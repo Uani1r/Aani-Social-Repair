@@ -313,7 +313,7 @@ function isMissingRelation(error: unknown): boolean {
 
 async function fetchCommentProfiles(
   userIds: string[],
-): Promise> {
+): Promise<Map<string, Profile>> {
   const profilesById = new Map<string, Profile>();
   const ids = Array.from(new Set(userIds.filter(Boolean)));
 
@@ -411,7 +411,7 @@ function optionalBool(value: unknown): boolean | undefined {
 async function fetchSummaries(
   postIds: string[],
   userId: string,
-): Promise | null> {
+): Promise<Map<string, Summary> | null> {
   if (!supabaseConfigured || postIds.length === 0) return null;
 
   try {
@@ -444,7 +444,7 @@ async function fetchSummaries(
 async function fetchFallbackSummaries(
   postIds: string[],
   userId: string,
-): Promise> {
+): Promise<Map<string, Summary>> {
   const summaries = new Map<string, Summary>();
   postIds.forEach((id) => summaries.set(id, { postId: id }));
 
