@@ -2800,9 +2800,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
 
-      // تمييز نوع الحركة مرة واحدة: سحب الصفحات أفقيًا لا يحرّك الشريطين
+      // تمييز نوع الحركة مرة واحدة (عتبة 2 بكسل فقط لالتقاط السحب الصغير جدًا)
       if (axis === 'none') {
-        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
         axis = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
       }
 
@@ -2816,8 +2816,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       if (accum !== 0 && Math.sign(step) !== Math.sign(accum)) accum = 0;
       accum += step;
 
-      // إصبع ينزل للأسفل (سحب من الأعلى إلى الأسفل) = إظهار، ولو بحركة صغيرة
-      if (accum >= 4) {
+      // أي نزول بسيط للإصبع (من الأعلى إلى الأسفل) = إظهار فوري للشريطين
+      if (accum >= 1) {
         setHidden(false);
         accum = 0;
       } else if (accum <= -10) {
@@ -2839,8 +2839,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
         // عجلة للأسفل = تصفح للأسفل = إخفاء
         setHidden(true);
         wheelAccum = 0;
-      } else if (wheelAccum <= -8) {
-        // عجلة للأعلى = تصفح للأعلى = إظهار
+      } else if (wheelAccum <= -2) {
+        // أي عجلة للأعلى = إظهار
         setHidden(false);
         wheelAccum = 0;
       }
