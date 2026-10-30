@@ -612,3 +612,50 @@ body.aani-chrome-hidden .story-strip {
     transition: none !important;
   }
 }
+
+
+/* =====================================================================
+   حركة التنقل بالسحب بين الرئيسية والريلز (بصرية فقط)
+   ===================================================================== */
+.page-slide-forward {
+  animation: aani-slide-from-right 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.page-slide-backward {
+  animation: aani-slide-from-left 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes aani-slide-from-right {
+  from {
+    opacity: 0.35;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes aani-slide-from-left {
+  from {
+    opacity: 0.35;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* منحنى حركة ناعم لشريط التنقل ومنع الارتجاف */
+.mobile-nav {
+  transition-timing-function: cubic-bezier(0.25, 0.8, 0.25, 1);
+  backface-visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-slide-forward,
+  .page-slide-backward {
+    animation: none;
+  }
+}

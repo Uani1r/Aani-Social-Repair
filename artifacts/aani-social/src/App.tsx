@@ -2734,9 +2734,14 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // سلوك التمرير: إخفاء الشرائط العلوية وتقليص شريط التنقل السفلي
+  // سلوك التمرير: إخفاء الشرائط العلوية وشريط التنقل السفلي
   const [chromeHidden, setChromeHidden] = useState(false);
   const lastScrollRef = useRef(0);
+
+  // السحب الأفقي للتنقل بين الرئيسية والريلز (حركة بصرية فقط)
+  const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const swipeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     let frame = 0;
@@ -2778,6 +2783,54 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       document.body.classList.remove('aani-chrome-hidden');
     };
   }, [chromeHidden]);
+
+  const handleSwipeStart = (event: React.TouchEvent) => {
+    const target = event.target as HTMLElement | null;
+
+    // لا نلتقط السحب داخل العناصر الأفقية أو حقول الإدخال حتى لا يتعارض معها
+    if (
+      target?.closest(
+        '.carousel-track, .overflow-x-auto, .no-scrollbar, input, textarea, [role="dialog"], [role="listbox"]',
+      )
+    ) {
+      swipeStartRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    if (!touch) return;
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleSwipeEnd = (event: React.TouchEvent) => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!start) return;
+
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+
+    const diffX = touch.clientX - start.x;
+    const diffY = touch.clientY - start.y;
+
+    // نتجاهل السحب العمودي حتى لا يتعارض مع التمرير داخل الصفحة
+    if (Math.abs(diffX) < 70 || Math.abs(diffX) < Math.abs(diffY) * 1.5) return;
+
+    const goingForward = diffX < 0;
+
+    if (goingForward && path !== '/reels') {
+      setSwipeDirection('forward');
+      setLocation('/reels');
+    } else if (!goingForward && path === '/reels') {
+      setSwipeDirection('backward');
+      setLocation('/feed');
+    } else {
+      return;
+    }
+
+    if (swipeTimerRef.current) window.clearTimeout(swipeTimerRef.current);
+    swipeTimerRef.current = window.setTimeout(() => setSwipeDirection(null), 420);
+  };
 
   const [postText, setPostText] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
@@ -2985,13 +3038,28 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
       <AIAssistantModal open={showAssistantModal} onClose={() => setShowAssistantModal(false)} />
 
-      <div className="content-shell pb-24">
-        <main className="main-content">{children}</main>
-        <nav
-          className={`mobile-nav fixed bottom-3 left-1/2 z-40 flex -translate-x-1/2 items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/90 px-3 py-2 shadow-2xl backdrop-blur-md transition-all duration-300 ease-out ${
-            chromeHidden ? 'scale-90 px-2.5 py-1.5 opacity-95' : 'scale-100'
+      <div className="content-shell" style={{ paddingBottom: 'calc(6rem + env(safe-area-inset-bottom))' }}>
+        <main
+          className={`main-content ${
+            swipeDirection === 'forward'
+              ? 'page-slide-forward'
+              : swipeDirection === 'backward'
+                ? 'page-slide-backward'
+                : ''
           }`}
-          style={{ width: 'min(92vw, 26rem)' }}
+          onTouchStart={handleSwipeStart}
+          onTouchEnd={handleSwipeEnd}
+        >
+          {children}
+        </main>
+        <nav
+          className={`mobile-nav fixed left-1/2 z-40 flex -translate-x-1/2 items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/90 px-3 py-2 shadow-2xl backdrop-blur-md transition-[transform,opacity] duration-300 ease-out will-change-transform ${
+            chromeHidden ? 'pointer-events-none translate-y-[160%] opacity-0' : 'translate-y-0 opacity-100'
+          }`}
+          style={{
+            bottom: 'calc(0.5rem + env(safe-area-inset-bottom))',
+            width: 'min(92vw, 26rem)',
+          }}
         >
           {nav.map(([href, Icon, label, id]) => {
             const active = path === href || (id === 'profile' && path.startsWith('/profile'));
