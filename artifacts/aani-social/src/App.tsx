@@ -2745,6 +2745,11 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
   useEffect(() => {
     let frame = 0;
+    let touchY = 0;
+
+    const setHidden = (hidden: boolean) => {
+      setChromeHidden(prev => (prev === hidden ? prev : hidden));
+    };
 
     const onScroll = () => {
       if (frame) return;
@@ -2755,22 +2760,49 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
         const y = window.scrollY || document.documentElement.scrollTop || 0;
         const previous = lastScrollRef.current;
 
-        if (Math.abs(y - previous) < 6) return;
-
-        if (y > previous && y > 80) {
-          setChromeHidden(true);
-        } else if (y < previous) {
-          setChromeHidden(false);
+        // أعلى الصفحة: أظهر الأشرطة دائمًا
+        if (y <= 10) {
+          setHidden(false);
+          lastScrollRef.current = y;
+          return;
         }
+
+        if (Math.abs(y - previous) < 4) return;
+
+        if (y > previous && y > 60) setHidden(true);
+        else if (y < previous) setHidden(false);
 
         lastScrollRef.current = y;
       });
     };
 
+    // استجابة فورية لحركة الإصبع: تظهر الأشرطة بمجرد الصعود 5 بكسل
+    const onTouchStart = (event: TouchEvent) => {
+      touchY = event.touches[0]?.clientY ?? 0;
+    };
+
+    const onTouchMove = (event: TouchEvent) => {
+      const currentY = event.touches[0]?.clientY ?? touchY;
+      const diff = touchY - currentY;
+
+      if (diff > 5) {
+        setHidden(false);
+        touchY = currentY;
+      } else if (diff < -15) {
+        const y = window.scrollY || document.documentElement.scrollTop || 0;
+        if (y > 60) setHidden(true);
+        touchY = currentY;
+      }
+    };
+
     window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
 
     return () => {
       window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, []);
@@ -2928,11 +2960,16 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   return (
     <div className="app-frame min-h-screen bg-black text-white">
       <header
-        className={`topbar grid grid-cols-3 items-center overflow-hidden bg-zinc-900/90 border-b border-zinc-800 sticky top-0 z-40 transition-all duration-300 ease-out ${
-          chromeHidden
-            ? '-translate-y-full max-h-0 border-transparent py-0 opacity-0 pointer-events-none'
-            : 'max-h-24 translate-y-0 px-4 py-2.5 opacity-100'
-        }`}
+        className="topbar fixed inset-x-0 top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md transition-[transform,opacity] duration-[400ms] ease-[cubic-bezier(0.25,1,0.5,1)] will-change-[transform,opacity]"
+        style={{
+          paddingTop: 'env(safe-area-inset-top)',
+          paddingBottom: '0.625rem',
+          paddingLeft: '1rem',
+          paddingRight: '1rem',
+          opacity: chromeHidden ? 0 : 1,
+          transform: chromeHidden ? 'translate3d(0, -30px, 0)' : 'translate3d(0, 0, 0)',
+          pointerEvents: chromeHidden ? 'none' : 'auto',
+        }}
       >
         <div className="flex items-center justify-start">
           <button className="relative p-2 rounded-full hover:bg-zinc-800 text-zinc-300" onClick={() => setShowNotifsModal(true)}>
@@ -2963,6 +3000,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           </button>
         </div>
       </header>
+
+      {/* مساحة تعويضية ثابتة للشريط العلوي (بصري فقط) */}
+      <div aria-hidden="true" style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }} />
 
       {showCreateModal && (
         <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
@@ -3053,12 +3093,13 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           {children}
         </main>
         <nav
-          className={`mobile-nav fixed left-1/2 z-40 flex -translate-x-1/2 items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/90 px-3 py-2 shadow-2xl backdrop-blur-md transition-[transform,opacity] duration-300 ease-out will-change-transform ${
-            chromeHidden ? 'pointer-events-none translate-y-[160%] opacity-0' : 'translate-y-0 opacity-100'
-          }`}
+          className="mobile-nav fixed inset-x-0 bottom-0 z-40 mx-auto flex items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/95 px-3 pt-2 shadow-2xl backdrop-blur-md transition-[transform,opacity] duration-[400ms] ease-[cubic-bezier(0.25,1,0.5,1)] will-change-[transform,opacity]"
           style={{
-            bottom: 'calc(0.5rem + env(safe-area-inset-bottom))',
             width: 'min(92vw, 26rem)',
+            paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))',
+            opacity: chromeHidden ? 0 : 1,
+            transform: chromeHidden ? 'translate3d(0, 30px, 0)' : 'translate3d(0, 0, 0)',
+            pointerEvents: chromeHidden ? 'none' : 'auto',
           }}
         >
           {nav.map(([href, Icon, label, id]) => {
