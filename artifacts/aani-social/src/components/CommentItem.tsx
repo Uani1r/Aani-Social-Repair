@@ -76,7 +76,6 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const replyCount = comment.replies?.length ?? 0;
   const author = comment.profiles;
   const displayName = author?.full_name || 'مستخدم آني';
-  const username = author?.username ? `@${author.username}` : '@user';
   const isReply = depth > 0;
   const hasActiveStory = storyOwners.has(comment.user_id);
   const ringClasses = hasActiveStory
@@ -88,14 +87,10 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   return (
     <div className="relative">
       <div
-        className="relative flex gap-3 border-b border-zinc-800/80 py-4"
+        className="relative flex gap-3 py-2"
         style={{ marginRight: `${depth * 12}px` }}
         dir="rtl"
       >
-        {depth > 0 && (
-          <div className="absolute bottom-0 top-0 right-[-6px] w-px bg-zinc-700/80" />
-        )}
-
         <div className="flex shrink-0">
           {author?.avatar_url ? (
             <img
@@ -116,7 +111,11 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           )}
         </div>
 
-        <div className="min-w-0 flex-1">
+        <div
+          className={`min-w-0 flex-1 ${
+            isReply ? 'mt-[6px]' : 'mt-[12px]'
+          }`}
+        >
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <p
@@ -125,14 +124,6 @@ export const CommentItem: React.FC<CommentItemProps> = ({
                 }`}
               >
                 {displayName}
-              </p>
-              <p
-                className={`truncate text-zinc-400 ${
-                  isReply ? 'text-[10px]' : 'text-xs'
-                }`}
-                dir="ltr"
-              >
-                {username}
               </p>
               <span className="shrink-0 text-[11px] text-zinc-500">
                 {formatRelativeTime(comment.created_at)}
