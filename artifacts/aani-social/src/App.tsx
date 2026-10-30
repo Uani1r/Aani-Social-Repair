@@ -2778,8 +2778,21 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     let startX = 0;
     let startY = 0;
-    let lastTouchY = 0;
-    let accum = 0;
+    let lastDirection: 0 | 1 | -1 = 0;
+    let lastToggleAt = 0;
+
+    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد) — بلا أي عتبة مسافة
+    const applyDirection = (direction: 1 | -1) => {
+      if (direction === lastDirection) return;
+
+      const now = performance.now();
+      // حماية صغيرة من اهتزاز الإصبع (70 مللي ثانية فقط)
+      if (now - lastToggleAt < 70) return;
+
+      lastDirection = direction;
+      lastToggleAt = now;
+      setHidden(direction === -1);
+    };
 
     const onTouchStart = (event: TouchEvent) => {
       const touch = event.touches[0];
@@ -2787,8 +2800,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
       startX = touch.clientX;
       startY = touch.clientY;
-      lastTouchY = touch.clientY;
-      accum = 0;
+      lastDirection = 0;
     };
 
     const onTouchMove = (event: TouchEvent) => {
@@ -2798,50 +2810,19 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
 
-      // أي حركة للأسفل (ولو بكسل واحد) تُظهر الشريطين فورًا
-      if (dy >= 1 && Math.abs(dy) >= Math.abs(dx)) {
-        setHidden(false);
-        accum = 0;
-        lastTouchY = touch.clientY;
-        return;
-      }
+      // نتجاهل السحب الأفقي (تبديل التبويبات) حتى لا يحرّك الشريطين
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) return;
 
-      // الإخفاء عند صعود الإصبع (سحب من الأسفل إلى الأعلى) بعد 12 بكسل
-      if (dy < -12) {
-        const step = touch.clientY - lastTouchY;
-        lastTouchY = touch.clientY;
-
-        if (step >= 0) return;
-
-        if (accum > 0) accum = 0;
-        accum += step;
-
-        if (accum <= -12) {
-          setHidden(true);
-          accum = 0;
-        }
-      } else {
-        lastTouchY = touch.clientY;
-      }
+      // أي حركة نزول مهما كانت صغيرة جدًا = إظهار
+      if (dy > 0) applyDirection(1);
+      // أي حركة صعود مهما كانت صغيرة جدًا = إخفاء
+      else if (dy < 0) applyDirection(-1);
     };
 
-    // بديل لسطح المكتب: عجلة الفأرة
-    let wheelAccum = 0;
+    // بديل لسطح المكتب: عجلة الفأرة (أي حركة تُظهر أو تُخفي فورًا)
     const onWheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
-
-      if (wheelAccum !== 0 && Math.sign(event.deltaY) !== Math.sign(wheelAccum)) wheelAccum = 0;
-      wheelAccum += event.deltaY;
-
-      if (wheelAccum >= 8) {
-        // عجلة للأسفل = تصفح للأسفل = إخفاء
-        setHidden(true);
-        wheelAccum = 0;
-      } else if (wheelAccum <= -2) {
-        // أي عجلة للأعلى = إظهار
-        setHidden(false);
-        wheelAccum = 0;
-      }
+      applyDirection(event.deltaY > 0 ? -1 : 1);
     };
 
     window.addEventListener('touchstart', onTouchStart, { passive: true });
