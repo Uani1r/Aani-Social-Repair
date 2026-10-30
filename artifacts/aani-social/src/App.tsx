@@ -2780,7 +2780,6 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     let startY = 0;
     let lastTouchY = 0;
     let accum = 0;
-    let axis: 'none' | 'vertical' | 'horizontal' = 'none';
 
     const onTouchStart = (event: TouchEvent) => {
       const touch = event.touches[0];
@@ -2790,7 +2789,6 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       startY = touch.clientY;
       lastTouchY = touch.clientY;
       accum = 0;
-      axis = 'none';
     };
 
     const onTouchMove = (event: TouchEvent) => {
@@ -2800,30 +2798,28 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
 
-      // تمييز نوع الحركة مرة واحدة (عتبة 2 بكسل فقط لالتقاط السحب الصغير جدًا)
-      if (axis === 'none') {
-        if (Math.abs(dx) < 2 && Math.abs(dy) < 2) return;
-        axis = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
-      }
-
-      if (axis !== 'vertical') return;
-
-      const step = touch.clientY - lastTouchY;
-      lastTouchY = touch.clientY;
-
-      if (!step) return;
-
-      if (accum !== 0 && Math.sign(step) !== Math.sign(accum)) accum = 0;
-      accum += step;
-
-      // أي نزول بسيط للإصبع (من الأعلى إلى الأسفل) = إظهار فوري للشريطين
-      if (accum >= 1) {
+      // أي حركة للأسفل (ولو بكسل واحد) تُظهر الشريطين فورًا
+      if (dy >= 1 && Math.abs(dy) >= Math.abs(dx)) {
         setHidden(false);
         accum = 0;
-      } else if (accum <= -10) {
-        // إصبع يصعد للأعلى (سحب من الأسفل إلى الأعلى) = إخفاء
-        setHidden(true);
-        accum = 0;
+        lastTouchY = touch.clientY;
+        return;
+      }
+
+      // الإخفاء فقط عند صعود واضح للإصبع وليس أثناء السحب الأفقي
+      if (dy < 0 && Math.abs(dy) > Math.abs(dx)) {
+        const step = touch.clientY - lastTouchY;
+        lastTouchY = touch.clientY;
+
+        if (step >= 0) return;
+
+        if (accum > 0) accum = 0;
+        accum += step;
+
+        if (accum <= -12) {
+          setHidden(true);
+          accum = 0;
+        }
       }
     };
 

@@ -591,10 +591,17 @@ body {
 .mobile-nav,
 .story-strip {
   transition:
-    transform 260ms cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 200ms cubic-bezier(0.4, 0, 0.2, 1),
-    max-height 260ms cubic-bezier(0.4, 0, 0.2, 1);
+    transform 140ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 120ms ease-out,
+    max-height 180ms cubic-bezier(0.2, 0, 0, 1);
   will-change: transform, opacity;
+}
+
+/* الإخفاء أهدأ قليلًا، والإظهار أسرع ليصل فور السحب */
+.topbar.is-hidden,
+.mobile-nav.is-hidden,
+body.aani-chrome-hidden .story-strip {
+  transition-duration: 240ms, 220ms, 240ms;
 }
 
 .topbar.is-hidden {
