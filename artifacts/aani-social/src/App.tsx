@@ -2877,12 +2877,12 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     start.dx = dx;
 
-    // مقاومة عند أول صفحة وآخر صفحة حتى لا يبدو السحب مكسورًا
+    // مقاومة عند حدود البداية والنهاية (السحب من اليسار لليمين = للأمام)
     const index = getRouteIndex(path);
-    const atStart = index <= 0 && dx > 0;
-    const atEnd = index >= swipeRoutes.length - 1 && dx < 0;
+    const atForwardLimit = index >= swipeRoutes.length - 1 && dx > 0;
+    const atBackwardLimit = index <= 0 && dx < 0;
 
-    setSwipeOffset(atStart || atEnd ? dx * 0.25 : dx);
+    setSwipeOffset(atForwardLimit || atBackwardLimit ? dx * 0.25 : dx);
   };
 
   const handleSwipeEnd = () => {
@@ -2901,7 +2901,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const index = getRouteIndex(path);
     if (index < 0) return;
 
-    const goingForward = start.dx < 0;
+    // السحب من اليسار إلى اليمين (dx > 0) يقدّم للأمام، ومن اليمين لليسار يرجع
+    const goingForward = start.dx > 0;
     const nextIndex = goingForward ? index + 1 : index - 1;
 
     if (nextIndex < 0 || nextIndex >= swipeRoutes.length) return;

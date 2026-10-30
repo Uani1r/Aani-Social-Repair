@@ -615,14 +615,15 @@ body.aani-chrome-hidden .story-strip {
 
 
 /* =====================================================================
-   حركة التنقل بالسحب بين الرئيسية والريلز (بصرية فقط)
+   حركة التنقل بالسحب (بصرية فقط)
+   السحب من اليسار إلى اليمين = للأمام، والصفحة الجديدة تدخل من اليسار
    ===================================================================== */
 .page-slide-forward {
-  animation: aani-slide-from-right 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: aani-slide-from-left 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .page-slide-backward {
-  animation: aani-slide-from-left 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: aani-slide-from-right 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 @keyframes aani-slide-from-right {
