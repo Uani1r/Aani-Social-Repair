@@ -814,6 +814,8 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
+  const likeBusyRef = useRef(false);
+  const repostBusyRef = useRef(false);
 
   // Optimistic UI states
   const [liked, setLiked] = useState(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
@@ -829,15 +831,26 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
     return [];
   }, [post.media_urls, post.media_url]);
 
+  // مزامنة أعلام التفاعل فقط عند تغيّرها فعليًا (وليس مع كل تحديث للعدّادات)
   useEffect(() => {
     setLiked(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
-    setLikesCount(post.likes_count ?? post.likes?.length ?? 0);
     setReposted(post.reposted_by_me ?? false);
     setBookmarked(post.saved_by_me ?? false);
-    setCommentsCount(post.comments_count || 0);
-    setRepostsCount(post.reposts_count || 0);
     setFeedback(post.feedback_by_me || null);
-  }, [post, currentUserId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id, post.liked_by_me, post.reposted_by_me, post.saved_by_me, post.feedback_by_me, currentUserId]);
+
+  // العدّادات من قاعدة البيانات، مع عدم إرباك ضغطة المستخدم أثناء تنفيذ الطلب
+  useEffect(() => {
+    if (!likeBusyRef.current) {
+      setLikesCount(post.likes_count ?? post.likes?.length ?? 0);
+    }
+    if (!repostBusyRef.current) {
+      setRepostsCount(post.reposts_count || 0);
+    }
+    setCommentsCount(post.comments_count || 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id, post.likes_count, post.reposts_count, post.comments_count]);
 
   // عدّاد التعليقات: تحديث فوري من نافذة التعليقات (Optimistic UI) دون إعادة تحميل
   useEffect(() => {
@@ -866,20 +879,26 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
   };
 
   const toggleLike = async () => {
+    // حماية من الضغطات السريعة المتتالية (تمنع القفز من 0 إلى 3)
+    if (likeBusyRef.current) return;
+
     const prevLiked = liked;
     const prevCount = likesCount;
     const nextLiked = !prevLiked;
 
+    likeBusyRef.current = true;
     setLiked(nextLiked);
-    setLikesCount(prevCount + (nextLiked ? 1 : -1));
+    setLikesCount(Math.max(0, prevCount + (nextLiked ? 1 : -1)));
     setIsAnimating(true);
     setTimeout(() => setIsAnimating(false), 450);
 
     if (!supabaseConfigured) {
       setLiked(prevLiked);
       setLikesCount(prevCount);
+      likeBusyRef.current = false;
       return;
     }
+
     try {
       if (prevLiked) {
         const { error } = await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', currentUserId);
@@ -893,21 +912,29 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
     } catch {
       setLiked(prevLiked);
       setLikesCount(prevCount);
+    } finally {
+      likeBusyRef.current = false;
     }
   };
 
   const toggleRepost = async () => {
+    if (repostBusyRef.current) return;
+
     const prevReposted = reposted;
     const prevCount = repostsCount;
     const nextReposted = !prevReposted;
+
+    repostBusyRef.current = true;
     setReposted(nextReposted);
-    setRepostsCount(prevCount + (nextReposted ? 1 : -1));
+    setRepostsCount(Math.max(0, prevCount + (nextReposted ? 1 : -1)));
 
     if (!supabaseConfigured) {
       setReposted(prevReposted);
       setRepostsCount(prevCount);
+      repostBusyRef.current = false;
       return;
     }
+
     try {
       if (prevReposted) {
         const { error } = await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', currentUserId);
@@ -920,6 +947,8 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
     } catch {
       setReposted(prevReposted);
       setRepostsCount(prevCount);
+    } finally {
+      repostBusyRef.current = false;
     }
   };
 
@@ -1467,9 +1496,38 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
     return () => window.removeEventListener('aani:post-created', onPostCreated);
   }, [refresh]);
 
-  // مزامنة العدّادات في الوقت الفعلي لكل المستخدمين (إعجاب/تعليق/إعادة نشر/مشاركة)
+  // مزامنة العدّادات في الوقت الفعلي — تُقرأ من الصفوف الحقيقية (RPC) لا من أعمدة قد تتأخر
   useEffect(() => {
     if (!supabaseConfigured) return;
+
+    const timers = new Map<string, number>();
+
+    const reconcileCounters = async (postId: string) => {
+      try {
+        const { data, error } = await supabase.rpc('get_post_interactions', { p_post_ids: [postId] });
+        if (error) return;
+
+        const row = (data || [])[0] as
+          | { likes_count?: number | string; comments_count?: number | string; reposts_count?: number | string }
+          | undefined;
+        if (!row) return;
+
+        setPosts(current =>
+          current.map(post =>
+            post.id === postId
+              ? {
+                  ...post,
+                  likes_count: Number(row.likes_count ?? post.likes_count ?? 0),
+                  comments_count: Number(row.comments_count ?? post.comments_count ?? 0),
+                  reposts_count: Number(row.reposts_count ?? post.reposts_count ?? 0),
+                }
+              : post,
+          ),
+        );
+      } catch {
+        /* تعذر الاتصال: نُبقي القيم الحالية دون إرباك الواجهة */
+      }
+    };
 
     const channel = supabase
       .channel('aani-post-counters')
@@ -1477,33 +1535,26 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'posts' },
         payload => {
-          const row = payload.new as {
-            id?: string;
-            likes_count?: number | null;
-            comments_count?: number | null;
-            reposts_count?: number | null;
-            shares_count?: number | null;
-          };
+          const row = payload.new as { id?: string };
           if (!row?.id) return;
 
-          setPosts(current =>
-            current.map(post =>
-              post.id === row.id
-                ? {
-                    ...post,
-                    likes_count: row.likes_count ?? post.likes_count,
-                    comments_count: row.comments_count ?? post.comments_count,
-                    reposts_count: row.reposts_count ?? post.reposts_count,
-                    shares_count: row.shares_count ?? post.shares_count,
-                  }
-                : post,
-            ),
+          const existing = timers.get(row.id);
+          if (existing) window.clearTimeout(existing);
+
+          timers.set(
+            row.id,
+            window.setTimeout(() => {
+              timers.delete(row.id);
+              void reconcileCounters(row.id as string);
+            }, 350),
           );
         },
       )
       .subscribe();
 
     return () => {
+      timers.forEach(timer => window.clearTimeout(timer));
+      timers.clear();
       void supabase.removeChannel(channel);
     };
   }, []);
@@ -2113,6 +2164,7 @@ function ProfilePage({ targetUserId, currentUserId, profile, onProfileUpdate, on
 function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
+  const likeBusyRef = useRef(false);
   const [playing, setPlaying] = useState(false);
   const [liked, setLiked] = useState(post.liked_by_me ?? (post.likes || []).some(l => l.user_id === currentUserId));
   const [likesCount, setLikesCount] = useState(post.likes_count ?? post.likes?.length ?? 0);
@@ -2122,13 +2174,22 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
   const [menuOpen, setMenuOpen] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
 
+  // مزامنة أعلام التفاعل فقط عند تغيّرها فعليًا (وليس مع كل تحديث للعدّادات)
   useEffect(() => {
     setLiked(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
-    setLikesCount(post.likes_count ?? post.likes?.length ?? 0);
     setSaved(post.saved_by_me ?? false);
     setReposted(post.reposted_by_me ?? false);
     setFeedback(post.feedback_by_me || null);
-  }, [post, currentUserId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id, post.liked_by_me, post.reposted_by_me, post.saved_by_me, post.feedback_by_me, currentUserId]);
+
+  // عدّاد الإعجاب من قاعدة البيانات، مع عدم إرباك الضغطة أثناء تنفيذ الطلب
+  useEffect(() => {
+    if (!likeBusyRef.current) {
+      setLikesCount(post.likes_count ?? post.likes?.length ?? 0);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [post.id, post.likes_count]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -2166,12 +2227,20 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
   };
 
   const toggleLike = async () => {
+    // حماية من الضغطات السريعة المتتالية
+    if (likeBusyRef.current) return;
+
     const prevLiked = liked;
     const prevCount = likesCount;
+    likeBusyRef.current = true;
     setLiked(!prevLiked);
-    setLikesCount(prevLiked ? prevCount - 1 : prevCount + 1);
+    setLikesCount(Math.max(0, prevLiked ? prevCount - 1 : prevCount + 1));
 
-    if (!supabaseConfigured) return;
+    if (!supabaseConfigured) {
+      likeBusyRef.current = false;
+      return;
+    }
+
     try {
       if (prevLiked) {
         const { error } = await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', currentUserId);
@@ -2185,6 +2254,8 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
     } catch {
       setLiked(prevLiked);
       setLikesCount(prevCount);
+    } finally {
+      likeBusyRef.current = false;
     }
   };
 
