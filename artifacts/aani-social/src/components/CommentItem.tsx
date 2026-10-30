@@ -14,6 +14,10 @@ interface CommentItemProps {
   comment: CommentWithDetails;
   currentUserId?: string;
   depth?: number;
+  /** اسم صاحب التعليق الأصلي الذي يرد عليه هذا الرد (يظهر كإشارة @) */
+  replyTo?: string;
+  /** في العرض المسطّح تُدار قائمة الردود من التعليق الأساسي فقط */
+  renderReplies?: boolean;
   onReply: (comment: CommentWithDetails) => void;
   onToggleLike: (commentId: string, isLiked: boolean) => void | Promise<void>;
   onToggleDislike: (commentId: string, isDisliked: boolean) => void | Promise<void>;
@@ -21,6 +25,11 @@ interface CommentItemProps {
   pendingDeleteIds?: Record<string, boolean>;
   storyOwners?: Set<string>;
 }
+
+type FlatReply = {
+  comment: CommentWithDetails;
+  replyTo?: string;
+};
 
 const formatRelativeTime = (value: string): string => {
   const date = new Date(value);
@@ -58,10 +67,32 @@ const formatRepliesLabel = (count: number): string => {
   return `عرض ${count} ردًّا`;
 };
 
+const mentionLabel = (comment?: CommentWithDetails): string | undefined => {
+  const username = comment?.profiles?.username?.trim();
+  if (username) return `@${username}`;
+  const fullName = comment?.profiles?.full_name?.trim();
+  return fullName || undefined;
+};
+
+/**
+ * تسطيح الردود: كل الردود (بأي مستوى) تُعرض في قائمة واحدة مستقيمة،
+ * ويُحفظ سياق الرد عبر إشارة @اسم صاحب التعليق الأصلي بدل الإزاحة البصرية.
+ */
+const flattenReplies = (
+  items: CommentWithDetails[],
+  parent?: CommentWithDetails,
+): FlatReply[] =>
+  items.flatMap((item) => [
+    { comment: item, replyTo: mentionLabel(parent) },
+    ...flattenReplies(item.replies ?? [], item),
+  ]);
+
 export const CommentItem: React.FC<CommentItemProps> = ({
   comment,
   currentUserId,
   depth = 0,
+  replyTo,
+  renderReplies = true,
   onReply,
   onToggleLike,
   onToggleDislike,
@@ -73,7 +104,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
-  const replyCount = comment.replies?.length ?? 0;
+  const flatReplies = flattenReplies(comment.replies ?? []);
+  const replyCount = flatReplies.length;
   const author = comment.profiles;
   const displayName = author?.full_name || 'مستخدم آني';
   const isReply = depth > 0;
@@ -88,7 +120,6 @@ export const CommentItem: React.FC<CommentItemProps> = ({
     <div className="relative">
       <div
         className="relative flex gap-3 py-2"
-        style={{ marginRight: `${depth * 12}px` }}
         dir="rtl"
       >
         <div className="flex shrink-0">
@@ -163,6 +194,9 @@ export const CommentItem: React.FC<CommentItemProps> = ({
             }`}
             dir="auto"
           >
+            {isReply && replyTo && (
+              <span className="me-1 font-semibold text-pink-400">{replyTo}</span>
+            )}
             {comment.content}
           </div>
 
@@ -231,7 +265,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
         </div>
       </div>
 
-      {replyCount > 0 && (
+      {renderReplies && replyCount > 0 && (
         <div className="px-2 pt-2 text-right">
           <button
             type="button"
@@ -244,16 +278,15 @@ export const CommentItem: React.FC<CommentItemProps> = ({
         </div>
       )}
 
-      {showReplies && replyCount > 0 && (
-        <div
-          className="relative mt-2 space-y-2 border-r border-zinc-600/60"
-          style={{ paddingRight: 48 }}
-        >
-          {comment.replies?.map((reply) => (
+      {renderReplies && showReplies && replyCount > 0 && (
+        <div className="relative mt-1 space-y-1 border-r-[1.5px] border-zinc-700/60 pr-3">
+          {flatReplies.map(({ comment: reply, replyTo: replyMention }) => (
             <CommentItem
               key={reply.id}
               comment={reply}
-              depth={depth + 1}
+              depth={1}
+              replyTo={replyMention}
+              renderReplies={false}
               currentUserId={currentUserId}
               onReply={onReply}
               onToggleLike={onToggleLike}
