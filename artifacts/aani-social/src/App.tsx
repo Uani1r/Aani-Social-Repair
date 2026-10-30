@@ -2765,71 +2765,95 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // إخفاء/إظهار الشريطين: آلة حالة اتجاهية بفجوة هيستيريسيس وحماية زمنية
+  // إخفاء/إظهار الشريطين: يعتمد على اتجاه حركة الإصبع مباشرة
   const [chromeHidden, setChromeHidden] = useState(false);
   const chromeHiddenRef = useRef(false);
-  const lastScrollRef = useRef(0);
-  const scrollAccumRef = useRef(0);
-  const lastToggleAtRef = useRef(0);
 
   useEffect(() => {
-    let frame = 0;
-
     const setHidden = (hidden: boolean) => {
       if (chromeHiddenRef.current === hidden) return;
       chromeHiddenRef.current = hidden;
       setChromeHidden(hidden);
     };
 
-    const onScroll = () => {
-      if (frame) return;
+    let startX = 0;
+    let startY = 0;
+    let lastTouchY = 0;
+    let accum = 0;
+    let axis: 'none' | 'vertical' | 'horizontal' = 'none';
 
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
+    const onTouchStart = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
 
-        const y = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
-        const dy = y - lastScrollRef.current;
-        lastScrollRef.current = y;
-
-        if (!dy) return;
-
-        // في أعلى الصفحة أو قريبًا منها: الشريطان ظاهران دائمًا
-        if (y <= 4) {
-          scrollAccumRef.current = 0;
-          setHidden(false);
-          return;
-        }
-
-        // عند تغيّر اتجاه الحركة نبدأ التجميع من الصفر (يمنع الاهتزاز)
-        if (scrollAccumRef.current !== 0 && Math.sign(dy) !== Math.sign(scrollAccumRef.current)) {
-          scrollAccumRef.current = 0;
-        }
-
-        scrollAccumRef.current = Math.max(-60, Math.min(60, scrollAccumRef.current + dy));
-
-        const accum = scrollAccumRef.current;
-        const now = performance.now();
-        const sinceToggle = now - lastToggleAtRef.current;
-
-        // الاختفاء يحتاج 28 بكسل لأسفل، والظهور 14 بكسل لأعلى، مع فترة سماح زمنية
-        if (!chromeHiddenRef.current && accum >= 28 && y > 24 && sinceToggle > 180) {
-          scrollAccumRef.current = 0;
-          lastToggleAtRef.current = now;
-          setHidden(true);
-        } else if (chromeHiddenRef.current && accum <= -14 && sinceToggle > 120) {
-          scrollAccumRef.current = 0;
-          lastToggleAtRef.current = now;
-          setHidden(false);
-        }
-      });
+      startX = touch.clientX;
+      startY = touch.clientY;
+      lastTouchY = touch.clientY;
+      accum = 0;
+      axis = 'none';
     };
 
-    lastScrollRef.current = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
-    window.addEventListener('scroll', onScroll, { passive: true });
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touch) return;
+
+      const dx = touch.clientX - startX;
+      const dy = touch.clientY - startY;
+
+      // تمييز نوع الحركة مرة واحدة: سحب الصفحات أفقيًا لا يحرّك الشريطين
+      if (axis === 'none') {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        axis = Math.abs(dx) > Math.abs(dy) ? 'horizontal' : 'vertical';
+      }
+
+      if (axis !== 'vertical') return;
+
+      const step = touch.clientY - lastTouchY;
+      lastTouchY = touch.clientY;
+
+      if (!step) return;
+
+      if (accum !== 0 && Math.sign(step) !== Math.sign(accum)) accum = 0;
+      accum += step;
+
+      // إصبع ينزل للأسفل (سحب من الأعلى إلى الأسفل) = إظهار، ولو بحركة صغيرة
+      if (accum >= 4) {
+        setHidden(false);
+        accum = 0;
+      } else if (accum <= -10) {
+        // إصبع يصعد للأعلى (سحب من الأسفل إلى الأعلى) = إخفاء
+        setHidden(true);
+        accum = 0;
+      }
+    };
+
+    // بديل لسطح المكتب: عجلة الفأرة
+    let wheelAccum = 0;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.deltaY) return;
+
+      if (wheelAccum !== 0 && Math.sign(event.deltaY) !== Math.sign(wheelAccum)) wheelAccum = 0;
+      wheelAccum += event.deltaY;
+
+      if (wheelAccum >= 8) {
+        // عجلة للأسفل = تصفح للأسفل = إخفاء
+        setHidden(true);
+        wheelAccum = 0;
+      } else if (wheelAccum <= -8) {
+        // عجلة للأعلى = تصفح للأعلى = إظهار
+        setHidden(false);
+        wheelAccum = 0;
+      }
+    };
+
+    window.addEventListener('touchstart', onTouchStart, { passive: true });
+    window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('wheel', onWheel, { passive: true });
 
     return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (frame) window.cancelAnimationFrame(frame);
+      window.removeEventListener('touchstart', onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('wheel', onWheel);
     };
   }, []);
 
