@@ -185,6 +185,31 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
   const encodedUrl = encodeURIComponent(shareUrl);
   const encodedText = encodeURIComponent(shareText);
 
+  // تسجيل كل عملية توجيه منفصلة في عدّاد المشاركات (وليس مرة واحدة لكل مستخدم)
+  const registerPostShares = async (count: number) => {
+    if (!supabaseConfigured || count <= 0) return;
+
+    try {
+      const { error } = await supabase.rpc('aani_register_post_share', {
+        p_post_id: post.id,
+        p_count: count,
+      });
+      if (!error) return;
+    } catch {
+      /* الدالة غير مطبقة بعد في القاعدة */
+    }
+
+    try {
+      const rows = Array.from({ length: count }, () => ({ post_id: post.id, user_id: currentUserId }));
+      const { error } = await supabase.from('post_shares').insert(rows);
+      if (error) {
+        await supabase.from('post_shares').insert({ post_id: post.id, user_id: currentUserId });
+      }
+    } catch (error) {
+      console.warn('[share] تعذر تسجيل عدّاد المشاركة:', error);
+    }
+  };
+
   const sendToSelected = async () => {
     if (sendingRef.current || selected.size === 0) return;
 
@@ -237,6 +262,10 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
       toast.success(
         ok === 1 ? 'تم إرسال المنشور' : `تم إرسال المنشور إلى ${ok} أشخاص`,
       );
+
+      // عدّاد المشاركات: عملية واحدة لكل مستقبل، وتظهر التحديثات لكل المستخدمين
+      await registerPostShares(ok);
+
       onSent?.(ok);
       setSelected(new Set());
       setNote('');
@@ -509,7 +538,7 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
               <ShareAction
                 icon={<Repeat2 size={18} />}
                 label={reposted ? 'إلغاء الإعادة' : 'إعادة النشر'}
-                tone={reposted ? 'emerald' : 'default'}
+                tone={reposted ? 'active' : 'default'}
                 busy={repostBusy}
                 onClick={() => void handleRepost()}
               />
@@ -595,7 +624,7 @@ const ShareAction: React.FC<{
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
-  tone?: 'default' | 'emerald';
+  tone?: 'default' | 'active';
   busy?: boolean;
 }> = ({ icon, label, onClick, tone = 'default', busy = false }) => (
   <button
@@ -606,7 +635,7 @@ const ShareAction: React.FC<{
   >
     <span
       className={`flex h-11 w-11 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 transition active:scale-95 ${
-        tone === 'emerald' ? 'text-emerald-400' : 'text-zinc-200'
+        tone === 'active' ? 'text-[#E53E3E]' : 'text-zinc-200'
       }`}
     >
       {busy ? <Loader2 size={17} className="animate-spin" /> : icon}

@@ -5,16 +5,16 @@ import {
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
-  Bot, Loader2, Play, Flag, EyeOff
+  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX
 } from 'lucide-react';
 
-import { Toaster } from 'sonner';
+import { Toaster, toast } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import { recordShare } from '@/lib/interactions';
+import { recordShare, postShareUrl } from '@/lib/interactions';
 import { displayName, formatDate, normalizeProfile, type Post, type Profile } from '@/lib/types';
 
 import NotFound from '@/pages/not-found';
@@ -1164,7 +1164,7 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
           </button>
 
           {/* 3. إعادة النشر */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-emerald-400 font-bold' : 'text-zinc-400 hover:text-emerald-400'}`} onClick={toggleRepost}>
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
             <Repeat size={18} />
             <span className="text-xs">{repostsCount}</span>
           </button>
@@ -1440,6 +1440,47 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
     return () => window.removeEventListener('aani:post-created', onPostCreated);
   }, [refresh]);
 
+  // مزامنة العدّادات في الوقت الفعلي لكل المستخدمين (إعجاب/تعليق/إعادة نشر/مشاركة)
+  useEffect(() => {
+    if (!supabaseConfigured) return;
+
+    const channel = supabase
+      .channel('aani-post-counters')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'posts' },
+        payload => {
+          const row = payload.new as {
+            id?: string;
+            likes_count?: number | null;
+            comments_count?: number | null;
+            reposts_count?: number | null;
+            shares_count?: number | null;
+          };
+          if (!row?.id) return;
+
+          setPosts(current =>
+            current.map(post =>
+              post.id === row.id
+                ? {
+                    ...post,
+                    likes_count: row.likes_count ?? post.likes_count,
+                    comments_count: row.comments_count ?? post.comments_count,
+                    reposts_count: row.reposts_count ?? post.reposts_count,
+                    shares_count: row.shares_count ?? post.shares_count,
+                  }
+                : post,
+            ),
+          );
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, []);
+
   return { posts, loading, refresh };
 }
 
@@ -1633,6 +1674,8 @@ function SharedPostPreview({ content, postId }: { content?: string | null; postI
   const caption = (match?.[2] || '').trim();
   const [info, setInfo] = useState<{ author: Profile | null; media: string; text: string; type: string } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [muted, setMuted] = useState(true);
+  const [, navigateToPost] = useLocation();
 
   useEffect(() => {
     let active = true;
@@ -1688,47 +1731,127 @@ function SharedPostPreview({ content, postId }: { content?: string | null; postI
 
   if (!resolvedId) return null;
 
+  const shareLink = async () => {
+    const url = postShareUrl(resolvedId);
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'منشور على آني', url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      toast.success('تم نسخ رابط المنشور');
+    } catch {
+      /* ألغى المستخدم المشاركة */
+    }
+  };
+
+  const isVideo = info?.type === 'reel';
+
   return (
-    <Link href={`/post/${resolvedId}`} className="block w-full overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 transition hover:border-pink-500/60">
-      <div className="flex items-center gap-2 p-2">
+    <div className="flex w-full items-center gap-2" dir="rtl">
+      {/* صورة الناشر خارج الفقاعة يميناً، بمحاذاة وسط كرت الوسائط */}
+      <span className="flex h-full shrink-0 items-center">
         {info?.author?.avatar_url ? (
-          <img src={info.author.avatar_url} alt="" className="h-6 w-6 rounded-full object-cover" />
+          <img src={info.author.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover" />
         ) : (
-          <span className="h-6 w-6 shrink-0 rounded-full bg-gradient-to-br from-pink-500 to-violet-600" />
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-[10px] font-bold text-white">
+            {info?.author ? displayName(info.author).replace('@', '').charAt(0) : 'آ'}
+          </span>
         )}
-        <strong className="min-w-0 flex-1 truncate text-[11px] font-bold text-white">
-          {info?.author ? displayName(info.author) : 'منشور على آني'}
-        </strong>
-        <Repeat size={12} className="text-zinc-500" />
+      </span>
+
+      {/* فقاعة الرسالة: عرض 62% وحدود منقطة رمادية فاتحة */}
+      <div
+        role="link"
+        tabIndex={0}
+        onClick={() => navigateToPost(`/post/${resolvedId}`)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            navigateToPost(`/post/${resolvedId}`);
+          }
+        }}
+        className="w-[62%] min-w-0 shrink-0 cursor-pointer overflow-hidden rounded-2xl border-[1.5px] border-dashed border-zinc-300/60 bg-zinc-900/75 transition hover:border-pink-500/60"
+      >
+        <div className="relative aspect-[4/5] w-full overflow-hidden bg-black">
+          {loading ? (
+            <div className="h-full w-full animate-pulse bg-zinc-800/80" />
+          ) : isVideo && info?.media ? (
+            <video
+              src={info.media}
+              muted={muted}
+              autoPlay
+              loop
+              playsInline
+              className="h-full w-full object-cover"
+            />
+          ) : info?.media ? (
+            <img src={info.media} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-pink-600/25 to-violet-600/25 p-3">
+              <p className="line-clamp-5 text-center text-[11px] leading-5 text-zinc-100">
+                {info?.text || 'منشور على آني'}
+              </p>
+            </div>
+          )}
+
+          {/* شعار/أيقونة أعلى الزاوية */}
+          <span className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full bg-black/55 px-1.5 py-0.5 text-[9px] font-bold text-white backdrop-blur">
+            <Repeat size={10} /> آني
+          </span>
+
+          {/* زر التشغيل في منتصف الوسائط */}
+          {isVideo && !loading && (
+            <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur">
+                <Play size={16} fill="currentColor" />
+              </span>
+            </span>
+          )}
+
+          {/* زر كتم الصوت أسفل اليسار (للريلز) */}
+          {isVideo && !loading && (
+            <button
+              type="button"
+              onClick={event => {
+                event.preventDefault();
+                event.stopPropagation();
+                setMuted(current => !current);
+              }}
+              aria-label={muted ? 'إلغاء الكتم' : 'كتم الصوت'}
+              className="absolute bottom-1.5 left-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur transition hover:bg-black/75"
+            >
+              {muted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+            </button>
+          )}
+        </div>
+
+        {(info?.text || caption) && !loading && (
+          <div className="space-y-0.5 px-2 py-1.5">
+            {info?.text && (
+              <p className="line-clamp-2 text-right text-[11px] leading-4 text-zinc-300">{info.text}</p>
+            )}
+            {caption && (
+              <p className="line-clamp-1 text-right text-[10px] text-zinc-500">{caption}</p>
+            )}
+          </div>
+        )}
+
+        {!loading && !info && (
+          <p className="px-2 py-1.5 text-right text-[11px] text-zinc-400">هذا المنشور لم يعد متاحاً.</p>
+        )}
       </div>
 
-      {loading ? (
-        <div className="h-24 w-full animate-pulse bg-zinc-800/70" />
-      ) : info?.media ? (
-        info.type === 'reel' ? (
-          <video src={info.media} muted playsInline preload="metadata" className="max-h-40 w-full bg-black object-cover" />
-        ) : (
-          <img src={info.media} alt="" className="max-h-40 w-full object-cover" />
-        )
-      ) : null}
-
-      {!loading && info?.text && (
-        <p className="line-clamp-2 w-full p-2 text-right text-[11px] leading-5 text-zinc-300">{info.text}</p>
-      )}
-
-      {!loading && !info && (
-        <p className="w-full p-2 text-right text-[11px] text-zinc-400">هذا المنشور لم يعد متاحاً.</p>
-      )}
-
-      {caption && (
-        <p className="line-clamp-2 w-full px-2 pb-1 text-right text-[11px] text-zinc-400">{caption}</p>
-      )}
-
-      <span className="flex items-center justify-between px-2 pb-2 text-[10px] text-pink-400">
-        <span>اضغط لفتح المنشور</span>
-        <ArrowUpLeft size={12} />
-      </span>
-    </Link>
+      {/* أيقونة المشاركة خارج الفقاعة على اليسار */}
+      <button
+        type="button"
+        onClick={() => void shareLink()}
+        aria-label="مشاركة المنشور"
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-zinc-700 text-zinc-300 transition hover:border-pink-500/60 hover:text-white"
+      >
+        <SendHorizontal size={14} className="rotate-180" />
+      </button>
+    </div>
   );
 }
 
@@ -1846,12 +1969,12 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
               const isMine = m.sender_id === currentUserId;
               const isSharedPost = Boolean(m.post_id) || (typeof m.content === 'string' && m.content.trim().startsWith('[post:'));
               return (
-                <div key={m.id} className={`max-w-[85%] flex flex-col ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'} ${isSharedPost ? 'w-full' : ''}`}>
+                <div key={m.id} className={`flex flex-col ${isSharedPost ? 'w-full' : 'max-w-[85%]'} ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'}`}>
                   {!isMine && target && (
                     <span className="mb-0.5 text-[10px] text-zinc-500">{displayName(target)}</span>
                   )}
                   {isSharedPost ? (
-                    <div className={`w-full max-w-[280px] ${isMine ? 'mr-auto' : 'ml-auto'}`}>
+                    <div className="w-full">
                       <SharedPostPreview postId={m.post_id} content={m.content} />
                     </div>
                   ) : (
@@ -2151,7 +2274,7 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
 
         {/* 3. إعادة النشر */}
         <button onClick={toggleRepost} className="flex flex-col items-center gap-1 text-white">
-          <span className={`p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md transition ${reposted ? 'text-emerald-400' : ''}`}>
+          <span className={`p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md transition ${reposted ? 'text-[#E53E3E]' : ''}`}>
             <Repeat size={22} />
           </span>
         </button>
