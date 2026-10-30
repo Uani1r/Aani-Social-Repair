@@ -2738,10 +2738,26 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [chromeHidden, setChromeHidden] = useState(false);
   const lastScrollRef = useRef(0);
 
-  // السحب الأفقي للتنقل بين الرئيسية والريلز (حركة بصرية فقط)
+  // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
-  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [swipeOffset, setSwipeOffset] = useState(0);
+  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number } | null>(null);
   const swipeTimerRef = useRef<number | null>(null);
+
+  // ترتيب صفحات التنقل بالسحب (نفس مسارات أزرار الشريط السفلي)
+  const swipeRoutes = useMemo(() => ['/feed', '/reels', '/search', '/messages', '/profile'], []);
+
+  const getRouteIndex = useCallback(
+    (target: string) => {
+      const normalized = target === '/' ? '/feed' : target;
+
+      return swipeRoutes.findIndex(
+        route =>
+          normalized === route || (route === '/profile' && normalized.startsWith('/profile')),
+      );
+    },
+    [swipeRoutes],
+  );
 
   useEffect(() => {
     let frame = 0;
@@ -2831,34 +2847,67 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     const touch = event.touches[0];
     if (!touch) return;
-    swipeStartRef.current = { x: touch.clientX, y: touch.clientY };
+
+    swipeStartRef.current = { x: touch.clientX, y: touch.clientY, axis: 'none', dx: 0 };
   };
 
-  const handleSwipeEnd = (event: React.TouchEvent) => {
+  const handleSwipeMove = (event: React.TouchEvent) => {
     const start = swipeStartRef.current;
-    swipeStartRef.current = null;
-    if (!start) return;
+    if (!start || start.axis === 'y') return;
 
-    const touch = event.changedTouches[0];
+    const touch = event.touches[0];
     if (!touch) return;
 
-    const diffX = touch.clientX - start.x;
-    const diffY = touch.clientY - start.y;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
 
-    // نتجاهل السحب العمودي حتى لا يتعارض مع التمرير داخل الصفحة
-    if (Math.abs(diffX) < 70 || Math.abs(diffX) < Math.abs(diffY) * 1.5) return;
+    // تحديد نوع الحركة مرة واحدة عند أول 10 بكسل (يمنع تعارض السحب مع التمرير)
+    if (start.axis === 'none') {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
 
-    const goingForward = diffX < 0;
+      start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
 
-    if (goingForward && path !== '/reels') {
-      setSwipeDirection('forward');
-      setLocation('/reels');
-    } else if (!goingForward && path === '/reels') {
-      setSwipeDirection('backward');
-      setLocation('/feed');
-    } else {
-      return;
+      if (start.axis === 'y') {
+        setSwipeOffset(0);
+        return;
+      }
     }
+
+    if (start.axis !== 'x') return;
+
+    start.dx = dx;
+
+    // مقاومة عند أول صفحة وآخر صفحة حتى لا يبدو السحب مكسورًا
+    const index = getRouteIndex(path);
+    const atStart = index <= 0 && dx > 0;
+    const atEnd = index >= swipeRoutes.length - 1 && dx < 0;
+
+    setSwipeOffset(atStart || atEnd ? dx * 0.25 : dx);
+  };
+
+  const handleSwipeEnd = () => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+
+    setSwipeOffset(0);
+
+    if (!start || start.axis !== 'x') return;
+
+    const width = window.innerWidth || 360;
+    const threshold = Math.max(60, width * 0.2);
+
+    if (Math.abs(start.dx) < threshold) return;
+
+    const index = getRouteIndex(path);
+    if (index < 0) return;
+
+    const goingForward = start.dx < 0;
+    const nextIndex = goingForward ? index + 1 : index - 1;
+
+    if (nextIndex < 0 || nextIndex >= swipeRoutes.length) return;
+
+    setSwipeDirection(goingForward ? 'forward' : 'backward');
+    setLocation(swipeRoutes[nextIndex]);
 
     if (swipeTimerRef.current) window.clearTimeout(swipeTimerRef.current);
     swipeTimerRef.current = window.setTimeout(() => setSwipeDirection(null), 420);
@@ -3087,8 +3136,15 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
                 ? 'page-slide-backward'
                 : ''
           }`}
+          style={{
+            transform: swipeOffset !== 0 ? `translate3d(${swipeOffset}px, 0, 0)` : undefined,
+            transition: swipeOffset !== 0 ? 'none' : 'transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1)',
+            touchAction: 'pan-y',
+          }}
           onTouchStart={handleSwipeStart}
+          onTouchMove={handleSwipeMove}
           onTouchEnd={handleSwipeEnd}
+          onTouchCancel={handleSwipeEnd}
         >
           {children}
         </main>

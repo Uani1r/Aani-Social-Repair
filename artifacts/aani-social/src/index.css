@@ -659,3 +659,10 @@ body.aani-chrome-hidden .story-strip {
     animation: none;
   }
 }
+
+
+/* السماح بالتمرير الأفقي داخل المعارض وشريط القصص دون تعارض مع سحب التنقل */
+.carousel-track,
+.no-scrollbar {
+  touch-action: pan-x;
+}
