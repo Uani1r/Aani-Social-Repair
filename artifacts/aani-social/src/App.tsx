@@ -2726,6 +2726,37 @@ function NotificationsModal({ isOpen, onClose, currentUserId }: { isOpen: boolea
 }
 
 // --- الهيكل الرئيسي لتطبيق آني (Shell) ---
+/**
+ * يحدد إن كانت اللمسة بدأت داخل عنصر يملك إيماءة أفقية خاصة (معرض صور،
+ * نافذة، حقل إدخال، فيديو...) حتى لا تُختطف من التنقل بالسحب.
+ */
+function isHorizontalGestureArea(target: EventTarget | null): boolean {
+  let node = target as HTMLElement | null;
+
+  while (node && node !== document.body) {
+    const tag = node.tagName;
+
+    // نحمي حقول الإدخال فقط أثناء الكتابة فيها حتى لا يتعطّل التنقل في بقية الصفحة
+    if ((tag === 'INPUT' || tag === 'TEXTAREA') && document.activeElement === node) {
+      return true;
+    }
+
+    if (tag === 'VIDEO') return true;
+
+    const role = node.getAttribute('role');
+    if (role === 'dialog' || role === 'listbox') return true;
+
+    const overflowX = window.getComputedStyle(node).overflowX;
+    if ((overflowX === 'auto' || overflowX === 'scroll') && node.scrollWidth > node.clientWidth + 4) {
+      return true;
+    }
+
+    node = node.parentElement;
+  }
+
+  return false;
+}
+
 function Shell({ children, profile, userId, onSignOut, onOpenComments }: { children: ReactNode; profile: Profile | null; userId: string; onSignOut: () => void; onOpenComments: (postId: string) => void }) {
   const [path, setLocation] = useLocation();
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -2762,8 +2793,17 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   useEffect(() => {
     let frame = 0;
     let touchY = 0;
+    let scrollAccum = 0;
+    let lastHideAt = 0;
 
     const setHidden = (hidden: boolean) => {
+      if (hidden) {
+        const now = Date.now();
+        // حماية من الاهتزاز: لا نُخفي إلا بعد مرور فترة قصيرة على آخر إخفاء
+        if (now - lastHideAt < 220) return;
+        lastHideAt = now;
+      }
+
       setChromeHidden(prev => (prev === hidden ? prev : hidden));
     };
 
@@ -2774,39 +2814,47 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
         frame = 0;
 
         const y = window.scrollY || document.documentElement.scrollTop || 0;
-        const previous = lastScrollRef.current;
+        const delta = y - lastScrollRef.current;
 
         // أعلى الصفحة: أظهر الأشرطة دائمًا
         if (y <= 10) {
+          scrollAccum = 0;
           setHidden(false);
           lastScrollRef.current = y;
           return;
         }
 
-        if (Math.abs(y - previous) < 4) return;
+        // تجميع الحركة في اتجاه واحد قبل تبديل الحالة (عتبة تمنع الارتجاف)
+        if (delta !== 0) {
+          if (scrollAccum !== 0 && Math.sign(delta) !== Math.sign(scrollAccum)) {
+            scrollAccum = 0;
+          }
+          scrollAccum += delta;
+        }
 
-        if (y > previous && y > 60) setHidden(true);
-        else if (y < previous) setHidden(false);
+        if (scrollAccum > 20) {
+          setHidden(true);
+          scrollAccum = 0;
+        } else if (scrollAccum < -20) {
+          setHidden(false);
+          scrollAccum = 0;
+        }
 
         lastScrollRef.current = y;
       });
     };
 
-    // استجابة فورية لحركة الإصبع: تظهر الأشرطة بمجرد الصعود 5 بكسل
+    // إظهار فوري عند رفع الإصبع (بدون إخفاء من حركة الإصبع لتجنب التذبذب)
     const onTouchStart = (event: TouchEvent) => {
       touchY = event.touches[0]?.clientY ?? 0;
     };
 
     const onTouchMove = (event: TouchEvent) => {
       const currentY = event.touches[0]?.clientY ?? touchY;
-      const diff = touchY - currentY;
 
-      if (diff > 5) {
+      if (touchY - currentY > 6) {
+        scrollAccum = 0;
         setHidden(false);
-        touchY = currentY;
-      } else if (diff < -15) {
-        const y = window.scrollY || document.documentElement.scrollTop || 0;
-        if (y > 60) setHidden(true);
         touchY = currentY;
       }
     };
@@ -2835,12 +2883,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const handleSwipeStart = (event: React.TouchEvent) => {
     const target = event.target as HTMLElement | null;
 
-    // لا نلتقط السحب داخل العناصر الأفقية أو حقول الإدخال حتى لا يتعارض معها
-    if (
-      target?.closest(
-        '.carousel-track, .overflow-x-auto, .no-scrollbar, input, textarea, [role="dialog"], [role="listbox"]',
-      )
-    ) {
+    // لا نلتقط السحب داخل العناصر التي تملك إيماءة أفقية أو حقول الإدخال
+    if (isHorizontalGestureArea(target)) {
       swipeStartRef.current = null;
       return;
     }
@@ -2909,6 +2953,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     setSwipeDirection(goingForward ? 'forward' : 'backward');
     setLocation(swipeRoutes[nextIndex]);
+
+    // بداية الصفحة الجديدة من الأعلى لتبدو الحركة انتقالًا حقيقيًا
+    window.scrollTo({ top: 0, behavior: 'auto' });
 
     if (swipeTimerRef.current) window.clearTimeout(swipeTimerRef.current);
     swipeTimerRef.current = window.setTimeout(() => setSwipeDirection(null), 420);
