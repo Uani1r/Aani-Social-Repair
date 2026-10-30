@@ -2806,8 +2806,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
         return;
       }
 
-      // الإخفاء فقط عند صعود واضح للإصبع وليس أثناء السحب الأفقي
-      if (dy < 0 && Math.abs(dy) > Math.abs(dx)) {
+      // الإخفاء عند صعود الإصبع (سحب من الأسفل إلى الأعلى) بعد 12 بكسل
+      if (dy < -12) {
         const step = touch.clientY - lastTouchY;
         lastTouchY = touch.clientY;
 
@@ -2820,6 +2820,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           setHidden(true);
           accum = 0;
         }
+      } else {
+        lastTouchY = touch.clientY;
       }
     };
 
@@ -2864,7 +2866,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
-  const [swipeOffset, setSwipeOffset] = useState(0);
+  const mainRef = useRef<HTMLElement | null>(null);
   const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number } | null>(null);
   const swipeTimerRef = useRef<number | null>(null);
 
@@ -2887,6 +2889,16 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     [swipeRoutes],
   );
 
+  const setMainOffset = (offset: number, animated: boolean) => {
+    const node = mainRef.current;
+    if (!node) return;
+
+    node.style.transition = animated
+      ? 'transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1)'
+      : 'none';
+    node.style.transform = offset === 0 ? '' : `translate3d(${offset}px, 0, 0)`;
+  };
+
   const handleSwipeStart = (event: React.TouchEvent) => {
     const target = event.target as HTMLElement | null;
 
@@ -2899,6 +2911,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const touch = event.touches[0];
     if (!touch) return;
 
+    setMainOffset(0, false);
     swipeStartRef.current = { x: touch.clientX, y: touch.clientY, axis: 'none', dx: 0 };
   };
 
@@ -2912,16 +2925,12 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
 
-    // تحديد نوع الحركة مرة واحدة عند أول 10 بكسل (يمنع تعارض السحب مع التمرير)
+    // تحديد نوع الحركة عند أول 6 بكسل، مع إمكانية التصحيح إذا تغيّر الاتجاه
     if (start.axis === 'none') {
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
-
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
       start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-
-      if (start.axis === 'y') {
-        setSwipeOffset(0);
-        return;
-      }
+    } else if (start.axis === 'y' && Math.abs(dx) > Math.abs(dy) * 1.5 && Math.abs(dx) > 14) {
+      start.axis = 'x';
     }
 
     if (start.axis !== 'x') return;
@@ -2933,39 +2942,42 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const atForwardLimit = index >= swipeRoutes.length - 1 && dx > 0;
     const atBackwardLimit = index <= 0 && dx < 0;
 
-    setSwipeOffset(atForwardLimit || atBackwardLimit ? dx * 0.25 : dx);
+    setMainOffset(atForwardLimit || atBackwardLimit ? dx * 0.25 : dx, false);
   };
 
   const handleSwipeEnd = () => {
     const start = swipeStartRef.current;
     swipeStartRef.current = null;
 
-    setSwipeOffset(0);
-
-    if (!start || start.axis !== 'x') return;
-
     const width = window.innerWidth || 360;
-    const threshold = Math.max(60, width * 0.2);
+    const threshold = Math.max(56, width * 0.18);
 
-    if (Math.abs(start.dx) < threshold) return;
+    const shouldNavigate = Boolean(start && start.axis === 'x' && Math.abs(start.dx) >= threshold);
+    const horizontalSwipe = Boolean(start && start.axis === 'x');
 
-    const index = getRouteIndex(path);
-    if (index < 0) return;
+    if (shouldNavigate && start) {
+      const index = getRouteIndex(path);
 
-    // السحب من اليسار إلى اليمين (dx > 0) يقدّم للأمام، ومن اليمين لليسار يرجع
-    const goingForward = start.dx > 0;
-    const nextIndex = goingForward ? index + 1 : index - 1;
+      if (index >= 0) {
+        // السحب من اليسار إلى اليمين (dx > 0) يقدّم للأمام، ومن اليمين لليسار يرجع
+        const goingForward = start.dx > 0;
+        const nextIndex = goingForward ? index + 1 : index - 1;
 
-    if (nextIndex < 0 || nextIndex >= swipeRoutes.length) return;
+        if (nextIndex >= 0 && nextIndex < swipeRoutes.length) {
+          setSwipeDirection(goingForward ? 'forward' : 'backward');
+          setLocation(swipeRoutes[nextIndex]);
 
-    setSwipeDirection(goingForward ? 'forward' : 'backward');
-    setLocation(swipeRoutes[nextIndex]);
+          // بداية الصفحة الجديدة من الأعلى لتبدو الحركة انتقالًا حقيقيًا
+          window.scrollTo({ top: 0, behavior: 'auto' });
 
-    // بداية الصفحة الجديدة من الأعلى لتبدو الحركة انتقالًا حقيقيًا
-    window.scrollTo({ top: 0, behavior: 'auto' });
+          if (swipeTimerRef.current) window.clearTimeout(swipeTimerRef.current);
+          swipeTimerRef.current = window.setTimeout(() => setSwipeDirection(null), 420);
+        }
+      }
+    }
 
-    if (swipeTimerRef.current) window.clearTimeout(swipeTimerRef.current);
-    swipeTimerRef.current = window.setTimeout(() => setSwipeDirection(null), 420);
+    // إعادة الصفحة لموضعها بحركة ناعمة
+    if (horizontalSwipe) setMainOffset(0, true);
   };
 
   const [postText, setPostText] = useState('');
@@ -3183,6 +3195,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
       <div className="content-shell" style={{ paddingBottom: 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main
+          ref={mainRef}
           className={`main-content ${
             swipeDirection === 'forward'
               ? 'page-slide-forward'
@@ -3190,11 +3203,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
                 ? 'page-slide-backward'
                 : ''
           }`}
-          style={{
-            transform: swipeOffset !== 0 ? `translate3d(${swipeOffset}px, 0, 0)` : undefined,
-            transition: swipeOffset !== 0 ? 'none' : 'transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1)',
-            touchAction: 'pan-y',
-          }}
+          style={{ touchAction: 'pan-y' }}
           onTouchStart={handleSwipeStart}
           onTouchMove={handleSwipeMove}
           onTouchEnd={handleSwipeEnd}
