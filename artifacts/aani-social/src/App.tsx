@@ -18,6 +18,7 @@ import { displayName, formatDate, normalizeProfile, type Post, type Profile } fr
 
 import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
+import ShareSheet from './components/ShareSheet';
 import '@/index.css';
 
 // --- مكون المساعد الذكي الآمن المربوط بـ Supabase Edge Function ---
@@ -819,6 +820,7 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
   const [bookmarked, setBookmarked] = useState(post.saved_by_me ?? false);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [showShareSheet, setShowShareSheet] = useState(false);
 
   const urls = useMemo(() => {
     if (post.media_urls && post.media_urls.length > 0) return post.media_urls;
@@ -922,16 +924,6 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
       }
     } catch {
       setBookmarked(prevBookmarked);
-    }
-  };
-
-  const handleShare = async () => {
-    const shareUrl = `${window.location.origin}/post/${post.id}`;
-    if (navigator.share) {
-      try { await navigator.share({ title: 'منشور على آني', url: shareUrl }); } catch {}
-    } else {
-      await navigator.clipboard.writeText(shareUrl);
-      alert('تم نسخ رابط المنشور للمشاركة!');
     }
   };
 
@@ -1177,7 +1169,7 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
           </button>
 
           {/* 4. المشاركة */}
-          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition" onClick={handleShare}>
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition" onClick={() => setShowShareSheet(true)}>
             <Send size={18} />
           </button>
 
@@ -1224,6 +1216,16 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
             </div>
           </form>
         </div>
+      )}
+
+      {showShareSheet && (
+        <ShareSheet
+          post={post}
+          currentUserId={currentUserId}
+          reposted={reposted}
+          onToggleRepost={toggleRepost}
+          onClose={() => setShowShareSheet(false)}
+        />
       )}
     </article>
   );
@@ -1622,6 +1624,82 @@ function SearchPage({ userId }: { userId: string }) {
   );
 }
 
+// --- معاينة منشور مشارَك داخل الرسائل ---
+function SharedPostPreview({ content }: { content: string }) {
+  const match = content.match(/^\[post:(\S+)\]([\s\S]*)$/);
+  const postId = match?.[1] || '';
+  const caption = match?.[2]?.trim() || '';
+  const [info, setInfo] = useState<{ author: Profile | null; media: string; text: string; type: string } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    if (!supabaseConfigured || !postId) return;
+
+    void (async () => {
+      try {
+        const { data: p } = await supabase
+          .from('posts')
+          .select('id, user_id, content, media_url, media_urls, type')
+          .eq('id', postId)
+          .maybeSingle();
+
+        if (!active) return;
+        if (!p) {
+          setInfo({ author: null, media: '', text: 'هذا المنشور لم يعد متاحاً.', type: 'text' });
+          return;
+        }
+
+        const { data: a } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .eq('id', p.user_id)
+          .maybeSingle();
+
+        if (!active) return;
+
+        const raw = p as { media_urls?: string[] | null; media_url?: string | null; content?: string; type?: string };
+        const media = (raw.media_urls?.length ? raw.media_urls[0] : raw.media_url) || '';
+
+        setInfo({
+          author: (a || null) as Profile | null,
+          media,
+          text: String(raw.content || ''),
+          type: String(raw.type || 'text'),
+        });
+      } catch {
+        if (active) setInfo({ author: null, media: '', text: '', type: 'text' });
+      }
+    })();
+
+    return () => { active = false; };
+  }, [postId]);
+
+  return (
+    <Link href={`/post/${postId}`} className="block w-full overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 transition hover:border-pink-500/50">
+      <div className="flex items-center gap-2 p-2">
+        {info?.author?.avatar_url ? (
+          <img src={info.author.avatar_url} alt="" className="h-6 w-6 rounded-full object-cover" />
+        ) : (
+          <span className="h-6 w-6 rounded-full bg-gradient-to-br from-pink-500 to-violet-600" />
+        )}
+        <strong className="truncate text-[11px] text-white">
+          {info?.author?.full_name || 'منشور على آني'}
+        </strong>
+      </div>
+      {info?.media && (
+        info.type === 'reel' ? (
+          <video src={info.media} muted playsInline className="max-h-40 w-full object-cover" />
+        ) : (
+          <img src={info.media} alt="" className="max-h-40 w-full object-cover" />
+        )
+      )}
+      {info?.text && <p className="w-full p-2 text-right text-[11px] leading-5 text-zinc-300 line-clamp-2">{info.text}</p>}
+      {caption && <p className="w-full px-2 pb-1 text-right text-[11px] text-zinc-400">{caption}</p>}
+      <span className="block px-2 pb-2 text-[10px] text-pink-400">اضغط للانتقال إلى المنشور</span>
+    </Link>
+  );
+}
+
 // --- صفحة الرسائل ---
 function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; selectedId?: string }) {
   const [, setLocation] = useLocation();
@@ -1711,11 +1789,20 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
             {target && <strong className="text-xs text-white">{displayName(target)}</strong>}
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 p-2">
-            {thread.map(m => (
-              <div key={m.id} className={`max-w-[75%] p-2 rounded-xl text-xs ${m.sender_id === currentUserId ? 'bg-pink-600 text-white mr-auto' : 'bg-zinc-800 text-zinc-200 ml-auto'}`}>
-                {m.content}
-              </div>
-            ))}
+            {thread.map(m => {
+              const isMine = m.sender_id === currentUserId;
+              const isSharedPost = typeof m.content === 'string' && m.content.trim().startsWith('[post:');
+              return (
+                <div key={m.id} className={`max-w-[85%] flex flex-col ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'}`}>
+                  {!isMine && target && (
+                    <span className="mb-0.5 text-[10px] text-zinc-500">{displayName(target)}</span>
+                  )}
+                  <div className={`p-2 rounded-xl text-xs ${isMine ? 'bg-pink-600 text-white' : 'bg-zinc-800 text-zinc-200'} ${isSharedPost ? 'w-full' : ''}`}>
+                    {isSharedPost ? <SharedPostPreview content={m.content} /> : m.content}
+                  </div>
+                </div>
+              );
+            })}
           </div>
           <form className="flex gap-2 pt-2 border-t border-zinc-800" onSubmit={sendMessage}>
             <input value={text} onChange={e => setText(e.target.value)} placeholder="اكتب رسالة..." className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl p-2 text-xs text-white outline-none" />
@@ -1824,6 +1911,7 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [showShareSheet, setShowShareSheet] = useState(false);
 
   useEffect(() => {
     setLiked(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
@@ -1921,16 +2009,6 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
     }
   };
 
-  const handleShare = async () => {
-    const shareUrl = `${window.location.origin}/post/${post.id}`;
-    if (navigator.share) {
-      try { await navigator.share({ title: 'ريل على آني', url: shareUrl }); } catch {}
-    } else {
-      await navigator.clipboard.writeText(shareUrl);
-      alert('تم نسخ رابط الريل للمشاركة!');
-    }
-  };
-
   const saveFeedback = async (value: 'interested' | 'not_interested') => {
     if (!supabaseConfigured) return;
     const previousFeedback = feedback;
@@ -2020,7 +2098,7 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
         </button>
 
         {/* 4. المشاركة */}
-        <button onClick={handleShare} className="flex flex-col items-center gap-1 text-white">
+        <button onClick={() => setShowShareSheet(true)} className="flex flex-col items-center gap-1 text-white">
           <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
             <Send size={22} />
           </span>
@@ -2054,6 +2132,16 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
           )}
         </div>
       </div>
+
+      {showShareSheet && (
+        <ShareSheet
+          post={post}
+          currentUserId={currentUserId}
+          reposted={reposted}
+          onToggleRepost={toggleRepost}
+          onClose={() => setShowShareSheet(false)}
+        />
+      )}
     </section>
   );
 }
