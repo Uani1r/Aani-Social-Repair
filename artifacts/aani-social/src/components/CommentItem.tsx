@@ -2,7 +2,6 @@
 import React, { useState } from 'react';
 import {
   Heart,
-  Languages,
   MoreHorizontal,
   Reply,
   ThumbsDown,
@@ -52,48 +51,6 @@ const buildInitials = (fullName?: string | null): string => {
   return initials || 'آ';
 };
 
-/**
- * ترجمة نص التعليق إلى العربية.
- * لا تغيّر نص التعليق الأصلي ولا تحفظ الترجمة في قاعدة البيانات.
- */
-async function translateCommentToArabic(text: string): Promise<string> {
-  const sourceText = text.trim();
-
-  if (!sourceText) {
-    throw new Error('لا يوجد نص لترجمته');
-  }
-
-  const url = new URL('https://api.mymemory.translated.net/get');
-  url.searchParams.set('q', sourceText);
-  url.searchParams.set('langpair', 'autodetect|ar');
-
-  const response = await fetch(url.toString());
-
-  if (!response.ok) {
-    throw new Error('تعذر الاتصال بخدمة الترجمة');
-  }
-
-  const data: {
-    responseStatus?: number;
-    responseDetails?: string;
-    responseData?: {
-      translatedText?: string;
-    };
-  } = await response.json();
-
-  const translated = data.responseData?.translatedText?.trim();
-
-  if (
-    data.responseStatus !== 200 ||
-    !translated ||
-    translated.toLowerCase() === 'error'
-  ) {
-    throw new Error(data.responseDetails || 'تعذرت ترجمة التعليق');
-  }
-
-  return translated;
-}
-
 export const CommentItem: React.FC<CommentItemProps> = ({
   comment,
   currentUserId,
@@ -105,10 +62,6 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   pendingReactionIds = {},
   pendingDeleteIds = {},
 }) => {
-  const [showTranslated, setShowTranslated] = useState(false);
-  const [translatedText, setTranslatedText] = useState<string | null>(null);
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [translationError, setTranslationError] = useState<string | null>(null);
   const [showReplies, setShowReplies] = useState(true);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
@@ -120,40 +73,6 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const isOwnComment = currentUserId === comment.user_id;
   const isReactionPending = !!pendingReactionIds[comment.id];
   const isDeleting = !!pendingDeleteIds[comment.id];
-
-  const handleTranslation = async () => {
-    if (isTranslating) return;
-
-    if (showTranslated) {
-      setShowTranslated(false);
-      setTranslationError(null);
-      return;
-    }
-
-    if (translatedText !== null) {
-      setShowTranslated(true);
-      setTranslationError(null);
-      return;
-    }
-
-    setIsTranslating(true);
-    setTranslationError(null);
-
-    try {
-      const result = await translateCommentToArabic(comment.content);
-      setTranslatedText(result);
-      setShowTranslated(true);
-    } catch (error) {
-      console.error('Comment translation failed:', error);
-      setTranslationError(
-        error instanceof Error
-          ? error.message
-          : 'تعذرت الترجمة، حاول مرة أخرى',
-      );
-    } finally {
-      setIsTranslating(false);
-    }
-  };
 
   return (
     <div className="relative">
@@ -226,20 +145,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           </div>
 
           <div className="mt-2 whitespace-pre-wrap break-words text-[15px] leading-8 text-zinc-100" dir="auto">
-            {showTranslated && translatedText !== null
-              ? translatedText
-              : comment.content}
+            {comment.content}
           </div>
-
-          {translationError && (
-            <p
-              role="status"
-              className="mt-2 text-xs text-amber-400"
-              dir="rtl"
-            >
-              {translationError}
-            </p>
-          )}
 
           {comment.image_url && (
             <button
@@ -265,21 +172,6 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               <Reply size={17} style={{ transform: 'scaleX(-1)' }} />
               <span>رد</span>
               {replyCount > 0 && <span>{replyCount}</span>}
-            </button>
-
-            <button
-              type="button"
-              onClick={handleTranslation}
-              disabled={isTranslating || !comment.content.trim()}
-              aria-busy={isTranslating}
-              className="inline-flex items-center gap-1.5 py-1 transition hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <Languages size={17} />
-              {isTranslating
-                ? 'جارٍ الترجمة...'
-                : showTranslated
-                  ? 'النص الأصلي'
-                  : 'ترجمة'}
             </button>
 
             <button

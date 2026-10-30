@@ -557,6 +557,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       await loadComments(false);
       return true;
     } catch (error: unknown) {
+      console.error('Comment reaction failed:', getErrorDetails(error));
       toast.error('تعذر تحديث التفاعل');
       return false;
     } finally {
