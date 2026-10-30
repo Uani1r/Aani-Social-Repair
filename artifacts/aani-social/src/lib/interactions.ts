@@ -716,14 +716,23 @@ export function syncCommentCount(
   userId: string,
   count: number,
 ): void {
-  if (!postId || !userId) return;
+  if (!postId) return;
 
-  if (isPending(postId, userId)) return;
+  const normalized = Number.isFinite(count) ? Math.max(0, Math.round(count)) : 0;
 
-  patchCache(postId, userId, {
-    comments: Number.isFinite(count) ? Math.max(0, count) : 0,
-    hydrated: true,
-  });
+  if (userId && !isPending(postId, userId)) {
+    patchCache(postId, userId, {
+      comments: normalized,
+      hydrated: true,
+    });
+  }
+
+  // إبلاغ بطاقات المنشورات بالعدد الجديد فورًا (Optimistic UI) وبدون إعادة تحميل
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("aani:comment-count", { detail: { postId, count: normalized } }),
+    );
+  }
 }
 
 /**

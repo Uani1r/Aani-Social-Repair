@@ -839,6 +839,19 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
     setFeedback(post.feedback_by_me || null);
   }, [post, currentUserId]);
 
+  // عدّاد التعليقات: تحديث فوري من نافذة التعليقات (Optimistic UI) دون إعادة تحميل
+  useEffect(() => {
+    const onCommentCount = (event: Event) => {
+      const detail = (event as CustomEvent<{ postId?: string; count?: number }>).detail;
+      if (!detail?.postId || detail.postId !== post.id) return;
+      const next = Number(detail.count);
+      if (Number.isFinite(next)) setCommentsCount(Math.max(0, next));
+    };
+
+    window.addEventListener('aani:comment-count', onCommentCount as EventListener);
+    return () => window.removeEventListener('aani:comment-count', onCommentCount as EventListener);
+  }, [post.id]);
+
   const handleScroll = useCallback(() => {
     const el = trackRef.current;
     if (!el) return;
@@ -870,10 +883,12 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
     try {
       if (prevLiked) {
         const { error } = await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error) throw error;
+        // لا يوجد صف إعجاب = الحالة المطلوبة أصلًا
+        if (error && error.code !== 'PGRST116') throw error;
       } else {
         const { error } = await supabase.from('likes').insert({ post_id: post.id, user_id: currentUserId });
-        if (error) throw error;
+        // إعجاب مسجّل مسبقًا = الحالة المطلوبة أصلًا (لا تراجع عن الواجهة)
+        if (error && error.code !== '23505') throw error;
       }
     } catch {
       setLiked(prevLiked);
@@ -896,10 +911,11 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
     try {
       if (prevReposted) {
         const { error } = await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error) throw error;
+        if (error && error.code !== 'PGRST116') throw error;
       } else {
         const { error } = await supabase.from('reposts').insert({ post_id: post.id, user_id: currentUserId });
-        if (error) throw error;
+        // إعادة نشر مسجّلة مسبقًا = الحالة المطلوبة أصلًا
+        if (error && error.code !== '23505') throw error;
       }
     } catch {
       setReposted(prevReposted);
@@ -942,15 +958,26 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
 
   const addComment = async (event: FormEvent) => {
     event.preventDefault();
-    if (!supabaseConfigured || !commentText.trim()) return;
+    const value = commentText.trim();
+    if (!supabaseConfigured || !value || busy) return;
+
+    // تحديث العداد فورًا (Optimistic UI) قبل انتظار الشبكة
+    const previousCount = commentsCount;
+    setCommentText('');
+    setCommentsCount(previousCount + 1);
+
     setBusy(true);
     try {
-      const { error } = await supabase.from('comments').insert({ post_id: post.id, user_id: currentUserId, content: commentText.trim() });
+      const { error } = await supabase.from('comments').insert({
+        post_id: post.id,
+        user_id: currentUserId,
+        content: value,
+      });
       if (error) throw error;
-      setCommentText('');
-      setCommentsCount(count => count + 1);
       await loadComments();
     } catch {
+      setCommentsCount(previousCount);
+      setCommentText(value);
       alert('تعذر نشر التعليق. حاول مرة أخرى.');
     } finally {
       setBusy(false);
@@ -2148,10 +2175,12 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
     try {
       if (prevLiked) {
         const { error } = await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error) throw error;
+        // لا يوجد صف إعجاب = الحالة المطلوبة أصلًا
+        if (error && error.code !== 'PGRST116') throw error;
       } else {
         const { error } = await supabase.from('likes').insert({ post_id: post.id, user_id: currentUserId });
-        if (error) throw error;
+        // إعجاب مسجّل مسبقًا = الحالة المطلوبة أصلًا (لا تراجع عن الواجهة)
+        if (error && error.code !== '23505') throw error;
       }
     } catch {
       setLiked(prevLiked);
@@ -2269,7 +2298,9 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
           <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
             <MessageSquare size={22} />
           </span>
-          <span className="text-[11px] font-semibold">{post.comments?.length || 0}</span>
+          <span className="text-[11px] font-bold">
+            {post.comments_count ?? post.comments?.length ?? 0}
+          </span>
         </button>
 
         {/* 3. إعادة النشر */}
