@@ -2765,40 +2765,62 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // سلوك التمرير: إخفاء الشرائط العلوية وشريط التنقل السفلي
-  const [chromeHidden, setChromeHidden] = useState(false);
-  const chromeHiddenRef = useRef(false);
-  const scrollAccumRef = useRef(0);
+  // سلوك التمرير: تقدّم متصل (0 → 1) يتحكم بتقلّص وتلاشي الشريطين تدريجيًا
+  const chromeProgressRef = useRef(0);
+  const chromeFullyHiddenRef = useRef(false);
   const lastScrollRef = useRef(0);
 
-  const setChromeHiddenState = useCallback((hidden: boolean) => {
-    if (chromeHiddenRef.current === hidden) return;
-    chromeHiddenRef.current = hidden;
-    setChromeHidden(hidden);
+  useEffect(() => {
+    let frame = 0;
+    const root = document.documentElement;
+
+    const applyProgress = (value: number) => {
+      const clamped = Math.min(1, Math.max(0, value));
+      chromeProgressRef.current = clamped;
+      root.style.setProperty('--aani-chrome-progress', clamped.toFixed(3));
+
+      const fullyHidden = clamped > 0.985;
+
+      if (fullyHidden !== chromeFullyHiddenRef.current) {
+        chromeFullyHiddenRef.current = fullyHidden;
+        document.body.classList.toggle('aani-chrome-fully-hidden', fullyHidden);
+      }
+    };
+
+    const onScroll = () => {
+      if (frame) return;
+
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+
+        const y = window.scrollY || document.documentElement.scrollTop || 0;
+        const delta = y - lastScrollRef.current;
+        lastScrollRef.current = y;
+
+        // أعلى الصفحة: الشريطان ظاهران تمامًا
+        if (y <= 6) {
+          applyProgress(0);
+          return;
+        }
+
+        // كل 110 بكسل من التمرير تُكمل الإخفاء (أو الإظهار):
+        // الحركة الصغيرة تُخفي جزءًا من الشريطين فقط، والاستمرار يُخفيهما كليًا
+        applyProgress(chromeProgressRef.current + delta / 110);
+      });
+    };
+
+    chromeProgressRef.current = 0;
+    lastScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
+    applyProgress(0);
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+      root.style.removeProperty('--aani-chrome-progress');
+      document.body.classList.remove('aani-chrome-fully-hidden');
+    };
   }, []);
-
-  // تغيير الحالة فقط عند تجاوز 6 بكسل في اتجاه واحد (حساسية عالية بلا ارتجاف)
-  const nudgeChrome = useCallback(
-    (delta: number) => {
-      if (!delta) return;
-
-      if (scrollAccumRef.current !== 0 && Math.sign(delta) !== Math.sign(scrollAccumRef.current)) {
-        scrollAccumRef.current = 0;
-      }
-
-      scrollAccumRef.current += delta;
-      const value = scrollAccumRef.current;
-
-      if (!chromeHiddenRef.current && value >= 6) {
-        scrollAccumRef.current = 0;
-        setChromeHiddenState(true);
-      } else if (chromeHiddenRef.current && value <= -6) {
-        scrollAccumRef.current = 0;
-        setChromeHiddenState(false);
-      }
-    },
-    [setChromeHiddenState],
-  );
 
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
@@ -2826,45 +2848,10 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   );
 
   useEffect(() => {
-    let frame = 0;
-
-    const onScroll = () => {
-      if (frame) return;
-
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-
-        const y = window.scrollY || document.documentElement.scrollTop || 0;
-        const delta = y - lastScrollRef.current;
-        lastScrollRef.current = y;
-
-        // أعلى الصفحة: أظهر الأشرطة دائمًا
-        if (y <= 8) {
-          scrollAccumRef.current = 0;
-          setChromeHiddenState(false);
-          return;
-        }
-
-        nudgeChrome(delta);
-      });
-    };
-
-    window.addEventListener('scroll', onScroll, { passive: true });
-
     return () => {
-      window.removeEventListener('scroll', onScroll);
-      if (frame) window.cancelAnimationFrame(frame);
+      document.body.classList.remove('aani-chrome-fully-hidden');
     };
-  }, [nudgeChrome, setChromeHiddenState]);
-
-  // تمرير حالة الإخفاء إلى قسم القصص عبر كلاس على الصفحة (بدون تغيير منطقها)
-  useEffect(() => {
-    document.body.classList.toggle('aani-chrome-hidden', chromeHidden);
-
-    return () => {
-      document.body.classList.remove('aani-chrome-hidden');
-    };
-  }, [chromeHidden]);
+  }, []);
 
   const handleSwipeStart = (event: React.TouchEvent) => {
     const target = event.target as HTMLElement | null;
@@ -3049,11 +3036,6 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           paddingBottom: '0.625rem',
           paddingLeft: '1rem',
           paddingRight: '1rem',
-          opacity: chromeHidden ? 0 : 1,
-          transform: chromeHidden ? 'translate3d(0, -30px, 0) scale(0.96)' : 'translate3d(0, 0, 0) scale(1)',
-          transition: 'transform 300ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 300ms cubic-bezier(0.22, 0.61, 0.36, 1)',
-          pointerEvents: chromeHidden ? 'none' : 'auto',
-          transformOrigin: 'top center',
         }}
       >
         <div className="flex items-center justify-start">
@@ -3189,11 +3171,6 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           style={{
             width: 'min(92vw, 26rem)',
             paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))',
-            opacity: chromeHidden ? 0 : 1,
-            transform: chromeHidden ? 'translate3d(0, 40px, 0) scale(0.9)' : 'translate3d(0, 0, 0) scale(1)',
-            transition: 'transform 300ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 300ms cubic-bezier(0.22, 0.61, 0.36, 1)',
-            pointerEvents: chromeHidden ? 'none' : 'auto',
-            transformOrigin: 'bottom center',
           }}
         >
           {nav.map(([href, Icon, label, id]) => {

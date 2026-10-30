@@ -584,34 +584,48 @@ body {
 
 
 /* =====================================================================
-   حركات التمرير: إخفاء شريط القصص عند النزول وإظهاره عند الصعود
-   (تعديل بصري فقط — لا يغيّر أي وظيفة أو عنصر)
+   اختفاء تدريجي متصل للشريطين العلوي والسفلي (بدون ارتجاف)
+   --aani-chrome-progress من 0 (ظاهر) إلى 1 (مخفي تمامًا)
    ===================================================================== */
-.story-strip {
-  overflow: hidden;
-  max-height: 520px;
-  transition:
-    max-height 0.3s ease,
-    opacity 0.25s ease,
-    transform 0.3s ease,
-    margin 0.3s ease;
+:root {
+  --aani-chrome-progress: 0;
 }
 
-body.aani-chrome-hidden .story-strip {
-  max-height: 0;
-  opacity: 0;
-  transform: translateY(-16px);
-  margin-bottom: 0;
+.story-strip {
+  overflow: hidden;
+  max-height: calc((1 - var(--aani-chrome-progress)) * 520px);
+  opacity: calc(1 - var(--aani-chrome-progress));
+  transform: translate3d(0, calc(var(--aani-chrome-progress) * -16px), 0);
+}
+
+.topbar {
+  transform: translate3d(0, calc(var(--aani-chrome-progress) * -30px), 0)
+    scale(calc(1 - var(--aani-chrome-progress) * 0.04));
+  opacity: calc(1 - var(--aani-chrome-progress));
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+
+.mobile-nav {
+  transform: translate3d(0, calc(var(--aani-chrome-progress) * 40px), 0)
+    scale(calc(1 - var(--aani-chrome-progress) * 0.1));
+  opacity: calc(1 - var(--aani-chrome-progress));
+  transform-origin: bottom center;
+  will-change: transform, opacity;
+}
+
+body.aani-chrome-fully-hidden .topbar,
+body.aani-chrome-fully-hidden .mobile-nav {
   pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .story-strip,
-  .mobile-nav,
-  .topbar {
-    transition: none !important;
+  .page-slide-forward,
+  .page-slide-backward {
+    animation: none;
   }
 }
+
 
 
 /* =====================================================================
