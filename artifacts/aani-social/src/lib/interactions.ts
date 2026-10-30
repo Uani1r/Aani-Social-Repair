@@ -27,6 +27,7 @@ export type InteractionSnapshot = {
   comments: number;
   reposts: number;
   shares: number;
+  saves: number;
   liked: boolean;
   bookmarked: boolean;
   reposted: boolean;
@@ -85,6 +86,7 @@ const EMPTY_SNAPSHOT: InteractionSnapshot = {
   comments: 0,
   reposts: 0,
   shares: 0,
+  saves: 0,
   liked: false,
   bookmarked: false,
   reposted: false,
@@ -157,6 +159,7 @@ function patchCache(
     next.comments === current.comments &&
     next.reposts === current.reposts &&
     next.shares === current.shares &&
+    next.saves === current.saves &&
     next.liked === current.liked &&
     next.bookmarked === current.bookmarked &&
     next.reposted === current.reposted &&
@@ -190,6 +193,7 @@ export function snapshotFromPost(
       existing?.reposts ?? 0,
     ),
     shares: localNumber(local.shares, post.shares_count, existing?.shares ?? 0),
+    saves: existing?.saves ?? 0,
     liked: local.liked ?? post.liked_by_me ?? existing?.liked ?? false,
     bookmarked:
       local.bookmarked ?? post.saved_by_me ?? existing?.bookmarked ?? false,
@@ -369,6 +373,7 @@ type Summary = {
   comments?: number;
   reposts?: number;
   shares?: number;
+  saves?: number;
   liked?: boolean;
   bookmarked?: boolean;
   reposted?: boolean;
@@ -441,6 +446,18 @@ async function fetchSummaries(
   }
 }
 
+// كل استعلام يُنفَّذ بشكل مستقل؛ فشل جدول واحد (غير موجود مثلًا)
+// لا يُسقط بقية العدّادات، فبقي العدّاد صفرًا على الرغم من وجود بيانات.
+const soft = (
+  request: PromiseLike<{
+    data: unknown;
+    error: unknown;
+  }>,
+): Promise<{
+  data: unknown;
+  error: unknown;
+}> => Promise.resolve(request).catch(() => ({ data: null, error: null }));
+
 async function fetchFallbackSummaries(
   postIds: string[],
   userId: string,
@@ -449,18 +466,6 @@ async function fetchFallbackSummaries(
   postIds.forEach((id) => summaries.set(id, { postId: id }));
 
   if (!supabaseConfigured || postIds.length === 0) return summaries;
-
-  // كل استعلام يُنفَّذ بشكل مستقل؛ فشل جدول واحد (غير موجود مثلًا)
-  // لا يُسقط بقية العدّادات، فبقي العدّاد صفرًا على الرغم من وجود بيانات.
-  const soft = (
-    request: PromiseLike<{
-      data: unknown;
-      error: unknown;
-    }>,
-  ): Promise<{
-    data: unknown;
-    error: unknown;
-  }> => Promise.resolve(request).catch(() => ({ data: null, error: null }));
 
   const [likes, comments, reposts, savedPosts, bookmarks, shares, rows] =
     await Promise.all([
@@ -487,6 +492,17 @@ async function fetchFallbackSummaries(
   const repostRows = (reposts.data ?? []) as RawRow[];
   const shareRows = (shares.data ?? []) as RawRow[];
 
+  // عدد عمليات الحفظ: كل مستخدم يُحسب مرة واحدة حتى لو وُجد صفه في الجدولين
+  const savesCounts = new Map<string, number>();
+  const seenSaves = new Set<string>();
+  savedRows.forEach((row) => {
+    const id = String(row.post_id ?? "");
+    const key = `${id}:${row.user_id ?? ""}`;
+    if (!id || seenSaves.has(key)) return;
+    seenSaves.add(key);
+    savesCounts.set(id, (savesCounts.get(id) ?? 0) + 1);
+  });
+
   postIds.forEach((postId) => {
     const summary = summaries.get(postId) ?? { postId };
     const row = counters.get(postId);
@@ -498,6 +514,7 @@ async function fetchFallbackSummaries(
     );
     summary.reposts = toNumber(row?.reposts_count, repostCounts.get(postId) ?? 0);
     summary.shares = toNumber(row?.shares_count, 0);
+    summary.saves = savesCounts.get(postId) ?? 0;
     summary.liked = likeRows.some(
       (like) => like.post_id === postId && like.user_id === userId,
     );
@@ -542,6 +559,7 @@ function applySummary(summary: Summary, userId: string): void {
     comments: summary.comments ?? current.comments,
     reposts: summary.reposts ?? current.reposts,
     shares: summary.shares ?? current.shares,
+    saves: summary.saves ?? current.saves,
     liked: summary.liked ?? current.liked,
     bookmarked: summary.bookmarked ?? local.bookmarked ?? current.bookmarked,
     reposted: summary.reposted ?? local.reposted ?? current.reposted,
@@ -682,6 +700,7 @@ export function decoratePost(post: Post, userId: string): Post {
     comments_count: state.comments,
     reposts_count: state.reposts,
     shares_count: state.shares,
+    saves_count: state.saves,
     liked_by_me: state.liked,
     saved_by_me: state.bookmarked,
     reposted_by_me: state.reposted,
@@ -705,6 +724,46 @@ export function syncCommentCount(
     comments: Number.isFinite(count) ? Math.max(0, count) : 0,
     hydrated: true,
   });
+}
+
+/**
+ * يجلب عدد عمليات الحفظ الحقيقي من قاعدة البيانات ويحدّث عدّاد المنشور.
+ * يُستدعى عند تهيئة المنشور وعند وصول تحديث فوري لحفظ/إزالة حفظ.
+ */
+export async function hydrateSavesCount(
+  postIds: string[],
+  userId: string,
+): Promise<void> {
+  if (!supabaseConfigured || postIds.length === 0) return;
+
+  const ids = Array.from(new Set(postIds)).filter(Boolean);
+  if (ids.length === 0) return;
+
+  try {
+    const [savedResult, bookmarkResult] = await Promise.all([
+      soft(supabase.from("saved_posts").select("post_id,user_id").in("post_id", ids).limit(20000)),
+      soft(supabase.from("bookmarks").select("post_id,user_id").in("post_id", ids).limit(20000)),
+    ]);
+
+    const savedRows = [...((savedResult.data ?? []) as RawRow[]), ...((bookmarkResult.data ?? []) as RawRow[])];
+
+    const savesCounts = new Map<string, number>();
+    const seen = new Set<string>();
+    savedRows.forEach((row) => {
+      const id = String(row.post_id ?? "");
+      const key = `${id}:${row.user_id ?? ""}`;
+      if (!id || seen.has(key)) return;
+      seen.add(key);
+      savesCounts.set(id, (savesCounts.get(id) ?? 0) + 1);
+    });
+
+    ids.forEach((id) => {
+      if (isPending(id, userId)) return;
+      patchCache(id, userId, { saves: savesCounts.get(id) ?? 0, hydrated: true });
+    });
+  } catch (error) {
+    console.warn("[interactions] saves hydration failed:", error);
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -762,9 +821,10 @@ export async function toggleBookmark(
 
   const before = readInteractionState(post, userId);
   const bookmarked = overrideState !== undefined ? !overrideState : !before.bookmarked;
+  const saves = Math.max(0, before.saves + (bookmarked ? 1 : -1));
 
   markPending(post.id, userId, 1);
-  patchCache(post.id, userId, { bookmarked });
+  patchCache(post.id, userId, { bookmarked, saves });
 
   try {
     if (!supabaseConfigured) {
@@ -796,7 +856,7 @@ export async function toggleBookmark(
         return;
       }
 
-      patchCache(post.id, userId, { bookmarked: before.bookmarked });
+      patchCache(post.id, userId, { bookmarked: before.bookmarked, saves: before.saves });
       toast.error("تعذر حفظ المنشور، حاول مرة أخرى");
       return;
     }
@@ -1350,6 +1410,7 @@ function scheduleHydration(userId: string): void {
 function handleChange(
   payload: RealtimePostgresChangesPayload<RawRow>,
   userId: string,
+  table?: string,
 ): void {
   const record = (payload.new ?? payload.old ?? {}) as RawRow;
   const postId = record.post_id ? String(record.post_id) : "";
@@ -1358,6 +1419,11 @@ function handleChange(
 
   dirtyPosts.add(postId);
   scheduleHydration(userId);
+
+  // تحديث عدّاد الحفظ فورًا عند وصول تحديث فوري من قاعدة البيانات
+  if (table === "saved_posts" || table === "bookmarks") {
+    void hydrateSavesCount([postId], userId);
+  }
 }
 
 function handlePostUpdate(
@@ -1416,6 +1482,7 @@ function buildChannel(userId: string): RealtimeChannel {
         handleChange(
           payload as RealtimePostgresChangesPayload<RawRow>,
           userId,
+          table,
         ),
     );
   });
@@ -1518,6 +1585,7 @@ export function usePostInteractions(
     }
 
     void hydratePosts([post], userId);
+    void hydrateSavesCount([post.id], userId);
   }, [key, post, userId]);
 
   const state = snapshot ?? snapshotFromPost(post, userId);

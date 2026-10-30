@@ -1,5 +1,5 @@
 import React from 'react';
-import { Bookmark, Heart, MessageCircle, Repeat2 } from 'lucide-react';
+import { Bookmark, Heart, MessageCircle, Repeat2, Share2 } from 'lucide-react';
 
 import { usePostInteractions } from '../lib/interactions';
 import type { Post } from '../lib/types';
@@ -28,14 +28,18 @@ export default function PostCard({
   const likes = interactions?.likes ?? post.likes_count ?? post.likes?.length ?? 0;
   const comments = interactions?.comments ?? post.comments_count ?? 0;
   const reposts = interactions?.reposts ?? post.reposts_count ?? 0;
+  const saves = interactions?.saves ?? 0;
+  const shares = interactions?.shares ?? 0;
   const liked = interactions?.liked ?? (post.likes || []).some((l) => l.user_id === currentUserId);
   const bookmarked = interactions?.bookmarked ?? false;
   const reposted = interactions?.reposted ?? false;
+  const shared = interactions?.shared ?? false;
   const pending = interactions?.pending ?? false;
 
   const toggleLike = interactions?.toggleLike || (() => {});
   const toggleBookmark = interactions?.toggleBookmark || (() => {});
   const toggleRepost = interactions?.toggleRepost || (() => {});
+  const share = interactions?.share || (() => {});
 
   const handleOpenComments = () => {
     if (onOpenComments) {
@@ -113,7 +117,7 @@ export default function PostCard({
               fill={liked ? 'currentColor' : 'none'}
               className={liked ? 'text-pink-500' : ''}
             />
-            <span>{likes}</span>
+            <span className="text-[11px]">{likes}</span>
           </button>
 
           <button
@@ -122,7 +126,7 @@ export default function PostCard({
             className="inline-flex items-center gap-1.5 rounded-full bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
           >
             <MessageCircle size={16} />
-            <span>{comments}</span>
+            <span className="text-[11px]">{comments}</span>
           </button>
 
           <button
@@ -136,7 +140,20 @@ export default function PostCard({
             }`}
           >
             <Repeat2 size={16} className={reposted ? 'text-emerald-400' : ''} />
-            <span>{reposts}</span>
+            <span className="text-[11px]">{reposts}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={share}
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition ${
+              shared
+                ? 'bg-sky-500/15 text-sky-400 hover:bg-sky-500/20'
+                : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-800 hover:text-white'
+            }`}
+          >
+            <Share2 size={16} className={shared ? 'text-sky-400' : ''} />
+            <span className="text-[11px]">{shares}</span>
           </button>
         </div>
 
@@ -144,7 +161,7 @@ export default function PostCard({
           type="button"
           onClick={toggleBookmark}
           disabled={pending}
-          className={`inline-flex items-center rounded-full p-2 text-xs font-medium transition ${
+          className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium transition ${
             bookmarked
               ? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/20'
               : 'bg-zinc-800/80 text-zinc-400 hover:bg-zinc-800 hover:text-white'
@@ -155,6 +172,7 @@ export default function PostCard({
             fill={bookmarked ? 'currentColor' : 'none'}
             className={bookmarked ? 'text-amber-400' : ''}
           />
+          <span className="text-[11px]">{saves}</span>
         </button>
       </div>
     </div>

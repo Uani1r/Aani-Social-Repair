@@ -51,6 +51,13 @@ const buildInitials = (fullName?: string | null): string => {
   return initials || 'آ';
 };
 
+const formatRepliesLabel = (count: number): string => {
+  if (count === 1) return 'عرض ردّ واحد';
+  if (count === 2) return 'عرض ردّين';
+  if (count <= 10) return `عرض ${count} ردود`;
+  return `عرض ${count} ردًّا`;
+};
+
 export const CommentItem: React.FC<CommentItemProps> = ({
   comment,
   currentUserId,
@@ -62,7 +69,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   pendingReactionIds = {},
   pendingDeleteIds = {},
 }) => {
-  const [showReplies, setShowReplies] = useState(true);
+  const [showReplies, setShowReplies] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -70,6 +77,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const author = comment.profiles;
   const displayName = author?.full_name || 'مستخدم آني';
   const username = author?.username ? `@${author.username}` : '@user';
+  const isReply = depth > 0;
   const isOwnComment = currentUserId === comment.user_id;
   const isReactionPending = !!pendingReactionIds[comment.id];
   const isDeleting = !!pendingDeleteIds[comment.id];
@@ -90,10 +98,16 @@ export const CommentItem: React.FC<CommentItemProps> = ({
             <img
               src={author.avatar_url}
               alt={displayName}
-              className="h-11 w-11 rounded-full object-cover ring-2 ring-zinc-800"
+              className={`rounded-full object-cover ring-zinc-800 ${
+                isReply ? 'h-8 w-8 ring-1' : 'h-11 w-11 ring-2'
+              }`}
             />
           ) : (
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-bold text-white ring-2 ring-zinc-800">
+            <div
+              className={`flex items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 font-bold text-white ring-zinc-800 ${
+                isReply ? 'h-8 w-8 text-[11px] ring-1' : 'h-11 w-11 text-sm ring-2'
+              }`}
+            >
               {buildInitials(displayName)}
             </div>
           )}
@@ -102,10 +116,19 @@ export const CommentItem: React.FC<CommentItemProps> = ({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-              <p className="truncate text-sm font-bold text-zinc-100">
+              <p
+                className={`truncate font-bold text-zinc-100 ${
+                  isReply ? 'text-xs' : 'text-sm'
+                }`}
+              >
                 {displayName}
               </p>
-              <p className="truncate text-xs text-zinc-400" dir="ltr">
+              <p
+                className={`truncate text-zinc-400 ${
+                  isReply ? 'text-[10px]' : 'text-xs'
+                }`}
+                dir="ltr"
+              >
                 {username}
               </p>
               <span className="shrink-0 text-[11px] text-zinc-500">
@@ -144,7 +167,12 @@ export const CommentItem: React.FC<CommentItemProps> = ({
             )}
           </div>
 
-          <div className="mt-2 whitespace-pre-wrap break-words text-[15px] leading-8 text-zinc-100" dir="auto">
+          <div
+            className={`mt-2 whitespace-pre-wrap break-words text-zinc-100 ${
+              isReply ? 'text-sm leading-6' : 'text-[15px] leading-8'
+            }`}
+            dir="auto"
+          >
             {comment.content}
           </div>
 
@@ -187,11 +215,11 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               aria-label={`إعجاب، ${comment.likes_count ?? 0}`}
             >
               <Heart
-                size={20}
+                size={16}
                 fill={comment.is_liked ? 'currentColor' : 'none'}
                 strokeWidth={1.8}
               />
-              {comment.likes_count ?? 0}
+              <span className="text-[11px]">{comment.likes_count ?? 0}</span>
             </button>
 
             <button
@@ -208,8 +236,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               }`}
               aria-label={`عدم إعجاب، ${comment.dislikes_count ?? 0}`}
             >
-              <ThumbsDown size={20} strokeWidth={1.8} />
-              {comment.dislikes_count ?? 0}
+              <ThumbsDown size={16} strokeWidth={1.8} />
+              <span className="text-[11px]">{comment.dislikes_count ?? 0}</span>
             </button>
           </div>
         </div>
@@ -220,15 +248,16 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           <button
             type="button"
             onClick={() => setShowReplies((prev) => !prev)}
-            className="inline-flex items-center gap-1 rounded-full bg-zinc-800/90 px-2.5 py-1 text-[10px] text-zinc-300"
+            className="inline-flex items-center gap-1 rounded-full bg-zinc-800/90 px-2.5 py-1 text-[10px] text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100"
+            aria-expanded={showReplies}
           >
-            {showReplies ? 'إخفاء' : 'عرض'} {replyCount} ردود
+            {showReplies ? 'إخفاء الردود' : formatRepliesLabel(replyCount)}
           </button>
         </div>
       )}
 
       {showReplies && replyCount > 0 && (
-        <div className="relative mt-2 space-y-2 border-r border-zinc-700/80 pl-2">
+        <div className="relative mt-2 mr-4 space-y-2 border-r border-zinc-700/60 pr-3">
           {comment.replies?.map((reply) => (
             <CommentItem
               key={reply.id}

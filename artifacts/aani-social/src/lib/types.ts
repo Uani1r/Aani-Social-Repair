@@ -22,6 +22,7 @@ export type Post = {
   comments_count?: number;
   reposts_count?: number;
   shares_count?: number;
+  saves_count?: number;
 
   /** Owner can close the comment thread for a single post. */
   comments_disabled?: boolean;

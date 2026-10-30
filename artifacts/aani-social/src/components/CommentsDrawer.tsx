@@ -126,6 +126,22 @@ const removeCommentFromTree = (
         : item,
     );
 
+const patchCommentInTree = (
+  items: CommentWithDetails[],
+  targetId: string,
+  patch: Partial<CommentWithDetails>,
+): CommentWithDetails[] =>
+  items.map((item) =>
+    item.id === targetId
+      ? { ...item, ...patch }
+      : item.replies
+        ? {
+            ...item,
+            replies: patchCommentInTree(item.replies, targetId, patch),
+          }
+        : item,
+  );
+
 const findCommentById = (
   items: CommentWithDetails[],
   targetId: string,
@@ -569,16 +585,47 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
   };
 
+  // تحديث فوري لحالة التفاعل في القائمة (Optimistic UI) قبل إرسال الطلب
+  const applyReactionOptimistically = (
+    commentId: string,
+    patch: Partial<CommentWithDetails>,
+  ) => {
+    setComments((previous) => patchCommentInTree(previous, commentId, patch));
+  };
+
   const handleToggleLike = async (commentId: string, isLiked: boolean) => {
+    if (pendingReactionIds[commentId]) return;
+
+    const target = findCommentById(comments, commentId);
+    if (!target) return;
+
+    const nextLiked = !isLiked;
+    applyReactionOptimistically(commentId, {
+      is_liked: nextLiked,
+      likes_count: Math.max(0, (target.likes_count ?? 0) + (nextLiked ? 1 : -1)),
+      is_disliked: nextLiked ? false : !!target.is_disliked,
+      dislikes_count: nextLiked
+        ? Math.max(0, (target.dislikes_count ?? 0) - (target.is_disliked ? 1 : 0))
+        : target.dislikes_count ?? 0,
+    });
+
     const ok = await runReaction(commentId, () =>
       toggleCommentLike(commentId, currentUserId, isLiked),
     );
 
-    // إشعار حقيقي لصاحب التعليق عند الإعجاب فقط (وليس عند إلغاء الإعجاب)
-    if (!ok || isLiked) return;
+    if (!ok) {
+      // إعادة الحالة السابقة عند فشل الحفظ
+      applyReactionOptimistically(commentId, {
+        is_liked: !!target.is_liked,
+        likes_count: target.likes_count ?? 0,
+        is_disliked: !!target.is_disliked,
+        dislikes_count: target.dislikes_count ?? 0,
+      });
+      return;
+    }
 
-    const target = findCommentById(comments, commentId);
-    if (!target || target.user_id === currentUserId) return;
+    // إشعار حقيقي لصاحب التعليق عند الإعجاب فقط (وليس عند إلغاء الإعجاب)
+    if (isLiked || target.user_id === currentUserId) return;
 
     void supabase
       .from('notifications')
@@ -591,9 +638,36 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   };
 
   const handleToggleDislike = async (commentId: string, isDisliked: boolean) => {
-    await runReaction(commentId, () =>
+    if (pendingReactionIds[commentId]) return;
+
+    const target = findCommentById(comments, commentId);
+    if (!target) return;
+
+    const nextDisliked = !isDisliked;
+    applyReactionOptimistically(commentId, {
+      is_disliked: nextDisliked,
+      dislikes_count: Math.max(
+        0,
+        (target.dislikes_count ?? 0) + (nextDisliked ? 1 : -1),
+      ),
+      is_liked: nextDisliked ? false : !!target.is_liked,
+      likes_count: nextDisliked
+        ? Math.max(0, (target.likes_count ?? 0) - (target.is_liked ? 1 : 0))
+        : target.likes_count ?? 0,
+    });
+
+    const ok = await runReaction(commentId, () =>
       toggleCommentDislike(commentId, currentUserId, isDisliked),
     );
+
+    if (!ok) {
+      applyReactionOptimistically(commentId, {
+        is_disliked: !!target.is_disliked,
+        dislikes_count: target.dislikes_count ?? 0,
+        is_liked: !!target.is_liked,
+        likes_count: target.likes_count ?? 0,
+      });
+    }
   };
 
   const handleDeleteComment = async (comment: CommentWithDetails) => {
