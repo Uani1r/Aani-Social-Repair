@@ -23,6 +23,9 @@ export type Post = {
   reposts_count?: number;
   shares_count?: number;
   saves_count?: number;
+  reposted_at?: string | null;
+  reposter_id?: string | null;
+  repost_attribution?: Profile | null;
 
   /** Owner can close the comment thread for a single post. */
   comments_disabled?: boolean;

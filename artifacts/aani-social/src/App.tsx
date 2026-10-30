@@ -1054,6 +1054,14 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
 
   return (
     <article className="post-card fade-up relative">
+      {post.repost_attribution && (
+        <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-zinc-500">
+          <Repeat size={12} />
+          <span>
+            أعاد <strong className="font-bold text-zinc-400">{displayName(post.repost_attribution)}</strong> نشر هذا
+          </span>
+        </div>
+      )}
       <header className="flex items-start gap-3 w-full">
         <Avatar profile={post.author} large />
         <div className="flex-1 min-w-0">
@@ -1334,19 +1342,57 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
 
         if (postsErr) throw postsErr;
 
-        if (rawPosts && rawPosts.length > 0) {
-          const { data: profData } = await supabase
+        // جلب المنشورات التي أعاد المستخدم نشرها لعرضها في ملفه الشخصي
+        const { data: repostRows } = await supabase
+          .from('reposts')
+          .select('post_id, created_at')
+          .eq('user_id', targetUserId)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        const repostPostIds = (repostRows || []).map(r => r.post_id).filter((id: string) => !(rawPosts || []).some(p => p.id === id));
+
+        let repostedRaw: any[] = [];
+        const repostedAtById = new Map<string, string>();
+        (repostRows || []).forEach(r => repostedAtById.set(r.post_id, r.created_at));
+
+        if (repostPostIds.length > 0) {
+          const { data: originalPosts } = await supabase
+            .from('posts')
+            .select('id, user_id, content, media_url, media_urls, type, created_at')
+            .in('id', repostPostIds);
+          repostedRaw = (originalPosts || []).map(p => ({ ...p, reposter_id: targetUserId }));
+        }
+
+        const allRaw = [...(rawPosts || []), ...repostedRaw];
+
+        if (allRaw.length > 0) {
+          const authorIds = [...new Set(allRaw.map(p => p.user_id))];
+          const { data: profs } = await supabase
+            .from('profiles')
+            .select('id, username, full_name, avatar_url')
+            .in('id', authorIds);
+          const { data: reposterProf } = await supabase
             .from('profiles')
             .select('id, username, full_name, avatar_url')
             .eq('id', targetUserId)
             .maybeSingle();
 
-          const formattedPosts = rawPosts.map(p => ({
-            ...p,
-            author: profData || { id: targetUserId, username: 'user', full_name: 'مستخدم' },
-            likes: [],
-            comments: []
-          }));
+          const profMap = new Map((profs || []).map(p => [p.id, p]));
+
+          const formattedPosts = allRaw
+            .map(p => ({
+              ...p,
+              author: profMap.get(p.user_id) || { id: p.user_id, username: 'user', full_name: 'مستخدم' },
+              repost_attribution: p.reposter_id ? (reposterProf || { id: targetUserId, username: 'user', full_name: 'مستخدم' }) : null,
+              likes: [],
+              comments: []
+            }))
+            .sort((a, b) => {
+              const aTime = repostedAtById.get(a.id) || a.created_at;
+              const bTime = repostedAtById.get(b.id) || b.created_at;
+              return new Date(bTime).getTime() - new Date(aTime).getTime();
+            });
 
           setPosts(await hydratePostInteractions(formattedPosts as unknown as Post[], currentUserId));
         } else {

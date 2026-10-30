@@ -261,6 +261,142 @@ $$;
 
 commit;
 
+-- ---------------------------------------------------------------------
+-- 7. عدّادات المنشور: أعمدة + مشغّلات مزامنة + امتلاء خلفي
+--    (تجعل أرقام التعليقات/إعادة النشر/المشاركة حقيقية لكل المستخدمين)
+-- ---------------------------------------------------------------------
+alter table public.posts
+  add column if not exists likes_count integer not null default 0,
+  add column if not exists comments_count integer not null default 0,
+  add column if not exists reposts_count integer not null default 0,
+  add column if not exists shares_count integer not null default 0;
+
+create or replace function public.aani_sync_post_counters()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_post uuid;
+  delta integer;
+begin
+  if tg_op = 'INSERT' then
+    target_post := new.post_id;
+    delta := 1;
+  else
+    target_post := old.post_id;
+    delta := -1;
+  end if;
+
+  if target_post is null then
+    return null;
+  end if;
+
+  if tg_table_name = 'likes' then
+    update public.posts
+      set likes_count = greatest(0, coalesce(likes_count, 0) + delta)
+      where id = target_post;
+  elsif tg_table_name = 'comments' then
+    update public.posts
+      set comments_count = greatest(0, coalesce(comments_count, 0) + delta)
+      where id = target_post;
+  elsif tg_table_name = 'reposts' then
+    update public.posts
+      set reposts_count = greatest(0, coalesce(reposts_count, 0) + delta)
+      where id = target_post;
+  elsif tg_table_name = 'post_shares' then
+    update public.posts
+      set shares_count = greatest(0, coalesce(shares_count, 0) + delta)
+      where id = target_post;
+  end if;
+
+  return null;
+end;
+$$;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'aani_likes_counter' and tgrelid = 'public.likes'::regclass
+  ) then
+    create trigger aani_likes_counter
+      after insert or delete on public.likes
+      for each row execute function public.aani_sync_post_counters();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'aani_comments_counter' and tgrelid = 'public.comments'::regclass
+  ) then
+    create trigger aani_comments_counter
+      after insert or delete on public.comments
+      for each row execute function public.aani_sync_post_counters();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'aani_reposts_counter' and tgrelid = 'public.reposts'::regclass
+  ) then
+    create trigger aani_reposts_counter
+      after insert or delete on public.reposts
+      for each row execute function public.aani_sync_post_counters();
+  end if;
+
+  if not exists (
+    select 1 from pg_trigger
+    where tgname = 'aani_post_shares_counter' and tgrelid = 'public.post_shares'::regclass
+  ) then
+    create trigger aani_post_shares_counter
+      after insert or delete on public.post_shares
+      for each row execute function public.aani_sync_post_counters();
+  end if;
+end;
+$$;
+
+-- امتلاء خلفي: موازنة العدّادات مع الصفوف الموجودة فعلاً
+update public.posts p set
+  likes_count = coalesce((select count(*) from public.likes l where l.post_id = p.id), 0),
+  comments_count = coalesce((select count(*) from public.comments c where c.post_id = p.id), 0),
+  reposts_count = coalesce((select count(*) from public.reposts r where r.post_id = p.id), 0),
+  shares_count = coalesce((select count(*) from public.post_shares s where s.post_id = p.id), 0);
+
+-- RPC جلب العدّادات في رحلة واحدة للتطبيق
+create or replace function public.post_interaction_summaries(post_ids uuid[])
+returns table (
+  post_id uuid,
+  like_count integer,
+  comment_count integer,
+  repost_count integer,
+  share_count integer,
+  liked boolean,
+  bookmarked boolean,
+  reposted boolean,
+  shared boolean
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select
+    p.id as post_id,
+    coalesce(p.likes_count, 0) as like_count,
+    coalesce(p.comments_count, 0) as comment_count,
+    coalesce(p.reposts_count, 0) as repost_count,
+    coalesce(p.shares_count, 0) as share_count,
+    exists (select 1 from public.likes l where l.post_id = p.id and l.user_id = auth.uid()) as liked,
+    exists (select 1 from public.bookmarks b where b.post_id = p.id and b.user_id = auth.uid()) as bookmarked,
+    exists (select 1 from public.reposts r where r.post_id = p.id and r.user_id = auth.uid()) as reposted,
+    exists (select 1 from public.post_shares s where s.post_id = p.id and s.user_id = auth.uid()) as shared
+  from public.posts p
+  where p.id = any(post_ids);
+$$;
+
+revoke all on function public.post_interaction_summaries(uuid[]) from public;
+grant execute on function public.post_interaction_summaries(uuid[]) to authenticated, anon;
+
 -- =====================================================================
 -- 7. تشخيص سريع (اختياري) — شغّل هذا السطر وحده لمعرفة ما كان ناقصًا:
 --

@@ -111,16 +111,12 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           )}
         </div>
 
-        <div
-          className={`min-w-0 flex-1 ${
-            isReply ? 'mt-[6px]' : 'mt-[12px]'
-          }`}
-        >
+        <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <p
-                className={`truncate font-bold text-zinc-100 ${
-                  isReply ? 'text-xs' : 'text-sm'
+                className={`truncate font-bold text-white ${
+                  isReply ? 'text-[13px]' : 'text-[15px]'
                 }`}
               >
                 {displayName}
@@ -162,8 +158,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           </div>
 
           <div
-            className={`mt-2 whitespace-pre-wrap break-words text-zinc-100 ${
-              isReply ? 'text-[13px] leading-6' : 'text-[15px] leading-8'
+            className={`mt-1 whitespace-pre-wrap break-words font-normal text-zinc-300 ${
+              isReply ? 'text-[13px] leading-6' : 'text-[14px] leading-7'
             }`}
             dir="auto"
           >
