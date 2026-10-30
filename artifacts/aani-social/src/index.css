@@ -581,3 +581,34 @@ body {
     transition: none;
   }
 }
+
+
+/* =====================================================================
+   حركات التمرير: إخفاء شريط القصص عند النزول وإظهاره عند الصعود
+   (تعديل بصري فقط — لا يغيّر أي وظيفة أو عنصر)
+   ===================================================================== */
+.story-strip {
+  overflow: hidden;
+  max-height: 520px;
+  transition:
+    max-height 0.3s ease,
+    opacity 0.25s ease,
+    transform 0.3s ease,
+    margin 0.3s ease;
+}
+
+body.aani-chrome-hidden .story-strip {
+  max-height: 0;
+  opacity: 0;
+  transform: translateY(-16px);
+  margin-bottom: 0;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .story-strip,
+  .mobile-nav,
+  .topbar {
+    transition: none !important;
+  }
+}

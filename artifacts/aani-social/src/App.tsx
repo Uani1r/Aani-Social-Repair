@@ -1568,7 +1568,9 @@ function FeedPage({ userId, profile, onOpenComments }: { userId: string; profile
 
   return (
     <section className="new-view w-full max-w-lg mx-auto">
-      <StoriesBar userId={userId} currentProfile={profile} />
+      <div className="story-strip">
+        <StoriesBar userId={userId} currentProfile={profile} />
+      </div>
 
       {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 
@@ -2732,6 +2734,51 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
+  // سلوك التمرير: إخفاء الشرائط العلوية وتقليص شريط التنقل السفلي
+  const [chromeHidden, setChromeHidden] = useState(false);
+  const lastScrollRef = useRef(0);
+
+  useEffect(() => {
+    let frame = 0;
+
+    const onScroll = () => {
+      if (frame) return;
+
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+
+        const y = window.scrollY || document.documentElement.scrollTop || 0;
+        const previous = lastScrollRef.current;
+
+        if (Math.abs(y - previous) < 6) return;
+
+        if (y > previous && y > 80) {
+          setChromeHidden(true);
+        } else if (y < previous) {
+          setChromeHidden(false);
+        }
+
+        lastScrollRef.current = y;
+      });
+    };
+
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  // تمرير حالة الإخفاء إلى قسم القصص عبر كلاس على الصفحة (بدون تغيير منطقها)
+  useEffect(() => {
+    document.body.classList.toggle('aani-chrome-hidden', chromeHidden);
+
+    return () => {
+      document.body.classList.remove('aani-chrome-hidden');
+    };
+  }, [chromeHidden]);
+
   const [postText, setPostText] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
@@ -2827,7 +2874,13 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
   return (
     <div className="app-frame min-h-screen bg-black text-white">
-      <header className="topbar grid grid-cols-3 items-center px-4 py-2.5 bg-zinc-900/90 border-b border-zinc-800 sticky top-0 z-40">
+      <header
+        className={`topbar grid grid-cols-3 items-center overflow-hidden bg-zinc-900/90 border-b border-zinc-800 sticky top-0 z-40 transition-all duration-300 ease-out ${
+          chromeHidden
+            ? '-translate-y-full max-h-0 border-transparent py-0 opacity-0 pointer-events-none'
+            : 'max-h-24 translate-y-0 px-4 py-2.5 opacity-100'
+        }`}
+      >
         <div className="flex items-center justify-start">
           <button className="relative p-2 rounded-full hover:bg-zinc-800 text-zinc-300" onClick={() => setShowNotifsModal(true)}>
             <Bell size={20} />
@@ -2932,14 +2985,34 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
       <AIAssistantModal open={showAssistantModal} onClose={() => setShowAssistantModal(false)} />
 
-      <div className="content-shell pb-16">
+      <div className="content-shell pb-24">
         <main className="main-content">{children}</main>
-        <nav className="mobile-nav fixed bottom-0 left-0 right-0 bg-zinc-900 border-t border-zinc-800 flex justify-around p-2 z-40">
-          {nav.map(([href, Icon, label, id]) => (
-            <Link key={id} href={href} className={`flex flex-col items-center gap-1 text-[10px] ${path === href || (id === 'profile' && path.startsWith('/profile')) ? 'text-pink-500 font-bold' : 'text-zinc-400'}`}>
-              <Icon size={19} /><span>{label}</span>
-            </Link>
-          ))}
+        <nav
+          className={`mobile-nav fixed bottom-3 left-1/2 z-40 flex -translate-x-1/2 items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/90 px-3 py-2 shadow-2xl backdrop-blur-md transition-all duration-300 ease-out ${
+            chromeHidden ? 'scale-90 px-2.5 py-1.5 opacity-95' : 'scale-100'
+          }`}
+          style={{ width: 'min(92vw, 26rem)' }}
+        >
+          {nav.map(([href, Icon, label, id]) => {
+            const active = path === href || (id === 'profile' && path.startsWith('/profile'));
+
+            return (
+              <Link
+                key={id}
+                href={href}
+                className={`flex flex-col items-center gap-1 text-[10px] transition ${active ? 'text-pink-500 font-bold' : 'text-zinc-400'}`}
+              >
+                <span
+                  className={`flex h-8 w-8 items-center justify-center rounded-full transition-all duration-300 ${
+                    active ? 'bg-zinc-200 text-zinc-900' : 'bg-transparent'
+                  }`}
+                >
+                  <Icon size={19} />
+                </span>
+                <span>{label}</span>
+              </Link>
+            );
+          })}
         </nav>
       </div>
     </div>
