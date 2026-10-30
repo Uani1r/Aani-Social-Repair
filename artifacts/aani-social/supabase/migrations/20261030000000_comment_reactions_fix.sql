@@ -1,12 +1,7 @@
 -- =====================================================================
--- Aani: تشخيص وإصلاح تفاعلات التعليقات (إعجاب / عدم إعجاب)
--- =====================================================================
--- عالج هذا الملف مشكلة الخطأ "تعذر تحديث التفاعل" عند الضغط على إعجاب
--- أو عدم إعجاب في التعليقات. السبب غالبًا: جداول comment_likes /
--- comment_dislikes أو سياساتها غير موجودة في المشروع المستهدف.
---
--- آمن للتشغيل عدة مرات (Idempotent) — الصقه وشغّله في:
--- Supabase Dashboard → SQL Editor → Run
+-- Aani: سكربت إصلاح شامل (تفاعلات التعليقات + عدّادات المنشورات)
+-- انسخ كامل المحتوى والصقه في Supabase Dashboard → SQL Editor ثم Run
+-- آمن للتشغيل عدة مرات (Idempotent)
 -- =====================================================================
 
 begin;
@@ -58,6 +53,16 @@ begin
     create policy "Users can create comments as themselves"
       on public.comments for insert to authenticated
       with check (user_id = (select auth.uid()));
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'comments'
+      and policyname = 'Users can delete their own comments'
+  ) then
+    create policy "Users can delete their own comments"
+      on public.comments for delete to authenticated
+      using (user_id = (select auth.uid()));
   end if;
 
   if not exists (
@@ -130,7 +135,7 @@ grant select, insert, delete on public.comment_likes to authenticated;
 grant select, insert, delete on public.comment_dislikes to authenticated;
 
 -- ---------------------------------------------------------------------
--- 4. إلغاء تعارض الإعجاب/عدم الإعجاب (سطر واحد لكل مستخدم)
+-- 4. منع تعارض الإعجاب/عدم الإعجاب (سطر واحد لكل مستخدم)
 -- ---------------------------------------------------------------------
 create or replace function public.aani_clear_opposite_comment_reaction()
 returns trigger
@@ -160,7 +165,7 @@ create trigger aani_comment_dislikes_exclusive
   for each row execute function public.aani_clear_opposite_comment_reaction();
 
 -- ---------------------------------------------------------------------
--- 5. البث الفوري (Realtime) لتفادي إعادة الجلب اليدوي
+-- 5. البث الفوري (Realtime)
 -- ---------------------------------------------------------------------
 alter table public.comments replica identity full;
 alter table public.comment_likes replica identity full;
@@ -201,7 +206,7 @@ create table if not exists public.notifications (
 alter table public.notifications add column if not exists content text;
 alter table public.notifications add column if not exists comment_id uuid;
 
--- توسيع أنواع الإشعارات: إزالة قيد CHECK القديم الذي يمنع أنواعًا مثل 'reply'
+-- إزالة قيد CHECK قديم يمنع أنواع إشعارات يحتاجها التطبيق
 do $$
 declare
   con record;
@@ -259,11 +264,9 @@ begin
 end
 $$;
 
-commit;
-
 -- ---------------------------------------------------------------------
--- 7. عدّادات المنشور: أعمدة + مشغّلات مزامنة + امتلاء خلفي
---    (تجعل أرقام التعليقات/إعادة النشر/المشاركة حقيقية لكل المستخدمين)
+-- 7. عدّادات المنشور: أعمدة + مشغّلات مزامنة تلقائية
+--    (أي تعليق/إعجاب/إعادة نشر/مشاركة يحدّث الأرقام للجميع فوراً)
 -- ---------------------------------------------------------------------
 alter table public.posts
   add column if not exists likes_count integer not null default 0,
@@ -355,12 +358,20 @@ begin
 end;
 $$;
 
--- امتلاء خلفي: موازنة العدّادات مع الصفوف الموجودة فعلاً
+-- امتلاء خلفي: موازنة جميع العدّادات مع الصفوف الموجودة فعلاً
 update public.posts p set
   likes_count = coalesce((select count(*) from public.likes l where l.post_id = p.id), 0),
   comments_count = coalesce((select count(*) from public.comments c where c.post_id = p.id), 0),
   reposts_count = coalesce((select count(*) from public.reposts r where r.post_id = p.id), 0),
   shares_count = coalesce((select count(*) from public.post_shares s where s.post_id = p.id), 0);
+
+-- التأكد النهائي من حساب الأرقام الحقيقية للتعليقات (Backfill)
+UPDATE public.posts p
+SET comments_count = (
+    SELECT COUNT(*)
+    FROM public.comments c
+    WHERE c.post_id = p.id
+);
 
 -- RPC جلب العدّادات في رحلة واحدة للتطبيق
 create or replace function public.post_interaction_summaries(post_ids uuid[])
@@ -429,20 +440,12 @@ $$;
 
 grant execute on function public.get_post_interactions(uuid[]) to authenticated;
 
--- حساب الأرقام الحقيقية للتعليقات الحالية (Backfill) — يصلح المنشورات القديمة
-UPDATE public.posts p
-SET comments_count = (
-    SELECT COUNT(*)
-    FROM public.comments c
-    WHERE c.post_id = p.id
-);
+commit;
 
 -- =====================================================================
--- 7. تشخيص سريع (اختياري) — شغّل هذا السطر وحده لمعرفة ما كان ناقصًا:
+-- 8. تشخيص سريع (اختياري) — شغّل هذا السطر وحده لمعرفة الجداول الموجودة:
 --
 -- select table_name from information_schema.tables
 -- where table_schema = 'public'
 --   and table_name in ('comments','comment_likes','comment_dislikes','notifications');
---
--- إذا أظهر النتيجة الجداول الأربعة فكل شيء سليم.
 -- =====================================================================
