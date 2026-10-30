@@ -2767,7 +2767,38 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
   // سلوك التمرير: إخفاء الشرائط العلوية وشريط التنقل السفلي
   const [chromeHidden, setChromeHidden] = useState(false);
+  const chromeHiddenRef = useRef(false);
+  const scrollAccumRef = useRef(0);
   const lastScrollRef = useRef(0);
+
+  const setChromeHiddenState = useCallback((hidden: boolean) => {
+    if (chromeHiddenRef.current === hidden) return;
+    chromeHiddenRef.current = hidden;
+    setChromeHidden(hidden);
+  }, []);
+
+  // تغيير الحالة فقط عند تجاوز 6 بكسل في اتجاه واحد (حساسية عالية بلا ارتجاف)
+  const nudgeChrome = useCallback(
+    (delta: number) => {
+      if (!delta) return;
+
+      if (scrollAccumRef.current !== 0 && Math.sign(delta) !== Math.sign(scrollAccumRef.current)) {
+        scrollAccumRef.current = 0;
+      }
+
+      scrollAccumRef.current += delta;
+      const value = scrollAccumRef.current;
+
+      if (!chromeHiddenRef.current && value >= 6) {
+        scrollAccumRef.current = 0;
+        setChromeHiddenState(true);
+      } else if (chromeHiddenRef.current && value <= -6) {
+        scrollAccumRef.current = 0;
+        setChromeHiddenState(false);
+      }
+    },
+    [setChromeHiddenState],
+  );
 
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
@@ -2782,30 +2813,20 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     (target: string) => {
       const normalized = target === '/' ? '/feed' : target;
 
-      return swipeRoutes.findIndex(
-        route =>
-          normalized === route || (route === '/profile' && normalized.startsWith('/profile')),
-      );
+      return swipeRoutes.findIndex(route => {
+        if (normalized === route) return true;
+
+        // المسارات الفرعية تُحسب ضمن تبويبها (مثل /messages/:id و /profile/:id)
+        if (route !== '/feed' && normalized.startsWith(`${route}/`)) return true;
+
+        return false;
+      });
     },
     [swipeRoutes],
   );
 
   useEffect(() => {
     let frame = 0;
-    let touchY = 0;
-    let scrollAccum = 0;
-    let lastHideAt = 0;
-
-    const setHidden = (hidden: boolean) => {
-      if (hidden) {
-        const now = Date.now();
-        // حماية من الاهتزاز: لا نُخفي إلا بعد مرور فترة قصيرة على آخر إخفاء
-        if (now - lastHideAt < 220) return;
-        lastHideAt = now;
-      }
-
-      setChromeHidden(prev => (prev === hidden ? prev : hidden));
-    };
 
     const onScroll = () => {
       if (frame) return;
@@ -2815,61 +2836,26 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
         const y = window.scrollY || document.documentElement.scrollTop || 0;
         const delta = y - lastScrollRef.current;
+        lastScrollRef.current = y;
 
         // أعلى الصفحة: أظهر الأشرطة دائمًا
-        if (y <= 10) {
-          scrollAccum = 0;
-          setHidden(false);
-          lastScrollRef.current = y;
+        if (y <= 8) {
+          scrollAccumRef.current = 0;
+          setChromeHiddenState(false);
           return;
         }
 
-        // تجميع الحركة في اتجاه واحد قبل تبديل الحالة (عتبة تمنع الارتجاف)
-        if (delta !== 0) {
-          if (scrollAccum !== 0 && Math.sign(delta) !== Math.sign(scrollAccum)) {
-            scrollAccum = 0;
-          }
-          scrollAccum += delta;
-        }
-
-        if (scrollAccum > 20) {
-          setHidden(true);
-          scrollAccum = 0;
-        } else if (scrollAccum < -20) {
-          setHidden(false);
-          scrollAccum = 0;
-        }
-
-        lastScrollRef.current = y;
+        nudgeChrome(delta);
       });
     };
 
-    // إظهار فوري عند رفع الإصبع (بدون إخفاء من حركة الإصبع لتجنب التذبذب)
-    const onTouchStart = (event: TouchEvent) => {
-      touchY = event.touches[0]?.clientY ?? 0;
-    };
-
-    const onTouchMove = (event: TouchEvent) => {
-      const currentY = event.touches[0]?.clientY ?? touchY;
-
-      if (touchY - currentY > 6) {
-        scrollAccum = 0;
-        setHidden(false);
-        touchY = currentY;
-      }
-    };
-
     window.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('touchstart', onTouchStart, { passive: true });
-    window.addEventListener('touchmove', onTouchMove, { passive: true });
 
     return () => {
       window.removeEventListener('scroll', onScroll);
-      window.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [nudgeChrome, setChromeHiddenState]);
 
   // تمرير حالة الإخفاء إلى قسم القصص عبر كلاس على الصفحة (بدون تغيير منطقها)
   useEffect(() => {
@@ -3057,15 +3043,17 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   return (
     <div className="app-frame min-h-screen bg-black text-white">
       <header
-        className="topbar fixed inset-x-0 top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md transition-[transform,opacity] duration-[400ms] ease-[cubic-bezier(0.25,1,0.5,1)] will-change-[transform,opacity]"
+        className="topbar fixed inset-x-0 top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity]"
         style={{
           paddingTop: 'env(safe-area-inset-top)',
           paddingBottom: '0.625rem',
           paddingLeft: '1rem',
           paddingRight: '1rem',
           opacity: chromeHidden ? 0 : 1,
-          transform: chromeHidden ? 'translate3d(0, -30px, 0)' : 'translate3d(0, 0, 0)',
+          transform: chromeHidden ? 'translate3d(0, -30px, 0) scale(0.96)' : 'translate3d(0, 0, 0) scale(1)',
+          transition: 'transform 300ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 300ms cubic-bezier(0.22, 0.61, 0.36, 1)',
           pointerEvents: chromeHidden ? 'none' : 'auto',
+          transformOrigin: 'top center',
         }}
       >
         <div className="flex items-center justify-start">
@@ -3197,13 +3185,15 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           {children}
         </main>
         <nav
-          className="mobile-nav fixed inset-x-0 bottom-0 z-40 mx-auto flex items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/95 px-3 pt-2 shadow-2xl backdrop-blur-md transition-[transform,opacity] duration-[400ms] ease-[cubic-bezier(0.25,1,0.5,1)] will-change-[transform,opacity]"
+          className="mobile-nav fixed inset-x-0 bottom-0 z-40 mx-auto flex items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/95 px-3 pt-2 shadow-2xl backdrop-blur-md will-change-[transform,opacity]"
           style={{
             width: 'min(92vw, 26rem)',
             paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))',
             opacity: chromeHidden ? 0 : 1,
-            transform: chromeHidden ? 'translate3d(0, 30px, 0)' : 'translate3d(0, 0, 0)',
+            transform: chromeHidden ? 'translate3d(0, 40px, 0) scale(0.9)' : 'translate3d(0, 0, 0) scale(1)',
+            transition: 'transform 300ms cubic-bezier(0.22, 0.61, 0.36, 1), opacity 300ms cubic-bezier(0.22, 0.61, 0.36, 1)',
             pointerEvents: chromeHidden ? 'none' : 'auto',
+            transformOrigin: 'bottom center',
           }}
         >
           {nav.map(([href, Icon, label, id]) => {
