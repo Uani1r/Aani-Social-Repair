@@ -1236,42 +1236,40 @@ async function hydratePostInteractions(posts: Post[], currentUserId: string): Pr
   const postIds = posts.map(post => post.id);
   const { data, error } = await supabase.rpc('get_post_interactions', { p_post_ids: postIds });
   if (error) {
-    const likes: Array<{ post_id: string; user_id: string }> = [];
-    for (let offset = 0; ; offset += 1000) {
-      const { data: page, error: likesError } = await supabase
-        .from('likes')
-        .select('post_id,user_id')
-        .in('post_id', postIds)
-        .order('post_id')
-        .order('user_id')
-        .range(offset, offset + 999);
-      if (likesError) return posts;
-      likes.push(...(page || []));
-      if (!page || page.length < 1000) break;
-    }
+    // فشل الـ RPC: نحسب جميع العدّادات مباشرة من الجداول
+    // (تعليقات، إعادات نشر، مشاركات، إعجابات) حتى لا تبقى الأرقام صفرًا
+    const [likesRes, commentsRes, repostsRes, sharesRes, feedbackRes] = await Promise.all([
+      supabase.from('likes').select('post_id,user_id').in('post_id', postIds).limit(20000),
+      supabase.from('comments').select('post_id').in('post_id', postIds).limit(20000),
+      supabase.from('reposts').select('post_id').in('post_id', postIds).limit(20000),
+      supabase.from('post_shares').select('post_id').in('post_id', postIds).limit(20000),
+      supabase.from('post_feedback').select('post_id,feedback').eq('user_id', currentUserId).in('post_id', postIds),
+    ]);
 
-    const { data: feedbackRows } = await supabase
-      .from('post_feedback')
-      .select('post_id,feedback')
-      .eq('user_id', currentUserId)
-      .in('post_id', postIds);
-    const likesByPost = new Map<string, { count: number; likedByMe: boolean }>();
-    for (const like of likes) {
-      const summary = likesByPost.get(like.post_id) || { count: 0, likedByMe: false };
-      summary.count += 1;
-      summary.likedByMe ||= like.user_id === currentUserId;
-      likesByPost.set(like.post_id, summary);
-    }
-    const feedbackByPost = new Map((feedbackRows || []).map(row => [row.post_id, row.feedback]));
-    return posts.map(post => {
-      const summary = likesByPost.get(post.id);
-      return {
-        ...post,
-        likes_count: summary?.count || 0,
-        liked_by_me: summary?.likedByMe || false,
-        feedback_by_me: (feedbackByPost.get(post.id) as Post['feedback_by_me']) || null,
-      };
-    });
+    const countByPostDirect = (rows: any[] | null): Map<string, number> => {
+      const counts = new Map<string, number>();
+      (rows || []).forEach(row => counts.set(row.post_id, (counts.get(row.post_id) || 0) + 1));
+      return counts;
+    };
+
+    const likeCounts = countByPostDirect(likesRes.data);
+    const commentCounts = countByPostDirect(commentsRes.data);
+    const repostCounts = countByPostDirect(repostsRes.data);
+    const shareCounts = countByPostDirect(sharesRes.data);
+    const likesRows = (likesRes.data || []) as Array<{ post_id: string; user_id: string }>;
+    const feedbackByPost = new Map(((feedbackRes.data || []) as any[]).map(row => [row.post_id, row.feedback]));
+
+    return posts.map(post => ({
+      ...post,
+      likes_count: likeCounts.get(post.id) ?? post.likes_count ?? 0,
+      comments_count: commentCounts.get(post.id) ?? post.comments_count ?? 0,
+      reposts_count: repostCounts.get(post.id) ?? post.reposts_count ?? 0,
+      shares_count: shareCounts.get(post.id) ?? (post as any).shares_count ?? 0,
+      liked_by_me: likesRows.some(l => l.post_id === post.id && l.user_id === currentUserId),
+      reposted_by_me: Boolean(post.reposted_by_me),
+      saved_by_me: Boolean(post.saved_by_me),
+      feedback_by_me: (feedbackByPost.get(post.id) as Post['feedback_by_me']) || null,
+    }));
   }
   const interactionRows = (data || []) as Array<{
     post_id: string;
