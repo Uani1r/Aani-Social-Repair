@@ -18,7 +18,7 @@ import {
   uploadCommentImage,
   type CommentWithDetails,
 } from '../lib/interactions';
-import { supabase, storageBucket } from '../lib/supabase';
+import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
 
 interface CommentsDrawerProps {
   postId: string;
@@ -63,12 +63,12 @@ const getErrorDetails = (error: unknown): SupabaseErrorDetails => {
   };
 };
 
-const formatCounter = (value: number): string => {
-  if (value === 0) return '0';
-
-  return value > 999
-    ? `${(value / 1000).toFixed(1).replace(/\.0$/, '')}K`
-    : String(value);
+const formatCommentsTitle = (count: number): string => {
+  if (count === 0) return 'التعليقات';
+  if (count === 1) return 'تعليق واحد';
+  if (count === 2) return 'تعليقان';
+  if (count <= 10) return `${count} تعليقات`;
+  return `${count} تعليقاً`;
 };
 
 const countComments = (items: CommentWithDetails[]): number =>
@@ -212,6 +212,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     Record<string, boolean>
   >({});
   const [showStickerPicker, setShowStickerPicker] = useState(false);
+  const [storyOwners, setStoryOwners] = useState<Set<string>>(new Set());
 
   const commentIdsRef = useRef<Set<string>>(new Set());
 
@@ -372,6 +373,44 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       void supabase.removeChannel(channel);
     };
   }, [isOpen, postId, loadComments]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    // جلب أصحاب الستوري النشط لإطار أحمر حول صورهم في التعليقات
+    if (!supabaseConfigured) return;
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const { data } = await supabase
+          .from('stories')
+          .select('user_id')
+          .gt('expires_at', new Date().toISOString())
+          .limit(1000);
+
+        if (cancelled) return;
+
+        setStoryOwners(
+          new Set(
+            ((data ?? []) as { user_id: string }[]).map((row) =>
+              String(row.user_id),
+            ),
+          ),
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error('Error fetching active story owners:', error);
+          setStoryOwners(new Set());
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, postId]);
 
   useEffect(() => {
     if (!selectedImage) {
@@ -755,7 +794,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           <div className="flex items-center gap-2" aria-live="polite">
             <MessageCircle size={18} className="text-pink-500" />
             <span className="text-base font-bold text-zinc-100">
-              التعليقات · {formatCounter(totalComments)}
+              {formatCommentsTitle(totalComments)}
             </span>
           </div>
 
@@ -799,8 +838,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
                 key={comment.id}
                 comment={comment}
                 currentUserId={currentUserId}
-                pendingReactionIds={pendingReactionIds}
                 pendingDeleteIds={pendingDeleteIds}
+                storyOwners={storyOwners}
                 onReply={(item) => {
                   setReplyingTo(item);
                   setShowStickerPicker(false);

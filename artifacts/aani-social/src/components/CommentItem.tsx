@@ -18,8 +18,8 @@ interface CommentItemProps {
   onToggleLike: (commentId: string, isLiked: boolean) => void | Promise<void>;
   onToggleDislike: (commentId: string, isDisliked: boolean) => void | Promise<void>;
   onDelete: (comment: CommentWithDetails) => void | Promise<void>;
-  pendingReactionIds?: Record<string, boolean>;
   pendingDeleteIds?: Record<string, boolean>;
+  storyOwners?: Set<string>;
 }
 
 const formatRelativeTime = (value: string): string => {
@@ -66,8 +66,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   onToggleLike,
   onToggleDislike,
   onDelete,
-  pendingReactionIds = {},
   pendingDeleteIds = {},
+  storyOwners = new Set<string>(),
 }) => {
   const [showReplies, setShowReplies] = useState(false);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
@@ -78,8 +78,11 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const displayName = author?.full_name || 'مستخدم آني';
   const username = author?.username ? `@${author.username}` : '@user';
   const isReply = depth > 0;
+  const hasActiveStory = storyOwners.has(comment.user_id);
+  const ringClasses = hasActiveStory
+    ? 'ring-[1.5px] ring-[#FF0000]'
+    : 'ring-1 ring-zinc-800';
   const isOwnComment = currentUserId === comment.user_id;
-  const isReactionPending = !!pendingReactionIds[comment.id];
   const isDeleting = !!pendingDeleteIds[comment.id];
 
   return (
@@ -98,14 +101,14 @@ export const CommentItem: React.FC<CommentItemProps> = ({
             <img
               src={author.avatar_url}
               alt={displayName}
-              className={`rounded-full object-cover ring-zinc-800 ${
-                isReply ? 'h-8 w-8 ring-1' : 'h-11 w-11 ring-2'
+              className={`rounded-full object-cover ${ringClasses} ${
+                isReply ? 'h-8 w-8' : 'h-10 w-10'
               }`}
             />
           ) : (
             <div
-              className={`flex items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 font-bold text-white ring-zinc-800 ${
-                isReply ? 'h-8 w-8 text-[11px] ring-1' : 'h-11 w-11 text-sm ring-2'
+              className={`flex items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 font-bold text-white ${ringClasses} ${
+                isReply ? 'h-8 w-8 text-[11px]' : 'h-10 w-10 text-sm'
               }`}
             >
               {buildInitials(displayName)}
@@ -169,7 +172,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
 
           <div
             className={`mt-2 whitespace-pre-wrap break-words text-zinc-100 ${
-              isReply ? 'text-sm leading-6' : 'text-[15px] leading-8'
+              isReply ? 'text-[13px] leading-6' : 'text-[15px] leading-8'
             }`}
             dir="auto"
           >
@@ -205,9 +208,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
             <button
               type="button"
               onClick={() => void onToggleLike(comment.id, !!comment.is_liked)}
-              disabled={isReactionPending}
               aria-pressed={!!comment.is_liked}
-              className={`inline-flex items-center gap-1.5 py-1 transition disabled:cursor-wait disabled:opacity-60 ${
+              className={`inline-flex items-center gap-1.5 py-1 transition ${
                 comment.is_liked
                   ? 'text-pink-400'
                   : 'text-zinc-400 hover:text-zinc-100'
@@ -227,9 +229,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               onClick={() =>
                 void onToggleDislike(comment.id, !!comment.is_disliked)
               }
-              disabled={isReactionPending}
               aria-pressed={!!comment.is_disliked}
-              className={`inline-flex items-center gap-1.5 py-1 transition disabled:cursor-wait disabled:opacity-60 ${
+              className={`inline-flex items-center gap-1.5 py-1 transition ${
                 comment.is_disliked
                   ? 'text-pink-400'
                   : 'text-zinc-400 hover:text-zinc-100'
@@ -257,7 +258,10 @@ export const CommentItem: React.FC<CommentItemProps> = ({
       )}
 
       {showReplies && replyCount > 0 && (
-        <div className="relative mt-2 mr-4 space-y-2 border-r border-zinc-700/60 pr-3">
+        <div
+          className="relative mt-2 space-y-2 border-r border-zinc-600/60"
+          style={{ paddingRight: 48 }}
+        >
           {comment.replies?.map((reply) => (
             <CommentItem
               key={reply.id}
@@ -268,8 +272,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               onToggleLike={onToggleLike}
               onToggleDislike={onToggleDislike}
               onDelete={onDelete}
-              pendingReactionIds={pendingReactionIds}
               pendingDeleteIds={pendingDeleteIds}
+              storyOwners={storyOwners}
             />
           ))}
         </div>
