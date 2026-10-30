@@ -19,6 +19,7 @@ import {
   type CommentWithDetails,
 } from '../lib/interactions';
 import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
+import { extractMentions, findActiveMention, type MentionQuery } from '../lib/mentions';
 
 interface CommentsDrawerProps {
   postId: string;
@@ -33,6 +34,13 @@ type SupabaseErrorDetails = {
   code?: string;
   details?: string;
   hint?: string;
+};
+
+type MentionCandidate = {
+  id: string;
+  username: string | null;
+  full_name: string | null;
+  avatar_url: string | null;
 };
 
 const getErrorDetails = (error: unknown): SupabaseErrorDetails => {
@@ -213,6 +221,52 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   >({});
   const [showStickerPicker, setShowStickerPicker] = useState(false);
   const [storyOwners, setStoryOwners] = useState<Set<string>>(new Set());
+  const [peopleDirectory, setPeopleDirectory] = useState<MentionCandidate[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
+
+  // أشخاص يمكن ذكرهم: من أتابعهم ومن يتابعونني (بدون مستخدمين عشوائيين)
+  useEffect(() => {
+    if (!isOpen || !supabaseConfigured || !currentUserId) return;
+
+    let active = true;
+
+    void (async () => {
+      try {
+        const { data: relations } = await supabase
+          .from('follows')
+          .select('follower_id, following_id')
+          .or(`follower_id.eq.${currentUserId},following_id.eq.${currentUserId}`)
+          .limit(2000);
+
+        const ids = new Set<string>();
+        (relations || []).forEach((row: { follower_id: string; following_id: string }) => {
+          if (row.follower_id === currentUserId) ids.add(row.following_id);
+          else if (row.following_id === currentUserId) ids.add(row.follower_id);
+        });
+        ids.delete(currentUserId);
+
+        if (ids.size === 0) {
+          if (active) setPeopleDirectory([]);
+          return;
+        }
+
+        const { data } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .in('id', Array.from(ids))
+          .limit(500);
+
+        if (active) setPeopleDirectory((data || []) as MentionCandidate[]);
+      } catch (error) {
+        console.warn('Error loading mention candidates:', error);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [isOpen, currentUserId]);
 
   const commentIdsRef = useRef<Set<string>>(new Set());
 
@@ -438,15 +492,88 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     return initialCommentsCount;
   }, [comments, initialCommentsCount]);
 
-  const insertMention = () => {
-    if (replyingTo) {
-      const mention = `@${replyingTo.profiles?.username || 'user'} `;
+  // قائمة مرشّحي المنشن: المتابَعون/المتابِعون + أصحاب التعليقات الحالية
+  const mentionCandidates = useMemo(() => {
+    const map = new Map<string, MentionCandidate>();
 
-      setContent((prev) => `${prev}${prev.trim() ? ' ' : ''}${mention}`);
+    peopleDirectory.forEach((person) => map.set(person.id, person));
+
+    const visit = (items: CommentWithDetails[]) => {
+      items.forEach((item) => {
+        if (item.user_id && item.profiles) {
+          map.set(item.user_id, {
+            id: item.user_id,
+            username: item.profiles.username ?? null,
+            full_name: item.profiles.full_name ?? null,
+            avatar_url: item.profiles.avatar_url ?? null,
+          });
+        }
+
+        if (item.replies) visit(item.replies);
+      });
+    };
+
+    visit(comments);
+    map.delete(currentUserId);
+
+    return Array.from(map.values());
+  }, [peopleDirectory, comments, currentUserId]);
+
+  const mentionSuggestions = useMemo(() => {
+    if (!mentionQuery) return [] as MentionCandidate[];
+
+    const needle = mentionQuery.query.trim().toLowerCase();
+
+    return mentionCandidates
+      .filter((person) => {
+        const username = (person.username ?? '').toLowerCase();
+        const fullName = (person.full_name ?? '').toLowerCase();
+        if (!needle) return true;
+        return username.includes(needle) || fullName.includes(needle);
+      })
+      .slice(0, 6);
+  }, [mentionCandidates, mentionQuery]);
+
+  const insertMention = () => {
+    const prefix = content && !content.endsWith(' ') ? `${content} ` : content;
+
+    if (replyingTo) {
+      const token = `@${replyingTo.profiles?.username || 'user'} `;
+      setContent(`${prefix}${token}`);
+      setMentionQuery(null);
     } else {
-      setContent((prev) => `${prev}${prev.trim() ? ' ' : ''}@`);
+      setContent(`${prefix}@`);
+      setMentionQuery({ query: '', start: prefix.length, end: prefix.length + 1 });
+      setMentionIndex(0);
     }
 
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  };
+
+  const handleComposerChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value;
+    setContent(value);
+
+    const caret = event.target.selectionStart ?? value.length;
+    setMentionQuery(findActiveMention(value, caret));
+    setMentionIndex(0);
+  };
+
+  const applyMentionSuggestion = (person: MentionCandidate) => {
+    const token = `@${person.username || person.full_name || 'user'}`;
+
+    setContent((prev) => {
+      const active = mentionQuery;
+      if (!active) {
+        return `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${token} `;
+      }
+
+      const before = prev.slice(0, active.start);
+      const after = prev.slice(active.end);
+      return `${before}${token} ${after.replace(/^\s+/, '')}`;
+    });
+
+    setMentionQuery(null);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
@@ -456,6 +583,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     );
 
     setShowStickerPicker(false);
+    setMentionQuery(null);
     window.setTimeout(() => textareaRef.current?.focus(), 0);
   };
 
@@ -513,6 +641,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     syncCommentCount(postId, currentUserId, countComments(optimisticList));
 
     setContent('');
+    setMentionQuery(null);
     setSelectedImage(null);
     setPreviewUrl(null);
     setReplyingTo(null);
@@ -568,6 +697,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         replaceCommentInTree(previous, optimisticId, realComment),
       );
 
+      // إشعار الرد: يذهب حصريًا لصاحب التعليق الأصلي
       if (replyingTo && replyingTo.user_id !== currentUserId) {
         void supabase
           .from('notifications')
@@ -575,8 +705,36 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             user_id: replyingTo.user_id,
             actor_id: currentUserId,
             type: 'reply',
+            content: `${currentUser?.full_name || 'مستخدم'} رد على تعليقك`,
             comment_id: replyingTo.id,
           });
+      }
+
+      // إشعارات المنشن: لكل شخص مذكور في التعليق (مرة واحدة لكل شخص)
+      const mentionTokens = extractMentions(nextContent);
+      if (mentionTokens.length > 0) {
+        const notified = new Set<string>([currentUserId, replyingTo?.user_id ?? '']);
+
+        mentionCandidates.forEach((person) => {
+          const username = (person.username ?? '').toLowerCase();
+          const fullName = (person.full_name ?? '').toLowerCase();
+          const isMentioned = mentionTokens.some(
+            (token) => token === username || token === fullName,
+          );
+
+          if (!isMentioned || notified.has(person.id)) return;
+          notified.add(person.id);
+
+          void supabase
+            .from('notifications')
+            .insert({
+              user_id: person.id,
+              actor_id: currentUserId,
+              type: 'mention',
+              content: `${currentUser?.full_name || 'مستخدم'} ذكرك في تعليق`,
+              comment_id: realComment.id,
+            });
+        });
       }
     } catch (err: unknown) {
       const error = getErrorDetails(err);
@@ -755,6 +913,37 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const handleComposerKeyDown = (
     event: React.KeyboardEvent<HTMLTextAreaElement>,
   ) => {
+    if (mentionSuggestions.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setMentionIndex((prev) => (prev + 1) % mentionSuggestions.length);
+        return;
+      }
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMentionIndex(
+          (prev) => (prev - 1 + mentionSuggestions.length) % mentionSuggestions.length,
+        );
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        setMentionQuery(null);
+        return;
+      }
+
+      if (
+        event.key === 'Enter' &&
+        !event.shiftKey &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        const person = mentionSuggestions[mentionIndex] ?? mentionSuggestions[0];
+        if (person) applyMentionSuggestion(person);
+        return;
+      }
+    }
     if (
       event.key === 'Enter' &&
       !event.shiftKey &&
@@ -870,7 +1059,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
               <span>
                 الرد على{' '}
                 <strong className="text-pink-400">
-                  @{replyingTo.profiles?.username || 'مستخدم'}
+                  {replyingTo.profiles?.full_name || replyingTo.profiles?.username || 'مستخدم'}
                 </strong>
               </span>
 
@@ -926,6 +1115,51 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             </div>
 
             <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-800/90 px-3 py-2.5 transition focus-within:border-pink-500/50">
+              {mentionQuery && mentionSuggestions.length > 0 && (
+                <div
+                  className="absolute bottom-full right-0 z-30 mb-3 max-h-64 w-64 max-w-[82vw] overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl"
+                  role="listbox"
+                  aria-label="اقتراحات المنشن"
+                >
+                  {mentionSuggestions.map((person, index) => (
+                    <button
+                      key={person.id}
+                      type="button"
+                      role="option"
+                      aria-selected={index === mentionIndex}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => applyMentionSuggestion(person)}
+                      className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs transition ${
+                        index === mentionIndex ? 'bg-zinc-800' : 'hover:bg-zinc-800/70'
+                      }`}
+                    >
+                      {person.avatar_url ? (
+                        <img
+                          src={person.avatar_url}
+                          alt=""
+                          className="h-7 w-7 shrink-0 rounded-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-[10px] font-bold text-white">
+                          {buildInitials(person.full_name)}
+                        </span>
+                      )}
+
+                      <span className="min-w-0 flex-1">
+                        <strong className="block truncate text-white">
+                          {person.full_name || person.username || 'مستخدم'}
+                        </strong>
+                        {person.username && (
+                          <span className="block truncate text-[10px] text-zinc-500">
+                            {person.username}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {showStickerPicker && (
                 <div
                   className="absolute bottom-full left-0 z-20 mb-3 grid grid-cols-5 gap-1 rounded-2xl border border-zinc-700 bg-zinc-900 p-2 shadow-xl"
@@ -961,7 +1195,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
                 ref={textareaRef}
                 rows={1}
                 value={content}
-                onChange={(event) => setContent(event.target.value)}
+                onChange={handleComposerChange}
                 onKeyDown={handleComposerKeyDown}
                 placeholder={replyingTo ? 'اكتب رداً...' : 'إضافة تعليق...'}
                 maxLength={2000}

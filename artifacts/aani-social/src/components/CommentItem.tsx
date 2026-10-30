@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import type { CommentWithDetails } from '../lib/interactions';
+import CommentText from './CommentText';
 
 interface CommentItemProps {
   comment: CommentWithDetails;
@@ -68,10 +69,10 @@ const formatRepliesLabel = (count: number): string => {
 };
 
 const mentionLabel = (comment?: CommentWithDetails): string | undefined => {
-  const username = comment?.profiles?.username?.trim();
-  if (username) return `@${username}`;
   const fullName = comment?.profiles?.full_name?.trim();
-  return fullName || undefined;
+  if (fullName) return fullName;
+  const username = comment?.profiles?.username?.trim();
+  return username || undefined;
 };
 
 /**
@@ -189,15 +190,16 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           </div>
 
           <div
-            className={`mt-1 whitespace-pre-wrap break-words font-normal text-zinc-300 ${
+            className={`mt-1 whitespace-pre-wrap break-words text-right font-normal text-zinc-300 ${
               isReply ? 'text-[13px] leading-6' : 'text-[14px] leading-7'
             }`}
-            dir="auto"
+            dir="rtl"
+            style={{ unicodeBidi: 'isolate' }}
           >
             {isReply && replyTo && (
               <span className="me-1 font-semibold text-pink-400">{replyTo}</span>
             )}
-            {comment.content}
+            <CommentText text={comment.content} />
           </div>
 
           {comment.image_url && (
