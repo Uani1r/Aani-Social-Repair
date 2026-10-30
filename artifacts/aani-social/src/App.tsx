@@ -14,6 +14,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { recordShare } from '@/lib/interactions';
 import { displayName, formatDate, normalizeProfile, type Post, type Profile } from '@/lib/types';
 
 import NotFound from '@/pages/not-found';
@@ -1224,6 +1225,7 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
           currentUserId={currentUserId}
           reposted={reposted}
           onToggleRepost={toggleRepost}
+          onRecordExternalShare={() => void recordShare(post, currentUserId)}
           onClose={() => setShowShareSheet(false)}
         />
       )}
@@ -1624,28 +1626,36 @@ function SearchPage({ userId }: { userId: string }) {
   );
 }
 
-// --- معاينة منشور مشارَك داخل الرسائل ---
-function SharedPostPreview({ content }: { content: string }) {
-  const match = content.match(/^\[post:(\S+)\]([\s\S]*)$/);
-  const postId = match?.[1] || '';
-  const caption = match?.[2]?.trim() || '';
+// --- معاينة منشور مشارَك داخل الرسائل (بطاقة مدمجة تفتح المنشور الأصلي) ---
+function SharedPostPreview({ content, postId }: { content?: string | null; postId?: string | null }) {
+  const match = (content || '').match(/^\[post:(\S+)\]([\s\S]*)$/);
+  const resolvedId = postId || match?.[1] || '';
+  const caption = (match?.[2] || '').trim();
   const [info, setInfo] = useState<{ author: Profile | null; media: string; text: string; type: string } | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
-    if (!supabaseConfigured || !postId) return;
+
+    if (!supabaseConfigured || !resolvedId) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
 
     void (async () => {
       try {
         const { data: p } = await supabase
           .from('posts')
           .select('id, user_id, content, media_url, media_urls, type')
-          .eq('id', postId)
+          .eq('id', resolvedId)
           .maybeSingle();
 
         if (!active) return;
+
         if (!p) {
-          setInfo({ author: null, media: '', text: 'هذا المنشور لم يعد متاحاً.', type: 'text' });
+          setInfo({ author: null, media: '', text: '', type: 'text' });
           return;
         }
 
@@ -1668,34 +1678,56 @@ function SharedPostPreview({ content }: { content: string }) {
         });
       } catch {
         if (active) setInfo({ author: null, media: '', text: '', type: 'text' });
+      } finally {
+        if (active) setLoading(false);
       }
     })();
 
     return () => { active = false; };
-  }, [postId]);
+  }, [resolvedId]);
+
+  if (!resolvedId) return null;
 
   return (
-    <Link href={`/post/${postId}`} className="block w-full overflow-hidden rounded-xl border border-zinc-700 bg-zinc-900 transition hover:border-pink-500/50">
+    <Link href={`/post/${resolvedId}`} className="block w-full overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 transition hover:border-pink-500/60">
       <div className="flex items-center gap-2 p-2">
         {info?.author?.avatar_url ? (
           <img src={info.author.avatar_url} alt="" className="h-6 w-6 rounded-full object-cover" />
         ) : (
-          <span className="h-6 w-6 rounded-full bg-gradient-to-br from-pink-500 to-violet-600" />
+          <span className="h-6 w-6 shrink-0 rounded-full bg-gradient-to-br from-pink-500 to-violet-600" />
         )}
-        <strong className="truncate text-[11px] text-white">
-          {info?.author?.full_name || 'منشور على آني'}
+        <strong className="min-w-0 flex-1 truncate text-[11px] font-bold text-white">
+          {info?.author ? displayName(info.author) : 'منشور على آني'}
         </strong>
+        <Repeat size={12} className="text-zinc-500" />
       </div>
-      {info?.media && (
+
+      {loading ? (
+        <div className="h-24 w-full animate-pulse bg-zinc-800/70" />
+      ) : info?.media ? (
         info.type === 'reel' ? (
-          <video src={info.media} muted playsInline className="max-h-40 w-full object-cover" />
+          <video src={info.media} muted playsInline preload="metadata" className="max-h-40 w-full bg-black object-cover" />
         ) : (
           <img src={info.media} alt="" className="max-h-40 w-full object-cover" />
         )
+      ) : null}
+
+      {!loading && info?.text && (
+        <p className="line-clamp-2 w-full p-2 text-right text-[11px] leading-5 text-zinc-300">{info.text}</p>
       )}
-      {info?.text && <p className="w-full p-2 text-right text-[11px] leading-5 text-zinc-300 line-clamp-2">{info.text}</p>}
-      {caption && <p className="w-full px-2 pb-1 text-right text-[11px] text-zinc-400">{caption}</p>}
-      <span className="block px-2 pb-2 text-[10px] text-pink-400">اضغط للانتقال إلى المنشور</span>
+
+      {!loading && !info && (
+        <p className="w-full p-2 text-right text-[11px] text-zinc-400">هذا المنشور لم يعد متاحاً.</p>
+      )}
+
+      {caption && (
+        <p className="line-clamp-2 w-full px-2 pb-1 text-right text-[11px] text-zinc-400">{caption}</p>
+      )}
+
+      <span className="flex items-center justify-between px-2 pb-2 text-[10px] text-pink-400">
+        <span>اضغط لفتح المنشور</span>
+        <ArrowUpLeft size={12} />
+      </span>
     </Link>
   );
 }
@@ -1710,11 +1742,32 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
-    const { data } = await supabase
+
+    const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
+
+    const { data, error } = await supabase
       .from('messages')
-      .select('id, sender_id, recipient_id, content, created_at')
-      .or(`and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`)
+      .select('id, sender_id, recipient_id, content, post_id, created_at')
+      .or(threadFilter)
       .order('created_at', { ascending: true });
+
+    if (error) {
+      const code = (error as { code?: string }).code;
+      if (code === '42703' || /post_id/i.test(error.message || '')) {
+        // عمود post_id غير مطبّق في القاعدة بعد: نجلب المحادثة بدون مرجع المنشور
+        const { data: fallback } = await supabase
+          .from('messages')
+          .select('id, sender_id, recipient_id, content, created_at')
+          .or(threadFilter)
+          .order('created_at', { ascending: true });
+        setThread(fallback || []);
+        return;
+      }
+      console.error('[messages] تعذر جلب المحادثة:', error);
+      setThread([]);
+      return;
+    }
+
     setThread(data || []);
   }, [currentUserId, selectedId]);
 
@@ -1791,15 +1844,21 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
           <div className="flex-1 overflow-y-auto space-y-2 p-2">
             {thread.map(m => {
               const isMine = m.sender_id === currentUserId;
-              const isSharedPost = typeof m.content === 'string' && m.content.trim().startsWith('[post:');
+              const isSharedPost = Boolean(m.post_id) || (typeof m.content === 'string' && m.content.trim().startsWith('[post:'));
               return (
-                <div key={m.id} className={`max-w-[85%] flex flex-col ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'}`}>
+                <div key={m.id} className={`max-w-[85%] flex flex-col ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'} ${isSharedPost ? 'w-full' : ''}`}>
                   {!isMine && target && (
                     <span className="mb-0.5 text-[10px] text-zinc-500">{displayName(target)}</span>
                   )}
-                  <div className={`p-2 rounded-xl text-xs ${isMine ? 'bg-pink-600 text-white' : 'bg-zinc-800 text-zinc-200'} ${isSharedPost ? 'w-full' : ''}`}>
-                    {isSharedPost ? <SharedPostPreview content={m.content} /> : m.content}
-                  </div>
+                  {isSharedPost ? (
+                    <div className={`w-full max-w-[280px] ${isMine ? 'mr-auto' : 'ml-auto'}`}>
+                      <SharedPostPreview postId={m.post_id} content={m.content} />
+                    </div>
+                  ) : (
+                    <div className={`p-2 rounded-xl text-xs ${isMine ? 'bg-pink-600 text-white' : 'bg-zinc-800 text-zinc-200'}`}>
+                      {m.content}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -2139,6 +2198,7 @@ function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string 
           currentUserId={currentUserId}
           reposted={reposted}
           onToggleRepost={toggleRepost}
+          onRecordExternalShare={() => void recordShare(post, currentUserId)}
           onClose={() => setShowShareSheet(false)}
         />
       )}
@@ -2286,6 +2346,9 @@ type NotificationItem = {
   type: string;
   is_read: boolean;
   created_at: string;
+  actor_id?: string | null;
+  entity_id?: string | null;
+  actor?: Profile | null;
 };
 
 function NotificationsModal({ isOpen, onClose, currentUserId }: { isOpen: boolean; onClose: () => void; currentUserId: string }) {
@@ -2316,9 +2379,45 @@ function NotificationsModal({ isOpen, onClose, currentUserId }: { isOpen: boolea
       if (queryError) {
         setItems([]);
         setError(queryError.message);
-      } else {
-        setItems((data || []) as NotificationItem[]);
+        setLoading(false);
+        return;
       }
+
+      let rows = (data || []) as NotificationItem[];
+
+      // إثراء اختياري: صاحب الإشعار ومرجع المنشور (يجعل إشعار إعادة النشر قابلاً للنقر)
+      try {
+        const { data: refs } = await supabase
+          .from('notifications')
+          .select('id,entity_id,actor_id')
+          .eq('user_id', currentUserId)
+          .order('created_at', { ascending: false })
+          .limit(40);
+
+        if (refs?.length) {
+          const refRows = refs as Array<{ id: string; entity_id?: string | null; actor_id?: string | null }>;
+          const refMap = new Map(refRows.map(row => [row.id, row]));
+          rows = rows.map(item => ({ ...item, ...(refMap.get(item.id) || {}) }));
+
+          const actorIds = Array.from(
+            new Set(rows.map(item => item.actor_id).filter((id): id is string => Boolean(id))),
+          );
+
+          if (actorIds.length) {
+            const { data: profiles } = await supabase
+              .from('profiles')
+              .select('id, username, full_name, avatar_url')
+              .in('id', actorIds);
+            const profileMap = new Map(((profiles || []) as Profile[]).map(person => [person.id, person]));
+            rows = rows.map(item => (item.actor_id ? { ...item, actor: profileMap.get(item.actor_id) || null } : item));
+          }
+        }
+      } catch (enrichError) {
+        console.warn('[notifications] تعذر إثراء الإشعارات:', enrichError);
+      }
+
+      if (!active) return;
+      setItems(rows);
       setLoading(false);
     };
 
@@ -2370,12 +2469,29 @@ function NotificationsModal({ isOpen, onClose, currentUserId }: { isOpen: boolea
           {loading && <p className="py-8 text-center text-sm text-zinc-400">جارٍ تحميل الإشعارات…</p>}
           {!loading && error && <p role="alert" className="rounded-xl bg-red-500/10 p-3 text-sm text-red-300">{error}</p>}
           {!loading && !error && items.length === 0 && <p className="py-8 text-center text-sm text-zinc-400">لا توجد إشعارات جديدة.</p>}
-          {!loading && !error && items.map(item => (
-            <article key={item.id} className={`mb-2 rounded-xl border p-3 ${item.is_read ? 'border-zinc-800 bg-zinc-950/40' : 'border-pink-500/30 bg-pink-500/5'}`}>
-              <p className="text-sm">{item.content || 'لديك إشعار جديد في آني.'}</p>
-              <time className="mt-1 block text-[11px] text-zinc-500">{formatDate(item.created_at)}</time>
-            </article>
-          ))}
+          {!loading && !error && items.map(item => {
+            const target = item.type === 'repost' && item.entity_id ? `/post/${item.entity_id}` : null;
+            const card = (
+              <article className={`mb-2 rounded-xl border p-3 ${item.is_read ? 'border-zinc-800 bg-zinc-950/40' : 'border-pink-500/30 bg-pink-500/5'}`}>
+                <div className="flex items-start gap-2.5">
+                  {item.actor && <Avatar profile={item.actor} />}
+                  <div className="min-w-0 flex-1">
+                    {item.actor && (
+                      <strong className="block truncate text-xs text-white">{displayName(item.actor)}</strong>
+                    )}
+                    <p className="text-sm">{item.content || 'لديك إشعار جديد في آني.'}</p>
+                    <time className="mt-1 block text-[11px] text-zinc-500">{formatDate(item.created_at)}</time>
+                  </div>
+                </div>
+              </article>
+            );
+
+            return target ? (
+              <Link key={item.id} href={target} onClick={onClose} className="block">{card}</Link>
+            ) : (
+              <div key={item.id}>{card}</div>
+            );
+          })}
         </div>
       </section>
     </div>
