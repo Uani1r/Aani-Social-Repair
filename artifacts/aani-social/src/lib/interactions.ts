@@ -450,15 +450,28 @@ async function fetchFallbackSummaries(
 
   if (!supabaseConfigured || postIds.length === 0) return summaries;
 
-  const [likes, comments, reposts, savedPosts, bookmarks, shares, rows] = await Promise.all([
-    supabase.from("likes").select("post_id,user_id").in("post_id", postIds).limit(20000),
-    supabase.from("comments").select("post_id").in("post_id", postIds).limit(20000),
-    supabase.from("reposts").select("post_id,user_id").in("post_id", postIds).limit(20000),
-    supabase.from("saved_posts").select("post_id,user_id").in("post_id", postIds).limit(20000),
-    supabase.from("bookmarks").select("post_id,user_id").in("post_id", postIds).limit(20000),
-    supabase.from("post_shares").select("post_id,user_id").in("post_id", postIds).limit(20000),
-    supabase.from("posts").select("*").in("id", postIds),
-  ]);
+  // كل استعلام يُنفَّذ بشكل مستقل؛ فشل جدول واحد (غير موجود مثلًا)
+  // لا يُسقط بقية العدّادات، فبقي العدّاد صفرًا على الرغم من وجود بيانات.
+  const soft = (
+    request: PromiseLike<{
+      data: unknown;
+      error: unknown;
+    }>,
+  ): Promise<{
+    data: unknown;
+    error: unknown;
+  }> => Promise.resolve(request).catch(() => ({ data: null, error: null }));
+
+  const [likes, comments, reposts, savedPosts, bookmarks, shares, rows] =
+    await Promise.all([
+      soft(supabase.from("likes").select("post_id,user_id").in("post_id", postIds).limit(20000)),
+      soft(supabase.from("comments").select("post_id").in("post_id", postIds).limit(20000)),
+      soft(supabase.from("reposts").select("post_id,user_id").in("post_id", postIds).limit(20000)),
+      soft(supabase.from("saved_posts").select("post_id,user_id").in("post_id", postIds).limit(20000)),
+      soft(supabase.from("bookmarks").select("post_id,user_id").in("post_id", postIds).limit(20000)),
+      soft(supabase.from("post_shares").select("post_id,user_id").in("post_id", postIds).limit(20000)),
+      soft(supabase.from("posts").select("*").in("id", postIds)),
+    ]);
 
   const likeCounts = countByPost(likes.data);
   const commentCounts = countByPost(comments.data);
@@ -562,8 +575,12 @@ export async function hydratePosts(
     return;
   }
 
-  const fallback = await fetchFallbackSummaries(targets, userId);
-  fallback.forEach((summary) => applySummary(summary, userId));
+  try {
+    const fallback = await fetchFallbackSummaries(targets, userId);
+    fallback.forEach((summary) => applySummary(summary, userId));
+  } catch (error) {
+    console.warn("[interactions] fallback hydration failed:", error);
+  }
 }
 
 export async function hydratePostIds(
@@ -669,6 +686,25 @@ export function decoratePost(post: Post, userId: string): Post {
     saved_by_me: state.bookmarked,
     reposted_by_me: state.reposted,
   };
+}
+
+/**
+ * يحدّث عدّاد التعليقات المرتبط بالمنشور في ذاكرة التفاعل المحلية،
+ * ليظهر العدد الحقيقي في بطاقة المنشور فورًا دون انتظار إعادة الجلب.
+ */
+export function syncCommentCount(
+  postId: string,
+  userId: string,
+  count: number,
+): void {
+  if (!postId || !userId) return;
+
+  if (isPending(postId, userId)) return;
+
+  patchCache(postId, userId, {
+    comments: Number.isFinite(count) ? Math.max(0, count) : 0,
+    hydrated: true,
+  });
 }
 
 /* ------------------------------------------------------------------ */

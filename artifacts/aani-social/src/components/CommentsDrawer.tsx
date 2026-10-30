@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import CommentItem from './CommentItem';
 import {
   fetchCommentsWithReplies,
+  syncCommentCount,
   toggleCommentDislike,
   toggleCommentLike,
   uploadCommentImage,
@@ -76,6 +77,88 @@ const countComments = (items: CommentWithDetails[]): number =>
     0,
   );
 
+const insertCommentIntoTree = (
+  items: CommentWithDetails[],
+  optimistic: CommentWithDetails,
+): CommentWithDetails[] => {
+  if (!optimistic.parent_id) return [...items, optimistic];
+
+  return items.map((item) =>
+    item.id === optimistic.parent_id
+      ? {
+          ...item,
+          replies: [...(item.replies ?? []), optimistic],
+        }
+      : {
+          ...item,
+          replies: item.replies
+            ? insertCommentIntoTree(item.replies, optimistic)
+            : item.replies,
+        },
+  );
+};
+
+const replaceCommentInTree = (
+  items: CommentWithDetails[],
+  targetId: string,
+  next: CommentWithDetails,
+): CommentWithDetails[] =>
+  items.map((item) =>
+    item.id === targetId
+      ? next
+      : item.replies
+        ? {
+            ...item,
+            replies: replaceCommentInTree(item.replies, targetId, next),
+          }
+        : item,
+  );
+
+const removeCommentFromTree = (
+  items: CommentWithDetails[],
+  targetId: string,
+): CommentWithDetails[] =>
+  items
+    .filter((item) => item.id !== targetId)
+    .map((item) =>
+      item.replies
+        ? { ...item, replies: removeCommentFromTree(item.replies, targetId) }
+        : item,
+    );
+
+const findCommentById = (
+  items: CommentWithDetails[],
+  targetId: string,
+): CommentWithDetails | null => {
+  for (const item of items) {
+    if (item.id === targetId) return item;
+
+    const inReplies = findCommentById(item.replies ?? [], targetId);
+    if (inReplies) return inReplies;
+  }
+
+  return null;
+};
+
+const buildSavedComment = (
+  row: Record<string, unknown>,
+  profiles: CommentWithDetails['profiles'],
+): CommentWithDetails => ({
+  id: String(row.id),
+  post_id: String(row.post_id ?? ''),
+  user_id: String(row.user_id ?? ''),
+  parent_id: row.parent_id ? String(row.parent_id) : null,
+  content: String(row.content ?? ''),
+  image_url: row.image_url ? String(row.image_url) : null,
+  created_at: String(row.created_at ?? new Date().toISOString()),
+  profiles,
+  likes_count: 0,
+  dislikes_count: 0,
+  is_liked: false,
+  is_disliked: false,
+  replies: [],
+});
+
 const buildInitials = (fullName?: string | null): string => {
   const source = (fullName ?? '').trim();
 
@@ -137,6 +220,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     try {
       const data = await fetchCommentsWithReplies(postId, currentUserId);
       setComments(data);
+      // ربط عدّاد المنشور بالعدد الحقيقي للتعليقات المقترنة به في قاعدة البيانات
+      syncCommentCount(postId, currentUserId, countComments(data));
     } catch (error: unknown) {
       console.error('Error fetching comments:', getErrorDetails(error));
       setCommentsError('تعذر تحميل التعليقات من قاعدة البيانات');
@@ -342,6 +427,42 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
     setSubmitting(true);
 
+    const parentId = replyingTo?.id ?? null;
+    const optimisticId = `temp-${crypto.randomUUID()}`;
+
+    // تعليق مؤقت يظهر فورًا في القائمة قبل اكتمال الحفظ (Optimistic UI)
+    const optimisticComment: CommentWithDetails = {
+      id: optimisticId,
+      post_id: postId,
+      user_id: currentUserId,
+      parent_id: parentId,
+      content: nextContent,
+      image_url: previewUrl,
+      created_at: new Date().toISOString(),
+      profiles: currentUser
+        ? {
+            full_name: currentUser.full_name,
+            username: currentUser.username,
+            avatar_url: currentUser.avatar_url,
+          }
+        : null,
+      likes_count: 0,
+      dislikes_count: 0,
+      is_liked: false,
+      is_disliked: false,
+      replies: [],
+    };
+
+    const optimisticList = insertCommentIntoTree(comments, optimisticComment);
+    setComments(optimisticList);
+    syncCommentCount(postId, currentUserId, countComments(optimisticList));
+
+    setContent('');
+    setSelectedImage(null);
+    setPreviewUrl(null);
+    setReplyingTo(null);
+    setShowStickerPicker(false);
+
     let uploadedImage: Awaited<
       ReturnType<typeof uploadCommentImage>
     > | null = null;
@@ -364,20 +485,33 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         post_id: postId,
         user_id: currentUserId,
         content: nextContent,
-        parent_id: replyingTo?.id ?? null,
+        parent_id: parentId,
       };
 
       if (uploadedImage?.publicUrl) {
         payload.image_url = uploadedImage.publicUrl;
       }
 
-      const { error: insertError } = await supabase
+      const { data: savedRow, error: insertError } = await supabase
         .from('comments')
-        .insert(payload);
+        .insert(payload)
+        .select('id, post_id, user_id, parent_id, content, image_url, created_at')
+        .maybeSingle();
 
       if (insertError) throw insertError;
+      if (!savedRow) throw new Error('لم يُعَد صف التعليق بعد الحفظ');
 
       commentSaved = true;
+
+      const realComment: CommentWithDetails = buildSavedComment(
+        savedRow as Record<string, unknown>,
+        optimisticComment.profiles,
+      );
+
+      // استبدال التعليق المؤقت بالصف المحفوظ فعليًا في قاعدة البيانات
+      setComments((previous) =>
+        replaceCommentInTree(previous, optimisticId, realComment),
+      );
 
       if (replyingTo && replyingTo.user_id !== currentUserId) {
         void supabase
@@ -389,29 +523,19 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             comment_id: replyingTo.id,
           });
       }
-
-      setContent('');
-      setSelectedImage(null);
-      setPreviewUrl(null);
-      setReplyingTo(null);
-      setShowStickerPicker(false);
-
-      toast.success('تم حفظ التعليق');
-
-      await loadComments(false);
     } catch (err: unknown) {
       const error = getErrorDetails(err);
+
+      // إزالة التعليق المؤقت عند فشل الحفظ الفعلي
+      setComments((previous) => removeCommentFromTree(previous, optimisticId));
 
       if (!commentSaved && uploadedImage?.path) {
         void supabase.storage.from(storageBucket).remove([uploadedImage.path]);
       }
 
-      if (commentSaved) {
-        toast.warning('تم حفظ التعليق، جارِ تحديث القائمة...');
-        void loadComments(false);
-      } else {
-        toast.error(`تعذر حفظ التعليق${error.message ? `: ${error.message}` : ''}`);
-      }
+      toast.error(`تعذر حفظ التعليق${error.message ? `: ${error.message}` : ''}`);
+
+      await loadComments(false);
     } finally {
       setSubmitting(false);
     }
@@ -420,8 +544,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const runReaction = async (
     commentId: string,
     update: () => Promise<void>,
-  ) => {
-    if (pendingReactionIds[commentId]) return;
+  ): Promise<boolean> => {
+    if (pendingReactionIds[commentId]) return false;
 
     setPendingReactionIds((prev) => ({
       ...prev,
@@ -431,8 +555,10 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     try {
       await update();
       await loadComments(false);
+      return true;
     } catch (error: unknown) {
       toast.error('تعذر تحديث التفاعل');
+      return false;
     } finally {
       setPendingReactionIds((prev) => {
         const next = { ...prev };
@@ -442,15 +568,32 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
   };
 
-  const handleToggleLike = (commentId: string, isLiked: boolean) =>
-    runReaction(commentId, () =>
+  const handleToggleLike = async (commentId: string, isLiked: boolean) => {
+    const ok = await runReaction(commentId, () =>
       toggleCommentLike(commentId, currentUserId, isLiked),
     );
 
-  const handleToggleDislike = (commentId: string, isDisliked: boolean) =>
-    runReaction(commentId, () =>
+    // إشعار حقيقي لصاحب التعليق عند الإعجاب فقط (وليس عند إلغاء الإعجاب)
+    if (!ok || isLiked) return;
+
+    const target = findCommentById(comments, commentId);
+    if (!target || target.user_id === currentUserId) return;
+
+    void supabase
+      .from('notifications')
+      .insert({
+        user_id: target.user_id,
+        actor_id: currentUserId,
+        type: 'like',
+        content: `${currentUser?.full_name || 'مستخدم'} قام بالإعجاب بتعليقك`,
+      });
+  };
+
+  const handleToggleDislike = async (commentId: string, isDisliked: boolean) => {
+    await runReaction(commentId, () =>
       toggleCommentDislike(commentId, currentUserId, isDisliked),
     );
+  };
 
   const handleDeleteComment = async (comment: CommentWithDetails) => {
     if (
