@@ -2765,26 +2765,20 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // سلوك التمرير: تقدّم متصل (0 → 1) يتحكم بتقلّص وتلاشي الشريطين تدريجيًا
-  const chromeProgressRef = useRef(0);
-  const chromeFullyHiddenRef = useRef(false);
+  // إخفاء/إظهار الشريطين: آلة حالة اتجاهية بفجوة هيستيريسيس وحماية زمنية
+  const [chromeHidden, setChromeHidden] = useState(false);
+  const chromeHiddenRef = useRef(false);
   const lastScrollRef = useRef(0);
+  const scrollAccumRef = useRef(0);
+  const lastToggleAtRef = useRef(0);
 
   useEffect(() => {
     let frame = 0;
-    const root = document.documentElement;
 
-    const applyProgress = (value: number) => {
-      const clamped = Math.min(1, Math.max(0, value));
-      chromeProgressRef.current = clamped;
-      root.style.setProperty('--aani-chrome-progress', clamped.toFixed(3));
-
-      const fullyHidden = clamped > 0.985;
-
-      if (fullyHidden !== chromeFullyHiddenRef.current) {
-        chromeFullyHiddenRef.current = fullyHidden;
-        document.body.classList.toggle('aani-chrome-fully-hidden', fullyHidden);
-      }
+    const setHidden = (hidden: boolean) => {
+      if (chromeHiddenRef.current === hidden) return;
+      chromeHiddenRef.current = hidden;
+      setChromeHidden(hidden);
     };
 
     const onScroll = () => {
@@ -2793,34 +2787,60 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       frame = window.requestAnimationFrame(() => {
         frame = 0;
 
-        const y = window.scrollY || document.documentElement.scrollTop || 0;
-        const delta = y - lastScrollRef.current;
+        const y = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
+        const dy = y - lastScrollRef.current;
         lastScrollRef.current = y;
 
-        // أعلى الصفحة: الشريطان ظاهران تمامًا
-        if (y <= 6) {
-          applyProgress(0);
+        if (!dy) return;
+
+        // في أعلى الصفحة أو قريبًا منها: الشريطان ظاهران دائمًا
+        if (y <= 4) {
+          scrollAccumRef.current = 0;
+          setHidden(false);
           return;
         }
 
-        // كل 110 بكسل من التمرير تُكمل الإخفاء (أو الإظهار):
-        // الحركة الصغيرة تُخفي جزءًا من الشريطين فقط، والاستمرار يُخفيهما كليًا
-        applyProgress(chromeProgressRef.current + delta / 110);
+        // عند تغيّر اتجاه الحركة نبدأ التجميع من الصفر (يمنع الاهتزاز)
+        if (scrollAccumRef.current !== 0 && Math.sign(dy) !== Math.sign(scrollAccumRef.current)) {
+          scrollAccumRef.current = 0;
+        }
+
+        scrollAccumRef.current = Math.max(-60, Math.min(60, scrollAccumRef.current + dy));
+
+        const accum = scrollAccumRef.current;
+        const now = performance.now();
+        const sinceToggle = now - lastToggleAtRef.current;
+
+        // الاختفاء يحتاج 28 بكسل لأسفل، والظهور 14 بكسل لأعلى، مع فترة سماح زمنية
+        if (!chromeHiddenRef.current && accum >= 28 && y > 24 && sinceToggle > 180) {
+          scrollAccumRef.current = 0;
+          lastToggleAtRef.current = now;
+          setHidden(true);
+        } else if (chromeHiddenRef.current && accum <= -14 && sinceToggle > 120) {
+          scrollAccumRef.current = 0;
+          lastToggleAtRef.current = now;
+          setHidden(false);
+        }
       });
     };
 
-    chromeProgressRef.current = 0;
-    lastScrollRef.current = window.scrollY || document.documentElement.scrollTop || 0;
-    applyProgress(0);
+    lastScrollRef.current = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
     window.addEventListener('scroll', onScroll, { passive: true });
 
     return () => {
       window.removeEventListener('scroll', onScroll);
       if (frame) window.cancelAnimationFrame(frame);
-      root.style.removeProperty('--aani-chrome-progress');
-      document.body.classList.remove('aani-chrome-fully-hidden');
     };
   }, []);
+
+  // تمرير حالة الإخفاء إلى شريط القصص عبر كلاس على الصفحة (بدون تغيير منطقها)
+  useEffect(() => {
+    document.body.classList.toggle('aani-chrome-hidden', chromeHidden);
+
+    return () => {
+      document.body.classList.remove('aani-chrome-hidden');
+    };
+  }, [chromeHidden]);
 
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
@@ -2846,12 +2866,6 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     },
     [swipeRoutes],
   );
-
-  useEffect(() => {
-    return () => {
-      document.body.classList.remove('aani-chrome-fully-hidden');
-    };
-  }, []);
 
   const handleSwipeStart = (event: React.TouchEvent) => {
     const target = event.target as HTMLElement | null;
@@ -3030,7 +3044,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   return (
     <div className="app-frame min-h-screen bg-black text-white">
       <header
-        className="topbar fixed inset-x-0 top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity]"
+        className={`topbar fixed inset-x-0 top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity] ${
+          chromeHidden ? 'is-hidden' : ''
+        }`}
         style={{
           paddingTop: 'env(safe-area-inset-top)',
           paddingBottom: '0.625rem',
@@ -3167,7 +3183,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
           {children}
         </main>
         <nav
-          className="mobile-nav fixed inset-x-0 bottom-0 z-40 mx-auto flex items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/95 px-3 pt-2 shadow-2xl backdrop-blur-md will-change-[transform,opacity]"
+          className={`mobile-nav fixed inset-x-0 bottom-0 z-40 mx-auto flex items-center justify-around gap-1 rounded-full border border-white/10 bg-zinc-900/95 px-3 pt-2 shadow-2xl backdrop-blur-md will-change-[transform,opacity] ${
+            chromeHidden ? 'is-hidden' : ''
+          }`}
           style={{
             width: 'min(92vw, 26rem)',
             paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))',

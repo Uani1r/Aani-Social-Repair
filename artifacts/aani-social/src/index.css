@@ -584,42 +584,50 @@ body {
 
 
 /* =====================================================================
-   اختفاء تدريجي متصل للشريطين العلوي والسفلي (بدون ارتجاف)
-   --aani-chrome-progress من 0 (ظاهر) إلى 1 (مخفي تمامًا)
+   اختفاء وإظهار الشريطين (نمط الشركات: آلة حالة اتجاهية + انتقالات CSS)
+   لا يتم تحريك أي خاصية تسبب إعادة تخطيط أثناء التمرير
    ===================================================================== */
-:root {
-  --aani-chrome-progress: 0;
+.topbar,
+.mobile-nav,
+.story-strip {
+  transition:
+    transform 260ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    max-height 260ms cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
+}
+
+.topbar.is-hidden {
+  transform: translate3d(0, -100%, 0);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mobile-nav.is-hidden {
+  transform: translate3d(0, 120%, 0) scale(0.94);
+  opacity: 0;
+  pointer-events: none;
 }
 
 .story-strip {
   overflow: hidden;
-  max-height: calc((1 - var(--aani-chrome-progress)) * 520px);
-  opacity: calc(1 - var(--aani-chrome-progress));
-  transform: translate3d(0, calc(var(--aani-chrome-progress) * -16px), 0);
+  max-height: 520px;
 }
 
-.topbar {
-  transform: translate3d(0, calc(var(--aani-chrome-progress) * -30px), 0)
-    scale(calc(1 - var(--aani-chrome-progress) * 0.04));
-  opacity: calc(1 - var(--aani-chrome-progress));
-  transform-origin: top center;
-  will-change: transform, opacity;
-}
-
-.mobile-nav {
-  transform: translate3d(0, calc(var(--aani-chrome-progress) * 40px), 0)
-    scale(calc(1 - var(--aani-chrome-progress) * 0.1));
-  opacity: calc(1 - var(--aani-chrome-progress));
-  transform-origin: bottom center;
-  will-change: transform, opacity;
-}
-
-body.aani-chrome-fully-hidden .topbar,
-body.aani-chrome-fully-hidden .mobile-nav {
+body.aani-chrome-hidden .story-strip {
+  max-height: 0;
+  opacity: 0;
+  transform: translate3d(0, -12px, 0);
   pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .topbar,
+  .mobile-nav,
+  .story-strip {
+    transition: none;
+  }
+
   .page-slide-forward,
   .page-slide-backward {
     animation: none;
