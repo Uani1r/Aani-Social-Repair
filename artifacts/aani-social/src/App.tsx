@@ -876,7 +876,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       )}
 
       {showUploadModal && (
-        <div className="fixed inset-0 z-[130] flex flex-col bg-black text-white" dir="rtl">
+        <div className="aani-page-enter fixed inset-0 z-[130] flex flex-col bg-black text-white" dir="rtl">
           {/* الشريط العلوي */}
           <div
             className="flex items-center justify-between px-4 py-3"

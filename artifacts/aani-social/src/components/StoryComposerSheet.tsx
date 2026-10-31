@@ -112,19 +112,13 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-[120] flex items-end justify-center bg-black/70 backdrop-blur-sm"
-      dir="rtl"
-      role="presentation"
-      onClick={onClose}
-    >
+    <div className="fixed inset-0 z-[120] bg-[#121212]" dir="rtl" role="presentation">
       <section
         role="dialog"
         aria-modal="true"
         aria-label="إضافة إلى قصة"
-        onClick={event => event.stopPropagation()}
-        className={`relative flex h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[#26262e] bg-[#121212] text-white shadow-2xl transition-transform duration-300 ease-out ${
-          shown ? 'translate-y-0' : 'translate-y-full'
+        className={`relative flex h-full w-full flex-col overflow-hidden bg-[#121212] text-white transition-transform duration-300 ease-out ${
+          shown ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         {/* الرأس */}

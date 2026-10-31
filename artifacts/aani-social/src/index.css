@@ -750,3 +750,26 @@ body.aani-chrome-revealed .story-bar {
     animation: none;
   }
 }
+
+
+/* انتقال صفحة كاملة (معاينة القصة) */
+.aani-page-enter {
+  animation: aani-page-enter-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes aani-page-enter-in {
+  from {
+    opacity: 0.5;
+    transform: translate3d(-24px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aani-page-enter {
+    animation: none;
+  }
+}
