@@ -876,93 +876,131 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       )}
 
       {showUploadModal && (
-        <div className="aani-page-enter fixed inset-0 z-[130] flex flex-col bg-black text-white" dir="rtl">
+        <div className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white" dir="rtl">
+          {/* الوسيط يملأ الشاشة بالكامل */}
+          {storyFile && previewStoryUrl ? (
+            storyFile.type.startsWith('video') ? (
+              <video src={previewStoryUrl} autoPlay loop playsInline className="absolute inset-0 h-full w-full object-cover" />
+            ) : (
+              <img src={previewStoryUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
+            )
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-zinc-400">
+              اختر وسيطاً من الاستوديو لعرضه هنا
+            </div>
+          )}
+
+          {/* طبقة تعتيم متدرجة لإبراز الأدوات فوق الصورة */}
+          <div
+            className="pointer-events-none absolute inset-0 z-10"
+            style={{
+              background:
+                'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0) 58%, rgba(0,0,0,0.78) 100%)',
+            }}
+          />
+
           {/* الشريط العلوي */}
           <div
-            className="flex items-center justify-between px-4 py-3"
+            className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-4 py-3"
             style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
           >
             <button
               type="button"
               onClick={() => setShowUploadModal(false)}
               aria-label="إغلاق"
-              className="rounded-full p-1.5 text-white/80 transition hover:bg-white/10"
+              className="rounded-full p-1.5 text-white/90 transition hover:bg-white/10"
             >
-              <X size={22} />
+              <X size={24} />
             </button>
-            <span className="text-[13px] font-semibold text-white/80">معاينة القصة</span>
+            <span className="text-[13px] font-semibold text-white/85">معاينة القصة</span>
             <span className="w-9" />
           </div>
 
-          {/* مساحة المعاينة */}
-          <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
-            {storyFile && previewStoryUrl ? (
-              storyFile.type.startsWith('video') ? (
-                <video src={previewStoryUrl} autoPlay loop playsInline className="h-full w-full object-contain" />
-              ) : (
-                <img src={previewStoryUrl} alt="" className="h-full w-full object-contain" />
-              )
-            ) : (
-              <div className="flex h-full w-full items-center justify-center p-6 text-center text-sm text-zinc-400">
-                اختر وسيطاً من الاستوديو لعرضه هنا
-              </div>
-            )}
+          {/* أدوات التحرير الجانبية فوق الصورة (يمين) */}
+          <div className="absolute right-3 top-[16%] z-20 flex flex-col gap-4">
+            {[
+              { key: 'text', icon: Type, label: 'نص' },
+              { key: 'sticker', icon: Smile, label: 'ملصق' },
+              { key: 'draw', icon: Pencil, label: 'رسم' },
+              { key: 'music', icon: Music2, label: 'موسيقى' },
+            ].map(tool => {
+              const Icon = tool.icon;
 
-            {/* أدوات التحرير الجانبية (يمين) */}
-            <div className="absolute right-2 top-1/2 flex -translate-y-1/2 flex-col gap-4">
-              {[
-                { key: 'text', icon: Type, label: 'نص' },
-                { key: 'sticker', icon: Smile, label: 'ملصق' },
-                { key: 'draw', icon: Pencil, label: 'رسم' },
-                { key: 'music', icon: Music2, label: 'موسيقى' },
-              ].map(tool => {
-                const Icon = tool.icon;
-
-                return (
-                  <button
-                    key={tool.key}
-                    type="button"
-                    title={tool.label}
-                    aria-label={tool.label}
-                    onClick={() => {
-                      if (tool.key === 'text') {
-                        const value = window.prompt('اكتب نصاً يظهر على قصتك (اختياري)', caption);
-                        if (value !== null) setCaption(value);
-                      } else {
-                        toast.info('هذه الأداة قيد التطوير');
-                      }
-                    }}
-                    className="flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm transition hover:bg-black/70"
-                  >
-                    <Icon size={18} />
-                  </button>
-                );
-              })}
-            </div>
+              return (
+                <button
+                  key={tool.key}
+                  type="button"
+                  title={tool.label}
+                  aria-label={tool.label}
+                  onClick={() => {
+                    if (tool.key === 'text') {
+                      const value = window.prompt('اكتب نصاً يظهر على قصتك (اختياري)', caption);
+                      if (value !== null) setCaption(value);
+                    } else {
+                      toast.info('هذه الأداة قيد التطوير');
+                    }
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm transition hover:bg-black/45"
+                >
+                  <Icon size={19} />
+                </button>
+              );
+            })}
           </div>
 
-          {/* الخياران السفليان: قصتك (يمين) والأصدقاء المقربون (يسار) */}
+          {/* أدوات إضافية على الجهة اليسرى فوق الصورة */}
+          <div className="absolute left-3 top-[16%] z-20 flex flex-col gap-4">
+            <button
+              type="button"
+              title="تأثيرات"
+              aria-label="تأثيرات"
+              onClick={() => toast.info('هذه الأداة قيد التطوير')}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm transition hover:bg-black/45"
+            >
+              <Sparkles size={19} />
+            </button>
+            <button
+              type="button"
+              title="إعدادات"
+              aria-label="إعدادات"
+              onClick={() => toast.info('هذه الأداة قيد التطوير')}
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm transition hover:bg-black/45"
+            >
+              <Settings size={19} />
+            </button>
+          </div>
+
+          {/* أسفل الشاشة: قصتك + الأصدقاء المقربون */}
           <div
-            className="flex items-center gap-3 px-4 py-3"
+            className="absolute inset-x-0 bottom-0 z-20 px-4 pt-2"
             style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
           >
-            <button
-              type="button"
-              onClick={() => void handleQuickPublishStory(false)}
-              disabled={uploading || !storyFile}
-              className="flex-1 rounded-full bg-white py-3 text-[13px] font-bold text-[#121212] transition disabled:opacity-40"
-            >
-              {uploading ? 'جارٍ النشر...' : 'قصتك'}
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleQuickPublishStory(true)}
-              disabled={uploading || !storyFile}
-              className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-[#2f2f39] bg-[#17171b] py-3 text-[13px] font-bold text-zinc-200 transition disabled:opacity-40"
-            >
-              <Star size={14} className="text-emerald-400" />
-              الأصدقاء المقربون
-            </button>
+            <div className="mb-3 flex justify-center">
+              <span className="flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212] shadow-lg">
+                <Avatar profile={currentProfile} />
+                قصتك
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => void handleQuickPublishStory(false)}
+                disabled={uploading || !storyFile}
+                className="flex-1 rounded-full bg-white py-3 text-[13px] font-bold text-[#121212] transition disabled:opacity-40"
+              >
+                {uploading ? 'جارٍ النشر...' : 'قصتك'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleQuickPublishStory(true)}
+                disabled={uploading || !storyFile}
+                className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-white/50 bg-black/40 py-3 text-[13px] font-bold text-white backdrop-blur-sm transition disabled:opacity-40"
+              >
+                <Star size={14} className="text-white" />
+                الأصدقاء المقربون
+              </button>
+            </div>
           </div>
         </div>
       )}
