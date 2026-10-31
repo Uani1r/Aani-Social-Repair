@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Camera, Check, ImagePlus, X } from 'lucide-react';
+import { Archive, Camera, Check, ImagePlus, Play, X } from 'lucide-react';
 
 type StoryMedia = {
   id: string;
@@ -247,7 +247,14 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                         style={{ animationDelay: `${Math.min(index + (tab === 'all' ? 2 : 0), 15) * 30}ms` }}
                       >
                         {preview.file.type.startsWith('video') ? (
-                          <video src={preview.url} muted playsInline className="h-full w-full object-cover" />
+                          <>
+                            <video src={preview.url} muted playsInline className="h-full w-full object-cover" />
+                            <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm">
+                                <Play size={16} fill="currentColor" />
+                              </span>
+                            </span>
+                          </>
                         ) : (
                           <img src={preview.url} alt="" className="h-full w-full object-cover" />
                         )}
