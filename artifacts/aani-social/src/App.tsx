@@ -358,6 +358,66 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [storyTextEffect, setStoryTextEffect] = useState(false);
   const [storyKeyboardInset, setStoryKeyboardInset] = useState(0);
 
+  // تكبير/تدوير الوسيط بإصبعين (داخل القصة فقط)
+  const [storyMediaZoom, setStoryMediaZoom] = useState(1);
+  const [storyMediaRotate, setStoryMediaRotate] = useState(0);
+  const pinchRef = useRef<{ dist: number; angle: number; zoom: number; rotate: number } | null>(null);
+
+  const handleStoryPinchStart = (event: React.TouchEvent) => {
+    if (event.touches.length !== 2) return;
+
+    const [first, second] = event.touches;
+    const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+    const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
+
+    pinchRef.current = { dist, angle, zoom: storyMediaZoom, rotate: storyMediaRotate };
+  };
+
+  const handleStoryPinchMove = (event: React.TouchEvent) => {
+    const start = pinchRef.current;
+    if (!start || event.touches.length !== 2) return;
+
+    const [first, second] = event.touches;
+    const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+    const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
+
+    if (start.dist > 0) {
+      setStoryMediaZoom(Math.min(4, Math.max(0.6, start.zoom * (dist / start.dist))));
+    }
+    setStoryMediaRotate(start.rotate + (angle - start.angle));
+  };
+
+  const handleStoryPinchEnd = () => {
+    pinchRef.current = null;
+  };
+
+  // تحريك النص في أي مكان داخل القصة
+  const [storyTextOffset, setStoryTextOffset] = useState({ x: 0, y: 0 });
+  const textDragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+
+  const handleStoryTextDragStart = (event: React.TouchEvent) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    textDragRef.current = { x: touch.clientX, y: touch.clientY, ox: storyTextOffset.x, oy: storyTextOffset.y };
+  };
+
+  const handleStoryTextDragMove = (event: React.TouchEvent) => {
+    const start = textDragRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch) return;
+
+    event.stopPropagation();
+    setStoryTextOffset({
+      x: Math.min(window.innerWidth * 0.45, Math.max(-window.innerWidth * 0.45, start.ox + (touch.clientX - start.x))),
+      y: Math.min(window.innerHeight * 0.4, Math.max(-window.innerHeight * 0.4, start.oy + (touch.clientY - start.y))),
+    });
+  };
+
+  const handleStoryTextDragEnd = () => {
+    textDragRef.current = null;
+  };
+
   // إبقاء شريط أدوات النص فوق لوحة المفاتيح
   useEffect(() => {
     if (!storyTextEditorOpen) {
@@ -946,11 +1006,32 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         <div className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white" dir="rtl">
           {/* الوسيط يملأ الشاشة بالكامل */}
           {storyFile && previewStoryUrl ? (
-            storyFile.type.startsWith('video') ? (
-              <video src={previewStoryUrl} autoPlay loop playsInline className="absolute inset-0 h-full w-full object-cover" />
-            ) : (
-              <img src={previewStoryUrl} alt="" className="absolute inset-0 h-full w-full object-cover" />
-            )
+            <div
+              className="absolute inset-0"
+              onTouchStart={handleStoryPinchStart}
+              onTouchMove={handleStoryPinchMove}
+              onTouchEnd={handleStoryPinchEnd}
+              onTouchCancel={handleStoryPinchEnd}
+              style={{ touchAction: 'none' }}
+            >
+              {storyFile.type.startsWith('video') ? (
+                <video
+                  src={previewStoryUrl}
+                  autoPlay
+                  loop
+                  playsInline
+                  className="h-full w-full object-cover transition-transform duration-75"
+                  style={{ transform: `scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)` }}
+                />
+              ) : (
+                <img
+                  src={previewStoryUrl}
+                  alt=""
+                  className="h-full w-full object-cover transition-transform duration-75"
+                  style={{ transform: `scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)` }}
+                />
+              )}
+            </div>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-zinc-400">
               اختر وسيطاً من الاستوديو لعرضه هنا
@@ -1095,12 +1176,19 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             )}
           </div>
 
-          {/* النص المنسّق فوق الصورة */}
+          {/* النص المنسّق فوق الصورة (قابل للسحب) */}
           {storyText.trim() && !storyTextEditorOpen && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6" dir="rtl">
               <p
-                className="max-w-full whitespace-pre-wrap break-words font-bold"
+                className="max-w-full cursor-grab whitespace-pre-wrap break-words font-bold active:cursor-grabbing"
+                onTouchStart={handleStoryTextDragStart}
+                onTouchMove={handleStoryTextDragMove}
+                onTouchEnd={handleStoryTextDragEnd}
+                onTouchCancel={handleStoryTextDragEnd}
                 style={{
+                  pointerEvents: 'auto',
+                  touchAction: 'none',
+                  transform: `translate(${storyTextOffset.x}px, ${storyTextOffset.y}px)`,
                   fontFamily: storyFontFamily,
                   color: storyTextColor,
                   fontSize: storyTextSize,
@@ -1173,18 +1261,20 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                     Aa
                   </button>
 
-                  <button
-                    type="button"
-                    aria-label="اللون"
-                    onClick={() => {
-                      const palette = ['#FFFFFF', '#000000', '#EF4444', '#3B82F6', '#22C55E', '#EAB308'];
-                      const next = palette[(palette.indexOf(storyTextColor) + 1) % palette.length];
-                      setStoryTextColor(next);
-                    }}
-                    className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white"
-                  >
-                    <Palette size={18} style={{ color: storyTextColor }} />
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    {['#FFFFFF', '#000000', '#EF4444', '#3B82F6', '#22C55E', '#EAB308'].map(color => (
+                      <button
+                        key={color}
+                        type="button"
+                        aria-label={`لون ${color}`}
+                        onClick={() => setStoryTextColor(color)}
+                        className={`h-6 w-6 rounded-full border-2 transition ${
+                          storyTextColor === color ? 'border-white scale-110' : 'border-white/30'
+                        }`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
 
                   <button
                     type="button"
@@ -1210,24 +1300,17 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                     <Square size={18} />
                   </button>
 
-                  <div className="flex items-center gap-1 rounded-full bg-black/30 px-1 py-1 text-white">
-                    <button
-                      type="button"
-                      aria-label="تصغير"
-                      onClick={() => setStoryTextSize(size => Math.max(14, size - 2))}
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-[15px]"
-                    >
-                      −
-                    </button>
-                    <span className="w-6 text-center text-[10px]">{storyTextSize}</span>
-                    <button
-                      type="button"
-                      aria-label="تكبير"
-                      onClick={() => setStoryTextSize(size => Math.min(64, size + 2))}
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-[15px]"
-                    >
-                      +
-                    </button>
+                  <div className="flex items-center gap-2 rounded-full bg-black/30 px-3 py-1.5 text-white">
+                    <input
+                      type="range"
+                      min={14}
+                      max={64}
+                      value={storyTextSize}
+                      onChange={event => setStoryTextSize(Number(event.target.value))}
+                      className="h-1 w-24 accent-white"
+                      aria-label="حجم النص"
+                    />
+                    <span className="w-5 text-center text-[10px]">{storyTextSize}</span>
                   </div>
 
                   <button
