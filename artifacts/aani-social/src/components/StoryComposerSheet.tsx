@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Camera, Check, ChevronDown, X } from 'lucide-react';
+import { Archive, Camera, Check, ChevronDown, ImagePlus, X } from 'lucide-react';
 
 type StoryMedia = {
   id: string;
@@ -16,16 +16,13 @@ type StoryComposerSheetProps = {
   archive: StoryMedia[];
 };
 
-type TabKey = 'all' | 'favorites' | 'photos' | 'videos';
+type TabKey = 'all' | 'videos' | 'photos';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'all', label: 'الكل' },
-  { key: 'favorites', label: 'المفضلات' },
-  { key: 'photos', label: 'الصور' },
   { key: 'videos', label: 'الفيديوهات' },
+  { key: 'photos', label: 'الصور' },
 ];
-
-const FAVORITES_KEY = 'aani:story-favorites';
 
 const fileKey = (file: File) => `${file.name}-${file.size}`;
 
@@ -47,14 +44,6 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
   const [newestFirst, setNewestFirst] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
   const [showArchive, setShowArchive] = useState(false);
-  const [favorites, setFavorites] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(FAVORITES_KEY);
-      return raw ? (JSON.parse(raw) as string[]) : [];
-    } catch {
-      return [];
-    }
-  });
 
   const galleryInputRef = useRef<HTMLInputElement | null>(null);
   const cameraInputRef = useRef<HTMLInputElement | null>(null);
@@ -66,7 +55,16 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
     }
 
     const raf = requestAnimationFrame(() => setShown(true));
-    return () => cancelAnimationFrame(raf);
+
+    // فتح استوديو الجهاز تلقائيًا عند ظهور الدرج (بدون زر وسيط)
+    const timer = window.setTimeout(() => {
+      galleryInputRef.current?.click();
+    }, 350);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
   }, [open]);
 
   const previews = useMemo(
@@ -80,14 +78,6 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
     };
   }, [previews]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(FAVORITES_KEY, JSON.stringify(favorites));
-    } catch {
-      /* التخزين المحلي غير متاح */
-    }
-  }, [favorites]);
-
   if (!open) return null;
 
   const filtered = previews
@@ -96,7 +86,6 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
 
       if (tab === 'photos') return !isVideo;
       if (tab === 'videos') return isVideo;
-      if (tab === 'favorites') return favorites.includes(preview.key);
       return true;
     })
     .sort((a, b) => (newestFirst ? b.file.lastModified - a.file.lastModified : a.file.lastModified - b.file.lastModified));
@@ -108,10 +97,6 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
     }
 
     setSelected(prev => (prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]));
-  };
-
-  const toggleFavorite = (key: string) => {
-    setFavorites(prev => (prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]));
   };
 
   const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -278,6 +263,16 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                     <Camera size={24} />
                   </button>
 
+                  {/* إعادة فتح استوديو الجهاز إن أُغلق المنتقي */}
+                  <button
+                    type="button"
+                    onClick={() => galleryInputRef.current?.click()}
+                    className="aani-media-tile flex aspect-square items-center justify-center rounded-lg border border-[#26262e] bg-[#17171b] text-zinc-300 transition hover:bg-[#1f1f27]"
+                    style={{ animationDelay: '30ms' }}
+                  >
+                    <ImagePlus size={22} />
+                  </button>
+
                   {filtered.map((preview, index) => {
                     const isSelected = selected.includes(preview.key);
 
@@ -286,9 +281,8 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                         key={preview.key}
                         type="button"
                         onClick={() => toggleSelection(preview.key)}
-                        onDoubleClick={() => toggleFavorite(preview.key)}
                         className="aani-media-tile relative aspect-square overflow-hidden rounded-lg border border-[#26262e] bg-[#17171b]"
-                        style={{ animationDelay: `${Math.min(index, 15) * 30}ms` }}
+                        style={{ animationDelay: `${Math.min(index + 2, 15) * 30}ms` }}
                       >
                         {preview.file.type.startsWith('video') ? (
                           <video src={preview.url} muted playsInline className="h-full w-full object-cover" />
@@ -305,31 +299,10 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                             {isSelected && <Check size={11} />}
                           </span>
                         )}
-
-                        {favorites.includes(preview.key) && (
-                          <span className="absolute bottom-1 left-1 rounded-full bg-black/60 px-1 text-[9px] text-zinc-200">
-                            ★
-                          </span>
-                        )}
                       </button>
                     );
                   })}
                 </div>
-
-                {filtered.length === 0 && (
-                  <div className="py-10 text-center">
-                    <p className="text-xs text-zinc-500">
-                      {tab === 'favorites' ? 'لا توجد عناصر مفضلة — انقر مطولًا على أي وسائط لإضافتها' : 'لا توجد وسائط بعد'}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => galleryInputRef.current?.click()}
-                      className="mt-3 rounded-full border border-[#2f2f39] px-4 py-2 text-[11px] text-zinc-200"
-                    >
-                      اختيار من الاستوديو
-                    </button>
-                  </div>
-                )}
               </div>
             </>
           )}
