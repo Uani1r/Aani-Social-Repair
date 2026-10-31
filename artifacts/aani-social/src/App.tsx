@@ -5,7 +5,7 @@ import {
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
-  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX
+  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX, Type, Smile, Music2
 } from 'lucide-react';
 
 import { Toaster, toast } from 'sonner';
@@ -327,6 +327,19 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoryPicker, setShowStoryPicker] = useState(false);
   const [storyFile, setStoryFile] = useState<File | null>(null);
+  const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!storyFile) {
+      setPreviewStoryUrl(null);
+      return;
+    }
+
+    const url = URL.createObjectURL(storyFile);
+    setPreviewStoryUrl(url);
+
+    return () => URL.revokeObjectURL(url);
+  }, [storyFile]);
   const [caption, setCaption] = useState('');
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
   const [uploadDuration, setUploadDuration] = useState<number>(5);
@@ -558,6 +571,72 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     handleNextStory();
   };
 
+  // نشر سريع من شاشة المعاينة: قصتك أو للأصدقاء المقربين فقط
+  const handleQuickPublishStory = async (closeFriends: boolean) => {
+    if (!supabaseConfigured || !storyFile) return;
+
+    setUploading(true);
+    try {
+      const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const filePath = `${userId}/story-${Date.now()}-${safeName}`;
+
+      const { error: uploadErr } = await supabase.storage
+        .from(storageBucket)
+        .upload(filePath, storyFile, { contentType: storyFile.type, upsert: true });
+
+      if (uploadErr) throw uploadErr;
+
+      const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
+
+      const { error: insertError } = await supabase.from('stories').insert({
+        user_id: userId,
+        media_url: publicUrl,
+        media_type: storyFile.type.startsWith('video') ? 'video' : 'photo',
+        caption: caption.trim() || null,
+        is_close_friends: closeFriends,
+        duration_seconds: 5,
+        timed_texts: [],
+      });
+
+      if (insertError) throw insertError;
+
+      setStoryFile(null);
+      setCaption('');
+      setShowUploadModal(false);
+      await fetchStories();
+      toast.success(closeFriends ? 'نُشرت قصتك للأصدقاء المقربين' : 'نُشرت قصتك');
+    } catch (error) {
+      console.error('Story publish failed:', error);
+      toast.error('تعذر نشر القصة، حاول مرة أخرى');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleCreateTextStory = async () => {
+    const text = window.prompt('اكتب نص القصة');
+    if (!text?.trim() || !supabaseConfigured) return;
+
+    try {
+      const { error } = await supabase.from('stories').insert({
+        user_id: userId,
+        media_url: null,
+        media_type: 'text',
+        caption: text.trim(),
+        is_close_friends: false,
+        duration_seconds: 5,
+        timed_texts: [],
+      });
+
+      if (error) throw error;
+
+      await fetchStories();
+      toast.success('نُشرت قصتك');
+    } catch {
+      toast.error('تعذر نشر القصة، حاول مرة أخرى');
+    }
+  };
+
   return (
     <div className="story-bar mb-4 w-full" dir="rtl">
       <div className="flex items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-2 pt-1">
@@ -639,9 +718,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         archive={(groupedStories[userId] || []) as any}
         onTextMode={() => {
           setShowStoryPicker(false);
-          setCaption('');
-          setStoryFile(null);
-          setShowUploadModal(true);
+          void handleCreateTextStory();
         }}
         onFilesSelected={files => {
           if (!files.length) return;
@@ -799,68 +876,93 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       )}
 
       {showUploadModal && (
-        <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
-          <div className="modal-content max-w-sm w-full bg-zinc-900 border border-zinc-800 p-4 rounded-2xl space-y-3" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-center border-b border-zinc-800 pb-2">
-              <h3 className="text-white font-bold text-sm flex items-center gap-1">
-                <Filter size={16} className="text-pink-500" /> محرر القصة المتقدم
-              </h3>
-              <button className="text-zinc-400 hover:text-white" onClick={() => setShowUploadModal(false)}><X size={18} /></button>
-            </div>
+        <div className="fixed inset-0 z-[130] flex flex-col bg-black text-white" dir="rtl">
+          {/* الشريط العلوي */}
+          <div
+            className="flex items-center justify-between px-4 py-3"
+            style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+          >
+            <button
+              type="button"
+              onClick={() => setShowUploadModal(false)}
+              aria-label="إغلاق"
+              className="rounded-full p-1.5 text-white/80 transition hover:bg-white/10"
+            >
+              <X size={22} />
+            </button>
+            <span className="text-[13px] font-semibold text-white/80">معاينة القصة</span>
+            <span className="w-9" />
+          </div>
 
-            <textarea 
-              placeholder="اكتب شرحاً عاماً للستوري..." 
-              value={caption} 
-              onChange={e => setCaption(e.target.value)} 
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2 text-xs text-white outline-none resize-none"
-              rows={2}
-            />
-
-            <div className="bg-zinc-950 p-2.5 rounded-xl border border-zinc-800/80 space-y-2 text-xs">
-              <span className="font-semibold text-zinc-300 block">إضافة نص بتوقيت ظهور خاص:</span>
-              <input 
-                placeholder="اكتب النص..." 
-                value={newText} 
-                onChange={e => setNewText(e.target.value)} 
-                className="w-full bg-zinc-900 p-2 rounded-lg text-white border border-zinc-800 outline-none"
-              />
-              <div className="flex gap-2 items-center text-[11px] text-zinc-400">
-                <span>بدء (ثوانٍ):</span>
-                <input type="number" min={0} max={90} value={textStart} onChange={e => setTextStart(Number(e.target.value))} className="w-12 bg-zinc-900 p-1 rounded border border-zinc-800 text-white" />
-                <span>إنهاء:</span>
-                <input type="number" min={1} max={90} value={textEnd} onChange={e => setTextEnd(Number(e.target.value))} className="w-12 bg-zinc-900 p-1 rounded border border-zinc-800 text-white" />
-                <button onClick={handleAddTimedText} className="button-primary text-[10px] px-2 py-1 mr-auto">إضافة النص</button>
+          {/* مساحة المعاينة */}
+          <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+            {storyFile && previewStoryUrl ? (
+              storyFile.type.startsWith('video') ? (
+                <video src={previewStoryUrl} autoPlay loop playsInline className="h-full w-full object-contain" />
+              ) : (
+                <img src={previewStoryUrl} alt="" className="h-full w-full object-contain" />
+              )
+            ) : (
+              <div className="flex h-full w-full items-center justify-center p-6 text-center text-sm text-zinc-400">
+                اختر وسيطاً من الاستوديو لعرضه هنا
               </div>
+            )}
+
+            {/* أدوات التحرير الجانبية (يمين) */}
+            <div className="absolute right-2 top-1/2 flex -translate-y-1/2 flex-col gap-4">
+              {[
+                { key: 'text', icon: Type, label: 'نص' },
+                { key: 'sticker', icon: Smile, label: 'ملصق' },
+                { key: 'draw', icon: Pencil, label: 'رسم' },
+                { key: 'music', icon: Music2, label: 'موسيقى' },
+              ].map(tool => {
+                const Icon = tool.icon;
+
+                return (
+                  <button
+                    key={tool.key}
+                    type="button"
+                    title={tool.label}
+                    aria-label={tool.label}
+                    onClick={() => {
+                      if (tool.key === 'text') {
+                        const value = window.prompt('اكتب نصاً يظهر على قصتك (اختياري)', caption);
+                        if (value !== null) setCaption(value);
+                      } else {
+                        toast.info('هذه الأداة قيد التطوير');
+                      }
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-black/45 text-white backdrop-blur-sm transition hover:bg-black/70"
+                  >
+                    <Icon size={18} />
+                  </button>
+                );
+              })}
             </div>
+          </div>
 
-            <div className="flex justify-between items-center bg-zinc-950 p-2 rounded-xl text-xs text-zinc-300 border border-zinc-800">
-              <span className="flex items-center gap-1"><Clock size={14} className="text-purple-400" /> مدة عرض الستوري:</span>
-              <select value={uploadDuration} onChange={e => setUploadDuration(Number(e.target.value))} className="bg-zinc-900 border border-zinc-800 text-white p-1 rounded outline-none">
-                <option value={5}>5 ثوانٍ</option>
-                <option value={15}>15 ثانية</option>
-                <option value={30}>30 ثانية</option>
-                <option value={60}>60 ثانية</option>
-                <option value={90}>90 ثانية (حجم أقصى)</option>
-              </select>
-            </div>
-
-            <label className="flex items-center gap-2 bg-zinc-950 border border-zinc-800 p-2.5 rounded-xl cursor-pointer hover:bg-zinc-800 text-xs text-zinc-300">
-              <ImagePlus size={16} className="text-pink-400" />
-              <span>{storyFile ? storyFile.name : 'اختيار صورة أو فيديو من الاستوديو'}</span>
-              <input type="file" accept="image/*,video/*" className="hidden" onChange={e => e.target.files?.[0] && setStoryFile(e.target.files[0])} />
-            </label>
-
-            <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer pt-1">
-              <input type="checkbox" checked={isCloseFriendsOnly} onChange={e => setIsCloseFriendsOnly(e.target.checked)} className="rounded accent-emerald-500" />
-              <span className="flex items-center gap-1"><Star size={14} className="text-emerald-400" /> مخصصة للأصدقاء المقربين فقط</span>
-            </label>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-zinc-800">
-              <button className="button-secondary text-xs" onClick={() => setShowUploadModal(false)}>إلغاء</button>
-              <button className="button-primary text-xs px-4" disabled={uploading || (!storyFile && !caption.trim() && !timedTexts.length)} onClick={handleUploadStory}>
-                {uploading ? 'جاري النشر...' : 'نشر الستوري'}
-              </button>
-            </div>
+          {/* الخياران السفليان: قصتك (يمين) والأصدقاء المقربون (يسار) */}
+          <div
+            className="flex items-center gap-3 px-4 py-3"
+            style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+          >
+            <button
+              type="button"
+              onClick={() => void handleQuickPublishStory(false)}
+              disabled={uploading || !storyFile}
+              className="flex-1 rounded-full bg-white py-3 text-[13px] font-bold text-[#121212] transition disabled:opacity-40"
+            >
+              {uploading ? 'جارٍ النشر...' : 'قصتك'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleQuickPublishStory(true)}
+              disabled={uploading || !storyFile}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-[#2f2f39] bg-[#17171b] py-3 text-[13px] font-bold text-zinc-200 transition disabled:opacity-40"
+            >
+              <Star size={14} className="text-emerald-400" />
+              الأصدقاء المقربون
+            </button>
           </div>
         </div>
       )}
