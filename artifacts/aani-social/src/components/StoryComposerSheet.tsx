@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Archive, Camera, Check, ChevronDown, ImagePlus, X } from 'lucide-react';
+import { Archive, Camera, Check, ImagePlus, X } from 'lucide-react';
 
 type StoryMedia = {
   id: string;
@@ -20,8 +20,8 @@ type TabKey = 'all' | 'videos' | 'photos';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'all', label: 'الكل' },
-  { key: 'videos', label: 'الفيديوهات' },
   { key: 'photos', label: 'الصور' },
+  { key: 'videos', label: 'الفيديوهات' },
 ];
 
 const fileKey = (file: File) => `${file.name}-${file.size}`;
@@ -40,8 +40,6 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
   const [shown, setShown] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [tab, setTab] = useState<TabKey>('all');
-  const [multiSelect, setMultiSelect] = useState(false);
-  const [newestFirst, setNewestFirst] = useState(true);
   const [selected, setSelected] = useState<string[]>([]);
   const [showArchive, setShowArchive] = useState(false);
 
@@ -88,14 +86,9 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
       if (tab === 'videos') return isVideo;
       return true;
     })
-    .sort((a, b) => (newestFirst ? b.file.lastModified - a.file.lastModified : a.file.lastModified - b.file.lastModified));
+    .sort((a, b) => b.file.lastModified - a.file.lastModified);
 
   const toggleSelection = (key: string) => {
-    if (!multiSelect) {
-      setSelected([key]);
-      return;
-    }
-
     setSelected(prev => (prev.includes(key) ? prev.filter(item => item !== key) : [...prev, key]));
   };
 
@@ -106,7 +99,7 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
     if (picked.length === 0) return;
 
     setFiles(prev => [...picked, ...prev]);
-    setSelected(picked.map(fileKey).slice(0, multiSelect ? undefined : 1));
+    setSelected(picked.map(fileKey));
   };
 
   const confirm = () => {
@@ -170,41 +163,6 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
             </button>
           </div>
 
-          {/* أدوات التصفية */}
-          <div className="mt-3 flex items-center justify-between gap-3 px-4">
-            <button
-              type="button"
-              onClick={() => setNewestFirst(value => !value)}
-              className="flex items-center gap-1 rounded-lg border border-[#26262e] bg-[#17171b] px-3 py-1.5 text-[11px] text-zinc-300"
-            >
-              {newestFirst ? 'الحديثة' : 'القديمة'}
-              <ChevronDown size={14} className="text-zinc-500" />
-            </button>
-
-            <label className="flex items-center gap-2 text-[11px] text-zinc-300">
-              اختيار متعدد
-              <button
-                type="button"
-                role="switch"
-                aria-checked={multiSelect}
-                onClick={() => {
-                  setMultiSelect(value => {
-                    const next = !value;
-                    if (!next) setSelected(prev => prev.slice(0, 1));
-                    return next;
-                  });
-                }}
-                className={`relative h-6 w-11 rounded-full transition ${multiSelect ? 'bg-zinc-200' : 'bg-[#2b2b34]'}`}
-              >
-                <span
-                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-[#121212] transition-all ${
-                    multiSelect ? 'right-5' : 'right-0.5'
-                  }`}
-                />
-              </button>
-            </label>
-          </div>
-
           {showArchive ? (
             /* الأرشيف */
             <div className="px-4 pb-6 pt-3">
@@ -254,24 +212,28 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
               {/* الشبكة */}
               <div className="px-3 pb-28 pt-3">
                 <div className="grid grid-cols-3 gap-1.5">
-                  {/* الكاميرا */}
-                  <button
-                    type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    className="aani-media-tile flex aspect-square items-center justify-center rounded-lg border border-[#26262e] bg-[#17171b] text-zinc-300 transition hover:bg-[#1f1f27]"
-                  >
-                    <Camera size={24} />
-                  </button>
+                  {tab === 'all' && (
+                    <>
+                      {/* الكاميرا */}
+                      <button
+                        type="button"
+                        onClick={() => cameraInputRef.current?.click()}
+                        className="aani-media-tile flex aspect-square items-center justify-center rounded-lg border border-[#26262e] bg-[#17171b] text-zinc-300 transition hover:bg-[#1f1f27]"
+                      >
+                        <Camera size={24} />
+                      </button>
 
-                  {/* إعادة فتح استوديو الجهاز إن أُغلق المنتقي */}
-                  <button
-                    type="button"
-                    onClick={() => galleryInputRef.current?.click()}
-                    className="aani-media-tile flex aspect-square items-center justify-center rounded-lg border border-[#26262e] bg-[#17171b] text-zinc-300 transition hover:bg-[#1f1f27]"
-                    style={{ animationDelay: '30ms' }}
-                  >
-                    <ImagePlus size={22} />
-                  </button>
+                      {/* إعادة فتح استوديو الجهاز إن أُغلق المنتقي */}
+                      <button
+                        type="button"
+                        onClick={() => galleryInputRef.current?.click()}
+                        className="aani-media-tile flex aspect-square items-center justify-center rounded-lg border border-[#26262e] bg-[#17171b] text-zinc-300 transition hover:bg-[#1f1f27]"
+                        style={{ animationDelay: '30ms' }}
+                      >
+                        <ImagePlus size={22} />
+                      </button>
+                    </>
+                  )}
 
                   {filtered.map((preview, index) => {
                     const isSelected = selected.includes(preview.key);
@@ -282,7 +244,7 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                         type="button"
                         onClick={() => toggleSelection(preview.key)}
                         className="aani-media-tile relative aspect-square overflow-hidden rounded-lg border border-[#26262e] bg-[#17171b]"
-                        style={{ animationDelay: `${Math.min(index + 2, 15) * 30}ms` }}
+                        style={{ animationDelay: `${Math.min(index + (tab === 'all' ? 2 : 0), 15) * 30}ms` }}
                       >
                         {preview.file.type.startsWith('video') ? (
                           <video src={preview.url} muted playsInline className="h-full w-full object-cover" />
@@ -290,15 +252,13 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                           <img src={preview.url} alt="" className="h-full w-full object-cover" />
                         )}
 
-                        {multiSelect && (
-                          <span
-                            className={`absolute right-1.5 top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border ${
-                              isSelected ? 'border-white bg-white text-[#121212]' : 'border-white/80 bg-black/25'
-                            }`}
-                          >
-                            {isSelected && <Check size={11} />}
-                          </span>
-                        )}
+                        <span
+                          className={`absolute right-1.5 top-1.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border ${
+                            isSelected ? 'border-white bg-white text-[#121212]' : 'border-white/80 bg-black/25'
+                          }`}
+                        >
+                          {isSelected && <Check size={11} />}
+                        </span>
                       </button>
                     );
                   })}
