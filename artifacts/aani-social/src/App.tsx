@@ -935,8 +935,12 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             <span className="w-9" />
           </div>
 
-          {/* أدوات التحرير: عمود واحد على الجانب الأيمن فقط */}
-          <div ref={storyToolsRef} className="absolute right-3 top-[15%] z-20 flex flex-col items-end gap-3">
+          {/* أدوات التحرير: عمود واحد على الجانب الأيمن فقط (أيقونات فقط) */}
+          <div
+            ref={storyToolsRef}
+            className="absolute right-2.5 z-20 flex flex-col items-center gap-2.5"
+            style={{ top: 'calc(3.75rem + env(safe-area-inset-top))' }}
+          >
             {[
               { key: 'text', icon: Type, label: 'نص' },
               { key: 'sticker', icon: Smile, label: 'ملصقات' },
@@ -973,14 +977,9 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                       toast.info('أداة الرسم ستُضاف قريبًا');
                     }
                   }}
-                  className="flex items-center gap-2"
+                  className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
                 >
-                  <span className="rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-semibold text-white/90 backdrop-blur-sm">
-                    {tool.label}
-                  </span>
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition active:scale-95">
-                    <Icon size={19} />
-                  </span>
+                  <Icon size={17} />
                 </button>
               );
             })}
@@ -992,10 +991,10 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                 aria-label="أدوات إضافية"
                 aria-expanded={storyMoreOpen}
                 onClick={() => setStoryMoreOpen(open => !open)}
-                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition active:scale-95"
+                className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
               >
                 <ChevronDown
-                  size={19}
+                  size={17}
                   className={`transition-transform duration-200 ${storyMoreOpen ? 'rotate-180' : ''}`}
                 />
               </button>
@@ -1054,23 +1053,29 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             className="absolute inset-x-0 bottom-0 z-20 px-4 pt-2"
             style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
           >
-            <div className="flex items-center gap-3">
+            <div className="flex items-stretch gap-2.5">
               <button
                 type="button"
                 onClick={() => void handleQuickPublishStory(false)}
                 disabled={uploading || !storyFile}
-                className="flex flex-1 items-center justify-center gap-2 rounded-full bg-white px-4 py-3 text-[13px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
+                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
               >
-                <Avatar profile={currentProfile} />
+                {currentProfile?.avatar_url ? (
+                  <img src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+                ) : (
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-white">
+                    {displayName(currentProfile).replace('@', '').charAt(0)}
+                  </span>
+                )}
                 {uploading ? 'جارٍ النشر...' : 'قصتك'}
               </button>
               <button
                 type="button"
                 onClick={() => void handleQuickPublishStory(true)}
                 disabled={uploading || !storyFile}
-                className="flex flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-4 py-3 text-[13px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
+                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
               >
-                <Star size={16} className="text-white" />
+                <Star size={15} style={{ color: '#4CAF50' }} fill="#4CAF50" />
                 الأصدقاء المقربون
               </button>
             </div>
