@@ -2776,12 +2776,13 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       setChromeHidden(hidden);
     };
 
-    let startX = 0;
-    let startY = 0;
     let lastTouchY = 0;
     let lastDirection: 0 | 1 | -1 = 0;
+    let touching = false;
+    let lastTouchMoveAt = 0;
+    let lastScrollY = window.scrollY || document.documentElement.scrollTop || 0;
 
-    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد) — استجابة فورية بلا أي عتبة
+    // 1 = إظهار (إصبع نازل / تمرير للأعلى)، -1 = إخفاء — استجابة فورية بلا عتبة
     const applyDirection = (direction: 1 | -1) => {
       if (direction === lastDirection) return;
 
@@ -2793,8 +2794,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const touch = event.touches[0];
       if (!touch) return;
 
-      startX = touch.clientX;
-      startY = touch.clientY;
+      touching = true;
+      lastTouchMoveAt = performance.now();
       lastTouchY = touch.clientY;
       lastDirection = 0;
     };
@@ -2803,20 +2804,47 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const touch = event.touches[0];
       if (!touch) return;
 
+      lastTouchMoveAt = performance.now();
+
       // لا نتدخل أثناء النوافذ والقوائم المفتوحة
       const target = event.target as HTMLElement | null;
       if (target?.closest('[role="dialog"], [role="listbox"]')) return;
 
-      // نقيس الحركة خطوة بخطوة حتى يُكتشف الاتجاه فورًا.
-      // أي حركة نزول — مهما كانت صغيرة أو مائلة — تُظهر الشريطين، وأي صعود يُخفيهما
       const step = touch.clientY - lastTouchY;
       lastTouchY = touch.clientY;
 
+      // أي حركة نزول — مهما كانت صغيرة أو مائلة — تُظهر، وأي صعود يُخفي
       if (step > 0) applyDirection(1);
       else if (step < 0) applyDirection(-1);
     };
 
-    // بديل لسطح المكتب: عجلة الفأرة (أي حركة تُظهر أو تُخفي فورًا)
+    const onTouchEnd = () => {
+      touching = false;
+      lastScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    };
+
+    // احتياط: بعض المتصفحات لا تُطلق أحداث اللمس أثناء التمرير، فنستخدم اتجاه التمرير
+    let lastScrollToggleAt = 0;
+    const onScroll = () => {
+      const now = performance.now();
+
+      if (touching && now - lastTouchMoveAt < 120) return;
+
+      const y = window.scrollY || document.documentElement.scrollTop || 0;
+      const delta = y - lastScrollY;
+      lastScrollY = y;
+
+      // عتبة صغيرة تمنع ارتجاف الارتداد عند حواف الصفحة
+      if (Math.abs(delta) < 4) return;
+      if (now - lastScrollToggleAt < 90) return;
+
+      lastScrollToggleAt = now;
+
+      if (delta > 0) applyDirection(-1);
+      else applyDirection(1);
+    };
+
+    // بديل لسطح المكتب: عجلة الفأرة
     const onWheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
       applyDirection(event.deltaY > 0 ? -1 : 1);
@@ -2824,11 +2852,17 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     window.addEventListener('touchstart', onTouchStart, { passive: true });
     window.addEventListener('touchmove', onTouchMove, { passive: true });
+    window.addEventListener('touchend', onTouchEnd, { passive: true });
+    window.addEventListener('touchcancel', onTouchEnd, { passive: true });
+    window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('wheel', onWheel, { passive: true });
 
     return () => {
       window.removeEventListener('touchstart', onTouchStart);
       window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+      window.removeEventListener('touchcancel', onTouchEnd);
+      window.removeEventListener('scroll', onScroll);
       window.removeEventListener('wheel', onWheel);
     };
   }, []);
