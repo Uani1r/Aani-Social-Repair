@@ -2781,10 +2781,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     let lastTouchY = 0;
     let lastDirection: 0 | 1 | -1 = 0;
 
-    // عتبة بكسل واحد: أقل من ذلك لا يُحسب حركة إصبع حقيقية
-    const MIN_MOVE_PX = 1;
-
-    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد) — استجابة فورية بلا تأخير
+    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد) — استجابة فورية بلا أي عتبة
     const applyDirection = (direction: 1 | -1) => {
       if (direction === lastDirection) return;
 
@@ -2810,13 +2807,13 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const target = event.target as HTMLElement | null;
       if (target?.closest('[role="dialog"], [role="listbox"]')) return;
 
-      // نقيس الحركة خطوة بخطوة حتى يُكتشف انعكاس الاتجاه فورًا.
-      // تُقبل أي حركة مائلة: لا يوجد أي استثناء للحركة الأفقية هنا.
+      // نقيس الحركة خطوة بخطوة حتى يُكتشف الاتجاه فورًا.
+      // أي حركة نزول — مهما كانت صغيرة أو مائلة — تُظهر الشريطين، وأي صعود يُخفيهما
       const step = touch.clientY - lastTouchY;
       lastTouchY = touch.clientY;
 
-      if (step >= MIN_MOVE_PX) applyDirection(1);
-      else if (step <= -MIN_MOVE_PX) applyDirection(-1);
+      if (step > 0) applyDirection(1);
+      else if (step < 0) applyDirection(-1);
     };
 
     // بديل لسطح المكتب: عجلة الفأرة (أي حركة تُظهر أو تُخفي فورًا)
