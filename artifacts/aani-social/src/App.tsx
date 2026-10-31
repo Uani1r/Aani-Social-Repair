@@ -2811,6 +2811,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   // إخفاء/إظهار الشريطين: يعتمد على اتجاه حركة الإصبع مباشرة
   const [chromeHidden, setChromeHidden] = useState(false);
   const chromeHiddenRef = useRef(false);
+  const prevChromeHiddenRef = useRef(false);
+  const storyRevealTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const setHidden = (hidden: boolean) => {
@@ -2912,7 +2914,23 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
   // تمرير حالة الإخفاء إلى شريط القصص عبر كلاس على الصفحة (بدون تغيير منطقها)
   useEffect(() => {
+    const wasHidden = prevChromeHiddenRef.current;
+    prevChromeHiddenRef.current = chromeHidden;
+
     document.body.classList.toggle('aani-chrome-hidden', chromeHidden);
+
+    // سلسلة الظهور: الشريط العلوي أولًا، ثم ينبثق شريط القصص من خلفه إلى مكانه
+    if (wasHidden && !chromeHidden) {
+      document.body.classList.remove('aani-chrome-revealed');
+      // إعادة تشغيل الأنيميشن من البداية
+      void document.body.offsetWidth;
+      document.body.classList.add('aani-chrome-revealed');
+
+      if (storyRevealTimerRef.current) window.clearTimeout(storyRevealTimerRef.current);
+      storyRevealTimerRef.current = window.setTimeout(() => {
+        document.body.classList.remove('aani-chrome-revealed');
+      }, 1000);
+    }
 
     return () => {
       document.body.classList.remove('aani-chrome-hidden');
