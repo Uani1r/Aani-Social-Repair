@@ -291,6 +291,32 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [activeUserGroup, setActiveUserGroup] = useState<string | null>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
 
+  // القصص المشاهدة (يُحفظ معرّف صاحبها محليًا لتمييز لون الحلقة فقط)
+  const [seenStories, setSeenStories] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem('aani:seen-stories');
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const markStorySeen = useCallback((authorId: string) => {
+    if (!authorId) return;
+
+    setSeenStories(prev => {
+      if (prev.includes(authorId)) return prev;
+
+      const next = [...prev, authorId];
+      try {
+        localStorage.setItem('aani:seen-stories', JSON.stringify(next));
+      } catch {
+        /* التخزين المحلي غير متاح */
+      }
+      return next;
+    });
+  }, []);
+
   const [showUI, setShowUI] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -533,39 +559,45 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   };
 
   return (
-    <div className="bg-zinc-900/90 border border-zinc-800 rounded-2xl mb-4 overflow-hidden transition-all duration-300">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800/60">
-        <span className="text-xs font-bold text-zinc-300 flex items-center gap-1.5">
-          <Sparkles size={15} className="text-pink-500" /> قصص آني
-        </span>
+    <div className="bg-[#161618] border border-[#26262e] rounded-2xl mb-4 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2">
+        <span className="text-[11px] font-semibold text-zinc-400">القصص</span>
         <button onClick={() => setCollapsed(!collapsed)} className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 text-xs flex items-center gap-1">
           {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
         </button>
       </div>
 
       {!collapsed && (
-        <div className="p-3 flex items-center gap-4 overflow-x-auto no-scrollbar">
+        <div className="px-2 pb-3 pt-1 flex items-center gap-[18px] overflow-x-auto no-scrollbar">
           <div className="flex flex-col items-center gap-1.5 shrink-0">
-            <div className="relative cursor-pointer" onClick={() => {
-              if (hasMyStory) {
-                setActiveUserGroup(userId);
-                setActiveStoryIndex(0);
-                setProgress(0);
-              } else {
-                setShowUploadModal(true);
-              }
-            }}>
-              <Avatar profile={currentProfile} extraLarge storyBorder={hasMyStory} />
+            <div
+              className="relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full border-[1.5px] border-dashed border-zinc-600/70 p-[2px]"
+              onClick={() => {
+                if (hasMyStory) {
+                  markStorySeen(userId);
+                  setActiveUserGroup(userId);
+                  setActiveStoryIndex(0);
+                  setProgress(0);
+                } else {
+                  setShowUploadModal(true);
+                }
+              }}
+            >
+              {hasMyStory ? (
+                <Avatar profile={currentProfile} extraLarge />
+              ) : (
+                <span className="text-2xl font-light text-zinc-500">+</span>
+              )}
               <button 
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowUploadModal(true);
                 }} 
-                className="absolute bottom-0 right-0 bg-pink-600 hover:bg-pink-700 text-white p-1 rounded-full border-2 border-zinc-900 shadow transition"
+                className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300"
                 title="إضافة ستوري جديدة"
               >
-                <Plus size={14} />
+                <Plus size={12} />
               </button>
             </div>
             <span className="text-xs font-medium text-zinc-300 truncate w-16 text-center">قصتك</span>
@@ -577,10 +609,16 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               <div 
                 key={authorId} 
                 className="flex flex-col items-center gap-1.5 cursor-pointer shrink-0" 
-                onClick={() => { setActiveUserGroup(authorId); setActiveStoryIndex(0); setProgress(0); setCurrentTimeSec(0); }}
+                onClick={() => { markStorySeen(authorId); setActiveUserGroup(authorId); setActiveStoryIndex(0); setProgress(0); setCurrentTimeSec(0); }}
               >
-                <Avatar profile={firstStory.author} extraLarge storyBorder isCloseFriends={firstStory.is_close_friends} />
-                <span className="text-xs text-zinc-300 truncate w-16 text-center font-medium">
+                <span
+                  className={`rounded-full p-[2px] transition-colors duration-200 ${
+                    seenStories.includes(authorId) ? 'bg-[#3a3a42]' : 'bg-[#8a8a95]'
+                  }`}
+                >
+                  <Avatar profile={firstStory.author} extraLarge />
+                </span>
+                <span className="text-xs text-zinc-400 truncate w-16 text-center">
                   {firstStory.author?.username || 'عضو'}
                 </span>
               </div>
@@ -590,14 +628,14 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       )}
 
       {currentStory && (
-        <div className="modal-overlay bg-black/95 flex items-center justify-center p-0 z-50">
-          <div className="relative max-w-sm w-full h-[92vh] bg-black rounded-3xl overflow-hidden flex flex-col justify-between shadow-2xl border border-zinc-800/80 select-none">
+        <div className="modal-overlay bg-[#0d0d0d]/95 flex items-center justify-center p-0 sm:p-4 z-50">
+          <div className="relative max-w-[400px] w-full h-[92vh] sm:h-[82vh] sm:max-h-[700px] bg-[#1a1a1f] rounded-2xl overflow-hidden flex flex-col justify-between border border-[#26262e] select-none">
             {showUI && (
               <div className="absolute top-2 inset-x-2 z-30 flex gap-1 px-1">
                 {activeStories.map((st, idx) => (
-                  <div key={st.id} className="h-0.5 flex-1 bg-white/30 rounded-full overflow-hidden">
+                  <div key={st.id} className="h-0.5 flex-1 bg-white/[0.18] rounded-full overflow-hidden">
                     <div 
-                      className="h-full bg-white transition-all duration-75 ease-linear"
+                      className="h-full bg-[#d0d0d8] transition-all duration-75 ease-linear"
                       style={{ 
                         width: idx < activeStoryIndex ? '100%' : idx === activeStoryIndex ? `${progress}%` : '0%' 
                       }}
@@ -655,7 +693,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                   <img src={currentStory.media_url} alt="" className="w-full h-full object-contain" />
                 )
               ) : (
-                <div className="p-6 text-center text-white font-bold text-base bg-gradient-to-br from-pink-900 to-purple-900 w-full h-full flex items-center justify-center">
+                <div className="p-6 text-center text-white font-bold text-base bg-[#1f1f27] w-full h-full flex items-center justify-center">
                   {currentStory.caption}
                 </div>
               )}
