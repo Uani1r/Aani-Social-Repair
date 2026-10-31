@@ -2778,6 +2778,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     let startX = 0;
     let startY = 0;
+    let lastTouchY = 0;
     let lastDirection: 0 | 1 | -1 = 0;
     let lastToggleAt = 0;
 
@@ -2803,6 +2804,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
       startX = touch.clientX;
       startY = touch.clientY;
+      lastTouchY = touch.clientY;
       lastDirection = 0;
     };
 
@@ -2810,16 +2812,25 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const touch = event.touches[0];
       if (!touch) return;
 
+      // لا نتدخل أثناء النوافذ والقوائم المفتوحة
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[role="dialog"], [role="listbox"]')) return;
+
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
 
       // نتجاهل السحب الأفقي (تبديل التبويبات) حتى لا يحرّك الشريطين
-      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) return;
+      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+        lastTouchY = touch.clientY;
+        return;
+      }
 
-      // بكسل واحد أو أكثر نزولًا = إظهار
-      if (dy >= MIN_MOVE_PX) applyDirection(1);
-      // بكسل واحد أو أكثر صعودًا = إخفاء
-      else if (dy <= -MIN_MOVE_PX) applyDirection(-1);
+      // نقيس الحركة خطوة بخطوة حتى يُكتشف انعكاس الاتجاه فورًا
+      const step = touch.clientY - lastTouchY;
+      lastTouchY = touch.clientY;
+
+      if (step >= MIN_MOVE_PX) applyDirection(1);
+      else if (step <= -MIN_MOVE_PX) applyDirection(-1);
     };
 
     // بديل لسطح المكتب: عجلة الفأرة (أي حركة تُظهر أو تُخفي فورًا)
@@ -2936,8 +2947,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const width = window.innerWidth || 360;
     const threshold = Math.max(56, width * 0.18);
 
-    const shouldNavigate = Boolean(start && start.axis === 'x' && Math.abs(start.dx) >= threshold);
     const horizontalSwipe = Boolean(start && start.axis === 'x');
+    const shouldNavigate = Boolean(start && start.axis === 'x' && Math.abs(start.dx) >= threshold);
+    let navigated = false;
 
     if (shouldNavigate && start) {
       const index = getRouteIndex(path);
@@ -2948,6 +2960,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
         const nextIndex = goingForward ? index + 1 : index - 1;
 
         if (nextIndex >= 0 && nextIndex < swipeRoutes.length) {
+          navigated = true;
           setSwipeDirection(goingForward ? 'forward' : 'backward');
           setLocation(swipeRoutes[nextIndex]);
 
@@ -2960,8 +2973,17 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       }
     }
 
-    // إعادة الصفحة لموضعها بحركة ناعمة
-    if (horizontalSwipe) setMainOffset(0, true);
+    if (navigated) {
+      // إزالة التحريك اللحظي فورًا حتى لا يتعارض مع حركة دخول الصفحة الجديدة
+      const node = mainRef.current;
+      if (node) {
+        node.style.transition = 'none';
+        node.style.transform = '';
+      }
+    } else if (horizontalSwipe) {
+      // ارتداد ناعم إلى الموضع الأصلي عند عدم بلوغ العتبة
+      setMainOffset(0, true);
+    }
   };
 
   const [postText, setPostText] = useState('');
