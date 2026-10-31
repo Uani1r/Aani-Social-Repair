@@ -5,7 +5,7 @@ import {
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
-  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX, Type, Smile, Music2
+  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown
 } from 'lucide-react';
 
 import { Toaster, toast } from 'sonner';
@@ -328,6 +328,25 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [showStoryPicker, setShowStoryPicker] = useState(false);
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
+
+  // قائمة الأدوات الإضافية القابلة للتوسعة (تُضاف العناصر هنا مستقبلًا)
+  const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [];
+  const [storyMoreOpen, setStoryMoreOpen] = useState(false);
+  const [storyStickerOpen, setStoryStickerOpen] = useState(false);
+  const storyToolsRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!storyMoreOpen) return;
+
+    const onDocumentClick = (event: MouseEvent) => {
+      if (!storyToolsRef.current?.contains(event.target as Node)) {
+        setStoryMoreOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', onDocumentClick);
+    return () => document.removeEventListener('mousedown', onDocumentClick);
+  }, [storyMoreOpen]);
 
   useEffect(() => {
     if (!storyFile) {
@@ -916,13 +935,15 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             <span className="w-9" />
           </div>
 
-          {/* أدوات التحرير الجانبية فوق الصورة (يمين) */}
-          <div className="absolute right-3 top-[16%] z-20 flex flex-col gap-4">
+          {/* أدوات التحرير: عمود واحد على الجانب الأيمن فقط */}
+          <div ref={storyToolsRef} className="absolute right-3 top-[15%] z-20 flex flex-col items-end gap-3">
             {[
               { key: 'text', icon: Type, label: 'نص' },
-              { key: 'sticker', icon: Smile, label: 'ملصق' },
-              { key: 'draw', icon: Pencil, label: 'رسم' },
+              { key: 'sticker', icon: Smile, label: 'ملصقات' },
               { key: 'music', icon: Music2, label: 'موسيقى' },
+              { key: 'effects', icon: Sparkles, label: 'فلاتر' },
+              { key: 'mention', icon: AtSign, label: 'إشارة' },
+              { key: 'draw', icon: Pencil, label: 'رسم' },
             ].map(tool => {
               const Icon = tool.icon;
 
@@ -936,68 +957,120 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                     if (tool.key === 'text') {
                       const value = window.prompt('اكتب نصاً يظهر على قصتك (اختياري)', caption);
                       if (value !== null) setCaption(value);
+                    } else if (tool.key === 'sticker') {
+                      setStoryStickerOpen(open => !open);
+                    } else if (tool.key === 'mention') {
+                      const username = window.prompt('اكتب اسم المستخدم للإشارة إليه');
+                      if (username?.trim()) {
+                        setCaption(prev => `${prev}${prev ? ' ' : ''}@${username.trim().replace(/^@/, '')}`);
+                      }
+                    } else if (tool.key === 'music') {
+                      const track = window.prompt('اكتب اسم المقطع الصوتي لإضافته إلى القصة');
+                      if (track?.trim()) toast.success(`سيُرفق: ${track.trim()}`);
+                    } else if (tool.key === 'effects') {
+                      toast.info('الفلاتر ستُضاف قريبًا');
                     } else {
-                      toast.info('هذه الأداة قيد التطوير');
+                      toast.info('أداة الرسم ستُضاف قريبًا');
                     }
                   }}
-                  className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm transition hover:bg-black/45"
+                  className="flex items-center gap-2"
                 >
-                  <Icon size={19} />
+                  <span className="rounded-full bg-black/35 px-2 py-0.5 text-[10px] font-semibold text-white/90 backdrop-blur-sm">
+                    {tool.label}
+                  </span>
+                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition active:scale-95">
+                    <Icon size={19} />
+                  </span>
                 </button>
               );
             })}
+
+            {/* الزر السابع: قائمة أدوات إضافية قابلة للتوسعة */}
+            <div className="relative">
+              <button
+                type="button"
+                aria-label="أدوات إضافية"
+                aria-expanded={storyMoreOpen}
+                onClick={() => setStoryMoreOpen(open => !open)}
+                className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white backdrop-blur-sm transition active:scale-95"
+              >
+                <ChevronDown
+                  size={19}
+                  className={`transition-transform duration-200 ${storyMoreOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+
+              {storyMoreOpen && (
+                <div
+                  className="absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border border-white/10 bg-[#101014]/95 p-1 shadow-2xl backdrop-blur-md"
+                  role="menu"
+                >
+                  {storyExtraTools.length === 0 ? (
+                    <p className="px-3 py-2 text-[10px] leading-4 text-zinc-500">
+                      ستظهر الأدوات الإضافية هنا عند إضافتها لاحقًا
+                    </p>
+                  ) : (
+                    storyExtraTools.map(item => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setStoryMoreOpen(false);
+                          item.action();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-right text-[11px] text-zinc-200 transition hover:bg-white/10"
+                      >
+                        {item.label}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* لوحة الملصقات */}
+            {storyStickerOpen && (
+              <div className="mt-1 grid grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-[#101014]/95 p-2 shadow-2xl backdrop-blur-md">
+                {['❤️', '😂', '🥰', '✨', '🔥', '👏', '🌷', '🤍'].map(sticker => (
+                  <button
+                    key={sticker}
+                    type="button"
+                    onClick={() => {
+                      setCaption(prev => `${prev}${prev ? ' ' : ''}${sticker}`);
+                      setStoryStickerOpen(false);
+                    }}
+                    className="flex h-8 w-8 items-center justify-center rounded-lg text-lg transition hover:bg-white/10"
+                  >
+                    {sticker}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* أدوات إضافية على الجهة اليسرى فوق الصورة */}
-          <div className="absolute left-3 top-[16%] z-20 flex flex-col gap-4">
-            <button
-              type="button"
-              title="تأثيرات"
-              aria-label="تأثيرات"
-              onClick={() => toast.info('هذه الأداة قيد التطوير')}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm transition hover:bg-black/45"
-            >
-              <Sparkles size={19} />
-            </button>
-            <button
-              type="button"
-              title="إعدادات"
-              aria-label="إعدادات"
-              onClick={() => toast.info('هذه الأداة قيد التطوير')}
-              className="flex h-10 w-10 items-center justify-center rounded-full bg-black/25 text-white backdrop-blur-sm transition hover:bg-black/45"
-            >
-              <Settings size={19} />
-            </button>
-          </div>
-
-          {/* أسفل الشاشة: قصتك + الأصدقاء المقربون */}
+          {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) */}
           <div
             className="absolute inset-x-0 bottom-0 z-20 px-4 pt-2"
             style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
           >
-            <div className="mb-3 flex justify-center">
-              <span className="flex items-center gap-2 rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212] shadow-lg">
-                <Avatar profile={currentProfile} />
-                قصتك
-              </span>
-            </div>
-
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={() => void handleQuickPublishStory(false)}
                 disabled={uploading || !storyFile}
-                className="flex-1 rounded-full bg-white py-3 text-[13px] font-bold text-[#121212] transition disabled:opacity-40"
+                className="flex flex-1 items-center justify-center gap-2 rounded-full bg-white px-4 py-3 text-[13px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
               >
+                <Avatar profile={currentProfile} />
                 {uploading ? 'جارٍ النشر...' : 'قصتك'}
               </button>
               <button
                 type="button"
                 onClick={() => void handleQuickPublishStory(true)}
                 disabled={uploading || !storyFile}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-full border border-white/50 bg-black/40 py-3 text-[13px] font-bold text-white backdrop-blur-sm transition disabled:opacity-40"
+                className="flex flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-4 py-3 text-[13px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
               >
-                <Star size={14} className="text-white" />
+                <Star size={16} className="text-white" />
                 الأصدقاء المقربون
               </button>
             </div>
