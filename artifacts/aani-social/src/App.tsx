@@ -5,7 +5,8 @@ import {
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
-  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown
+  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown,
+  Palette, AlignCenter, Square, Check
 } from 'lucide-react';
 
 import { Toaster, toast } from 'sonner';
@@ -334,6 +335,17 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
   const [storyStickerOpen, setStoryStickerOpen] = useState(false);
   const storyToolsRef = useRef<HTMLDivElement | null>(null);
+
+  // محرر النص الغني للقصة
+  const [storyTextEditorOpen, setStoryTextEditorOpen] = useState(false);
+  const [storyText, setStoryText] = useState('');
+  const [storyFontTab, setStoryFontTab] = useState<'ar' | 'en'>('ar');
+  const [storyFontFamily, setStoryFontFamily] = useState('Cairo');
+  const [storyTextColor, setStoryTextColor] = useState('#FFFFFF');
+  const [storyTextSize, setStoryTextSize] = useState(30);
+  const [storyTextAlign, setStoryTextAlign] = useState<'right' | 'center' | 'left'>('center');
+  const [storyTextBackground, setStoryTextBackground] = useState(false);
+  const [storyTextEffect, setStoryTextEffect] = useState(false);
 
   useEffect(() => {
     if (!storyMoreOpen) return;
@@ -959,8 +971,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                   aria-label={tool.label}
                   onClick={() => {
                     if (tool.key === 'text') {
-                      const value = window.prompt('اكتب نصاً يظهر على قصتك (اختياري)', caption);
-                      if (value !== null) setCaption(value);
+                      setStoryTextEditorOpen(true);
                     } else if (tool.key === 'sticker') {
                       setStoryStickerOpen(open => !open);
                     } else if (tool.key === 'mention') {
@@ -1047,6 +1058,221 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               </div>
             )}
           </div>
+
+          {/* النص المنسّق فوق الصورة */}
+          {storyText.trim() && !storyTextEditorOpen && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6" dir="rtl">
+              <p
+                className="max-w-full whitespace-pre-wrap break-words font-bold"
+                style={{
+                  fontFamily: storyFontFamily,
+                  color: storyTextColor,
+                  fontSize: storyTextSize,
+                  textAlign: storyTextAlign,
+                  lineHeight: 1.4,
+                  padding: storyTextBackground ? '8px 12px' : undefined,
+                  borderRadius: storyTextBackground ? 12 : undefined,
+                  background: storyTextBackground ? 'rgba(0,0,0,0.45)' : 'transparent',
+                  textShadow: storyTextEffect ? '0 2px 14px rgba(0,0,0,0.9)' : 'none',
+                }}
+              >
+                {storyText}
+              </p>
+            </div>
+          )}
+
+          {/* محرر النص الغني (خلفية شبه شفافة تُظهر القصة) */}
+          {storyTextEditorOpen && (
+            <div className="absolute inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm" dir="rtl">
+              <div
+                className="flex items-center justify-between px-4 py-3"
+                style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+              >
+                <span className="text-[12px] text-white/60">محرر النص</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCaption(storyText.trim());
+                    setStoryTextEditorOpen(false);
+                  }}
+                  className="rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212]"
+                >
+                  تم
+                </button>
+              </div>
+
+              <div className="flex flex-1 items-center justify-center px-6">
+                <textarea
+                  autoFocus
+                  value={storyText}
+                  onChange={event => setStoryText(event.target.value)}
+                  placeholder="اكتب شيئاً..."
+                  dir="rtl"
+                  rows={3}
+                  className="w-full max-w-md resize-none overflow-hidden bg-transparent text-center font-bold outline-none placeholder:text-white/40"
+                  style={{
+                    fontFamily: storyFontFamily,
+                    color: storyTextColor,
+                    fontSize: storyTextSize,
+                    textAlign: storyTextAlign,
+                    background: storyTextBackground ? 'rgba(0,0,0,0.45)' : 'transparent',
+                    textShadow: storyTextEffect ? '0 2px 12px rgba(0,0,0,0.9)' : 'none',
+                    borderRadius: storyTextBackground ? 12 : undefined,
+                    padding: storyTextBackground ? '10px 12px' : 0,
+                  }}
+                />
+              </div>
+
+              {/* شريط أدوات النص */}
+              <div
+                className="border-t border-white/10 bg-[#101014]/90 px-3 py-2 backdrop-blur-md"
+                style={{ paddingBottom: 'calc(0.6rem + env(safe-area-inset-bottom))' }}
+              >
+                <div className="flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setStoryFontTab(tab => (tab === 'ar' ? 'en' : 'ar'))}
+                    className="flex h-10 min-w-10 items-center justify-center rounded-xl bg-white/5 px-3 text-[15px] font-bold text-white"
+                  >
+                    Aa
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-label="اللون"
+                    onClick={() => {
+                      const palette = ['#FFFFFF', '#000000', '#EF4444', '#3B82F6', '#22C55E', '#EAB308'];
+                      const next = palette[(palette.indexOf(storyTextColor) + 1) % palette.length];
+                      setStoryTextColor(next);
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white"
+                  >
+                    <Palette size={18} style={{ color: storyTextColor }} />
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-label="المحاذاة"
+                    onClick={() =>
+                      setStoryTextAlign(prev =>
+                        prev === 'center' ? 'right' : prev === 'right' ? 'left' : 'center',
+                      )
+                    }
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-black/30 text-white"
+                  >
+                    <AlignCenter size={18} />
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-label="خلفية النص"
+                    onClick={() => setStoryTextBackground(value => !value)}
+                    className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                      storyTextBackground ? 'bg-white text-black' : 'bg-black/30 text-white'
+                    }`}
+                  >
+                    <Square size={18} />
+                  </button>
+
+                  <div className="flex items-center gap-1 rounded-full bg-black/30 px-1 py-1 text-white">
+                    <button
+                      type="button"
+                      aria-label="تصغير"
+                      onClick={() => setStoryTextSize(size => Math.max(14, size - 2))}
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-[15px]"
+                    >
+                      −
+                    </button>
+                    <span className="w-6 text-center text-[10px]">{storyTextSize}</span>
+                    <button
+                      type="button"
+                      aria-label="تكبير"
+                      onClick={() => setStoryTextSize(size => Math.min(64, size + 2))}
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-[15px]"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    aria-label="تأثيرات النص"
+                    onClick={() => setStoryTextEffect(value => !value)}
+                    className={`flex h-10 w-10 items-center justify-center rounded-full ${
+                      storyTextEffect ? 'bg-white text-black' : 'bg-black/30 text-white'
+                    }`}
+                  >
+                    <Sparkles size={18} />
+                  </button>
+
+                  <button
+                    type="button"
+                    aria-label="تأكيد"
+                    onClick={() => {
+                      setCaption(storyText.trim());
+                      setStoryTextEditorOpen(false);
+                    }}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500 text-white"
+                  >
+                    <Check size={18} />
+                  </button>
+                </div>
+
+                {/* اختيار الخط */}
+                <div className="mt-2">
+                  <div className="mb-1.5 flex items-center gap-2 text-[10px]">
+                    <button
+                      type="button"
+                      onClick={() => setStoryFontTab('ar')}
+                      className={`rounded-full px-2.5 py-1 transition ${
+                        storyFontTab === 'ar' ? 'bg-white text-black font-bold' : 'text-white/60'
+                      }`}
+                    >
+                      خطوط عربية
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStoryFontTab('en')}
+                      className={`rounded-full px-2.5 py-1 transition ${
+                        storyFontTab === 'en' ? 'bg-white text-black font-bold' : 'text-white/60'
+                      }`}
+                    >
+                      English
+                    </button>
+                  </div>
+
+                  <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                    {(storyFontTab === 'ar'
+                      ? ['Cairo', 'Tajawal', 'Almarai', 'Amiri', 'system-ui']
+                      : ['Helvetica', 'Arial', 'Impact', 'Georgia', 'monospace']
+                    ).map(font => (
+                      <button
+                        key={font}
+                        type="button"
+                        onClick={() => setStoryFontFamily(font)}
+                        style={{ fontFamily: font }}
+                        className={`shrink-0 rounded-xl border px-3 py-1.5 text-[12px] transition ${
+                          storyFontFamily === font
+                            ? 'border-white bg-white text-[#121212]'
+                            : 'border-white/15 bg-white/5 text-white/85'
+                        }`}
+                      >
+                        {font === 'Cairo'
+                          ? 'القاهرة'
+                          : font === 'Tajawal'
+                            ? 'تجوال'
+                            : font === 'Almarai'
+                              ? 'المراعي'
+                              : font === 'Amiri'
+                                ? 'أميري'
+                                : font}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) */}
           <div
