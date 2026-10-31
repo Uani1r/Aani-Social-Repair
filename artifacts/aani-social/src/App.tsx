@@ -328,15 +328,15 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoryPicker, setShowStoryPicker] = useState(false);
 
-  // أثناء شاشات القصص (اختيار/معاينة/محرر النص) تُخفى أشرطة التطبيق كليًا
+  // أثناء شاشات القصص (اختيار/معاينة/عارض القصص) تُخفى أشرطة التطبيق وتُعزل الحركات
   useEffect(() => {
-    const immersive = showStoryPicker || showUploadModal;
+    const immersive = showStoryPicker || showUploadModal || Boolean(activeUserGroup);
     document.body.classList.toggle('aani-immersive', immersive);
 
     return () => {
       document.body.classList.remove('aani-immersive');
     };
-  }, [showStoryPicker, showUploadModal]);
+  }, [showStoryPicker, showUploadModal, activeUserGroup]);
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
 
@@ -356,6 +356,32 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [storyTextAlign, setStoryTextAlign] = useState<'right' | 'center' | 'left'>('center');
   const [storyTextBackground, setStoryTextBackground] = useState(false);
   const [storyTextEffect, setStoryTextEffect] = useState(false);
+  const [storyKeyboardInset, setStoryKeyboardInset] = useState(0);
+
+  // إبقاء شريط أدوات النص فوق لوحة المفاتيح
+  useEffect(() => {
+    if (!storyTextEditorOpen) {
+      setStoryKeyboardInset(0);
+      return;
+    }
+
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const updateInset = () => {
+      const inset = Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop);
+      setStoryKeyboardInset(inset);
+    };
+
+    updateInset();
+    viewport.addEventListener('resize', updateInset);
+    viewport.addEventListener('scroll', updateInset);
+
+    return () => {
+      viewport.removeEventListener('resize', updateInset);
+      viewport.removeEventListener('scroll', updateInset);
+    };
+  }, [storyTextEditorOpen]);
 
   useEffect(() => {
     if (!storyMoreOpen) return;
@@ -1136,7 +1162,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               {/* شريط أدوات النص */}
               <div
                 className="border-t border-white/10 bg-[#101014]/90 px-3 py-2 backdrop-blur-md"
-                style={{ paddingBottom: 'calc(0.6rem + env(safe-area-inset-bottom))' }}
+                style={{ paddingBottom: `calc(0.6rem + env(safe-area-inset-bottom) + ${storyKeyboardInset}px)` }}
               >
                 <div className="flex items-center justify-between">
                   <button
@@ -3456,6 +3482,12 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   };
 
   const handleSwipeStart = (event: React.TouchEvent) => {
+    // التنقل بالسحب مخصص لتبويبات الشريط السفلي فقط، ولا يعمل داخل شاشات القصص
+    if (document.body.classList.contains('aani-immersive')) {
+      swipeStartRef.current = null;
+      return;
+    }
+
     const target = event.target as HTMLElement | null;
 
     // لا نلتقط السحب داخل العناصر التي تملك إيماءة أفقية أو حقول الإدخال

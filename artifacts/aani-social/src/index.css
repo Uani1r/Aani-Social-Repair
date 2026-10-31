@@ -791,3 +791,10 @@ body.aani-immersive .mobile-nav {
   pointer-events: none;
   transition: none;
 }
+
+
+/* منع تمرير الصفحة الرئيسية خلف شاشات القصص */
+body.aani-immersive {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
