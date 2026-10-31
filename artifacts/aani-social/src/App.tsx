@@ -2781,7 +2781,10 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     let lastDirection: 0 | 1 | -1 = 0;
     let lastToggleAt = 0;
 
-    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد) — بلا أي عتبة مسافة
+    // عتبة بكسل واحد: أقل من ذلك لا يُحسب حركة إصبع حقيقية
+    const MIN_MOVE_PX = 1;
+
+    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد)
     const applyDirection = (direction: 1 | -1) => {
       if (direction === lastDirection) return;
 
@@ -2813,10 +2816,10 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       // نتجاهل السحب الأفقي (تبديل التبويبات) حتى لا يحرّك الشريطين
       if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) return;
 
-      // أي حركة نزول مهما كانت صغيرة جدًا = إظهار
-      if (dy > 0) applyDirection(1);
-      // أي حركة صعود مهما كانت صغيرة جدًا = إخفاء
-      else if (dy < 0) applyDirection(-1);
+      // بكسل واحد أو أكثر نزولًا = إظهار
+      if (dy >= MIN_MOVE_PX) applyDirection(1);
+      // بكسل واحد أو أكثر صعودًا = إخفاء
+      else if (dy <= -MIN_MOVE_PX) applyDirection(-1);
     };
 
     // بديل لسطح المكتب: عجلة الفأرة (أي حركة تُظهر أو تُخفي فورًا)
