@@ -327,6 +327,16 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoryPicker, setShowStoryPicker] = useState(false);
+
+  // أثناء شاشات القصص (اختيار/معاينة/محرر النص) تُخفى أشرطة التطبيق كليًا
+  useEffect(() => {
+    const immersive = showStoryPicker || showUploadModal;
+    document.body.classList.toggle('aani-immersive', immersive);
+
+    return () => {
+      document.body.classList.remove('aani-immersive');
+    };
+  }, [showStoryPicker, showUploadModal]);
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
 
@@ -3314,6 +3324,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     };
 
     const onTouchMove = (event: TouchEvent) => {
+      // لا تعمل حركة إخفاء/إظهار الأشرطة داخل شاشات القصص والواجهات المغطاة
+      if (document.body.classList.contains('aani-immersive')) return;
+
       const touch = event.touches[0];
       if (!touch) return;
 
@@ -3341,6 +3354,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const onScroll = () => {
       const now = performance.now();
 
+      if (document.body.classList.contains('aani-immersive')) return;
       if (touching && now - lastTouchMoveAt < 120) return;
 
       const y = window.scrollY || document.documentElement.scrollTop || 0;
@@ -3359,6 +3373,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     // بديل لسطح المكتب: عجلة الفأرة
     const onWheel = (event: WheelEvent) => {
+      if (document.body.classList.contains('aani-immersive')) return;
       if (!event.deltaY) return;
       applyDirection(event.deltaY > 0 ? -1 : 1);
     };

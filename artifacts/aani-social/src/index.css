@@ -773,3 +773,21 @@ body.aani-chrome-revealed .story-bar {
     animation: none;
   }
 }
+
+
+/* =====================================================================
+   شاشات القصص والواجهات المغطاة: إخفاء أشرطة التطبيق كليًا وثابتًا
+   ===================================================================== */
+body.aani-immersive .topbar {
+  transform: translate3d(0, -100%, 0);
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
+
+body.aani-immersive .mobile-nav {
+  transform: translate3d(0, 120%, 0) scale(0.94);
+  opacity: 0;
+  pointer-events: none;
+  transition: none;
+}
