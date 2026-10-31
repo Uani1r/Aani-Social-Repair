@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { 
-  ArrowUpLeft, Bell, Bookmark, ChevronDown, ChevronUp, Clock, Film, Filter, Heart, Home, 
+  ArrowUpLeft, Bell, Bookmark, Clock, Film, Filter, Heart, Home, 
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
@@ -286,7 +286,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
 // --- شريط القصص الموحد ---
 function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile: Profile | null }) {
-  const [collapsed, setCollapsed] = useState(false);
   const [groupedStories, setGroupedStories] = useState<{ [key: string]: any[] }>({});
   const [activeUserGroup, setActiveUserGroup] = useState<string | null>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
@@ -559,73 +558,79 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   };
 
   return (
-    <div className="bg-[#161618] border border-[#26262e] rounded-2xl mb-4 overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2">
-        <span className="text-[11px] font-semibold text-zinc-400">القصص</span>
-        <button onClick={() => setCollapsed(!collapsed)} className="text-zinc-400 hover:text-white p-1 rounded-lg hover:bg-zinc-800 text-xs flex items-center gap-1">
-          {collapsed ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
-        </button>
-      </div>
+    <div className="story-bar mb-4 w-full" dir="rtl">
+      <div className="flex items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-2 pt-1">
+        {/* قصتك */}
+        <div className="flex flex-col items-center gap-1.5 shrink-0">
+          <div
+            className="relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full border-[1.5px] border-dashed border-zinc-600/70 p-[2px]"
+            onClick={() => {
+              if (hasMyStory) {
+                markStorySeen(userId);
+                setActiveUserGroup(userId);
+                setActiveStoryIndex(0);
+                setProgress(0);
+              } else {
+                setShowUploadModal(true);
+              }
+            }}
+          >
+            {hasMyStory ? (
+              <Avatar profile={currentProfile} extraLarge />
+            ) : (
+              <span className="text-2xl font-light text-zinc-500">+</span>
+            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowUploadModal(true);
+              }}
+              className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300"
+              title="إضافة ستوري جديدة"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+          <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">قصتك</span>
+        </div>
 
-      {!collapsed && (
-        <div className="px-2 pb-3 pt-1 flex items-center gap-[18px] overflow-x-auto no-scrollbar">
-          <div className="flex flex-col items-center gap-1.5 shrink-0">
+        {/* قصص المتابَعين بحلقة العلم العراقي */}
+        {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
+          const firstStory = groupedStories[authorId][0];
+          const isSeen = seenStories.includes(authorId);
+
+          return (
             <div
-              className="relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full border-[1.5px] border-dashed border-zinc-600/70 p-[2px]"
+              key={authorId}
+              className="flex flex-col items-center gap-1.5 cursor-pointer shrink-0"
               onClick={() => {
-                if (hasMyStory) {
-                  markStorySeen(userId);
-                  setActiveUserGroup(userId);
-                  setActiveStoryIndex(0);
-                  setProgress(0);
-                } else {
-                  setShowUploadModal(true);
-                }
+                markStorySeen(authorId);
+                setActiveUserGroup(authorId);
+                setActiveStoryIndex(0);
+                setProgress(0);
+                setCurrentTimeSec(0);
               }}
             >
-              {hasMyStory ? (
-                <Avatar profile={currentProfile} extraLarge />
-              ) : (
-                <span className="text-2xl font-light text-zinc-500">+</span>
-              )}
-              <button 
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowUploadModal(true);
-                }} 
-                className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300"
-                title="إضافة ستوري جديدة"
+              <span
+                className="flex h-16 w-16 items-center justify-center rounded-full p-[2.5px] transition-colors duration-200"
+                style={{
+                  background: isSeen
+                    ? '#3a3a42'
+                    : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)',
+                }}
               >
-                <Plus size={12} />
-              </button>
-            </div>
-            <span className="text-xs font-medium text-zinc-300 truncate w-16 text-center">قصتك</span>
-          </div>
-
-          {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
-            const firstStory = groupedStories[authorId][0];
-            return (
-              <div 
-                key={authorId} 
-                className="flex flex-col items-center gap-1.5 cursor-pointer shrink-0" 
-                onClick={() => { markStorySeen(authorId); setActiveUserGroup(authorId); setActiveStoryIndex(0); setProgress(0); setCurrentTimeSec(0); }}
-              >
-                <span
-                  className={`rounded-full p-[2px] transition-colors duration-200 ${
-                    seenStories.includes(authorId) ? 'bg-[#3a3a42]' : 'bg-[#8a8a95]'
-                  }`}
-                >
+                <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
                   <Avatar profile={firstStory.author} extraLarge />
                 </span>
-                <span className="text-xs text-zinc-400 truncate w-16 text-center">
-                  {firstStory.author?.username || 'عضو'}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+              </span>
+              <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">
+                {firstStory.author?.username || 'عضو'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
 
       {currentStory && (
         <div className="modal-overlay bg-[#0d0d0d]/95 flex items-center justify-center p-0 sm:p-4 z-50">
