@@ -597,11 +597,11 @@ body {
   will-change: transform, opacity;
 }
 
-/* الإخفاء أهدأ قليلًا، والإظهار أسرع ليصل فور السحب */
+/* الإخفاء سريع قليلًا، والإظهار أسرع ليصل فور السحب */
 .topbar.is-hidden,
 .mobile-nav.is-hidden,
 body.aani-chrome-hidden .story-strip {
-  transition-duration: 240ms, 220ms, 240ms;
+  transition-duration: 190ms, 170ms, 200ms;
 }
 
 .topbar.is-hidden {

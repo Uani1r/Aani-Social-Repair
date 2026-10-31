@@ -2780,21 +2780,15 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     let startY = 0;
     let lastTouchY = 0;
     let lastDirection: 0 | 1 | -1 = 0;
-    let lastToggleAt = 0;
 
     // عتبة بكسل واحد: أقل من ذلك لا يُحسب حركة إصبع حقيقية
     const MIN_MOVE_PX = 1;
 
-    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد)
+    // 1 = إظهار (إصبع نازل)، -1 = إخفاء (إصبع صاعد) — استجابة فورية بلا تأخير
     const applyDirection = (direction: 1 | -1) => {
       if (direction === lastDirection) return;
 
-      const now = performance.now();
-      // حماية صغيرة من اهتزاز الإصبع (70 مللي ثانية فقط)
-      if (now - lastToggleAt < 70) return;
-
       lastDirection = direction;
-      lastToggleAt = now;
       setHidden(direction === -1);
     };
 
@@ -2819,8 +2813,9 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const dx = touch.clientX - startX;
       const dy = touch.clientY - startY;
 
-      // نتجاهل السحب الأفقي (تبديل التبويبات) حتى لا يحرّك الشريطين
-      if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.2) {
+      // نتجاهل السحب الأفقي الواضح جدًا فقط (تبديل التبويبات)،
+      // أما الحركة المائلة فتُقبل وتُحرّك الشريطين
+      if (Math.abs(dx) > 24 && Math.abs(dx) > Math.abs(dy) * 2) {
         lastTouchY = touch.clientY;
         return;
       }
