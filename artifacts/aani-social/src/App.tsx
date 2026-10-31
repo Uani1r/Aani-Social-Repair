@@ -2810,17 +2810,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       const target = event.target as HTMLElement | null;
       if (target?.closest('[role="dialog"], [role="listbox"]')) return;
 
-      const dx = touch.clientX - startX;
-      const dy = touch.clientY - startY;
-
-      // نتجاهل السحب الأفقي الواضح جدًا فقط (تبديل التبويبات)،
-      // أما الحركة المائلة فتُقبل وتُحرّك الشريطين
-      if (Math.abs(dx) > 24 && Math.abs(dx) > Math.abs(dy) * 2) {
-        lastTouchY = touch.clientY;
-        return;
-      }
-
-      // نقيس الحركة خطوة بخطوة حتى يُكتشف انعكاس الاتجاه فورًا
+      // نقيس الحركة خطوة بخطوة حتى يُكتشف انعكاس الاتجاه فورًا.
+      // تُقبل أي حركة مائلة: لا يوجد أي استثناء للحركة الأفقية هنا.
       const step = touch.clientY - lastTouchY;
       lastTouchY = touch.clientY;
 
