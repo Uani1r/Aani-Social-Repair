@@ -20,6 +20,7 @@ import { displayName, formatDate, normalizeProfile, type Post, type Profile } fr
 import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
 import ShareSheet from './components/ShareSheet';
+import StoryComposerSheet from './components/StoryComposerSheet';
 import '@/index.css';
 
 // --- مكون المساعد الذكي الآمن المربوط بـ Supabase Edge Function ---
@@ -300,8 +301,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     }
   });
 
-  const markStorySeen = useCallback((authorId: string) => {
-    if (!authorId) return;
+  const markStorySeen = useCallback((authorId: string) => {    if (!authorId) return;
 
     setSeenStories(prev => {
       if (prev.includes(authorId)) return prev;
@@ -325,6 +325,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [showMenu, setShowMenu] = useState(false);
 
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showStoryPicker, setShowStoryPicker] = useState(false);
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [caption, setCaption] = useState('');
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
@@ -571,7 +572,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                 setActiveStoryIndex(0);
                 setProgress(0);
               } else {
-                setShowUploadModal(true);
+                setShowStoryPicker(true);
               }
             }}
           >
@@ -584,7 +585,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                setShowUploadModal(true);
+                setShowStoryPicker(true);
               }}
               className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300"
               title="إضافة ستوري جديدة"
@@ -631,6 +632,29 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           );
         })}
       </div>
+
+      <StoryComposerSheet
+        open={showStoryPicker}
+        onClose={() => setShowStoryPicker(false)}
+        archive={(groupedStories[userId] || []) as any}
+        onTextMode={() => {
+          setShowStoryPicker(false);
+          setCaption('');
+          setStoryFile(null);
+          setShowUploadModal(true);
+        }}
+        onFilesSelected={files => {
+          if (!files.length) return;
+
+          if (files.length > 1) {
+            toast.info('سيُستخدم أول وسيط مختار لنشر القصة');
+          }
+
+          setStoryFile(files[0]);
+          setShowStoryPicker(false);
+          setShowUploadModal(true);
+        }}
+      />
 
       {currentStory && (
         <div className="modal-overlay bg-[#0d0d0d]/95 flex items-center justify-center p-0 sm:p-4 z-50">
