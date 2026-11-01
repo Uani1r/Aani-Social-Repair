@@ -1,4 +1,4 @@
-// رفع وسائط الستوري مع نسبة تقدّم حقيقية عبر XHR (لا يجمّد الواجهة)
+// رفع وسائط الستوري مع نسبة تقدّم حقيقية عبر XHR وخطة بديلة عبر عميل Supabase.
 
 import { supabase, storageBucket, supabasePublicKey, supabaseUrl } from '@/lib/supabase';
 
@@ -14,19 +14,40 @@ export async function uploadStoryMedia({ file, path, onProgress }: UploadOptions
   const baseUrl = supabaseUrl;
   const anonKey = supabasePublicKey;
 
-  // بدون جلسة مصادقة: نرجع لرفع المكتبة (دون تقدم حقيقي)
   if (!token || !baseUrl) {
     const { error } = await supabase.storage
       .from(storageBucket)
       .upload(path, file, { contentType: file.type, upsert: true });
-    onProgress?.(100);
     if (error) throw error;
+    onProgress?.(100);
     return;
   }
 
   await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let fallbackStarted = false;
     const encodedPath = path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+
+    const fallbackUpload = async () => {
+      if (fallbackStarted) return;
+      fallbackStarted = true;
+      try {
+        const { error } = await supabase.storage
+          .from(storageBucket)
+          .upload(path, file, { contentType: file.type, upsert: true });
+        if (error) throw error;
+        onProgress?.(100);
+        resolve();
+      } catch (error) {
+        const message = error && typeof error === 'object' && 'message' in error
+          ? String((error as { message?: unknown }).message || 'تعذر رفع ملف القصة إلى التخزين')
+          : error instanceof Error
+            ? error.message
+            : 'تعذر رفع ملف القصة إلى التخزين';
+        reject(new Error(message));
+      }
+    };
+
     xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/storage/v1/object/${encodeURIComponent(storageBucket)}/${encodedPath}`);
     xhr.setRequestHeader('authorization', `Bearer ${token}`);
     if (anonKey) xhr.setRequestHeader('apikey', anonKey);
@@ -43,23 +64,13 @@ export async function uploadStoryMedia({ file, path, onProgress }: UploadOptions
       if (xhr.status >= 200 && xhr.status < 300) {
         onProgress?.(100);
         resolve();
-        return;
+      } else {
+        void fallbackUpload();
       }
-
-      // بعض إعدادات التخزين لا تقبل رفع XHR: نجرب المكتبة كخطة بديلة
-      void supabase.storage
-        .from(storageBucket)
-        .upload(path, file, { contentType: file.type, upsert: true })
-        .then(({ error }) => {
-          if (error) reject(error);
-          else {
-            onProgress?.(100);
-            resolve();
-          }
-        });
     };
 
-    xhr.onerror = () => reject(new Error('network'));
+    xhr.onerror = () => void fallbackUpload();
+    xhr.onabort = () => reject(new Error('أُلغيت عملية رفع القصة'));
     xhr.send(file);
   });
 }

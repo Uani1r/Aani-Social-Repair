@@ -9,6 +9,7 @@ export interface StoryRow {
   media_url: string | null;
   media_type: string;
   caption: string | null;
+  duration_seconds?: number | null;
   expires_at: string | null;
   filter_key?: string | null;
   original_story_id?: string | null;
@@ -38,7 +39,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
       setLoading(true);
       const { data } = await supabase
         .from('stories')
-        .select('id, user_id, media_url, media_type, caption, expires_at, author:profiles(id, username, full_name, avatar_url)')
+        .select('id, user_id, media_url, media_type, caption, duration_seconds, expires_at, author:profiles(id, username, full_name, avatar_url)')
         .eq('id', storyId)
         .maybeSingle();
 

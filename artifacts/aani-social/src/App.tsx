@@ -25,6 +25,7 @@ import StoryComposerSheet from './components/StoryComposerSheet';
 import CloseFriendsSheet from './components/CloseFriendsSheet';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from './components/StoryDmCard';
 import StoryFilterBar from './components/StoryFilterBar';
+import StoryExpirySlider from './components/StoryExpirySlider';
 import StoryMusicSheet from './components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from './components/StoryMentionPicker';
 import StoryTextToolbar from './components/StoryTextToolbar';
@@ -413,6 +414,7 @@ function StoriesBar({
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [currentVideoPlaybackDuration, setCurrentVideoPlaybackDuration] = useState<{ storyId: string; seconds: number } | null>(null);
   const [replyText, setReplyText] = useState('');
   const [isLiked, setIsLiked] = useState(false);
   const [originalStoryAuthor, setOriginalStoryAuthor] = useState<NonNullable<StoryDmCardStory['author']> | null>(null);
@@ -436,15 +438,22 @@ function StoriesBar({
   const [reshareScaledDown, setReshareScaledDown] = useState(false);
 
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
+  const [storyExpiryOpen, setStoryExpiryOpen] = useState(false);
   // أدوات إضافية للمحرر: إدارة قائمة الأصدقاء المقربين دون إشعارات.
   const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [
     {
       key: 'close-friends',
       label: 'الأصدقاء المقربون',
       action: () => {
+        setStoryExpiryOpen(false);
         setStoryMoreOpen(false);
         setCloseFriendsOpen(true);
       },
+    },
+    {
+      key: 'expiry',
+      label: 'مدة انتهاء القصة',
+      action: () => setStoryExpiryOpen(open => !open),
     },
   ];
   const [storyFiltersOpen, setStoryFiltersOpen] = useState(false);
@@ -844,6 +853,7 @@ function StoriesBar({
     const onDocumentClick = (event: MouseEvent) => {
       if (!storyToolsRef.current?.contains(event.target as Node)) {
         setStoryMoreOpen(false);
+        setStoryExpiryOpen(false);
       }
     };
 
@@ -864,7 +874,8 @@ function StoriesBar({
   }, [storyFile]);
   const [caption, setCaption] = useState('');
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
-  const [uploadDuration, setUploadDuration] = useState<number>(5);
+  const [uploadDuration, setUploadDuration] = useState<number>(30);
+  const [customDurationSeconds, setCustomDurationSeconds] = useState<number | null>(null);
   const [timedTexts, setTimedTexts] = useState<Array<{ id: string; text: string; startTime: number; endTime: number; x: number; y: number }>>([]);
   const [newText, setNewText] = useState('');
   const [textStart, setTextStart] = useState(0);
@@ -897,6 +908,11 @@ function StoriesBar({
     setStoryMentions([]);
     setStoryFilterId('original');
     setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
+    setUploadDuration(pendingReshare.media_type === 'video'
+      ? Math.min(120, Math.max(1, pendingReshare.duration_seconds || 120))
+      : 30);
+    setCustomDurationSeconds(null);
+    setStoryExpiryOpen(false);
     setShowUploadModal(true);
     onReshareHandled();
   }, [pendingReshare, onReshareHandled]);
@@ -989,6 +1005,15 @@ function StoriesBar({
   }, [pendingProfileStoryOwnerId, onProfileStoryHandled]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
+  const storyDisplayDuration = !currentStory
+    ? 5
+    : currentStory.media_type === 'video'
+      ? currentVideoPlaybackDuration && currentVideoPlaybackDuration.storyId === currentStory.id
+        ? currentVideoPlaybackDuration.seconds
+        : 120
+      : currentStory.media_type === 'photo'
+        ? 30
+        : Math.max(1, Number(currentStory.duration_seconds) || 5);
   const currentStoryFilter = decodeStoryFilterKey((currentStory as { filter_key?: string } | null)?.filter_key);
   useEffect(() => {
     const originalStoryId = (currentStory as { original_story_id?: string } | null)?.original_story_id;
@@ -1015,6 +1040,7 @@ function StoriesBar({
   const currentStoryFilterOverlay = getStoryFilterOverlay(currentStoryFilter.id);
   const myStories = groupedStories[userId] || [];
   const hasMyStory = myStories.length > 0;
+  const myStoryHasCloseFriends = myStories.some(story => story.is_close_friends);
 
   useEffect(() => {
     if (!currentStory || !supabaseConfigured) return;
@@ -1025,14 +1051,14 @@ function StoriesBar({
 
   useEffect(() => {
     if (!currentStory || isPaused) return;
-    const duration = (currentStory.duration_seconds || 5) * 1000;
+    const duration = storyDisplayDuration * 1000;
     const interval = 50;
     const step = (interval / duration) * 100;
 
     const timer = setInterval(() => {
       setProgress(prev => {
         const nextProg = prev + step;
-        setCurrentTimeSec((nextProg / 100) * (currentStory.duration_seconds || 5));
+        setCurrentTimeSec((nextProg / 100) * storyDisplayDuration);
         if (nextProg >= 100) {
           handleNextStory();
           return 0;
@@ -1042,7 +1068,7 @@ function StoriesBar({
     }, interval);
 
     return () => clearInterval(timer);
-  }, [currentStory, isPaused, activeStoryIndex, activeUserGroup]);
+  }, [currentStory, storyDisplayDuration, isPaused, activeStoryIndex, activeUserGroup]);
 
   const handleNextStory = () => {
     if (activeStoryIndex < activeStories.length - 1) {
@@ -1237,6 +1263,8 @@ function StoriesBar({
     const sourceStory = reshareStory;
     const storyCaption = caption.trim();
     const mentions = [...storyMentions];
+    const durationSeconds = uploadDuration;
+    const expirySeconds = customDurationSeconds;
     if (!supabaseConfigured || (!mediaFile && !sourceStory?.media_url)) return;
 
     // إغلاق المحرر أولاً، ثم متابعة الرفع دون حجب التفاعل مع الصفحة الرئيسية.
@@ -1263,35 +1291,22 @@ function StoriesBar({
           setUploadProgress(85);
         }
 
-        const storyPayload = {
-          user_id: userId,
-          media_url: mediaUrl,
-          media_type: mediaType,
-          caption: storyCaption || sourceStory?.caption || null,
-          is_close_friends: closeFriends,
-          duration_seconds: 5,
-          timed_texts: [],
-          filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
-          ...(sourceStory ? { original_story_id: sourceStory.id, share_type: 'reshare' } : {}),
-        };
+        const { data: storyId, error: insertError } = await supabase.rpc('aani_create_story', {
+          p_media_url: mediaUrl || null,
+          p_media_type: mediaType,
+          p_caption: storyCaption || sourceStory?.caption || null,
+          p_is_close_friends: closeFriends,
+          p_duration_seconds: durationSeconds,
+          p_timed_texts: [],
+          p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
+          p_original_story_id: sourceStory?.id || null,
+          p_share_type: sourceStory ? 'reshare' : 'original',
+          p_expiry_seconds: expirySeconds,
+        });
 
-        let insertResult = await supabase
-          .from('stories')
-          .insert(storyPayload)
-          .select('id')
-          .single();
-
-        // توافق مع قاعدة بيانات لم يُشغَّل عليها ترحيل الفلاتر بعد للقصص الأصلية فقط.
-        if (insertResult.error && !sourceStory) {
-          const { filter_key, ...legacyPayload } = storyPayload;
-          void filter_key;
-          insertResult = await supabase.from('stories').insert(legacyPayload).select('id').single();
-        }
-
-        if (insertResult.error) throw insertResult.error;
-
-        if (insertResult.data?.id && mentions.length > 0) {
-          void linkStoryMentions(insertResult.data.id, currentProfile?.username || 'مستخدم', mentions);
+        if (insertError) throw insertError;
+        if (typeof storyId === 'string' && mentions.length > 0) {
+          void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', mentions);
         }
 
         setStoryFile(current => current === mediaFile ? null : current);
@@ -1301,11 +1316,24 @@ function StoriesBar({
         setTimedTexts([]);
         setStoryMentions([]);
         setReshareScaledDown(false);
+        setCustomDurationSeconds(null);
+        setStoryExpiryOpen(false);
         await fetchStories();
         toast.success('تم نشر القصة بنجاح', { duration: 5000 });
       } catch (error) {
         console.error('Story publish failed:', error);
-        toast.error('تعذر نشر القصة، حاول مرة أخرى');
+        const errorInfo = error && typeof error === 'object' ? error as { message?: unknown; code?: unknown } : null;
+        const details = error instanceof Error
+          ? error.message
+          : String(errorInfo?.message || '');
+        const errorCode = String(errorInfo?.code || '');
+        if (errorCode === 'PGRST202' || /aani_create_story|function.*not found|PGRST202/i.test(details)) {
+          toast.error('حدّث قاعدة البيانات بتشغيل ترحيل القصص ثم أعد المحاولة');
+        } else if (errorCode === '42501' || /row-level security|permission denied/i.test(details)) {
+          toast.error('رفضت صلاحيات قاعدة البيانات نشر القصة. تأكد من تطبيق تحديث الخصوصية والقصص.');
+        } else {
+          toast.error(details ? `تعذر نشر القصة: ${details}` : 'تعذر نشر القصة، حاول مرة أخرى');
+        }
         setShowUploadModal(true);
       } finally {
         setUploading(false);
@@ -1344,7 +1372,12 @@ function StoriesBar({
         {/* قصتك */}
         <div className="flex flex-col items-center gap-1.5 shrink-0">
           <div
-            className="relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full border-[1.5px] border-dashed border-zinc-600/70 p-[2px]"
+            className={`relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full ${hasMyStory ? 'p-[2.5px]' : 'border-[1.5px] border-dashed border-zinc-600/70 p-[2px]'}`}
+            style={hasMyStory ? {
+              background: myStoryHasCloseFriends
+                ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
+                : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
+            } : undefined}
             onClick={() => {
               if (uploading) return;
               if (hasMyStory) {
@@ -1358,11 +1391,9 @@ function StoriesBar({
             }}
           >
             {hasMyStory || uploading ? (
-              <Avatar
-                profile={currentProfile}
-                extraLarge
-                isCloseFriends={myStories.some(story => story.is_close_friends)}
-              />
+              <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
+                <Avatar profile={currentProfile} extraLarge />
+              </span>
             ) : (
               <span className="text-2xl font-light text-zinc-500">+</span>
             )}
@@ -1432,7 +1463,7 @@ function StoriesBar({
                     ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
                     : isSeen
                       ? '#3a3a42'
-                      : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)',
+                      : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
                 }}
               >
                 <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
@@ -1465,6 +1496,9 @@ function StoriesBar({
           setStoryFile(files[0]);
           setReshareStory(null);
           setReshareScaledDown(false);
+          setUploadDuration(files[0].type.startsWith('video') ? 120 : 30);
+          setCustomDurationSeconds(null);
+          setStoryExpiryOpen(false);
           setShowStoryPicker(false);
           setShowUploadModal(true);
         }}
@@ -1548,10 +1582,21 @@ function StoriesBar({
               {currentStory.media_url ? (
                 currentStory.media_type === 'video' ? (
                   <video
+                    key={currentStory.id}
                     src={currentStory.media_url}
                     autoPlay
                     playsInline
                     preload="metadata"
+                    onLoadedMetadata={event => {
+                      const duration = Number(event.currentTarget.duration);
+                      if (!Number.isFinite(duration) || duration <= 0) return;
+                      setCurrentVideoPlaybackDuration({
+                        storyId: currentStory.id,
+                        seconds: Math.min(120, Math.max(1, Math.ceil(duration))),
+                      });
+                      setProgress(0);
+                      setCurrentTimeSec(0);
+                    }}
                     className="h-full w-full object-contain"
                     style={{ filter: currentStoryFilter.css }}
                   />
@@ -1687,6 +1732,12 @@ function StoriesBar({
                     autoPlay
                     loop
                     playsInline
+                    onLoadedMetadata={event => {
+                      const duration = Number(event.currentTarget.duration);
+                      if (Number.isFinite(duration) && duration > 0) {
+                        setUploadDuration(Math.min(120, Math.max(1, Math.ceil(duration))));
+                      }
+                    }}
                     data-story-media="true"
                     className="h-full w-full object-cover"
                     style={{
@@ -1871,7 +1922,11 @@ function StoriesBar({
                 type="button"
                 aria-label="أدوات إضافية"
                 aria-expanded={storyMoreOpen}
-                onClick={() => setStoryMoreOpen(open => !open)}
+                onClick={() => {
+                  const nextOpen = !storyMoreOpen;
+                  setStoryMoreOpen(nextOpen);
+                  if (!nextOpen) setStoryExpiryOpen(false);
+                }}
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
               >
                 <ChevronDown
@@ -1882,7 +1937,7 @@ function StoriesBar({
 
               {storyMoreOpen && (
                 <div
-                  className="absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden rounded-2xl border border-white/10 bg-[#101014]/95 p-1 shadow-2xl backdrop-blur-md"
+                  className="absolute right-0 top-full z-30 mt-2 w-64 max-w-[82vw] overflow-hidden rounded-2xl border border-white/10 bg-[#101014]/95 p-1 shadow-2xl backdrop-blur-md"
                   role="menu"
                 >
                   {storyExtraTools.length === 0 ? (
@@ -1890,21 +1945,34 @@ function StoriesBar({
                       ستظهر الأدوات الإضافية هنا عند إضافتها لاحقًا
                     </p>
                   ) : (
-                    storyExtraTools.map(item => (
-                      <button
-                        key={item.key}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setStoryMoreOpen(false);
-                          item.action();
-                        }}
-                        className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-right text-[11px] text-zinc-200 transition hover:bg-white/10"
-                      >
-                        <Star size={14} className="text-emerald-400" fill="currentColor" />
-                        {item.label}
-                      </button>
-                    ))
+                    storyExtraTools.map(item => {
+                      const Icon = item.key === 'close-friends' ? Star : Clock;
+                      return (
+                        <button
+                          key={item.key}
+                          type="button"
+                          role="menuitem"
+                          aria-label={item.label}
+                          title={item.label}
+                          onClick={() => {
+                            if (item.key === 'expiry') {
+                              item.action();
+                              return;
+                            }
+                            item.action();
+                          }}
+                          className={`flex h-10 w-full items-center justify-center rounded-xl transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/80'}`}
+                        >
+                          <Icon size={18} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
+                        </button>
+                      );
+                    })
+                  )}
+                  {storyExpiryOpen && (
+                    <StoryExpirySlider
+                      durationSeconds={customDurationSeconds}
+                      onChange={setCustomDurationSeconds}
+                    />
                   )}
                 </div>
               )}
