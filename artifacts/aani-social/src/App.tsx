@@ -21,6 +21,7 @@ import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
 import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
+import StoryMusicSheet from './components/StoryMusicSheet';
 import StoryStickersSheet, { type PickedSticker } from './components/StoryStickersSheet';
 import StoryTextToolbar from './components/StoryTextToolbar';
 import {
@@ -421,6 +422,9 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [storyStickersSheetOpen, setStoryStickersOpen] = useState(false);
   const [storyStickers, setStoryStickers] = useState<StoryStickerItem[]>([]);
   const [myStickers, setMyStickers] = useState<string[]>([]);
+  // مقطع موسيقي مختار (يُحفظ للاستخدام عند تفعيل المزوّد الحقيقي)
+  const [storyMusicOpen, setStoryMusicOpen] = useState(false);
+  const [storyMusicTrack, setStoryMusicTrack] = useState<{ id: string; title: string; artist: string } | null>(null);
   const storyToolsRef = useRef<HTMLDivElement | null>(null);
 
   // ملصقاتي المقتصة تُحفظ محلياً
@@ -1577,8 +1581,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                         setCaption(prev => `${prev}${prev ? ' ' : ''}@${username.trim().replace(/^@/, '')}`);
                       }
                     } else if (tool.key === 'music') {
-                      const track = window.prompt('اكتب اسم المقطع الصوتي لإضافته إلى القصة');
-                      if (track?.trim()) toast.success(`سيُرفق: ${track.trim()}`);
+                      setStoryMusicOpen(true);
                     } else if (tool.key === 'effects') {
                       toast.info('الفلاتر ستُضاف قريبًا');
                     } else {
@@ -1749,6 +1752,12 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             className="absolute inset-x-0 bottom-0 z-20 px-4 pt-2"
             style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
           >
+            {storyMusicTrack && (
+              <div className="mx-auto mb-2 flex w-fit items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-[10px] text-white backdrop-blur-sm">
+                <Music2 size={12} />
+                <span className="max-w-[55vw] truncate">{storyMusicTrack.title}</span>
+              </div>
+            )}
             <div className="flex items-stretch gap-2.5">
               <button
                 type="button"
@@ -1784,6 +1793,17 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             onPick={handlePickStorySticker}
             myStickers={myStickers}
             onAddMySticker={addMyCutoutSticker}
+          />
+
+          {/* الموسيقى: نافذة «قادمة قريباً» أو واجهة الاختيار عند تفعيل المزوّد */}
+          <StoryMusicSheet
+            open={storyMusicOpen}
+            onClose={() => setStoryMusicOpen(false)}
+            onSelect={track => {
+              setStoryMusicTrack({ id: track.id, title: track.title, artist: track.artist });
+              setStoryMusicOpen(false);
+              toast.success(`تم اختيار: ${track.title}`);
+            }}
           />
         </div>
       )}
