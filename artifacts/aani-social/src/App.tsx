@@ -466,15 +466,14 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     field.style.height = `${field.scrollHeight}px`;
   }, [storyText, storyFontFamily, storyTextAlign, storyTextEditorOpen]);
 
-  // تكبير/تدوير الوسيط وتحريك لوحة القصة
-  const [storyMediaZoom, setStoryMediaZoom] = useState(1);
-  const [storyMediaRotate, setStoryMediaRotate] = useState(0);
+  // لوحة القصة كاملة (الخلفية الفارغة فقط): إصبعان للسحب والتكبير
+  const [storyCanvasScale, setStoryCanvasScale] = useState(1);
   const [storyCanvasOffset, setStoryCanvasOffset] = useState({ x: 0, y: 0 });
   const canvasGestureRef = useRef<StoryCanvasGesture | null>(null);
 
   const clampCanvas = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
 
-  // إصبعان: تكبير/تدوير + سحب لوحة القصة كاملة. نقرة واحدة على مساحة فارغة: كتابة نص جديد
+  // إصبعان على المساحة الفارغة: تحريك وتكبير لوحة القصة. نقرة واحدة: كتابة نص جديد
   const handleStoryCanvasTouchStart = (event: React.TouchEvent) => {
     const now = Date.now();
 
@@ -485,9 +484,9 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         midX: (first.clientX + second.clientX) / 2,
         midY: (first.clientY + second.clientY) / 2,
         dist: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
-        angle: (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI,
-        zoom: storyMediaZoom,
-        rotate: storyMediaRotate,
+        angle: 0,
+        zoom: storyCanvasScale,
+        rotate: 0,
         originX: storyCanvasOffset.x,
         originY: storyCanvasOffset.y,
         moved: true,
@@ -505,8 +504,8 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       midY: touch.clientY,
       dist: 0,
       angle: 0,
-      zoom: storyMediaZoom,
-      rotate: storyMediaRotate,
+      zoom: storyCanvasScale,
+      rotate: 0,
       originX: storyCanvasOffset.x,
       originY: storyCanvasOffset.y,
       moved: false,
@@ -521,14 +520,12 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     if (gesture.mode === 'pinch' && event.touches.length >= 2) {
       const [first, second] = event.touches;
       const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-      const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
       const midX = (first.clientX + second.clientX) / 2;
       const midY = (first.clientY + second.clientY) / 2;
 
       if (gesture.dist > 0) {
-        setStoryMediaZoom(Math.min(4, Math.max(0.6, gesture.zoom * (dist / gesture.dist))));
+        setStoryCanvasScale(Math.min(3, Math.max(0.6, gesture.zoom * (dist / gesture.dist))));
       }
-      setStoryMediaRotate(gesture.rotate + (angle - gesture.angle));
       setStoryCanvasOffset({
         x: clampCanvas(gesture.originX + (midX - gesture.midX), window.innerWidth * 0.45),
         y: clampCanvas(gesture.originY + (midY - gesture.midY), window.innerHeight * 0.45),
@@ -550,6 +547,99 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     canvasGestureRef.current = null;
 
     // نقرة قصيرة على مساحة فارغة → فتح محرر النص للبدء في كتابة نص جديد
+    if (gesture?.mode === 'pan' && !gesture.moved && Date.now() - gesture.startTime < 400) {
+      setStoryTextEditorOpen(true);
+    }
+  };
+
+  // الصورة وحدها: سحب وتكبير وتدوير مستقل تماماً عن النص وعن لوحة القصة
+  const [storyMediaZoom, setStoryMediaZoom] = useState(1);
+  const [storyMediaRotate, setStoryMediaRotate] = useState(0);
+  const [storyMediaOffset, setStoryMediaOffset] = useState({ x: 0, y: 0 });
+  const mediaGestureRef = useRef<StoryCanvasGesture | null>(null);
+
+  const handleStoryMediaTouchStart = (event: React.TouchEvent) => {
+    event.stopPropagation();
+    const now = Date.now();
+
+    if (event.touches.length >= 2) {
+      const [first, second] = event.touches;
+      mediaGestureRef.current = {
+        mode: 'pinch',
+        midX: (first.clientX + second.clientX) / 2,
+        midY: (first.clientY + second.clientY) / 2,
+        dist: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        angle: (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI,
+        zoom: storyMediaZoom,
+        rotate: storyMediaRotate,
+        originX: storyMediaOffset.x,
+        originY: storyMediaOffset.y,
+        moved: true,
+        startTime: now,
+      };
+      return;
+    }
+
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    mediaGestureRef.current = {
+      mode: 'pan',
+      midX: touch.clientX,
+      midY: touch.clientY,
+      dist: 0,
+      angle: 0,
+      zoom: storyMediaZoom,
+      rotate: storyMediaRotate,
+      originX: storyMediaOffset.x,
+      originY: storyMediaOffset.y,
+      moved: false,
+      startTime: now,
+    };
+  };
+
+  const handleStoryMediaTouchMove = (event: React.TouchEvent) => {
+    const gesture = mediaGestureRef.current;
+    if (!gesture) return;
+    event.stopPropagation();
+
+    if (gesture.mode === 'pinch' && event.touches.length >= 2) {
+      const [first, second] = event.touches;
+      const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
+      const midX = (first.clientX + second.clientX) / 2;
+      const midY = (first.clientY + second.clientY) / 2;
+
+      if (gesture.dist > 0) {
+        setStoryMediaZoom(Math.min(4, Math.max(0.4, gesture.zoom * (dist / gesture.dist))));
+      }
+      setStoryMediaRotate(gesture.rotate + (angle - gesture.angle));
+      setStoryMediaOffset({
+        x: clampCanvas(gesture.originX + (midX - gesture.midX), window.innerWidth * 0.6),
+        y: clampCanvas(gesture.originY + (midY - gesture.midY), window.innerHeight * 0.6),
+      });
+      return;
+    }
+
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    const dx = touch.clientX - gesture.midX;
+    const dy = touch.clientY - gesture.midY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) gesture.moved = true;
+
+    setStoryMediaOffset({
+      x: clampCanvas(gesture.originX + dx, window.innerWidth * 0.6),
+      y: clampCanvas(gesture.originY + dy, window.innerHeight * 0.6),
+    });
+  };
+
+  const handleStoryMediaTouchEnd = (event: React.TouchEvent) => {
+    const gesture = mediaGestureRef.current;
+    mediaGestureRef.current = null;
+    event.stopPropagation();
+
+    // نقرة قصيرة على الصورة → تحرير نص القصة
     if (gesture?.mode === 'pan' && !gesture.moved && Date.now() - gesture.startTime < 400) {
       setStoryTextEditorOpen(true);
     }
@@ -1267,13 +1357,40 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               <div
                 className="absolute inset-0"
                 style={{
-                  transform: `translate3d(${storyCanvasOffset.x}px, ${storyCanvasOffset.y}px, 0) scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)`,
+                  transform: `translate3d(${storyCanvasOffset.x}px, ${storyCanvasOffset.y}px, 0) scale(${storyCanvasScale})`,
                 }}
               >
+                {/* الصورة وحدها: إيماءاتها محصورة بها ولا تصل إلى النص أو خلفية القصة */}
                 {storyFile.type.startsWith('video') ? (
-                  <video src={previewStoryUrl} autoPlay loop playsInline className="h-full w-full object-cover" />
+                  <video
+                    src={previewStoryUrl}
+                    autoPlay
+                    loop
+                    playsInline
+                    className="h-full w-full object-cover"
+                    onTouchStart={handleStoryMediaTouchStart}
+                    onTouchMove={handleStoryMediaTouchMove}
+                    onTouchEnd={handleStoryMediaTouchEnd}
+                    onTouchCancel={handleStoryMediaTouchEnd}
+                    style={{
+                      touchAction: 'none',
+                      transform: `translate(${storyMediaOffset.x}px, ${storyMediaOffset.y}px) scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)`,
+                    }}
+                  />
                 ) : (
-                  <img src={previewStoryUrl} alt="" className="h-full w-full object-cover" />
+                  <img
+                    src={previewStoryUrl}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    onTouchStart={handleStoryMediaTouchStart}
+                    onTouchMove={handleStoryMediaTouchMove}
+                    onTouchEnd={handleStoryMediaTouchEnd}
+                    onTouchCancel={handleStoryMediaTouchEnd}
+                    style={{
+                      touchAction: 'none',
+                      transform: `translate(${storyMediaOffset.x}px, ${storyMediaOffset.y}px) scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)`,
+                    }}
+                  />
                 )}
 
                 {/* طبقة تعتيم متدرجة لإبراز الأدوات فوق الصورة */}
