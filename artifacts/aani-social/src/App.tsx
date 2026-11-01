@@ -23,6 +23,7 @@ import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
 import StoryFilterBar from './components/StoryFilterBar';
 import StoryMusicSheet from './components/StoryMusicSheet';
+import StoryMentionPicker, { type MentionCandidate } from './components/StoryMentionPicker';
 import StoryTextToolbar from './components/StoryTextToolbar';
 import {
   DEFAULT_ADJUSTMENTS as DEFAULT_FILTER_ADJUSTMENTS,
@@ -423,6 +424,9 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   // مقطع موسيقي مختار (يُحفظ للاستخدام عند تفعيل المزوّد الحقيقي)
   const [storyMusicOpen, setStoryMusicOpen] = useState(false);
   const [storyMusicTrack, setStoryMusicTrack] = useState<{ id: string; title: string; artist: string } | null>(null);
+  // أشخاص تمت الإشارة إليهم (مخفيون بصرياً، يُحفظون مع القصة)
+  const [storyMentionsOpen, setStoryMentionsOpen] = useState(false);
+  const [storyMentions, setStoryMentions] = useState<MentionCandidate[]>([]);
   const storyToolsRef = useRef<HTMLDivElement | null>(null);
 
 
@@ -1053,7 +1057,41 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     handleNextStory();
   };
 
-  // نشر سريع من شاشة المعاينة: قصتك أو للأصدقاء المقربين فقط
+  // ربط الإشارات بالقصة بعد نشرها فقط: سجل مستقل + إشعار + رسالة خاصة
+  const linkStoryMentions = async (storyId: string, authorName: string, mentions: MentionCandidate[]) => {
+    if (!storyId || mentions.length === 0) return;
+
+    const { error: mentionError } = await supabase.from('story_mentions').insert(
+      mentions.map(person => ({ story_id: storyId, author_id: userId, mentioned_id: person.id })),
+    );
+    if (mentionError) return;
+
+    for (const person of mentions) {
+      await supabase.from('notifications').insert({
+        user_id: person.id,
+        actor_id: userId,
+        type: 'mention',
+        content: `أشار إليك ${authorName} في قصة`,
+        reference_id: storyId,
+      });
+
+      const message = {
+        sender_id: userId,
+        recipient_id: person.id,
+        content: `[story:${storyId}] تمت الإشارة إليك بواسطة ${authorName} في قصته.`,
+        story_id: storyId,
+      };
+
+      const { error: messageError } = await supabase.from('messages').insert(message);
+      if (messageError) {
+        // توافق مع قاعدة بيانات لم يُضَف إليها عمود story_id بعد
+        const { story_id, ...legacyMessage } = message;
+        void story_id;
+        await supabase.from('messages').insert(legacyMessage);
+      }
+    }
+  };
+
   const handleQuickPublishStory = async (closeFriends: boolean) => {
     if (!supabaseConfigured || !storyFile) return;
 
@@ -1081,20 +1119,31 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
       };
 
-      let { error: insertError } = await supabase.from('stories').insert(storyPayload);
+      let { data: insertedStory, error: insertError } = await supabase
+        .from('stories')
+        .insert(storyPayload)
+        .select('id')
+        .single();
 
       // توافق مع قاعدة بيانات لم يُشغَّل عليها ترحيل الفلاتر بعد
       if (insertError) {
         const { filter_key, ...legacyPayload } = storyPayload;
         void filter_key;
-        const retry = await supabase.from('stories').insert(legacyPayload);
+        const retry = await supabase.from('stories').insert(legacyPayload).select('id').single();
+        insertedStory = retry.data;
         insertError = retry.error;
       }
 
       if (insertError) throw insertError;
 
+      // لا تُرسل الإشارات إلا بعد نجاح نشر القصة
+      if (insertedStory?.id) {
+        await linkStoryMentions(insertedStory.id, currentProfile?.username || 'مستخدم', storyMentions);
+      }
+
       setStoryFile(null);
       setCaption('');
+      setStoryMentions([]);
       setShowUploadModal(false);
       await fetchStories();
       toast.success(closeFriends ? 'نُشرت قصتك للأصدقاء المقربين' : 'نُشرت قصتك');
@@ -1545,10 +1594,9 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                       setStoryFiltersOpen(false);
                       setStoryTextEditorOpen(true);
                     } else if (tool.key === 'mention') {
-                      const username = window.prompt('اكتب اسم المستخدم للإشارة إليه');
-                      if (username?.trim()) {
-                        setCaption(prev => `${prev}${prev ? ' ' : ''}@${username.trim().replace(/^@/, '')}`);
-                      }
+                      setStoryTextEditorOpen(false);
+                      setStoryFiltersOpen(false);
+                      setStoryMentionsOpen(true);
                     } else if (tool.key === 'music') {
                       setStoryTextEditorOpen(false);
                       setStoryMusicOpen(true);
@@ -1780,6 +1828,22 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               setStoryMusicTrack({ id: track.id, title: track.title, artist: track.artist });
               setStoryMusicOpen(false);
               toast.success(`تم اختيار: ${track.title}`);
+            }}
+          />
+
+          {/* الإشارة إلى أشخاص: تُخزَّن مع القصة دون ظهور أسمائهم على الصورة */}
+          <StoryMentionPicker
+            open={storyMentionsOpen}
+            currentUserId={userId}
+            onClose={() => setStoryMentionsOpen(false)}
+            onConfirm={people => {
+              setStoryMentions(people);
+              setStoryMentionsOpen(false);
+              if (people.length === 1) {
+                toast.success(`تمت الإشارة إلى @${people[0].username}`);
+              } else if (people.length > 1) {
+                toast.success(`تمت الإشارة إلى ${people.length} أشخاص`);
+              }
             }}
           />
         </div>
