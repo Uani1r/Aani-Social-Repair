@@ -14,6 +14,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { uploadStoryMedia } from '@/lib/storyUpload';
 import { recordShare, postShareUrl } from '@/lib/interactions';
 import { displayName, formatDate, normalizeProfile, type Post, type Profile } from '@/lib/types';
 
@@ -21,7 +22,8 @@ import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
 import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
-import StoryDmCard from './components/StoryDmCard';
+import CloseFriendsSheet from './components/CloseFriendsSheet';
+import StoryDmCard, { type StoryRow as StoryDmCardStory } from './components/StoryDmCard';
 import StoryFilterBar from './components/StoryFilterBar';
 import StoryMusicSheet from './components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from './components/StoryMentionPicker';
@@ -361,10 +363,26 @@ function StoryTypedPreview({ text, animate }: { text: string; animate: boolean }
   );
 }
 
-function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile: Profile | null }) {
+function StoriesBar({
+  userId,
+  currentProfile,
+  pendingReshare,
+  onReshareHandled,
+  pendingProfileStoryOwnerId,
+  onProfileStoryHandled,
+}: {
+  userId: string;
+  currentProfile: Profile | null;
+  pendingReshare: StoryDmCardStory | null;
+  onReshareHandled: () => void;
+  pendingProfileStoryOwnerId: string | null;
+  onProfileStoryHandled: () => void;
+}) {
   const [groupedStories, setGroupedStories] = useState<{ [key: string]: any[] }>({});
   const [activeUserGroup, setActiveUserGroup] = useState<string | null>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
+  const [profileStoryOwnerId, setProfileStoryOwnerId] = useState<string | null>(null);
+  const [profilePreviewStories, setProfilePreviewStories] = useState<any[]>([]);
 
   // القصص المشاهدة (يُحفظ معرّف صاحبها محليًا لتمييز لون الحلقة فقط)
   const [seenStories, setSeenStories] = useState<string[]>(() => {
@@ -397,6 +415,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [replyText, setReplyText] = useState('');
   const [isLiked, setIsLiked] = useState(false);
+  const [originalStoryAuthor, setOriginalStoryAuthor] = useState<NonNullable<StoryDmCardStory['author']> | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -413,10 +432,21 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   }, [showStoryPicker, showUploadModal, activeUserGroup]);
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
+  const [reshareStory, setReshareStory] = useState<StoryDmCardStory | null>(null);
+  const [reshareScaledDown, setReshareScaledDown] = useState(false);
 
-  // قائمة الأدوات الإضافية القابلة للتوسعة (تُضاف العناصر هنا مستقبلًا)
-  const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [];
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
+  // أدوات إضافية للمحرر: إدارة قائمة الأصدقاء المقربين دون إشعارات.
+  const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [
+    {
+      key: 'close-friends',
+      label: 'الأصدقاء المقربون',
+      action: () => {
+        setStoryMoreOpen(false);
+        setCloseFriendsOpen(true);
+      },
+    },
+  ];
   const [storyFiltersOpen, setStoryFiltersOpen] = useState(false);
   const [storyFilterId, setStoryFilterId] = useState('original');
   const [storyFilterAdjustments, setStoryFilterAdjustments] = useState<StoryAdjustments>(DEFAULT_FILTER_ADJUSTMENTS);
@@ -428,6 +458,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   // أشخاص تمت الإشارة إليهم (مخفيون بصرياً، يُحفظون مع القصة)
   const [storyMentionsOpen, setStoryMentionsOpen] = useState(false);
   const [storyMentions, setStoryMentions] = useState<MentionCandidate[]>([]);
+  const [closeFriendsOpen, setCloseFriendsOpen] = useState(false);
   const storyToolsRef = useRef<HTMLDivElement | null>(null);
 
 
@@ -510,6 +541,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const clampCanvas = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
 
   const storyGestureRef = useRef<StoryGestureState | null>(null);
+  const lastStoryTouchRef = useRef(0);
 
   // قيم المرجع حسب العنصر المقفل
   const readStoryGestureBase = (target: StoryGestureTarget) => {
@@ -736,10 +768,15 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     }
 
     storyGestureRef.current = null;
+    if (reshareStory) lastStoryTouchRef.current = Date.now();
 
     // نقرة قصيرة: إن كانت إحدى النوافذ الفرعية مفتوحة تُغلق فقط،
     // وإلا تُفتح نافذة كتابة النص (الوضع الأساسي فقط)
     if (!gesture.moved && Date.now() - gesture.startTime < 400) {
+      if (reshareStory) {
+        setReshareScaledDown(current => !current);
+        return;
+      }
       const panels = storyPanelsRef.current;
       if (panels.filters || panels.textEditor || panels.more) {
         closeStoryPanels();
@@ -833,10 +870,48 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [textStart, setTextStart] = useState(0);
   const [textEnd, setTextEnd] = useState(5);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+
+  useEffect(() => {
+    if (!pendingReshare) return;
+    const expiresAt = pendingReshare.expires_at ? Date.parse(pendingReshare.expires_at) : Number.NaN;
+    if (!pendingReshare.media_url || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+      toast.error('هذه القصة لم تعد متاحة لإعادة المشاركة');
+      onReshareHandled();
+      return;
+    }
+
+    setStoryFile(null);
+    setReshareStory(pendingReshare);
+    setReshareScaledDown(true);
+    setCaption(pendingReshare.caption || '');
+    setStoryText('');
+    setStoryCanvasScale(1);
+    setStoryCanvasOffset({ x: 0, y: 0 });
+    setStoryMediaZoom(1);
+    setStoryMediaRotate(0);
+    setStoryMediaOffset({ x: 0, y: 0 });
+    setStoryTextOffset({ x: 0, y: 0 });
+    setStoryTextScale(1);
+    setStoryTextRotation(0);
+    setStoryMentions([]);
+    setStoryFilterId('original');
+    setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
+    setShowUploadModal(true);
+    onReshareHandled();
+  }, [pendingReshare, onReshareHandled]);
+
+  const editorMediaUrl = reshareStory?.media_url || previewStoryUrl;
+  const editorIsVideo = reshareStory
+    ? reshareStory.media_type === 'video'
+    : Boolean(storyFile?.type.startsWith('video'));
 
   const fetchStories = useCallback(async () => {
     if (!supabaseConfigured || !userId) return;
 
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const within24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
     const { data: followings } = await supabase
       .from('follows')
       .select('following_id')
@@ -849,7 +924,8 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       .from('stories')
       .select('*, author:profiles(id, username, full_name, avatar_url)')
       .in('user_id', allowedUserIds)
-      .gt('expires_at', new Date().toISOString())
+      .gte('created_at', within24Hours)
+      .gt('expires_at', nowIso)
       .order('created_at', { ascending: true });
 
     if (data) {
@@ -868,11 +944,74 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   useEffect(() => { void fetchStories(); }, [fetchStories]);
 
   const activeStories = useMemo(() => {
+    if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories;
     return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup] : [];
-  }, [activeUserGroup, groupedStories]);
+  }, [activeUserGroup, groupedStories, profileStoryOwnerId, profilePreviewStories]);
+
+  useEffect(() => {
+    if (!pendingProfileStoryOwnerId) return;
+    if (!supabaseConfigured) {
+      toast.error('تعذر تحميل قصص هذا الحساب');
+      onProfileStoryHandled();
+      return;
+    }
+
+    let active = true;
+    const now = new Date();
+    void supabase
+      .from('stories')
+      .select('*, author:profiles(id, username, full_name, avatar_url)')
+      .eq('user_id', pendingProfileStoryOwnerId)
+      .gte('created_at', new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString())
+      .gt('expires_at', now.toISOString())
+      .order('created_at', { ascending: true })
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error || !data?.length) {
+          toast.info('لا توجد قصص متاحة لهذا الحساب');
+          onProfileStoryHandled();
+          return;
+        }
+
+        markStorySeen(pendingProfileStoryOwnerId);
+        setProfileStoryOwnerId(pendingProfileStoryOwnerId);
+        setProfilePreviewStories(data);
+        setActiveUserGroup(pendingProfileStoryOwnerId);
+        setActiveStoryIndex(0);
+        setProgress(0);
+        setCurrentTimeSec(0);
+        onProfileStoryHandled();
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [pendingProfileStoryOwnerId, onProfileStoryHandled]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
   const currentStoryFilter = decodeStoryFilterKey((currentStory as { filter_key?: string } | null)?.filter_key);
+  useEffect(() => {
+    const originalStoryId = (currentStory as { original_story_id?: string } | null)?.original_story_id;
+    if (!originalStoryId || !supabaseConfigured) {
+      setOriginalStoryAuthor(null);
+      return;
+    }
+
+    let active = true;
+    setOriginalStoryAuthor(null);
+    void supabase
+      .from('stories')
+      .select('author:profiles(id, username, full_name, avatar_url)')
+      .eq('id', originalStoryId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (active) setOriginalStoryAuthor((data?.author as StoryDmCardStory['author']) ?? null);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentStory]);
   const currentStoryFilterOverlay = getStoryFilterOverlay(currentStoryFilter.id);
   const myStories = groupedStories[userId] || [];
   const hasMyStory = myStories.length > 0;
@@ -1093,67 +1232,86 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     }
   };
 
-  const handleQuickPublishStory = async (closeFriends: boolean) => {
-    if (!supabaseConfigured || !storyFile) return;
+  const handleQuickPublishStory = (closeFriends: boolean) => {
+    const mediaFile = storyFile;
+    const sourceStory = reshareStory;
+    const storyCaption = caption.trim();
+    const mentions = [...storyMentions];
+    if (!supabaseConfigured || (!mediaFile && !sourceStory?.media_url)) return;
 
+    // إغلاق المحرر أولاً، ثم متابعة الرفع دون حجب التفاعل مع الصفحة الرئيسية.
+    setShowUploadModal(false);
     setUploading(true);
-    try {
-      const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-      const filePath = `${userId}/story-${Date.now()}-${safeName}`;
+    setUploadProgress(0);
 
-      const { error: uploadErr } = await supabase.storage
-        .from(storageBucket)
-        .upload(filePath, storyFile, { contentType: storyFile.type, upsert: true });
+    void (async () => {
+      try {
+        let mediaUrl = sourceStory?.media_url || '';
+        let mediaType = sourceStory?.media_type === 'video' ? 'video' : 'photo';
 
-      if (uploadErr) throw uploadErr;
+        if (mediaFile) {
+          const safeName = mediaFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+          const filePath = `${userId}/story-${Date.now()}-${safeName}`;
+          await uploadStoryMedia({
+            file: mediaFile,
+            path: filePath,
+            onProgress: setUploadProgress,
+          });
+          mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
+          mediaType = mediaFile.type.startsWith('video') ? 'video' : 'photo';
+        } else {
+          setUploadProgress(85);
+        }
 
-      const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
+        const storyPayload = {
+          user_id: userId,
+          media_url: mediaUrl,
+          media_type: mediaType,
+          caption: storyCaption || sourceStory?.caption || null,
+          is_close_friends: closeFriends,
+          duration_seconds: 5,
+          timed_texts: [],
+          filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
+          ...(sourceStory ? { original_story_id: sourceStory.id, share_type: 'reshare' } : {}),
+        };
 
-      const storyPayload = {
-        user_id: userId,
-        media_url: publicUrl,
-        media_type: storyFile.type.startsWith('video') ? 'video' : 'photo',
-        caption: caption.trim() || null,
-        is_close_friends: closeFriends,
-        duration_seconds: 5,
-        timed_texts: [],
-        filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
-      };
+        let insertResult = await supabase
+          .from('stories')
+          .insert(storyPayload)
+          .select('id')
+          .single();
 
-      let { data: insertedStory, error: insertError } = await supabase
-        .from('stories')
-        .insert(storyPayload)
-        .select('id')
-        .single();
+        // توافق مع قاعدة بيانات لم يُشغَّل عليها ترحيل الفلاتر بعد للقصص الأصلية فقط.
+        if (insertResult.error && !sourceStory) {
+          const { filter_key, ...legacyPayload } = storyPayload;
+          void filter_key;
+          insertResult = await supabase.from('stories').insert(legacyPayload).select('id').single();
+        }
 
-      // توافق مع قاعدة بيانات لم يُشغَّل عليها ترحيل الفلاتر بعد
-      if (insertError) {
-        const { filter_key, ...legacyPayload } = storyPayload;
-        void filter_key;
-        const retry = await supabase.from('stories').insert(legacyPayload).select('id').single();
-        insertedStory = retry.data;
-        insertError = retry.error;
+        if (insertResult.error) throw insertResult.error;
+
+        if (insertResult.data?.id && mentions.length > 0) {
+          void linkStoryMentions(insertResult.data.id, currentProfile?.username || 'مستخدم', mentions);
+        }
+
+        setStoryFile(current => current === mediaFile ? null : current);
+        setReshareStory(current => current?.id === sourceStory?.id ? null : current);
+        setCaption(current => current.trim() === storyCaption ? '' : current);
+        setStoryText('');
+        setTimedTexts([]);
+        setStoryMentions([]);
+        setReshareScaledDown(false);
+        await fetchStories();
+        toast.success('تم نشر القصة بنجاح', { duration: 5000 });
+      } catch (error) {
+        console.error('Story publish failed:', error);
+        toast.error('تعذر نشر القصة، حاول مرة أخرى');
+        setShowUploadModal(true);
+      } finally {
+        setUploading(false);
+        setUploadProgress(0);
       }
-
-      if (insertError) throw insertError;
-
-      // لا تُرسل الإشارات إلا بعد نجاح نشر القصة
-      if (insertedStory?.id) {
-        await linkStoryMentions(insertedStory.id, currentProfile?.username || 'مستخدم', storyMentions);
-      }
-
-      setStoryFile(null);
-      setCaption('');
-      setStoryMentions([]);
-      setShowUploadModal(false);
-      await fetchStories();
-      toast.success(closeFriends ? 'نُشرت قصتك للأصدقاء المقربين' : 'نُشرت قصتك');
-    } catch (error) {
-      console.error('Story publish failed:', error);
-      toast.error('تعذر نشر القصة، حاول مرة أخرى');
-    } finally {
-      setUploading(false);
-    }
+    })();
   };
 
   const handleCreateTextStory = async () => {
@@ -1188,6 +1346,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           <div
             className="relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full border-[1.5px] border-dashed border-zinc-600/70 p-[2px]"
             onClick={() => {
+              if (uploading) return;
               if (hasMyStory) {
                 markStorySeen(userId);
                 setActiveUserGroup(userId);
@@ -1198,18 +1357,48 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               }
             }}
           >
-            {hasMyStory ? (
-              <Avatar profile={currentProfile} extraLarge />
+            {hasMyStory || uploading ? (
+              <Avatar
+                profile={currentProfile}
+                extraLarge
+                isCloseFriends={myStories.some(story => story.is_close_friends)}
+              />
             ) : (
               <span className="text-2xl font-light text-zinc-500">+</span>
             )}
+            {uploading && (
+              <svg
+                viewBox="0 0 64 64"
+                className="pointer-events-none absolute inset-0 z-10 h-16 w-16 animate-spin"
+                role="progressbar"
+                aria-label={`جارٍ نشر القصة ${uploadProgress}%`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={uploadProgress}
+              >
+                <circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="2.5" />
+                <circle
+                  cx="32"
+                  cy="32"
+                  r="29"
+                  fill="none"
+                  stroke="#ec4899"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeDasharray={2 * Math.PI * 29}
+                  strokeDashoffset={2 * Math.PI * 29 * (1 - uploadProgress / 100)}
+                  style={{ transition: 'stroke-dashoffset 120ms linear' }}
+                />
+              </svg>
+            )}
             <button
               type="button"
+              disabled={uploading}
               onClick={(e) => {
                 e.stopPropagation();
-                setShowStoryPicker(true);
+                if (!uploading) setShowStoryPicker(true);
               }}
-              className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300"
+              className="absolute -bottom-0.5 -right-0.5 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 disabled:opacity-50"
               title="إضافة ستوري جديدة"
             >
               <Plus size={12} />
@@ -1222,6 +1411,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
           const firstStory = groupedStories[authorId][0];
           const isSeen = seenStories.includes(authorId);
+          const hasCloseFriendsStory = groupedStories[authorId].some(story => story.is_close_friends);
 
           return (
             <div
@@ -1238,9 +1428,11 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               <span
                 className="flex h-16 w-16 items-center justify-center rounded-full p-[2.5px] transition-colors duration-200"
                 style={{
-                  background: isSeen
-                    ? '#3a3a42'
-                    : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)',
+                  background: hasCloseFriendsStory
+                    ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
+                    : isSeen
+                      ? '#3a3a42'
+                      : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)',
                 }}
               >
                 <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
@@ -1271,6 +1463,8 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           }
 
           setStoryFile(files[0]);
+          setReshareStory(null);
+          setReshareScaledDown(false);
           setShowStoryPicker(false);
           setShowUploadModal(true);
         }}
@@ -1296,18 +1490,34 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
 
             {showUI && (
               <div className="absolute top-4 inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent">
-                <Link href={`/profile/${currentStory.user_id}`} className="flex items-center gap-2">
-                  <Avatar profile={currentStory.author} storyBorder={false} />
-                  <div>
-                    <div className="flex items-center gap-1">
-                      <span className="font-bold text-xs">{displayName(currentStory.author)}</span>
-                      {currentStory.is_close_friends && (
-                        <span className="bg-emerald-500 text-[9px] px-1.5 py-0.2 rounded-md font-semibold">أصدقاء مقربون</span>
-                      )}
+                <div className="flex min-w-0 flex-col items-start gap-1">
+                  <Link href={`/profile/${currentStory.user_id}`} className="flex items-center gap-2">
+                    <Avatar profile={currentStory.author} storyBorder={false} />
+                    <div>
+                      <div className="flex items-center gap-1">
+                        <span className="font-bold text-xs">{displayName(currentStory.author)}</span>
+                        {currentStory.is_close_friends && (
+                          <span className="bg-emerald-500 text-[9px] px-1.5 py-0.2 rounded-md font-semibold">أصدقاء مقربون</span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-zinc-300 block">{formatDate(currentStory.created_at)}</span>
                     </div>
-                    <span className="text-[10px] text-zinc-300 block">{formatDate(currentStory.created_at)}</span>
-                  </div>
-                </Link>
+                  </Link>
+                  {currentStory.original_story_id && originalStoryAuthor && (
+                    <div className="flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-0.5 text-white/85">
+                      {originalStoryAuthor.avatar_url ? (
+                        <img src={originalStoryAuthor.avatar_url} alt="" className="h-4 w-4 rounded-full object-cover" />
+                      ) : (
+                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[7px] font-bold">
+                          {displayName(originalStoryAuthor).replace('@', '').charAt(0)}
+                        </span>
+                      )}
+                      <span className="max-w-[42vw] truncate text-[9px]">
+                        من قصة {displayName(originalStoryAuthor)}
+                      </span>
+                    </div>
+                  )}
+                </div>
 
                 <div className="flex items-center gap-2">
                   <button onClick={() => setShowMenu(!showMenu)} className="p-1 hover:bg-white/20 rounded-full">
@@ -1444,9 +1654,9 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       {showUploadModal && (
         <div className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white" dir="rtl">
           {/* الوسيط يملأ الشاشة بالكامل، والنص داخل لوحة تُسحب وتُكبَّر كوحدة واحدة */}
-          {storyFile && previewStoryUrl ? (
+          {editorMediaUrl ? (
             <div
-              className="absolute inset-0"
+              className="absolute inset-0 flex items-center justify-center"
               onTouchStart={handleStoryCanvasTouchStart}
               onTouchMove={handleStoryCanvasTouchMove}
               onTouchEnd={handleStoryCanvasTouchEnd}
@@ -1454,15 +1664,26 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               style={{ touchAction: 'none' }}
             >
               <div
-                className="absolute inset-0"
-                style={{
+                className={reshareStory
+                  ? 'relative overflow-hidden rounded-[28px] transition-[width,height,border-radius] duration-300'
+                  : 'absolute inset-0'}
+                onClick={() => {
+                  if (reshareStory && Date.now() - lastStoryTouchRef.current > 500) {
+                    setReshareScaledDown(current => !current);
+                  }
+                }}
+                style={reshareStory ? {
+                  width: reshareScaledDown ? 'min(78vw, 360px)' : '100vw',
+                  height: reshareScaledDown ? '76vh' : '100dvh',
+                  transform: `translate3d(${storyCanvasOffset.x}px, ${storyCanvasOffset.y}px, 0) scale(${storyCanvasScale})`,
+                } : {
                   transform: `translate3d(${storyCanvasOffset.x}px, ${storyCanvasOffset.y}px, 0) scale(${storyCanvasScale})`,
                 }}
               >
                 {/* الصورة: تُقفل الإيماءة عليها إذا بدأ اللمس منها */}
-                {storyFile.type.startsWith('video') ? (
+                {editorIsVideo ? (
                   <video
-                    src={previewStoryUrl}
+                    src={editorMediaUrl}
                     autoPlay
                     loop
                     playsInline
@@ -1476,7 +1697,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                   />
                 ) : (
                   <img
-                    src={previewStoryUrl}
+                    src={editorMediaUrl}
                     alt=""
                     data-story-media="true"
                     className="h-full w-full object-cover"
@@ -1559,13 +1780,42 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           >
             <button
               type="button"
-              onClick={() => setShowUploadModal(false)}
+              onClick={() => {
+                setShowUploadModal(false);
+                if (reshareStory) {
+                  setReshareStory(null);
+                  setReshareScaledDown(false);
+                  setCaption('');
+                  setStoryText('');
+                }
+              }}
               aria-label="إغلاق"
               className="rounded-full p-1.5 text-white/90 transition hover:bg-white/10"
             >
               <X size={24} />
             </button>
-            <span className="text-[13px] font-semibold text-white/85">معاينة القصة</span>
+            {reshareStory ? (
+              <div className="flex min-w-0 flex-col items-center gap-1">
+                <div className="flex items-center gap-1.5 text-white">
+                  <Avatar profile={currentProfile} />
+                  <span className="max-w-[42vw] truncate text-[11px] font-bold">{displayName(currentProfile)}</span>
+                </div>
+                <div className="flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-white/85 backdrop-blur-sm">
+                  {reshareStory.author?.avatar_url ? (
+                    <img src={reshareStory.author.avatar_url} alt="" className="h-4 w-4 rounded-full object-cover" />
+                  ) : (
+                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[7px] font-bold">
+                      {displayName(reshareStory.author).replace('@', '').charAt(0)}
+                    </span>
+                  )}
+                  <span className="max-w-[48vw] truncate text-[9px]">
+                    من قصة {displayName(reshareStory.author)}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <span className="text-[13px] font-semibold text-white/85">معاينة القصة</span>
+            )}
             <span className="w-9" />
           </div>
 
@@ -1651,6 +1901,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                         }}
                         className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-right text-[11px] text-zinc-200 transition hover:bg-white/10"
                       >
+                        <Star size={14} className="text-emerald-400" fill="currentColor" />
                         {item.label}
                       </button>
                     ))
@@ -1774,8 +2025,8 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           >
             {storyFiltersOpen && (
               <StoryFilterBar
-                previewUrl={previewStoryUrl}
-                isVideo={Boolean(storyFile?.type.startsWith('video'))}
+                previewUrl={editorMediaUrl}
+                isVideo={editorIsVideo}
                 activeId={storyFilterId}
                 onSelect={setStoryFilterId}
                 adjustments={storyFilterAdjustments}
@@ -1797,7 +2048,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               <button
                 type="button"
                 onClick={() => void handleQuickPublishStory(false)}
-                disabled={uploading || !storyFile}
+                disabled={uploading || (!storyFile && !reshareStory?.media_url)}
                 className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
               >
                 {currentProfile?.avatar_url ? (
@@ -1812,7 +2063,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               <button
                 type="button"
                 onClick={() => void handleQuickPublishStory(true)}
-                disabled={uploading || !storyFile}
+                disabled={uploading || (!storyFile && !reshareStory?.media_url)}
                 className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
               >
                 <Star size={15} style={{ color: '#4CAF50' }} fill="#4CAF50" />
@@ -1846,6 +2097,11 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                 toast.success(`تمت الإشارة إلى ${people.length} أشخاص`);
               }
             }}
+          />
+          <CloseFriendsSheet
+            open={closeFriendsOpen}
+            currentUserId={userId}
+            onClose={() => setCloseFriendsOpen(false)}
           />
         </div>
       )}
@@ -2615,13 +2871,36 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
 }
 
 // --- الصفحة الرئيسية ---
-function FeedPage({ userId, profile, onOpenComments }: { userId: string; profile: Profile | null; onOpenComments: (postId: string) => void }) {
+function FeedPage({
+  userId,
+  profile,
+  onOpenComments,
+  pendingStoryReshare,
+  onStoryReshareHandled,
+  pendingProfileStoryOwnerId,
+  onProfileStoryHandled,
+}: {
+  userId: string;
+  profile: Profile | null;
+  onOpenComments: (postId: string) => void;
+  pendingStoryReshare: StoryDmCardStory | null;
+  onStoryReshareHandled: () => void;
+  pendingProfileStoryOwnerId: string | null;
+  onProfileStoryHandled: () => void;
+}) {
   const { posts, loading, refresh } = usePosts('feed', undefined, userId);
 
   return (
     <section className="new-view w-full max-w-lg mx-auto">
       <div className="story-strip">
-        <StoriesBar userId={userId} currentProfile={profile} />
+        <StoriesBar
+          userId={userId}
+          currentProfile={profile}
+          pendingReshare={pendingStoryReshare}
+          onReshareHandled={onStoryReshareHandled}
+          pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+          onProfileStoryHandled={onProfileStoryHandled}
+        />
       </div>
 
       {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
@@ -2988,7 +3267,15 @@ function SharedPostPreview({ content, postId }: { content?: string | null; postI
 }
 
 // --- صفحة الرسائل ---
-function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; selectedId?: string }) {
+function MessagesPage({
+  currentUserId,
+  selectedId,
+  onReshareStory,
+}: {
+  currentUserId: string;
+  selectedId?: string;
+  onReshareStory: (story: StoryDmCardStory) => void;
+}) {
   const [, setLocation] = useLocation();
   const [contacts, setContacts] = useState<Profile[]>([]);
   const [target, setTarget] = useState<Profile | null>(null);
@@ -3122,6 +3409,10 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
                         storyId={String(sharedStoryId)}
                         currentUserId={currentUserId}
                         senderName={target ? displayName(target) : undefined}
+                        onAddToStory={story => {
+                          onReshareStory(story);
+                          setLocation('/feed');
+                        }}
                       />
                     </div>
                   ) : (
@@ -3146,7 +3437,21 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
 }
 
 // --- الملف الشخصي ---
-function ProfilePage({ targetUserId, currentUserId, profile, onProfileUpdate, onOpenComments }: { targetUserId: string; currentUserId: string; profile: Profile | null; onProfileUpdate: (next: Profile) => void; onOpenComments: (postId: string) => void }) {
+function ProfilePage({
+  targetUserId,
+  currentUserId,
+  profile,
+  onProfileUpdate,
+  onOpenComments,
+  onOpenStories,
+}: {
+  targetUserId: string;
+  currentUserId: string;
+  profile: Profile | null;
+  onProfileUpdate: (next: Profile) => void;
+  onOpenComments: (postId: string) => void;
+  onOpenStories: (profileId: string) => void;
+}) {
   const activeUserId = targetUserId || currentUserId;
   const own = activeUserId === currentUserId;
 
@@ -3155,38 +3460,151 @@ function ProfilePage({ targetUserId, currentUserId, profile, onProfileUpdate, on
   const [following, setFollowing] = useState(0);
   const [postCount, setPostCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [followRequestSent, setFollowRequestSent] = useState(false);
+  const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
+  const [hasActiveStories, setHasActiveStories] = useState(false);
+  const [hasCloseFriendsStory, setHasCloseFriendsStory] = useState(false);
+  const [privacySaving, setPrivacySaving] = useState(false);
+  const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
+  const [, setLocation] = useLocation();
 
   const { posts, loading, refresh } = usePosts('profile', activeUserId, currentUserId);
 
   useEffect(() => {
     if (!supabaseConfigured || !activeUserId) return;
+    let active = true;
     const loadProfileData = async () => {
-      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }] = await Promise.all([
+      const now = new Date();
+      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: activeStories }, { data: incomingRequests }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         supabase.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', activeUserId),
-        own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle()
+        own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
+        own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
+        supabase.from('stories').select('id, is_close_friends').eq('user_id', activeUserId)
+          .gte('created_at', new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString())
+          .gt('expires_at', now.toISOString()).limit(50),
+        own
+          ? supabase.from('follow_requests').select('requester_id, created_at').eq('recipient_id', currentUserId).order('created_at', { ascending: false }).limit(100)
+          : Promise.resolve({ data: [] }),
       ]);
+
+      const requestRows = (incomingRequests || []) as Array<{ requester_id: string; created_at: string }>;
+      const requesterIds = [...new Set(requestRows.map(row => row.requester_id))];
+      const { data: requesterProfiles } = requesterIds.length
+        ? await supabase.from('profiles').select('id, username, full_name, avatar_url, bio, is_private').in('id', requesterIds)
+        : { data: [] };
+      if (!active) return;
+
       if (prof) setPerson(prof as Profile);
       setFollowers(fCount || 0);
       setFollowing(fingCount || 0);
       setPostCount(pCount || 0);
       setIsFollowing(Boolean(checkFollow));
+      setFollowRequestSent(Boolean(checkRequest));
+      setHasActiveStories(Boolean(activeStories?.length));
+      setHasCloseFriendsStory(Boolean(activeStories?.some(story => story.is_close_friends)));
+      const profileById = new Map<string, Profile>(((requesterProfiles || []) as Profile[]).map(requester => [requester.id, requester] as [string, Profile]));
+      setFollowRequests(requestRows.flatMap(row => {
+        const requester = profileById.get(row.requester_id);
+        return requester ? [{ profile: requester, created_at: row.created_at }] : [];
+      }));
     };
     void loadProfileData();
+    return () => { active = false; };
   }, [activeUserId, currentUserId, own]);
 
   const toggleFollow = async () => {
-    if (!supabaseConfigured) return;
+    if (!supabaseConfigured || own || !person) return;
     if (isFollowing) {
-      await supabase.from('follows').delete().eq('follower_id', currentUserId).eq('following_id', activeUserId);
-      setFollowers(prev => prev - 1);
-    } else {
-      await supabase.from('follows').insert({ follower_id: currentUserId, following_id: activeUserId });
-      setFollowers(prev => prev + 1);
+      const { error } = await supabase.from('follows').delete().eq('follower_id', currentUserId).eq('following_id', activeUserId);
+      if (error) {
+        toast.error('تعذرت إزالة المتابعة');
+        return;
+      }
+      setFollowers(prev => Math.max(0, prev - 1));
+      setIsFollowing(false);
+      return;
     }
-    setIsFollowing(!isFollowing);
+
+    if (followRequestSent) {
+      const { error } = await supabase.from('follow_requests').delete().eq('requester_id', currentUserId).eq('recipient_id', activeUserId);
+      if (error) {
+        toast.error('تعذر إلغاء طلب المتابعة');
+        return;
+      }
+      setFollowRequestSent(false);
+      toast.success('تم إلغاء طلب المتابعة');
+      return;
+    }
+
+    if (person.is_private) {
+      const { error } = await supabase.from('follow_requests').insert({ requester_id: currentUserId, recipient_id: activeUserId });
+      if (error) {
+        toast.error('تعذر إرسال طلب المتابعة');
+        return;
+      }
+      setFollowRequestSent(true);
+      toast.success('تم إرسال طلب المتابعة');
+      return;
+    }
+
+    const { error } = await supabase.from('follows').insert({ follower_id: currentUserId, following_id: activeUserId });
+    if (error && error.code !== '23505') {
+      toast.error('تعذرت متابعة هذا الحساب');
+      return;
+    }
+    setFollowers(prev => prev + (error ? 0 : 1));
+    setIsFollowing(true);
+  };
+
+  const respondToFollowRequest = async (requesterId: string, accept: boolean) => {
+    if (!supabaseConfigured || !own || busyRequestId) return;
+    setBusyRequestId(requesterId);
+
+    if (accept) {
+      const { error } = await supabase.from('follows').insert({ follower_id: requesterId, following_id: currentUserId });
+      if (error && error.code !== '23505') {
+        toast.error('تعذر قبول طلب المتابعة');
+        setBusyRequestId(null);
+        return;
+      }
+      if (!error) setFollowers(value => value + 1);
+    }
+
+    const { error: deleteError } = await supabase
+      .from('follow_requests')
+      .delete()
+      .eq('requester_id', requesterId)
+      .eq('recipient_id', currentUserId);
+    if (deleteError) {
+      toast.error(accept ? 'تمت الموافقة لكن تعذر إخفاء الطلب' : 'تعذر رفض طلب المتابعة');
+      setBusyRequestId(null);
+      return;
+    }
+
+    setFollowRequests(current => current.filter(request => request.profile.id !== requesterId));
+    setBusyRequestId(null);
+    toast.success(accept ? 'تم قبول طلب المتابعة' : 'تم رفض طلب المتابعة');
+  };
+
+  const toggleAccountPrivacy = async () => {
+    if (!supabaseConfigured || !own || !person || privacySaving) return;
+    const isPrivate = !Boolean(person.is_private);
+    setPrivacySaving(true);
+    const { error } = await supabase.from('profiles').update({ is_private: isPrivate }).eq('id', currentUserId);
+    if (error) {
+      toast.error('تعذر تحديث خصوصية الحساب');
+      setPrivacySaving(false);
+      return;
+    }
+
+    const updatedProfile = { ...person, is_private: isPrivate };
+    setPerson(updatedProfile);
+    onProfileUpdate(updatedProfile);
+    toast.success(isPrivate ? 'أصبح الحساب خاصاً' : 'أصبح الحساب عاماً');
+    setPrivacySaving(false);
   };
 
   if (!person) return <div className="status-box">جاري تحميل البروفايل...</div>;
@@ -3194,7 +3612,32 @@ function ProfilePage({ targetUserId, currentUserId, profile, onProfileUpdate, on
   return (
     <section className="new-view space-y-4 max-w-lg mx-auto">
       <div className="profile-banner card flex items-center gap-4 p-4 border border-zinc-800 rounded-2xl bg-zinc-900/80">
-        <Avatar profile={person} extraLarge />
+        <button
+          type="button"
+          disabled={!hasActiveStories}
+          aria-label={hasActiveStories ? 'عرض قصص الحساب' : `صورة ${displayName(person)}`}
+          onClick={() => {
+            if (!hasActiveStories) return;
+            onOpenStories(activeUserId);
+            setLocation('/feed');
+          }}
+          className="shrink-0 rounded-full disabled:cursor-default"
+        >
+          <span
+            className="flex h-[72px] w-[72px] items-center justify-center rounded-full p-[3px]"
+            style={{
+              background: hasActiveStories
+                ? hasCloseFriendsStory
+                  ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
+                  : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)'
+                : 'transparent',
+            }}
+          >
+            <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-zinc-900">
+              <Avatar profile={person} extraLarge />
+            </span>
+          </span>
+        </button>
         <div className="flex-1">
           <strong dir="ltr" className="text-white text-sm block font-bold">@{person.username}</strong>
           <p className="text-xs text-zinc-400 my-1">{person.bio || 'لا توجد نبذة شخصية'}</p>
@@ -3205,16 +3648,64 @@ function ProfilePage({ targetUserId, currentUserId, profile, onProfileUpdate, on
             <span><b className="text-white">{following}</b> يتابع</span>
           </div>
 
+          {own && (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-black/30 px-3 py-2">
+              <div>
+                <span className="block text-[11px] font-bold text-white">خصوصية الحساب</span>
+                <span className="text-[10px] text-zinc-400">{person.is_private ? 'خاص — القصص للمتابعين المقبولين' : 'عام — القصص متاحة من الملف الشخصي'}</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={Boolean(person.is_private)}
+                onClick={() => void toggleAccountPrivacy()}
+                disabled={privacySaving}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition ${person.is_private ? 'bg-pink-600' : 'bg-zinc-700'} disabled:opacity-50`}
+              >
+                <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${person.is_private ? 'right-1' : 'right-6'}`} />
+              </button>
+            </div>
+          )}
+
           {!own && (
             <div className="flex gap-2 mt-2">
-              <button className={`action-button text-xs px-4 py-1.5 rounded-xl font-bold ${isFollowing ? 'bg-zinc-800 text-zinc-300' : 'bg-pink-600 text-white'}`} onClick={toggleFollow}>
-                {isFollowing ? 'إلغاء المتابعة' : 'متابعة'}
+              <button
+                className={`action-button text-xs px-4 py-1.5 rounded-xl font-bold ${isFollowing || followRequestSent ? 'bg-zinc-800 text-zinc-300' : 'bg-pink-600 text-white'}`}
+                onClick={() => void toggleFollow()}
+              >
+                {isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
               </button>
               <Link href={`/messages/${activeUserId}`} className="action-button text-xs px-4 py-1.5 rounded-xl bg-zinc-800 text-white font-medium">رسالة</Link>
             </div>
           )}
         </div>
       </div>
+
+      {own && followRequests.length > 0 && (
+        <section className="card space-y-2 border border-zinc-800 p-3">
+          <h2 className="text-xs font-bold text-white">طلبات المتابعة ({followRequests.length})</h2>
+          {followRequests.map(request => (
+            <div key={request.profile.id} className="flex items-center gap-2 rounded-xl bg-black/20 p-2">
+              <Avatar profile={request.profile} />
+              <span className="min-w-0 flex-1 truncate text-[11px] text-white">
+                {request.profile.full_name || `@${request.profile.username}`}
+              </span>
+              <button
+                type="button"
+                disabled={Boolean(busyRequestId)}
+                onClick={() => void respondToFollowRequest(request.profile.id, true)}
+                className="rounded-lg bg-emerald-600 px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50"
+              >قبول</button>
+              <button
+                type="button"
+                disabled={Boolean(busyRequestId)}
+                onClick={() => void respondToFollowRequest(request.profile.id, false)}
+                className="rounded-lg bg-zinc-800 px-2.5 py-1 text-[10px] font-bold text-zinc-300 disabled:opacity-50"
+              >رفض</button>
+            </div>
+          ))}
+        </section>
+      )}
 
       <h2 className="section-label my-2 text-sm font-bold text-white">منشورات وريلز المستخدم</h2>
       {loading && <div className="status-box">جاري تحميل المنشورات...</div>}
@@ -4372,6 +4863,10 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [selectedPostForComments, setSelectedPostForComments] = useState<string | null>(null);
+  const [pendingStoryReshare, setPendingStoryReshare] = useState<StoryDmCardStory | null>(null);
+  const clearPendingStoryReshare = useCallback(() => setPendingStoryReshare(null), []);
+  const [pendingProfileStoryOwnerId, setPendingProfileStoryOwnerId] = useState<string | null>(null);
+  const clearPendingProfileStory = useCallback(() => setPendingProfileStoryOwnerId(null), []);
   const user = session?.user;
 
   useEffect(() => {
@@ -4431,15 +4926,31 @@ function App() {
         {user ? (
           <Shell userId={user.id} profile={profile} onSignOut={() => void signOut()} onOpenComments={(id) => setSelectedPostForComments(id)}>
             <Switch>
-              <Route path="/feed"><FeedPage userId={user.id} profile={profile} onOpenComments={(id) => setSelectedPostForComments(id)} /></Route>
+              <Route path="/feed"><FeedPage
+                userId={user.id}
+                profile={profile}
+                onOpenComments={(id) => setSelectedPostForComments(id)}
+                pendingStoryReshare={pendingStoryReshare}
+                onStoryReshareHandled={clearPendingStoryReshare}
+                pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+                onProfileStoryHandled={clearPendingProfileStory}
+              /></Route>
               <Route path="/post/:postId">{params => <PostDetailPage postId={params.postId} currentUserId={user.id} onOpenComments={(id) => setSelectedPostForComments(id)} />}</Route>
-              <Route path="/"><FeedPage userId={user.id} profile={profile} onOpenComments={(id) => setSelectedPostForComments(id)} /></Route>
+              <Route path="/"><FeedPage
+                userId={user.id}
+                profile={profile}
+                onOpenComments={(id) => setSelectedPostForComments(id)}
+                pendingStoryReshare={pendingStoryReshare}
+                onStoryReshareHandled={clearPendingStoryReshare}
+                pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+                onProfileStoryHandled={clearPendingProfileStory}
+              /></Route>
               <Route path="/reels"><ReelsPage userId={user.id} /></Route>
               <Route path="/search"><SearchPage userId={user.id} /></Route>
-              <Route path="/messages"><MessagesPage currentUserId={user.id} /></Route>
-              <Route path="/messages/:userId">{params => <MessagesPage currentUserId={user.id} selectedId={params.userId} />}</Route>
-              <Route path="/profile">{() => <ProfilePage targetUserId={user.id} currentUserId={user.id} profile={profile} onProfileUpdate={setProfile} onOpenComments={(id) => setSelectedPostForComments(id)} />}</Route>
-              <Route path="/profile/:userId">{params => <ProfilePage key={params.userId} targetUserId={params.userId} currentUserId={user.id} profile={profile} onProfileUpdate={setProfile} onOpenComments={(id) => setSelectedPostForComments(id)} />}</Route>
+              <Route path="/messages"><MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} /></Route>
+              <Route path="/messages/:userId">{params => <MessagesPage currentUserId={user.id} selectedId={params.userId} onReshareStory={setPendingStoryReshare} />}</Route>
+              <Route path="/profile">{() => <ProfilePage targetUserId={user.id} currentUserId={user.id} profile={profile} onProfileUpdate={setProfile} onOpenComments={(id) => setSelectedPostForComments(id)} onOpenStories={setPendingProfileStoryOwnerId} />}</Route>
+              <Route path="/profile/:userId">{params => <ProfilePage key={params.userId} targetUserId={params.userId} currentUserId={user.id} profile={profile} onProfileUpdate={setProfile} onOpenComments={(id) => setSelectedPostForComments(id)} onOpenStories={setPendingProfileStoryOwnerId} />}</Route>
               <Route component={NotFound} />
             </Switch>
 
@@ -4461,7 +4972,7 @@ function App() {
           </Switch>
         )}
       </WouterRouter>
-      <Toaster />
+      <Toaster position="bottom-center" />
     </TooltipProvider>
   );
 }

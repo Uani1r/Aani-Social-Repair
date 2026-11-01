@@ -1,16 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Music2, Plus } from 'lucide-react';
-import { toast } from 'sonner';
+import { Plus } from 'lucide-react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
-interface StoryDmCardProps {
-  storyId: string;
-  currentUserId: string;
-  senderName?: string;
-}
-
-interface StoryRow {
+export interface StoryRow {
   id: string;
   user_id: string;
   media_url: string | null;
@@ -18,15 +11,21 @@ interface StoryRow {
   caption: string | null;
   expires_at: string | null;
   filter_key?: string | null;
-  author?: { username?: string | null; full_name?: string | null; avatar_url?: string | null } | null;
+  original_story_id?: string | null;
+  author?: { id?: string; username?: string | null; full_name?: string | null; avatar_url?: string | null } | null;
+}
+
+interface StoryDmCardProps {
+  storyId: string;
+  currentUserId: string;
+  senderName?: string;
+  onAddToStory: (story: StoryRow) => void;
 }
 
 /** بطاقة ستوري عمودية داخل المحادثة الخاصة (شبيهة ببطاقة ريلز إنستغرام) */
-export default function StoryDmCard({ storyId, currentUserId, senderName }: StoryDmCardProps) {
+export default function StoryDmCard({ storyId, currentUserId, senderName, onAddToStory }: StoryDmCardProps) {
   const [story, setStory] = useState<StoryRow | null>(null);
   const [loading, setLoading] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [added, setAdded] = useState(false);
 
   useEffect(() => {
     if (!supabaseConfigured || !storyId) {
@@ -54,43 +53,9 @@ export default function StoryDmCard({ storyId, currentUserId, senderName }: Stor
     };
   }, [storyId]);
 
-  const expired = !story || (story.expires_at ? new Date(story.expires_at).getTime() < Date.now() : false);
+  const expiresAt = story?.expires_at ? Date.parse(story.expires_at) : Number.NaN;
+  const expired = !story || !Number.isFinite(expiresAt) || expiresAt <= Date.now();
   const canReshare = Boolean(story && !expired && story.user_id !== currentUserId && story.media_url);
-
-  const addToStory = async () => {
-    if (!story || !canReshare) return;
-    if (!window.confirm('إضافة هذه القصة إلى قصتك؟')) return;
-
-    setAdding(true);
-    const payload = {
-      user_id: currentUserId,
-      media_url: story.media_url,
-      media_type: story.media_type === 'video' ? 'video' : 'photo',
-      caption: story.caption,
-      is_close_friends: false,
-      duration_seconds: 5,
-      timed_texts: [],
-      original_story_id: story.id,
-      share_type: 'reshare',
-    };
-
-    const { error } = await supabase.from('stories').insert(payload);
-    if (error) {
-      const { original_story_id, share_type, ...legacyPayload } = payload;
-      void original_story_id;
-      void share_type;
-      const retry = await supabase.from('stories').insert(legacyPayload);
-      if (retry.error) {
-        toast.error('تعذرت إضافة القصة');
-        setAdding(false);
-        return;
-      }
-    }
-
-    toast.success('تمت إضافة القصة إلى قصتك');
-    setAdded(true);
-    setAdding(false);
-  };
 
   const authorLabel = story?.author?.full_name || story?.author?.username || senderName || 'مستخدم';
 
@@ -127,26 +92,22 @@ export default function StoryDmCard({ storyId, currentUserId, senderName }: Stor
           <span className="truncate text-[11px] font-bold">{story?.author?.username || 'قصة'}</span>
         </div>
 
-        {canReshare && (
-          <button
-            type="button"
-            onClick={() => void addToStory()}
-            disabled={adding || added}
-            className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-1 rounded-full bg-white/95 px-3 py-1.5 text-[11px] font-bold text-zinc-900 shadow-lg transition active:scale-95 disabled:opacity-70"
-          >
-            <Plus size={13} />
-            {added ? 'أُضيفت إلى قصتك' : adding ? 'جارٍ الإضافة…' : 'إضافة إلى قصتك'}
-          </button>
-        )}
       </div>
 
-      <div className="px-2.5 py-2">
-        <p className="truncate text-[11px] text-zinc-300">
-          {expired ? 'هذه القصة لم تعد متاحة' : `قصة من ${authorLabel}`}
-        </p>
-        <p className="mt-0.5 flex items-center gap-1 text-[10px] text-zinc-500">
-          <Music2 size={10} /> {story?.caption || 'أرسل لك قصة'}
-        </p>
+      <div className="p-2.5">
+        {canReshare && story ? (
+          <button
+            type="button"
+            onClick={() => onAddToStory(story)}
+            className="flex w-full items-center justify-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] font-bold text-zinc-900 shadow-lg transition active:scale-[0.98]"
+          >
+            <Plus size={14} /> إضافة إلى قصتك
+          </button>
+        ) : (
+          <p className="truncate text-center text-[11px] text-zinc-400">
+            {expired ? 'هذه القصة لم تعد متاحة' : `قصة من ${authorLabel}`}
+          </p>
+        )}
       </div>
     </div>
   );

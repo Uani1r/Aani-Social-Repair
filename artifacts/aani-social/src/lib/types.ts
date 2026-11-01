@@ -6,6 +6,7 @@ export type Profile = {
   display_name?: string | null;
   avatar_url: string | null;
   bio: string;
+  is_private?: boolean;
 };
 
 export type Post = {
