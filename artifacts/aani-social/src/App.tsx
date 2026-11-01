@@ -21,6 +21,7 @@ import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
 import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
+import StoryDmCard from './components/StoryDmCard';
 import StoryFilterBar from './components/StoryFilterBar';
 import StoryMusicSheet from './components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from './components/StoryMentionPicker';
@@ -1071,7 +1072,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         user_id: person.id,
         actor_id: userId,
         type: 'mention',
-        content: `أشار إليك ${authorName} في قصة`,
+        content: 'قصة جديدة بانتظارك',
         reference_id: storyId,
       });
 
@@ -3001,14 +3002,14 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
 
     const { data, error } = await supabase
       .from('messages')
-      .select('id, sender_id, recipient_id, content, post_id, created_at')
+      .select('id, sender_id, recipient_id, content, post_id, story_id, created_at')
       .or(threadFilter)
       .order('created_at', { ascending: true });
 
     if (error) {
       const code = (error as { code?: string }).code;
-      if (code === '42703' || /post_id/i.test(error.message || '')) {
-        // عمود post_id غير مطبّق في القاعدة بعد: نجلب المحادثة بدون مرجع المنشور
+      if (code === '42703' || /post_id|story_id/i.test(error.message || '')) {
+        // أعمدة المراجع غير مطبّقة في القاعدة بعد: نجلب المحادثة بدونها
         const { data: fallback } = await supabase
           .from('messages')
           .select('id, sender_id, recipient_id, content, created_at')
@@ -3099,8 +3100,15 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
             {thread.map(m => {
               const isMine = m.sender_id === currentUserId;
               const isSharedPost = Boolean(m.post_id) || (typeof m.content === 'string' && m.content.trim().startsWith('[post:'));
+              const storyFromColumn = m.story_id ? String(m.story_id) : null;
+              const storyFromContent =
+                typeof m.content === 'string' && m.content.trim().startsWith('[story:')
+                  ? m.content.trim().slice(7).split(']')[0]
+                  : null;
+              const sharedStoryId = storyFromColumn || storyFromContent;
+              const isSharedStory = Boolean(sharedStoryId) && !isSharedPost;
               return (
-                <div key={m.id} className={`flex flex-col ${isSharedPost ? 'w-full' : 'max-w-[85%]'} ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'}`}>
+                <div key={m.id} className={`flex flex-col ${isSharedPost || isSharedStory ? 'w-full' : 'max-w-[85%]'} ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'}`}>
                   {!isMine && target && (
                     <span className="mb-0.5 text-[10px] text-zinc-500">{displayName(target)}</span>
                   )}
@@ -3108,9 +3116,19 @@ function MessagesPage({ currentUserId, selectedId }: { currentUserId: string; se
                     <div className="w-full">
                       <SharedPostPreview postId={m.post_id} content={m.content} />
                     </div>
+                  ) : isSharedStory ? (
+                    <div className={`w-full ${isMine ? 'flex justify-end' : 'flex justify-start'}`}>
+                      <StoryDmCard
+                        storyId={String(sharedStoryId)}
+                        currentUserId={currentUserId}
+                        senderName={target ? displayName(target) : undefined}
+                      />
+                    </div>
                   ) : (
                     <div className={`p-2 rounded-xl text-xs ${isMine ? 'bg-pink-600 text-white' : 'bg-zinc-800 text-zinc-200'}`}>
-                      {m.content}
+                      {typeof m.content === 'string' && m.content.trim().startsWith('[story:')
+                        ? 'أرسل لك قصة'
+                        : m.content}
                     </div>
                   )}
                 </div>
