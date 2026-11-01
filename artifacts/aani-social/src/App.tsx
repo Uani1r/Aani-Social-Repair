@@ -21,6 +21,7 @@ import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
 import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
+import StoryStickersSheet, { type PickedSticker } from './components/StoryStickersSheet';
 import StoryTextToolbar from './components/StoryTextToolbar';
 import {
   STORY_TEXT_BACKGROUNDS,
@@ -292,12 +293,24 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   );
 }
 
+// ملصق موضوع فوق القصة (إيموجي أو صورة مقتصة)
+type StoryStickerItem = {
+  id: string;
+  type: 'emoji' | 'image';
+  value: string;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+};
+
 // --- شريط القصص الموحد ---
 // العنصر الذي بدأ منه اللمس: يُقفل التفاعل عليه وحده حتى نهاية الإيماءة
-type StoryGestureTarget = 'text' | 'image' | 'canvas';
+type StoryGestureTarget = 'text' | 'image' | 'sticker' | 'canvas';
 
 type StoryGestureState = {
   target: StoryGestureTarget;
+  stickerId?: string;
   touchCount: number;
   startX: number;
   startY: number;
@@ -405,8 +418,48 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   // قائمة الأدوات الإضافية القابلة للتوسعة (تُضاف العناصر هنا مستقبلًا)
   const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [];
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
-  const [storyStickerOpen, setStoryStickerOpen] = useState(false);
+  const [storyStickersSheetOpen, setStoryStickersOpen] = useState(false);
+  const [storyStickers, setStoryStickers] = useState<StoryStickerItem[]>([]);
+  const [myStickers, setMyStickers] = useState<string[]>([]);
   const storyToolsRef = useRef<HTMLDivElement | null>(null);
+
+  // ملصقاتي المقتصة تُحفظ محلياً
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('aani:my-cutout-stickers');
+      if (raw) setMyStickers(JSON.parse(raw) as string[]);
+    } catch {
+      /* التخزين المحلي غير متاح */
+    }
+  }, []);
+
+  const addMyCutoutSticker = useCallback((dataUrl: string) => {
+    setMyStickers(prev => {
+      const next = [dataUrl, ...prev].slice(0, 24);
+      try {
+        localStorage.setItem('aani:my-cutout-stickers', JSON.stringify(next));
+      } catch {
+        /* تجاهل تجاوز المساحة */
+      }
+      return next;
+    });
+  }, []);
+
+  const handlePickStorySticker = useCallback((sticker: PickedSticker) => {
+    setStoryStickers(prev => [
+      ...prev,
+      {
+        id: `sticker-${Date.now()}-${Math.round(Math.random() * 10000)}`,
+        type: sticker.type,
+        value: sticker.value,
+        x: 0,
+        y: 0,
+        scale: 1,
+        rotation: 0,
+      },
+    ]);
+    setStoryStickersOpen(false);
+  }, []);
 
   // محرر النص الغني للقصة
   const [storyTextEditorOpen, setStoryTextEditorOpen] = useState(false);
@@ -471,13 +524,20 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const storyGestureRef = useRef<StoryGestureState | null>(null);
 
   // قيم المرجع حسب العنصر المقفل
-  const readStoryGestureBase = (target: StoryGestureTarget) => {
+  const readStoryGestureBase = (target: StoryGestureTarget, stickerId?: string) => {
     if (target === 'text') {
       return { x: storyTextOffset.x, y: storyTextOffset.y, scale: storyTextScale, rotate: storyTextRotation };
     }
 
     if (target === 'image') {
       return { x: storyMediaOffset.x, y: storyMediaOffset.y, scale: storyMediaZoom, rotate: storyMediaRotate };
+    }
+
+    if (target === 'sticker') {
+      const sticker = storyStickers.find(item => item.id === stickerId);
+      return sticker
+        ? { x: sticker.x, y: sticker.y, scale: sticker.scale, rotate: sticker.rotation }
+        : { x: 0, y: 0, scale: 1, rotate: 0 };
     }
 
     return { x: storyCanvasOffset.x, y: storyCanvasOffset.y, scale: storyCanvasScale, rotate: 0 };
@@ -494,8 +554,8 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   };
 
   // بدء الإيماءة: يُقفل الهدف من أول لمسة فقط
-  const startStoryGesture = (event: React.TouchEvent, target: StoryGestureTarget) => {
-    const base = readStoryGestureBase(target);
+  const startStoryGesture = (event: React.TouchEvent, target: StoryGestureTarget, stickerId?: string) => {
+    const base = readStoryGestureBase(target, stickerId);
     const touches = event.touches;
     if (!touches.length) return;
 
@@ -503,6 +563,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       const center = storyTouchCenter(touches);
       storyGestureRef.current = {
         target,
+        stickerId,
         touchCount: 2,
         startX: center.x,
         startY: center.y,
@@ -518,6 +579,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     const touch = touches[0];
     storyGestureRef.current = {
       target,
+      stickerId,
       touchCount: 1,
       startX: touch.clientX,
       startY: touch.clientY,
@@ -546,20 +608,24 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           startY: center.y,
           startDist: center.dist,
           startAngle: center.angle,
-          ...readStoryGestureBase(gesture.target),
+          ...readStoryGestureBase(gesture.target, gesture.stickerId),
           moved: true,
         };
       }
       return;
     }
 
+    const stickerElement = element?.closest('[data-story-sticker]') as HTMLElement | null;
+
     const target: StoryGestureTarget = element?.closest('[data-story-text]')
       ? 'text'
-      : element?.closest('[data-story-media]')
-        ? 'image'
-        : 'canvas';
+      : stickerElement
+        ? 'sticker'
+        : element?.closest('[data-story-media]')
+          ? 'image'
+          : 'canvas';
 
-    startStoryGesture(event, target);
+    startStoryGesture(event, target, stickerElement?.getAttribute('data-story-sticker') ?? undefined);
   };
 
   const handleStoryCanvasTouchMove = (event: React.TouchEvent) => {
@@ -581,7 +647,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           startY: center.y,
           startDist: center.dist,
           startAngle: center.angle,
-          ...readStoryGestureBase(gesture.target),
+          ...readStoryGestureBase(gesture.target, gesture.stickerId),
           moved: true,
         };
       } else {
@@ -593,7 +659,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           startY: touch.clientY,
           startDist: 0,
           startAngle: 0,
-          ...readStoryGestureBase(gesture.target),
+          ...readStoryGestureBase(gesture.target, gesture.stickerId),
         };
       }
       return;
@@ -631,6 +697,23 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         return;
       }
 
+      if (gesture.target === 'sticker' && gesture.stickerId) {
+        setStoryStickers(prev =>
+          prev.map(item =>
+            item.id === gesture.stickerId
+              ? {
+                  ...item,
+                  x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
+                  y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.45),
+                  scale: Math.min(5, Math.max(0.3, gesture.scale * ratio)),
+                  rotation: gesture.rotate + deltaAngle,
+                }
+              : item,
+          ),
+        );
+        return;
+      }
+
       setStoryCanvasScale(Math.min(3, Math.max(0.6, gesture.scale * ratio)));
       setStoryCanvasOffset({
         x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
@@ -657,6 +740,21 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
         x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.6),
         y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.6),
       });
+      return;
+    }
+
+    if (gesture.target === 'sticker' && gesture.stickerId) {
+      setStoryStickers(prev =>
+        prev.map(item =>
+          item.id === gesture.stickerId
+            ? {
+                ...item,
+                x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
+                y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.45),
+              }
+            : item,
+        ),
+      );
     }
   };
 
@@ -1401,6 +1499,26 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                     </div>
                   </div>
                 )}
+
+                {/* الملصقات الموضوعة: تُسحب وتُكبَّر بإيماءات مستقلة */}
+                {storyStickers.map(sticker => (
+                  <div
+                    key={sticker.id}
+                    data-story-sticker={sticker.id}
+                    className="absolute left-1/2 top-1/2 cursor-grab select-none active:cursor-grabbing"
+                    style={{
+                      touchAction: 'none',
+                      pointerEvents: 'auto',
+                      transform: `translate(-50%, -50%) translate(${sticker.x}px, ${sticker.y}px) scale(${sticker.scale}) rotate(${sticker.rotation}deg)`,
+                    }}
+                  >
+                    {sticker.type === 'image' ? (
+                      <img src={sticker.value} alt="" draggable={false} className="h-28 w-auto max-w-[45vw] object-contain" />
+                    ) : (
+                      <span className="block text-[64px] leading-none">{sticker.value}</span>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           ) : (
@@ -1452,7 +1570,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                     if (tool.key === 'text') {
                       setStoryTextEditorOpen(true);
                     } else if (tool.key === 'sticker') {
-                      setStoryStickerOpen(open => !open);
+                      setStoryStickersOpen(true);
                     } else if (tool.key === 'mention') {
                       const username = window.prompt('اكتب اسم المستخدم للإشارة إليه');
                       if (username?.trim()) {
@@ -1518,24 +1636,6 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               )}
             </div>
 
-            {/* لوحة الملصقات */}
-            {storyStickerOpen && (
-              <div className="mt-1 grid grid-cols-4 gap-1 rounded-2xl border border-white/10 bg-[#101014]/95 p-2 shadow-2xl backdrop-blur-md">
-                {['❤️', '😂', '🥰', '✨', '🔥', '👏', '🌷', '🤍'].map(sticker => (
-                  <button
-                    key={sticker}
-                    type="button"
-                    onClick={() => {
-                      setCaption(prev => `${prev}${prev ? ' ' : ''}${sticker}`);
-                      setStoryStickerOpen(false);
-                    }}
-                    className="flex h-8 w-8 items-center justify-center rounded-lg text-lg transition hover:bg-white/10"
-                  >
-                    {sticker}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
 
 
@@ -1676,6 +1776,15 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
               </button>
             </div>
           </div>
+
+          {/* واجهة الملصقات: تنبثق من الأسفل ولا تحرّك القائمة الجانبية */}
+          <StoryStickersSheet
+            open={storyStickersSheetOpen}
+            onClose={() => setStoryStickersOpen(false)}
+            onPick={handlePickStorySticker}
+            myStickers={myStickers}
+            onAddMySticker={addMyCutoutSticker}
+          />
         </div>
       )}
     </div>
