@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type MouseEvent as ReactMouseEvent } from 'react';
 
 import {
   STORY_FONTS_AR,
@@ -25,6 +25,8 @@ export interface StoryTextToolbarProps {
   onCycleBackground: () => void;
   animation: StoryTextAnimation;
   onAnimationChange: (animation: StoryTextAnimation) => void;
+  /** يُستدعى بعد كل ضغطة لإعادة تركيز حقل النص وإبقاء لوحة المفاتيح مفتوحة */
+  onInteract?: () => void;
 }
 
 const ICON_BUTTON_BASE =
@@ -36,8 +38,9 @@ const CHIP = 'shrink-0 rounded-xl border px-3 py-1.5 text-[12px] transition acti
 const ACTIVE_CHIP = 'border-white bg-white font-bold text-[#121212]';
 const IDLE_CHIP = 'border-white/15 bg-white/5 text-white/85';
 
+/* اللوحات تُعرض فوق الشريط داخل التدفق فلا تُغطي نص المحرر */
 const PANEL =
-  'absolute bottom-full left-0 right-0 z-30 mb-2.5 rounded-2xl border border-white/10 bg-[#101014]/95 p-2.5 shadow-2xl backdrop-blur-xl';
+  'mb-2 max-h-[34vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#101014]/95 p-2.5 shadow-2xl backdrop-blur-xl';
 
 const LIGHT_BACKGROUNDS = ['#FFFFFF', '#F6E05E', '#C7C7CC', '#68D391', '#4FD1C5', '#FBD38D'];
 
@@ -67,6 +70,7 @@ export default function StoryTextToolbar({
   onCycleBackground,
   animation,
   onAnimationChange,
+  onInteract,
 }: StoryTextToolbarProps) {
   const [panel, setPanel] = useState<PanelKey>(null);
   const [fontTab, setFontTab] = useState<StoryFontTab>('ar');
@@ -78,15 +82,28 @@ export default function StoryTextToolbar({
     setPanel(current => (current === key ? null : key));
   };
 
+  // كل نقرة تُبقي التركيز على حقل النص فلا تختفي لوحة المفاتيح
+  const run = (action: () => void) => () => {
+    onInteract?.();
+    action();
+  };
+
+  // منع فقدان التركيز عند اللمس أو النقر (مع تجاهل عناصر الإدخال)
+  const handleMouseDown = (event: ReactMouseEvent) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('input, textarea, select')) return;
+    event.preventDefault();
+  };
+
   return (
-    <div className="relative w-full" dir="rtl">
+    <div className="w-full" dir="rtl" onMouseDown={handleMouseDown}>
       {/* لوحة الخطوط: قائمة تمرير أفقية فوق الشريط */}
       {panel === 'font' && (
         <div className={PANEL}>
           <div className="mb-2 flex items-center gap-1.5">
             <button
               type="button"
-              onClick={() => setFontTab('ar')}
+              onClick={run(() => setFontTab('ar'))}
               className={`rounded-full px-2.5 py-1 text-[10px] transition ${
                 fontTab === 'ar' ? 'bg-white font-bold text-[#121212]' : 'text-white/60'
               }`}
@@ -95,7 +112,7 @@ export default function StoryTextToolbar({
             </button>
             <button
               type="button"
-              onClick={() => setFontTab('en')}
+              onClick={run(() => setFontTab('en'))}
               className={`rounded-full px-2.5 py-1 text-[10px] transition ${
                 fontTab === 'en' ? 'bg-white font-bold text-[#121212]' : 'text-white/60'
               }`}
@@ -110,7 +127,7 @@ export default function StoryTextToolbar({
               <button
                 key={font.family}
                 type="button"
-                onClick={() => onFontFamilyChange(font.family)}
+                onClick={run(() => onFontFamilyChange(font.family))}
                 style={{ fontFamily: font.family }}
                 className={`${CHIP} ${fontFamily === font.family ? ACTIVE_CHIP : IDLE_CHIP}`}
               >
@@ -130,7 +147,7 @@ export default function StoryTextToolbar({
                 key={color}
                 type="button"
                 aria-label={`لون ${color}`}
-                onClick={() => onTextColorChange(color)}
+                onClick={run(() => onTextColorChange(color))}
                 className={`h-6 w-6 rounded-full border transition active:scale-90 ${
                   textColor.toLowerCase() === color.toLowerCase()
                     ? 'border-white ring-2 ring-white/50'
@@ -172,7 +189,7 @@ export default function StoryTextToolbar({
               <button
                 key={item.key}
                 type="button"
-                onClick={() => onAnimationChange(item.key)}
+                onClick={run(() => onAnimationChange(item.key))}
                 className={`${CHIP} ${animation === item.key ? ACTIVE_CHIP : IDLE_CHIP}`}
               >
                 {item.label}
@@ -189,7 +206,7 @@ export default function StoryTextToolbar({
       >
         <button
           type="button"
-          onClick={() => togglePanel('font')}
+          onClick={run(() => togglePanel('font'))}
           aria-label="تعديل الخط"
           aria-pressed={panel === 'font'}
           className={`${ICON_BUTTON_BASE} ${panel === 'font' ? ICON_BUTTON_ACTIVE : ICON_BUTTON_IDLE}`}
@@ -199,7 +216,7 @@ export default function StoryTextToolbar({
 
         <button
           type="button"
-          onClick={() => togglePanel('color')}
+          onClick={run(() => togglePanel('color'))}
           aria-label="ألوان النص"
           aria-pressed={panel === 'color'}
           className={`${ICON_BUTTON_BASE} ${ICON_BUTTON_IDLE}`}
@@ -219,7 +236,7 @@ export default function StoryTextToolbar({
 
         <button
           type="button"
-          onClick={() => togglePanel('animation')}
+          onClick={run(() => togglePanel('animation'))}
           aria-label="حركات النص"
           aria-pressed={panel === 'animation'}
           className={`${ICON_BUTTON_BASE} ${panel === 'animation' ? ICON_BUTTON_ACTIVE : ICON_BUTTON_IDLE}`}
@@ -231,7 +248,7 @@ export default function StoryTextToolbar({
 
         <button
           type="button"
-          onClick={onCycleAlign}
+          onClick={run(onCycleAlign)}
           aria-label={STORY_TEXT_ALIGN_LABELS[align]}
           className={`${ICON_BUTTON_BASE} ${ICON_BUTTON_IDLE}`}
         >
@@ -240,7 +257,7 @@ export default function StoryTextToolbar({
 
         <button
           type="button"
-          onClick={onCycleBackground}
+          onClick={run(onCycleBackground)}
           aria-label={`خلفية النص: ${backgroundLabel}`}
           className={`${ICON_BUTTON_BASE} ${ICON_BUTTON_IDLE}`}
         >

@@ -7,6 +7,7 @@ export type StoryTextAnimation =
   | 'typewriter'
   | 'pop'
   | 'slide-up'
+  | 'slide-down'
   | 'slide-right'
   | 'slide-left'
   | 'bounce'
@@ -140,6 +141,7 @@ export const STORY_TEXT_ANIMATIONS: { key: StoryTextAnimation; label: string }[]
   { key: 'typewriter', label: 'آلة كاتبة' },
   { key: 'pop', label: 'انبثاق' },
   { key: 'slide-up', label: 'من الأسفل' },
+  { key: 'slide-down', label: 'من الأعلى' },
   { key: 'slide-right', label: 'من اليمين' },
   { key: 'slide-left', label: 'من اليسار' },
   { key: 'bounce', label: 'قفز' },
