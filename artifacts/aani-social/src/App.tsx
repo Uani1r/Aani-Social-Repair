@@ -1357,36 +1357,50 @@ function StoriesBar({
 
   const handleUploadStory = async () => {
     if (!supabaseConfigured) return;
-    if (!storyFile && !caption.trim()) return;
+    const sourceStory = storyFile ? null : reshareStory;
+    if (!storyFile && !caption.trim() && !sourceStory?.media_url) return;
 
     setUploading(true);
     try {
-      let publicUrl = '';
-      let mediaType = 'text';
+      let mediaUrl = sourceStory?.media_url || '';
+      let mediaType = sourceStory?.media_type === 'video' ? 'video' : sourceStory ? 'photo' : 'text';
 
       if (storyFile) {
         const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
         const filePath = `${userId}/story-${Date.now()}-${safeName}`;
         const { error: uploadErr } = await supabase.storage.from(storageBucket).upload(filePath, storyFile, { contentType: storyFile.type, upsert: true });
         if (uploadErr) throw uploadErr;
-        publicUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
+        mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
         mediaType = storyFile.type.startsWith('video') ? 'video' : 'photo';
       }
 
-      const { error: insertError } = await supabase.from('stories').insert({
-        user_id: userId,
-        media_url: publicUrl || null,
-        media_type: mediaType,
-        caption: caption.trim() || null,
-        is_close_friends: isCloseFriendsOnly,
-        duration_seconds: uploadDuration,
-        timed_texts: timedTexts
+      const { data: storyId, error: insertError } = await supabase.rpc('aani_create_story', {
+        p_media_url: mediaUrl || null,
+        p_media_type: mediaType,
+        p_caption: caption.trim() || sourceStory?.caption || null,
+        p_is_close_friends: isCloseFriendsOnly,
+        p_duration_seconds: uploadDuration,
+        p_timed_texts: timedTexts,
+        p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
+        p_original_story_id: sourceStory?.id || null,
+        p_share_type: sourceStory ? 'reshare' : 'original',
+        p_expiry_seconds: customDurationSeconds,
       });
       if (insertError) throw insertError;
+      if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
+
+      if (storyMentions.length > 0) {
+        void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', storyMentions);
+      }
 
       setStoryFile(null);
+      setReshareStory(null);
+      setReshareScaledDown(false);
       setCaption('');
       setTimedTexts([]);
+      setStoryMentions([]);
+      setCustomDurationSeconds(null);
+      setStoryExpiryOpen(false);
       setShowUploadModal(false);
       await fetchStories();
     } catch (err) {
@@ -1451,7 +1465,7 @@ function StoriesBar({
 
   const handleQuickPublishStory = (closeFriends: boolean) => {
     const mediaFile = storyFile;
-    const sourceStory = reshareStory;
+    const sourceStory = mediaFile ? null : reshareStory;
     const storyCaption = caption.trim();
     const mentions = [...storyMentions];
     const durationSeconds = uploadDuration;
@@ -1501,12 +1515,12 @@ function StoriesBar({
         }
 
         setStoryFile(current => current === mediaFile ? null : current);
-        setReshareStory(current => current?.id === sourceStory?.id ? null : current);
+        setReshareStory(null);
+        setReshareScaledDown(false);
         setCaption(current => current.trim() === storyCaption ? '' : current);
         setStoryText('');
         setTimedTexts([]);
         setStoryMentions([]);
-        setReshareScaledDown(false);
         setCustomDurationSeconds(null);
         setStoryExpiryOpen(false);
         await fetchStories();
@@ -1538,14 +1552,17 @@ function StoriesBar({
     if (!text?.trim() || !supabaseConfigured) return;
 
     try {
-      const { error } = await supabase.from('stories').insert({
-        user_id: userId,
-        media_url: null,
-        media_type: 'text',
-        caption: text.trim(),
-        is_close_friends: false,
-        duration_seconds: 5,
-        timed_texts: [],
+      const { error } = await supabase.rpc('aani_create_story', {
+        p_media_url: null,
+        p_media_type: 'text',
+        p_caption: text.trim(),
+        p_is_close_friends: false,
+        p_duration_seconds: 5,
+        p_timed_texts: [],
+        p_filter_key: null,
+        p_original_story_id: null,
+        p_share_type: 'original',
+        p_expiry_seconds: null,
       });
 
       if (error) throw error;
