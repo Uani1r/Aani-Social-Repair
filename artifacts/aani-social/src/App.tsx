@@ -441,6 +441,24 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [storyAnimationTick, setStoryAnimationTick] = useState(0);
   const storyTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // مرجع لحالة النوافذ الفرعية داخل معالجات اللمس (لتجنّب قراءة حالة قديمة)
+  const storyPanelsRef = useRef({ filters: false, textEditor: false, more: false });
+
+  useEffect(() => {
+    storyPanelsRef.current = {
+      filters: storyFiltersOpen,
+      textEditor: storyTextEditorOpen,
+      more: storyMoreOpen,
+    };
+  }, [storyFiltersOpen, storyTextEditorOpen, storyMoreOpen]);
+
+  // تُغلق النوافذ الفرعية وحدها دون فتح أي أداة أخرى
+  const closeStoryPanels = useCallback(() => {
+    setStoryFiltersOpen(false);
+    setStoryTextEditorOpen(false);
+    setStoryMoreOpen(false);
+  }, []);
+
   const storyBackgroundPreset = STORY_TEXT_BACKGROUNDS[storyBackgroundIndex % STORY_TEXT_BACKGROUNDS.length];
   const storyHasBackground = storyBackgroundPreset.key !== 'none';
 
@@ -714,8 +732,14 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
 
     storyGestureRef.current = null;
 
-    // نقرة قصيرة على النص أو الصورة أو الخلفية → تحرير النص
+    // نقرة قصيرة: إن كانت إحدى النوافذ الفرعية مفتوحة تُغلق فقط،
+    // وإلا تُفتح نافذة كتابة النص (الوضع الأساسي فقط)
     if (!gesture.moved && Date.now() - gesture.startTime < 400) {
+      const panels = storyPanelsRef.current;
+      if (panels.filters || panels.textEditor || panels.more) {
+        closeStoryPanels();
+        return;
+      }
       setStoryTextEditorOpen(true);
     }
   };
@@ -1518,6 +1542,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                   aria-label={tool.label}
                   onClick={() => {
                     if (tool.key === 'text') {
+                      setStoryFiltersOpen(false);
                       setStoryTextEditorOpen(true);
                     } else if (tool.key === 'mention') {
                       const username = window.prompt('اكتب اسم المستخدم للإشارة إليه');
@@ -1525,8 +1550,10 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                         setCaption(prev => `${prev}${prev ? ' ' : ''}@${username.trim().replace(/^@/, '')}`);
                       }
                     } else if (tool.key === 'music') {
+                      setStoryTextEditorOpen(false);
                       setStoryMusicOpen(true);
                     } else if (tool.key === 'effects') {
+                      setStoryTextEditorOpen(false);
                       setStoryFiltersOpen(open => !open);
                     } else {
                       toast.info('أداة الرسم ستُضاف قريبًا');
@@ -1708,6 +1735,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                   setStoryFilterId('original');
                   setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
                 }}
+                onClose={() => setStoryFiltersOpen(false)}
               />
             )}
             {storyMusicTrack && (

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal, X } from 'lucide-react';
 
 import {
   STORY_FILTERS,
@@ -15,6 +15,7 @@ interface StoryFilterBarProps {
   adjustments: StoryAdjustments;
   onAdjust: (key: keyof StoryAdjustments, value: number) => void;
   onReset: () => void;
+  onClose: () => void;
 }
 
 const SLIDERS: { key: keyof StoryAdjustments; label: string; min: number; max: number }[] = [
@@ -33,6 +34,7 @@ export default function StoryFilterBar({
   adjustments,
   onAdjust,
   onReset,
+  onClose,
 }: StoryFilterBarProps) {
   const [adjustOpen, setAdjustOpen] = useState(false);
 
@@ -57,6 +59,14 @@ export default function StoryFilterBar({
             className="rounded-full bg-white/10 px-2 py-1 text-[10px] text-white/75 transition active:scale-95"
           >
             إعادة
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="إغلاق الفلاتر"
+            className="flex h-6 w-6 items-center justify-center rounded-full bg-white/10 text-white/80 transition active:scale-95"
+          >
+            <X size={13} />
           </button>
         </div>
       </div>
