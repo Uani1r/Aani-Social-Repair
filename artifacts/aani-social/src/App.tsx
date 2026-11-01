@@ -5,7 +5,7 @@ import {
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
-  Bot, Loader2, Play, Flag, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown,
+  Bot, Loader2, Play, Flag, Eye, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown,
 } from 'lucide-react';
 
 import { Toaster, toast } from 'sonner';
@@ -416,7 +416,25 @@ function StoriesBar({
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [currentVideoPlaybackDuration, setCurrentVideoPlaybackDuration] = useState<{ storyId: string; seconds: number } | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [replyFocused, setReplyFocused] = useState(false);
+  const [replyKeyboardInset, setReplyKeyboardInset] = useState(0);
+  const [isSendingReply, setIsSendingReply] = useState(false);
   const [isLiked, setIsLiked] = useState(false);
+  const [isLikeSaving, setIsLikeSaving] = useState(false);
+  const [storyViewsOpen, setStoryViewsOpen] = useState(false);
+  const [storyViewsLoading, setStoryViewsLoading] = useState(false);
+  const [storyViewsError, setStoryViewsError] = useState(false);
+  const [storyViewsCount, setStoryViewsCount] = useState(0);
+  const [storyViewers, setStoryViewers] = useState<Array<{
+    user_id: string;
+    viewed_at: string;
+    viewer: { id: string; username: string | null; full_name: string | null; avatar_url: string | null } | null;
+  }>>([]);
+  const storyViewSwipeStartRef = useRef<number | null>(null);
+  const storyViewsWasPausedRef = useRef(false);
+  const storyVideoRef = useRef<HTMLVideoElement | null>(null);
+  const storyVideoWasPlayingRef = useRef(false);
+  const storyViewsRequestRef = useRef(0);
   const [originalStoryAuthor, setOriginalStoryAuthor] = useState<NonNullable<StoryDmCardStory['author']> | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -1005,6 +1023,7 @@ function StoriesBar({
   }, [pendingProfileStoryOwnerId, onProfileStoryHandled]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
+  const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
   const storyDisplayDuration = !currentStory
     ? 5
     : currentStory.media_type === 'video'
@@ -1043,14 +1062,101 @@ function StoriesBar({
   const myStoryHasCloseFriends = myStories.some(story => story.is_close_friends);
 
   useEffect(() => {
-    if (!currentStory || !supabaseConfigured) return;
-    void supabase.from('story_likes').select('id').eq('story_id', currentStory.id).eq('user_id', userId).maybeSingle().then(({ data }) => {
-      setIsLiked(Boolean(data));
-    });
-  }, [currentStory, userId]);
+    setReplyText('');
+    setReplyFocused(false);
+    setReplyKeyboardInset(0);
+    setStoryViewsOpen(false);
+    setStoryViewsLoading(false);
+    setStoryViewsError(false);
+    setStoryViewsCount(0);
+    setStoryViewers([]);
+    setIsPaused(false);
+    storyViewsWasPausedRef.current = false;
+    storyViewsRequestRef.current += 1;
+  }, [currentStory?.id]);
 
   useEffect(() => {
-    if (!currentStory || isPaused) return;
+    if (!currentStory || isStoryOwner || !supabaseConfigured) {
+      setIsLiked(false);
+      return;
+    }
+
+    let active = true;
+    void supabase
+      .from('story_likes')
+      .select('id')
+      .eq('story_id', currentStory.id)
+      .eq('user_id', userId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.error('[story likes] تعذر تحميل حالة الإعجاب:', error);
+          return;
+        }
+        setIsLiked(Boolean(data));
+      })
+      .catch(error => {
+        if (active) console.error('[story likes] تعذر تحميل حالة الإعجاب:', error);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentStory?.id, isStoryOwner, userId]);
+
+  useEffect(() => {
+    if (!currentStory || isStoryOwner || !userId || !supabaseConfigured) return;
+
+    let active = true;
+    void supabase
+      .from('story_views')
+      .upsert(
+        { story_id: currentStory.id, user_id: userId },
+        { onConflict: 'story_id,user_id', ignoreDuplicates: true },
+      )
+      .then(({ error }) => {
+        if (active && error) {
+          console.error('[story views] تعذر تسجيل المشاهدة:', error);
+          toast.error('تعذر تسجيل مشاهدة الستوري. تأكد من تطبيق ترحيل سجل المشاهدات.');
+        }
+      })
+      .catch(error => {
+        if (active) {
+          console.error('[story views] تعذر تسجيل المشاهدة:', error);
+          toast.error('تعذر تسجيل مشاهدة الستوري. تحقق من الاتصال وحاول مجدداً.');
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [currentStory?.id, isStoryOwner, userId]);
+
+  useEffect(() => {
+    if (!replyFocused || isStoryOwner) {
+      setReplyKeyboardInset(0);
+      return;
+    }
+
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+
+    const updateInset = () => {
+      setReplyKeyboardInset(Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
+    };
+
+    updateInset();
+    viewport.addEventListener('resize', updateInset);
+    viewport.addEventListener('scroll', updateInset);
+    return () => {
+      viewport.removeEventListener('resize', updateInset);
+      viewport.removeEventListener('scroll', updateInset);
+    };
+  }, [replyFocused, isStoryOwner]);
+
+  useEffect(() => {
+    if (!currentStory || isPaused || storyViewsOpen) return;
     const duration = storyDisplayDuration * 1000;
     const interval = 50;
     const step = (interval / duration) * 100;
@@ -1068,7 +1174,7 @@ function StoriesBar({
     }, interval);
 
     return () => clearInterval(timer);
-  }, [currentStory, storyDisplayDuration, isPaused, activeStoryIndex, activeUserGroup]);
+  }, [currentStory, storyDisplayDuration, isPaused, storyViewsOpen, activeStoryIndex, activeUserGroup]);
 
   const handleNextStory = () => {
     if (activeStoryIndex < activeStories.length - 1) {
@@ -1120,48 +1226,133 @@ function StoriesBar({
     setNewText('');
   };
 
+  const handleOpenStoryViews = async () => {
+    if (!currentStory || !isStoryOwner || !supabaseConfigured) return;
+
+    const storyId = currentStory.id;
+    const requestId = ++storyViewsRequestRef.current;
+    storyViewsWasPausedRef.current = isPaused;
+    storyVideoWasPlayingRef.current = Boolean(storyVideoRef.current && !storyVideoRef.current.paused);
+    storyVideoRef.current?.pause();
+    setIsPaused(true);
+    setStoryViewsOpen(true);
+    setStoryViewsLoading(true);
+    setStoryViewsError(false);
+
+    try {
+      const { data, count, error } = await supabase
+        .from('story_views')
+        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, avatar_url)', { count: 'exact' })
+        .eq('story_id', storyId)
+        .order('viewed_at', { ascending: false });
+      if (error) throw error;
+      if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
+
+      setStoryViewers((data || []) as typeof storyViewers);
+      setStoryViewsCount(count ?? data?.length ?? 0);
+    } catch (error) {
+      if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
+      console.error('[story views] تعذر تحميل قائمة المشاهدين:', error);
+      setStoryViewsError(true);
+      setStoryViewers([]);
+      setStoryViewsCount(0);
+      toast.error('تعذر تحميل قائمة المشاهدات. تأكد من تطبيق ترحيل سجل المشاهدات.');
+    } finally {
+      if (requestId === storyViewsRequestRef.current) setStoryViewsLoading(false);
+    }
+  };
+
+  const handleCloseStoryViews = () => {
+    setStoryViewsOpen(false);
+    setIsPaused(storyViewsWasPausedRef.current);
+    if (storyVideoWasPlayingRef.current) {
+      void storyVideoRef.current?.play().catch(error => {
+        console.warn('[story viewer] تعذرت متابعة تشغيل الفيديو بعد إغلاق المشاهدات:', error);
+      });
+    }
+    storyVideoWasPlayingRef.current = false;
+  };
+
   const handleToggleLike = async () => {
-    if (!supabaseConfigured || !currentStory) return;
-    if (isLiked) {
-      await supabase.from('story_likes').delete().eq('story_id', currentStory.id).eq('user_id', userId);
-      setIsLiked(false);
-    } else {
-      await supabase.from('story_likes').insert({ story_id: currentStory.id, user_id: userId });
-      setIsLiked(true);
-      if (currentStory.user_id !== userId) {
-        await supabase.from('notifications').insert({
-          user_id: currentStory.user_id,
-          actor_id: userId,
-          type: 'like',
-          content: 'أعجب بستوريك',
-          reference_id: currentStory.id
-        });
+    if (!supabaseConfigured || !currentStory || isStoryOwner || isLikeSaving) return;
+    setIsLikeSaving(true);
+
+    try {
+      if (isLiked) {
+        const { error } = await supabase
+          .from('story_likes')
+          .delete()
+          .eq('story_id', currentStory.id)
+          .eq('user_id', userId);
+        if (error) throw error;
+        setIsLiked(false);
+        toast.success('تم إلغاء الإعجاب');
+      } else {
+        const { error } = await supabase
+          .from('story_likes')
+          .upsert(
+            { story_id: currentStory.id, user_id: userId },
+            { onConflict: 'story_id,user_id', ignoreDuplicates: true },
+          );
+        if (error) throw error;
+        setIsLiked(true);
+        try {
+          const { error: notificationError } = await supabase.from('notifications').insert({
+            user_id: currentStory.user_id,
+            actor_id: userId,
+            type: 'like',
+            content: 'أعجب بستوريك',
+            reference_id: currentStory.id,
+          });
+          if (notificationError) console.warn('[story likes] تعذر إرسال إشعار الإعجاب:', notificationError);
+        } catch (notificationError) {
+          console.warn('[story likes] تعذر إرسال إشعار الإعجاب:', notificationError);
+        }
+        toast.success('تم الإعجاب بالستوري');
       }
+    } catch (error) {
+      console.error('[story likes] تعذر حفظ الإعجاب:', error);
+      toast.error('تعذر حفظ الإعجاب. حاول مرة أخرى.');
+    } finally {
+      setIsLikeSaving(false);
     }
   };
 
   const handleSendReply = async (customContent?: string) => {
-    const textToSend = customContent || replyText;
-    if (!supabaseConfigured || !currentStory || !textToSend.trim()) return;
+    const textToSend = (customContent ?? replyText).trim();
+    if (!supabaseConfigured || !currentStory || isStoryOwner || !textToSend || isSendingReply) return;
 
-    await supabase.from('messages').insert({
-      sender_id: userId,
-      recipient_id: currentStory.user_id,
-      content: `رد على الستوري: ${textToSend.trim()}`,
-    });
-
-    if (currentStory.user_id !== userId) {
-      await supabase.from('notifications').insert({
-        user_id: currentStory.user_id,
-        actor_id: userId,
-        type: 'reply',
-        content: `رد على ستوريك: ${textToSend.trim()}`,
-        reference_id: currentStory.id
+    setIsSendingReply(true);
+    try {
+      const { error } = await supabase.from('messages').insert({
+        sender_id: userId,
+        recipient_id: currentStory.user_id,
+        content: `[story-reply]${textToSend}`,
+        story_id: currentStory.id,
       });
-    }
+      if (error) throw error;
 
-    setReplyText('');
-    alert('تم إرسال الرد بنجاح!');
+      try {
+        const { error: notificationError } = await supabase.from('notifications').insert({
+          user_id: currentStory.user_id,
+          actor_id: userId,
+          type: 'reply',
+          content: `رد على ستوريك: ${textToSend}`,
+          reference_id: currentStory.id,
+        });
+        if (notificationError) console.warn('[story replies] تعذر إرسال إشعار الرد:', notificationError);
+      } catch (notificationError) {
+        console.warn('[story replies] تعذر إرسال إشعار الرد:', notificationError);
+      }
+
+      setReplyText('');
+      toast.success('تم إرسال الرد إلى صاحب الستوري');
+    } catch (error) {
+      console.error('[story replies] تعذر حفظ الرد:', error);
+      toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
+    } finally {
+      setIsSendingReply(false);
+    }
   };
 
   const handleUploadStory = async () => {
@@ -1505,10 +1696,15 @@ function StoriesBar({
       />
 
       {currentStory && (
-        <div className="modal-overlay bg-[#0d0d0d]/95 flex items-center justify-center p-0 sm:p-4 z-50">
-          <div className="relative max-w-[400px] w-full h-[92vh] sm:h-[82vh] sm:max-h-[700px] bg-[#1a1a1f] rounded-2xl overflow-hidden flex flex-col justify-between border border-[#26262e] select-none">
+        <div
+          className="fixed inset-0 z-[110] h-[100dvh] w-screen overflow-hidden bg-[#0d0d0d] text-white"
+          role="dialog"
+          aria-modal="true"
+          aria-label="عارض القصص"
+        >
+          <div className="relative h-full w-full overflow-hidden bg-black select-none">
             {showUI && (
-              <div className="absolute top-2 inset-x-2 z-30 flex gap-1 px-1">
+              <div className="absolute inset-x-2 z-30 flex gap-1 px-1" style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
                 {activeStories.map((st, idx) => (
                   <div key={st.id} className="h-0.5 flex-1 bg-white/[0.18] rounded-full overflow-hidden">
                     <div 
@@ -1523,7 +1719,7 @@ function StoriesBar({
             )}
 
             {showUI && (
-              <div className="absolute top-4 inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent">
+              <div className="absolute inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent" style={{ top: 'calc(1.5rem + env(safe-area-inset-top))' }}>
                 <div className="flex min-w-0 flex-col items-start gap-1">
                   <Link href={`/profile/${currentStory.user_id}`} className="flex items-center gap-2">
                     <Avatar profile={currentStory.author} storyBorder={false} />
@@ -1578,10 +1774,11 @@ function StoriesBar({
               </div>
             )}
 
-            <div className="relative w-full h-full flex items-center justify-center bg-zinc-950">
+            <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-zinc-950">
               {currentStory.media_url ? (
                 currentStory.media_type === 'video' ? (
                   <video
+                    ref={storyVideoRef}
                     key={currentStory.id}
                     src={currentStory.media_url}
                     autoPlay
@@ -1641,7 +1838,12 @@ function StoriesBar({
               })}
 
               {currentStory.caption && currentStory.media_url && (
-                <div className="absolute bottom-20 inset-x-4 bg-black/60 backdrop-blur-md p-3 rounded-xl text-center text-white text-xs z-10">
+                <div
+                  className="absolute inset-x-4 z-10 rounded-xl bg-black/60 p-3 text-center text-xs text-white backdrop-blur-md"
+                  style={{ bottom: isStoryOwner
+                    ? 'calc(4.5rem + env(safe-area-inset-bottom))'
+                    : `calc(5.5rem + env(safe-area-inset-bottom) + ${replyKeyboardInset}px)` }}
+                >
                   {currentStory.caption}
                 </div>
               )}
@@ -1658,39 +1860,167 @@ function StoriesBar({
               />
             </div>
 
-            {showUI && (
-              <div className="absolute bottom-3 inset-x-3 z-30 flex items-center gap-2 bg-gradient-to-t from-black/90 via-black/50 to-transparent pt-4 pb-1">
-                <div className="flex-1 flex items-center bg-zinc-900/90 border border-zinc-700/60 rounded-full px-3 py-1.5 shadow">
-                  <input 
-                    type="text" 
-                    placeholder="رد..." 
-                    value={replyText} 
-                    onChange={e => setReplyText(e.target.value)} 
-                    onKeyDown={e => { if (e.key === 'Enter') void handleSendReply(); }}
-                    className="bg-transparent text-white text-xs outline-none w-full placeholder-zinc-400"
+            {isStoryOwner && (
+              <div
+                className="absolute inset-x-0 bottom-0 z-[25] h-24 touch-none"
+                aria-hidden="true"
+                onTouchStart={event => {
+                  storyViewSwipeStartRef.current = event.touches[0]?.clientY ?? null;
+                }}
+                onTouchEnd={event => {
+                  const startY = storyViewSwipeStartRef.current;
+                  const endY = event.changedTouches[0]?.clientY;
+                  storyViewSwipeStartRef.current = null;
+                  if (startY !== null && endY !== undefined && startY - endY > 48) {
+                    void handleOpenStoryViews();
+                  }
+                }}
+                onTouchCancel={() => {
+                  storyViewSwipeStartRef.current = null;
+                }}
+              />
+            )}
+
+            {showUI && isStoryOwner && (
+              <button
+                type="button"
+                onClick={() => void handleOpenStoryViews()}
+                aria-label="عرض مشاهدات الستوري"
+                title="عرض المشاهدات"
+                className="absolute left-1/2 z-30 flex h-10 w-10 -translate-x-1/2 items-center justify-center text-white drop-shadow-[0_1px_5px_rgba(0,0,0,0.9)]"
+                style={{ bottom: 'calc(0.65rem + env(safe-area-inset-bottom))' }}
+              >
+                <Eye size={23} />
+              </button>
+            )}
+
+            {showUI && !isStoryOwner && (
+              <div
+                className="absolute inset-x-0 bottom-0 z-30 flex items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pt-5"
+                style={{ paddingBottom: `calc(0.75rem + env(safe-area-inset-bottom) + ${replyKeyboardInset}px)` }}
+                onClick={event => event.stopPropagation()}
+              >
+                <div className="flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-900/95 px-3 py-2 shadow-lg">
+                  <input
+                    key={currentStory.id}
+                    type="text"
+                    placeholder="رد على الستوري..."
+                    aria-label="اكتب رداً على الستوري"
+                    maxLength={3900}
+                    value={replyText}
+                    disabled={isSendingReply}
+                    onFocus={() => setReplyFocused(true)}
+                    onBlur={() => setReplyFocused(false)}
+                    onChange={event => setReplyText(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        void handleSendReply();
+                      }
+                    }}
+                    className="w-full min-w-0 bg-transparent text-xs text-white outline-none placeholder-zinc-400 disabled:opacity-60"
                   />
                   {replyText.trim() && (
-                    <button onClick={() => void handleSendReply()} className="text-pink-500 font-bold text-xs mr-1">
-                      إرسال
+                    <button
+                      type="button"
+                      onClick={() => void handleSendReply()}
+                      disabled={isSendingReply}
+                      aria-label="إرسال الرد"
+                      className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-pink-400 transition hover:bg-white/10 disabled:opacity-50"
+                    >
+                      {isSendingReply ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />}
                     </button>
                   )}
                 </div>
 
-                <div className="flex items-center gap-1 bg-zinc-900/80 border border-zinc-700/60 rounded-full px-2 py-1">
+                <div className="flex shrink-0 items-center gap-0.5 rounded-full border border-zinc-700/70 bg-zinc-900/90 px-1.5 py-1">
                   {['😲', '😂', '😍'].map(emoji => (
-                    <button key={emoji} onClick={() => void handleSendReply(emoji)} className="hover:scale-125 transition text-base">
+                    <button
+                      key={emoji}
+                      type="button"
+                      disabled={isSendingReply}
+                      onClick={() => void handleSendReply(emoji)}
+                      aria-label={`إرسال ${emoji}`}
+                      className="text-sm transition hover:scale-125 disabled:opacity-50"
+                    >
                       {emoji}
                     </button>
                   ))}
                 </div>
 
-                <button 
-                  onClick={handleToggleLike} 
-                  className={`p-2 rounded-full bg-zinc-900/80 border border-zinc-700/60 transition ${isLiked ? 'text-pink-500' : 'text-white'}`}
+                <button
+                  type="button"
+                  onClick={() => void handleToggleLike()}
+                  disabled={isLikeSaving}
+                  aria-label={isLiked ? 'إلغاء الإعجاب بالستوري' : 'الإعجاب بالستوري'}
+                  aria-pressed={isLiked}
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-700/70 bg-zinc-900/90 transition disabled:opacity-50 ${isLiked ? 'text-pink-500' : 'text-white'}`}
                 >
-                  <Heart size={18} fill={isLiked ? 'currentColor' : 'none'} />
+                  {isLikeSaving ? <Loader2 size={17} className="animate-spin" /> : <Heart size={19} fill={isLiked ? 'currentColor' : 'none'} />}
                 </button>
               </div>
+            )}
+
+            {storyViewsOpen && isStoryOwner && (
+              <>
+                <button
+                  type="button"
+                  aria-label="إغلاق قائمة المشاهدات"
+                  className="absolute inset-0 z-[60] bg-black/45"
+                  onClick={handleCloseStoryViews}
+                />
+                <section
+                  className="absolute inset-x-0 bottom-0 z-[70] flex max-h-[70dvh] flex-col overflow-hidden rounded-t-3xl border-t border-white/10 bg-zinc-950/95 px-4 pt-2 shadow-2xl backdrop-blur-xl"
+                  style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+                  role="dialog"
+                  aria-modal="true"
+                  aria-label="مشاهدات الستوري"
+                  onClick={event => event.stopPropagation()}
+                >
+                  <div className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-white/30" />
+                  <div className="mb-3 flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-white">المشاهدات</h2>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-zinc-400">{storyViewsCount}</span>
+                      <button
+                        type="button"
+                        onClick={handleCloseStoryViews}
+                        aria-label="إغلاق"
+                        className="rounded-full p-1 text-zinc-300 transition hover:bg-white/10"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-y-auto pb-2">
+                    {storyViewsLoading ? (
+                      <div className="flex items-center justify-center gap-2 py-8 text-xs text-zinc-400">
+                        <Loader2 size={16} className="animate-spin" /> جارٍ تحميل المشاهدات...
+                      </div>
+                    ) : storyViewsError ? (
+                      <p className="py-8 text-center text-xs text-red-300">تعذر تحميل المشاهدات. تحقق من إعداد قاعدة البيانات والاتصال.</p>
+                    ) : storyViewers.length === 0 ? (
+                      <p className="py-8 text-center text-xs text-zinc-400">لا توجد مشاهدات مسجلة بعد.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {storyViewers.map(item => (
+                          <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-3 rounded-xl px-2 py-1.5">
+                            <Avatar profile={item.viewer} />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-semibold text-white">
+                                {item.viewer?.full_name || item.viewer?.username || 'مستخدم'}
+                              </p>
+                              <p className="truncate text-[10px] text-zinc-400" dir="ltr">
+                                {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
+                              </p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </section>
+              </>
             )}
           </div>
         </div>
@@ -1937,7 +2267,8 @@ function StoriesBar({
 
               {storyMoreOpen && (
                 <div
-                  className="absolute right-0 top-full z-30 mt-2 w-64 max-w-[82vw] overflow-hidden rounded-2xl border border-white/10 bg-[#101014]/95 p-1 shadow-2xl backdrop-blur-md"
+                  className="absolute right-full top-0 z-30 mr-2 w-48 max-w-[calc(100vw_-_4rem)] overflow-hidden rounded-xl border border-white/10 bg-[#101014]/95 p-1 shadow-2xl backdrop-blur-md"
+                  dir="rtl"
                   role="menu"
                 >
                   {storyExtraTools.length === 0 ? (
@@ -1961,9 +2292,10 @@ function StoriesBar({
                             }
                             item.action();
                           }}
-                          className={`flex h-10 w-full items-center justify-center rounded-xl transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/80'}`}
+                          className={`flex h-9 w-full items-center justify-start gap-2 rounded-lg px-3 text-[11px] transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/80'}`}
                         >
-                          <Icon size={18} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
+                          <Icon size={16} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
+                          <span>{item.label}</span>
                         </button>
                       );
                     })
@@ -3461,7 +3793,8 @@ function MessagesPage({
                   ? m.content.trim().slice(7).split(']')[0]
                   : null;
               const sharedStoryId = storyFromColumn || storyFromContent;
-              const isSharedStory = Boolean(sharedStoryId) && !isSharedPost;
+              const isStoryReply = Boolean(m.story_id) && typeof m.content === 'string' && m.content.startsWith('[story-reply]');
+              const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
               return (
                 <div key={m.id} className={`flex flex-col ${isSharedPost || isSharedStory ? 'w-full' : 'max-w-[85%]'} ${isMine ? 'items-end mr-auto' : 'items-start ml-auto'}`}>
                   {!isMine && target && (
@@ -3485,7 +3818,12 @@ function MessagesPage({
                     </div>
                   ) : (
                     <div className={`p-2 rounded-xl text-xs ${isMine ? 'bg-pink-600 text-white' : 'bg-zinc-800 text-zinc-200'}`}>
-                      {typeof m.content === 'string' && m.content.trim().startsWith('[story:')
+                      {isStoryReply ? (
+                        <>
+                          <span className="mb-1 block text-[9px] text-white/65">رد على الستوري</span>
+                          <span>{String(m.content).slice('[story-reply]'.length).trim()}</span>
+                        </>
+                      ) : typeof m.content === 'string' && m.content.trim().startsWith('[story:')
                         ? 'أرسل لك قصة'
                         : m.content}
                     </div>
