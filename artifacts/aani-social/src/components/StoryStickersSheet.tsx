@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
-import { Film, ImagePlus, Plus, Search, Smile, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ImagePlus, Plus, Search, Sparkles, X } from 'lucide-react';
 
 import StickerCutoutStudio from './StickerCutoutStudio';
+import { STICKER_CATEGORIES, STICKERS, type StickerCategory } from '@/lib/stickerLibrary';
 
 export interface PickedSticker {
   type: 'emoji' | 'image';
@@ -16,59 +17,7 @@ interface StoryStickersSheetProps {
   onAddMySticker: (dataUrl: string) => void;
 }
 
-type SheetTab = 'mine' | 'emoji' | 'gif';
-
-interface StickerPack {
-  key: string;
-  label: string;
-  items: string[];
-}
-
-const STICKER_PACKS: StickerPack[] = [
-  {
-    key: 'trending',
-    label: 'رائج',
-    items: ['🔥', '✨', '💫', '⚡', '🌟', '💥', '🌈', '🫧', '🎯', '👑', '💯', '🪄'],
-  },
-  {
-    key: 'faces',
-    label: 'وجوه',
-    items: ['😂', '🥰', '😍', '😎', '🤩', '🥳', '😭', '🤔', '😴', '😇', '🫠', '🤯'],
-  },
-  {
-    key: 'love',
-    label: 'قلوب',
-    items: ['❤️', '🩷', '🧡', '💛', '💚', '🩵', '💙', '💜', '🤍', '💖', '💘', '💞'],
-  },
-  {
-    key: 'animals',
-    label: 'حيوانات',
-    items: ['🐱', '🐶', '🦊', '🐼', '🐨', '🦁', '🐯', '🐸', '🦄', '🐝', '🦋', '🐢'],
-  },
-  {
-    key: 'party',
-    label: 'احتفال',
-    items: ['🎉', '🎊', '🎈', '🎁', '🕯️', '🥂', '🍾', '🎂', '🎵', '🎶', '🪩', '🎤'],
-  },
-  {
-    key: 'food',
-    label: 'طعام',
-    items: ['☕', '🍕', '🍔', '🍟', '🍩', '🍰', '🍫', '🍓', '🥑', '🌮', '🍿', '🧋'],
-  },
-  {
-    key: 'aani',
-    label: 'آني',
-    items: ['🇮🇶', '🌙', '⭐', '🕌', '🌴', '🫶', '🤍', '🕊️', '✨', '🌷', '💫', '🪬'],
-  },
-];
-
-const GIF_STICKERS: string[] = ['💃', '🕺', '🤸', '🎉', '💥', '🔥', '💖', '⚡', '🌈', '🎈', '🌟', '🎊'];
-
-const NAV: { key: SheetTab; label: string; Icon: typeof Smile }[] = [
-  { key: 'mine', label: 'ملصقاتي', Icon: ImagePlus },
-  { key: 'emoji', label: 'الإيموجي', Icon: Smile },
-  { key: 'gif', label: 'GIF', Icon: Film },
-];
+type SheetTab = 'mine' | 'library';
 
 export default function StoryStickersSheet({
   open,
@@ -77,27 +26,49 @@ export default function StoryStickersSheet({
   myStickers,
   onAddMySticker,
 }: StoryStickersSheetProps) {
-  const [tab, setTab] = useState<SheetTab>('emoji');
+  const [tab, setTab] = useState<SheetTab>('library');
   const [search, setSearch] = useState('');
-  const [activePack, setActivePack] = useState(STICKER_PACKS[0].key);
+  const [category, setCategory] = useState<StickerCategory>('reactions');
   const [studioOpen, setStudioOpen] = useState(false);
+  const [remoteStickers, setRemoteStickers] = useState<string[]>([]);
 
-  const pack = useMemo(
-    () => STICKER_PACKS.find(item => item.key === activePack) ?? STICKER_PACKS[0],
-    [activePack],
-  );
+  // إن وُجد مفتاح Tenor في متغيرات البيئة تُجلب ملصقات التريند العالمية
+  useEffect(() => {
+    if (!open) return;
+    const apiKey = import.meta.env.VITE_TENOR_API_KEY as string | undefined;
+    if (!apiKey) return;
 
-  const visibleEmojis = useMemo(() => {
-    const query = search.trim();
-    if (!query) return pack.items;
-    const pool = STICKER_PACKS.flatMap(item => item.items);
-    return Array.from(new Set(pool)).filter(item => item.includes(query));
-  }, [pack, search]);
+    let cancelled = false;
+    const query = search.trim() || 'reaction stickers';
+    fetch(
+      `https://g.tenor.com/v2/search?q=${encodeURIComponent(query)}&key=${apiKey}&limit=24&searchfilter=sticker`,
+    )
+      .then(response => (response.ok ? response.json() : null))
+      .then((data: { results?: Array<{ media_formats?: { gif?: { url?: string } } }> } | null) => {
+        if (cancelled || !data?.results) return;
+        const urls = data.results
+          .map(item => item.media_formats?.gif?.url)
+          .filter((url): url is string => Boolean(url));
+        setRemoteStickers(urls);
+      })
+      .catch(() => {
+        /* بدون اتصال: تبقى المكتبة المحلية متاحة */
+      });
 
-  const visibleGifs = useMemo(() => {
-    const query = search.trim();
-    return query ? GIF_STICKERS.filter(item => item.includes(query)) : GIF_STICKERS;
-  }, [search]);
+    return () => {
+      cancelled = true;
+    };
+  }, [open, search]);
+
+  const library = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (query) {
+      return STICKERS.filter(item => item.label.toLowerCase().includes(query));
+    }
+    return STICKERS.filter(item => item.category === category);
+  }, [category, search]);
+
+  const mine = useMemo(() => (search.trim() ? [] : myStickers), [myStickers, search]);
 
   if (!open) return null;
 
@@ -111,7 +82,7 @@ export default function StoryStickersSheet({
           className="absolute inset-0 cursor-default bg-black/45 backdrop-blur-[1px]"
         />
 
-        <div className="aani-sheet-in relative z-10 flex max-h-[72vh] flex-col overflow-hidden rounded-t-[26px] border-t border-white/10 bg-[#141519] text-white shadow-[0_-16px_40px_rgba(0,0,0,0.6)]">
+        <div className="aani-sheet-in relative z-10 flex h-[62vh] flex-col overflow-hidden rounded-t-[26px] border-t border-white/10 bg-[#141519] text-white shadow-[0_-16px_40px_rgba(0,0,0,0.6)]">
           <div className="mx-auto mt-2 h-1 w-10 shrink-0 rounded-full bg-white/25" />
 
           <div className="flex items-center justify-between px-4 pt-2 pb-1">
@@ -136,7 +107,6 @@ export default function StoryStickersSheet({
             </div>
           </div>
 
-          {/* البحث */}
           <div className="px-4 pt-1">
             <div className="flex items-center gap-2 rounded-xl bg-white/10 px-3 py-2">
               <Search size={15} className="text-white/50" />
@@ -150,18 +120,15 @@ export default function StoryStickersSheet({
             </div>
           </div>
 
-          {/* الأقسام */}
-          {tab !== 'mine' && (
+          {tab === 'library' && !search.trim() && (
             <div className="aani-hscroll mt-2 flex gap-2 overflow-x-auto px-4 pb-1">
-              {STICKER_PACKS.map(item => (
+              {STICKER_CATEGORIES.map(item => (
                 <button
                   key={item.key}
                   type="button"
-                  onClick={() => setActivePack(item.key)}
+                  onClick={() => setCategory(item.key)}
                   className={`shrink-0 rounded-full px-3 py-1 text-[11px] transition ${
-                    activePack === item.key
-                      ? 'bg-white font-bold text-[#121212]'
-                      : 'bg-white/8 text-white/70'
+                    category === item.key ? 'bg-white font-bold text-[#121212]' : 'bg-white/10 text-white/70'
                   }`}
                 >
                   {item.label}
@@ -170,45 +137,45 @@ export default function StoryStickersSheet({
             </div>
           )}
 
-          {/* المحتوى */}
           <div className="aani-hscroll mt-2 flex-1 overflow-y-auto px-4 pb-3">
-            {tab === 'emoji' && (
-              <div className="grid grid-cols-4 gap-2">
-                {visibleEmojis.map(item => (
+            {tab === 'library' && remoteStickers.length > 0 && (
+              <div className="mb-3">
+                <p className="mb-1.5 text-[10px] text-white/40">تريند عالمي</p>
+                <div className="aani-hscroll flex gap-2 overflow-x-auto pb-1">
+                  {remoteStickers.map(src => (
+                    <button
+                      key={src}
+                      type="button"
+                      onClick={() => onPick({ type: 'image', value: src })}
+                      className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-white/5 p-1.5 transition active:scale-90"
+                    >
+                      <img src={src} alt="" className="max-h-full max-w-full object-contain" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {tab === 'library' && (
+              <div className="grid grid-cols-3 gap-2">
+                {library.map(sticker => (
                   <button
-                    key={item}
+                    key={sticker.id}
                     type="button"
-                    onClick={() => onPick({ type: 'emoji', value: item })}
-                    className="flex aspect-square items-center justify-center rounded-2xl bg-white/5 text-[34px] leading-none transition active:scale-90"
+                    onClick={() => onPick({ type: 'image', value: sticker.src })}
+                    className="flex aspect-square items-center justify-center rounded-2xl bg-white/5 p-2 transition active:scale-90"
                   >
-                    {item}
+                    <img src={sticker.src} alt={sticker.label} className="max-h-full max-w-full object-contain" />
                   </button>
                 ))}
-                {visibleEmojis.length === 0 && (
-                  <p className="col-span-4 py-6 text-center text-[12px] text-white/40">لا توجد نتائج</p>
+                {library.length === 0 && (
+                  <p className="col-span-3 py-6 text-center text-[12px] text-white/40">لا توجد نتائج</p>
                 )}
               </div>
             )}
 
-            {tab === 'gif' && (
-              <div className="grid grid-cols-4 gap-2">
-                {visibleGifs.map((item, index) => (
-                  <button
-                    key={`${item}-${index}`}
-                    type="button"
-                    onClick={() => onPick({ type: 'emoji', value: item })}
-                    className="flex aspect-square items-center justify-center rounded-2xl bg-white/5 text-[34px] leading-none transition active:scale-90"
-                  >
-                    <span className="aani-sticker-gif" style={{ animationDelay: `${index * 90}ms` }}>
-                      {item}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-
             {tab === 'mine' && (
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setStudioOpen(true)}
@@ -218,19 +185,19 @@ export default function StoryStickersSheet({
                   <span className="text-[9px]">ملصق جديد</span>
                 </button>
 
-                {myStickers.map((dataUrl, index) => (
+                {mine.map((dataUrl, index) => (
                   <button
                     key={`${dataUrl.slice(-24)}-${index}`}
                     type="button"
                     onClick={() => onPick({ type: 'image', value: dataUrl })}
-                    className="flex aspect-square items-center justify-center rounded-2xl bg-white/5 p-1.5 transition active:scale-90"
+                    className="flex aspect-square items-center justify-center rounded-2xl bg-white/5 p-2 transition active:scale-90"
                   >
                     <img src={dataUrl} alt="" className="max-h-full max-w-full object-contain" />
                   </button>
                 ))}
 
-                {myStickers.length === 0 && (
-                  <p className="col-span-3 self-center py-6 text-center text-[11px] leading-5 text-white/40">
+                {mine.length === 0 && (
+                  <p className="col-span-2 self-center py-6 text-center text-[11px] leading-5 text-white/40">
                     لا توجد ملصقات بعد — اضغط «صنع ملصق» لقص أي عنصر من صورك
                   </p>
                 )}
@@ -238,28 +205,30 @@ export default function StoryStickersSheet({
             )}
           </div>
 
-          {/* شريط التنقل السفلي */}
           <div
             className="flex items-center justify-around border-t border-white/10 bg-black/40 px-2 py-1.5"
             style={{ paddingBottom: 'calc(0.4rem + env(safe-area-inset-bottom))' }}
           >
-            {NAV.map(item => {
-              const Icon = item.Icon;
-              const active = tab === item.key;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  onClick={() => setTab(item.key)}
-                  className={`flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1 text-[10px] transition ${
-                    active ? 'text-white' : 'text-white/45'
-                  }`}
-                >
-                  <Icon size={19} />
-                  {item.label}
-                </button>
-              );
-            })}
+            <button
+              type="button"
+              onClick={() => setTab('mine')}
+              className={`flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1 text-[10px] transition ${
+                tab === 'mine' ? 'text-white' : 'text-white/45'
+              }`}
+            >
+              <ImagePlus size={19} />
+              ملصقاتي
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab('library')}
+              className={`flex flex-1 flex-col items-center gap-0.5 rounded-xl py-1 text-[10px] transition ${
+                tab === 'library' ? 'text-white' : 'text-white/45'
+              }`}
+            >
+              <Sparkles size={19} />
+              الملصقات
+            </button>
           </div>
         </div>
       </div>

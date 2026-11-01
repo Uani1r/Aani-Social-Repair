@@ -52,6 +52,30 @@ function floodFillMask(
   }
 }
 
+/** يرسم الملصق مع إطار أبيض سميك حول جميع أطراف العنصر المقتطع */
+function renderWithOutline(target: CanvasRenderingContext2D, source: HTMLCanvasElement, width: number, height: number) {
+  const silhouette = document.createElement('canvas');
+  silhouette.width = width;
+  silhouette.height = height;
+  const silhouetteCtx = silhouette.getContext('2d');
+  if (!silhouetteCtx) return;
+
+  silhouetteCtx.drawImage(source, 0, 0);
+  silhouetteCtx.globalCompositeOperation = 'source-in';
+  silhouetteCtx.fillStyle = '#ffffff';
+  silhouetteCtx.fillRect(0, 0, width, height);
+
+  const radius = Math.max(4, Math.round(Math.max(width, height) / 150));
+  target.clearRect(0, 0, width, height);
+  for (let dx = -radius; dx <= radius; dx += 1) {
+    for (let dy = -radius; dy <= radius; dy += 1) {
+      if (dx * dx + dy * dy > radius * radius) continue;
+      target.drawImage(silhouette, dx, dy);
+    }
+  }
+  target.drawImage(source, 0, 0);
+}
+
 export default function StickerCutoutStudio({ open, onClose, onDone }: StickerCutoutStudioProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -78,7 +102,7 @@ export default function StickerCutoutStudio({ open, onClose, onDone }: StickerCu
       objectUrlRef.current = null;
     }
 
-    const timer = window.setTimeout(() => fileRef.current?.click(), 250);
+    const timer = window.setTimeout(() => fileRef.current?.click(), 60);
     return () => window.clearTimeout(timer);
   }, [open]);
 
@@ -100,7 +124,14 @@ export default function StickerCutoutStudio({ open, onClose, onDone }: StickerCu
       if (shouldClear) output.data[i * 4 + 3] = 0;
     }
 
-    ctx.putImageData(output, 0, 0);
+    const cutCanvas = document.createElement('canvas');
+    cutCanvas.width = width;
+    cutCanvas.height = height;
+    const cutCtx = cutCanvas.getContext('2d');
+    if (!cutCtx) return;
+    cutCtx.putImageData(output, 0, 0);
+
+    renderWithOutline(ctx, cutCanvas, width, height);
     lastPointRef.current = { x: originX, y: originY };
     setCutDone(true);
     setStatus(mode === 'keep' ? 'تم قص العنصر — اضغط «تم» للحفظ' : 'تمت إزالة الخلفية — اضغط «تم» للحفظ');
