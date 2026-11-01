@@ -293,6 +293,36 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 }
 
 // --- شريط القصص الموحد ---
+// حالة إيماءة سحب/تكبير النص بلمسة أو إصبعين
+type StoryTextGesture = {
+  mode: 'drag' | 'pinch';
+  startX: number;
+  startY: number;
+  originX: number;
+  originY: number;
+  dist: number;
+  angle: number;
+  scale: number;
+  rotation: number;
+  moved: boolean;
+  startTime: number;
+};
+
+// حالة إيماءة لوحة القصة: إصبعان للسحب والتكبير، وإصبع واحد لالتقاط النقر
+type StoryCanvasGesture = {
+  mode: 'pan' | 'pinch';
+  midX: number;
+  midY: number;
+  dist: number;
+  angle: number;
+  zoom: number;
+  rotate: number;
+  originX: number;
+  originY: number;
+  moved: boolean;
+  startTime: number;
+};
+
 // معاينة حيّة لحركة «الآلة الكاتبة»: تكتب النص حرفاً حرفاً بعد مؤشر وامض
 function StoryTypedPreview({ text, animate }: { text: string; animate: boolean }) {
   const [count, setCount] = useState(0);
@@ -436,64 +466,181 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
     field.style.height = `${field.scrollHeight}px`;
   }, [storyText, storyFontFamily, storyTextAlign, storyTextEditorOpen]);
 
-  // تكبير/تدوير الوسيط بإصبعين (داخل القصة فقط)
+  // تكبير/تدوير الوسيط وتحريك لوحة القصة
   const [storyMediaZoom, setStoryMediaZoom] = useState(1);
   const [storyMediaRotate, setStoryMediaRotate] = useState(0);
-  const pinchRef = useRef<{ dist: number; angle: number; zoom: number; rotate: number } | null>(null);
+  const [storyCanvasOffset, setStoryCanvasOffset] = useState({ x: 0, y: 0 });
+  const canvasGestureRef = useRef<StoryCanvasGesture | null>(null);
 
-  const handleStoryPinchStart = (event: React.TouchEvent) => {
-    if (event.touches.length !== 2) return;
+  const clampCanvas = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
 
-    const [first, second] = event.touches;
-    const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-    const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
+  // إصبعان: تكبير/تدوير + سحب لوحة القصة كاملة. نقرة واحدة على مساحة فارغة: كتابة نص جديد
+  const handleStoryCanvasTouchStart = (event: React.TouchEvent) => {
+    const now = Date.now();
 
-    pinchRef.current = { dist, angle, zoom: storyMediaZoom, rotate: storyMediaRotate };
-  };
-
-  const handleStoryPinchMove = (event: React.TouchEvent) => {
-    const start = pinchRef.current;
-    if (!start || event.touches.length !== 2) return;
-
-    const [first, second] = event.touches;
-    const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
-    const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
-
-    if (start.dist > 0) {
-      setStoryMediaZoom(Math.min(4, Math.max(0.6, start.zoom * (dist / start.dist))));
+    if (event.touches.length >= 2) {
+      const [first, second] = event.touches;
+      canvasGestureRef.current = {
+        mode: 'pinch',
+        midX: (first.clientX + second.clientX) / 2,
+        midY: (first.clientY + second.clientY) / 2,
+        dist: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        angle: (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI,
+        zoom: storyMediaZoom,
+        rotate: storyMediaRotate,
+        originX: storyCanvasOffset.x,
+        originY: storyCanvasOffset.y,
+        moved: true,
+        startTime: now,
+      };
+      return;
     }
-    setStoryMediaRotate(start.rotate + (angle - start.angle));
-  };
 
-  const handleStoryPinchEnd = () => {
-    pinchRef.current = null;
-  };
-
-  // تحريك النص في أي مكان داخل القصة
-  const [storyTextOffset, setStoryTextOffset] = useState({ x: 0, y: 0 });
-  const textDragRef = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
-
-  const handleStoryTextDragStart = (event: React.TouchEvent) => {
     const touch = event.touches[0];
     if (!touch) return;
 
-    textDragRef.current = { x: touch.clientX, y: touch.clientY, ox: storyTextOffset.x, oy: storyTextOffset.y };
+    canvasGestureRef.current = {
+      mode: 'pan',
+      midX: touch.clientX,
+      midY: touch.clientY,
+      dist: 0,
+      angle: 0,
+      zoom: storyMediaZoom,
+      rotate: storyMediaRotate,
+      originX: storyCanvasOffset.x,
+      originY: storyCanvasOffset.y,
+      moved: false,
+      startTime: now,
+    };
   };
 
-  const handleStoryTextDragMove = (event: React.TouchEvent) => {
-    const start = textDragRef.current;
-    const touch = event.touches[0];
-    if (!start || !touch) return;
+  const handleStoryCanvasTouchMove = (event: React.TouchEvent) => {
+    const gesture = canvasGestureRef.current;
+    if (!gesture) return;
 
+    if (gesture.mode === 'pinch' && event.touches.length >= 2) {
+      const [first, second] = event.touches;
+      const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
+      const midX = (first.clientX + second.clientX) / 2;
+      const midY = (first.clientY + second.clientY) / 2;
+
+      if (gesture.dist > 0) {
+        setStoryMediaZoom(Math.min(4, Math.max(0.6, gesture.zoom * (dist / gesture.dist))));
+      }
+      setStoryMediaRotate(gesture.rotate + (angle - gesture.angle));
+      setStoryCanvasOffset({
+        x: clampCanvas(gesture.originX + (midX - gesture.midX), window.innerWidth * 0.45),
+        y: clampCanvas(gesture.originY + (midY - gesture.midY), window.innerHeight * 0.45),
+      });
+      return;
+    }
+
+    if (gesture.mode === 'pan' && event.touches.length === 1) {
+      const touch = event.touches[0];
+      if (!touch) return;
+      if (Math.abs(touch.clientX - gesture.midX) > 6 || Math.abs(touch.clientY - gesture.midY) > 6) {
+        gesture.moved = true;
+      }
+    }
+  };
+
+  const handleStoryCanvasTouchEnd = () => {
+    const gesture = canvasGestureRef.current;
+    canvasGestureRef.current = null;
+
+    // نقرة قصيرة على مساحة فارغة → فتح محرر النص للبدء في كتابة نص جديد
+    if (gesture?.mode === 'pan' && !gesture.moved && Date.now() - gesture.startTime < 400) {
+      setStoryTextEditorOpen(true);
+    }
+  };
+
+  // إيماءات النص: سحب بإصبع واحد، تكبير وتدوير بإصبعين، ونقرة لفتح المحرر
+  const [storyTextOffset, setStoryTextOffset] = useState({ x: 0, y: 0 });
+  const [storyTextScale, setStoryTextScale] = useState(1);
+  const [storyTextRotation, setStoryTextRotation] = useState(0);
+  const textGestureRef = useRef<StoryTextGesture | null>(null);
+
+  const handleStoryTextTouchStart = (event: React.TouchEvent) => {
     event.stopPropagation();
+    const now = Date.now();
+
+    if (event.touches.length >= 2) {
+      const [first, second] = event.touches;
+      textGestureRef.current = {
+        mode: 'pinch',
+        startX: 0,
+        startY: 0,
+        originX: storyTextOffset.x,
+        originY: storyTextOffset.y,
+        dist: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+        angle: (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI,
+        scale: storyTextScale,
+        rotation: storyTextRotation,
+        moved: true,
+        startTime: now,
+      };
+      return;
+    }
+
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    textGestureRef.current = {
+      mode: 'drag',
+      startX: touch.clientX,
+      startY: touch.clientY,
+      originX: storyTextOffset.x,
+      originY: storyTextOffset.y,
+      dist: 0,
+      angle: 0,
+      scale: storyTextScale,
+      rotation: storyTextRotation,
+      moved: false,
+      startTime: now,
+    };
+  };
+
+  const handleStoryTextTouchMove = (event: React.TouchEvent) => {
+    const gesture = textGestureRef.current;
+    if (!gesture) return;
+    event.stopPropagation();
+
+    if (gesture.mode === 'pinch' && event.touches.length >= 2) {
+      const [first, second] = event.touches;
+      const dist = Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+      const angle = (Math.atan2(second.clientY - first.clientY, second.clientX - first.clientX) * 180) / Math.PI;
+
+      if (gesture.dist > 0) {
+        setStoryTextScale(Math.min(4, Math.max(0.4, gesture.scale * (dist / gesture.dist))));
+      }
+      setStoryTextRotation(gesture.rotation + (angle - gesture.angle));
+      return;
+    }
+
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    const dx = touch.clientX - gesture.startX;
+    const dy = touch.clientY - gesture.startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) gesture.moved = true;
+
     setStoryTextOffset({
-      x: Math.min(window.innerWidth * 0.45, Math.max(-window.innerWidth * 0.45, start.ox + (touch.clientX - start.x))),
-      y: Math.min(window.innerHeight * 0.4, Math.max(-window.innerHeight * 0.4, start.oy + (touch.clientY - start.y))),
+      x: Math.min(window.innerWidth * 0.45, Math.max(-window.innerWidth * 0.45, gesture.originX + dx)),
+      y: Math.min(window.innerHeight * 0.4, Math.max(-window.innerHeight * 0.4, gesture.originY + dy)),
     });
   };
 
-  const handleStoryTextDragEnd = () => {
-    textDragRef.current = null;
+  const handleStoryTextTouchEnd = (event: React.TouchEvent) => {
+    const gesture = textGestureRef.current;
+    textGestureRef.current = null;
+    if (!gesture) return;
+    event.stopPropagation();
+
+    // نقرة قصيرة بدون سحب → فتح المحرر لتحرير النص الحالي
+    if (gesture.mode === 'drag' && !gesture.moved && Date.now() - gesture.startTime < 400) {
+      setStoryTextEditorOpen(true);
+    }
   };
 
   // إبقاء شريط أدوات النص فوق لوحة المفاتيح
@@ -1107,48 +1254,82 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
 
       {showUploadModal && (
         <div className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white" dir="rtl">
-          {/* الوسيط يملأ الشاشة بالكامل */}
+          {/* الوسيط يملأ الشاشة بالكامل، والنص داخل لوحة تُسحب وتُكبَّر كوحدة واحدة */}
           {storyFile && previewStoryUrl ? (
             <div
               className="absolute inset-0"
-              onTouchStart={handleStoryPinchStart}
-              onTouchMove={handleStoryPinchMove}
-              onTouchEnd={handleStoryPinchEnd}
-              onTouchCancel={handleStoryPinchEnd}
+              onTouchStart={handleStoryCanvasTouchStart}
+              onTouchMove={handleStoryCanvasTouchMove}
+              onTouchEnd={handleStoryCanvasTouchEnd}
+              onTouchCancel={handleStoryCanvasTouchEnd}
               style={{ touchAction: 'none' }}
             >
-              {storyFile.type.startsWith('video') ? (
-                <video
-                  src={previewStoryUrl}
-                  autoPlay
-                  loop
-                  playsInline
-                  className="h-full w-full object-cover transition-transform duration-75"
-                  style={{ transform: `scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)` }}
+              <div
+                className="absolute inset-0"
+                style={{
+                  transform: `translate3d(${storyCanvasOffset.x}px, ${storyCanvasOffset.y}px, 0) scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)`,
+                }}
+              >
+                {storyFile.type.startsWith('video') ? (
+                  <video src={previewStoryUrl} autoPlay loop playsInline className="h-full w-full object-cover" />
+                ) : (
+                  <img src={previewStoryUrl} alt="" className="h-full w-full object-cover" />
+                )}
+
+                {/* طبقة تعتيم متدرجة لإبراز الأدوات فوق الصورة */}
+                <div
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    background:
+                      'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0) 58%, rgba(0,0,0,0.78) 100%)',
+                  }}
                 />
-              ) : (
-                <img
-                  src={previewStoryUrl}
-                  alt=""
-                  className="h-full w-full object-cover transition-transform duration-75"
-                  style={{ transform: `scale(${storyMediaZoom}) rotate(${storyMediaRotate}deg)` }}
-                />
-              )}
+
+                {/* النص: نقرة للتحرير، سحب بإصبع للتحريك، إصبعان للتكبير والتدوير */}
+                {storyText.trim() && !storyTextEditorOpen && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6" dir="rtl">
+                    <div
+                      key={`${storyTextAnimation}-${storyText}`}
+                      className={storyTextAnimation === 'none' ? undefined : `aani-story-anim-${storyTextAnimation}`}
+                    >
+                      <p
+                        className="max-w-full cursor-grab whitespace-pre-wrap break-words font-bold active:cursor-grabbing"
+                        onTouchStart={handleStoryTextTouchStart}
+                        onTouchMove={handleStoryTextTouchMove}
+                        onTouchEnd={handleStoryTextTouchEnd}
+                        onTouchCancel={handleStoryTextTouchEnd}
+                        style={{
+                          pointerEvents: 'auto',
+                          touchAction: 'none',
+                          transform: `translate(${storyTextOffset.x}px, ${storyTextOffset.y}px) scale(${storyTextScale}) rotate(${storyTextRotation}deg)`,
+                          fontFamily: storyFontFamily,
+                          color: storyTextColor,
+                          fontSize: 30,
+                          textAlign: storyTextAlign,
+                          lineHeight: 1.35,
+                          display: storyHasBackground ? 'inline-block' : undefined,
+                          width: storyHasBackground ? 'fit-content' : undefined,
+                          padding: storyHasBackground ? '2px 10px' : undefined,
+                          borderRadius: storyHasBackground ? 8 : undefined,
+                          background: storyHasBackground ? storyBackgroundPreset.background : 'transparent',
+                          textShadow: '0 2px 14px rgba(0,0,0,0.9)',
+                        }}
+                      >
+                        {visibleStoryText}
+                        {storyTextAnimation === 'typewriter' && visibleStoryText.length < storyText.length && (
+                          <span className="aani-story-caret">|</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-sm text-zinc-400">
               اختر وسيطاً من الاستوديو لعرضه هنا
             </div>
           )}
-
-          {/* طبقة تعتيم متدرجة لإبراز الأدوات فوق الصورة */}
-          <div
-            className="pointer-events-none absolute inset-0 z-10"
-            style={{
-              background:
-                'linear-gradient(to bottom, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0) 58%, rgba(0,0,0,0.78) 100%)',
-            }}
-          />
 
           {/* الشريط العلوي */}
           <div
@@ -1279,44 +1460,6 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
             )}
           </div>
 
-          {/* النص المنسّق فوق الصورة (قابل للسحب) */}
-          {storyText.trim() && !storyTextEditorOpen && (
-            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6" dir="rtl">
-              <div
-                key={`${storyTextAnimation}-${storyText}`}
-                className={storyTextAnimation === 'none' ? undefined : `aani-story-anim-${storyTextAnimation}`}
-              >
-                <p
-                  className="max-w-full cursor-grab whitespace-pre-wrap break-words font-bold active:cursor-grabbing"
-                  onTouchStart={handleStoryTextDragStart}
-                  onTouchMove={handleStoryTextDragMove}
-                  onTouchEnd={handleStoryTextDragEnd}
-                  onTouchCancel={handleStoryTextDragEnd}
-                  style={{
-                    pointerEvents: 'auto',
-                    touchAction: 'none',
-                    transform: `translate(${storyTextOffset.x}px, ${storyTextOffset.y}px)`,
-                    fontFamily: storyFontFamily,
-                    color: storyTextColor,
-                    fontSize: 30,
-                    textAlign: storyTextAlign,
-                    lineHeight: 1.35,
-                    display: storyHasBackground ? 'inline-block' : undefined,
-                    width: storyHasBackground ? 'fit-content' : undefined,
-                    padding: storyHasBackground ? '2px 10px' : undefined,
-                    borderRadius: storyHasBackground ? 8 : undefined,
-                    background: storyHasBackground ? storyBackgroundPreset.background : 'transparent',
-                    textShadow: '0 2px 14px rgba(0,0,0,0.9)',
-                  }}
-                >
-                  {visibleStoryText}
-                  {storyTextAnimation === 'typewriter' && visibleStoryText.length < storyText.length && (
-                    <span className="aani-story-caret">|</span>
-                  )}
-                </p>
-              </div>
-            </div>
-          )}
 
           {/* محرر النص الغني (خلفية شبه شفافة تُظهر القصة) */}
           {storyTextEditorOpen && (
