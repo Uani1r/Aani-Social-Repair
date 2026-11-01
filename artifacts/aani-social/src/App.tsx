@@ -21,6 +21,13 @@ import NotFound from '@/pages/not-found';
 import CommentsDrawer from './components/CommentsDrawer';
 import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
+import StoryTextToolbar from './components/StoryTextToolbar';
+import {
+  STORY_TEXT_BACKGROUNDS,
+  nextStoryTextAlign,
+  type StoryTextAlign,
+  type StoryTextAnimation,
+} from '@/lib/storyFonts';
 import '@/index.css';
 
 // --- مكون المساعد الذكي الآمن المربوط بـ Supabase Edge Function ---
@@ -350,6 +357,17 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
   const [storyText, setStoryText] = useState('');
   const [storyKeyboardInset, setStoryKeyboardInset] = useState(0);
 
+  // نمط نص القصة: الخط + اللون + المحاذاة + الحركة + الخلفية
+  const [storyFontFamily, setStoryFontFamily] = useState('Cairo');
+  const [storyTextColor, setStoryTextColor] = useState('#FFFFFF');
+  const [storyTextAlign, setStoryTextAlign] = useState<StoryTextAlign>('center');
+  const [storyTextAnimation, setStoryTextAnimation] = useState<StoryTextAnimation>('none');
+  const [storyBackgroundIndex, setStoryBackgroundIndex] = useState(0);
+  const [storyTypedLength, setStoryTypedLength] = useState(0);
+
+  const storyBackgroundPreset = STORY_TEXT_BACKGROUNDS[storyBackgroundIndex % STORY_TEXT_BACKGROUNDS.length];
+  const storyHasBackground = storyBackgroundPreset.key !== 'none';
+
   // تكبير/تدوير الوسيط بإصبعين (داخل القصة فقط)
   const [storyMediaZoom, setStoryMediaZoom] = useState(1);
   const [storyMediaRotate, setStoryMediaRotate] = useState(0);
@@ -434,6 +452,31 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
       viewport.removeEventListener('scroll', updateInset);
     };
   }, [storyTextEditorOpen]);
+
+  // حركة الآلة الكاتبة: إظهار النص حرفاً بحرف بعد إغلاق المحرر
+  useEffect(() => {
+    if (storyTextAnimation !== 'typewriter' || storyTextEditorOpen || !storyText.trim()) {
+      setStoryTypedLength(storyText.length);
+      return;
+    }
+
+    setStoryTypedLength(0);
+    let index = 0;
+    const timer = window.setInterval(() => {
+      index += 1;
+      setStoryTypedLength(index);
+      if (index >= storyText.length) {
+        window.clearInterval(timer);
+      }
+    }, 65);
+
+    return () => window.clearInterval(timer);
+  }, [storyText, storyTextAnimation, storyTextEditorOpen]);
+
+  const visibleStoryText =
+    storyTextAnimation === 'typewriter' && !storyTextEditorOpen
+      ? storyText.slice(0, storyTypedLength)
+      : storyText;
 
   useEffect(() => {
     if (!storyMoreOpen) return;
@@ -1171,25 +1214,37 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
           {/* النص المنسّق فوق الصورة (قابل للسحب) */}
           {storyText.trim() && !storyTextEditorOpen && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-6" dir="rtl">
-              <p
-                className="max-w-full cursor-grab whitespace-pre-wrap break-words font-bold active:cursor-grabbing"
-                onTouchStart={handleStoryTextDragStart}
-                onTouchMove={handleStoryTextDragMove}
-                onTouchEnd={handleStoryTextDragEnd}
-                onTouchCancel={handleStoryTextDragEnd}
-                style={{
-                  pointerEvents: 'auto',
-                  touchAction: 'none',
-                  transform: `translate(${storyTextOffset.x}px, ${storyTextOffset.y}px)`,
-                  color: '#FFFFFF',
-                  fontSize: 30,
-                  textAlign: 'center',
-                  lineHeight: 1.4,
-                  textShadow: '0 2px 14px rgba(0,0,0,0.9)',
-                }}
+              <div
+                key={`${storyTextAnimation}-${storyText}`}
+                className={storyTextAnimation === 'none' ? undefined : `aani-story-anim-${storyTextAnimation}`}
               >
-                {storyText}
-              </p>
+                <p
+                  className="max-w-full cursor-grab whitespace-pre-wrap break-words font-bold active:cursor-grabbing"
+                  onTouchStart={handleStoryTextDragStart}
+                  onTouchMove={handleStoryTextDragMove}
+                  onTouchEnd={handleStoryTextDragEnd}
+                  onTouchCancel={handleStoryTextDragEnd}
+                  style={{
+                    pointerEvents: 'auto',
+                    touchAction: 'none',
+                    transform: `translate(${storyTextOffset.x}px, ${storyTextOffset.y}px)`,
+                    fontFamily: storyFontFamily,
+                    color: storyTextColor,
+                    fontSize: 30,
+                    textAlign: storyTextAlign,
+                    lineHeight: 1.5,
+                    padding: storyHasBackground ? '6px 14px' : undefined,
+                    borderRadius: storyHasBackground ? 12 : undefined,
+                    background: storyHasBackground ? storyBackgroundPreset.background : 'transparent',
+                    textShadow: storyHasBackground ? 'none' : '0 2px 14px rgba(0,0,0,0.9)',
+                  }}
+                >
+                  {visibleStoryText}
+                  {storyTextAnimation === 'typewriter' && visibleStoryText.length < storyText.length && (
+                    <span className="aani-story-caret">|</span>
+                  )}
+                </p>
+              </div>
             </div>
           )}
 
@@ -1213,10 +1268,7 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                 </button>
               </div>
 
-              <div
-                className="flex flex-1 items-center justify-center px-6"
-                style={{ paddingBottom: `calc(1rem + env(safe-area-inset-bottom) + ${storyKeyboardInset}px)` }}
-              >
+              <div className="flex flex-1 items-center justify-center px-6">
                 <textarea
                   autoFocus
                   value={storyText}
@@ -1224,16 +1276,42 @@ function StoriesBar({ userId, currentProfile }: { userId: string; currentProfile
                   placeholder="اكتب شيئاً..."
                   dir="rtl"
                   rows={3}
-                  className="w-full max-w-md resize-none overflow-hidden bg-transparent text-center font-bold outline-none placeholder:text-white/40"
+                  className="w-full max-w-md resize-none overflow-hidden bg-transparent font-bold outline-none placeholder:text-white/40"
                   style={{
-                    color: '#FFFFFF',
+                    fontFamily: storyFontFamily,
+                    color: storyTextColor,
                     fontSize: 30,
-                    lineHeight: 1.4,
-                    textShadow: '0 2px 12px rgba(0,0,0,0.9)',
+                    textAlign: storyTextAlign,
+                    lineHeight: 1.5,
+                    padding: storyHasBackground ? '6px 14px' : 0,
+                    borderRadius: storyHasBackground ? 12 : undefined,
+                    background: storyHasBackground ? storyBackgroundPreset.background : 'transparent',
+                    textShadow: storyHasBackground ? 'none' : '0 2px 12px rgba(0,0,0,0.9)',
                   }}
                 />
               </div>
 
+              {/* شريط أدوات النص بنمط إنستغرام: الخيارات تنبثق فوقه مباشرة */}
+              <div
+                className="px-3"
+                style={{ paddingBottom: `calc(0.8rem + env(safe-area-inset-bottom) + ${storyKeyboardInset}px)` }}
+              >
+                <StoryTextToolbar
+                  fontFamily={storyFontFamily}
+                  onFontFamilyChange={setStoryFontFamily}
+                  textColor={storyTextColor}
+                  onTextColorChange={setStoryTextColor}
+                  align={storyTextAlign}
+                  onCycleAlign={() => setStoryTextAlign(prev => nextStoryTextAlign(prev))}
+                  backgroundLabel={storyBackgroundPreset.label}
+                  backgroundSwatch={storyBackgroundPreset.background}
+                  onCycleBackground={() =>
+                    setStoryBackgroundIndex(prev => (prev + 1) % STORY_TEXT_BACKGROUNDS.length)
+                  }
+                  animation={storyTextAnimation}
+                  onAnimationChange={setStoryTextAnimation}
+                />
+              </div>
             </div>
           )}
 

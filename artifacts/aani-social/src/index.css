@@ -2,6 +2,12 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Noto+Sans+Arabic:wght@400;500;600;700&family=Tajawal:wght@400;500;700&family=Cairo:wght@400;600;700&family=Almarai:wght@400;700&family=Amiri:wght@400;700&display=swap');
 
 /* 2. استدعاء Tailwind 4 */
+/* مكتبة خطوط نص القصة: خطوط عربية متنوعة (رسمية، نسخ ورقعة، كوفية، حركية) */
+@import url('https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=Aref+Ruqaa+Ink:wght@400;700&family=Reem+Kufi:wght@400;700&family=Noto+Kufi+Arabic:wght@400;700&family=Noto+Naskh+Arabic:wght@400;700&family=Scheherazade+New:wght@400;700&family=Lateef:wght@400;700&family=El+Messiri:wght@400;700&family=Changa:wght@400;700&family=Mada:wght@400;700&family=Markazi+Text:wght@400;700&family=Harmattan:wght@400;700&family=Baloo+Bhaijaan+2:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@400;700&family=Alexandria:wght@400;700&family=Kufam:wght@400;700&family=Marhey:wght@400;700&family=Readex+Pro:wght@400;700&family=Rubik:wght@400;700&family=Rakkas&family=Lalezar&family=Katibeh&family=Jomhuria&family=Qahiri&family=Gulzar&family=Vibes&display=swap');
+
+/* خطوط إنجليزية لنص القصة */
+@import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&family=Playfair+Display:wght@400;700&family=Courier+Prime:wght@400;700&family=Cormorant+Garamond:wght@400;700&family=Great+Vibes&family=Creepster&family=Bebas+Neue&display=swap');
+
 @import "tailwindcss";
 
 /* 3. توجيه Tailwind لمسح كافة ملفات المكونات واستخراج الكلاسات */
@@ -797,4 +803,155 @@ body.aani-immersive .mobile-nav {
 body.aani-immersive {
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+
+/* =====================================================================
+   حركات نص القصة + تمرير أفقي بلا شريط تمرير
+   ===================================================================== */
+@keyframes aani-story-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes aani-story-slide-up-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 44px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes aani-story-slide-right-in {
+  from {
+    opacity: 0;
+    transform: translate3d(58px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes aani-story-slide-left-in {
+  from {
+    opacity: 0;
+    transform: translate3d(-58px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes aani-story-bounce-in {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -36px, 0);
+  }
+  40% {
+    opacity: 1;
+    transform: translate3d(0, 10px, 0);
+  }
+  65% {
+    transform: translate3d(0, -6px, 0);
+  }
+  85% {
+    transform: translate3d(0, 3px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes aani-story-glow-in {
+  0% {
+    opacity: 0;
+    filter: brightness(2.4) blur(6px);
+  }
+  60% {
+    opacity: 1;
+    filter: brightness(1.5) blur(0);
+  }
+  100% {
+    opacity: 1;
+    filter: brightness(1) blur(0);
+  }
+}
+
+@keyframes aani-story-caret-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.aani-story-anim-pop {
+  animation: aani-story-pop-in 420ms cubic-bezier(0.18, 0.89, 0.32, 1.12) both;
+}
+
+.aani-story-anim-slide-up {
+  animation: aani-story-slide-up-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.aani-story-anim-slide-right {
+  animation: aani-story-slide-right-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.aani-story-anim-slide-left {
+  animation: aani-story-slide-left-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.aani-story-anim-bounce {
+  animation: aani-story-bounce-in 760ms cubic-bezier(0.3, 0.7, 0.3, 1) both;
+}
+
+.aani-story-anim-glow {
+  animation: aani-story-glow-in 900ms ease-out both;
+}
+
+.aani-story-caret {
+  margin-inline-start: 2px;
+  animation: aani-story-caret-blink 700ms steps(1, end) infinite;
+}
+
+.aani-hscroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.aani-hscroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aani-story-anim-pop,
+  .aani-story-anim-slide-up,
+  .aani-story-anim-slide-right,
+  .aani-story-anim-slide-left,
+  .aani-story-anim-bounce,
+  .aani-story-anim-glow,
+  .aani-story-caret {
+    animation: none;
+  }
 }
