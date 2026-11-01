@@ -60,3 +60,13 @@ create index if not exists aani_messages_story_idx
 alter table public.stories
   add column if not exists original_story_id uuid references public.stories(id) on delete set null,
   add column if not exists share_type text not null default 'original';
+
+-- منع تكرار إشعار الإشارة لنفس الستوري ونفس الشخص
+create unique index if not exists aani_notifications_mention_unique
+  on public.notifications (user_id, reference_id, type)
+  where type = 'mention' and reference_id is not null;
+
+-- منع تكرار بطاقة الستوري في محادثة الشخص نفسه
+create unique index if not exists aani_messages_story_unique
+  on public.messages (recipient_id, story_id)
+  where story_id is not null;
