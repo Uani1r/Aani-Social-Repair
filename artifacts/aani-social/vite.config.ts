@@ -15,7 +15,7 @@ const PUBLIC_ENV_KEYS = [
   'VITE_SUPABASE_STORAGE_BUCKET',
 ] as const;
 
-export default defineConfig(async ({ command, mode }) => {
+export default defineConfig(async ({ mode }) => {
   // Precedence: real process env (hosting platform / Docker ARG) > app .env > root .env.
   // Values found in files are pushed into process.env so Vite's own env loader
   // picks them up for import.meta.env.
@@ -37,42 +37,26 @@ export default defineConfig(async ({ command, mode }) => {
   const rawPort = process.env.PORT || '5000';
   const port = Number(rawPort) || 5000;
 
-  // إضافات Replit التطويرية فقط. لا يجوز أن تُسقط خادم التطوير أو البناء إذا
-  // تعذّر تحميلها، ولا أن تُحقن في بناء الإنتاج (تضيف عناوين تخص خادم التطوير
-  // وحده، وقد تترك الصفحة فارغة في النسخة المنشورة).
-  const replitDevPlugins = async () => {
-    if (
-      command !== 'serve' ||
-      process.env.NODE_ENV === 'production' ||
-      process.env.REPL_ID === undefined
-    ) {
-      return [];
-    }
-
-    try {
-      const [cartographer, devBanner] = await Promise.all([
-        import('@replit/vite-plugin-cartographer'),
-        import('@replit/vite-plugin-dev-banner'),
-      ]);
-
-      return [
-        cartographer.cartographer({
-          root: path.resolve(import.meta.dirname, '..'),
-        }),
-        devBanner.devBanner(),
-      ];
-    } catch (error) {
-      console.warn(
-        '[vite] Replit dev plugins unavailable; starting without them.',
-        error,
-      );
-      return [];
-    }
-  };
-
   return {
     base: '/',
-    plugins: [react(), tailwindcss(), ...(await replitDevPlugins())],
+    plugins: [
+      react(),
+      tailwindcss(),
+
+      ...(process.env.NODE_ENV !== 'production' &&
+      process.env.REPL_ID !== undefined
+        ? [
+            await import('@replit/vite-plugin-cartographer').then((m) =>
+              m.cartographer({
+                root: path.resolve(import.meta.dirname, '..'),
+              }),
+            ),
+            await import('@replit/vite-plugin-dev-banner').then((m) =>
+              m.devBanner(),
+            ),
+          ]
+        : []),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, 'src'),
@@ -98,9 +82,8 @@ export default defineConfig(async ({ command, mode }) => {
       strictPort: true,
       host: '0.0.0.0',
       allowedHosts: true,
-      // أخطاء الترجمة تُعرض في الصفحة بدل شاشة بيضاء صامتة.
       hmr: {
-        overlay: true,
+        overlay: false,
       },
       fs: {
         strict: true,
