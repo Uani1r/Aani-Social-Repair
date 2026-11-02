@@ -700,7 +700,7 @@ body {
 
 .story-bar {
   position: sticky;
-  top: calc(3.5rem + env(safe-area-inset-top));
+  top: calc(2.9375rem + env(safe-area-inset-top));
   z-index: 30;
   background: rgba(9, 9, 11, 0.96);
 }

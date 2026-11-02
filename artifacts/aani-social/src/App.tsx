@@ -5726,9 +5726,20 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments, pendingSt
       if (document.body.classList.contains('aani-immersive')) return;
       if (touching && now - lastTouchMoveAt < 120) return;
 
-      const y = window.scrollY || document.documentElement.scrollTop || 0;
+      const y = Math.max(
+        0,
+        window.scrollY || 0,
+        document.documentElement.scrollTop || 0,
+        document.body.scrollTop || 0,
+      );
       const delta = y - lastScrollY;
       lastScrollY = y;
+
+      // أبقِ الوحدة ظاهرة عند أعلى الصفحة وخلال ارتداد السحب للتحديث.
+      if (y <= 2) {
+        applyDirection(1);
+        return;
+      }
 
       // عتبة قصيرة تمنع الارتجاف وتُظهر الوحدة قبل الوصول إلى أعلى الصفحة.
       if (Math.abs(delta) < 2) return;
@@ -6082,7 +6093,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments, pendingSt
       </header>
 
       {/* مساحة تعويضية ثابتة للشريط العلوي (بصري فقط) */}
-      <div aria-hidden="true" style={{ height: 'calc(3.5rem + env(safe-area-inset-top))' }} />
+      <div aria-hidden="true" style={{ height: 'calc(2.9375rem + env(safe-area-inset-top))' }} />
       <StoriesBar
         userId={userId}
         currentProfile={profile}
