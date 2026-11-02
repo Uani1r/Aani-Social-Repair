@@ -25,3 +25,7 @@ timeoutMs = 20000
 
 [userenv.shared]
 VITE_SUPABASE_URL = "https://whvhxgfdumxzunzsjkll.supabase.co"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
