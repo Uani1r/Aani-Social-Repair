@@ -1,8 +1,12 @@
 modules = ["nodejs-24", "python-base-3.13"]
 
-# زر Run في المعاينة يشغّل خادم Vite التطويري.
+# زر Run في المعاينة يشغّل خادم Vite التطويري على منفذ 5000 المعرَّف أدناه.
 # النشر يستخدم قسم [deployment] أدناه (بناء ثم خادم ملفات ثابت).
 run = "pnpm --filter @workspace/aani-social run dev"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
 
 [deployment]
 build = ["sh", "-c", "pnpm --filter @workspace/aani-social run build"]
