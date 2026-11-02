@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { 
-  ArrowUpLeft, Bell, Bookmark, Clock, Film, Filter, Heart, Home, 
+  ArrowUpLeft, Bell, Bookmark, Clock, Filter, Heart, Home, 
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
@@ -47,7 +47,7 @@ import PostDetailPage from '@/pages/PostDetailPage';
 import SearchPage from '@/pages/SearchPage';
 import MessagesPage from '@/pages/MessagesPage';
 import ProfilePage from '@/pages/ProfilePage';
-import ReelSlide from '@/components/ReelSlide';
+import ReelsPage from '@/pages/ReelsPage';
 import Avatar from './components/Avatar';
 import AIAssistantModal from './components/AIAssistantModal';
 import SharedPostPreview from './components/SharedPostPreview';
@@ -3242,24 +3242,6 @@ function StoriesBar({
           />
         </div>
       )}
-    </div>
-  );
-}
-
-// --- صفحة Reels ---
-function ReelsPage({ userId }: { userId: string }) {
-  const { posts, loading } = usePosts('reel', undefined, userId);
-
-  return (
-    <div className="reels-container">
-      {loading && <div className="status-box text-white pt-20">جاري تحميل الريلز...</div>}
-      {!loading && !posts.length && (
-        <div className="empty-state text-center py-24 text-white">
-          <Film size={36} className="mx-auto text-pink-500 mb-2" />
-          <h2 className="font-bold text-lg">لا يوجد ريلز منشور حالياً</h2>
-        </div>
-      )}
-      {!loading && posts.map(post => <ReelSlide key={post.id} post={post} currentUserId={userId} />)}
     </div>
   );
 }
