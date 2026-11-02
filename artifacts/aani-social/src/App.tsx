@@ -51,6 +51,7 @@ type StoryViewerProfile = {
   full_name: string;
   display_name?: string | null;
   avatar_url: string | null;
+  is_private?: boolean;
 };
 
 type StoryViewerEntry = {
@@ -58,6 +59,14 @@ type StoryViewerEntry = {
   viewed_at: string;
   viewer: StoryViewerProfile | null;
   is_liked: boolean;
+  is_following: boolean;
+  follow_request_pending: boolean;
+};
+
+type StoryViewerPreviewRow = {
+  user_id: string;
+  viewed_at: string;
+  viewer: StoryViewerProfile | null;
 };
 
 type StoryViewerPreviewSession = {
@@ -72,7 +81,7 @@ type StoryViewerPreviewState = {
   storageKey: string;
   createdAt: number;
   expiresAt: number;
-  rows: Array<Omit<StoryViewerEntry, 'is_liked'>>;
+  rows: StoryViewerPreviewRow[];
 };
 
 const STORY_VIEWER_PREVIEW_TTL_MS = 60 * 60 * 1000;
@@ -1388,7 +1397,7 @@ function StoriesBar({
     const [viewsResult, likesResult] = await Promise.all([
       supabase
         .from('story_views')
-        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, display_name, avatar_url)', { count: 'exact' })
+        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, display_name, avatar_url, is_private)', { count: 'exact' })
         .eq('story_id', storyId)
         .order('viewed_at', { ascending: true }),
       supabase
@@ -1401,9 +1410,40 @@ function StoriesBar({
     if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
 
     const likedUserIds = new Set((likesResult.data || []).map(item => String(item.user_id)));
+    const viewerIds = [...new Set((viewsResult.data || []).map(item => String(item.user_id)))];
+    let followedIds = new Set<string>();
+    let pendingIds = new Set<string>();
+    if (userId && viewerIds.length > 0) {
+      const [followsResult, requestsResult] = await Promise.all([
+        supabase
+          .from('follows')
+          .select('following_id')
+          .eq('follower_id', userId)
+          .in('following_id', viewerIds),
+        supabase
+          .from('follow_requests')
+          .select('recipient_id')
+          .eq('requester_id', userId)
+          .in('recipient_id', viewerIds),
+      ]);
+      if (followsResult.error) {
+        console.warn('[story views] تعذر تحميل حالات المتابعة:', followsResult.error);
+      } else {
+        followedIds = new Set((followsResult.data || []).map(item => String(item.following_id)));
+      }
+      if (requestsResult.error) {
+        console.warn('[story views] تعذر تحميل طلبات المتابعة:', requestsResult.error);
+      } else {
+        pendingIds = new Set((requestsResult.data || []).map(item => String(item.recipient_id)));
+      }
+    }
+
+    if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
     const rows = (viewsResult.data || []).map(item => ({
       ...item,
       is_liked: likedUserIds.has(String(item.user_id)),
+      is_following: followedIds.has(String(item.user_id)),
+      follow_request_pending: pendingIds.has(String(item.user_id)),
     })) as StoryViewerEntry[];
     setStoryViewers(rows);
     setStoryViewsCount(viewsResult.count ?? rows.length);
@@ -1678,6 +1718,69 @@ function StoriesBar({
     } catch (error) {
       console.error('[story views] تعذر إخفاء القصص عن الحساب:', error);
       toast.error(error instanceof Error ? error.message : 'تعذر حفظ إعداد الإخفاء. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
+    } finally {
+      setViewerActionBusyId(null);
+    }
+  };
+
+  const handleToggleStoryViewerFollow = async (viewer: StoryViewerEntry) => {
+    if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
+
+    setViewerActionBusyId(viewer.user_id);
+    try {
+      if (viewer.is_following) {
+        const { error } = await supabase
+          .from('follows')
+          .delete()
+          .eq('follower_id', userId)
+          .eq('following_id', viewer.user_id);
+        if (error) throw error;
+        setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
+          ? { ...item, is_following: false, follow_request_pending: false }
+          : item));
+        toast.success('تم إلغاء المتابعة');
+        return;
+      }
+
+      if (viewer.follow_request_pending) {
+        const { error } = await supabase
+          .from('follow_requests')
+          .delete()
+          .eq('requester_id', userId)
+          .eq('recipient_id', viewer.user_id);
+        if (error) throw error;
+        setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
+          ? { ...item, follow_request_pending: false }
+          : item));
+        toast.success('تم إلغاء طلب المتابعة');
+        return;
+      }
+
+      if (viewer.viewer?.is_private) {
+        const { error } = await supabase.from('follow_requests').insert({
+          requester_id: userId,
+          recipient_id: viewer.user_id,
+        });
+        if (error && error.code !== '23505') throw error;
+        setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
+          ? { ...item, follow_request_pending: true }
+          : item));
+        toast.success(error ? 'سبق إرسال طلب المتابعة' : 'تم إرسال طلب المتابعة');
+        return;
+      }
+
+      const { error } = await supabase.from('follows').insert({
+        follower_id: userId,
+        following_id: viewer.user_id,
+      });
+      if (error && error.code !== '23505') throw error;
+      setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
+        ? { ...item, is_following: true, follow_request_pending: false }
+        : item));
+      toast.success(error ? 'الحساب متابَع بالفعل' : 'تمت متابعة الحساب');
+    } catch (error) {
+      console.error('[story views] تعذر تحديث المتابعة:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر تحديث حالة المتابعة. تحقق من الاتصال والصلاحيات.');
     } finally {
       setViewerActionBusyId(null);
     }
@@ -2509,8 +2612,8 @@ function StoriesBar({
                   onClick={event => event.stopPropagation()}
                 >
                   <div data-story-viewers-panel-header="true" className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-white/30" />
-                  <div data-story-viewers-panel-header="true" className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-white">المشاهدات الفعلية</h2>
+                  <div data-story-viewers-panel-header="true" className="mb-1 flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-white">المشاهدات</h2>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-zinc-400">{storyViewsCount}</span>
                       <button
@@ -2531,9 +2634,6 @@ function StoriesBar({
                     )}
                     {storyViewsError && (
                       <p className="py-5 text-center text-xs text-red-300">تعذر تحميل بيانات المشاهدين أو الإعجابات الفعلية. تحقق من قاعدة البيانات والاتصال.</p>
-                    )}
-                    {!storyViewsLoading && !storyViewsError && storyViewers.length === 0 && (
-                      <p className="py-4 text-center text-xs text-zinc-400">لا توجد مشاهدات فعلية مسجلة بعد.</p>
                     )}
                     {!storyViewsLoading && !storyViewsError && storyViewers.length > 0 && (
                       <ul className="space-y-2">
@@ -2575,6 +2675,16 @@ function StoriesBar({
                                 <DropdownMenuItem onSelect={() => void handleHideStoryFromViewer(item)}>
                                   <EyeOff size={15} /> إخفاء الستوري عنه
                                 </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => void handleToggleStoryViewerFollow(item)}>
+                                  <UserRound size={15} />
+                                  {item.is_following
+                                    ? 'إلغاء المتابعة'
+                                    : item.follow_request_pending
+                                      ? 'إلغاء طلب المتابعة'
+                                      : item.viewer?.is_private
+                                        ? 'طلب متابعة'
+                                        : 'متابعة'}
+                                </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </li>
@@ -2583,16 +2693,10 @@ function StoriesBar({
                     )}
 
                     {storyViewerPreview?.storyId === currentStory.id && storyViewerPreview.expiresAt > Date.now() && storyViewerPreview.rows.length > 0 && (
-                      <section className="mt-4 rounded-2xl border border-dashed border-sky-400/30 bg-sky-400/[0.04] p-3">
-                        <div className="mb-2">
-                          <p className="text-xs font-bold text-sky-200">معاينة مؤقتة — حسابات حقيقية من المنصة</p>
-                          <p className="mt-1 text-[10px] leading-4 text-sky-100/65">
-                            هذه صفوف للمعاينة فقط، ولا تمثل مشاهدات أو إعجابات مسجلة. تنتهي عند {new Date(storyViewerPreview.expiresAt).toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' })}.
-                          </p>
-                        </div>
+                      <div className="mt-1">
                         <ul className="space-y-2">
                           {storyViewerPreview.rows.map(item => (
-                            <li key={`preview:${currentStory.id}:${item.user_id}`} className="flex items-center gap-3 rounded-xl px-2 py-2">
+                            <li key={`preview:${currentStory.id}:${item.user_id}`} className="flex items-center gap-2 py-2">
                               <Avatar profile={item.viewer} />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-xs font-semibold text-white">
@@ -2608,7 +2712,7 @@ function StoriesBar({
                             </li>
                           ))}
                         </ul>
-                      </section>
+                      </div>
                     )}
                   </div>
                 </section>
@@ -3712,6 +3816,7 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
   const refresh = useCallback(async () => {
     if (!supabaseConfigured) { setPosts([]); setLoading(false); return; }
     setLoading(true);
+    if (query === 'feed') setPosts([]);
     try {
       if (query === 'feed') {
         const { data: rawPosts, error: postsErr } = await supabase
@@ -3928,9 +4033,162 @@ function FeedPage({
   onProfileStoryHandled: () => void;
 }) {
   const { posts, loading, refresh } = usePosts('feed', undefined, userId);
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pullGestureRef = useRef<{ x: number; y: number; lastX: number; lastY: number; pathLength: number } | null>(null);
+  const refreshingRef = useRef(false);
+  const feedMountedRef = useRef(false);
+  const refreshIndicatorTimerRef = useRef<number | null>(null);
+
+  const refreshFeed = useCallback(async () => {
+    if (refreshingRef.current || loading) return;
+    refreshingRef.current = true;
+    setIsRefreshing(true);
+    setPullDistance(52);
+    const startedAt = Date.now();
+
+    try {
+      await refresh();
+    } finally {
+      const delay = Math.max(0, 350 - (Date.now() - startedAt));
+      if (refreshIndicatorTimerRef.current) window.clearTimeout(refreshIndicatorTimerRef.current);
+      refreshIndicatorTimerRef.current = window.setTimeout(() => {
+        refreshingRef.current = false;
+        refreshIndicatorTimerRef.current = null;
+        if (!feedMountedRef.current) return;
+        setIsRefreshing(false);
+        setPullDistance(0);
+      }, delay);
+    }
+  }, [loading, refresh]);
+
+  useEffect(() => {
+    feedMountedRef.current = true;
+    return () => {
+      feedMountedRef.current = false;
+      refreshingRef.current = false;
+      if (refreshIndicatorTimerRef.current) window.clearTimeout(refreshIndicatorTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onFeedRefresh = () => void refreshFeed();
+    window.addEventListener('aani:feed-refresh', onFeedRefresh);
+    return () => window.removeEventListener('aani:feed-refresh', onFeedRefresh);
+  }, [refreshFeed]);
+
+  const handlePullTouchStart = (event: React.TouchEvent<HTMLElement>) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const touch = event.touches[0];
+    if (
+      !touch
+      || event.touches.length !== 1
+      || loading
+      || refreshingRef.current
+      || !target
+      || target.closest('button, a, input, textarea, select, [role="dialog"], [contenteditable="true"], .story-strip')
+      || isHorizontalGestureArea(target)
+    ) {
+      pullGestureRef.current = null;
+      return;
+    }
+
+    const scrollTop = Math.max(
+      0,
+      window.scrollY || 0,
+      document.documentElement.scrollTop || 0,
+      document.body.scrollTop || 0,
+    );
+    if (scrollTop > 2) {
+      pullGestureRef.current = null;
+      return;
+    }
+
+    pullGestureRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      lastX: touch.clientX,
+      lastY: touch.clientY,
+      pathLength: 0,
+    };
+    setPullDistance(0);
+  };
+
+  const handlePullTouchMove = (event: React.TouchEvent<HTMLElement>) => {
+    const start = pullGestureRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch || event.touches.length !== 1) {
+      pullGestureRef.current = null;
+      return;
+    }
+
+    const segmentX = touch.clientX - start.lastX;
+    const segmentY = touch.clientY - start.lastY;
+    pullGestureRef.current = {
+      ...start,
+      lastX: touch.clientX,
+      lastY: touch.clientY,
+      pathLength: start.pathLength + Math.hypot(segmentX, segmentY),
+    };
+
+    const deltaY = touch.clientY - start.y;
+    const deltaX = touch.clientX - start.x;
+    setPullDistance(deltaY > 0 && deltaY >= Math.abs(deltaX) * 0.55 ? Math.min(72, deltaY) : 0);
+  };
+
+  const handlePullTouchEnd = (event: React.TouchEvent<HTMLElement>) => {
+    const start = pullGestureRef.current;
+    pullGestureRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) {
+      setPullDistance(0);
+      return;
+    }
+
+    const deltaY = touch.clientY - start.y;
+    const deltaX = touch.clientX - start.x;
+    const finalSegment = Math.hypot(touch.clientX - start.lastX, touch.clientY - start.lastY);
+    const totalTravel = start.pathLength + finalSegment;
+    const shouldRefresh = deltaY >= 72
+      && deltaY >= Math.abs(deltaX) * 0.55
+      && totalTravel >= 80;
+
+    if (shouldRefresh) {
+      void refreshFeed();
+    } else {
+      setPullDistance(0);
+    }
+  };
+
+  const handlePullTouchCancel = () => {
+    pullGestureRef.current = null;
+    setPullDistance(0);
+  };
 
   return (
-    <section className="new-view w-full max-w-lg mx-auto">
+    <section
+      className="new-view relative w-full max-w-lg mx-auto"
+      style={{ overscrollBehaviorY: 'contain', touchAction: 'pan-y' }}
+      onTouchStart={handlePullTouchStart}
+      onTouchMove={handlePullTouchMove}
+      onTouchEnd={handlePullTouchEnd}
+      onTouchCancel={handlePullTouchCancel}
+    >
+      {(pullDistance > 0 || isRefreshing) && (
+        <div
+          className="pointer-events-none flex items-center justify-center overflow-hidden transition-[height] duration-150"
+          style={{ height: isRefreshing ? 48 : Math.min(48, pullDistance) }}
+          role={isRefreshing ? 'status' : undefined}
+          aria-label={isRefreshing ? 'جارٍ تحديث المنشورات' : 'اسحب لأسفل للتحديث'}
+        >
+          <Loader2
+            size={20}
+            className={`text-pink-400 ${isRefreshing ? 'animate-spin' : 'transition-transform'}`}
+            style={isRefreshing ? undefined : { transform: `rotate(${Math.min(300, pullDistance * 4)}deg)` }}
+          />
+        </div>
+      )}
+
       <div className="story-strip">
         <StoriesBar
           userId={userId}
@@ -5370,6 +5628,42 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const homeTapAtRef = useRef(0);
+  const homeTapResetTimerRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+  }, []);
+
+  const handleHomeNavigationTap = (event: React.MouseEvent<HTMLAnchorElement>, navId: string) => {
+    if (navId !== 'feed') {
+      homeTapAtRef.current = 0;
+      if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+      homeTapResetTimerRef.current = null;
+      return;
+    }
+
+    const now = Date.now();
+    if (homeTapAtRef.current > 0 && now - homeTapAtRef.current <= 450) {
+      event.preventDefault();
+      homeTapAtRef.current = 0;
+      if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+      homeTapResetTimerRef.current = null;
+      setLocation('/feed');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.setTimeout(() => window.dispatchEvent(new Event('aani:feed-refresh')), 0);
+      return;
+    }
+
+    homeTapAtRef.current = now;
+    if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+    homeTapResetTimerRef.current = window.setTimeout(() => {
+      homeTapAtRef.current = 0;
+      homeTapResetTimerRef.current = null;
+    }, 450);
+
+    if (path === '/feed') event.preventDefault();
+  };
 
   // إخفاء/إظهار الشريطين: يعتمد على اتجاه حركة الإصبع مباشرة
   const [chromeHidden, setChromeHidden] = useState(false);
@@ -5508,7 +5802,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
-  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number } | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number; pullCandidate: boolean } | null>(null);
   const swipeTimerRef = useRef<number | null>(null);
 
   // ترتيب صفحات التنقل بالسحب (نفس مسارات أزرار الشريط السفلي)
@@ -5558,8 +5852,24 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
     const touch = event.touches[0];
     if (!touch) return;
 
+    const scrollTop = Math.max(
+      0,
+      window.scrollY || 0,
+      document.documentElement.scrollTop || 0,
+      document.body.scrollTop || 0,
+    );
+    const pullCandidate = (path === '/' || path === '/feed')
+      && scrollTop <= 2
+      && !target?.closest('button, a, input, textarea, select, [role="dialog"], [contenteditable="true"], .story-strip');
+
     setMainOffset(0, false);
-    swipeStartRef.current = { x: touch.clientX, y: touch.clientY, axis: 'none', dx: 0 };
+    swipeStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      axis: 'none',
+      dx: 0,
+      pullCandidate,
+    };
   };
 
   const handleSwipeMove = (event: React.TouchEvent) => {
@@ -5571,6 +5881,13 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
     const dx = touch.clientX - start.x;
     const dy = touch.clientY - start.y;
+
+    if (start.pullCandidate && dy >= 24 && dy >= Math.abs(dx) * 0.55) {
+      start.axis = 'y';
+      start.dx = 0;
+      setMainOffset(0, false);
+      return;
+    }
 
     // تحديد نوع الحركة عند أول 6 بكسل، مع إمكانية التصحيح إذا تغيّر الاتجاه
     if (start.axis === 'none') {
@@ -5885,6 +6202,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
               <Link
                 key={id}
                 href={href}
+                onClick={event => handleHomeNavigationTap(event, id)}
                 className={`flex flex-col items-center gap-1 text-[10px] transition ${active ? 'text-pink-500 font-bold' : 'text-zinc-400'}`}
               >
                 <span
