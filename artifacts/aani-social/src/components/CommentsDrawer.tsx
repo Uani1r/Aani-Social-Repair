@@ -1145,12 +1145,12 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
                         </span>
                       )}
 
-                      <span className="min-w-0 flex-1">
-                        <strong className="block truncate text-white">
+                      <span className="user-identity-meta h-7 min-w-0 flex-1">
+                        <strong className="block truncate leading-tight text-white">
                           {person.full_name || person.username || 'مستخدم'}
                         </strong>
                         {person.username && (
-                          <span className="block truncate text-[10px] text-zinc-500">
+                          <span className="block truncate text-[10px] leading-none text-zinc-500" dir="ltr">
                             {person.username}
                           </span>
                         )}

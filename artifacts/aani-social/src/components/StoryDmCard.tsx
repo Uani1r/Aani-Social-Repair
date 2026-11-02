@@ -13,7 +13,7 @@ export interface StoryRow {
   expires_at: string | null;
   filter_key?: string | null;
   original_story_id?: string | null;
-  author?: { id?: string; username?: string | null; full_name?: string | null; avatar_url?: string | null } | null;
+  author?: { id?: string; username?: string | null; full_name?: string | null; display_name?: string | null; avatar_url?: string | null } | null;
 }
 
 interface StoryDmCardProps {
@@ -51,7 +51,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
 
         const { data: author, error: authorError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url')
           .eq('id', data.user_id)
           .maybeSingle();
         if (authorError) console.warn('[story DM card] تعذر تحميل ملف صاحب القصة:', authorError);
@@ -74,7 +74,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
   const expired = !story || !Number.isFinite(expiresAt) || expiresAt <= Date.now();
   const canReshare = Boolean(story && !expired && story.user_id !== currentUserId && story.media_url);
 
-  const authorLabel = story?.author?.full_name || story?.author?.username || senderName || 'مستخدم';
+  const authorLabel = story?.author?.display_name || story?.author?.full_name || story?.author?.username || senderName || 'مستخدم';
 
   return (
     <div className="w-[78%] max-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl">
@@ -100,13 +100,18 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
 
         <div className="absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent p-2">
           {story?.author?.avatar_url ? (
-            <img src={story.author.avatar_url} alt="" className="h-6 w-6 rounded-full object-cover" />
+            <img src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
           ) : (
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
               {(story?.author?.username || 'A').charAt(0).toUpperCase()}
             </span>
           )}
-          <span className="truncate text-[11px] font-bold">{story?.author?.username || 'قصة'}</span>
+          <span className="user-identity-meta h-6 min-w-0 flex-1">
+            <span className="truncate text-[10px] font-bold leading-tight">{authorLabel}</span>
+            {story?.author?.username && (
+              <span className="truncate text-[9px] leading-none text-white/70" dir="ltr">{story.author.username}</span>
+            )}
+          </span>
         </div>
 
       </div>

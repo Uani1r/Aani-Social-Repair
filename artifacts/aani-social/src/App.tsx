@@ -2380,16 +2380,19 @@ function StoriesBar({
             {showUI && (
               <div className="absolute inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent" style={{ top: 'calc(1.5rem + env(safe-area-inset-top))' }}>
                 <div className="flex min-w-0 flex-col items-start gap-1">
-                  <Link href={`/profile/${currentStory.user_id}`} className="flex items-center gap-2">
+                  <Link href={`/profile/${currentStory.user_id}`} className="flex min-w-0 items-center gap-2">
                     <Avatar profile={currentStory.author} storyBorder={false} />
-                    <div>
-                      <div className="flex items-center gap-1">
-                        <span className="font-bold text-xs">{displayName(currentStory.author)}</span>
+                    <div className="user-identity-meta h-8 min-w-0 flex-1">
+                      <div className="flex min-w-0 items-center gap-1">
+                        <span className="truncate font-bold text-xs">{displayName(currentStory.author)}</span>
                         {currentStory.is_close_friends && (
-                          <span className="bg-emerald-500 text-[9px] px-1.5 py-0.2 rounded-md font-semibold">أصدقاء مقربون</span>
+                          <span className="shrink-0 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold">أصدقاء مقربون</span>
                         )}
                       </div>
-                      <span className="text-[10px] text-zinc-300 block">{formatDate(currentStory.created_at)}</span>
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="truncate text-[10px] text-zinc-300" dir="ltr">{currentStory.author?.username}</span>
+                        <span className="shrink-0 text-[10px] text-zinc-300">{formatDate(currentStory.created_at)}</span>
+                      </div>
                     </div>
                   </Link>
                   {currentStory.original_story_id && originalStoryAuthor && (
@@ -2624,8 +2627,8 @@ function StoriesBar({
                   </div>
                   <div className="min-h-0 flex-1 overflow-y-auto pb-2">
                     {storyViewsLoading && (
-                      <div className="flex items-center justify-center gap-2 py-5 text-xs text-zinc-400">
-                        <Loader2 size={16} className="animate-spin" /> جارٍ تحميل المشاهدات...
+                      <div className="flex items-center justify-center py-5 text-zinc-400" role="status" aria-label="جارٍ تحميل المشاهدات">
+                        <Loader2 size={20} className="animate-spin" />
                       </div>
                     )}
                     {storyViewsError && (
@@ -2637,13 +2640,15 @@ function StoriesBar({
                           <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-2 rounded-xl px-2 py-2 hover:bg-white/[0.03]">
                             <Avatar profile={item.viewer} />
                             <div className="min-w-0 flex-1">
-                              <p className="truncate text-xs font-semibold text-white">
-                                {storyViewerDisplayName(item.viewer)}
-                              </p>
-                              <p className="truncate text-[10px] text-zinc-400" dir="ltr">
-                                {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
-                              </p>
-                              <time className="mt-0.5 block text-[10px] text-zinc-500">
+                              <div className="user-identity-meta h-8">
+                                <p className="truncate text-xs font-semibold leading-tight text-white">
+                                  {storyViewerDisplayName(item.viewer)}
+                                </p>
+                                <p className="truncate text-[10px] leading-none text-zinc-400" dir="ltr">
+                                  {item.viewer?.username || 'اسم المستخدم غير متاح'}
+                                </p>
+                              </div>
+                              <time className="mt-1 block text-[10px] text-zinc-500">
                                 {formatDate(item.viewed_at)}
                               </time>
                             </div>
@@ -2654,7 +2659,7 @@ function StoriesBar({
                               <DropdownMenuTrigger asChild>
                                 <button
                                   type="button"
-                                  aria-label={`خيارات ${item.viewer?.username ? `@${item.viewer.username}` : 'المشاهد'}`}
+                                  aria-label={`خيارات ${item.viewer?.username || 'المشاهد'}`}
                                   disabled={Boolean(viewerActionBusyId)}
                                   className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
                                 >
@@ -2695,13 +2700,15 @@ function StoriesBar({
                             <li key={`preview:${currentStory.id}:${item.user_id}`} className="flex items-center gap-2 py-2">
                               <Avatar profile={item.viewer} />
                               <div className="min-w-0 flex-1">
-                                <p className="truncate text-xs font-semibold text-white">
-                                  {storyViewerDisplayName(item.viewer)}
-                                </p>
-                                <p className="truncate text-[10px] text-zinc-400" dir="ltr">
-                                  {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
-                                </p>
-                                <time className="mt-0.5 block text-[10px] text-zinc-500">
+                                <div className="user-identity-meta h-8">
+                                  <p className="truncate text-xs font-semibold leading-tight text-white">
+                                    {storyViewerDisplayName(item.viewer)}
+                                  </p>
+                                  <p className="truncate text-[10px] leading-none text-zinc-400" dir="ltr">
+                                    {item.viewer?.username || 'اسم المستخدم غير متاح'}
+                                  </p>
+                                </div>
+                                <time className="mt-1 block text-[10px] text-zinc-500">
                                   {formatDate(item.viewed_at)} · معاينة
                                 </time>
                               </div>
@@ -3231,7 +3238,7 @@ function StoriesBar({
               setStoryMentions(people);
               setStoryMentionsOpen(false);
               if (people.length === 1) {
-                toast.success(`تمت الإشارة إلى @${people[0].username}`);
+                toast.success(`تمت الإشارة إلى ${people[0].username}`);
               } else if (people.length > 1) {
                 toast.success(`تمت الإشارة إلى ${people.length} أشخاص`);
               }
@@ -3560,15 +3567,14 @@ function PostCard({ post, currentUserId, onRefresh, onOpenComments }: { post: Po
       )}
       <header className="flex items-start gap-3 w-full">
         <Avatar profile={post.author} large />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Link href={`/profile/${post.user_id}`} className="hover:underline">
-              <strong className="text-white text-sm font-bold truncate block">{displayName(post.author)}</strong>
+        <div className="user-identity-meta h-12 min-w-0 flex-1">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <Link href={`/profile/${post.user_id}`} className="min-w-0 flex-1 hover:underline">
+              <strong className="block truncate text-sm font-bold text-white">{displayName(post.author)}</strong>
             </Link>
-            <span className="text-zinc-500 text-xs truncate" dir="ltr">@{post.author?.username || 'user'}</span>
-            <span className="text-zinc-600 text-xs">·</span>
-            <time className="text-zinc-500 text-xs whitespace-nowrap">{formatDate(post.created_at)}</time>
+            <time className="shrink-0 text-xs whitespace-nowrap text-zinc-500">{formatDate(post.created_at)}</time>
           </div>
+          <span className="truncate text-xs leading-none text-zinc-500" dir="ltr">{post.author?.username || 'user'}</span>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -4350,9 +4356,9 @@ function SearchPage({ userId }: { userId: string }) {
             <Link key={p.id} href={`/profile/${p.id}`} className="flex items-center justify-between p-2.5 rounded-xl hover:bg-zinc-800/50">
               <div className="flex items-center gap-3">
                 <Avatar profile={p} large />
-                <div>
-                  <strong className="text-xs text-white block font-bold">{displayName(p)}</strong>
-                  <span className="text-[11px] text-zinc-400" dir="ltr">@{p.username}</span>
+                <div className="user-identity-meta h-12 min-w-0 flex-1">
+                  <strong className="block truncate text-xs font-bold leading-tight text-white">{displayName(p)}</strong>
+                  <span className="block truncate text-[11px] leading-none text-zinc-400" dir="ltr">{p.username}</span>
                 </div>
               </div>
               <ArrowUpLeft size={16} className="text-zinc-500" />
@@ -4658,9 +4664,9 @@ function MessagesPage({
               <Link key={c.id} href={`/messages/${c.id}`} className="flex items-center justify-between p-2 rounded-xl hover:bg-zinc-800/50">
                 <div className="flex items-center gap-2">
                   <Avatar profile={c} />
-                  <div>
-                    <strong className="text-xs text-white block">{displayName(c)}</strong>
-                    <span className="text-[10px] text-zinc-400" dir="ltr">@{c.username}</span>
+                  <div className="user-identity-meta h-8 min-w-0 flex-1">
+                    <strong className="block truncate text-xs leading-tight text-white">{displayName(c)}</strong>
+                    <span className="block truncate text-[10px] leading-none text-zinc-400" dir="ltr">{c.username}</span>
                   </div>
                 </div>
                 <ArrowUpLeft size={16} className="text-zinc-500" />
@@ -4911,7 +4917,7 @@ function ProfilePage({
 
   return (
     <section className="new-view space-y-4 max-w-lg mx-auto">
-      <div className="profile-banner card flex items-center gap-4 p-4 border border-zinc-800 rounded-2xl bg-zinc-900/80">
+      <div className="profile-banner card flex items-start gap-4 p-4 border border-zinc-800 rounded-2xl bg-zinc-900/80">
         <button
           type="button"
           disabled={!hasActiveStories}
@@ -4938,9 +4944,12 @@ function ProfilePage({
             </span>
           </span>
         </button>
-        <div className="flex-1">
-          <strong dir="ltr" className="text-white text-sm block font-bold">@{person.username}</strong>
-          <p className="text-xs text-zinc-400 my-1">{person.bio || 'لا توجد نبذة شخصية'}</p>
+        <div className="min-w-0 flex-1">
+          <div className="user-identity-meta h-[72px] min-w-0">
+            <strong className="block truncate text-sm font-bold leading-tight text-white">{displayName(person)}</strong>
+            <span className="block truncate text-xs leading-none text-zinc-400" dir="ltr">{person.username}</span>
+          </div>
+          <p className="mt-2 text-xs text-zinc-400">{person.bio || 'لا توجد نبذة شخصية'}</p>
 
           <div className="flex gap-4 my-2 text-xs text-zinc-300">
             <span><b className="text-white">{postCount}</b> منشور</span>
@@ -4987,9 +4996,10 @@ function ProfilePage({
           {followRequests.map(request => (
             <div key={request.profile.id} className="flex items-center gap-2 rounded-xl bg-black/20 p-2">
               <Avatar profile={request.profile} />
-              <span className="min-w-0 flex-1 truncate text-[11px] text-white">
-                {request.profile.full_name || `@${request.profile.username}`}
-              </span>
+              <div className="user-identity-meta h-8 min-w-0 flex-1">
+                <span className="block truncate text-[11px] leading-tight text-white">{displayName(request.profile)}</span>
+                <span className="block truncate text-[10px] leading-none text-zinc-400" dir="ltr">{request.profile.username}</span>
+              </div>
               <button
                 type="button"
                 disabled={Boolean(busyRequestId)}
@@ -5378,9 +5388,9 @@ function SettingsModal({ isOpen, onClose, currentProfile, onSignOut }: SettingsM
           <div className="space-y-4 pt-3 flex-1">
             <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
               <Avatar profile={currentProfile} large />
-              <div className="min-w-0">
-                <strong className="block truncate text-sm">{displayName(currentProfile)}</strong>
-                {currentProfile?.username && <span className="text-xs text-zinc-400" dir="ltr">@{currentProfile.username}</span>}
+              <div className="user-identity-meta h-12 min-w-0 flex-1">
+                <strong className="block truncate text-sm leading-tight">{displayName(currentProfile)}</strong>
+                {currentProfile?.username && <span className="block truncate text-xs leading-none text-zinc-400" dir="ltr">{currentProfile.username}</span>}
               </div>
             </div>
             <p className="text-xs leading-6 text-zinc-400">إدارة جلسة تسجيل الدخول وإعدادات حسابك في آني.</p>

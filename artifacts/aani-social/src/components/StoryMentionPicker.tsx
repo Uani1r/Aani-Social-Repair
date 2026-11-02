@@ -204,9 +204,9 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
                     {(person.username || '?').charAt(0).toUpperCase()}
                   </span>
                 )}
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[12px] font-bold">{person.full_name || person.username}</span>
-                  <span className="block truncate text-[10px] text-white/50">@{person.username}</span>
+                <span className="user-identity-meta h-10 min-w-0 flex-1">
+                  <span className="block truncate text-[12px] font-bold leading-tight">{person.full_name || person.username}</span>
+                  <span className="block truncate text-[10px] leading-none text-white/50" dir="ltr">{person.username}</span>
                 </span>
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition ${

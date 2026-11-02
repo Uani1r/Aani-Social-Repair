@@ -63,7 +63,7 @@ export const displayName = (
 ): string =>
   profile?.display_name ||
   profile?.full_name ||
-  (profile?.username ? `@${profile.username}` : "عضو آني");
+  (profile?.username || "عضو آني");
 
 export const normalizeProfile = (
   value: unknown,
