@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { Link, Route, Router as WouterRouter, Switch, useLocation } from 'wouter';
 import { 
   ArrowUpLeft, Bell, Bookmark, Clock, Film, Filter, Heart, Home, 
-  ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
-  Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
+  MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
+  Settings, Sparkles, Star, Trash2, UserRound, X, SendHorizontal, Pencil,
   ThumbsUp,
   Bot, Loader2, Play, Flag, Eye, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown, Ban,
 } from 'lucide-react';
@@ -48,6 +48,7 @@ import SearchPage from '@/pages/SearchPage';
 import MessagesPage from '@/pages/MessagesPage';
 import ProfilePage from '@/pages/ProfilePage';
 import ReelsPage from '@/pages/ReelsPage';
+import CreatePostModal from '@/components/CreatePostModal';
 import Avatar from './components/Avatar';
 import AIAssistantModal from './components/AIAssistantModal';
 import SharedPostPreview from './components/SharedPostPreview';
@@ -3996,63 +3997,20 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
       <div aria-hidden="true" style={{ height: 'calc(2.9375rem + env(safe-area-inset-top))' }} />
 
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content max-w-md w-full bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
-              <h3 className="font-semibold text-white text-sm">منشور جديد</h3>
-              <button className="text-zinc-400" onClick={() => setShowCreateModal(false)}><X size={18} /></button>
-            </div>
-
-            <textarea 
-              value={postText}
-              onChange={(e) => setPostText(e.target.value)}
-              placeholder="اكتب شرحاً للمنشور..." 
-              className="w-full p-3 border rounded-xl resize-none outline-none bg-zinc-950 border-zinc-800 text-white text-xs" 
-              rows={3} 
-            />
-
-            {filePreviews.length > 0 && (
-              <div className="flex gap-2 overflow-x-auto py-2 no-scrollbar">
-                {filePreviews.map((preview, i) => (
-                  <div key={preview.url} className="relative w-20 h-20 rounded-xl overflow-hidden border border-zinc-800 shrink-0 bg-black">
-                    {fileType === 'image' ? (
-                      <img src={preview.url} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      <video src={preview.url} className="w-full h-full object-cover" />
-                    )}
-                    <button type="button" onClick={() => setSelectedFiles(files => files.filter((_, idx) => idx !== i))} className="absolute top-1 right-1 bg-black/70 text-white rounded-full p-0.5">
-                      <X size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <input type="file" id="image-upload" multiple accept="image/*" className="hidden" onChange={(e) => { if (e.target.files) { setSelectedFiles(Array.from(e.target.files)); setFileType('image'); } }} />
-            <input type="file" id="video-upload" accept="video/*" className="hidden" onChange={(e) => { if (e.target.files?.[0]) { setSelectedFiles([e.target.files[0]]); setFileType('video'); } }} />
-
-            <div className="flex items-center justify-between pt-2 border-t border-zinc-800 text-xs">
-              <div className="flex gap-2">
-                <label htmlFor="image-upload" className="flex items-center gap-1 px-3 py-2 text-pink-400 bg-pink-950/40 rounded-xl cursor-pointer">
-                  <ImagePlus size={15} /> صور
-                </label>
-                <label htmlFor="video-upload" className="flex items-center gap-1 px-3 py-2 text-purple-400 bg-purple-950/40 rounded-xl cursor-pointer">
-                  <Video size={15} /> فيديو
-                </label>
-              </div>
-
-              <button 
-                type="button"
-                onClick={() => void handlePublish()}
-                disabled={isSubmitting || (!postText.trim() && selectedFiles.length === 0)}
-                className="px-5 py-2 bg-pink-600 disabled:opacity-50 text-white rounded-xl font-semibold"
-              >
-                {isSubmitting ? 'جاري النشر...' : 'نشر'}
-              </button>
-            </div>
-            {createError && <p className="text-xs text-red-400">{createError}</p>}
-          </div>
-        </div>
+        <CreatePostModal
+          postText={postText}
+          selectedFiles={selectedFiles}
+          fileType={fileType}
+          filePreviews={filePreviews}
+          isSubmitting={isSubmitting}
+          createError={createError}
+          onPostTextChange={setPostText}
+          onRemoveFile={index => setSelectedFiles(files => files.filter((_, idx) => idx !== index))}
+          onSelectImages={files => { setSelectedFiles(files); setFileType('image'); }}
+          onSelectVideo={file => { setSelectedFiles([file]); setFileType('video'); }}
+          onPublish={() => void handlePublish()}
+          onClose={() => setShowCreateModal(false)}
+        />
       )}
 
       <SettingsModal isOpen={showSettingsModal} onClose={() => setShowSettingsModal(false)} currentProfile={profile} onSignOut={handleSignOut} />
