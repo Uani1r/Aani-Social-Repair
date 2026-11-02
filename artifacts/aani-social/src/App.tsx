@@ -1277,21 +1277,15 @@ function StoriesBar({
 
     let active = true;
     void supabase
-      .from('story_views')
-      .upsert(
-        { story_id: currentStory.id, user_id: userId },
-        { onConflict: 'story_id,user_id', ignoreDuplicates: true },
-      )
+      .rpc('aani_record_story_view', { p_story_id: currentStory.id })
       .then(({ error }) => {
         if (active && error) {
-          console.error('[story views] تعذر تسجيل المشاهدة:', error);
-          toast.error('تعذر تسجيل مشاهدة الستوري. تأكد من تطبيق ترحيل سجل المشاهدات.');
+          console.warn('[story views] تعذر تسجيل المشاهدة في الخلفية:', error);
         }
       })
       .catch(error => {
         if (active) {
-          console.error('[story views] تعذر تسجيل المشاهدة:', error);
-          toast.error('تعذر تسجيل مشاهدة الستوري. تحقق من الاتصال وحاول مجدداً.');
+          console.warn('[story views] تعذر تسجيل المشاهدة في الخلفية:', error);
         }
       });
 
