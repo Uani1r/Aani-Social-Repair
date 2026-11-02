@@ -2197,8 +2197,8 @@ function StoriesBar({
   };
 
   return (
-    <div className="story-bar mb-4 w-full" dir="rtl">
-      <div className="flex items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-2 pt-1">
+    <div className="contents" dir="rtl">
+      <div className="story-bar story-bar-content mb-4 flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-2 pt-1">
         {/* قصتك */}
         <div className="flex flex-col items-center gap-1.5 shrink-0">
           <div
