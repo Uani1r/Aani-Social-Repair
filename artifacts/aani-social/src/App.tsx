@@ -4211,7 +4211,7 @@ function FeedPage({ userId, profile, onOpenComments, pendingStoryReshare, onStor
         onProfileStoryHandled={onProfileStoryHandled}
       />
 
-      {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>
+      {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 
       {!loading && posts.length === 0 && (
         <div className="empty-state card text-center p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50">
