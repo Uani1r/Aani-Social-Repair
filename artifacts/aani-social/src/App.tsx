@@ -432,7 +432,9 @@ function StoriesBar({
   const storyViewerTouchStartRef = useRef<{
     x: number;
     y: number;
-    startedAt: number;
+    lastX: number;
+    lastY: number;
+    pathLength: number;
     startedInViewersHeader: boolean;
   } | null>(null);
   const storyViewerPausedBeforeTouchRef = useRef(false);
@@ -1313,6 +1315,16 @@ function StoriesBar({
     storyVideoWasPlayingRef.current = false;
   };
 
+  const suppressStoryClick = () => {
+    const suppressUntil = Date.now() + 700;
+    suppressStoryClickUntilRef.current = suppressUntil;
+    window.setTimeout(() => {
+      if (suppressStoryClickUntilRef.current === suppressUntil) {
+        suppressStoryClickUntilRef.current = 0;
+      }
+    }, 700);
+  };
+
   const handleStoryViewerTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
     storyViewerPausedBeforeTouchRef.current = isPaused;
     if (event.touches.length !== 1) {
@@ -1330,8 +1342,29 @@ function StoriesBar({
     storyViewerTouchStartRef.current = {
       x: touch.clientX,
       y: touch.clientY,
-      startedAt: Date.now(),
+      lastX: touch.clientX,
+      lastY: touch.clientY,
+      pathLength: 0,
       startedInViewersHeader: Boolean(target?.closest('[data-story-viewers-panel-header]')),
+    };
+  };
+
+  const handleStoryViewerTouchMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = storyViewerTouchStartRef.current;
+    if (!start) return;
+    if (event.touches.length !== 1) {
+      storyViewerTouchStartRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    const deltaX = touch.clientX - start.lastX;
+    const deltaY = touch.clientY - start.lastY;
+    storyViewerTouchStartRef.current = {
+      ...start,
+      lastX: touch.clientX,
+      lastY: touch.clientY,
+      pathLength: start.pathLength + Math.hypot(deltaX, deltaY),
     };
   };
 
@@ -1341,34 +1374,35 @@ function StoriesBar({
     const touch = event.changedTouches[0];
     if (!start || !touch) return;
 
-    const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    const verticalDistance = Math.abs(deltaY);
-    const elapsed = Math.max(1, Date.now() - start.startedAt);
-    const isFastEnough = verticalDistance >= 112 || verticalDistance / elapsed >= 0.12;
-    const isVerticalSwipe = verticalDistance >= 72
-      && verticalDistance >= Math.abs(deltaX) * 0.6
-      && elapsed <= 1200
-      && isFastEnough;
-    if (!isVerticalSwipe) return;
+    const finalSegment = Math.hypot(touch.clientX - start.lastX, touch.clientY - start.lastY);
+    const totalTravel = start.pathLength + finalSegment;
+    const isClearSwipe = Math.abs(deltaY) >= 64 && totalTravel >= 72;
 
-    suppressStoryClickUntilRef.current = Date.now() + 700;
-
-    const topEdge = Math.max(56, Math.min(96, window.innerHeight * 0.1));
-    if (deltaY > 0 && start.y <= topEdge) {
-      setActiveUserGroup(null);
+    if (storyViewsOpen) {
+      if (isClearSwipe && isStoryOwner && deltaY > 0 && start.startedInViewersHeader) {
+        suppressStoryClick();
+        handleCloseStoryViews();
+        return;
+      }
+      if (isClearSwipe) suppressStoryClick();
       return;
     }
 
-    if (storyViewsOpen && isStoryOwner) {
-      if (deltaY > 0 && start.startedInViewersHeader) handleCloseStoryViews();
+    if (showMenu) {
+      if (isClearSwipe) suppressStoryClick();
       return;
     }
+    if (!isClearSwipe) return;
 
-    const bottomEdge = window.innerHeight - Math.max(112, window.innerHeight * 0.14);
-    if (isStoryOwner && deltaY < 0 && start.y >= bottomEdge) {
+    suppressStoryClick();
+
+    if (deltaY < 0 && isStoryOwner) {
       void handleOpenStoryViews(storyViewerPausedBeforeTouchRef.current);
+      return;
     }
+
+    if (deltaY > 0) setActiveUserGroup(null);
   };
 
   const handleStoryViewerTouchCancel = () => {
@@ -1820,9 +1854,19 @@ function StoriesBar({
           aria-modal="true"
           aria-label="عارض القصص"
           onTouchStartCapture={handleStoryViewerTouchStart}
+          onTouchMoveCapture={handleStoryViewerTouchMove}
           onTouchEnd={handleStoryViewerTouchEnd}
           onTouchCancel={handleStoryViewerTouchCancel}
           onClickCapture={event => {
+            const target = event.target instanceof Element ? event.target : null;
+            const isMenuInteraction = target?.closest('[data-story-viewer-menu], [data-story-viewer-menu-toggle]');
+            if (showMenu && !isMenuInteraction) {
+              setShowMenu(false);
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+
             if (Date.now() < suppressStoryClickUntilRef.current) {
               suppressStoryClickUntilRef.current = 0;
               event.preventDefault();
@@ -1878,7 +1922,13 @@ function StoriesBar({
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button onClick={() => setShowMenu(!showMenu)} className="p-1 hover:bg-white/20 rounded-full">
+                  <button
+                    type="button"
+                    data-story-viewer-menu-toggle="true"
+                    aria-label="خيارات الستوري"
+                    onClick={() => setShowMenu(!showMenu)}
+                    className="p-1 hover:bg-white/20 rounded-full"
+                  >
                     <MoreVertical size={18} />
                   </button>
                   <button onClick={() => setActiveUserGroup(null)} className="p-1 hover:bg-white/20 rounded-full">
@@ -1889,7 +1939,7 @@ function StoriesBar({
             )}
 
             {showMenu && (
-              <div className="absolute top-14 left-3 z-40 bg-zinc-900 border border-zinc-800 rounded-xl p-2 shadow-xl text-xs space-y-1">
+              <div data-story-viewer-menu="true" className="absolute top-14 left-3 z-40 bg-zinc-900 border border-zinc-800 rounded-xl p-2 shadow-xl text-xs space-y-1">
                 {currentStory.user_id === userId ? (
                   <button onClick={handleDeleteStory} className="flex items-center gap-2 text-red-400 p-2 w-full hover:bg-zinc-800 rounded-lg">
                     <Trash2 size={14} /> حذف الستوري
