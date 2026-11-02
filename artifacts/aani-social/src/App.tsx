@@ -367,6 +367,12 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 }
 
 // --- شريط القصص الموحد ---
+type StoryDrawPoint = { x: number; y: number };
+type StoryDrawStroke = { id: string; color: string; size: number; points: StoryDrawPoint[] };
+
+const STORY_DRAW_COLORS = ['#FFFFFF', '#FF3B30', '#FFCC00', '#34C759', '#007AFF', '#AF52DE'];
+const STORY_DRAW_SIZES = [3, 6, 10];
+
 // العنصر الذي بدأ منه اللمس: يُقفل التفاعل عليه وحده حتى نهاية الإيماءة
 type StoryGestureTarget = 'text' | 'image' | 'canvas';
 
@@ -531,6 +537,12 @@ function StoriesBar({
 
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
   const [storyDurationOpen, setStoryDurationOpen] = useState(false);
+  const [storyDrawingOpen, setStoryDrawingOpen] = useState(false);
+  const [storyDrawColor, setStoryDrawColor] = useState(STORY_DRAW_COLORS[0]);
+  const [storyDrawSize, setStoryDrawSize] = useState(STORY_DRAW_SIZES[1]);
+  const [storyDrawStrokes, setStoryDrawStrokes] = useState<StoryDrawStroke[]>([]);
+  const storyDrawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const activeStoryDrawStrokeRef = useRef<StoryDrawStroke | null>(null);
   // أدوات إضافية للمحرر: الأصدقاء المقربون ومدة عرض القصة على الشاشة.
   const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [
     {
@@ -579,21 +591,23 @@ function StoriesBar({
   const storyTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // مرجع لحالة النوافذ الفرعية داخل معالجات اللمس (لتجنّب قراءة حالة قديمة)
-  const storyPanelsRef = useRef({ filters: false, textEditor: false, more: false });
+  const storyPanelsRef = useRef({ filters: false, textEditor: false, more: false, drawing: false });
 
   useEffect(() => {
     storyPanelsRef.current = {
       filters: storyFiltersOpen,
       textEditor: storyTextEditorOpen,
       more: storyMoreOpen,
+      drawing: storyDrawingOpen,
     };
-  }, [storyFiltersOpen, storyTextEditorOpen, storyMoreOpen]);
+  }, [storyFiltersOpen, storyTextEditorOpen, storyMoreOpen, storyDrawingOpen]);
 
   // تُغلق النوافذ الفرعية وحدها دون فتح أي أداة أخرى
   const closeStoryPanels = useCallback(() => {
     setStoryFiltersOpen(false);
     setStoryTextEditorOpen(false);
     setStoryMoreOpen(false);
+    setStoryDrawingOpen(false);
   }, []);
 
   const storyBackgroundPreset = STORY_TEXT_BACKGROUNDS[storyBackgroundIndex % STORY_TEXT_BACKGROUNDS.length];
@@ -879,7 +893,7 @@ function StoriesBar({
         return;
       }
       const panels = storyPanelsRef.current;
-      if (panels.filters || panels.textEditor || panels.more) {
+      if (panels.filters || panels.textEditor || panels.more || panels.drawing) {
         closeStoryPanels();
         return;
       }
@@ -985,6 +999,9 @@ function StoriesBar({
     }
 
     setStoryFile(null);
+    setStoryDrawStrokes([]);
+    setStoryDrawingOpen(false);
+    activeStoryDrawStrokeRef.current = null;
     setReshareStory(pendingReshare);
     setReshareScaledDown(true);
     setCaption(pendingReshare.caption || '');
@@ -1985,6 +2002,19 @@ function StoriesBar({
     }
   };
 
+  const buildStoryTimedTexts = () => [
+    ...timedTexts,
+    ...(storyDrawStrokes.length > 0
+      ? [{
+          id: 'story-drawing',
+          type: 'drawing' as const,
+          startTime: 0,
+          endTime: uploadDuration,
+          strokes: storyDrawStrokes,
+        }]
+      : []),
+  ];
+
   const handleUploadStory = async () => {
     if (!supabaseConfigured) return;
     const sourceStory = storyFile ? null : reshareStory;
@@ -2010,7 +2040,7 @@ function StoriesBar({
         p_caption: caption.trim() || sourceStory?.caption || null,
         p_is_close_friends: isCloseFriendsOnly,
         p_duration_seconds: uploadDuration,
-        p_timed_texts: timedTexts,
+        p_timed_texts: buildStoryTimedTexts(),
         p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
         p_original_story_id: sourceStory?.id || null,
         p_share_type: sourceStory ? 'reshare' : 'original',
@@ -2028,6 +2058,9 @@ function StoriesBar({
       setReshareScaledDown(false);
       setCaption('');
       setTimedTexts([]);
+      setStoryDrawStrokes([]);
+      setStoryDrawingOpen(false);
+      activeStoryDrawStrokeRef.current = null;
       setStoryMentions([]);
       setStoryDurationOpen(false);
       storyDurationManuallyChosenRef.current = false;
@@ -2131,7 +2164,7 @@ function StoriesBar({
           p_caption: storyCaption || sourceStory?.caption || null,
           p_is_close_friends: closeFriends,
           p_duration_seconds: durationSeconds,
-          p_timed_texts: [],
+          p_timed_texts: buildStoryTimedTexts(),
           p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
           p_original_story_id: sourceStory?.id || null,
           p_share_type: sourceStory ? 'reshare' : 'original',
@@ -2149,6 +2182,9 @@ function StoriesBar({
         setCaption(current => current.trim() === storyCaption ? '' : current);
         setStoryText('');
         setTimedTexts([]);
+        setStoryDrawStrokes([]);
+        setStoryDrawingOpen(false);
+        activeStoryDrawStrokeRef.current = null;
         setStoryMentions([]);
         setStoryDurationOpen(false);
         storyDurationManuallyChosenRef.current = false;
@@ -2201,6 +2237,145 @@ function StoriesBar({
     } catch {
       toast.error('تعذر نشر القصة، حاول مرة أخرى');
     }
+  };
+
+  const redrawStoryDrawingCanvas = useCallback(() => {
+    const canvas = storyDrawingCanvasRef.current;
+    if (!canvas) return;
+
+    const width = canvas.clientWidth;
+    const height = canvas.clientHeight;
+    if (!width || !height) return;
+
+    const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    const pixelWidth = Math.round(width * pixelRatio);
+    const pixelHeight = Math.round(height * pixelRatio);
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    storyDrawStrokes.forEach(stroke => {
+      if (stroke.points.length === 0) return;
+      context.strokeStyle = stroke.color;
+      context.fillStyle = stroke.color;
+      context.lineWidth = stroke.size;
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.beginPath();
+      context.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
+      if (stroke.points.length === 1) {
+        context.arc(
+          stroke.points[0].x * width,
+          stroke.points[0].y * height,
+          Math.max(1, stroke.size / 2),
+          0,
+          Math.PI * 2,
+        );
+        context.fill();
+        return;
+      }
+      for (const point of stroke.points.slice(1)) {
+        context.lineTo(point.x * width, point.y * height);
+      }
+      context.stroke();
+    });
+  }, [storyDrawStrokes]);
+
+  useEffect(() => {
+    if (!showUploadModal || !editorMediaUrl) return;
+    const canvas = storyDrawingCanvasRef.current;
+    if (!canvas) return;
+
+    redrawStoryDrawingCanvas();
+    const observer = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(redrawStoryDrawingCanvas);
+    observer?.observe(canvas);
+    window.addEventListener('resize', redrawStoryDrawingCanvas);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', redrawStoryDrawingCanvas);
+    };
+  }, [editorMediaUrl, redrawStoryDrawingCanvas, showUploadModal]);
+
+  const getStoryDrawPoint = (canvas: HTMLCanvasElement, clientX: number, clientY: number): StoryDrawPoint => {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: rect.width > 0 ? Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)) : 0,
+      y: rect.height > 0 ? Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)) : 0,
+    };
+  };
+
+  const handleStoryDrawPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!storyDrawingOpen) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const canvas = event.currentTarget;
+    const point = getStoryDrawPoint(canvas, event.clientX, event.clientY);
+    const stroke: StoryDrawStroke = {
+      id: `draw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      color: storyDrawColor,
+      size: storyDrawSize,
+      points: [point],
+    };
+    activeStoryDrawStrokeRef.current = stroke;
+    const context = canvas.getContext('2d');
+    if (context) {
+      const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.fillStyle = stroke.color;
+      context.beginPath();
+      context.arc(point.x * canvas.clientWidth, point.y * canvas.clientHeight, Math.max(1, stroke.size / 2), 0, Math.PI * 2);
+      context.fill();
+    }
+    canvas.setPointerCapture(event.pointerId);
+  };
+
+  const handleStoryDrawPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const stroke = activeStoryDrawStrokeRef.current;
+    if (!storyDrawingOpen || !stroke) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const canvas = event.currentTarget;
+    const point = getStoryDrawPoint(canvas, event.clientX, event.clientY);
+    const previous = stroke.points[stroke.points.length - 1];
+    stroke.points.push(point);
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    context.strokeStyle = stroke.color;
+    context.lineWidth = stroke.size;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.beginPath();
+    context.moveTo(previous.x * canvas.clientWidth, previous.y * canvas.clientHeight);
+    context.lineTo(point.x * canvas.clientWidth, point.y * canvas.clientHeight);
+    context.stroke();
+  };
+
+  const handleStoryDrawPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const stroke = activeStoryDrawStrokeRef.current;
+    if (!stroke) return;
+    event.preventDefault();
+    event.stopPropagation();
+    activeStoryDrawStrokeRef.current = null;
+    setStoryDrawStrokes(previous => [...previous, { ...stroke, points: [...stroke.points] }]);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const undoStoryDrawStroke = () => {
+    if (activeStoryDrawStrokeRef.current) activeStoryDrawStrokeRef.current = null;
+    setStoryDrawStrokes(previous => previous.slice(0, -1));
   };
 
   return (
@@ -2342,6 +2517,9 @@ function StoriesBar({
           }
 
           setStoryFile(files[0]);
+          setStoryDrawStrokes([]);
+          setStoryDrawingOpen(false);
+          activeStoryDrawStrokeRef.current = null;
           setReshareStory(null);
           setReshareScaledDown(false);
           storyDurationManuallyChosenRef.current = true;
@@ -2498,19 +2676,54 @@ function StoriesBar({
                 />
               )}
 
-              {(currentStory.timed_texts || []).map((tt: any) => {
-                if (currentTimeSec >= tt.startTime && currentTimeSec <= tt.endTime) {
+              {(Array.isArray(currentStory.timed_texts) ? currentStory.timed_texts : []).map((tt: any) => {
+                if (!tt || currentTimeSec < tt.startTime || currentTimeSec > tt.endTime) return null;
+
+                if (tt.type === 'drawing' && Array.isArray(tt.strokes)) {
                   return (
-                    <div 
-                      key={tt.id}
-                      style={{ top: `${tt.y}%`, left: `${tt.x}%`, transform: 'translate(-50%, -50%)' }}
-                      className="absolute bg-black/70 text-white font-bold px-3 py-1.5 rounded-xl text-xs border border-white/20 backdrop-blur-sm z-20"
+                    <svg
+                      key={tt.id || 'story-drawing'}
+                      className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+                      viewBox="0 0 1000 1000"
+                      preserveAspectRatio="none"
+                      aria-hidden="true"
                     >
-                      {tt.text}
-                    </div>
+                      {tt.strokes.map((stroke: any, index: number) => {
+                        const points = Array.isArray(stroke?.points)
+                          ? stroke.points.filter((point: any) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+                          : [];
+                        if (points.length === 0) return null;
+                        const first = points[0];
+                        const path = points.length === 1
+                          ? `M ${first.x * 1000} ${first.y * 1000} L ${first.x * 1000 + 0.01} ${first.y * 1000}`
+                          : points.map((point: StoryDrawPoint, pointIndex: number) => `${pointIndex === 0 ? 'M' : 'L'} ${point.x * 1000} ${point.y * 1000}`).join(' ');
+                        const width = Number.isFinite(stroke.size) ? Math.min(24, Math.max(1, stroke.size)) : 5;
+                        return (
+                          <path
+                            key={stroke.id || index}
+                            d={path}
+                            fill="none"
+                            stroke={typeof stroke.color === 'string' ? stroke.color : '#FFFFFF'}
+                            strokeWidth={width}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        );
+                      })}
+                    </svg>
                   );
                 }
-                return null;
+
+                return (
+                  <div
+                    key={tt.id}
+                    style={{ top: `${tt.y}%`, left: `${tt.x}%`, transform: 'translate(-50%, -50%)' }}
+                    className="absolute bg-black/70 text-white font-bold px-3 py-1.5 rounded-xl text-xs border border-white/20 backdrop-blur-sm z-20"
+                  >
+                    {tt.text}
+                  </div>
+                );
               })}
 
               {currentStory.caption && currentStory.media_url && (
@@ -2917,6 +3130,20 @@ function StoriesBar({
                     </div>
                   </div>
                 )}
+                <canvas
+                  ref={storyDrawingCanvasRef}
+                  aria-label="لوحة الرسم على الستوري"
+                  className={`absolute inset-0 z-10 h-full w-full ${storyDrawingOpen ? 'pointer-events-auto cursor-crosshair' : 'pointer-events-none'}`}
+                  style={{ touchAction: 'none' }}
+                  onPointerDown={handleStoryDrawPointerDown}
+                  onPointerMove={handleStoryDrawPointerMove}
+                  onPointerUp={handleStoryDrawPointerUp}
+                  onPointerCancel={handleStoryDrawPointerUp}
+                  onTouchStart={event => event.stopPropagation()}
+                  onTouchMove={event => event.stopPropagation()}
+                  onTouchEnd={event => event.stopPropagation()}
+                  onTouchCancel={event => event.stopPropagation()}
+                />
               </div>
             </div>
           ) : (
@@ -2934,6 +3161,8 @@ function StoriesBar({
               type="button"
               onClick={() => {
                 setShowUploadModal(false);
+                setStoryDrawingOpen(false);
+                activeStoryDrawStrokeRef.current = null;
                 if (reshareStory) {
                   setReshareStory(null);
                   setReshareScaledDown(false);
@@ -2994,20 +3223,32 @@ function StoriesBar({
                   aria-label={tool.label}
                   onClick={() => {
                     if (tool.key === 'text') {
+                      setStoryDrawingOpen(false);
                       setStoryFiltersOpen(false);
                       setStoryTextEditorOpen(true);
                     } else if (tool.key === 'mention') {
+                      setStoryDrawingOpen(false);
                       setStoryTextEditorOpen(false);
                       setStoryFiltersOpen(false);
                       setStoryMentionsOpen(true);
                     } else if (tool.key === 'music') {
+                      setStoryDrawingOpen(false);
                       setStoryTextEditorOpen(false);
                       setStoryMusicOpen(true);
                     } else if (tool.key === 'effects') {
+                      setStoryDrawingOpen(false);
                       setStoryTextEditorOpen(false);
                       setStoryFiltersOpen(open => !open);
-                    } else {
-                      toast.info('أداة الرسم ستُضاف قريبًا');
+                    } else if (tool.key === 'draw') {
+                      if (!editorMediaUrl) {
+                        toast.info('اختر صورة أو فيديو أولاً');
+                        return;
+                      }
+                      setStoryTextEditorOpen(false);
+                      setStoryFiltersOpen(false);
+                      setStoryMoreOpen(false);
+                      setStoryDurationOpen(false);
+                      setStoryDrawingOpen(true);
                     }
                   }}
                   className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
@@ -3038,7 +3279,7 @@ function StoriesBar({
 
               {storyMoreOpen && (
                 <div
-                  className="absolute right-full top-0 z-30 mr-2 flex w-14 flex-col gap-1 rounded-2xl border border-white/10 bg-[#101014]/95 p-1.5 shadow-2xl backdrop-blur-xl"
+                  className="absolute left-1/2 top-full z-30 mt-2 flex w-9 -translate-x-1/2 flex-col items-stretch gap-1 rounded-xl border border-white/10 bg-[#101014]/95 py-1 shadow-2xl backdrop-blur-xl"
                   dir="rtl"
                   role="menu"
                 >
@@ -3052,7 +3293,7 @@ function StoriesBar({
                           aria-label={item.label}
                           aria-expanded={item.key === 'duration' ? storyDurationOpen : undefined}
                           onClick={item.action}
-                          className={`flex h-11 w-11 items-center justify-center rounded-xl transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/85'}`}
+                          className={`flex h-9 w-full items-center justify-center rounded-lg transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/85'}`}
                         >
                           <Icon size={19} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
                         </button>
@@ -3206,6 +3447,60 @@ function StoriesBar({
               <div className="mx-auto mb-2 flex w-fit items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-[10px] text-white backdrop-blur-sm">
                 <Music2 size={12} />
                 <span className="max-w-[55vw] truncate">{storyMusicTrack.title}</span>
+              </div>
+            )}
+            {storyDrawingOpen && (
+              <div className="mb-3 rounded-2xl border border-white/15 bg-black/75 p-2.5 text-white shadow-xl backdrop-blur-xl" dir="rtl">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="shrink-0 text-[10px] font-semibold text-white/70">لون القلم</span>
+                  <div className="flex items-center gap-2" dir="ltr">
+                    {STORY_DRAW_COLORS.map(color => (
+                      <button
+                        key={color}
+                        type="button"
+                        aria-label={`لون الرسم ${color}`}
+                        aria-pressed={storyDrawColor === color}
+                        onClick={() => setStoryDrawColor(color)}
+                        className={`h-6 w-6 rounded-full border-2 transition ${storyDrawColor === color ? 'border-white scale-110' : 'border-white/30'}`}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <span className="shrink-0 text-[10px] font-semibold text-white/70">حجم القلم</span>
+                  <div className="flex items-center gap-2" dir="ltr">
+                    {STORY_DRAW_SIZES.map(size => (
+                      <button
+                        key={size}
+                        type="button"
+                        aria-label={`حجم القلم ${size}`}
+                        aria-pressed={storyDrawSize === size}
+                        onClick={() => setStoryDrawSize(size)}
+                        className={`flex h-8 w-8 items-center justify-center rounded-full border transition ${storyDrawSize === size ? 'border-white bg-white/15' : 'border-white/20'}`}
+                      >
+                        <span className="rounded-full bg-white" style={{ width: size, height: size }} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={undoStoryDrawStroke}
+                    disabled={storyDrawStrokes.length === 0}
+                    className="h-9 flex-1 rounded-full border border-white/25 text-[11px] font-semibold disabled:opacity-40"
+                  >
+                    تراجع
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStoryDrawingOpen(false)}
+                    className="h-9 flex-1 rounded-full bg-white text-[11px] font-bold text-[#121212]"
+                  >
+                    تم
+                  </button>
+                </div>
               </div>
             )}
             <div className="flex items-stretch gap-2.5">
