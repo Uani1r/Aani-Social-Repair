@@ -8,7 +8,7 @@ import {
   Bot, Loader2, Play, Flag, Eye, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown, Ban,
 } from 'lucide-react';
 
-import { Toaster, toast } from 'sonner';
+import { toast } from 'sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -52,6 +52,23 @@ type StoryViewerProfile = {
   display_name?: string | null;
   avatar_url: string | null;
   is_private?: boolean;
+};
+
+const STORY_VIEWER_PLACEHOLDER_NAMES = new Set([
+  'new member',
+  'member',
+  'عضو جديد',
+  'عضو آني',
+  'مستخدم',
+]);
+
+const storyViewerDisplayName = (profile: StoryViewerProfile | null) => {
+  for (const candidate of [profile?.full_name, profile?.display_name]) {
+    const name = candidate?.trim();
+    if (name && !STORY_VIEWER_PLACEHOLDER_NAMES.has(name.toLowerCase())) return name;
+  }
+
+  return profile?.username?.trim() || 'مستخدم';
 };
 
 type StoryViewerEntry = {
@@ -2557,21 +2574,6 @@ function StoriesBar({
                   )}
                 </div>
 
-                <div className="flex shrink-0 items-center gap-0.5 rounded-full border border-zinc-700/70 bg-zinc-900/90 px-1.5 py-1">
-                  {['😲', '😂', '😍'].map(emoji => (
-                    <button
-                      key={emoji}
-                      type="button"
-                      disabled={isSendingReply}
-                      onClick={() => void handleSendReply(emoji)}
-                      aria-label={`إرسال ${emoji}`}
-                      className="text-sm transition hover:scale-125 disabled:opacity-50"
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-
                 <button
                   type="button"
                   onClick={() => void handleToggleLike()}
@@ -2636,7 +2638,7 @@ function StoriesBar({
                             <Avatar profile={item.viewer} />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-xs font-semibold text-white">
-                                {item.viewer?.display_name || item.viewer?.full_name || item.viewer?.username || 'مستخدم'}
+                                {storyViewerDisplayName(item.viewer)}
                               </p>
                               <p className="truncate text-[10px] text-zinc-400" dir="ltr">
                                 {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
@@ -2694,7 +2696,7 @@ function StoriesBar({
                               <Avatar profile={item.viewer} />
                               <div className="min-w-0 flex-1">
                                 <p className="truncate text-xs font-semibold text-white">
-                                  {item.viewer?.display_name || item.viewer?.full_name || item.viewer?.username || 'مستخدم'}
+                                  {storyViewerDisplayName(item.viewer)}
                                 </p>
                                 <p className="truncate text-[10px] text-zinc-400" dir="ltr">
                                   {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
@@ -2726,7 +2728,7 @@ function StoriesBar({
                     >
                       <h3 className="text-sm font-bold">الإبلاغ عن الحساب</h3>
                       <p className="mt-1 text-[11px] text-zinc-400">
-                        {viewerReportTarget.viewer?.display_name || viewerReportTarget.viewer?.full_name || viewerReportTarget.viewer?.username || 'الحساب المحدد'}
+                        {storyViewerDisplayName(viewerReportTarget.viewer)}
                       </p>
                       <label className="mt-4 block text-[11px] text-zinc-300">
                         سبب الإبلاغ
@@ -5622,6 +5624,13 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  const handleSignOut = () => {
+    // Root is valid in both session states: feed before logout, login after it.
+    setLocation('/');
+    onSignOut();
+  };
+
   const homeTapAtRef = useRef(0);
   const homeTapResetTimerRef = useRef<number | null>(null);
 
@@ -6148,7 +6157,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
         </div>
       )}
 
-      <SettingsModal isOpen={showSettingsModal} onClose={() => setShowSettingsModal(false)} currentProfile={profile} onSignOut={onSignOut} />
+      <SettingsModal isOpen={showSettingsModal} onClose={() => setShowSettingsModal(false)} currentProfile={profile} onSignOut={handleSignOut} />
       <NotificationsModal isOpen={showNotifsModal} onClose={() => setShowNotifsModal(false)} currentUserId={userId} />
 
       {/* زر المساعد الذكي العائم */}
@@ -6330,7 +6339,6 @@ function App() {
           </Switch>
         )}
       </WouterRouter>
-      <Toaster position="bottom-center" />
     </TooltipProvider>
   );
 }
