@@ -444,30 +444,33 @@ function StoriesBar({
   const [profileStoryOwnerId, setProfileStoryOwnerId] = useState<string | null>(null);
   const [profilePreviewStories, setProfilePreviewStories] = useState<any[]>([]);
 
-  // القصص المشاهدة (يُحفظ معرّف صاحبها محليًا لتمييز لون الحلقة فقط)
-  const [seenStories, setSeenStories] = useState<string[]>(() => {
+  // تُحفظ معرّفات القصص التي شاهدها المستخدم، لا معرّفات أصحابها.
+  const seenStoryStorageKey = `aani:seen-story-ids:${userId}`;
+  const [seenStoryIds, setSeenStoryIds] = useState<string[]>(() => {
     try {
-      const raw = localStorage.getItem('aani:seen-stories');
-      return raw ? (JSON.parse(raw) as string[]) : [];
+      const raw = localStorage.getItem(seenStoryStorageKey);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') as string[] : [];
     } catch {
       return [];
     }
   });
 
-  const markStorySeen = useCallback((authorId: string) => {    if (!authorId) return;
+  const markStorySeen = useCallback((storyId: string) => {
+    if (!storyId) return;
 
-    setSeenStories(prev => {
-      if (prev.includes(authorId)) return prev;
+    setSeenStoryIds(previous => {
+      if (previous.includes(storyId)) return previous;
 
-      const next = [...prev, authorId];
+      const next = [...previous, storyId];
       try {
-        localStorage.setItem('aani:seen-stories', JSON.stringify(next));
+        localStorage.setItem(seenStoryStorageKey, JSON.stringify(next));
       } catch {
         /* التخزين المحلي غير متاح */
       }
       return next;
     });
-  }, []);
+  }, [seenStoryStorageKey]);
 
   const [showUI, setShowUI] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
@@ -1097,7 +1100,6 @@ function StoriesBar({
         if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة:', authorError);
         const storiesWithAuthor = data.map(story => ({ ...story, author: author || null }));
 
-        markStorySeen(pendingProfileStoryOwnerId);
         setProfileStoryOwnerId(pendingProfileStoryOwnerId);
         setProfilePreviewStories(storiesWithAuthor);
         setActiveUserGroup(pendingProfileStoryOwnerId);
@@ -1165,6 +1167,9 @@ function StoriesBar({
   const myStories = groupedStories[userId] || [];
   const hasMyStory = myStories.length > 0;
   const myStoryHasCloseFriends = myStories.some(story => story.is_close_friends);
+  const hasSeenAllStories = (stories: any[]) =>
+    stories.length > 0 && stories.every(story => seenStoryIds.includes(String(story.id)));
+  const hasSeenAllMyStories = hasSeenAllStories(myStories);
 
   useEffect(() => {
     setReplyText('');
@@ -1355,6 +1360,8 @@ function StoriesBar({
   }, [currentStory, storyDisplayDuration, isPaused, storyViewsOpen, activeStoryIndex, activeUserGroup]);
 
   const handleNextStory = () => {
+    if (currentStory?.id) markStorySeen(String(currentStory.id));
+
     if (activeStoryIndex < activeStories.length - 1) {
       setActiveStoryIndex(prev => prev + 1);
       setProgress(0);
@@ -2198,20 +2205,19 @@ function StoriesBar({
 
   return (
     <div className="contents" dir="rtl">
-      <div className="story-bar story-bar-content mb-2 flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-0">
+      <div className="story-bar story-bar-content mb-2 flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-1">
         {/* قصتك */}
         <div className="flex flex-col items-center gap-1 shrink-0">
           <div
             className={`relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full ${hasMyStory ? 'p-[2.5px]' : 'border-[1.5px] border-dashed border-zinc-600/70 p-[2px]'}`}
             style={hasMyStory ? {
-              background: myStoryHasCloseFriends
-                ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
+              background: hasSeenAllMyStories
+                ? '#3a3a42'
                 : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
             } : undefined}
             onClick={() => {
               if (uploading) return;
               if (hasMyStory) {
-                markStorySeen(userId);
                 setActiveUserGroup(userId);
                 setActiveStoryIndex(0);
                 setProgress(0);
@@ -2252,6 +2258,14 @@ function StoriesBar({
                 />
               </svg>
             )}
+            {hasMyStory && myStoryHasCloseFriends && (
+              <span
+                className="absolute -bottom-0.5 -left-0.5 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-[#121212] bg-emerald-500 text-white"
+                title="أصدقاء مقربون"
+              >
+                <Star size={10} fill="currentColor" />
+              </span>
+            )}
             <button
               type="button"
               disabled={uploading}
@@ -2271,7 +2285,7 @@ function StoriesBar({
         {/* قصص المتابَعين بحلقة العلم العراقي */}
         {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
           const firstStory = groupedStories[authorId][0];
-          const isSeen = seenStories.includes(authorId);
+          const isSeen = hasSeenAllStories(groupedStories[authorId]);
           const hasCloseFriendsStory = groupedStories[authorId].some(story => story.is_close_friends);
 
           return (
@@ -2279,7 +2293,6 @@ function StoriesBar({
               key={authorId}
               className="flex flex-col items-center gap-1 cursor-pointer shrink-0"
               onClick={() => {
-                markStorySeen(authorId);
                 setActiveUserGroup(authorId);
                 setActiveStoryIndex(0);
                 setProgress(0);
@@ -2287,18 +2300,21 @@ function StoriesBar({
               }}
             >
               <span
-                className="flex h-16 w-16 items-center justify-center rounded-full p-[2.5px] transition-colors duration-200"
+                className="relative flex h-16 w-16 items-center justify-center rounded-full p-[2.5px] transition-colors duration-200"
                 style={{
-                  background: hasCloseFriendsStory
-                    ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
-                    : isSeen
-                      ? '#3a3a42'
-                      : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
+                  background: isSeen
+                    ? '#3a3a42'
+                    : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
                 }}
               >
                 <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
                   <Avatar profile={firstStory.author} extraLarge />
                 </span>
+                {hasCloseFriendsStory && (
+                  <span className="absolute -bottom-0.5 -left-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-[#121212] bg-emerald-500 text-white" title="أصدقاء مقربون">
+                    <Star size={10} fill="currentColor" />
+                  </span>
+                )}
               </span>
               <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">
                 {firstStory.author?.username || 'عضو'}
@@ -6095,6 +6111,7 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments, pendingSt
       {/* مساحة تعويضية ثابتة للشريط العلوي (بصري فقط) */}
       <div aria-hidden="true" style={{ height: 'calc(2.9375rem + env(safe-area-inset-top))' }} />
       <StoriesBar
+        key={userId}
         userId={userId}
         currentProfile={profile}
         pendingReshare={pendingStoryReshare}
