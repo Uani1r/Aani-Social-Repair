@@ -1,8 +1,8 @@
 modules = ["nodejs-24", "python-base-3.13"]
 
 [deployment]
-build = ["sh", "-c", "npx vite build artifacts/aani-social"]
-run = ["node", "dist/index.js"]
+build = ["sh", "-c", "pnpm --filter @workspace/aani-social run build"]
+run = ["node", "scripts/serve-static.mjs", "artifacts/aani-social/dist/public"]
 router = "application"
 deploymentTarget = "autoscale"
 
