@@ -429,7 +429,12 @@ function StoriesBar({
     viewed_at: string;
     viewer: { id: string; username: string | null; full_name: string | null; avatar_url: string | null } | null;
   }>>([]);
-  const storyViewerTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const storyViewerTouchStartRef = useRef<{
+    x: number;
+    y: number;
+    startedAt: number;
+    startedInViewersHeader: boolean;
+  } | null>(null);
   const storyViewerPausedBeforeTouchRef = useRef(false);
   const suppressStoryClickUntilRef = useRef(0);
   const storyViewsWasPausedRef = useRef(false);
@@ -893,8 +898,8 @@ function StoriesBar({
   }, [storyFile]);
   const [caption, setCaption] = useState('');
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
-  const [uploadDuration, setUploadDuration] = useState<number>(30);
-  const storyDurationManuallyChosenRef = useRef(false);
+  const [uploadDuration, setUploadDuration] = useState<number>(60);
+  const storyDurationManuallyChosenRef = useRef(true);
   const [timedTexts, setTimedTexts] = useState<Array<{ id: string; text: string; startTime: number; endTime: number; x: number; y: number }>>([]);
   const [newText, setNewText] = useState('');
   const [textStart, setTextStart] = useState(0);
@@ -927,10 +932,8 @@ function StoriesBar({
     setStoryMentions([]);
     setStoryFilterId('original');
     setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
-    storyDurationManuallyChosenRef.current = false;
-    setUploadDuration(pendingReshare.media_type === 'video'
-      ? Math.min(120, Math.max(1, pendingReshare.duration_seconds || 120))
-      : 30);
+    storyDurationManuallyChosenRef.current = true;
+    setUploadDuration(Math.min(120, Math.max(5, pendingReshare.duration_seconds || 60)));
     setStoryDurationOpen(false);
     setShowUploadModal(true);
     onReshareHandled();
@@ -1052,15 +1055,11 @@ function StoriesBar({
 
   const currentStory = activeStories[activeStoryIndex] || null;
   const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
-  const fallbackStoryDuration = currentStory?.media_type === 'photo'
-    ? 30
-    : currentStory?.media_type === 'video'
-      ? 120
-      : 5;
+  const fallbackStoryDuration = 60;
   const storedStoryDuration = Number(currentStory?.duration_seconds);
   const storyDisplayDuration = currentStory
-    ? Math.min(120, Math.max(1, storedStoryDuration || fallbackStoryDuration))
-    : 5;
+    ? Math.min(120, Math.max(5, storedStoryDuration || fallbackStoryDuration))
+    : 60;
   const currentStoryFilter = decodeStoryFilterKey((currentStory as { filter_key?: string } | null)?.filter_key);
   useEffect(() => {
     const originalStoryId = (currentStory as { original_story_id?: string } | null)?.original_story_id;
@@ -1268,7 +1267,7 @@ function StoriesBar({
   };
 
   const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
-    if (!currentStory || !isStoryOwner || !supabaseConfigured) return;
+    if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
 
     const storyId = currentStory.id;
     const requestId = ++storyViewsRequestRef.current;
@@ -1321,14 +1320,19 @@ function StoriesBar({
       return;
     }
 
-    const target = event.target;
-    if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
       storyViewerTouchStartRef.current = null;
       return;
     }
 
     const touch = event.touches[0];
-    storyViewerTouchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    storyViewerTouchStartRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      startedAt: Date.now(),
+      startedInViewersHeader: Boolean(target?.closest('[data-story-viewers-panel-header]')),
+    };
   };
 
   const handleStoryViewerTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
@@ -1339,26 +1343,31 @@ function StoriesBar({
 
     const deltaX = touch.clientX - start.x;
     const deltaY = touch.clientY - start.y;
-    const isVerticalSwipe = Math.abs(deltaY) >= 52 && Math.abs(deltaY) >= Math.abs(deltaX) * 0.45;
+    const verticalDistance = Math.abs(deltaY);
+    const elapsed = Math.max(1, Date.now() - start.startedAt);
+    const isFastEnough = verticalDistance >= 112 || verticalDistance / elapsed >= 0.12;
+    const isVerticalSwipe = verticalDistance >= 72
+      && verticalDistance >= Math.abs(deltaX) * 0.6
+      && elapsed <= 1200
+      && isFastEnough;
     if (!isVerticalSwipe) return;
 
     suppressStoryClickUntilRef.current = Date.now() + 700;
 
-    if (storyViewsOpen && isStoryOwner) {
-      if (deltaY > 0) handleCloseStoryViews();
-      return;
-    }
-
-    const topEdge = Math.max(120, window.innerHeight * 0.15);
-    const bottomEdge = window.innerHeight - Math.max(120, window.innerHeight * 0.15);
-
-    if (isStoryOwner && deltaY < 0 && start.y >= bottomEdge) {
-      void handleOpenStoryViews(storyViewerPausedBeforeTouchRef.current);
-      return;
-    }
-
+    const topEdge = Math.max(56, Math.min(96, window.innerHeight * 0.1));
     if (deltaY > 0 && start.y <= topEdge) {
       setActiveUserGroup(null);
+      return;
+    }
+
+    if (storyViewsOpen && isStoryOwner) {
+      if (deltaY > 0 && start.startedInViewersHeader) handleCloseStoryViews();
+      return;
+    }
+
+    const bottomEdge = window.innerHeight - Math.max(112, window.innerHeight * 0.14);
+    if (isStoryOwner && deltaY < 0 && start.y >= bottomEdge) {
+      void handleOpenStoryViews(storyViewerPausedBeforeTouchRef.current);
     }
   };
 
@@ -1649,7 +1658,7 @@ function StoriesBar({
         p_media_type: 'text',
         p_caption: text.trim(),
         p_is_close_friends: false,
-        p_duration_seconds: 5,
+        p_duration_seconds: uploadDuration,
         p_timed_texts: [],
         p_filter_key: null,
         p_original_story_id: null,
@@ -1796,8 +1805,8 @@ function StoriesBar({
           setStoryFile(files[0]);
           setReshareStory(null);
           setReshareScaledDown(false);
-          storyDurationManuallyChosenRef.current = false;
-          setUploadDuration(files[0].type.startsWith('video') ? 120 : 30);
+          storyDurationManuallyChosenRef.current = true;
+          setUploadDuration(60);
           setStoryDurationOpen(false);
           setShowStoryPicker(false);
           setShowUploadModal(true);
@@ -2062,7 +2071,10 @@ function StoriesBar({
                   type="button"
                   aria-label="إغلاق قائمة المشاهدات"
                   className="absolute inset-0 z-[60] bg-black/45"
-                  onClick={handleCloseStoryViews}
+                  onClick={event => {
+                    event.stopPropagation();
+                    handleCloseStoryViews();
+                  }}
                 />
                 <section
                   className="absolute inset-x-0 bottom-0 z-[70] flex h-[88dvh] max-h-[90dvh] flex-col overflow-hidden rounded-t-3xl border-t border-white/10 bg-zinc-950/95 px-4 pt-2 shadow-2xl backdrop-blur-xl"
@@ -2072,8 +2084,8 @@ function StoriesBar({
                   aria-label="مشاهدات الستوري"
                   onClick={event => event.stopPropagation()}
                 >
-                  <div className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-white/30" />
-                  <div className="mb-3 flex items-center justify-between">
+                  <div data-story-viewers-panel-header="true" className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-white/30" />
+                  <div data-story-viewers-panel-header="true" className="mb-3 flex items-center justify-between">
                     <h2 className="text-sm font-bold text-white">المشاهدات</h2>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-zinc-400">{storyViewsCount}</span>
@@ -2160,7 +2172,7 @@ function StoriesBar({
                     onLoadedMetadata={event => {
                       const duration = Number(event.currentTarget.duration);
                       if (Number.isFinite(duration) && duration > 0 && !storyDurationManuallyChosenRef.current) {
-                        setUploadDuration(Math.min(120, Math.max(1, Math.ceil(duration))));
+                        setUploadDuration(Math.min(120, Math.max(5, Math.ceil(duration))));
                       }
                     }}
                     data-story-media="true"
@@ -2362,48 +2374,38 @@ function StoriesBar({
 
               {storyMoreOpen && (
                 <div
-                  className="absolute right-full top-0 z-30 mr-2 w-48 max-w-[calc(100vw_-_4rem)] overflow-hidden rounded-xl border border-white/10 bg-[#101014]/95 p-1 shadow-2xl backdrop-blur-md"
+                  className="absolute right-full top-0 z-30 mr-2 flex w-14 flex-col gap-1 rounded-2xl border border-white/10 bg-[#101014]/95 p-1.5 shadow-2xl backdrop-blur-xl"
                   dir="rtl"
                   role="menu"
                 >
-                  {storyExtraTools.length === 0 ? (
-                    <p className="px-3 py-2 text-[10px] leading-4 text-zinc-500">
-                      ستظهر الأدوات الإضافية هنا عند إضافتها لاحقًا
-                    </p>
-                  ) : (
-                    storyExtraTools.map(item => {
-                      const Icon = item.key === 'close-friends' ? Star : Clock;
-                      return (
+                  {storyExtraTools.map(item => {
+                    const Icon = item.key === 'close-friends' ? Star : Clock;
+                    return (
+                      <div key={item.key} className="relative">
                         <button
-                          key={item.key}
                           type="button"
                           role="menuitem"
                           aria-label={item.label}
-                          title={item.label}
-                          onClick={() => {
-                            if (item.key === 'duration') {
-                              item.action();
-                              return;
-                            }
-                            item.action();
-                          }}
-                          className={`flex h-9 w-full items-center justify-start gap-2 rounded-lg px-3 text-[11px] transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/80'}`}
+                          aria-expanded={item.key === 'duration' ? storyDurationOpen : undefined}
+                          onClick={item.action}
+                          className={`flex h-11 w-11 items-center justify-center rounded-xl transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/85'}`}
                         >
-                          <Icon size={16} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
-                          <span>{item.label}</span>
+                          <Icon size={19} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
                         </button>
-                      );
-                    })
-                  )}
-                  {storyDurationOpen && (
-                    <StoryExpirySlider
-                      durationSeconds={uploadDuration}
-                      onChange={duration => {
-                        storyDurationManuallyChosenRef.current = true;
-                        setUploadDuration(duration);
-                      }}
-                    />
-                  )}
+                        {item.key === 'duration' && storyDurationOpen && (
+                          <div className="absolute right-full top-0 z-40 mr-2">
+                            <StoryExpirySlider
+                              durationSeconds={uploadDuration}
+                              onChange={duration => {
+                                storyDurationManuallyChosenRef.current = true;
+                                setUploadDuration(duration);
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

@@ -1,37 +1,30 @@
+import { Clock } from 'lucide-react';
+
 interface StoryExpirySliderProps {
   durationSeconds: number;
   onChange: (durationSeconds: number) => void;
 }
 
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds} ثانية`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return remainingSeconds ? `${minutes} دقيقة و${remainingSeconds} ثانية` : `${minutes} دقيقة`;
-}
-
 export default function StoryExpirySlider({ durationSeconds, onChange }: StoryExpirySliderProps) {
   return (
-    <div className="mt-2 w-full rounded-xl border border-white/10 bg-black/70 p-3" dir="rtl">
-      <div className="mb-2 flex items-center justify-between text-[10px] text-white/75">
-        <span>مدة عرض الستوري على الشاشة</span>
-        <span className="font-bold text-white">{formatDuration(durationSeconds)}</span>
-      </div>
+    <div
+      className="flex w-48 max-w-[calc(100vw-8rem)] items-center gap-3 rounded-2xl border border-white/10 bg-[#101014]/95 px-3 py-3 shadow-2xl backdrop-blur-xl"
+      dir="ltr"
+    >
+      <Clock size={17} className="shrink-0 text-white/75" aria-hidden="true" />
       <input
         type="range"
-        min={1}
+        min={5}
         max={120}
         step={1}
         value={durationSeconds}
         onChange={event => onChange(Number(event.target.value))}
-        aria-label="مدة عرض الستوري على الشاشة بالثواني"
-        className="h-1 w-full accent-emerald-400"
+        aria-label="مدة عرض الستوري بالثواني"
+        className="h-1 min-w-0 flex-1 accent-emerald-400"
       />
-      <div className="mt-1 flex justify-between text-[9px] text-white/40">
-        <span>1 ثانية</span>
-        <span>60 ثانية</span>
-        <span>120 ثانية</span>
-      </div>
+      <span className="min-w-[2.5rem] text-center text-[11px] font-semibold tabular-nums text-white" aria-live="polite">
+        {durationSeconds}s
+      </span>
     </div>
   );
 }
