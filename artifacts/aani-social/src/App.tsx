@@ -2205,8 +2205,7 @@ function StoriesBar({
 
   return (
     <div className="contents" dir="rtl">
-      <div className="story-bar story-strip mb-2 w-full">
-        <div className="story-bar-content flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-1">
+      <div className="story-bar story-bar-content mb-2 flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-1">
         {/* قصتك */}
         <div className="flex flex-col items-center gap-1 shrink-0">
           <div
@@ -2323,7 +2322,6 @@ function StoriesBar({
             </div>
           );
         })}
-        </div>
       </div>
 
       <StoryComposerSheet
@@ -4035,14 +4033,9 @@ function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, cur
 }
 
 // --- الصفحة الرئيسية ---
-function FeedPage({ userId, profile, onOpenComments, pendingStoryReshare, onStoryReshareHandled, pendingProfileStoryOwnerId, onProfileStoryHandled }: {
+function FeedPage({ userId, onOpenComments }: {
   userId: string;
-  profile: Profile | null;
   onOpenComments: (postId: string) => void;
-  pendingStoryReshare: StoryDmCardStory | null;
-  onStoryReshareHandled: () => void;
-  pendingProfileStoryOwnerId: string | null;
-  onProfileStoryHandled: () => void;
 }) {
   const { posts, loading, refresh } = usePosts('feed', undefined, userId);
   const [pullDistance, setPullDistance] = useState(0);
@@ -4201,17 +4194,7 @@ function FeedPage({ userId, profile, onOpenComments, pendingStoryReshare, onStor
         </div>
       )}
 
-      <StoriesBar
-        key={userId}
-        userId={userId}
-        currentProfile={profile}
-        pendingReshare={pendingStoryReshare}
-        onReshareHandled={onStoryReshareHandled}
-        pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
-        onProfileStoryHandled={onProfileStoryHandled}
-      />
-
-      {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>
+      {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 
       {!loading && posts.length === 0 && (
         <div className="empty-state card text-center p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50">
@@ -5636,7 +5619,7 @@ function isHorizontalGestureArea(target: EventTarget | null): boolean {
   return false;
 }
 
-function Shell({ children, profile, userId, onSignOut, onOpenComments }: { children: ReactNode; profile: Profile | null; userId: string; onSignOut: () => void; onOpenComments: (postId: string) => void }) {
+function Shell({ children, profile, userId, onSignOut, onOpenComments, pendingStoryReshare, onStoryReshareHandled, pendingProfileStoryOwnerId, onProfileStoryHandled }: { children: ReactNode; profile: Profile | null; userId: string; onSignOut: () => void; onOpenComments: (postId: string) => void; pendingStoryReshare: StoryDmCardStory | null; onStoryReshareHandled: () => void; pendingProfileStoryOwnerId: string | null; onProfileStoryHandled: () => void }) {
   const [path, setLocation] = useLocation();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -6127,6 +6110,15 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments }: { child
 
       {/* مساحة تعويضية ثابتة للشريط العلوي (بصري فقط) */}
       <div aria-hidden="true" style={{ height: 'calc(2.9375rem + env(safe-area-inset-top))' }} />
+      <StoriesBar
+        key={userId}
+        userId={userId}
+        currentProfile={profile}
+        pendingReshare={pendingStoryReshare}
+        onReshareHandled={onStoryReshareHandled}
+        pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+        onProfileStoryHandled={onProfileStoryHandled}
+      />
 
       {showCreateModal && (
         <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
@@ -6327,26 +6319,20 @@ function App() {
             profile={profile}
             onSignOut={() => void signOut()}
             onOpenComments={(id) => setSelectedPostForComments(id)}
+            pendingStoryReshare={pendingStoryReshare}
+            onStoryReshareHandled={clearPendingStoryReshare}
+            pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+            onProfileStoryHandled={clearPendingProfileStory}
           >
             <Switch>
               <Route path="/feed"><FeedPage
                 userId={user.id}
-                profile={profile}
                 onOpenComments={(id) => setSelectedPostForComments(id)}
-                pendingStoryReshare={pendingStoryReshare}
-                onStoryReshareHandled={clearPendingStoryReshare}
-                pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
-                onProfileStoryHandled={clearPendingProfileStory}
               /></Route>
               <Route path="/post/:postId">{params => <PostDetailPage postId={params.postId} currentUserId={user.id} onOpenComments={(id) => setSelectedPostForComments(id)} />}</Route>
               <Route path="/"><FeedPage
                 userId={user.id}
-                profile={profile}
                 onOpenComments={(id) => setSelectedPostForComments(id)}
-                pendingStoryReshare={pendingStoryReshare}
-                onStoryReshareHandled={clearPendingStoryReshare}
-                pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
-                onProfileStoryHandled={clearPendingProfileStory}
               /></Route>
               <Route path="/reels"><ReelsPage userId={user.id} /></Route>
               <Route path="/search"><SearchPage userId={user.id} /></Route>
