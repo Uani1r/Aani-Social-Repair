@@ -6278,6 +6278,13 @@ function App() {
 
     let mounted = true;
 
+    // لا نُبقي التطبيق على شاشة الانتظار إلى ما لا نهاية إذا تعطّل نداء الجلسة
+    // (شبكة بطيئة، تخزين محجوب، تبويب مجمّد). الواجهة تُفتح ثم تُحدَّث بالجلسة
+    // عند وصولها.
+    const loadingGuard = window.setTimeout(() => {
+      if (mounted) setAuthLoading(false);
+    }, 6000);
+
     const loadSession = async () => {
       try {
         const { data, error } = await supabase.auth.getSession();
@@ -6297,10 +6304,12 @@ function App() {
       if (!mounted) return;
       setSession(nextSession);
       setProfile(null);
+      setAuthLoading(false);
     });
 
     return () => {
       mounted = false;
+      window.clearTimeout(loadingGuard);
       subscription.unsubscribe();
     };
   }, []);
