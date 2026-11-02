@@ -955,7 +955,7 @@ function StoriesBar({
     // صلاحية القصة ووقت انتهائها يتحقق منهما RLS بساعة قاعدة البيانات، لا ساعة الجهاز.
     const { data, error } = await supabase
       .from('stories')
-      .select('*, author:profiles(id, username, full_name, avatar_url)')
+      .select('*')
       .in('user_id', allowedUserIds)
       .order('created_at', { ascending: true });
 
@@ -966,11 +966,19 @@ function StoriesBar({
       return;
     }
 
+    const storyRows = data || [];
+    const authorIds = [...new Set(storyRows.map(story => String(story.user_id)))];
+    const { data: authors, error: authorsError } = authorIds.length
+      ? await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', authorIds)
+      : { data: [], error: null };
+    if (authorsError) console.warn('[stories] تعذر تحميل ملفات أصحاب القصص:', authorsError);
+
+    const authorById = new Map<string, any>((authors || []).map(author => [String(author.id), author] as [string, any]));
     const groups: { [key: string]: any[] } = {};
-    (data || []).forEach(st => {
-      const authorId = st.user_id;
+    storyRows.forEach(story => {
+      const authorId = String(story.user_id);
       if (!groups[authorId]) groups[authorId] = [];
-      groups[authorId].push(st);
+      groups[authorId].push({ ...story, author: authorById.get(authorId) || null });
     });
     setGroupedStories(groups);
   }, [userId]);
@@ -991,12 +999,13 @@ function StoriesBar({
     }
 
     let active = true;
-    void supabase
-      .from('stories')
-      .select('*, author:profiles(id, username, full_name, avatar_url)')
-      .eq('user_id', pendingProfileStoryOwnerId)
-      .order('created_at', { ascending: true })
-      .then(({ data, error }) => {
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('stories')
+          .select('*')
+          .eq('user_id', pendingProfileStoryOwnerId)
+          .order('created_at', { ascending: true });
         if (!active) return;
         if (error) {
           console.error('[stories] تعذر تحميل قصص الملف الشخصي:', error);
@@ -1010,21 +1019,30 @@ function StoriesBar({
           return;
         }
 
+        const { data: author, error: authorError } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .eq('id', pendingProfileStoryOwnerId)
+          .maybeSingle();
+        if (!active) return;
+        if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة:', authorError);
+        const storiesWithAuthor = data.map(story => ({ ...story, author: author || null }));
+
         markStorySeen(pendingProfileStoryOwnerId);
         setProfileStoryOwnerId(pendingProfileStoryOwnerId);
-        setProfilePreviewStories(data);
+        setProfilePreviewStories(storiesWithAuthor);
         setActiveUserGroup(pendingProfileStoryOwnerId);
         setActiveStoryIndex(0);
         setProgress(0);
         setCurrentTimeSec(0);
         onProfileStoryHandled();
-      })
-      .catch(error => {
+      } catch (error) {
         if (!active) return;
         console.error('[stories] فشل طلب قصص الملف الشخصي:', error);
         toast.error('تعذر تحميل القصص. تحقق من الاتصال ثم أعد المحاولة.');
         onProfileStoryHandled();
-      });
+      }
+    })();
 
     return () => {
       active = false;
@@ -1052,14 +1070,27 @@ function StoriesBar({
 
     let active = true;
     setOriginalStoryAuthor(null);
-    void supabase
-      .from('stories')
-      .select('author:profiles(id, username, full_name, avatar_url)')
-      .eq('id', originalStoryId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (active) setOriginalStoryAuthor((data?.author as StoryDmCardStory['author']) ?? null);
-      });
+    void (async () => {
+      try {
+        const { data: originalStory, error } = await supabase
+          .from('stories')
+          .select('user_id')
+          .eq('id', originalStoryId)
+          .maybeSingle();
+        if (error) throw error;
+        if (!originalStory) return;
+
+        const { data: author, error: authorError } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .eq('id', originalStory.user_id)
+          .maybeSingle();
+        if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة الأصلية:', authorError);
+        if (active) setOriginalStoryAuthor((author as StoryDmCardStory['author']) ?? null);
+      } catch (error) {
+        if (active) console.warn('[stories] تعذر تحميل بيانات القصة الأصلية:', error);
+      }
+    })();
 
     return () => {
       active = false;

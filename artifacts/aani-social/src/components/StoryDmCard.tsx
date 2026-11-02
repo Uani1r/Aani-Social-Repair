@@ -37,15 +37,31 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
     let active = true;
     const load = async () => {
       setLoading(true);
-      const { data } = await supabase
-        .from('stories')
-        .select('id, user_id, media_url, media_type, caption, duration_seconds, expires_at, author:profiles(id, username, full_name, avatar_url)')
-        .eq('id', storyId)
-        .maybeSingle();
+      try {
+        const { data, error } = await supabase
+          .from('stories')
+          .select('id, user_id, media_url, media_type, caption, duration_seconds, expires_at')
+          .eq('id', storyId)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) {
+          if (active) setStory(null);
+          return;
+        }
 
-      if (!active) return;
-      setStory((data as StoryRow | null) ?? null);
-      setLoading(false);
+        const { data: author, error: authorError } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, avatar_url')
+          .eq('id', data.user_id)
+          .maybeSingle();
+        if (authorError) console.warn('[story DM card] تعذر تحميل ملف صاحب القصة:', authorError);
+        if (active) setStory({ ...(data as StoryRow), author: author || null });
+      } catch (error) {
+        console.error('[story DM card] تعذر تحميل القصة:', error);
+        if (active) setStory(null);
+      } finally {
+        if (active) setLoading(false);
+      }
     };
 
     void load();
