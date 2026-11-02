@@ -5,7 +5,7 @@ import {
   ImagePlus, MessageCircle, MessageSquare, MoreVertical, Plus, Repeat, Search, Send, 
   Settings, Sparkles, Star, Trash2, UserRound, Video, X, SendHorizontal, Pencil,
   ThumbsUp,
-  Bot, Loader2, Play, Flag, Eye, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown,
+  Bot, Loader2, Play, Flag, Eye, EyeOff, Volume2, VolumeX, Type, Smile, Music2, AtSign, ChevronDown, Ban,
 } from 'lucide-react';
 
 import { Toaster, toast } from 'sonner';
@@ -44,6 +44,39 @@ import {
   type StoryTextAnimation,
 } from '@/lib/storyFonts';
 import '@/index.css';
+
+type StoryViewerProfile = {
+  id: string;
+  username: string;
+  full_name: string;
+  display_name?: string | null;
+  avatar_url: string | null;
+};
+
+type StoryViewerEntry = {
+  user_id: string;
+  viewed_at: string;
+  viewer: StoryViewerProfile | null;
+  is_liked: boolean;
+};
+
+type StoryViewerPreviewSession = {
+  profileIds: string[];
+  createdAt: number;
+  expiresAt: number;
+  expired?: boolean;
+};
+
+type StoryViewerPreviewState = {
+  storyId: string;
+  storageKey: string;
+  createdAt: number;
+  expiresAt: number;
+  rows: Array<Omit<StoryViewerEntry, 'is_liked'>>;
+};
+
+const STORY_VIEWER_PREVIEW_TTL_MS = 60 * 60 * 1000;
+const STORY_VIEWER_PREVIEW_LIMIT = 4;
 
 // --- مكون المساعد الذكي الآمن المربوط بـ Supabase Edge Function ---
 function AIAssistantModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -424,18 +457,21 @@ function StoriesBar({
   const [storyViewsLoading, setStoryViewsLoading] = useState(false);
   const [storyViewsError, setStoryViewsError] = useState(false);
   const [storyViewsCount, setStoryViewsCount] = useState(0);
-  const [storyViewers, setStoryViewers] = useState<Array<{
-    user_id: string;
-    viewed_at: string;
-    viewer: { id: string; username: string | null; full_name: string | null; avatar_url: string | null } | null;
-  }>>([]);
+  const [storyViewers, setStoryViewers] = useState<StoryViewerEntry[]>([]);
+  const [storyViewerPreview, setStoryViewerPreview] = useState<StoryViewerPreviewState | null>(null);
+  const [viewerActionBusyId, setViewerActionBusyId] = useState<string | null>(null);
+  const [viewerReportTarget, setViewerReportTarget] = useState<StoryViewerEntry | null>(null);
+  const [viewerReportCategory, setViewerReportCategory] = useState<'spam' | 'harassment' | 'hate' | 'fake_account' | 'other'>('spam');
+  const [viewerReportDetails, setViewerReportDetails] = useState('');
+  const [viewerReportBusy, setViewerReportBusy] = useState(false);
+  const [viewerRowMenuOpen, setViewerRowMenuOpen] = useState(false);
   const storyViewerTouchStartRef = useRef<{
     x: number;
     y: number;
     lastX: number;
     lastY: number;
     pathLength: number;
-    startedInViewersHeader: boolean;
+    startedInViewersPanel: boolean;
   } | null>(null);
   const storyViewerPausedBeforeTouchRef = useRef(false);
   const suppressStoryClickUntilRef = useRef(0);
@@ -443,6 +479,7 @@ function StoriesBar({
   const storyVideoRef = useRef<HTMLVideoElement | null>(null);
   const storyVideoWasPlayingRef = useRef(false);
   const storyViewsRequestRef = useRef(0);
+  const storyViewsChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
   const [originalStoryAuthor, setOriginalStoryAuthor] = useState<NonNullable<StoryDmCardStory['author']> | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -1112,10 +1149,89 @@ function StoriesBar({
     setStoryViewsError(false);
     setStoryViewsCount(0);
     setStoryViewers([]);
+    setViewerReportTarget(null);
+    setViewerRowMenuOpen(false);
     setIsPaused(false);
     storyViewsWasPausedRef.current = false;
     storyViewsRequestRef.current += 1;
+
+    return () => {
+      storyViewsRequestRef.current += 1;
+      if (storyViewsChannelRef.current) {
+        void supabase.removeChannel(storyViewsChannelRef.current);
+        storyViewsChannelRef.current = null;
+      }
+    };
   }, [currentStory?.id]);
+
+  useEffect(() => {
+    if (!storyViewerPreview) return;
+    const preview = storyViewerPreview;
+    const expirePreview = () => {
+      try {
+        localStorage.setItem(preview.storageKey, JSON.stringify({
+          profileIds: [],
+          createdAt: preview.createdAt,
+          expiresAt: preview.expiresAt,
+          expired: true,
+        } satisfies StoryViewerPreviewSession));
+      } catch {
+        /* التخزين المحلي غير متاح */
+      }
+      setStoryViewerPreview(current => current?.storageKey === preview.storageKey ? null : current);
+    };
+    const remaining = preview.expiresAt - Date.now();
+    if (remaining <= 0) {
+      expirePreview();
+      return;
+    }
+    const timer = window.setTimeout(expirePreview, remaining);
+    return () => window.clearTimeout(timer);
+  }, [storyViewerPreview]);
+
+  useEffect(() => {
+    const expireStoredPreviews = () => {
+      try {
+        const prefix = 'aani:story-viewer-preview:';
+        let index = 0;
+        while (index < localStorage.length) {
+          const key = localStorage.key(index);
+          if (!key || !key.startsWith(prefix)) {
+            index += 1;
+            continue;
+          }
+
+          let session: Partial<StoryViewerPreviewSession> | null = null;
+          try {
+            session = JSON.parse(localStorage.getItem(key) || 'null') as Partial<StoryViewerPreviewSession> | null;
+          } catch {
+            localStorage.removeItem(key);
+            continue;
+          }
+          if (!session || !Number.isFinite(session.expiresAt) || !Number.isFinite(session.createdAt)) {
+            localStorage.removeItem(key);
+            continue;
+          }
+          if ((session.expiresAt as number) <= Date.now() && !session.expired) {
+            localStorage.setItem(key, JSON.stringify({
+              profileIds: [],
+              createdAt: session.createdAt,
+              expiresAt: session.expiresAt,
+              expired: true,
+            } satisfies StoryViewerPreviewSession));
+            setStoryViewerPreview(current => current?.storageKey === key ? null : current);
+          }
+          index += 1;
+        }
+      } catch {
+        /* التخزين المحلي غير متاح */
+      }
+    };
+
+    expireStoredPreviews();
+    const timer = window.setInterval(expireStoredPreviews, 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!currentStory || isStoryOwner || !supabaseConfigured) {
@@ -1268,6 +1384,137 @@ function StoriesBar({
     setNewText('');
   };
 
+  const loadStoryViewerEntries = async (storyId: string, requestId: number) => {
+    const [viewsResult, likesResult] = await Promise.all([
+      supabase
+        .from('story_views')
+        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, display_name, avatar_url)', { count: 'exact' })
+        .eq('story_id', storyId)
+        .order('viewed_at', { ascending: true }),
+      supabase
+        .from('story_likes')
+        .select('user_id')
+        .eq('story_id', storyId),
+    ]);
+    if (viewsResult.error) throw viewsResult.error;
+    if (likesResult.error) throw likesResult.error;
+    if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
+
+    const likedUserIds = new Set((likesResult.data || []).map(item => String(item.user_id)));
+    const rows = (viewsResult.data || []).map(item => ({
+      ...item,
+      is_liked: likedUserIds.has(String(item.user_id)),
+    })) as StoryViewerEntry[];
+    setStoryViewers(rows);
+    setStoryViewsCount(viewsResult.count ?? rows.length);
+    return rows;
+  };
+
+  const loadStoryViewerPreview = async (storyId: string, actualViewerIds: string[], requestId: number) => {
+    if (!userId) return;
+    const storageKey = `aani:story-viewer-preview:${userId}:session`;
+    let session: StoryViewerPreviewSession | null = null;
+
+    try {
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored) as Partial<StoryViewerPreviewSession>;
+        if (
+          Array.isArray(parsed.profileIds)
+          && parsed.profileIds.every(id => typeof id === 'string')
+          && Number.isFinite(parsed.createdAt)
+          && Number.isFinite(parsed.expiresAt)
+        ) {
+          session = {
+            profileIds: parsed.profileIds as string[],
+            createdAt: parsed.createdAt as number,
+            expiresAt: parsed.expiresAt as number,
+            expired: parsed.expired === true,
+          };
+        }
+      }
+    } catch {
+      session = null;
+    }
+
+    if (session && (session.expired || session.expiresAt <= Date.now())) {
+      const expiredSession: StoryViewerPreviewSession = {
+        ...session,
+        profileIds: [],
+        expired: true,
+      };
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(expiredSession));
+      } catch {
+        /* التخزين المحلي غير متاح */
+      }
+      setStoryViewerPreview(null);
+      return;
+    }
+
+    let profileRows: StoryViewerProfile[] = [];
+    if (session?.profileIds.length) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, display_name, avatar_url')
+        .in('id', session.profileIds);
+      if (error) throw error;
+      const profileById = new Map<string, StoryViewerProfile>(
+        ((data || []) as StoryViewerProfile[]).map(profile => [String(profile.id), profile] as [string, StoryViewerProfile]),
+      );
+      profileRows = session.profileIds
+        .map(id => profileById.get(id))
+        .filter((profile): profile is StoryViewerProfile => Boolean(profile));
+    } else if (!session) {
+      const actualIds = new Set(actualViewerIds);
+      const pageSize = 100;
+      let offset = 0;
+      while (profileRows.length < STORY_VIEWER_PREVIEW_LIMIT) {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, username, full_name, display_name, avatar_url')
+          .neq('id', userId)
+          .order('created_at', { ascending: true })
+          .range(offset, offset + pageSize - 1);
+        if (error) throw error;
+        const page = (data || []) as StoryViewerProfile[];
+        profileRows.push(...page.filter(profile => profile.id !== userId && !actualIds.has(String(profile.id))));
+        if (page.length < pageSize) break;
+        offset += pageSize;
+      }
+      profileRows = profileRows.slice(0, STORY_VIEWER_PREVIEW_LIMIT);
+      const createdAt = Date.now();
+      session = {
+        profileIds: profileRows.map(profile => String(profile.id)),
+        createdAt,
+        expiresAt: createdAt + STORY_VIEWER_PREVIEW_TTL_MS,
+      };
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(session));
+      } catch {
+        /* ستبقى المعاينة مؤقتة لهذه الجلسة فقط */
+      }
+    }
+
+    if (!session || requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
+    const actualIds = new Set(actualViewerIds);
+    const previewRows = profileRows
+      .filter(profile => !actualIds.has(String(profile.id)))
+      .map((profile, index, profiles) => ({
+        user_id: String(profile.id),
+        viewed_at: new Date(session!.createdAt - (profiles.length - index) * 60_000).toISOString(),
+        viewer: profile,
+      }));
+
+    setStoryViewerPreview({
+      storyId,
+      storageKey,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt,
+      rows: previewRows,
+    });
+  };
+
   const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
     if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
 
@@ -1280,32 +1527,77 @@ function StoriesBar({
     setStoryViewsOpen(true);
     setStoryViewsLoading(true);
     setStoryViewsError(false);
+    setStoryViewers([]);
+    setStoryViewerPreview(null);
+
+    if (storyViewsChannelRef.current) {
+      void supabase.removeChannel(storyViewsChannelRef.current);
+      storyViewsChannelRef.current = null;
+    }
 
     try {
-      const { data, count, error } = await supabase
-        .from('story_views')
-        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, avatar_url)', { count: 'exact' })
-        .eq('story_id', storyId)
-        .order('viewed_at', { ascending: false });
-      if (error) throw error;
+      const rows = await loadStoryViewerEntries(storyId, requestId);
+      if (!rows || requestId !== storyViewsRequestRef.current) return;
+
+      try {
+        await loadStoryViewerPreview(storyId, rows.map(item => item.user_id), requestId);
+      } catch (previewError) {
+        console.warn('[story views] تعذر تحميل حسابات المعاينة المؤقتة:', previewError);
+      }
       if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
 
-      setStoryViewers((data || []) as typeof storyViewers);
-      setStoryViewsCount(count ?? data?.length ?? 0);
+      const refreshStoryViewerEntries = () => {
+        const refreshRequestId = ++storyViewsRequestRef.current;
+        void loadStoryViewerEntries(storyId, refreshRequestId).then(rows => {
+          if (!rows) return;
+          const realViewerIds = new Set(rows.map(item => item.user_id));
+          setStoryViewerPreview(current => current?.storyId === storyId
+            ? { ...current, rows: current.rows.filter(item => !realViewerIds.has(item.user_id)) }
+            : current);
+        }).catch(error => {
+          if (refreshRequestId !== storyViewsRequestRef.current) return;
+          console.error('[story views] تعذر تحديث قائمة المشاهدين:', error);
+          setStoryViewsError(true);
+        });
+      };
+
+      const channel = supabase
+        .channel(`story-viewers:${storyId}:${requestId}`)
+        .on('postgres_changes', {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'story_views',
+          filter: `story_id=eq.${storyId}`,
+        }, refreshStoryViewerEntries)
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'story_likes',
+          filter: `story_id=eq.${storyId}`,
+        }, refreshStoryViewerEntries)
+        .subscribe();
+      storyViewsChannelRef.current = channel;
     } catch (error) {
       if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
       console.error('[story views] تعذر تحميل قائمة المشاهدين:', error);
       setStoryViewsError(true);
       setStoryViewers([]);
       setStoryViewsCount(0);
-      toast.error('تعذر تحميل قائمة المشاهدات. تأكد من تطبيق ترحيل سجل المشاهدات.');
+      toast.error('تعذر تحميل المشاهدين والإعجابات الفعلية. تحقق من ترحيل بيانات مشاهدي الستوري.');
     } finally {
-      if (requestId === storyViewsRequestRef.current) setStoryViewsLoading(false);
+      if (currentStory?.id === storyId) setStoryViewsLoading(false);
     }
   };
 
   const handleCloseStoryViews = () => {
+    storyViewsRequestRef.current += 1;
+    if (storyViewsChannelRef.current) {
+      void supabase.removeChannel(storyViewsChannelRef.current);
+      storyViewsChannelRef.current = null;
+    }
     setStoryViewsOpen(false);
+    setViewerRowMenuOpen(false);
+    setViewerReportTarget(null);
     setIsPaused(storyViewsWasPausedRef.current);
     if (storyVideoWasPlayingRef.current) {
       void storyVideoRef.current?.play().catch(error => {
@@ -1313,6 +1605,82 @@ function StoriesBar({
       });
     }
     storyVideoWasPlayingRef.current = false;
+  };
+
+  const handleOpenViewerReport = (viewer: StoryViewerEntry) => {
+    if (!isStoryOwner || viewer.user_id === userId) return;
+    setViewerReportTarget(viewer);
+    setViewerReportCategory('spam');
+    setViewerReportDetails('');
+  };
+
+  const handleSubmitViewerReport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const target = viewerReportTarget;
+    if (!target || !isStoryOwner || target.user_id === userId || !supabaseConfigured || viewerReportBusy) return;
+
+    setViewerReportBusy(true);
+    try {
+      const { error } = await supabase.from('user_reports').insert({
+        reporter_id: userId,
+        reported_user_id: target.user_id,
+        category: viewerReportCategory,
+        details: viewerReportDetails.trim(),
+      });
+      if (error) {
+        if (error.code === '23505') throw new Error('سبق أن أبلغت عن هذا الحساب.');
+        throw error;
+      }
+      toast.success('تم إرسال البلاغ لمراجعة الحساب.');
+      setViewerReportTarget(null);
+    } catch (error) {
+      console.error('[story views] تعذر إرسال بلاغ الحساب:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر إرسال البلاغ. تأكد من تطبيق تحديث إجراءات مشاهدي الستوري.');
+    } finally {
+      setViewerReportBusy(false);
+    }
+  };
+
+  const handleBlockStoryViewer = async (viewer: StoryViewerEntry) => {
+    if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
+    const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
+    if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع من مشاهدة قصصك والتواصل معك.`)) return;
+
+    setViewerActionBusyId(viewer.user_id);
+    try {
+      const { error } = await supabase.rpc('aani_block_user', { p_blocked_user_id: viewer.user_id });
+      if (error) throw error;
+      const wasVisible = storyViewers.some(item => item.user_id === viewer.user_id);
+      setStoryViewers(current => current.filter(item => item.user_id !== viewer.user_id));
+      setStoryViewerPreview(current => current?.storyId === currentStory?.id
+        ? { ...current, rows: current.rows.filter(item => item.user_id !== viewer.user_id) }
+        : current);
+      if (wasVisible) setStoryViewsCount(count => Math.max(0, count - 1));
+      toast.success('تم حظر الحساب ومنع التواصل وإزالة المتابعة والأصدقاء المقربين المتبادلة.');
+    } catch (error) {
+      console.error('[story views] تعذر حظر الحساب:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر حظر الحساب. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
+    } finally {
+      setViewerActionBusyId(null);
+    }
+  };
+
+  const handleHideStoryFromViewer = async (viewer: StoryViewerEntry) => {
+    if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
+    const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
+    if (!window.confirm(`إخفاء قصصك المستقبلية عن ${name}؟ لن تُحذف مشاهداته السابقة.`)) return;
+
+    setViewerActionBusyId(viewer.user_id);
+    try {
+      const { error } = await supabase.rpc('aani_hide_story_from_user', { p_hidden_user_id: viewer.user_id });
+      if (error) throw error;
+      toast.success('تم حفظ إخفاء قصصك المستقبلية عن هذا الحساب. لم تُحذف مشاهداته السابقة.');
+    } catch (error) {
+      console.error('[story views] تعذر إخفاء القصص عن الحساب:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر حفظ إعداد الإخفاء. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
+    } finally {
+      setViewerActionBusyId(null);
+    }
   };
 
   const suppressStoryClick = () => {
@@ -1326,6 +1694,7 @@ function StoriesBar({
   };
 
   const handleStoryViewerTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    suppressStoryClickUntilRef.current = 0;
     storyViewerPausedBeforeTouchRef.current = isPaused;
     if (event.touches.length !== 1) {
       storyViewerTouchStartRef.current = null;
@@ -1345,7 +1714,7 @@ function StoriesBar({
       lastX: touch.clientX,
       lastY: touch.clientY,
       pathLength: 0,
-      startedInViewersHeader: Boolean(target?.closest('[data-story-viewers-panel-header]')),
+      startedInViewersPanel: Boolean(target?.closest('[data-story-viewers-panel]')),
     };
   };
 
@@ -1380,7 +1749,11 @@ function StoriesBar({
     const isClearSwipe = Math.abs(deltaY) >= 64 && totalTravel >= 72;
 
     if (storyViewsOpen) {
-      if (isClearSwipe && isStoryOwner && deltaY > 0 && start.startedInViewersHeader) {
+      if (viewerReportTarget || viewerRowMenuOpen) {
+        if (isClearSwipe) suppressStoryClick();
+        return;
+      }
+      if (isClearSwipe && isStoryOwner && deltaY > 0 && start.startedInViewersPanel) {
         suppressStoryClick();
         handleCloseStoryViews();
         return;
@@ -2127,6 +2500,7 @@ function StoriesBar({
                   }}
                 />
                 <section
+                  data-story-viewers-panel="true"
                   className="absolute inset-x-0 bottom-0 z-[70] flex h-[88dvh] max-h-[90dvh] flex-col overflow-hidden rounded-t-3xl border-t border-white/10 bg-zinc-950/95 px-4 pt-2 shadow-2xl backdrop-blur-xl"
                   style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
                   role="dialog"
@@ -2136,7 +2510,7 @@ function StoriesBar({
                 >
                   <div data-story-viewers-panel-header="true" className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-white/30" />
                   <div data-story-viewers-panel-header="true" className="mb-3 flex items-center justify-between">
-                    <h2 className="text-sm font-bold text-white">المشاهدات</h2>
+                    <h2 className="text-sm font-bold text-white">المشاهدات الفعلية</h2>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-zinc-400">{storyViewsCount}</span>
                       <button
@@ -2150,33 +2524,148 @@ function StoriesBar({
                     </div>
                   </div>
                   <div className="min-h-0 flex-1 overflow-y-auto pb-2">
-                    {storyViewsLoading ? (
-                      <div className="flex items-center justify-center gap-2 py-8 text-xs text-zinc-400">
+                    {storyViewsLoading && (
+                      <div className="flex items-center justify-center gap-2 py-5 text-xs text-zinc-400">
                         <Loader2 size={16} className="animate-spin" /> جارٍ تحميل المشاهدات...
                       </div>
-                    ) : storyViewsError ? (
-                      <p className="py-8 text-center text-xs text-red-300">تعذر تحميل المشاهدات. تحقق من إعداد قاعدة البيانات والاتصال.</p>
-                    ) : storyViewers.length === 0 ? (
-                      <p className="py-8 text-center text-xs text-zinc-400">لا توجد مشاهدات مسجلة بعد.</p>
-                    ) : (
+                    )}
+                    {storyViewsError && (
+                      <p className="py-5 text-center text-xs text-red-300">تعذر تحميل بيانات المشاهدين أو الإعجابات الفعلية. تحقق من قاعدة البيانات والاتصال.</p>
+                    )}
+                    {!storyViewsLoading && !storyViewsError && storyViewers.length === 0 && (
+                      <p className="py-4 text-center text-xs text-zinc-400">لا توجد مشاهدات فعلية مسجلة بعد.</p>
+                    )}
+                    {!storyViewsLoading && !storyViewsError && storyViewers.length > 0 && (
                       <ul className="space-y-2">
                         {storyViewers.map(item => (
-                          <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-3 rounded-xl px-2 py-1.5">
+                          <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-2 rounded-xl px-2 py-2 hover:bg-white/[0.03]">
                             <Avatar profile={item.viewer} />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-xs font-semibold text-white">
-                                {item.viewer?.full_name || item.viewer?.username || 'مستخدم'}
+                                {item.viewer?.display_name || item.viewer?.full_name || item.viewer?.username || 'مستخدم'}
                               </p>
                               <p className="truncate text-[10px] text-zinc-400" dir="ltr">
                                 {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
                               </p>
+                              <time className="mt-0.5 block text-[10px] text-zinc-500">
+                                {formatDate(item.viewed_at)}
+                              </time>
                             </div>
+                            {item.is_liked && (
+                              <Heart size={16} fill="currentColor" className="shrink-0 text-pink-500" aria-label="أعجب بالستوري" />
+                            )}
+                            <DropdownMenu onOpenChange={setViewerRowMenuOpen}>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  aria-label={`خيارات ${item.viewer?.username ? `@${item.viewer.username}` : 'المشاهد'}`}
+                                  disabled={Boolean(viewerActionBusyId)}
+                                  className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+                                >
+                                  <MoreVertical size={18} />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="z-[150] min-w-48 border-zinc-800 bg-zinc-900 text-white">
+                                <DropdownMenuItem onSelect={() => handleOpenViewerReport(item)}>
+                                  <Flag size={15} /> الإبلاغ عن الحساب
+                                </DropdownMenuItem>
+                                <DropdownMenuItem className="text-amber-300 focus:text-amber-200" onSelect={() => void handleBlockStoryViewer(item)}>
+                                  <Ban size={15} /> حظر الحساب
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onSelect={() => void handleHideStoryFromViewer(item)}>
+                                  <EyeOff size={15} /> إخفاء الستوري عنه
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </li>
                         ))}
                       </ul>
                     )}
+
+                    {storyViewerPreview?.storyId === currentStory.id && storyViewerPreview.expiresAt > Date.now() && storyViewerPreview.rows.length > 0 && (
+                      <section className="mt-4 rounded-2xl border border-dashed border-sky-400/30 bg-sky-400/[0.04] p-3">
+                        <div className="mb-2">
+                          <p className="text-xs font-bold text-sky-200">معاينة مؤقتة — حسابات حقيقية من المنصة</p>
+                          <p className="mt-1 text-[10px] leading-4 text-sky-100/65">
+                            هذه صفوف للمعاينة فقط، ولا تمثل مشاهدات أو إعجابات مسجلة. تنتهي عند {new Date(storyViewerPreview.expiresAt).toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' })}.
+                          </p>
+                        </div>
+                        <ul className="space-y-2">
+                          {storyViewerPreview.rows.map(item => (
+                            <li key={`preview:${currentStory.id}:${item.user_id}`} className="flex items-center gap-3 rounded-xl px-2 py-2">
+                              <Avatar profile={item.viewer} />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-xs font-semibold text-white">
+                                  {item.viewer?.display_name || item.viewer?.full_name || item.viewer?.username || 'مستخدم'}
+                                </p>
+                                <p className="truncate text-[10px] text-zinc-400" dir="ltr">
+                                  {item.viewer?.username ? `@${item.viewer.username}` : 'اسم المستخدم غير متاح'}
+                                </p>
+                                <time className="mt-0.5 block text-[10px] text-zinc-500">
+                                  {formatDate(item.viewed_at)} · معاينة
+                                </time>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
                   </div>
                 </section>
+
+                {viewerReportTarget && (
+                  <div
+                    className="absolute inset-0 z-[90] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+                    onClick={() => {
+                      if (!viewerReportBusy) setViewerReportTarget(null);
+                    }}
+                  >
+                    <form
+                      dir="rtl"
+                      onSubmit={event => void handleSubmitViewerReport(event)}
+                      onClick={event => event.stopPropagation()}
+                      className="w-full max-w-sm rounded-2xl border border-white/10 bg-zinc-900 p-4 text-white shadow-2xl"
+                    >
+                      <h3 className="text-sm font-bold">الإبلاغ عن الحساب</h3>
+                      <p className="mt-1 text-[11px] text-zinc-400">
+                        {viewerReportTarget.viewer?.display_name || viewerReportTarget.viewer?.full_name || viewerReportTarget.viewer?.username || 'الحساب المحدد'}
+                      </p>
+                      <label className="mt-4 block text-[11px] text-zinc-300">
+                        سبب الإبلاغ
+                        <select
+                          required
+                          value={viewerReportCategory}
+                          onChange={event => setViewerReportCategory(event.target.value as typeof viewerReportCategory)}
+                          className="mt-1.5 h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-xs text-white outline-none focus:border-sky-400"
+                        >
+                          <option value="spam">رسائل أو محتوى مزعج</option>
+                          <option value="harassment">مضايقة أو تنمّر</option>
+                          <option value="hate">خطاب كراهية</option>
+                          <option value="fake_account">حساب منتحل أو مزيف</option>
+                          <option value="other">سبب آخر</option>
+                        </select>
+                      </label>
+                      <label className="mt-3 block text-[11px] text-zinc-300">
+                        تفاصيل إضافية (اختياري)
+                        <textarea
+                          value={viewerReportDetails}
+                          onChange={event => setViewerReportDetails(event.target.value)}
+                          maxLength={1000}
+                          rows={3}
+                          className="mt-1.5 w-full resize-none rounded-lg border border-zinc-700 bg-zinc-950 p-2 text-xs text-white outline-none focus:border-sky-400"
+                        />
+                      </label>
+                      <div className="mt-4 flex gap-2">
+                        <button type="button" disabled={viewerReportBusy} onClick={() => setViewerReportTarget(null)} className="h-10 flex-1 rounded-lg border border-zinc-700 text-xs text-zinc-300 disabled:opacity-50">
+                          إلغاء
+                        </button>
+                        <button type="submit" disabled={viewerReportBusy} className="h-10 flex-1 rounded-lg bg-sky-500 text-xs font-bold text-zinc-950 disabled:opacity-50">
+                          {viewerReportBusy ? <Loader2 size={15} className="mx-auto animate-spin" /> : 'إرسال البلاغ'}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                )}
               </>
             )}
           </div>
