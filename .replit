@@ -1,16 +1,8 @@
 modules = ["nodejs-24", "python-base-3.13"]
 
-# زر Run في المعاينة يشغّل خادم Vite التطويري على منفذ 5000 المعرَّف أدناه.
-# النشر يستخدم قسم [deployment] أدناه (بناء ثم خادم ملفات ثابت).
-run = "pnpm --filter @workspace/aani-social run dev"
-
-[[ports]]
-localPort = 5000
-externalPort = 80
-
 [deployment]
-build = ["sh", "-c", "pnpm --filter @workspace/aani-social run build"]
-run = ["node", "scripts/serve-static.mjs", "artifacts/aani-social/dist/public"]
+build = ["sh", "-c", "npx vite build artifacts/aani-social"]
+run = ["node", "dist/index.js"]
 router = "application"
 deploymentTarget = "autoscale"
 
@@ -33,3 +25,7 @@ timeoutMs = 20000
 
 [userenv.shared]
 VITE_SUPABASE_URL = "https://whvhxgfdumxzunzsjkll.supabase.co"
+
+[[ports]]
+localPort = 5000
+externalPort = 80
