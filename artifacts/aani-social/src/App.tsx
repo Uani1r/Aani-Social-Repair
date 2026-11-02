@@ -2198,9 +2198,9 @@ function StoriesBar({
 
   return (
     <div className="contents" dir="rtl">
-      <div className="story-bar story-bar-content mb-4 flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-2 pt-1">
+      <div className="story-bar story-bar-content mb-2 flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-0">
         {/* قصتك */}
-        <div className="flex flex-col items-center gap-1.5 shrink-0">
+        <div className="flex flex-col items-center gap-1 shrink-0">
           <div
             className={`relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full ${hasMyStory ? 'p-[2.5px]' : 'border-[1.5px] border-dashed border-zinc-600/70 p-[2px]'}`}
             style={hasMyStory ? {
@@ -2277,7 +2277,7 @@ function StoriesBar({
           return (
             <div
               key={authorId}
-              className="flex flex-col items-center gap-1.5 cursor-pointer shrink-0"
+              className="flex flex-col items-center gap-1 cursor-pointer shrink-0"
               onClick={() => {
                 markStorySeen(authorId);
                 setActiveUserGroup(authorId);
@@ -5705,11 +5705,12 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments, pendingSt
       if (target?.closest('[role="dialog"], [role="listbox"]')) return;
 
       const step = touch.clientY - lastTouchY;
+      if (Math.abs(step) < 2) return;
       lastTouchY = touch.clientY;
 
-      // أي حركة نزول — مهما كانت صغيرة أو مائلة — تُظهر، وأي صعود يُخفي
+      // عتبة صغيرة تمنع الاهتزاز وتستجيب للسحبات القصيرة من أي موضع.
       if (step > 0) applyDirection(1);
-      else if (step < 0) applyDirection(-1);
+      else applyDirection(-1);
     };
 
     const onTouchEnd = () => {
@@ -5729,8 +5730,8 @@ function Shell({ children, profile, userId, onSignOut, onOpenComments, pendingSt
       const delta = y - lastScrollY;
       lastScrollY = y;
 
-      // عتبة صغيرة تمنع ارتجاف الارتداد عند حواف الصفحة
-      if (Math.abs(delta) < 4) return;
+      // عتبة قصيرة تمنع الارتجاف وتُظهر الوحدة قبل الوصول إلى أعلى الصفحة.
+      if (Math.abs(delta) < 2) return;
       if (now - lastScrollToggleAt < 90) return;
 
       lastScrollToggleAt = now;
