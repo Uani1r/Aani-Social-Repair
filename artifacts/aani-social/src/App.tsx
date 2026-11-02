@@ -414,7 +414,6 @@ function StoriesBar({
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
-  const [currentVideoPlaybackDuration, setCurrentVideoPlaybackDuration] = useState<{ storyId: string; seconds: number } | null>(null);
   const [replyText, setReplyText] = useState('');
   const [replyFocused, setReplyFocused] = useState(false);
   const [replyKeyboardInset, setReplyKeyboardInset] = useState(0);
@@ -430,7 +429,9 @@ function StoriesBar({
     viewed_at: string;
     viewer: { id: string; username: string | null; full_name: string | null; avatar_url: string | null } | null;
   }>>([]);
-  const storyViewSwipeStartRef = useRef<number | null>(null);
+  const storyViewerTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const storyViewerPausedBeforeTouchRef = useRef(false);
+  const suppressStoryClickUntilRef = useRef(0);
   const storyViewsWasPausedRef = useRef(false);
   const storyVideoRef = useRef<HTMLVideoElement | null>(null);
   const storyVideoWasPlayingRef = useRef(false);
@@ -456,22 +457,22 @@ function StoriesBar({
   const [reshareScaledDown, setReshareScaledDown] = useState(false);
 
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
-  const [storyExpiryOpen, setStoryExpiryOpen] = useState(false);
-  // أدوات إضافية للمحرر: إدارة قائمة الأصدقاء المقربين دون إشعارات.
+  const [storyDurationOpen, setStoryDurationOpen] = useState(false);
+  // أدوات إضافية للمحرر: الأصدقاء المقربون ومدة عرض القصة على الشاشة.
   const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [
     {
       key: 'close-friends',
       label: 'الأصدقاء المقربون',
       action: () => {
-        setStoryExpiryOpen(false);
+        setStoryDurationOpen(false);
         setStoryMoreOpen(false);
         setCloseFriendsOpen(true);
       },
     },
     {
-      key: 'expiry',
-      label: 'مدة انتهاء القصة',
-      action: () => setStoryExpiryOpen(open => !open),
+      key: 'duration',
+      label: 'مدة عرض الستوري',
+      action: () => setStoryDurationOpen(open => !open),
     },
   ];
   const [storyFiltersOpen, setStoryFiltersOpen] = useState(false);
@@ -871,7 +872,7 @@ function StoriesBar({
     const onDocumentClick = (event: MouseEvent) => {
       if (!storyToolsRef.current?.contains(event.target as Node)) {
         setStoryMoreOpen(false);
-        setStoryExpiryOpen(false);
+        setStoryDurationOpen(false);
       }
     };
 
@@ -893,7 +894,7 @@ function StoriesBar({
   const [caption, setCaption] = useState('');
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
   const [uploadDuration, setUploadDuration] = useState<number>(30);
-  const [customDurationSeconds, setCustomDurationSeconds] = useState<number | null>(null);
+  const storyDurationManuallyChosenRef = useRef(false);
   const [timedTexts, setTimedTexts] = useState<Array<{ id: string; text: string; startTime: number; endTime: number; x: number; y: number }>>([]);
   const [newText, setNewText] = useState('');
   const [textStart, setTextStart] = useState(0);
@@ -926,11 +927,11 @@ function StoriesBar({
     setStoryMentions([]);
     setStoryFilterId('original');
     setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
+    storyDurationManuallyChosenRef.current = false;
     setUploadDuration(pendingReshare.media_type === 'video'
       ? Math.min(120, Math.max(1, pendingReshare.duration_seconds || 120))
       : 30);
-    setCustomDurationSeconds(null);
-    setStoryExpiryOpen(false);
+    setStoryDurationOpen(false);
     setShowUploadModal(true);
     onReshareHandled();
   }, [pendingReshare, onReshareHandled]);
@@ -1051,15 +1052,15 @@ function StoriesBar({
 
   const currentStory = activeStories[activeStoryIndex] || null;
   const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
-  const storyDisplayDuration = !currentStory
-    ? 5
-    : currentStory.media_type === 'video'
-      ? currentVideoPlaybackDuration && currentVideoPlaybackDuration.storyId === currentStory.id
-        ? currentVideoPlaybackDuration.seconds
-        : 120
-      : currentStory.media_type === 'photo'
-        ? 30
-        : Math.max(1, Number(currentStory.duration_seconds) || 5);
+  const fallbackStoryDuration = currentStory?.media_type === 'photo'
+    ? 30
+    : currentStory?.media_type === 'video'
+      ? 120
+      : 5;
+  const storedStoryDuration = Number(currentStory?.duration_seconds);
+  const storyDisplayDuration = currentStory
+    ? Math.min(120, Math.max(1, storedStoryDuration || fallbackStoryDuration))
+    : 5;
   const currentStoryFilter = decodeStoryFilterKey((currentStory as { filter_key?: string } | null)?.filter_key);
   useEffect(() => {
     const originalStoryId = (currentStory as { original_story_id?: string } | null)?.original_story_id;
@@ -1266,12 +1267,12 @@ function StoriesBar({
     setNewText('');
   };
 
-  const handleOpenStoryViews = async () => {
+  const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
     if (!currentStory || !isStoryOwner || !supabaseConfigured) return;
 
     const storyId = currentStory.id;
     const requestId = ++storyViewsRequestRef.current;
-    storyViewsWasPausedRef.current = isPaused;
+    storyViewsWasPausedRef.current = wasPausedBeforeOpen;
     storyVideoWasPlayingRef.current = Boolean(storyVideoRef.current && !storyVideoRef.current.paused);
     storyVideoRef.current?.pause();
     setIsPaused(true);
@@ -1311,6 +1312,58 @@ function StoriesBar({
       });
     }
     storyVideoWasPlayingRef.current = false;
+  };
+
+  const handleStoryViewerTouchStart = (event: React.TouchEvent<HTMLDivElement>) => {
+    storyViewerPausedBeforeTouchRef.current = isPaused;
+    if (event.touches.length !== 1) {
+      storyViewerTouchStartRef.current = null;
+      return;
+    }
+
+    const target = event.target;
+    if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"]')) {
+      storyViewerTouchStartRef.current = null;
+      return;
+    }
+
+    const touch = event.touches[0];
+    storyViewerTouchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleStoryViewerTouchEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const start = storyViewerTouchStartRef.current;
+    storyViewerTouchStartRef.current = null;
+    const touch = event.changedTouches[0];
+    if (!start || !touch) return;
+
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    const isVerticalSwipe = Math.abs(deltaY) >= 52 && Math.abs(deltaY) >= Math.abs(deltaX) * 0.45;
+    if (!isVerticalSwipe) return;
+
+    suppressStoryClickUntilRef.current = Date.now() + 700;
+
+    if (storyViewsOpen && isStoryOwner) {
+      if (deltaY > 0) handleCloseStoryViews();
+      return;
+    }
+
+    const topEdge = Math.max(120, window.innerHeight * 0.15);
+    const bottomEdge = window.innerHeight - Math.max(120, window.innerHeight * 0.15);
+
+    if (isStoryOwner && deltaY < 0 && start.y >= bottomEdge) {
+      void handleOpenStoryViews(storyViewerPausedBeforeTouchRef.current);
+      return;
+    }
+
+    if (deltaY > 0 && start.y <= topEdge) {
+      setActiveUserGroup(null);
+    }
+  };
+
+  const handleStoryViewerTouchCancel = () => {
+    storyViewerTouchStartRef.current = null;
   };
 
   const handleToggleLike = async () => {
@@ -1424,7 +1477,7 @@ function StoriesBar({
         p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
         p_original_story_id: sourceStory?.id || null,
         p_share_type: sourceStory ? 'reshare' : 'original',
-        p_expiry_seconds: customDurationSeconds,
+        p_expiry_seconds: null,
       });
       if (insertError) throw insertError;
       if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
@@ -1439,8 +1492,8 @@ function StoriesBar({
       setCaption('');
       setTimedTexts([]);
       setStoryMentions([]);
-      setCustomDurationSeconds(null);
-      setStoryExpiryOpen(false);
+      setStoryDurationOpen(false);
+      storyDurationManuallyChosenRef.current = false;
       setShowUploadModal(false);
       await fetchStories();
     } catch (err) {
@@ -1509,7 +1562,6 @@ function StoriesBar({
     const storyCaption = caption.trim();
     const mentions = [...storyMentions];
     const durationSeconds = uploadDuration;
-    const expirySeconds = customDurationSeconds;
     if (!supabaseConfigured || (!mediaFile && !sourceStory?.media_url)) return;
 
     // إغلاق المحرر أولاً، ثم متابعة الرفع دون حجب التفاعل مع الصفحة الرئيسية.
@@ -1546,7 +1598,7 @@ function StoriesBar({
           p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
           p_original_story_id: sourceStory?.id || null,
           p_share_type: sourceStory ? 'reshare' : 'original',
-          p_expiry_seconds: expirySeconds,
+          p_expiry_seconds: null,
         });
 
         if (insertError) throw insertError;
@@ -1561,8 +1613,8 @@ function StoriesBar({
         setStoryText('');
         setTimedTexts([]);
         setStoryMentions([]);
-        setCustomDurationSeconds(null);
-        setStoryExpiryOpen(false);
+        setStoryDurationOpen(false);
+        storyDurationManuallyChosenRef.current = false;
         await fetchStories();
         toast.success('تم نشر القصة بنجاح', { duration: 5000 });
       } catch (error) {
@@ -1744,9 +1796,9 @@ function StoriesBar({
           setStoryFile(files[0]);
           setReshareStory(null);
           setReshareScaledDown(false);
+          storyDurationManuallyChosenRef.current = false;
           setUploadDuration(files[0].type.startsWith('video') ? 120 : 30);
-          setCustomDurationSeconds(null);
-          setStoryExpiryOpen(false);
+          setStoryDurationOpen(false);
           setShowStoryPicker(false);
           setShowUploadModal(true);
         }}
@@ -1758,6 +1810,16 @@ function StoriesBar({
           role="dialog"
           aria-modal="true"
           aria-label="عارض القصص"
+          onTouchStartCapture={handleStoryViewerTouchStart}
+          onTouchEnd={handleStoryViewerTouchEnd}
+          onTouchCancel={handleStoryViewerTouchCancel}
+          onClickCapture={event => {
+            if (Date.now() < suppressStoryClickUntilRef.current) {
+              suppressStoryClickUntilRef.current = 0;
+              event.preventDefault();
+              event.stopPropagation();
+            }
+          }}
         >
           <div className="relative h-full w-full overflow-hidden bg-black select-none">
             {showUI && (
@@ -1841,16 +1903,6 @@ function StoriesBar({
                     autoPlay
                     playsInline
                     preload="metadata"
-                    onLoadedMetadata={event => {
-                      const duration = Number(event.currentTarget.duration);
-                      if (!Number.isFinite(duration) || duration <= 0) return;
-                      setCurrentVideoPlaybackDuration({
-                        storyId: currentStory.id,
-                        seconds: Math.min(120, Math.max(1, Math.ceil(duration))),
-                      });
-                      setProgress(0);
-                      setCurrentTimeSec(0);
-                    }}
                     className="h-full w-full object-contain"
                     style={{ filter: currentStoryFilter.css }}
                   />
@@ -1919,22 +1971,8 @@ function StoriesBar({
 
             {isStoryOwner && (
               <div
-                className="absolute inset-x-0 bottom-0 z-[25] h-24 touch-none"
+                className="absolute inset-x-0 bottom-0 z-[25] h-24"
                 aria-hidden="true"
-                onTouchStart={event => {
-                  storyViewSwipeStartRef.current = event.touches[0]?.clientY ?? null;
-                }}
-                onTouchEnd={event => {
-                  const startY = storyViewSwipeStartRef.current;
-                  const endY = event.changedTouches[0]?.clientY;
-                  storyViewSwipeStartRef.current = null;
-                  if (startY !== null && endY !== undefined && startY - endY > 48) {
-                    void handleOpenStoryViews();
-                  }
-                }}
-                onTouchCancel={() => {
-                  storyViewSwipeStartRef.current = null;
-                }}
               />
             )}
 
@@ -2027,7 +2065,7 @@ function StoriesBar({
                   onClick={handleCloseStoryViews}
                 />
                 <section
-                  className="absolute inset-x-0 bottom-0 z-[70] flex max-h-[70dvh] flex-col overflow-hidden rounded-t-3xl border-t border-white/10 bg-zinc-950/95 px-4 pt-2 shadow-2xl backdrop-blur-xl"
+                  className="absolute inset-x-0 bottom-0 z-[70] flex h-[88dvh] max-h-[90dvh] flex-col overflow-hidden rounded-t-3xl border-t border-white/10 bg-zinc-950/95 px-4 pt-2 shadow-2xl backdrop-blur-xl"
                   style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
                   role="dialog"
                   aria-modal="true"
@@ -2121,7 +2159,7 @@ function StoriesBar({
                     playsInline
                     onLoadedMetadata={event => {
                       const duration = Number(event.currentTarget.duration);
-                      if (Number.isFinite(duration) && duration > 0) {
+                      if (Number.isFinite(duration) && duration > 0 && !storyDurationManuallyChosenRef.current) {
                         setUploadDuration(Math.min(120, Math.max(1, Math.ceil(duration))));
                       }
                     }}
@@ -2312,7 +2350,7 @@ function StoriesBar({
                 onClick={() => {
                   const nextOpen = !storyMoreOpen;
                   setStoryMoreOpen(nextOpen);
-                  if (!nextOpen) setStoryExpiryOpen(false);
+                  if (!nextOpen) setStoryDurationOpen(false);
                 }}
                 className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
               >
@@ -2343,7 +2381,7 @@ function StoriesBar({
                           aria-label={item.label}
                           title={item.label}
                           onClick={() => {
-                            if (item.key === 'expiry') {
+                            if (item.key === 'duration') {
                               item.action();
                               return;
                             }
@@ -2357,10 +2395,13 @@ function StoriesBar({
                       );
                     })
                   )}
-                  {storyExpiryOpen && (
+                  {storyDurationOpen && (
                     <StoryExpirySlider
-                      durationSeconds={customDurationSeconds}
-                      onChange={setCustomDurationSeconds}
+                      durationSeconds={uploadDuration}
+                      onChange={duration => {
+                        storyDurationManuallyChosenRef.current = true;
+                        setUploadDuration(duration);
+                      }}
                     />
                   )}
                 </div>
