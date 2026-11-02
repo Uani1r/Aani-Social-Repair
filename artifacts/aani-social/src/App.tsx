@@ -943,36 +943,36 @@ function StoriesBar({
   const fetchStories = useCallback(async () => {
     if (!supabaseConfigured || !userId) return;
 
-    const now = new Date();
-    const nowIso = now.toISOString();
-    const within24Hours = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: followings } = await supabase
+    const { data: followings, error: followingsError } = await supabase
       .from('follows')
       .select('following_id')
       .eq('follower_id', userId);
+    if (followingsError) console.warn('[stories] تعذر تحميل قائمة المتابَعين:', followingsError);
 
     const followedIds = (followings || []).map(f => f.following_id);
     const allowedUserIds = [userId, ...followedIds];
 
-    const { data } = await supabase
+    // صلاحية القصة ووقت انتهائها يتحقق منهما RLS بساعة قاعدة البيانات، لا ساعة الجهاز.
+    const { data, error } = await supabase
       .from('stories')
       .select('*, author:profiles(id, username, full_name, avatar_url)')
       .in('user_id', allowedUserIds)
-      .gte('created_at', within24Hours)
-      .gt('expires_at', nowIso)
       .order('created_at', { ascending: true });
 
-    if (data) {
-      const groups: { [key: string]: any[] } = {};
-      data.forEach(st => {
-        const authorId = st.user_id;
-        if (!groups[authorId]) groups[authorId] = [];
-        groups[authorId].push(st);
-      });
-      setGroupedStories(groups);
-    } else {
+    if (error) {
+      console.error('[stories] تعذر جلب القصص:', error);
       setGroupedStories({});
+      toast.error(`تعذر تحميل القصص من قاعدة البيانات: ${error.message}`);
+      return;
     }
+
+    const groups: { [key: string]: any[] } = {};
+    (data || []).forEach(st => {
+      const authorId = st.user_id;
+      if (!groups[authorId]) groups[authorId] = [];
+      groups[authorId].push(st);
+    });
+    setGroupedStories(groups);
   }, [userId]);
 
   useEffect(() => { void fetchStories(); }, [fetchStories]);
@@ -991,17 +991,20 @@ function StoriesBar({
     }
 
     let active = true;
-    const now = new Date();
     void supabase
       .from('stories')
       .select('*, author:profiles(id, username, full_name, avatar_url)')
       .eq('user_id', pendingProfileStoryOwnerId)
-      .gte('created_at', new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString())
-      .gt('expires_at', now.toISOString())
       .order('created_at', { ascending: true })
       .then(({ data, error }) => {
         if (!active) return;
-        if (error || !data?.length) {
+        if (error) {
+          console.error('[stories] تعذر تحميل قصص الملف الشخصي:', error);
+          toast.error(`تعذر تحميل القصص من قاعدة البيانات: ${error.message}`);
+          onProfileStoryHandled();
+          return;
+        }
+        if (!data?.length) {
           toast.info('لا توجد قصص متاحة لهذا الحساب');
           onProfileStoryHandled();
           return;
@@ -1014,6 +1017,12 @@ function StoriesBar({
         setActiveStoryIndex(0);
         setProgress(0);
         setCurrentTimeSec(0);
+        onProfileStoryHandled();
+      })
+      .catch(error => {
+        if (!active) return;
+        console.error('[stories] فشل طلب قصص الملف الشخصي:', error);
+        toast.error('تعذر تحميل القصص. تحقق من الاتصال ثم أعد المحاولة.');
         onProfileStoryHandled();
       });
 
@@ -3897,17 +3906,14 @@ function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
-      const now = new Date();
-      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: activeStories }, { data: incomingRequests }] = await Promise.all([
+      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: activeStories, error: activeStoriesError }, { data: incomingRequests }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         supabase.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
-        supabase.from('stories').select('id, is_close_friends').eq('user_id', activeUserId)
-          .gte('created_at', new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString())
-          .gt('expires_at', now.toISOString()).limit(50),
+        supabase.from('stories').select('id, is_close_friends').eq('user_id', activeUserId).limit(50),
         own
           ? supabase.from('follow_requests').select('requester_id, created_at').eq('recipient_id', currentUserId).order('created_at', { ascending: false }).limit(100)
           : Promise.resolve({ data: [] }),
@@ -3919,6 +3925,10 @@ function ProfilePage({
         ? await supabase.from('profiles').select('id, username, full_name, avatar_url, bio, is_private').in('id', requesterIds)
         : { data: [] };
       if (!active) return;
+      if (activeStoriesError) {
+        console.error('[profile stories] تعذر التحقق من القصص النشطة:', activeStoriesError);
+        toast.error(`تعذر التحقق من قصص الحساب: ${activeStoriesError.message}`);
+      }
 
       if (prof) setPerson(prof as Profile);
       setFollowers(fCount || 0);
