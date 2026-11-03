@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { AtSign, ChevronDown, Clock, ImagePlus, Music2, Pencil, Sparkles, Star, Type } from 'lucide-react';
+import { AtSign, ChevronDown, Clock, ImagePlus, Music2, Pencil, Sparkles, Star, Type, X } from 'lucide-react';
 
 import StoryExpirySlider from '@/components/StoryExpirySlider';
 import StoryFilterBar from '@/components/StoryFilterBar';
@@ -21,6 +21,7 @@ type StoryEditorToolbarProps = {
   storyExtraTools: StoryEditorExtraTool[];
   uploadDuration: number;
   onSelectTool: (key: StoryEditorToolKey) => void;
+  onClose: () => void;
   onToggleMore: () => void;
   onDurationChange: (duration: number) => void;
 };
@@ -32,6 +33,7 @@ export function StoryEditorToolbar({
   storyExtraTools,
   uploadDuration,
   onSelectTool,
+  onClose,
   onToggleMore,
   onDurationChange,
 }: StoryEditorToolbarProps) {
@@ -50,6 +52,15 @@ export function StoryEditorToolbar({
       className="absolute right-2.5 z-20 flex flex-col items-center gap-2.5"
       style={{ top: 'calc(3.75rem + env(safe-area-inset-top))' }}
     >
+      <button
+        type="button"
+        aria-label="إغلاق محرر القصة"
+        title="إغلاق"
+        onClick={onClose}
+        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
+      >
+        <X size={17} />
+      </button>
       {tools.map(tool => {
         const Icon = tool.icon;
         return (
@@ -130,6 +141,7 @@ type StoryTextEditorPanelProps = {
   storyHasBackground: boolean;
   storyBackgroundPreset: StoryBackgroundPreset;
   storyTextAreaRef: { current: HTMLTextAreaElement | null };
+  onCloseStory: () => void;
   onStoryTextChange: (value: string) => void;
   onFinishTextEditing: () => void;
   onFontFamilyChange: (family: string) => void;
@@ -154,6 +166,7 @@ export function StoryTextEditorPanel({
   storyHasBackground,
   storyBackgroundPreset,
   storyTextAreaRef,
+  onCloseStory,
   onStoryTextChange,
   onFinishTextEditing,
   onFontFamilyChange,
@@ -177,7 +190,18 @@ export function StoryTextEditorPanel({
         className="flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
       >
-        <span className="text-[12px] text-white/60">محرر النص</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="إغلاق محرر القصة"
+            title="إغلاق القصة"
+            onClick={onCloseStory}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition active:scale-95"
+          >
+            <X size={18} />
+          </button>
+          <span className="text-[12px] text-white/60">محرر النص</span>
+        </div>
         <button
           type="button"
           onClick={onFinishTextEditing}

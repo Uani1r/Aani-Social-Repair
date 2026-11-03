@@ -31,6 +31,9 @@ interface TextOnlyStoryCanvasProps {
   storyText: string;
   textLayers: StoryTimedText[];
   onUpdateImageSticker: (id: string, update: StoryImageStickerUpdate) => void;
+  onClose: () => void;
+  onActivateImageSticker: (id: string) => void;
+  onCanvasTap: (id?: string) => void;
   fontFamily: string;
   textColor: string;
   textAlign: StoryTextAlign;
@@ -120,6 +123,9 @@ export default function TextOnlyStoryCanvas({
   storyText,
   textLayers,
   onUpdateImageSticker,
+  onClose,
+  onActivateImageSticker,
+  onCanvasTap,
   fontFamily,
   textColor,
   textAlign,
@@ -190,6 +196,10 @@ export default function TextOnlyStoryCanvas({
   const lastCanvasTouchRef = useRef(0);
   const handleCanvasTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
     lastCanvasTouchRef.current = Date.now();
+    if (backgroundPickerOpen) {
+      setBackgroundPickerOpen(false);
+      return;
+    }
     onCanvasTouchEnd(event);
   };
 
@@ -207,7 +217,12 @@ export default function TextOnlyStoryCanvas({
           className="absolute inset-0"
           style={{ background: canvasBackground, filter: storyFilterValue }}
           onClick={event => {
-            if (event.target === event.currentTarget && Date.now() - lastCanvasTouchRef.current > 500) onOpenTextEditor();
+            if (event.target !== event.currentTarget || Date.now() - lastCanvasTouchRef.current <= 500) return;
+            if (backgroundPickerOpen) {
+              setBackgroundPickerOpen(false);
+              return;
+            }
+            onCanvasTap();
           }}
         />
         {storyFilterOverlay && (
@@ -228,6 +243,7 @@ export default function TextOnlyStoryCanvas({
                 key={layer.id}
                 sticker={layer}
                 onChange={update => onUpdateImageSticker(layer.id, update)}
+                onActivate={() => onActivateImageSticker(layer.id)}
               />
             );
           }
@@ -325,6 +341,7 @@ export default function TextOnlyStoryCanvas({
         storyExtraTools={extraTools}
         uploadDuration={uploadDuration}
         onSelectTool={onSelectTool}
+        onClose={onClose}
         onToggleMore={onToggleMore}
         onDurationChange={onDurationChange}
       />
@@ -371,6 +388,7 @@ export default function TextOnlyStoryCanvas({
         storyHasBackground={textBackgroundPreset.key !== 'none'}
         storyBackgroundPreset={textBackgroundPreset}
         storyTextAreaRef={textAreaRef}
+        onCloseStory={onClose}
         onStoryTextChange={onTextChange}
         onFinishTextEditing={onFinishEditing}
         onFontFamilyChange={onFontFamilyChange}

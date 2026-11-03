@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
 
 import type { StoryImageOverlay, StoryImageStickerUpdate, StoryStickerShape } from '@/components/stories/types';
 
@@ -7,6 +7,7 @@ type StoryImageStickerProps = {
   interactive?: boolean;
   sizeScale?: number;
   onChange?: (update: StoryImageStickerUpdate) => void;
+  onActivate?: () => void;
 };
 
 type StickerSize = { width: number; height: number; clipPath?: string; borderRadius?: string };
@@ -69,13 +70,24 @@ export default function StoryImageSticker({
   interactive = true,
   sizeScale = 1,
   onChange,
+  onActivate,
 }: StoryImageStickerProps) {
   const gestureRef = useRef<StickerGesture | null>(null);
   const stickerRef = useRef<HTMLDivElement | null>(null);
   const suppressClickUntilRef = useRef(0);
+  const [imageNaturalSize, setImageNaturalSize] = useState({ width: 0, height: 0 });
   const shape = SHAPES[sticker.shape] || SHAPES.square;
   const width = shape.width * sizeScale;
   const height = shape.height * sizeScale;
+  const imageAspect = imageNaturalSize.width > 0 && imageNaturalSize.height > 0
+    ? imageNaturalSize.width / imageNaturalSize.height
+    : width / height;
+  const imageWidth = Math.max(width, height * imageAspect);
+  const imageHeight = Math.max(height, width / imageAspect);
+  const maxCropX = Math.max(0, ((imageWidth * sticker.cropScale - width) / (2 * imageWidth)) * 100);
+  const maxCropY = Math.max(0, ((imageHeight * sticker.cropScale - height) / (2 * imageHeight)) * 100);
+  const cropX = clamp(sticker.cropX, -maxCropX, maxCropX);
+  const cropY = clamp(sticker.cropY, -maxCropY, maxCropY);
 
   useEffect(() => () => {
     if (gestureRef.current?.timer) window.clearTimeout(gestureRef.current.timer);
@@ -109,8 +121,8 @@ export default function StoryImageSticker({
       baseY: sticker.y,
       baseScale: sticker.scale,
       baseRotation: sticker.rotation,
-      baseCropX: sticker.cropX,
-      baseCropY: sticker.cropY,
+      baseCropX: cropX,
+      baseCropY: cropY,
       baseCropScale: sticker.cropScale,
       moved: false,
       longPressed: mode === 'crop',
@@ -139,8 +151,8 @@ export default function StoryImageSticker({
       baseY: sticker.y,
       baseScale: sticker.scale,
       baseRotation: sticker.rotation,
-      baseCropX: sticker.cropX,
-      baseCropY: sticker.cropY,
+      baseCropX: cropX,
+      baseCropY: cropY,
       baseCropScale: sticker.cropScale,
       moved: false,
       longPressed: false,
@@ -150,6 +162,7 @@ export default function StoryImageSticker({
   const handleTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     if (!interactive) return;
     event.stopPropagation();
+    onActivate?.();
     clearGestureTimer(gestureRef.current);
     if (event.touches.length >= 2) {
       beginTransform(event.touches);
@@ -206,11 +219,11 @@ export default function StoryImageSticker({
 
     if (gesture.mode === 'crop') {
       const canvas = getCanvasSize();
-      const renderedWidth = Math.max(1, shape.width * sizeScale * sticker.scale * canvas.scaleX);
-      const renderedHeight = Math.max(1, shape.height * sizeScale * sticker.scale * canvas.scaleY);
+      const renderedWidth = Math.max(1, imageWidth * sticker.scale * canvas.scaleX);
+      const renderedHeight = Math.max(1, imageHeight * sticker.scale * canvas.scaleY);
       onChange?.({
-        cropX: clamp(gesture.baseCropX + (deltaX / renderedWidth) * 100, -150, 150),
-        cropY: clamp(gesture.baseCropY + (deltaY / renderedHeight) * 100, -150, 150),
+        cropX: clamp(gesture.baseCropX + (deltaX / renderedWidth) * 100, -maxCropX, maxCropX),
+        cropY: clamp(gesture.baseCropY + (deltaY / renderedHeight) * 100, -maxCropY, maxCropY),
       });
     } else if (gesture.mode === 'move') {
       const canvas = getCanvasSize();
@@ -243,6 +256,7 @@ export default function StoryImageSticker({
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!interactive || event.pointerType !== 'mouse') return;
     event.stopPropagation();
+    onActivate?.();
     gestureRef.current = {
       mode: 'move',
       touchCount: 0,
@@ -254,8 +268,8 @@ export default function StoryImageSticker({
       baseY: sticker.y,
       baseScale: sticker.scale,
       baseRotation: sticker.rotation,
-      baseCropX: sticker.cropX,
-      baseCropY: sticker.cropY,
+      baseCropX: cropX,
+      baseCropY: cropY,
       baseCropScale: sticker.cropScale,
       moved: false,
       longPressed: false,
@@ -301,6 +315,7 @@ export default function StoryImageSticker({
   const handleClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!interactive) return;
     event.stopPropagation();
+    onActivate?.();
     if (Date.now() < suppressClickUntilRef.current) return;
     cycleShape();
   };
@@ -309,6 +324,7 @@ export default function StoryImageSticker({
     if (!interactive || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
     event.stopPropagation();
+    onActivate?.();
     cycleShape();
   };
 
@@ -319,7 +335,7 @@ export default function StoryImageSticker({
       tabIndex={interactive ? 0 : undefined}
       aria-label={interactive ? `ملصق صورة بشكل ${shape.label}؛ اضغط لتغيير الشكل` : undefined}
       aria-hidden={interactive ? undefined : true}
-      className={`absolute z-[15] overflow-hidden ${interactive ? 'pointer-events-auto cursor-grab active:cursor-grabbing' : 'pointer-events-none'}`}
+      className={`absolute z-[15] overflow-hidden ${interactive ? 'pointer-events-auto cursor-grab active:cursor-grabbing focus:outline-none' : 'pointer-events-none'}`}
       style={{
         left: `${sticker.x}%`,
         top: `${sticker.y}%`,
@@ -347,18 +363,21 @@ export default function StoryImageSticker({
         src={sticker.src}
         alt=""
         draggable={false}
-        className="h-full w-full object-cover"
+        onLoad={event => {
+          const { naturalWidth, naturalHeight } = event.currentTarget;
+          if (naturalWidth > 0 && naturalHeight > 0) {
+            setImageNaturalSize({ width: naturalWidth, height: naturalHeight });
+          }
+        }}
+        className="absolute left-1/2 top-1/2 max-w-none"
         style={{
-          transform: `translate(${sticker.cropX}%, ${sticker.cropY}%) scale(${sticker.cropScale})`,
+          width: `${imageWidth}px`,
+          height: `${imageHeight}px`,
+          transform: `translate(-50%, -50%) translate(${cropX}%, ${cropY}%) scale(${sticker.cropScale})`,
           transformOrigin: 'center',
           userSelect: 'none',
           pointerEvents: 'none',
         }}
-      />
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 border-2 border-white/90 shadow-[0_2px_12px_rgba(0,0,0,0.45)]"
-        style={{ clipPath: shape.clipPath, borderRadius: shape.borderRadius }}
       />
     </div>
   );

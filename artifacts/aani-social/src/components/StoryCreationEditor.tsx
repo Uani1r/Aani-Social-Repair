@@ -80,6 +80,7 @@ type StoryCreationEditorProps = {
   onCreateTextLayer: () => void;
   onEditTextLayer: (id: string) => void;
   onUpdateImageSticker: (id: string, update: StoryImageStickerUpdate) => void;
+  onActivateImageSticker: (id: string) => void;
   onVideoMetadata: (durationSeconds: number) => void;
   onCanvasTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => void;
   onCanvasTouchMove: (event: ReactTouchEvent<HTMLDivElement>) => void;
@@ -170,6 +171,7 @@ export default function StoryCreationEditor({
   onCreateTextLayer,
   onEditTextLayer,
   onUpdateImageSticker,
+  onActivateImageSticker,
   onVideoMetadata,
   onCanvasTouchStart,
   onCanvasTouchMove,
@@ -219,7 +221,10 @@ export default function StoryCreationEditor({
             className={reshareStory
               ? 'relative overflow-hidden rounded-[28px] transition-[width,height,border-radius] duration-300'
               : 'absolute inset-0'}
-            onClick={onMediaClick}
+            onClick={event => {
+              event.stopPropagation();
+              onMediaClick();
+            }}
             style={reshareStory ? {
               width: reshareScaledDown ? 'min(78vw, 360px)' : '100vw',
               height: reshareScaledDown ? '76vh' : '100dvh',
@@ -286,6 +291,7 @@ export default function StoryCreationEditor({
                     key={layer.id}
                     sticker={layer}
                     onChange={update => onUpdateImageSticker(layer.id, update)}
+                    onActivate={() => onActivateImageSticker(layer.id)}
                   />
                 );
               }
@@ -383,6 +389,7 @@ export default function StoryCreationEditor({
         storyExtraTools={storyExtraTools}
         uploadDuration={uploadDuration}
         onSelectTool={onSelectStoryTool}
+        onClose={onClose}
         onToggleMore={onToggleMore}
         onDurationChange={onDurationChange}
       />
@@ -401,6 +408,7 @@ export default function StoryCreationEditor({
         storyHasBackground={storyHasBackground}
         storyBackgroundPreset={storyBackgroundPreset}
         storyTextAreaRef={storyTextAreaRef}
+        onCloseStory={onClose}
         onStoryTextChange={onStoryTextChange}
         onFinishTextEditing={onFinishTextEditing}
         onFontFamilyChange={onFontFamilyChange}

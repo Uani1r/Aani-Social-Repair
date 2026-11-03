@@ -197,6 +197,7 @@ export default function StoriesBar({
   const [storyText, setStoryText] = useState('');
   const [timedTexts, setTimedTexts] = useState<StoryTimedText[]>([]);
   const [editingStoryTextId, setEditingStoryTextId] = useState<string | null>(null);
+  const [activeStoryStickerId, setActiveStoryStickerId] = useState<string | null>(null);
 
   useEffect(() => {
     const activeUrls = new Set(timedTexts
@@ -213,6 +214,12 @@ export default function StoriesBar({
     localStickerObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     localStickerObjectUrlsRef.current.clear();
   }, []);
+
+  useEffect(() => {
+    if (activeStoryStickerId && !timedTexts.some(layer => layer.type === 'image' && layer.id === activeStoryStickerId)) {
+      setActiveStoryStickerId(null);
+    }
+  }, [activeStoryStickerId, timedTexts]);
   const storyGestureTextIdRef = useRef<string | null>(null);
   const [storyKeyboardInset, setStoryKeyboardInset] = useState(0);
 
@@ -227,7 +234,16 @@ export default function StoriesBar({
   const storyTextAreaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // مرجع لحالة النوافذ الفرعية داخل معالجات اللمس (لتجنّب قراءة حالة قديمة)
-  const storyPanelsRef = useRef({ filters: false, textEditor: false, more: false, drawing: false });
+  const storyPanelsRef = useRef({
+    filters: false,
+    textEditor: false,
+    more: false,
+    drawing: false,
+    duration: false,
+    music: false,
+    mentions: false,
+    closeFriends: false,
+  });
 
   useEffect(() => {
     storyPanelsRef.current = {
@@ -235,8 +251,12 @@ export default function StoriesBar({
       textEditor: storyTextEditorOpen,
       more: storyMoreOpen,
       drawing: storyDrawingOpen,
+      duration: storyDurationOpen,
+      music: storyMusicOpen,
+      mentions: storyMentionsOpen,
+      closeFriends: closeFriendsOpen,
     };
-  }, [storyFiltersOpen, storyTextEditorOpen, storyMoreOpen, storyDrawingOpen]);
+  }, [storyFiltersOpen, storyTextEditorOpen, storyMoreOpen, storyDrawingOpen, storyDurationOpen, storyMusicOpen, storyMentionsOpen, closeFriendsOpen]);
 
   // تُغلق النوافذ الفرعية وحدها دون فتح أي أداة أخرى
   const closeStoryPanels = useCallback(() => {
@@ -244,6 +264,10 @@ export default function StoriesBar({
     setStoryTextEditorOpen(false);
     setStoryMoreOpen(false);
     setStoryDrawingOpen(false);
+    setStoryDurationOpen(false);
+    setStoryMusicOpen(false);
+    setStoryMentionsOpen(false);
+    setCloseFriendsOpen(false);
   }, []);
 
   const storyBackgroundPreset = STORY_TEXT_BACKGROUNDS[storyBackgroundIndex % STORY_TEXT_BACKGROUNDS.length];
@@ -293,6 +317,7 @@ export default function StoriesBar({
   const lastStoryTouchRef = useRef(0);
 
   const openStoryTextEditor = (id?: string) => {
+    setActiveStoryStickerId(null);
     const layer = id ? timedTexts.find((item): item is StoryTextOverlay =>
       item.id === id && (item.type === undefined || item.type === 'text'),
     ) : undefined;
@@ -319,6 +344,35 @@ export default function StoriesBar({
     setStoryMoreOpen(false);
     setStoryDurationOpen(false);
     setStoryTextEditorOpen(true);
+  };
+
+  const handleStoryCanvasTap = (id?: string) => {
+    if (id) {
+      openStoryTextEditor(id);
+      return;
+    }
+
+    if (activeStoryStickerId) {
+      setActiveStoryStickerId(null);
+      return;
+    }
+
+    const panels = storyPanelsRef.current;
+    if (panels.textEditor) {
+      finishStoryTextEditing();
+      return;
+    }
+    if (panels.filters || panels.more || panels.drawing || panels.duration || panels.music || panels.mentions || panels.closeFriends) {
+      closeStoryPanels();
+      return;
+    }
+
+    openStoryTextEditor();
+  };
+
+  const handleStoryCanvasClick = () => {
+    if (Date.now() - lastStoryTouchRef.current < 500) return;
+    handleStoryCanvasTap();
   };
 
   // قيم المرجع حسب العنصر المقفل
@@ -592,16 +646,15 @@ export default function StoriesBar({
     storyGestureTextIdRef.current = null;
 
     if (!gesture.moved && Date.now() - gesture.startTime < 400) {
+      if (activeStoryStickerId && !textLayerId) {
+        handleStoryCanvasTap();
+        return;
+      }
       if (reshareStory && !textLayerId) {
         setReshareScaledDown(current => !current);
         return;
       }
-      const panels = storyPanelsRef.current;
-      if (panels.filters || panels.textEditor || panels.more || panels.drawing) {
-        closeStoryPanels();
-        return;
-      }
-      openStoryTextEditor(textLayerId || undefined);
+      handleStoryCanvasTap(textLayerId || undefined);
     }
   };
 
@@ -773,7 +826,7 @@ export default function StoriesBar({
     setStoryText,
   });
 
-  const finishStoryTextEditing = () => {
+  function finishStoryTextEditing() {
     const text = storyText.trim();
     if (text) {
       const layer: StoryTextOverlay = {
@@ -801,7 +854,7 @@ export default function StoriesBar({
     setStoryText('');
     setEditingStoryTextId(null);
     setStoryTextEditorOpen(false);
-  };
+  }
 
   const updateStoryImageSticker = (id: string, update: StoryImageStickerUpdate) => {
     setTimedTexts(previous => previous.map(layer => layer.type === 'image' && layer.id === id
@@ -861,6 +914,20 @@ export default function StoriesBar({
       cropScale: 1,
     };
     setTimedTexts(previous => [...previous, sticker]);
+    setActiveStoryStickerId(sticker.id);
+  };
+
+  const closeTextOnlyStory = () => {
+    setShowTextOnlyStoryCanvas(false);
+    setStoryTextEditorOpen(false);
+    setStoryText('');
+    setTimedTexts([]);
+    setEditingStoryTextId(null);
+    setActiveStoryStickerId(null);
+    setStoryDrawStrokes([]);
+    setStoryDrawingOpen(false);
+    activeStoryDrawStrokeRef.current = null;
+    closeStoryPanels();
   };
 
   const openTextOnlyStory = () => {
@@ -1490,6 +1557,9 @@ export default function StoriesBar({
           storyText={storyText}
           textLayers={timedTexts}
           onUpdateImageSticker={updateStoryImageSticker}
+          onActivateImageSticker={setActiveStoryStickerId}
+          onCanvasTap={handleStoryCanvasTap}
+          onClose={closeTextOnlyStory}
           fontFamily={storyFontFamily}
           textColor={storyTextColor}
           textAlign={storyTextAlign}
@@ -1738,6 +1808,8 @@ export default function StoriesBar({
           onCloseCloseFriends={() => setCloseFriendsOpen(false)}
           onClose={() => {
             setShowUploadModal(false);
+            closeStoryPanels();
+            setActiveStoryStickerId(null);
             setStoryDrawingOpen(false);
             setStoryTextEditorOpen(false);
             setStoryText('');
@@ -1752,13 +1824,24 @@ export default function StoriesBar({
             }
           }}
           onMediaClick={() => {
-            if (reshareStory && Date.now() - lastStoryTouchRef.current > 500) {
-              setReshareScaledDown(current => !current);
+            const panels = storyPanelsRef.current;
+            if (activeStoryStickerId || panels.filters || panels.textEditor || panels.more || panels.drawing
+              || panels.duration || panels.music || panels.mentions || panels.closeFriends) {
+              handleStoryCanvasTap();
+              return;
             }
+            if (reshareStory) {
+              if (Date.now() - lastStoryTouchRef.current > 500) {
+                setReshareScaledDown(current => !current);
+              }
+              return;
+            }
+            handleStoryCanvasClick();
           }}
-          onCreateTextLayer={() => openStoryTextEditor()}
+          onCreateTextLayer={handleStoryCanvasClick}
           onEditTextLayer={openStoryTextEditor}
           onUpdateImageSticker={updateStoryImageSticker}
+          onActivateImageSticker={setActiveStoryStickerId}
           onVideoMetadata={duration => {
             if (Number.isFinite(duration) && duration > 0 && !storyDurationManuallyChosenRef.current) {
               setUploadDuration(Math.min(120, Math.max(5, Math.ceil(duration))));
