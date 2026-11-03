@@ -1,4 +1,4 @@
-import type { CommentWithDetails } from '../interactions';
+import type { CommentWithDetails } from '../interactions/types';
 
 export const countComments = (items: CommentWithDetails[]): number =>
   items.reduce(
