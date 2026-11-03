@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -135,6 +136,7 @@ function App() {
           </Switch>
         )}
       </WouterRouter>
+      <Toaster position="top-center" duration={10000} theme="dark" />
     </TooltipProvider>
   );
 }
