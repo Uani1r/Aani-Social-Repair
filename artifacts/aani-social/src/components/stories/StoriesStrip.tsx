@@ -1,6 +1,7 @@
 import { Plus, Star } from 'lucide-react';
 
 import Avatar from '../Avatar';
+import UserIdentity from '../UserIdentity';
 import type { Profile } from '@/lib/types';
 import type { StoriesByUser, StoryRow } from './types';
 
@@ -138,9 +139,13 @@ export default function StoriesStrip({
                   </span>
                 )}
               </span>
-              <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">
-                {firstStory.author?.username || 'عضو'}
-              </span>
+              <UserIdentity
+                name={firstStory.author?.full_name || firstStory.author?.username || 'عضو'}
+                username={firstStory.author?.full_name ? firstStory.author.username : null}
+                className="w-16"
+                nameClassName="text-[10px] text-zinc-400"
+                usernameClassName="text-[9px] text-zinc-500"
+              />
             </div>
           );
         })}

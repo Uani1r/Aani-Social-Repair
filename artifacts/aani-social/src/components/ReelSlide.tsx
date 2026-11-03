@@ -5,6 +5,7 @@ import {
 
 import Avatar from '@/components/Avatar';
 import ShareSheet from '@/components/ShareSheet';
+import UserIdentity from '@/components/UserIdentity';
 import { recordShare } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Post } from '@/lib/types';
@@ -198,14 +199,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
       <div className="absolute inset-x-0 bottom-0 pt-24 pb-12 px-4 reel-gradient-bottom z-20 pointer-events-none">
         <div className="flex items-end justify-between gap-4">
           <div className="flex-1 min-w-0 text-white pointer-events-auto">
-            <div className="flex items-center gap-2 mb-2">
+            <div className="mb-2 flex items-center gap-4">
               <Avatar profile={post.author} />
-              <div className="user-identity-meta min-w-0 flex-1">
-                <strong className="block truncate text-sm font-bold text-white">{displayName(post.author)}</strong>
-                {post.author?.username && (
-                  <span className="block truncate text-xs leading-none text-zinc-300" dir="ltr">{post.author.username}</span>
-                )}
-              </div>
+              <UserIdentity
+                name={displayName(post.author)}
+                username={post.author?.username}
+                className="min-w-0 flex-1"
+                nameClassName="text-sm font-bold text-white"
+                usernameClassName="text-xs text-zinc-300"
+              />
             </div>
             {post.content && <p className="text-sm leading-snug line-clamp-3">{post.content}</p>}
           </div>

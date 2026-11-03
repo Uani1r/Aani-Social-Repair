@@ -3,6 +3,7 @@ import { Bookmark, Heart, MessageCircle, Repeat2, Share2 } from 'lucide-react';
 
 import { usePostInteractions } from '../lib/interactions';
 import type { Post } from '../lib/types';
+import UserIdentity from './UserIdentity';
 
 export interface PostCardProps {
   post: Post;
@@ -56,7 +57,7 @@ export default function PostCard({
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-white shadow-sm" dir="rtl">
       {/* رأس المنشور */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-4">
           {post.author?.avatar_url ? (
             <img
               src={post.author.avatar_url}
@@ -68,14 +69,14 @@ export default function PostCard({
               {post.author?.full_name?.[0]?.toUpperCase() || 'آ'}
             </div>
           )}
-          <div className="user-identity-meta h-14 min-w-0">
-            <div className="truncate font-semibold leading-tight text-zinc-100">
-              {post.author?.display_name || post.author?.full_name || 'مستخدم'}
-            </div>
-            {post.author?.username && (
-              <div className="truncate text-xs leading-none text-zinc-400" dir="ltr">{post.author.username}</div>
-            )}
-            <div className="whitespace-nowrap text-xs text-zinc-400">{formattedDate}</div>
+          <div className="min-w-0">
+            <UserIdentity
+              name={post.author?.display_name || post.author?.full_name || 'مستخدم'}
+              username={post.author?.username}
+              nameClassName="font-semibold text-zinc-100"
+              usernameClassName="text-xs text-zinc-400"
+            />
+            <div className="mt-1 whitespace-nowrap text-xs text-zinc-400">{formattedDate}</div>
           </div>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Loader2, Search, X } from 'lucide-react';
 
+import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
 export interface MentionCandidate {
@@ -195,7 +196,7 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
                 key={person.id}
                 type="button"
                 onClick={() => toggle(person)}
-                className="mb-1 flex w-full items-center gap-3 rounded-2xl px-2 py-2 text-right transition active:scale-[0.99] hover:bg-white/10"
+                className="mb-1 flex w-full items-center gap-4 rounded-2xl px-2 py-2 text-right transition active:scale-[0.99] hover:bg-white/10"
               >
                 {person.avatar_url ? (
                   <img src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
@@ -204,10 +205,13 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
                     {(person.username || '?').charAt(0).toUpperCase()}
                   </span>
                 )}
-                <span className="user-identity-meta h-10 min-w-0 flex-1">
-                  <span className="block truncate text-[12px] font-bold leading-tight">{person.full_name || person.username}</span>
-                  <span className="block truncate text-[10px] leading-none text-white/50" dir="ltr">{person.username}</span>
-                </span>
+                <UserIdentity
+                  name={person.full_name || person.username}
+                  username={person.username}
+                  className="min-w-0 flex-1"
+                  nameClassName="text-[12px] font-bold text-white"
+                  usernameClassName="text-[10px] text-white/50"
+                />
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition ${
                     picked ? 'border-white bg-white text-[#121212]' : 'border-white/30 text-transparent'

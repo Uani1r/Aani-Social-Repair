@@ -2,6 +2,7 @@ import { Link } from 'wouter';
 import { MoreVertical, Trash2, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import UserIdentity from '@/components/UserIdentity';
 import { displayName, formatDate } from '@/lib/types';
 
 import type { StoryViewerProps } from './types';
@@ -35,17 +36,23 @@ export default function StoryHeader({
       {showUI && (
         <div className="absolute inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent" style={{ top: 'calc(1.5rem + env(safe-area-inset-top))' }}>
           <div className="flex min-w-0 flex-col items-start gap-1">
-            <Link href={`/profile/${currentStory.user_id}`} className="flex min-w-0 items-center gap-2">
+            <Link href={`/profile/${currentStory.user_id}`} className="flex min-w-0 items-center gap-4">
               <Avatar profile={currentStory.author} storyBorder={false} />
-              <div className="user-identity-meta h-12 min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-1">
-                  <span className="truncate font-bold text-xs">{displayName(currentStory.author)}</span>
-                  {currentStory.is_close_friends && (
-                    <span className="shrink-0 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold">أصدقاء مقربون</span>
+              <div className="min-w-0 flex-1">
+                <UserIdentity
+                  name={(
+                    <span className="flex min-w-0 items-center gap-1">
+                      <span className="truncate">{displayName(currentStory.author)}</span>
+                      {currentStory.is_close_friends && (
+                        <span className="shrink-0 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold">أصدقاء مقربون</span>
+                      )}
+                    </span>
                   )}
-                </div>
-                <span className="truncate text-[10px] text-zinc-300" dir="ltr">{currentStory.author?.username}</span>
-                <span className="whitespace-nowrap text-[10px] text-zinc-300">{formatDate(currentStory.created_at)}</span>
+                  username={currentStory.author?.username}
+                  nameClassName="text-xs font-bold text-white"
+                  usernameClassName="text-[10px] text-zinc-300"
+                />
+                <span className="mt-1 block whitespace-nowrap text-[10px] text-zinc-300">{formatDate(currentStory.created_at)}</span>
               </div>
             </Link>
             {currentStory.original_story_id && originalStoryAuthor && (

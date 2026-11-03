@@ -3,6 +3,7 @@ import { Link } from 'wouter';
 import { ArrowUpLeft, Search, Trash2 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -93,12 +94,15 @@ export default function SearchPage({ userId }: { userId: string }) {
         <div className="card space-y-2">
           {profiles.map(p => (
             <Link key={p.id} href={`/profile/${p.id}`} className="flex items-center justify-between p-2.5 rounded-xl hover:bg-zinc-800/50">
-              <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-4">
                 <Avatar profile={p} large />
-                <div className="user-identity-meta h-12 min-w-0 flex-1">
-                  <strong className="block truncate text-xs font-bold leading-tight text-white">{displayName(p)}</strong>
-                  <span className="block truncate text-[11px] leading-none text-zinc-400" dir="ltr">{p.username}</span>
-                </div>
+                <UserIdentity
+                  name={displayName(p)}
+                  username={p.username}
+                  className="min-w-0 flex-1"
+                  nameClassName="text-xs font-bold text-white"
+                  usernameClassName="text-[11px] text-zinc-400"
+                />
               </div>
               <ArrowUpLeft size={16} className="text-zinc-500" />
             </Link>

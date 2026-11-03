@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type { CommentWithDetails } from '../lib/interactions';
 import CommentText from './CommentText';
+import UserIdentity from './UserIdentity';
 
 interface CommentItemProps {
   comment: CommentWithDetails;
@@ -120,7 +121,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   return (
     <div className="relative">
       <div
-        className="relative flex gap-3 py-2"
+        className="relative flex gap-4 py-2"
         dir="rtl"
       >
         <div className="flex shrink-0">
@@ -145,20 +146,14 @@ export const CommentItem: React.FC<CommentItemProps> = ({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <div className={`user-identity-meta ${isReply ? 'h-12' : 'h-14'} min-w-0 flex-1`}>
-              <p
-                className={`truncate font-bold leading-tight text-white ${
-                  isReply ? 'text-[13px]' : 'text-[15px]'
-                }`}
-              >
-                {displayName}
-              </p>
-              {author?.username && (
-                <span className={`block truncate leading-none text-zinc-500 ${isReply ? 'text-[10px]' : 'text-[11px]'}`} dir="ltr">
-                  {author.username}
-                </span>
-              )}
-              <time className="text-[11px] text-zinc-500">
+            <div className="min-w-0 flex-1">
+              <UserIdentity
+                name={displayName}
+                username={author?.username}
+                nameClassName={`font-bold text-white ${isReply ? 'text-[13px]' : 'text-[15px]'}`}
+                usernameClassName={`text-zinc-500 ${isReply ? 'text-[10px]' : 'text-[11px]'}`}
+              />
+              <time className="mt-1 block text-[11px] text-zinc-500">
                 {formatRelativeTime(comment.created_at)}
               </time>
             </div>

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { SendHorizontal, Settings, Sparkles, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import UserIdentity from '@/components/UserIdentity';
 import type { SettingsModalProps } from '@/lib/appShared';
 import { displayName } from '@/lib/types';
 
@@ -62,12 +63,15 @@ export default function SettingsModal({ isOpen, onClose, currentProfile, onSignO
 
         {activeTab === 'main' ? (
           <div className="space-y-4 pt-3 flex-1">
-            <div className="flex items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+            <div className="flex items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
               <Avatar profile={currentProfile} large />
-              <div className="user-identity-meta h-12 min-w-0 flex-1">
-                <strong className="block truncate text-sm leading-tight">{displayName(currentProfile)}</strong>
-                {currentProfile?.username && <span className="block truncate text-xs leading-none text-zinc-400" dir="ltr">{currentProfile.username}</span>}
-              </div>
+              <UserIdentity
+                name={displayName(currentProfile)}
+                username={currentProfile?.username}
+                className="min-w-0 flex-1"
+                nameClassName="text-sm text-white"
+                usernameClassName="text-xs text-zinc-400"
+              />
             </div>
             <p className="text-xs leading-6 text-zinc-400">إدارة جلسة تسجيل الدخول وإعدادات حسابك في آني.</p>
             <button type="button" onClick={onSignOut} className="w-full rounded-xl bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20">

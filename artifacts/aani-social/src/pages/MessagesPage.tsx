@@ -4,6 +4,7 @@ import { ArrowUpLeft, Send } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import SharedPostPreview from '@/components/SharedPostPreview';
+import UserIdentity from '@/components/UserIdentity';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
@@ -150,12 +151,15 @@ export default function MessagesPage({
           <div className="card space-y-2">
             {contacts.map(c => (
               <Link key={c.id} href={`/messages/${c.id}`} className="flex items-center justify-between p-2 rounded-xl hover:bg-zinc-800/50">
-                <div className="flex items-center gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-4">
                   <Avatar profile={c} />
-                  <div className="user-identity-meta h-8 min-w-0 flex-1">
-                    <strong className="block truncate text-xs leading-tight text-white">{displayName(c)}</strong>
-                    <span className="block truncate text-[10px] leading-none text-zinc-400" dir="ltr">{c.username}</span>
-                  </div>
+                  <UserIdentity
+                    name={displayName(c)}
+                    username={c.username}
+                    className="min-w-0 flex-1"
+                    nameClassName="text-xs text-white"
+                    usernameClassName="text-[10px] text-zinc-400"
+                  />
                 </div>
                 <ArrowUpLeft size={16} className="text-zinc-500" />
               </Link>
@@ -169,12 +173,13 @@ export default function MessagesPage({
           <div className="flex items-center justify-between border-b border-zinc-800 pb-2 mb-2">
             <button onClick={() => setLocation('/messages')} className="text-xs text-pink-500 flex items-center gap-1"><ArrowUpLeft size={14} /> كل الرسائل</button>
             {target && (
-              <div className="user-identity-meta h-8 min-w-0">
-                <strong className="block truncate text-xs text-white">{displayName(target)}</strong>
-                {target.username && (
-                  <span className="block truncate text-[10px] leading-none text-zinc-400" dir="ltr">{target.username}</span>
-                )}
-              </div>
+              <UserIdentity
+                name={displayName(target)}
+                username={target.username}
+                className="min-w-0 max-w-[55%]"
+                nameClassName="text-xs text-white"
+                usernameClassName="text-[10px] text-zinc-400"
+              />
             )}
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 p-2">

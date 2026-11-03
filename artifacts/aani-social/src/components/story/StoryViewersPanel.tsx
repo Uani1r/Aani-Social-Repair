@@ -2,6 +2,7 @@ import type { FormEvent } from 'react';
 import { Ban, Eye, EyeOff, Flag, Heart, Loader2, MoreVertical, UserRound, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import UserIdentity from '@/components/UserIdentity';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -119,13 +120,15 @@ export default function StoryViewersPanel({
           {!storyViewsLoading && !storyViewsError && storyViewers.length > 0 && (
             <ul className="space-y-2">
               {storyViewers.map((item: StoryViewerEntry) => (
-                <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-2 rounded-xl px-2 py-2 hover:bg-white/[0.03]">
+                <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-4 rounded-xl px-2 py-2 hover:bg-white/[0.03]">
                   <Avatar profile={item.viewer} />
                   <div className="min-w-0 flex-1">
-                    <div className="user-identity-meta h-8">
-                      <p className="truncate text-xs font-semibold leading-tight text-white">{storyViewerDisplayName(item.viewer)}</p>
-                      <p className="truncate text-[10px] leading-none text-zinc-400" dir="ltr">{item.viewer?.username || 'اسم المستخدم غير متاح'}</p>
-                    </div>
+                    <UserIdentity
+                      name={storyViewerDisplayName(item.viewer)}
+                      username={item.viewer?.username || 'اسم المستخدم غير متاح'}
+                      nameClassName="text-xs font-semibold text-white"
+                      usernameClassName="text-[10px] text-zinc-400"
+                    />
                     <time className="mt-1 block text-[10px] text-zinc-500">
                       {item.is_viewer === false
                         ? `أعجب بالقصة ${formatDate(item.liked_at || item.viewed_at)}`
@@ -177,13 +180,15 @@ export default function StoryViewersPanel({
             <div className="mt-1">
               <ul className="space-y-2">
                 {storyViewerPreview.rows.map(item => (
-                  <li key={`preview:${currentStory.id}:${item.user_id}`} className="flex items-center gap-2 py-2">
+                  <li key={`preview:${currentStory.id}:${item.user_id}`} className="flex items-center gap-4 py-2">
                     <Avatar profile={item.viewer} />
                     <div className="min-w-0 flex-1">
-                      <div className="user-identity-meta h-8">
-                        <p className="truncate text-xs font-semibold leading-tight text-white">{storyViewerDisplayName(item.viewer)}</p>
-                        <p className="truncate text-[10px] leading-none text-zinc-400" dir="ltr">{item.viewer?.username || 'اسم المستخدم غير متاح'}</p>
-                      </div>
+                      <UserIdentity
+                        name={storyViewerDisplayName(item.viewer)}
+                        username={item.viewer?.username || 'اسم المستخدم غير متاح'}
+                        nameClassName="text-xs font-semibold text-white"
+                        usernameClassName="text-[10px] text-zinc-400"
+                      />
                       <time className="mt-1 block text-[10px] text-zinc-500">{formatDate(item.viewed_at)} · معاينة</time>
                     </div>
                   </li>

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
+import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
@@ -183,7 +184,7 @@ export default function ProfilePage({
 
   return (
     <section className="new-view space-y-4 max-w-lg mx-auto">
-      <div className="profile-banner card flex items-start gap-4 p-4 border border-zinc-800 rounded-2xl bg-zinc-900/80">
+      <div className="profile-banner card flex items-start gap-5 p-4 border border-zinc-800 rounded-2xl bg-zinc-900/80">
         <button
           type="button"
           disabled={!hasActiveStories}
@@ -211,17 +212,29 @@ export default function ProfilePage({
           </span>
         </button>
         <div className="min-w-0 flex-1">
-          <div className="user-identity-meta h-[72px] min-w-0">
-            <strong className="block truncate text-sm font-bold leading-tight text-white">{displayName(person)}</strong>
-            <span className="block truncate text-xs leading-none text-zinc-400" dir="ltr">{person.username}</span>
+          <UserIdentity
+            name={displayName(person)}
+            username={person.username}
+            className="w-full"
+            nameClassName="text-sm font-bold text-white"
+            usernameClassName="text-xs text-zinc-400"
+          />
+
+          <div className="mt-3 flex w-full items-center justify-between text-center text-xs text-zinc-300">
+            <div className="flex flex-col items-center">
+              <b className="text-white">{postCount}</b>
+              <span>منشور</span>
+            </div>
+            <div className="flex flex-col items-center">
+              <b className="text-white">{followers}</b>
+              <span>متابِع</span>
+            </div>
+            <div className="flex flex-col items-center">
+              <b className="text-white">{following}</b>
+              <span>يتابع</span>
+            </div>
           </div>
           <p className="mt-2 text-xs text-zinc-400">{person.bio || 'لا توجد نبذة شخصية'}</p>
-
-          <div className="flex gap-4 my-2 text-xs text-zinc-300">
-            <span><b className="text-white">{postCount}</b> منشور</span>
-            <span><b className="text-white">{followers}</b> متابِع</span>
-            <span><b className="text-white">{following}</b> يتابع</span>
-          </div>
 
           {own && (
             <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-black/30 px-3 py-2">
@@ -260,12 +273,15 @@ export default function ProfilePage({
         <section className="card space-y-2 border border-zinc-800 p-3">
           <h2 className="text-xs font-bold text-white">طلبات المتابعة ({followRequests.length})</h2>
           {followRequests.map(request => (
-            <div key={request.profile.id} className="flex items-center gap-2 rounded-xl bg-black/20 p-2">
+            <div key={request.profile.id} className="flex items-center gap-4 rounded-xl bg-black/20 p-2">
               <Avatar profile={request.profile} />
-              <div className="user-identity-meta h-8 min-w-0 flex-1">
-                <span className="block truncate text-[11px] leading-tight text-white">{displayName(request.profile)}</span>
-                <span className="block truncate text-[10px] leading-none text-zinc-400" dir="ltr">{request.profile.username}</span>
-              </div>
+              <UserIdentity
+                name={displayName(request.profile)}
+                username={request.profile.username}
+                className="min-w-0 flex-1"
+                nameClassName="text-[11px] text-white"
+                usernameClassName="text-[10px] text-zinc-400"
+              />
               <button
                 type="button"
                 disabled={Boolean(busyRequestId)}

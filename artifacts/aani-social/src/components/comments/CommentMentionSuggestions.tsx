@@ -1,5 +1,6 @@
 import React from 'react';
 
+import UserIdentity from '../UserIdentity';
 import type { MentionCandidate } from './types';
 import { buildInitials } from './utils';
 
@@ -30,7 +31,7 @@ const CommentMentionSuggestions: React.FC<CommentMentionSuggestionsProps> = ({
           aria-selected={index === selectedIndex}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => onSelect(person)}
-          className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs transition ${
+          className={`flex w-full items-center gap-4 rounded-xl px-2 py-1.5 text-right text-xs transition ${
             index === selectedIndex ? 'bg-zinc-800' : 'hover:bg-zinc-800/70'
           }`}
         >
@@ -46,16 +47,13 @@ const CommentMentionSuggestions: React.FC<CommentMentionSuggestionsProps> = ({
             </span>
           )}
 
-          <span className="user-identity-meta h-7 min-w-0 flex-1">
-            <strong className="block truncate leading-tight text-white">
-              {person.full_name || person.username || 'مستخدم'}
-            </strong>
-            {person.username && (
-              <span className="block truncate text-[10px] leading-none text-zinc-500" dir="ltr">
-                {person.username}
-              </span>
-            )}
-          </span>
+          <UserIdentity
+            name={person.full_name || person.username || 'مستخدم'}
+            username={person.username}
+            className="min-w-0 flex-1"
+            nameClassName="font-bold text-white"
+            usernameClassName="text-[10px] text-zinc-500"
+          />
         </button>
       ))}
     </div>

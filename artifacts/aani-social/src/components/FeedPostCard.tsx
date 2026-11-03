@@ -6,6 +6,7 @@ import { Link } from 'wouter';
 
 import Avatar from './Avatar';
 import ShareSheet from './ShareSheet';
+import UserIdentity from './UserIdentity';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -375,14 +376,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       )}
       <header className="flex w-full items-start gap-4">
         <Avatar profile={post.author} large />
-        <div className="user-identity-meta h-12 min-w-0 flex-1">
-          <div className="flex min-w-0 items-center justify-between gap-2">
-            <Link href={`/profile/${post.user_id}`} className="min-w-0 flex-1 hover:underline">
-              <strong className="block truncate text-sm font-bold text-white">{displayName(post.author)}</strong>
-            </Link>
-            <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
-          </div>
-          <span className="truncate text-xs leading-none text-zinc-500" dir="ltr">{post.author?.username || 'user'}</span>
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          <UserIdentity
+            name={<Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>}
+            username={post.author?.username || 'user'}
+            className="min-w-0 flex-1"
+            nameClassName="text-sm font-bold text-white"
+            usernameClassName="text-xs text-zinc-500"
+          />
+          <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

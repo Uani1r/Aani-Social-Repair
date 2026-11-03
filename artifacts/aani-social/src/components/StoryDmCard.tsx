@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 
+import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
 export interface StoryRow {
@@ -98,7 +99,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
           <img src={story.media_url} alt="" className="h-full w-full object-cover" />
         )}
 
-        <div className="absolute inset-x-0 top-0 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent p-2">
+        <div className="absolute inset-x-0 top-0 flex items-center gap-4 bg-gradient-to-b from-black/70 to-transparent p-2">
           {story?.author?.avatar_url ? (
             <img src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
           ) : (
@@ -106,12 +107,13 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
               {(story?.author?.username || 'A').charAt(0).toUpperCase()}
             </span>
           )}
-          <span className="user-identity-meta h-6 min-w-0 flex-1">
-            <span className="truncate text-[10px] font-bold leading-tight">{authorLabel}</span>
-            {story?.author?.username && (
-              <span className="truncate text-[9px] leading-none text-white/70" dir="ltr">{story.author.username}</span>
-            )}
-          </span>
+          <UserIdentity
+            name={authorLabel}
+            username={story?.author?.username}
+            className="min-w-0 flex-1"
+            nameClassName="text-[10px] font-bold text-white"
+            usernameClassName="text-[9px] text-white/70"
+          />
         </div>
 
       </div>
