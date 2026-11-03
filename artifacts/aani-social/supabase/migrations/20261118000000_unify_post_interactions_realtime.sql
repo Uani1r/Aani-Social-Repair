@@ -41,7 +41,7 @@ as $$
       exists (select 1 from public.likes l where l.post_id = p.id and l.user_id = auth.uid()) as liked_by_me,
       exists (select 1 from public.reposts r where r.post_id = p.id and r.user_id = auth.uid()) as reposted_by_me,
       exists (select 1 from public.bookmarks b where b.post_id = p.id and b.user_id = auth.uid()) as saved_by_me,
-      (select f.feedback from public.post_feedback f where f.post_id = p.id and f.user_id = auth.uid()) as feedback_by_me,
+      (select f.feedback from public.post_feedback f where f.post_id = p.id and f.user_id = auth.uid() limit 1) as feedback_by_me,
       exists (select 1 from public.post_shares s where s.post_id = p.id and s.user_id = auth.uid()) as shared_by_me
     from public.posts p
     where p.id = any(coalesce(p_post_ids, '{}'::uuid[]))
@@ -70,7 +70,7 @@ $$;
 
 revoke all on function public.aani_post_interaction_rows(uuid[]) from public, anon, authenticated;
 
-create function public.get_post_interactions(p_post_ids uuid[])
+create or replace function public.get_post_interactions(p_post_ids uuid[])
 returns table (
   post_id uuid,
   likes_count bigint,
@@ -99,7 +99,7 @@ as $$
   select * from public.aani_post_interaction_rows(p_post_ids);
 $$;
 
-create function public.post_interaction_summaries(post_ids uuid[])
+create or replace function public.post_interaction_summaries(post_ids uuid[])
 returns table (
   post_id uuid,
   likes_count bigint,
