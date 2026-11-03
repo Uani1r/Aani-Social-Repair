@@ -54,6 +54,7 @@ type StoryCreationEditorProps = {
   storyAnimationTick: number;
   storyPreviewClassName: string;
   storyTextAreaRef: { current: HTMLTextAreaElement | null };
+  storyFiltersOpen: boolean;
   storyFilterId: string;
   storyFilterAdjustments: StoryAdjustments;
   storyMusicTrack: { id: string; title: string; artist: string } | null;
@@ -139,6 +140,7 @@ export default function StoryCreationEditor({
   storyAnimationTick,
   storyPreviewClassName,
   storyTextAreaRef,
+  storyFiltersOpen,
   storyFilterId,
   storyFilterAdjustments,
   storyMusicTrack,

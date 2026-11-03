@@ -2123,6 +2123,7 @@ export default function StoriesBar({
           storyAnimationTick={storyAnimationTick}
           storyPreviewClassName={storyPreviewClassName}
           storyTextAreaRef={storyTextAreaRef}
+          storyFiltersOpen={storyFiltersOpen}
           storyFilterId={storyFilterId}
           storyFilterAdjustments={storyFilterAdjustments}
           storyMusicTrack={storyMusicTrack}
