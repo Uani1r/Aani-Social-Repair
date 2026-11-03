@@ -1617,6 +1617,9 @@ export default function StoriesBar({
           textAnimation={storyTextAnimation}
           textBackgroundPreset={storyBackgroundPreset}
           canvasBackground={textCanvasBackground}
+          storyTextOffset={storyTextOffset}
+          storyTextScale={storyTextScale}
+          storyTextRotation={storyTextRotation}
           editorOpen={storyTextEditorOpen}
           keyboardInset={storyKeyboardInset}
           animationTick={storyAnimationTick}
@@ -1654,6 +1657,12 @@ export default function StoriesBar({
           onAnimationChange={value => {
             setStoryTextAnimation(value);
             setStoryAnimationTick(tick => tick + 1);
+          }}
+          onTextScaleChange={setStoryTextScale}
+          onTextTransformChange={transform => {
+            setStoryTextOffset({ x: transform.x, y: transform.y });
+            setStoryTextScale(transform.scale);
+            setStoryTextRotation(transform.rotation);
           }}
           onInteract={() => {
             keepStoryEditorFocus();

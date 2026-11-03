@@ -45,6 +45,9 @@ interface TextOnlyStoryCanvasProps {
   textAnimation: StoryTextAnimation;
   textBackgroundPreset: StoryTextBackgroundPreset;
   canvasBackground: string;
+  storyTextOffset: { x: number; y: number };
+  storyTextScale: number;
+  storyTextRotation: number;
   editorOpen: boolean;
   keyboardInset: number;
   animationTick: number;
@@ -80,6 +83,8 @@ interface TextOnlyStoryCanvasProps {
   onCycleAlign: () => void;
   onCycleTextBackground: () => void;
   onAnimationChange: (animation: StoryTextAnimation) => void;
+  onTextScaleChange: (scale: number) => void;
+  onTextTransformChange: (transform: { x: number; y: number; scale: number; rotation: number }) => void;
   onInteract: () => void;
   onCanvasBackgroundChange: (background: string) => void;
   onSelectTool: (key: StoryEditorToolKey) => void;
@@ -140,6 +145,9 @@ export default function TextOnlyStoryCanvas({
   textAnimation,
   textBackgroundPreset,
   canvasBackground,
+  storyTextOffset,
+  storyTextScale,
+  storyTextRotation,
   editorOpen,
   keyboardInset,
   animationTick,
@@ -175,6 +183,8 @@ export default function TextOnlyStoryCanvas({
   onCycleAlign,
   onCycleTextBackground,
   onAnimationChange,
+  onTextScaleChange,
+  onTextTransformChange,
   onInteract,
   onCanvasBackgroundChange,
   onSelectTool,
@@ -416,6 +426,12 @@ export default function TextOnlyStoryCanvas({
         storyFontFamily={fontFamily}
         storyTextColor={textColor}
         storyTextAlign={textAlign}
+        storyTextTransform={{
+          x: storyTextOffset.x,
+          y: storyTextOffset.y,
+          scale: storyTextScale,
+          rotation: storyTextRotation,
+        }}
         storyHasBackground={textBackgroundPreset.key !== 'none'}
         storyBackgroundPreset={textBackgroundPreset}
         storyTextAreaRef={textAreaRef}
@@ -427,6 +443,8 @@ export default function TextOnlyStoryCanvas({
         onCycleAlign={onCycleAlign}
         onCycleBackground={onCycleTextBackground}
         onAnimationChange={onAnimationChange}
+        onTextScaleChange={onTextScaleChange}
+        onTextTransformChange={onTextTransformChange}
         onInteract={onInteract}
       />
 
