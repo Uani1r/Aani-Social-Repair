@@ -2,8 +2,7 @@ import { Plus, Star } from 'lucide-react';
 
 import Avatar from '../Avatar';
 import type { Profile } from '@/lib/types';
-
-type StoriesByUser = { [key: string]: any[] };
+import type { StoriesByUser, StoryRow } from './types';
 
 interface StoriesStripProps {
   userId: string;
@@ -31,8 +30,8 @@ export default function StoriesStrip({
   const myStories = groupedStories[userId] || [];
   const hasMyStory = myStories.length > 0;
   const myStoryHasCloseFriends = myStories.some(story => story.is_close_friends);
-  const hasSeenAllStories = (stories: any[]) =>
-    stories.length > 0 && stories.every(story => seenStoryIds.includes(String(story.id)));
+  const hasSeenAllStories = (stories: StoryRow[]) =>
+    stories.length > 0 && stories.every(story => seenStoryIds.includes(story.id));
   const hasSeenAllMyStories = hasSeenAllStories(myStories);
 
   return (

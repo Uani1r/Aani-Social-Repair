@@ -2,7 +2,13 @@ import { useCallback, useEffect, type Dispatch, type SetStateAction } from 'reac
 import { toast } from 'sonner';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-type StoriesByUser = { [key: string]: any[] };
+import {
+  normalizeStoryAuthor,
+  normalizeStoryRow,
+  type StoriesByUser,
+  type StoryAuthor,
+  type StoryRow,
+} from './types';
 
 interface UseStoriesDataOptions {
   userId: string;
@@ -10,7 +16,7 @@ interface UseStoriesDataOptions {
   onProfileStoryHandled: () => void;
   setGroupedStories: Dispatch<SetStateAction<StoriesByUser>>;
   setProfileStoryOwnerId: Dispatch<SetStateAction<string | null>>;
-  setProfilePreviewStories: Dispatch<SetStateAction<any[]>>;
+  setProfilePreviewStories: Dispatch<SetStateAction<StoryRow[]>>;
   setActiveUserGroup: Dispatch<SetStateAction<string | null>>;
   setActiveStoryIndex: Dispatch<SetStateAction<number>>;
   setProgress: Dispatch<SetStateAction<number>>;
@@ -55,19 +61,25 @@ export function useStoriesData({
       return;
     }
 
-    const storyRows = data || [];
-    const authorIds = [...new Set(storyRows.map(story => String(story.user_id)))];
+    const storyRows = ((data ?? []) as unknown[])
+      .map(normalizeStoryRow)
+      .filter((story): story is StoryRow => story !== null);
+    const authorIds = [...new Set(storyRows.map(story => story.user_id))];
     const { data: authors, error: authorsError } = authorIds.length
       ? await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', authorIds)
       : { data: [], error: null };
     if (authorsError) console.warn('[stories] تعذر تحميل ملفات أصحاب القصص:', authorsError);
 
-    const authorById = new Map<string, any>((authors || []).map(author => [String(author.id), author] as [string, any]));
+    const authorById = new Map<string, StoryAuthor>();
+    ((authors ?? []) as unknown[]).forEach((value: unknown) => {
+      const author = normalizeStoryAuthor(value);
+      if (author) authorById.set(author.id, author);
+    });
     const groups: StoriesByUser = {};
     storyRows.forEach(story => {
-      const authorId = String(story.user_id);
+      const authorId = story.user_id;
       if (!groups[authorId]) groups[authorId] = [];
-      groups[authorId].push({ ...story, author: authorById.get(authorId) || null });
+      groups[authorId].push({ ...story, author: authorById.get(authorId) ?? null });
     });
     setGroupedStories(groups);
   }, [setGroupedStories, userId]);
@@ -97,7 +109,10 @@ export function useStoriesData({
           onProfileStoryHandled();
           return;
         }
-        if (!data?.length) {
+        const storyRows = ((data ?? []) as unknown[])
+          .map(normalizeStoryRow)
+          .filter((story): story is StoryRow => story !== null);
+        if (storyRows.length === 0) {
           toast.info('لا توجد قصص متاحة لهذا الحساب');
           onProfileStoryHandled();
           return;
@@ -110,7 +125,8 @@ export function useStoriesData({
           .maybeSingle();
         if (!active) return;
         if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة:', authorError);
-        const storiesWithAuthor = data.map(story => ({ ...story, author: author || null }));
+        const storyAuthor = normalizeStoryAuthor(author);
+        const storiesWithAuthor = storyRows.map(story => ({ ...story, author: storyAuthor }));
 
         setProfileStoryOwnerId(pendingProfileStoryOwnerId);
         setProfilePreviewStories(storiesWithAuthor);

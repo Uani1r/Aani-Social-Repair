@@ -45,6 +45,13 @@ export type Post = {
   comments?: PostComment[];
 };
 
+export type PostRow = Pick<
+  Post,
+  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'type' | 'created_at'
+> & {
+  reposter_id?: string | null;
+};
+
 export type PostFeedback = "interested" | "not_interested";
 
 export type PostComment = {

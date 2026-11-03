@@ -64,10 +64,10 @@ export default function StoryMediaStage({
         />
       )}
 
-      {(Array.isArray(currentStory.timed_texts) ? currentStory.timed_texts : []).map((timedText: any) => {
-        if (!timedText || currentTimeSec < timedText.startTime || currentTimeSec > timedText.endTime) return null;
+      {currentStory.timed_texts.map(timedText => {
+        if (currentTimeSec < timedText.startTime || currentTimeSec > timedText.endTime) return null;
 
-        if (timedText.type === 'drawing' && Array.isArray(timedText.strokes)) {
+        if (timedText.type === 'drawing') {
           return (
             <svg
               key={timedText.id || 'story-drawing'}
@@ -76,10 +76,8 @@ export default function StoryMediaStage({
               preserveAspectRatio="none"
               aria-hidden="true"
             >
-              {timedText.strokes.map((stroke: any, index: number) => {
-                const points = Array.isArray(stroke?.points)
-                  ? stroke.points.filter((point: any) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
-                  : [];
+              {timedText.strokes.map((stroke, index) => {
+                const points = stroke.points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
                 if (points.length === 0) return null;
                 const first = points[0];
                 const path = points.length === 1

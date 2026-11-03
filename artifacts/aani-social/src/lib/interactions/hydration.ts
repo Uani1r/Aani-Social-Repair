@@ -111,13 +111,22 @@ function mapSummaryRow(row: RawRow): Summary {
     bookmarked: optionalBool(row.saved_by_me ?? row.bookmarked),
     reposted: optionalBool(row.reposted_by_me ?? row.reposted),
     shared: optionalBool(row.shared_by_me ?? row.shared),
-    feedback:
-      feedback === null
-        ? null
-        : typeof feedback === "string"
-          ? (feedback as Post["feedback_by_me"])
-          : undefined,
+    feedback: normalizeFeedback(feedback),
   };
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function optionalStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return (value as unknown[]).filter((item: unknown): item is string => typeof item === "string");
+}
+
+function normalizeFeedback(value: unknown): Post["feedback_by_me"] | undefined {
+  if (value === null) return null;
+  return value === "interested" || value === "not_interested" ? value : undefined;
 }
 
 export function optionalNumber(value: unknown): number | undefined {
@@ -260,7 +269,7 @@ async function fetchFallbackSummaries(
   const seenSaves = new Set<string>();
   savedRows.forEach((row) => {
     const id = String(row.post_id ?? "");
-    const key = `${id}:${row.user_id ?? ""}`;
+    const key = `${id}:${String(row.user_id ?? "")}`;
     if (!id || seenSaves.has(key)) return;
     seenSaves.add(key);
     savesCounts.set(id, (savesCounts.get(id) ?? 0) + 1);
@@ -301,7 +310,7 @@ async function fetchFallbackSummaries(
       );
     }
     if (querySucceeded(feedback)) {
-      summary.feedback = (feedbackByPost.get(postId) ?? null) as Post["feedback_by_me"];
+      summary.feedback = normalizeFeedback(feedbackByPost.get(postId) ?? null) ?? null;
     }
 
     summaries.set(postId, summary);
@@ -462,22 +471,22 @@ export async function decoratePosts(
     id: String(row.id),
     user_id: String(row.user_id ?? ""),
     content: String(row.content ?? ""),
-    media_url: (row.media_url as string | null) ?? null,
-    media_urls: (row.media_urls as string[] | null) ?? null,
-    type: (row.type as Post["type"]) ?? "text",
+    media_url: optionalString(row.media_url) ?? null,
+    media_urls: optionalStringArray(row.media_urls),
+    type: row.type === "photo" || row.type === "reel" ? row.type : "text",
     created_at: String(row.created_at ?? new Date().toISOString()),
     author: byId.get(String(row.user_id ?? "")) ?? null,
     likes_count: optionalNumber(row.likes_count),
     comments_count: optionalNumber(row.comments_count),
     reposts_count: optionalNumber(row.reposts_count),
     shares_count: optionalNumber(row.shares_count),
-    reposted_at: (row.reposted_at as string | null) ?? null,
+    reposted_at: optionalString(row.reposted_at) ?? null,
     repost_attribution: row.reposter_id
       ? (byId.get(String(row.reposter_id)) ?? null)
       : null,
     comments_disabled: row.comments_disabled === true,
-    audio_url: (row.audio_url as string | null) ?? null,
-    audio_title: (row.audio_title as string | null) ?? null,
+    audio_url: optionalString(row.audio_url) ?? null,
+    audio_title: optionalString(row.audio_title) ?? null,
   }));
 
   await hydratePosts(posts, userId);
@@ -551,7 +560,7 @@ export async function hydrateSavesCount(
 
     savedRows.forEach((row) => {
       const id = String(row.post_id ?? "");
-      const key = `${id}:${row.user_id ?? ""}`;
+      const key = `${id}:${String(row.user_id ?? "")}`;
       if (!id || seen.has(key)) return;
       seen.add(key);
       savesCounts.set(id, (savesCounts.get(id) ?? 0) + 1);

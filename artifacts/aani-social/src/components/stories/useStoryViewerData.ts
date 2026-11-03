@@ -9,10 +9,11 @@ import {
   type StoryViewerProfile,
 } from '@/lib/appShared';
 import { supabase } from '@/lib/supabase';
+import type { StoryRow } from './types';
 
 interface UseStoryViewerDataOptions {
   userId: string;
-  currentStory: any;
+  currentStory: StoryRow | null;
   storyViewsRequestRef: MutableRefObject<number>;
   setStoryViewers: Dispatch<SetStateAction<StoryViewerEntry[]>>;
   setStoryViewsCount: Dispatch<SetStateAction<number>>;

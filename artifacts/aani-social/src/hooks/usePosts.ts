@@ -2,7 +2,86 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { Post } from '@/lib/types';
+import type { Post, PostRow, Profile } from '@/lib/types';
+
+interface RepostRow {
+  post_id: string;
+  created_at: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizePostRow(value: unknown): PostRow | null {
+  if (!isRecord(value)
+    || typeof value.id !== 'string'
+    || typeof value.user_id !== 'string'
+    || typeof value.created_at !== 'string') {
+    return null;
+  }
+
+  const mediaUrls = Array.isArray(value.media_urls)
+    ? (value.media_urls as unknown[]).filter((url: unknown): url is string => typeof url === 'string')
+    : null;
+
+  return {
+    id: value.id,
+    user_id: value.user_id,
+    content: typeof value.content === 'string' ? value.content : '',
+    media_url: typeof value.media_url === 'string' ? value.media_url : null,
+    media_urls: mediaUrls,
+    type: value.type === 'photo' || value.type === 'reel' ? value.type : 'text',
+    created_at: value.created_at,
+    ...(typeof value.reposter_id === 'string' || value.reposter_id === null
+      ? { reposter_id: value.reposter_id }
+      : {}),
+  };
+}
+
+function normalizePostRows(value: unknown): PostRow[] {
+  if (!Array.isArray(value)) return [];
+
+  return (value as unknown[])
+    .map(normalizePostRow)
+    .filter((post): post is PostRow => post !== null);
+}
+
+function normalizeRepostRows(value: unknown): RepostRow[] {
+  if (!Array.isArray(value)) return [];
+
+  return (value as unknown[]).flatMap((item: unknown) => {
+    if (!isRecord(item) || typeof item.post_id !== 'string' || typeof item.created_at !== 'string') return [];
+    return [{ post_id: item.post_id, created_at: item.created_at }];
+  });
+}
+
+function normalizePostProfile(value: unknown): Profile | null {
+  if (!isRecord(value) || typeof value.id !== 'string') return null;
+
+  return {
+    id: value.id,
+    username: typeof value.username === 'string' ? value.username : 'user',
+    full_name: typeof value.full_name === 'string' ? value.full_name : 'مستخدم',
+    avatar_url: typeof value.avatar_url === 'string' ? value.avatar_url : null,
+    bio: typeof value.bio === 'string' ? value.bio : '',
+  };
+}
+
+function profileMap(value: unknown): Map<string, Profile> {
+  const profiles = new Map<string, Profile>();
+  if (!Array.isArray(value)) return profiles;
+
+  (value as unknown[]).forEach((item: unknown) => {
+    const profile = normalizePostProfile(item);
+    if (profile) profiles.set(profile.id, profile);
+  });
+  return profiles;
+}
+
+function fallbackProfile(id: string, fullName: string): Profile {
+  return { id, username: 'user', full_name: fullName, avatar_url: null, bio: '' };
+}
 
 export async function hydratePostInteractions(
   posts: Post[],
@@ -21,7 +100,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     if (query === 'feed') setPosts([]);
     try {
       if (query === 'feed') {
-        const { data: rawPosts, error: postsErr } = await supabase
+        const { data: postData, error: postsErr } = await supabase
           .from('posts')
           .select('id, user_id, content, media_url, media_urls, type, created_at')
           .in('type', ['text', 'photo'])
@@ -30,23 +109,24 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         if (postsErr) throw postsErr;
 
-        if (rawPosts && rawPosts.length > 0) {
-          const uIds = [...new Set(rawPosts.map(p => p.user_id))];
-          const { data: profs } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
-          const profMap = new Map((profs || []).map(p => [p.id, p]));
+        const rawPosts = normalizePostRows(postData);
+        if (rawPosts.length > 0) {
+          const uIds = [...new Set(rawPosts.map(post => post.user_id))];
+          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
+          const profMap = profileMap(profileData);
 
-          const formatted = rawPosts.map(p => ({
-            ...p,
-            author: profMap.get(p.user_id) || { id: p.user_id, username: 'user', full_name: 'مستخدم آني' },
+          const formatted: Post[] = rawPosts.map(post => ({
+            ...post,
+            author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
             likes: [],
-            comments: []
+            comments: [],
           }));
-          setPosts(await hydratePostInteractions(formatted as unknown as Post[], currentUserId));
+          setPosts(await hydratePostInteractions(formatted, currentUserId));
         } else {
           setPosts([]);
         }
       } else if (query === 'profile' && targetUserId) {
-        const { data: rawPosts, error: postsErr } = await supabase
+        const { data: postData, error: postsErr } = await supabase
           .from('posts')
           .select('id, user_id, content, media_url, media_urls, type, created_at')
           .eq('user_id', targetUserId)
@@ -54,51 +134,58 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         if (postsErr) throw postsErr;
 
+        const rawPosts = normalizePostRows(postData);
+
         // جلب المنشورات التي أعاد المستخدم نشرها لعرضها في ملفه الشخصي
-        const { data: repostRows } = await supabase
+        const { data: repostData } = await supabase
           .from('reposts')
           .select('post_id, created_at')
           .eq('user_id', targetUserId)
           .order('created_at', { ascending: false })
           .limit(50);
 
-        const repostPostIds = (repostRows || []).map(r => r.post_id).filter((id: string) => !(rawPosts || []).some(p => p.id === id));
+        const repostRows = normalizeRepostRows(repostData);
+        const repostPostIds = repostRows
+          .map(row => row.post_id)
+          .filter(id => !rawPosts.some(post => post.id === id));
 
-        let repostedRaw: any[] = [];
+        let repostedRaw: Array<PostRow & { reposter_id: string }> = [];
         const repostedAtById = new Map<string, string>();
-        (repostRows || []).forEach(r => repostedAtById.set(r.post_id, r.created_at));
+        repostRows.forEach(row => repostedAtById.set(row.post_id, row.created_at));
 
         if (repostPostIds.length > 0) {
-          const { data: originalPosts } = await supabase
+          const { data: originalPostData } = await supabase
             .from('posts')
             .select('id, user_id, content, media_url, media_urls, type, created_at')
             .in('id', repostPostIds);
-          repostedRaw = (originalPosts || []).map(p => ({ ...p, reposter_id: targetUserId }));
+          repostedRaw = normalizePostRows(originalPostData).map(post => ({ ...post, reposter_id: targetUserId }));
         }
 
-        const allRaw = [...(rawPosts || []), ...repostedRaw];
+        const allRaw: PostRow[] = [...rawPosts, ...repostedRaw];
 
         if (allRaw.length > 0) {
-          const authorIds = [...new Set(allRaw.map(p => p.user_id))];
-          const { data: profs } = await supabase
+          const authorIds = [...new Set(allRaw.map(post => post.user_id))];
+          const { data: profileData } = await supabase
             .from('profiles')
             .select('id, username, full_name, avatar_url')
             .in('id', authorIds);
-          const { data: reposterProf } = await supabase
+          const { data: reposterProfileData } = await supabase
             .from('profiles')
             .select('id, username, full_name, avatar_url')
             .eq('id', targetUserId)
             .maybeSingle();
 
-          const profMap = new Map((profs || []).map(p => [p.id, p]));
+          const profMap = profileMap(profileData);
+          const reposterProfile = normalizePostProfile(reposterProfileData)
+            || fallbackProfile(targetUserId, 'مستخدم');
 
-          const formattedPosts = allRaw
-            .map(p => ({
-              ...p,
-              author: profMap.get(p.user_id) || { id: p.user_id, username: 'user', full_name: 'مستخدم' },
-              repost_attribution: p.reposter_id ? (reposterProf || { id: targetUserId, username: 'user', full_name: 'مستخدم' }) : null,
+          const formattedPosts: Post[] = allRaw
+            .map((post): Post => ({
+              ...post,
+              author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم'),
+              repost_attribution: post.reposter_id ? reposterProfile : null,
               likes: [],
-              comments: []
+              comments: [],
             }))
             .sort((a, b) => {
               const aTime = repostedAtById.get(a.id) || a.created_at;
@@ -106,12 +193,12 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
               return new Date(bTime).getTime() - new Date(aTime).getTime();
             });
 
-          setPosts(await hydratePostInteractions(formattedPosts as unknown as Post[], currentUserId));
+          setPosts(await hydratePostInteractions(formattedPosts, currentUserId));
         } else {
           setPosts([]);
         }
       } else if (query === 'reel') {
-        const { data: rawPosts, error: postsErr } = await supabase
+        const { data: postData, error: postsErr } = await supabase
           .from('posts')
           .select('id, user_id, content, media_url, media_urls, type, created_at')
           .eq('type', 'reel')
@@ -120,18 +207,19 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         if (postsErr) throw postsErr;
 
-        if (rawPosts && rawPosts.length > 0) {
-          const uIds = [...new Set(rawPosts.map(p => p.user_id))];
-          const { data: profs } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
-          const profMap = new Map((profs || []).map(p => [p.id, p]));
+        const rawPosts = normalizePostRows(postData);
+        if (rawPosts.length > 0) {
+          const uIds = [...new Set(rawPosts.map(post => post.user_id))];
+          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
+          const profMap = profileMap(profileData);
 
-          const formatted = rawPosts.map(p => ({
-            ...p,
-            author: profMap.get(p.user_id) || { id: p.user_id, username: 'user', full_name: 'مستخدم آني' },
+          const formatted: Post[] = rawPosts.map(post => ({
+            ...post,
+            author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
             likes: [],
-            comments: []
+            comments: [],
           }));
-          setPosts(await hydratePostInteractions(formatted as unknown as Post[], currentUserId));
+          setPosts(await hydratePostInteractions(formatted, currentUserId));
         } else {
           setPosts([]);
         }

@@ -14,7 +14,50 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { recordShare } from '@/lib/interactions';
-import { displayName, formatDate, normalizeProfile, type Post } from '@/lib/types';
+import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
+
+type FeedPostComment = {
+  id: string;
+  content: string;
+  author: Partial<Profile> | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeCommentAuthor(value: unknown): Partial<Profile> | null {
+  const candidate: unknown = Array.isArray(value) ? value[0] : value;
+  if (!isRecord(candidate)) return null;
+
+  const profile: Partial<Profile> = {};
+  if (typeof candidate.id === 'string') profile.id = candidate.id;
+  if (typeof candidate.username === 'string') profile.username = candidate.username;
+  if (typeof candidate.full_name === 'string') profile.full_name = candidate.full_name;
+  if (typeof candidate.display_name === 'string' || candidate.display_name === null) {
+    profile.display_name = candidate.display_name;
+  }
+  if (typeof candidate.avatar_url === 'string' || candidate.avatar_url === null) {
+    profile.avatar_url = candidate.avatar_url;
+  }
+  if (typeof candidate.bio === 'string') profile.bio = candidate.bio;
+  if (typeof candidate.is_private === 'boolean') profile.is_private = candidate.is_private;
+
+  return Object.keys(profile).length > 0 ? profile : null;
+}
+
+function normalizeFeedPostComments(value: unknown): FeedPostComment[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item: unknown) => {
+    if (!isRecord(item) || typeof item.id !== 'string') return [];
+    return [{
+      id: item.id,
+      content: typeof item.content === 'string' ? item.content : '',
+      author: normalizeCommentAuthor(item.author),
+    }];
+  });
+}
 
 export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments }: {
   post: Post;
@@ -23,7 +66,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   onOpenComments?: (postId: string) => void;
 }) {
   const [commentText, setCommentText] = useState('');
-  const [comments, setComments] = useState<any[] | null>(null);
+  const [comments, setComments] = useState<FeedPostComment[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [commentsCount, setCommentsCount] = useState(post.comments_count || 0);
   const [repostsCount, setRepostsCount] = useState(post.reposts_count || 0);
@@ -200,7 +243,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     if (!supabaseConfigured) return;
     setBusy(true);
     const { data } = await supabase.from('comments').select('id,post_id,user_id,content,created_at,author:profiles(id,username,full_name,avatar_url)').eq('post_id', post.id).order('created_at', { ascending: true });
-    setComments(data || []);
+    setComments(normalizeFeedPostComments(data));
     setBusy(false);
   };
 
@@ -460,7 +503,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             {busy && <p className="muted text-xs text-zinc-500">جاري تحميل التعليقات...</p>}
             {comments.map(c => (
               <p key={c.id} className="text-xs mb-1.5 text-zinc-300 break-words">
-                <b className="text-white ml-1">{displayName(normalizeProfile(c.author))}:</b> {c.content}
+                <b className="text-white ml-1">{displayName(c.author)}:</b> {c.content}
               </p>
             ))}
             <form className="comment-form flex gap-1.5 mt-2 w-full" onSubmit={addComment}>

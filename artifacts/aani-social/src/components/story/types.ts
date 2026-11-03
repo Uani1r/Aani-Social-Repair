@@ -2,10 +2,11 @@ import type { FormEvent } from 'react';
 
 import type { StoryViewerEntry, StoryViewerPreviewState } from '@/lib/appShared';
 import type { Profile } from '@/lib/types';
+import type { StoryRow } from '@/components/stories/types';
 
 export type StoryViewerProps = {
-  currentStory: any;
-  activeStories: any[];
+  currentStory: StoryRow;
+  activeStories: StoryRow[];
   activeStoryIndex: number;
   progress: number;
   currentStoryFilter: { css: string };

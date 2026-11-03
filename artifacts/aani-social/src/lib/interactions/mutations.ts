@@ -74,7 +74,7 @@ export async function toggleBookmark(
       return;
     }
 
-    let errorToReport: any = null;
+    let errorToReport: { code: string; message: string } | null = null;
 
     if (bookmarked) {
       const { error: bookmarkError } = await supabase.from("bookmarks").insert({ post_id: post.id, user_id: userId });

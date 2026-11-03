@@ -8,6 +8,43 @@ import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/Sto
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
+interface MessageRow {
+  id: string;
+  sender_id: string;
+  recipient_id: string;
+  content: string;
+  post_id: string | null;
+  story_id: string | null;
+  created_at: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeMessageRows(value: unknown): MessageRow[] {
+  if (!Array.isArray(value)) return [];
+
+  return (value as unknown[]).flatMap((item: unknown) => {
+    if (!isRecord(item)
+      || typeof item.id !== 'string'
+      || typeof item.sender_id !== 'string'
+      || typeof item.recipient_id !== 'string') {
+      return [];
+    }
+
+    return [{
+      id: item.id,
+      sender_id: item.sender_id,
+      recipient_id: item.recipient_id,
+      content: typeof item.content === 'string' ? item.content : '',
+      post_id: typeof item.post_id === 'string' ? item.post_id : null,
+      story_id: typeof item.story_id === 'string' ? item.story_id : null,
+      created_at: typeof item.created_at === 'string' ? item.created_at : '',
+    }];
+  });
+}
+
 export default function MessagesPage({
   currentUserId,
   selectedId,
@@ -20,7 +57,7 @@ export default function MessagesPage({
   const [, setLocation] = useLocation();
   const [contacts, setContacts] = useState<Profile[]>([]);
   const [target, setTarget] = useState<Profile | null>(null);
-  const [thread, setThread] = useState<any[]>([]);
+  const [thread, setThread] = useState<MessageRow[]>([]);
   const [text, setText] = useState('');
 
   const loadThread = useCallback(async () => {
@@ -43,7 +80,7 @@ export default function MessagesPage({
           .select('id, sender_id, recipient_id, content, created_at')
           .or(threadFilter)
           .order('created_at', { ascending: true });
-        setThread(fallback || []);
+        setThread(normalizeMessageRows(fallback));
         return;
       }
       console.error('[messages] تعذر جلب المحادثة:', error);
@@ -51,7 +88,7 @@ export default function MessagesPage({
       return;
     }
 
-    setThread(data || []);
+    setThread(normalizeMessageRows(data));
   }, [currentUserId, selectedId]);
 
   useEffect(() => {

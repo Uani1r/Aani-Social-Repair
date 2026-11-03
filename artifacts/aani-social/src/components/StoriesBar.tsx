@@ -17,10 +17,10 @@ import {
 } from '@/lib/appShared';
 
 import StoryComposerSheet from './StoryComposerSheet';
-import type { StoryRow as StoryDmCardStory } from './StoryDmCard';
 import StoryCreationEditor from '@/components/StoryCreationEditor';
 import StoryViewer from '@/components/StoryViewer';
 import StoriesStrip from '@/components/stories/StoriesStrip';
+import type { StoryAuthor, StoryRow } from '@/components/stories/types';
 import { useStoriesData } from '@/components/stories/useStoriesData';
 import { useStoryCreationActions } from '@/components/stories/useStoryCreationActions';
 import { useStoryViewerActions } from '@/components/stories/useStoryViewerActions';
@@ -57,11 +57,11 @@ export default function StoriesBar({
   pendingProfileStoryOwnerId: string | null;
   onProfileStoryHandled: () => void;
 }) {
-  const [groupedStories, setGroupedStories] = useState<{ [key: string]: any[] }>({});
+  const [groupedStories, setGroupedStories] = useState<Record<string, StoryRow[]>>({});
   const [activeUserGroup, setActiveUserGroup] = useState<string | null>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
   const [profileStoryOwnerId, setProfileStoryOwnerId] = useState<string | null>(null);
-  const [profilePreviewStories, setProfilePreviewStories] = useState<any[]>([]);
+  const [profilePreviewStories, setProfilePreviewStories] = useState<StoryRow[]>([]);
 
   // تُحفظ معرّفات القصص التي شاهدها المستخدم، لا معرّفات أصحابها.
   const seenStoryStorageKey = `aani:seen-story-ids:${userId}`;
@@ -118,7 +118,7 @@ export default function StoriesBar({
   const storyVideoWasPlayingRef = useRef(false);
   const storyViewsRequestRef = useRef(0);
   const storyViewsChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const [originalStoryAuthor, setOriginalStoryAuthor] = useState<NonNullable<StoryDmCardStory['author']> | null>(null);
+  const [originalStoryAuthor, setOriginalStoryAuthor] = useState<StoryAuthor | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -686,9 +686,9 @@ export default function StoriesBar({
   const storyDisplayDuration = currentStory
     ? Math.min(120, Math.max(5, storedStoryDuration || fallbackStoryDuration))
     : 60;
-  const currentStoryFilter = decodeStoryFilterKey((currentStory as { filter_key?: string } | null)?.filter_key);
+  const currentStoryFilter = decodeStoryFilterKey(currentStory?.filter_key ?? undefined);
   useEffect(() => {
-    const originalStoryId = (currentStory as { original_story_id?: string } | null)?.original_story_id;
+    const originalStoryId = currentStory?.original_story_id;
     if (!originalStoryId || !supabaseConfigured) {
       setOriginalStoryAuthor(null);
       return;
@@ -712,7 +712,7 @@ export default function StoriesBar({
           .eq('id', originalStory.user_id)
           .maybeSingle();
         if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة الأصلية:', authorError);
-        if (active) setOriginalStoryAuthor((author as StoryDmCardStory['author']) ?? null);
+        if (active) setOriginalStoryAuthor(normalizeStoryAuthor(author));
       } catch (error) {
         if (active) console.warn('[stories] تعذر تحميل بيانات القصة الأصلية:', error);
       }
@@ -1200,7 +1200,7 @@ export default function StoriesBar({
       <StoryComposerSheet
         open={showStoryPicker}
         onClose={() => setShowStoryPicker(false)}
-        archive={(groupedStories[userId] || []) as any}
+        archive={groupedStories[userId] || []}
         onTextMode={() => {
           setShowStoryPicker(false);
           void handleCreateTextStory();
@@ -1239,7 +1239,7 @@ export default function StoriesBar({
           showUI={showUI}
           isPaused={isPaused}
           isStoryOwner={isStoryOwner}
-          originalStoryAuthor={originalStoryAuthor as Partial<Profile> | null}
+          originalStoryAuthor={originalStoryAuthor}
           userId={userId}
           showMenu={showMenu}
           storyViewsOpen={storyViewsOpen}

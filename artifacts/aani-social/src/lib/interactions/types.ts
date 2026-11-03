@@ -45,7 +45,7 @@ export interface CommentWithDetails {
   replies?: CommentWithDetails[];
 }
 
-export type RawRow = Record<string, any>;
+export type RawRow = Record<string, unknown>;
 
 export type LocalPostState = {
   liked?: boolean;

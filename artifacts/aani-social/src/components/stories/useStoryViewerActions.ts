@@ -6,6 +6,7 @@ import type {
   StoryViewerPreviewState,
 } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import type { StoryRow } from './types';
 
 type StoryReportCategory = 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';
 
@@ -14,7 +15,7 @@ type StoryPreviewLoader = (storyId: string, actualViewerIds: string[], requestId
 
 interface UseStoryViewerActionsOptions {
   userId: string;
-  currentStory: any;
+  currentStory: StoryRow | null;
   isStoryOwner: boolean;
   isPaused: boolean;
   storyViewsOpen: boolean;
