@@ -114,9 +114,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
     if (!supabaseConfigured) return;
     try {
       if (prevSaved) {
-        await supabase.from('bookmarks').delete().eq('post_id', post.id).eq('user_id', currentUserId);
+        const { error } = await supabase.from('bookmarks').delete().eq('post_id', post.id).eq('user_id', currentUserId);
+        if (error) throw error;
       } else {
-        await supabase.from('bookmarks').insert({ post_id: post.id, user_id: currentUserId });
+        const { error } = await supabase.from('bookmarks').insert({ post_id: post.id, user_id: currentUserId });
+        if (error) throw error;
       }
     } catch {
       setSaved(prevSaved);
@@ -130,9 +132,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
     if (!supabaseConfigured) return;
     try {
       if (prevReposted) {
-        await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', currentUserId);
+        const { error } = await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', currentUserId);
+        if (error && error.code !== 'PGRST116') throw error;
       } else {
-        await supabase.from('reposts').insert({ post_id: post.id, user_id: currentUserId });
+        const { error } = await supabase.from('reposts').insert({ post_id: post.id, user_id: currentUserId });
+        // إعادة نشر مسجّلة مسبقًا = الحالة المطلوبة أصلًا
+        if (error && error.code !== '23505') throw error;
       }
     } catch {
       setReposted(prevReposted);

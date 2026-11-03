@@ -90,7 +90,16 @@ export default function MessagesPage({
   const sendMessage = async (e: FormEvent) => {
     e.preventDefault();
     if (!supabaseConfigured || !selectedId || !text.trim()) return;
-    await supabase.from('messages').insert({ sender_id: currentUserId, recipient_id: selectedId, content: text.trim() });
+
+    try {
+      const { error } = await supabase.from('messages').insert({ sender_id: currentUserId, recipient_id: selectedId, content: text.trim() });
+      if (error) throw error;
+    } catch (error) {
+      console.error('[messages] تعذر إرسال الرسالة:', error);
+      alert('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
+      return;
+    }
+
     setText('');
     await loadThread();
   };
