@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import { AtSign, ChevronDown, Clock, Music2, Pencil, Sparkles, Star, Type } from 'lucide-react';
+import { AtSign, ChevronDown, Clock, ImagePlus, Music2, Pencil, Sparkles, Star, Type } from 'lucide-react';
 
 import StoryExpirySlider from '@/components/StoryExpirySlider';
 import StoryFilterBar from '@/components/StoryFilterBar';
@@ -9,7 +9,7 @@ import { STORY_DRAW_COLORS, STORY_DRAW_SIZES } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 
-export type StoryEditorToolKey = 'text' | 'music' | 'effects' | 'mention' | 'draw';
+export type StoryEditorToolKey = 'text' | 'image' | 'music' | 'effects' | 'mention' | 'draw';
 
 type StoryEditorExtraTool = { key: string; label: string; action: () => void };
 type StoryBackgroundPreset = { label: string; background: string };
@@ -37,6 +37,7 @@ export function StoryEditorToolbar({
 }: StoryEditorToolbarProps) {
   const tools: { key: StoryEditorToolKey; icon: LucideIcon; label: string }[] = [
     { key: 'text', icon: Type, label: 'نص' },
+    { key: 'image', icon: ImagePlus, label: 'ملصق صورة' },
     { key: 'music', icon: Music2, label: 'موسيقى' },
     { key: 'effects', icon: Sparkles, label: 'فلاتر' },
     { key: 'mention', icon: AtSign, label: 'إشارة' },

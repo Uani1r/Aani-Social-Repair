@@ -29,6 +29,31 @@ export interface StoryDrawingOverlay {
   strokes: StoryDrawStroke[];
 }
 
+export const STORY_STICKER_SHAPES = ['square', 'circle', 'rectangle', 'triangle', 'heart', 'star', 'diamond', 'hexagon'] as const;
+export type StoryStickerShape = typeof STORY_STICKER_SHAPES[number];
+
+export interface StoryImageOverlay {
+  id: string;
+  type: 'image';
+  src: string;
+  shape: StoryStickerShape;
+  startTime: number;
+  endTime: number;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+  cropX: number;
+  cropY: number;
+  cropScale: number;
+  localFile?: File;
+}
+
+export type StoryImageStickerUpdate = Partial<Pick<
+  StoryImageOverlay,
+  'shape' | 'x' | 'y' | 'scale' | 'rotation' | 'cropX' | 'cropY' | 'cropScale'
+>>;
+
 export interface StoryCanvasStyle {
   background: string;
   textBackground: string;
@@ -45,7 +70,7 @@ export interface StoryCanvasStyleOverlay extends StoryCanvasStyle {
   endTime: number;
 }
 
-export type StoryTimedText = StoryTextOverlay | StoryDrawingOverlay | StoryCanvasStyleOverlay;
+export type StoryTimedText = StoryTextOverlay | StoryDrawingOverlay | StoryImageOverlay | StoryCanvasStyleOverlay;
 
 export interface StoryRow {
   id: string;
@@ -100,6 +125,16 @@ function isSafeStoryBackground(value: unknown): value is string {
     && !/(url|var|expression)/i.test(value);
 }
 
+function isSafeStoryImageSource(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 2048) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:';
+  } catch {
+    return value.startsWith('/') && !value.startsWith('//') && !value.includes('..');
+  }
+}
+
 const STORY_TEXT_ANIMATIONS: StoryTextAnimation[] = [
   'none', 'typewriter', 'pop', 'slide-up', 'slide-down', 'slide-right', 'slide-left', 'bounce', 'glow',
 ];
@@ -128,6 +163,18 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
   if (value.type === 'drawing') {
     return Array.isArray(value.strokes)
       && (value.strokes as unknown[]).every(isStoryDrawStroke);
+  }
+
+  if (value.type === 'image') {
+    return isSafeStoryImageSource(value.src)
+      && STORY_STICKER_SHAPES.includes(value.shape as StoryStickerShape)
+      && typeof value.x === 'number' && Number.isFinite(value.x) && value.x >= 0 && value.x <= 100
+      && typeof value.y === 'number' && Number.isFinite(value.y) && value.y >= 0 && value.y <= 100
+      && typeof value.scale === 'number' && Number.isFinite(value.scale) && value.scale >= 0.3 && value.scale <= 5
+      && typeof value.rotation === 'number' && Number.isFinite(value.rotation) && Math.abs(value.rotation) <= 3600
+      && typeof value.cropX === 'number' && Number.isFinite(value.cropX) && Math.abs(value.cropX) <= 150
+      && typeof value.cropY === 'number' && Number.isFinite(value.cropY) && Math.abs(value.cropY) <= 150
+      && typeof value.cropScale === 'number' && Number.isFinite(value.cropScale) && value.cropScale >= 1 && value.cropScale <= 4;
   }
 
   const validOptionalTextStyle = (key: string, validate: (candidate: unknown) => boolean) =>

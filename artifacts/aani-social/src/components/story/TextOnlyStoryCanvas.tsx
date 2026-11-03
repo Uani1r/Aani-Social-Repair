@@ -5,7 +5,8 @@ import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
 import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
-import type { StoryTextOverlay } from '@/components/stories/types';
+import StoryImageSticker from '@/components/StoryImageSticker';
+import type { StoryImageStickerUpdate, StoryTimedText } from '@/components/stories/types';
 import type { StoryDrawStroke } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextBackgroundPreset, StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
@@ -28,7 +29,8 @@ interface TextOnlyStoryCanvasProps {
   userId: string;
   currentProfile: Profile | null;
   storyText: string;
-  textLayers: StoryTextOverlay[];
+  textLayers: StoryTimedText[];
+  onUpdateImageSticker: (id: string, update: StoryImageStickerUpdate) => void;
   fontFamily: string;
   textColor: string;
   textAlign: StoryTextAlign;
@@ -97,6 +99,7 @@ interface TextOnlyStoryCanvasProps {
 }
 
 const CANVAS_BACKGROUNDS = [
+  { label: 'أسود ملكي', value: '#000000' },
   { label: 'بنفسجي ووردي', value: 'linear-gradient(135deg, #4C1D95 0%, #DB2777 52%, #F97316 100%)' },
   { label: 'أزرق ليلي', value: 'linear-gradient(135deg, #0F172A 0%, #1D4ED8 55%, #38BDF8 100%)' },
   { label: 'غروب', value: 'linear-gradient(135deg, #7C2D12 0%, #EA580C 48%, #FACC15 100%)' },
@@ -116,6 +119,7 @@ export default function TextOnlyStoryCanvas({
   currentProfile,
   storyText,
   textLayers,
+  onUpdateImageSticker,
   fontFamily,
   textColor,
   textAlign,
@@ -217,33 +221,46 @@ export default function TextOnlyStoryCanvas({
           />
         )}
 
-        {textLayers.map(layer => (
-          <button
-            key={layer.id}
-            type="button"
-            data-story-text="true"
-            data-story-text-id={layer.id}
-            onClick={event => {
-              event.stopPropagation();
-              if (Date.now() - lastCanvasTouchRef.current > 500) onOpenTextEditor(layer.id);
-            }}
-            className="absolute z-10 max-w-[82vw] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug text-shadow-lg"
-            style={{
-              left: `${layer.x}%`,
-              top: `${layer.y}%`,
-              transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
-              fontFamily: layer.fontFamily || 'Cairo',
-              color: layer.textColor || '#FFFFFF',
-              textAlign: layer.textAlign || 'center',
-              background: layer.textBackground || 'transparent',
-              textShadow: '0 2px 14px rgba(0,0,0,0.42)',
-            }}
-          >
-            <span className={layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : undefined}>
-              {layer.text}
-            </span>
-          </button>
-        ))}
+        {textLayers.map(layer => {
+          if (layer.type === 'image') {
+            return (
+              <StoryImageSticker
+                key={layer.id}
+                sticker={layer}
+                onChange={update => onUpdateImageSticker(layer.id, update)}
+              />
+            );
+          }
+          if (layer.type === 'drawing' || layer.type === 'canvas-style') return null;
+
+          return (
+            <button
+              key={layer.id}
+              type="button"
+              data-story-text="true"
+              data-story-text-id={layer.id}
+              onClick={event => {
+                event.stopPropagation();
+                if (Date.now() - lastCanvasTouchRef.current > 500) onOpenTextEditor(layer.id);
+              }}
+              className="absolute z-10 max-w-[82vw] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug text-shadow-lg"
+              style={{
+                left: `${layer.x}%`,
+                top: `${layer.y}%`,
+                transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                fontFamily: layer.fontFamily || 'Cairo',
+                color: layer.textColor || '#FFFFFF',
+                textAlign: layer.textAlign || 'center',
+                background: layer.textBackground || 'transparent',
+                textShadow: '0 2px 14px rgba(0,0,0,0.42)',
+              }}
+            >
+              <span className={layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : undefined}>
+                {layer.text}
+              </span>
+            </button>
+          );
+        })}
 
         <canvas
           ref={storyDrawingCanvasRef}

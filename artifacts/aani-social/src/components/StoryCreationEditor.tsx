@@ -4,13 +4,14 @@ import { Star, X } from 'lucide-react';
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import Avatar from '@/components/Avatar';
 import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
+import StoryImageSticker from '@/components/StoryImageSticker';
 import { displayName, type Profile } from '@/lib/types';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
-import type { StoryTextOverlay } from '@/components/stories/types';
+import type { StoryImageStickerUpdate, StoryTimedText } from '@/components/stories/types';
 import type { MusicTrack } from '@/lib/music';
 
 type Point = { x: number; y: number };
@@ -32,7 +33,7 @@ type StoryCreationEditorProps = {
   storyFilterValue: string;
   storyFilterOverlay?: StoryFilterOverlay | null;
   storyText: string;
-  storyTextLayers: StoryTextOverlay[];
+  storyTextLayers: StoryTimedText[];
   storyTextEditorOpen: boolean;
   storyTextAnimation: StoryTextAnimation;
   storyTextOffset: Point;
@@ -78,6 +79,7 @@ type StoryCreationEditorProps = {
   onMediaClick: () => void;
   onCreateTextLayer: () => void;
   onEditTextLayer: (id: string) => void;
+  onUpdateImageSticker: (id: string, update: StoryImageStickerUpdate) => void;
   onVideoMetadata: (durationSeconds: number) => void;
   onCanvasTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => void;
   onCanvasTouchMove: (event: ReactTouchEvent<HTMLDivElement>) => void;
@@ -167,6 +169,7 @@ export default function StoryCreationEditor({
   onMediaClick,
   onCreateTextLayer,
   onEditTextLayer,
+  onUpdateImageSticker,
   onVideoMetadata,
   onCanvasTouchStart,
   onCanvasTouchMove,
@@ -276,35 +279,48 @@ export default function StoryCreationEditor({
             />
 
             {/* كل عبارة طبقة مستقلة؛ النقر يفتح تحرير هذه الطبقة فقط */}
-            {storyTextLayers.map(layer => (
-              <div key={layer.id} className="pointer-events-none absolute inset-0" dir="rtl">
-                <button
-                  type="button"
-                  data-story-text="true"
-                  data-story-text-id={layer.id}
-                  onClick={event => {
-                    event.stopPropagation();
-                    onEditTextLayer(layer.id);
-                  }}
-                  className={`pointer-events-auto absolute max-w-[82vw] cursor-grab whitespace-pre-wrap break-words rounded-lg px-2 py-1 text-3xl font-bold active:cursor-grabbing ${layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : ''}`}
-                  style={{
-                    left: `${layer.x}%`,
-                    top: `${layer.y}%`,
-                    touchAction: 'none',
-                    transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
-                    fontFamily: layer.fontFamily || 'Cairo',
-                    color: layer.textColor || '#FFFFFF',
-                    fontSize: 30,
-                    textAlign: layer.textAlign || 'center',
-                    lineHeight: 1.35,
-                    background: layer.textBackground || 'transparent',
-                    textShadow: '0 2px 14px rgba(0,0,0,0.9)',
-                  }}
-                >
-                  {layer.text}
-                </button>
-              </div>
-            ))}
+            {storyTextLayers.map(layer => {
+              if (layer.type === 'image') {
+                return (
+                  <StoryImageSticker
+                    key={layer.id}
+                    sticker={layer}
+                    onChange={update => onUpdateImageSticker(layer.id, update)}
+                  />
+                );
+              }
+              if (layer.type === 'drawing' || layer.type === 'canvas-style') return null;
+
+              return (
+                <div key={layer.id} className="pointer-events-none absolute inset-0" dir="rtl">
+                  <button
+                    type="button"
+                    data-story-text="true"
+                    data-story-text-id={layer.id}
+                    onClick={event => {
+                      event.stopPropagation();
+                      onEditTextLayer(layer.id);
+                    }}
+                    className={`pointer-events-auto absolute max-w-[82vw] cursor-grab whitespace-pre-wrap break-words rounded-lg px-2 py-1 text-3xl font-bold active:cursor-grabbing ${layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : ''}`}
+                    style={{
+                      left: `${layer.x}%`,
+                      top: `${layer.y}%`,
+                      touchAction: 'none',
+                      transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                      fontFamily: layer.fontFamily || 'Cairo',
+                      color: layer.textColor || '#FFFFFF',
+                      fontSize: 30,
+                      textAlign: layer.textAlign || 'center',
+                      lineHeight: 1.35,
+                      background: layer.textBackground || 'transparent',
+                      textShadow: '0 2px 14px rgba(0,0,0,0.9)',
+                    }}
+                  >
+                    {layer.text}
+                  </button>
+                </div>
+              );
+            })}
             <canvas
               ref={storyDrawingCanvasRef}
               aria-label="لوحة الرسم على الستوري"

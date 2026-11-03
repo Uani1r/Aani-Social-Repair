@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 
 import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -21,7 +21,15 @@ import StoryCreationEditor from '@/components/StoryCreationEditor';
 import TextOnlyStoryCanvas from '@/components/story/TextOnlyStoryCanvas';
 import StoryViewer from '@/components/StoryViewer';
 import StoriesStrip from '@/components/stories/StoriesStrip';
-import type { StoryAuthor, StoryCanvasStyle, StoryRow, StoryTextOverlay } from '@/components/stories/types';
+import type {
+  StoryAuthor,
+  StoryCanvasStyle,
+  StoryImageOverlay,
+  StoryImageStickerUpdate,
+  StoryRow,
+  StoryTextOverlay,
+  StoryTimedText,
+} from '@/components/stories/types';
 import { useStoriesData } from '@/components/stories/useStoriesData';
 import { useStoryCreationActions } from '@/components/stories/useStoryCreationActions';
 import { useStoryViewerActions } from '@/components/stories/useStoryViewerActions';
@@ -125,8 +133,10 @@ export default function StoriesBar({
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoryPicker, setShowStoryPicker] = useState(false);
   const [showTextOnlyStoryCanvas, setShowTextOnlyStoryCanvas] = useState(false);
-  const [textCanvasBackground, setTextCanvasBackground] = useState('linear-gradient(135deg, #4C1D95 0%, #DB2777 52%, #F97316 100%)');
+  const [textCanvasBackground, setTextCanvasBackground] = useState('#000000');
   const textCanvasMediaPickerRef = useRef(false);
+  const storyStickerInputRef = useRef<HTMLInputElement | null>(null);
+  const localStickerObjectUrlsRef = useRef<Set<string>>(new Set());
 
   // أثناء شاشات القصص (اختيار/معاينة/عارض القصص) تُخفى أشرطة التطبيق وتُعزل الحركات
   useEffect(() => {
@@ -185,8 +195,24 @@ export default function StoriesBar({
   // محرر النص الغني للقصة
   const [storyTextEditorOpen, setStoryTextEditorOpen] = useState(false);
   const [storyText, setStoryText] = useState('');
-  const [timedTexts, setTimedTexts] = useState<StoryTextOverlay[]>([]);
+  const [timedTexts, setTimedTexts] = useState<StoryTimedText[]>([]);
   const [editingStoryTextId, setEditingStoryTextId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const activeUrls = new Set(timedTexts
+      .filter((layer): layer is StoryImageOverlay => layer.type === 'image' && Boolean(layer.localFile))
+      .map(layer => layer.src));
+    localStickerObjectUrlsRef.current.forEach(url => {
+      if (activeUrls.has(url)) return;
+      URL.revokeObjectURL(url);
+      localStickerObjectUrlsRef.current.delete(url);
+    });
+  }, [timedTexts]);
+
+  useEffect(() => () => {
+    localStickerObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    localStickerObjectUrlsRef.current.clear();
+  }, []);
   const storyGestureTextIdRef = useRef<string | null>(null);
   const [storyKeyboardInset, setStoryKeyboardInset] = useState(0);
 
@@ -267,7 +293,9 @@ export default function StoriesBar({
   const lastStoryTouchRef = useRef(0);
 
   const openStoryTextEditor = (id?: string) => {
-    const layer = id ? timedTexts.find(item => item.id === id) : undefined;
+    const layer = id ? timedTexts.find((item): item is StoryTextOverlay =>
+      item.id === id && (item.type === undefined || item.type === 'text'),
+    ) : undefined;
     setEditingStoryTextId(layer?.id ?? null);
     setStoryText(layer?.text || '');
     setStoryTextOffset(layer ? {
@@ -297,7 +325,8 @@ export default function StoriesBar({
   const readStoryGestureBase = (target: StoryGestureTarget) => {
     if (target === 'text') {
       const selectedLayer = storyGestureTextIdRef.current
-        ? timedTexts.find(layer => layer.id === storyGestureTextIdRef.current)
+        ? timedTexts.find((layer): layer is StoryTextOverlay => layer.id === storyGestureTextIdRef.current
+          && (layer.type === undefined || layer.type === 'text'))
         : undefined;
       if (selectedLayer) {
         return {
@@ -459,7 +488,8 @@ export default function StoriesBar({
         setStoryTextOffset(nextOffset);
         const layerId = storyGestureTextIdRef.current;
         if (layerId) {
-          setTimedTexts(previous => previous.map(layer => layer.id === layerId ? {
+          setTimedTexts(previous => previous.map(layer => layer.id === layerId
+            && (layer.type === undefined || layer.type === 'text') ? {
             ...layer,
             x: 50 + (nextOffset.x / window.innerWidth) * 100,
             y: 50 + (nextOffset.y / window.innerHeight) * 100,
@@ -504,7 +534,8 @@ export default function StoriesBar({
       setStoryTextOffset(nextOffset);
       const layerId = storyGestureTextIdRef.current;
       if (layerId) {
-        setTimedTexts(previous => previous.map(layer => layer.id === layerId ? {
+        setTimedTexts(previous => previous.map(layer => layer.id === layerId
+          && (layer.type === undefined || layer.type === 'text') ? {
           ...layer,
           x: 50 + (nextOffset.x / window.innerWidth) * 100,
           y: 50 + (nextOffset.y / window.innerHeight) * 100,
@@ -772,6 +803,66 @@ export default function StoriesBar({
     setStoryTextEditorOpen(false);
   };
 
+  const updateStoryImageSticker = (id: string, update: StoryImageStickerUpdate) => {
+    setTimedTexts(previous => previous.map(layer => layer.type === 'image' && layer.id === id
+      ? { ...layer, ...update }
+      : layer));
+  };
+
+  const handleStoryDurationChange = (duration: number) => {
+    storyDurationManuallyChosenRef.current = true;
+    setUploadDuration(duration);
+    setTimedTexts(previous => previous.map(layer => layer.type === 'image'
+      ? { ...layer, endTime: duration }
+      : layer));
+  };
+
+  const openStoryStickerPicker = () => {
+    if (storyTextEditorOpen) finishStoryTextEditing();
+    setStoryTextEditorOpen(false);
+    setStoryFiltersOpen(false);
+    setStoryDrawingOpen(false);
+    setStoryMoreOpen(false);
+    setStoryDurationOpen(false);
+    setStoryMusicOpen(false);
+    setStoryMentionsOpen(false);
+    storyStickerInputRef.current?.click();
+  };
+
+  const handleStoryStickerFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('اختر صورة لإضافتها كملصق');
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      toast.error('حجم صورة الملصق يجب ألا يتجاوز 20 ميغابايت');
+      return;
+    }
+
+    const src = URL.createObjectURL(file);
+    localStickerObjectUrlsRef.current.add(src);
+    const sticker: StoryImageOverlay = {
+      id: `story-sticker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type: 'image',
+      src,
+      localFile: file,
+      shape: 'square',
+      startTime: 0,
+      endTime: uploadDuration,
+      x: 50,
+      y: 50,
+      scale: 1,
+      rotation: 0,
+      cropX: 0,
+      cropY: 0,
+      cropScale: 1,
+    };
+    setTimedTexts(previous => [...previous, sticker]);
+  };
+
   const openTextOnlyStory = () => {
     textCanvasMediaPickerRef.current = false;
     setShowStoryPicker(false);
@@ -792,7 +883,7 @@ export default function StoriesBar({
     setStoryTextOffset({ x: 0, y: 0 });
     setStoryTextScale(1);
     setStoryTextRotation(0);
-    setTextCanvasBackground('linear-gradient(135deg, #4C1D95 0%, #DB2777 52%, #F97316 100%)');
+    setTextCanvasBackground('#000000');
     setStoryDrawStrokes([]);
     setStoryDrawingOpen(false);
     activeStoryDrawStrokeRef.current = null;
@@ -1319,6 +1410,14 @@ export default function StoriesBar({
 
   return (
     <div className="contents" dir="rtl">
+      <input
+        ref={storyStickerInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        aria-label="اختيار صورة كملصق للقصة"
+        onChange={handleStoryStickerFileChange}
+      />
       <StoriesStrip
         userId={userId}
         currentProfile={currentProfile}
@@ -1390,6 +1489,7 @@ export default function StoriesBar({
           currentProfile={currentProfile}
           storyText={storyText}
           textLayers={timedTexts}
+          onUpdateImageSticker={updateStoryImageSticker}
           fontFamily={storyFontFamily}
           textColor={storyTextColor}
           textAlign={storyTextAlign}
@@ -1442,6 +1542,8 @@ export default function StoriesBar({
           onSelectTool={toolKey => {
             if (toolKey === 'text') {
               openStoryTextEditor();
+            } else if (toolKey === 'image') {
+              openStoryStickerPicker();
             } else if (toolKey === 'mention') {
               setStoryDrawingOpen(false);
               setStoryTextEditorOpen(false);
@@ -1468,10 +1570,7 @@ export default function StoriesBar({
             setStoryMoreOpen(nextOpen);
             if (!nextOpen) setStoryDurationOpen(false);
           }}
-          onDurationChange={duration => {
-            storyDurationManuallyChosenRef.current = true;
-            setUploadDuration(duration);
-          }}
+          onDurationChange={handleStoryDurationChange}
           onSelectFilter={setStoryFilterId}
           onAdjustFilter={(key, value) => setStoryFilterAdjustments(previous => ({ ...previous, [key]: value }))}
           onResetFilters={() => {
@@ -1659,6 +1758,7 @@ export default function StoriesBar({
           }}
           onCreateTextLayer={() => openStoryTextEditor()}
           onEditTextLayer={openStoryTextEditor}
+          onUpdateImageSticker={updateStoryImageSticker}
           onVideoMetadata={duration => {
             if (Number.isFinite(duration) && duration > 0 && !storyDurationManuallyChosenRef.current) {
               setUploadDuration(Math.min(120, Math.max(5, Math.ceil(duration))));
@@ -1673,6 +1773,8 @@ export default function StoriesBar({
           onSelectStoryTool={toolKey => {
             if (toolKey === 'text') {
               openStoryTextEditor();
+            } else if (toolKey === 'image') {
+              openStoryStickerPicker();
             } else if (toolKey === 'mention') {
               setStoryDrawingOpen(false);
               setStoryTextEditorOpen(false);
@@ -1703,10 +1805,7 @@ export default function StoriesBar({
             setStoryMoreOpen(nextOpen);
             if (!nextOpen) setStoryDurationOpen(false);
           }}
-          onDurationChange={duration => {
-            storyDurationManuallyChosenRef.current = true;
-            setUploadDuration(duration);
-          }}
+          onDurationChange={handleStoryDurationChange}
           onStoryTextChange={setStoryText}
           onFinishTextEditing={finishStoryTextEditing}
           onFontFamilyChange={setStoryFontFamily}

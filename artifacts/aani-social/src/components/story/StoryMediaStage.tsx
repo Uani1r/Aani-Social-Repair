@@ -1,6 +1,7 @@
 import type { StoryDrawPoint } from '@/lib/appShared';
 
-import type { StoryCanvasStyleOverlay, StoryTextOverlay } from '@/components/stories/types';
+import StoryImageSticker from '@/components/StoryImageSticker';
+import type { StoryCanvasStyleOverlay, StoryImageOverlay, StoryTextOverlay } from '@/components/stories/types';
 import type { StoryViewerProps } from './types';
 
 type StoryMediaStageProps = Pick<
@@ -127,6 +128,16 @@ export default function StoryMediaStage({
                 );
               })}
             </svg>
+          );
+        }
+
+        if (timedText.type === 'image') {
+          return (
+            <StoryImageSticker
+              key={timedText.id}
+              sticker={timedText as StoryImageOverlay}
+              interactive={false}
+            />
           );
         }
 

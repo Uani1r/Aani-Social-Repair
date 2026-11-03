@@ -2,7 +2,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { toast } from 'sonner';
 
 import type { StoryDrawStroke } from '@/lib/appShared';
-import type { StoryCanvasStyle, StoryTextOverlay } from '@/components/stories/types';
+import type { StoryCanvasStyle, StoryTextOverlay, StoryTimedText } from '@/components/stories/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadStoryMedia } from '@/lib/storyUpload';
 import type { Profile } from '@/lib/types';
@@ -10,7 +10,7 @@ import { encodeStoryFilterKey, type StoryAdjustments } from '@/lib/storyFilters'
 import type { StoryRow as StoryDmCardStory } from '../StoryDmCard';
 import type { MentionCandidate } from '../StoryMentionPicker';
 
-type TimedText = StoryTextOverlay;
+type TimedText = StoryTimedText;
 
 interface UseStoryCreationActionsOptions {
   userId: string;
@@ -73,18 +73,35 @@ export function useStoryCreationActions({
   setShowUploadModal,
   setStoryText,
 }: UseStoryCreationActionsOptions) {
-  const buildStoryTimedTexts = () => [
-    ...timedTexts,
-    ...(storyDrawStrokes.length > 0
-      ? [{
-          id: 'story-drawing',
-          type: 'drawing' as const,
-          startTime: 0,
-          endTime: uploadDuration,
-          strokes: storyDrawStrokes,
-        }]
-      : []),
-  ];
+  const buildStoryTimedTexts = async (layers: TimedText[] = timedTexts): Promise<TimedText[]> => {
+    const persistedLayers: TimedText[] = [];
+    for (const layer of layers) {
+      if (layer.type !== 'image' || !layer.localFile) {
+        persistedLayers.push(layer);
+        continue;
+      }
+
+      const { localFile, ...sticker } = layer;
+      const safeName = localFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
+      const filePath = `${userId}/story-sticker-${layer.id}-${Date.now()}-${safeName}`;
+      await uploadStoryMedia({ file: localFile, path: filePath });
+      const src = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
+      persistedLayers.push({ ...sticker, src });
+    }
+
+    return [
+      ...persistedLayers,
+      ...(storyDrawStrokes.length > 0
+        ? [{
+            id: 'story-drawing',
+            type: 'drawing' as const,
+            startTime: 0,
+            endTime: uploadDuration,
+            strokes: storyDrawStrokes,
+          }]
+        : []),
+    ];
+  };
 
   const linkStoryMentions = async (storyId: string, authorName: string, mentions: MentionCandidate[]) => {
     if (!storyId || mentions.length === 0) return;
@@ -145,7 +162,7 @@ export function useStoryCreationActions({
         p_caption: caption.trim() || sourceStory?.caption || null,
         p_is_close_friends: isCloseFriendsOnly,
         p_duration_seconds: uploadDuration,
-        p_timed_texts: buildStoryTimedTexts(),
+        p_timed_texts: await buildStoryTimedTexts(),
         p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
         p_original_story_id: sourceStory?.id || null,
         p_share_type: sourceStory ? 'reshare' : 'original',
@@ -216,7 +233,7 @@ export function useStoryCreationActions({
           p_caption: storyCaption || sourceStory?.caption || null,
           p_is_close_friends: closeFriends,
           p_duration_seconds: durationSeconds,
-          p_timed_texts: buildStoryTimedTexts(),
+          p_timed_texts: await buildStoryTimedTexts(),
           p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
           p_original_story_id: sourceStory?.id || null,
           p_share_type: sourceStory ? 'reshare' : 'original',
@@ -267,11 +284,17 @@ export function useStoryCreationActions({
   const handleCreateTextStory = async (
     text: string,
     canvasStyle: StoryCanvasStyle,
-    textLayers: StoryTextOverlay[],
+    textLayers: TimedText[],
     closeFriends = isCloseFriendsOnly,
   ): Promise<boolean> => {
-    const trimmedText = textLayers.map(layer => layer.text.trim()).filter(Boolean).join('\n') || text.trim();
-    if (!trimmedText || !supabaseConfigured) return false;
+    const layerText = textLayers
+      .filter((layer): layer is StoryTextOverlay => layer.type === undefined || layer.type === 'text')
+      .map(layer => layer.text.trim())
+      .filter(Boolean)
+      .join('\n');
+    const trimmedText = layerText || text.trim();
+    const hasImageSticker = textLayers.some(layer => layer.type === 'image');
+    if ((!trimmedText && !hasImageSticker) || !supabaseConfigured) return false;
 
     setUploading(true);
     try {
@@ -283,21 +306,12 @@ export function useStoryCreationActions({
           endTime: uploadDuration,
           ...canvasStyle,
         },
-        ...textLayers,
-        ...(storyDrawStrokes.length > 0
-          ? [{
-              id: 'story-drawing',
-              type: 'drawing' as const,
-              startTime: 0,
-              endTime: uploadDuration,
-              strokes: storyDrawStrokes,
-            }]
-          : []),
+        ...await buildStoryTimedTexts(textLayers),
       ];
       const { data: storyId, error } = await supabase.rpc('aani_create_story', {
         p_media_url: null,
         p_media_type: 'text',
-        p_caption: trimmedText,
+        p_caption: trimmedText || null,
         p_is_close_friends: closeFriends,
         p_duration_seconds: uploadDuration,
         p_timed_texts: timedTexts,

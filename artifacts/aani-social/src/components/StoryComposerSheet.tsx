@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, Camera, Check, ImagePlus, Play, X } from 'lucide-react';
 
-import type { StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
+import StoryImageSticker from '@/components/StoryImageSticker';
+import type { StoryImageOverlay, StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
 
 type StoryMedia = StoryRow;
 
@@ -165,9 +166,11 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                     const canvasStyle = story.timed_texts.find(
                       (item): item is StoryCanvasStyleOverlay => item.type === 'canvas-style',
                     );
-                    const textLayers = story.timed_texts.filter(
-                      (item): item is StoryTextOverlay => item.type === undefined || item.type === 'text',
+                    const visualLayers = story.timed_texts.filter(
+                      (item): item is StoryTextOverlay | StoryImageOverlay =>
+                        item.type === undefined || item.type === 'text' || item.type === 'image',
                     );
+                    const hasTextLayer = visualLayers.some(layer => layer.type === undefined || layer.type === 'text');
 
                     return (
                       <div
@@ -184,22 +187,36 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                         ) : (
                           <div className="absolute inset-0" style={{ background: canvasStyle?.background || '#1f1f27' }} />
                         )}
-                        {textLayers.length > 0 ? textLayers.map(layer => (
-                          <span
-                            key={layer.id}
-                            className="absolute z-10 max-w-[88%] whitespace-pre-wrap break-words px-1 text-center text-[8px] font-bold leading-tight"
-                            style={{
-                              left: `${layer.x}%`,
-                              top: `${layer.y}%`,
-                              transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
-                              color: layer.textColor || canvasStyle?.textColor || '#FFFFFF',
-                              fontFamily: layer.fontFamily || canvasStyle?.fontFamily || 'Cairo',
-                              background: layer.textBackground || 'transparent',
-                            }}
-                          >
-                            {layer.text}
-                          </span>
-                        )) : (!story.media_url || story.media_type === 'text') && (
+                        {visualLayers.map(layer => {
+                          if (layer.type === 'image') {
+                            return (
+                              <StoryImageSticker
+                                key={layer.id}
+                                sticker={layer}
+                                interactive={false}
+                                sizeScale={0.3}
+                              />
+                            );
+                          }
+
+                          return (
+                            <span
+                              key={layer.id}
+                              className="absolute z-10 max-w-[88%] whitespace-pre-wrap break-words px-1 text-center text-[8px] font-bold leading-tight"
+                              style={{
+                                left: `${layer.x}%`,
+                                top: `${layer.y}%`,
+                                transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                                color: layer.textColor || canvasStyle?.textColor || '#FFFFFF',
+                                fontFamily: layer.fontFamily || canvasStyle?.fontFamily || 'Cairo',
+                                background: layer.textBackground || 'transparent',
+                              }}
+                            >
+                              {layer.text}
+                            </span>
+                          );
+                        })}
+                        {!hasTextLayer && (!story.media_url || story.media_type === 'text') && (
                           <p
                             className="absolute left-1/2 top-1/2 line-clamp-4 w-[88%] -translate-x-1/2 -translate-y-1/2 whitespace-pre-wrap text-center text-[10px] leading-4 text-zinc-200"
                             style={{
