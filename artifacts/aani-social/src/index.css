@@ -58,18 +58,39 @@
   --app-font-serif: 'Newsreader', Georgia, serif;
 }
 
-html, body, #root, .app-frame {
-  background-color: #09090b !important;
+html, body, #root {
+  width: 100%;
+  background-color: #000 !important;
   color: #fafafa !important;
   direction: rtl;
   min-height: 100vh;
 }
 
 body {
+  display: flex;
+  justify-content: center;
   margin: 0;
+  background-color: #000 !important;
   font-family: var(--app-font-sans);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+}
+
+#root {
+  display: flex;
+  justify-content: center;
+}
+
+.app-frame {
+  width: min(100%, 450px);
+  height: min(100vh, 900px);
+  max-height: 900px;
+  min-height: min(100vh, 900px);
+  margin: 0 auto;
+  border-left: 1px solid #2a2b33;
+  border-right: 1px solid #2a2b33;
+  box-sizing: border-box;
+  background-color: #000 !important;
 }
 
 /* ===== Post Card (X / Twitter Style) ===== */
@@ -601,6 +622,13 @@ body {
   will-change: transform, opacity;
 }
 
+.topbar {
+  left: 50%;
+  right: auto;
+  width: min(100%, 450px);
+  transform: translateX(-50%);
+}
+
 /* الإخفاء سريع قليلًا، والإظهار أسرع ليصل فور السحب */
 .topbar.is-hidden,
 .mobile-nav.is-hidden {
@@ -608,7 +636,7 @@ body {
 }
 
 .topbar.is-hidden {
-  transform: translate3d(0, -100%, 0);
+  transform: translate3d(-50%, -100%, 0);
   opacity: 0;
   pointer-events: none;
 }

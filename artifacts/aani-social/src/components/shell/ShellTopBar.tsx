@@ -21,7 +21,7 @@ export default function ShellTopBar({
   return (
     <>
       <header
-        className={`topbar fixed inset-x-0 top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity] ${
+        className={`topbar fixed top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity] ${
           chromeHidden ? 'is-hidden' : ''
         }`}
         style={{

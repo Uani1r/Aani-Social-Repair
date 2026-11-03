@@ -111,41 +111,42 @@ export default function PublishOptionsSheet({
         aria-modal={open}
         aria-label="ماذا تريد أن تنشر؟"
         onClick={event => event.stopPropagation()}
-        className="absolute inset-x-0 bottom-0 min-h-[320px] rounded-t-[24px] border border-b-0 border-white/10 px-5 pt-4 text-white shadow-[0_-12px_48px_rgba(0,0,0,0.35)]"
+        className="absolute bottom-0 min-h-[320px] w-full max-w-[450px] rounded-t-[24px] border-t border-[#2a2b33] text-white shadow-[0_-12px_48px_rgba(0,0,0,0.35)]"
         style={{
-          background: 'rgba(29, 29, 31, 0.94)',
+          left: '50%',
+          background: '#1a1b22',
           backdropFilter: 'blur(20px)',
           WebkitBackdropFilter: 'blur(20px)',
-          paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
-          transform: open ? `translateY(${dragOffset}px)` : 'translateY(100%)',
+          padding: '12px 24px 40px',
+          transform: open ? `translate(-50%, ${dragOffset}px)` : 'translate(-50%, 100%)',
           transition: isDragging ? 'none' : 'transform 320ms cubic-bezier(0.22, 0.75, 0.25, 1)',
         }}
       >
         <div
-          className="mx-auto mb-5 flex h-5 w-20 touch-none cursor-grab items-center justify-center active:cursor-grabbing"
+          className="mx-auto mb-6 flex h-4 w-16 touch-none cursor-grab items-center justify-center active:cursor-grabbing"
           onPointerDown={handleDragStart}
           onPointerMove={handleDragMove}
           onPointerUp={handleDragEnd}
           onPointerCancel={handleDragEnd}
           aria-label="اسحب للأسفل لإغلاق القائمة"
         >
-          <span className="h-1.5 w-16 rounded-full bg-zinc-500/70" />
+          <span className="h-1 w-10 rounded-full bg-[#444]" />
         </div>
 
-        <h2 className="text-center text-[20px] font-bold text-white">ماذا تريد أن تنشر؟</h2>
+        <h2 className="mb-[30px] text-center text-[18px] font-bold text-white">ماذا تريد أن تنشر؟</h2>
 
-        <div className="mt-8 grid grid-cols-4 gap-2">
+        <div className="grid grid-cols-4 justify-between gap-[10px]">
           {options.map(({ key, label, Icon, iconClassName, backgroundClassName }) => (
             <button
               key={key}
               type="button"
               onClick={() => handleOption(key)}
-              className="flex min-w-0 flex-col items-center gap-3 rounded-2xl px-1 py-2 text-zinc-300 transition active:scale-95"
+              className="flex min-w-0 flex-col items-center gap-[10px] rounded-2xl px-1 py-2 text-[#8b8d98] transition active:scale-95"
             >
-              <span className={`flex h-16 w-16 items-center justify-center rounded-[26px] sm:h-[72px] sm:w-[72px] ${backgroundClassName}`}>
-                <Icon size={34} strokeWidth={2.2} className={iconClassName} />
+              <span className={`flex h-[60px] w-[60px] items-center justify-center rounded-[22px] ${backgroundClassName}`}>
+                <Icon size={24} strokeWidth={2.2} className={iconClassName} />
               </span>
-              <span className="text-[13px]">{label}</span>
+              <span className="text-[13px] text-[#8b8d98]">{label}</span>
             </button>
           ))}
         </div>
