@@ -3,7 +3,7 @@ import { Film as FilmIcon } from 'lucide-react';
 import ReelSlide from '@/components/ReelSlide';
 import { usePosts } from '@/hooks/usePosts';
 
-export default function ReelsPage({ userId }: { userId: string }) {
+export default function ReelsPage({ userId, onOpenComments }: { userId: string; onOpenComments: (postId: string) => void }) {
   const { posts, loading } = usePosts('reel', undefined, userId);
 
   return (
@@ -15,7 +15,7 @@ export default function ReelsPage({ userId }: { userId: string }) {
           <h2 className="font-bold text-lg">لا يوجد ريلز منشور حالياً</h2>
         </div>
       )}
-      {!loading && posts.map(post => <ReelSlide key={post.id} post={post} currentUserId={userId} />)}
+      {!loading && posts.map(post => <ReelSlide key={post.id} post={post} currentUserId={userId} onOpenComments={onOpenComments} />)}
     </div>
   );
 }

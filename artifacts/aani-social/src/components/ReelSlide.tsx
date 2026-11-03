@@ -9,7 +9,7 @@ import { recordShare } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Post } from '@/lib/types';
 
-export default function ReelSlide({ post, currentUserId }: { post: Post; currentUserId: string }) {
+export default function ReelSlide({ post, currentUserId, onOpenComments }: { post: Post; currentUserId: string; onOpenComments: (postId: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
   const likeBusyRef = useRef(false);
@@ -213,7 +213,7 @@ export default function ReelSlide({ post, currentUserId }: { post: Post; current
         </button>
 
         {/* 2. التعليقات */}
-        <button className="flex flex-col items-center gap-1 text-white">
+        <button onClick={() => onOpenComments(post.id)} className="flex flex-col items-center gap-1 text-white">
           <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
             <MessageSquare size={22} />
           </span>

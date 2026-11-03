@@ -73,7 +73,7 @@ function App() {
                   StoriesBarComponent={StoriesBar}
                 />
               </Route>
-              <Route path="/reels"><ReelsPage userId={user.id} /></Route>
+              <Route path="/reels"><ReelsPage userId={user.id} onOpenComments={id => setSelectedPostForComments(id)} /></Route>
               <Route path="/search"><SearchPage userId={user.id} /></Route>
               <Route path="/messages">
                 <MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} />
