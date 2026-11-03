@@ -81,6 +81,10 @@ Supabase CLI قبل اختبار هذه الميزات؛ لن تعمل الجد�
 إذا لم تكن جداول `bookmarks` و`reposts` موجودة بعد، طبّق ترحيل
 `20261025000000_social_features.sql` أولًا.
 
+إذا فشل نشر المنشور برسالة `posts_content_length_check`، طبّق
+`supabase/migrations/20261121000000_posts_content_length.sql` على قاعدة Supabase
+الصحيحة لرفع الحد إلى 2000 حرف مع إبقاء السجلات القديمة كما هي.
+
 إذا رفضت قاعدة البيانات نشر القصة النصية برسالة `null value in column "media_url"`،
 طبّق `supabase/migrations/20261119000000_allow_text_story_without_media_url.sql` على
 مشروع Supabase الصحيح؛ هذا يسمح بأن تكون `media_url` فارغة للقصص النصية فقط من ناحية

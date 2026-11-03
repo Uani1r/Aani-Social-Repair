@@ -413,6 +413,10 @@ export default function Shell({
 
     const content = [postText.trim(), ...tagContent].filter(Boolean).join('\n');
     if (!content && selectedFiles.length === 0) return;
+    if (Array.from(content).length > 2000) {
+      setCreateError('محتوى المنشور مع الوسوم يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص أو أزل بعض الوسوم.');
+      return;
+    }
 
     setIsSubmitting(true);
     setCreateError('');
@@ -446,7 +450,12 @@ export default function Shell({
         type,
       });
 
-      if (postError) throw new Error(`فشل حفظ المنشور: ${postError.message}`);
+      if (postError) {
+        if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
+          throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا لطول المنشور. طبّق الترحيل 20261121000000_posts_content_length.sql على Supabase ثم أعد المحاولة.');
+        }
+        throw new Error(`فشل حفظ المنشور: ${postError.message}`);
+      }
 
       setPostText('');
       setSelectedFiles([]);
