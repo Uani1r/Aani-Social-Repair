@@ -81,6 +81,11 @@ Supabase CLI قبل اختبار هذه الميزات؛ لن تعمل الجد�
 إذا لم تكن جداول `bookmarks` و`reposts` موجودة بعد، طبّق ترحيل
 `20261025000000_social_features.sql` أولًا.
 
+إذا رفضت قاعدة البيانات نشر القصة النصية برسالة `null value in column "media_url"`،
+طبّق `supabase/migrations/20261119000000_allow_text_story_without_media_url.sql` على
+مشروع Supabase الصحيح؛ هذا يسمح بأن تكون `media_url` فارغة للقصص النصية فقط من ناحية
+بيانات التطبيق، ولا يغيّر القصص أو الوسائط الموجودة.
+
 لتسجيل مشاهدات الستوري وعرض قائمة المشاهدين، طبّق بالترتيب
 `supabase/migrations/20261109000000_story_views.sql` ثم
 `supabase/migrations/20261115000000_story_viewer_actions.sql` ثم
