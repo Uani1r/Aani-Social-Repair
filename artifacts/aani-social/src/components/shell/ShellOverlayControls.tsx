@@ -87,6 +87,7 @@ export default function ShellOverlayControls({
 
       {showCreateModal && (
         <CreatePostModal
+          profile={profile}
           postText={postText}
           selectedFiles={selectedFiles}
           fileType={fileType}
