@@ -129,6 +129,9 @@ export function buildStoryFilterCss(id: string, adjustments: StoryAdjustments, f
     parts.push(`contrast(${Math.max(0.2, contrast)})`);
   }
   if (adjustments.saturation !== 0) parts.push(`saturate(${Math.max(0, 1 + adjustments.saturation / 100)})`);
+  // لا يوفّر CSS دالة warmth؛ نستخدم sepia للدفء وانحراف hue طفيفًا للبرودة.
+  if (adjustments.warmth > 0) parts.push(`sepia(${Math.min(1, adjustments.warmth / 100)})`);
+  if (adjustments.warmth < 0) parts.push(`hue-rotate(${adjustments.warmth * 0.4}deg)`);
 
   return parts.length ? parts.join(' ') : 'none';
 }
@@ -149,13 +152,15 @@ export function decodeStoryFilterKey(key?: string | null): { id: string; adjustm
   if (!key) {
     return { id: 'original', adjustments: DEFAULT_ADJUSTMENTS, css: 'none' };
   }
-  const [id, brightness, contrast, saturation, , clarity] = key.split('|');
+  const parts = key.split('|');
+  const [id, brightness, contrast, saturation, warmth, clarity] = parts;
+  const hasWarmthSlot = parts.length >= 6;
   const adjustments: StoryAdjustments = {
     brightness: Number(brightness) || 0,
     contrast: Number(contrast) || 0,
     saturation: Number(saturation) || 0,
-    warmth: 0,
-    clarity: Number(clarity) || 0,
+    warmth: hasWarmthSlot ? Number(warmth) || 0 : 0,
+    clarity: Number(hasWarmthSlot ? clarity : warmth) || 0,
   };
   return { id: id || 'original', adjustments, css: buildStoryFilterCss(id || 'original', adjustments) };
 }
