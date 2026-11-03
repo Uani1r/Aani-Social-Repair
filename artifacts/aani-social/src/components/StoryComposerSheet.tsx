@@ -210,7 +210,7 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                           return (
                             <span
                               key={layer.id}
-                              className="absolute z-10 max-w-[88%] whitespace-pre-wrap break-words px-1 text-center text-[8px] font-bold leading-tight"
+                              className="absolute z-10 w-[88%] max-w-[88%] whitespace-pre-wrap break-words px-1 text-center text-[8px] font-bold leading-tight"
                               style={{
                                 left: `${layer.x}%`,
                                 top: `${layer.y}%`,

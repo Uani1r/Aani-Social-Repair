@@ -338,7 +338,7 @@ export default function StoryCreationEditor({
                       event.stopPropagation();
                       onEditTextLayer(layer.id);
                     }}
-                    className={`pointer-events-auto absolute max-w-[82vw] cursor-grab whitespace-pre-wrap break-words rounded-lg px-2 py-1 text-3xl font-bold active:cursor-grabbing ${layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : ''}`}
+                    className={`pointer-events-auto absolute w-[82vw] max-w-[82vw] cursor-grab whitespace-pre-wrap break-words rounded-lg px-2 py-1 text-3xl font-bold active:cursor-grabbing ${layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : ''}`}
                     style={{
                       left: `${layer.x}%`,
                       top: `${layer.y}%`,
@@ -349,6 +349,7 @@ export default function StoryCreationEditor({
                       color: layer.textColor || '#FFFFFF',
                       fontSize: layer.fontSize ?? 30,
                       textAlign: layer.textAlign || 'center',
+                      overflowWrap: 'anywhere',
                       lineHeight: 1.35,
                       background: layer.textBackground || 'transparent',
                       textShadow: '0 2px 14px rgba(0,0,0,0.9)',
@@ -447,6 +448,7 @@ export default function StoryCreationEditor({
         storyPreviewClassName={storyPreviewClassName}
         storyTextAnimation={storyTextAnimation}
         storyTextFontSize={storyTextFontSize}
+        storyAlignmentGuides={storyAlignmentGuides}
         storyTextTransform={{
           x: storyTextOffset.x,
           y: storyTextOffset.y,
@@ -456,6 +458,7 @@ export default function StoryCreationEditor({
         storyFontFamily={storyFontFamily}
         storyTextColor={storyTextColor}
         storyTextAlign={storyTextAlign}
+        storyTextLayerWidth="82vw"
         storyHasBackground={storyHasBackground}
         storyBackgroundPreset={storyBackgroundPreset}
         storyTextAreaRef={storyTextAreaRef}

@@ -3,9 +3,11 @@ import type { LucideIcon } from 'lucide-react';
 import { AtSign, ChevronDown, Clock, ImagePlus, Music2, Pencil, Sparkles, Star, Type, X } from 'lucide-react';
 
 import StoryExpirySlider from '@/components/StoryExpirySlider';
+import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
 import StoryFilterBar from '@/components/StoryFilterBar';
 import StoryTextToolbar from '@/components/StoryTextToolbar';
 import StoryTypedPreview from '@/components/StoryTypedPreview';
+import { useStoryViewportLock } from '@/components/stories/useStoryViewportLock';
 import { STORY_DRAW_COLORS, STORY_DRAW_SIZES } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
@@ -159,10 +161,12 @@ type StoryTextEditorPanelProps = {
   storyPreviewClassName: string;
   storyTextAnimation: StoryTextAnimation;
   storyTextFontSize?: number;
+  storyAlignmentGuides?: { vertical: boolean; horizontal: boolean };
   storyFontFamily: string;
   storyTextColor: string;
   storyTextAlign: StoryTextAlign;
   storyTextTransform?: StoryTextTransform;
+  storyTextLayerWidth?: '82vw' | '90vw';
   storyHasBackground: boolean;
   storyBackgroundPreset: StoryBackgroundPreset;
   storyTextAreaRef: { current: HTMLTextAreaElement | null };
@@ -189,10 +193,12 @@ export function StoryTextEditorPanel({
   storyPreviewClassName,
   storyTextAnimation,
   storyTextFontSize,
+  storyAlignmentGuides,
   storyFontFamily,
   storyTextColor,
   storyTextAlign,
   storyTextTransform,
+  storyTextLayerWidth,
   storyHasBackground,
   storyBackgroundPreset,
   storyTextAreaRef,
@@ -209,6 +215,7 @@ export function StoryTextEditorPanel({
   onTextTransformGestureEnd,
   onInteract,
 }: StoryTextEditorPanelProps) {
+  useStoryViewportLock(storyTextEditorOpen);
   const textGestureRef = useRef<StoryTextGesture | null>(null);
   const fontSizePointerIdRef = useRef<number | null>(null);
   const lastTextGestureAtRef = useRef(0);
@@ -218,6 +225,11 @@ export function StoryTextEditorPanel({
   useEffect(() => {
     latestTransformRef.current = { ...activeTransform };
   }, [activeTransform.x, activeTransform.y, activeTransform.scale, activeTransform.rotation]);
+
+  useEffect(() => {
+    if (!storyTextEditorOpen) return;
+    storyTextAreaRef.current?.focus({ preventScroll: true });
+  }, [storyTextEditorOpen, storyTextAreaRef]);
 
   useEffect(() => {
     if (!storyTextEditorOpen || storyTextFontSize === undefined) return;
@@ -232,6 +244,14 @@ export function StoryTextEditorPanel({
   const minFontSize = 12;
   const maxFontSize = 96;
   const activeFontSize = Math.min(maxFontSize, Math.max(minFontSize, storyTextFontSize ?? 30));
+  const finishTextEditing = () => {
+    storyTextAreaRef.current?.blur();
+    onFinishTextEditing();
+  };
+  const closeStoryEditor = () => {
+    storyTextAreaRef.current?.blur();
+    onCloseStory();
+  };
   const currentTransform = (): StoryTextTransform => ({ ...latestTransformRef.current });
   const clamp = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
   const updateFontSizeFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -491,10 +511,20 @@ export function StoryTextEditorPanel({
       onPointerCancel={event => event.stopPropagation()}
       onClick={event => {
         if (Date.now() - lastTextGestureAtRef.current < 500) return;
-        if (event.target === event.currentTarget) onFinishTextEditing();
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('button, input, textarea, select, [data-story-text-editor-control], [data-story-text-editor-chrome]')) return;
+        finishTextEditing();
       }}
     >
+      {storyAlignmentGuides && (
+        <StoryAlignmentGuides
+          vertical={storyAlignmentGuides.vertical}
+          horizontal={storyAlignmentGuides.horizontal}
+          insideEditor
+        />
+      )}
       <div
+        data-story-text-editor-chrome="true"
         className={`${storyTextTransform ? 'pointer-events-none relative z-[60]' : ''} flex items-center justify-between px-4 py-3`}
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
       >
@@ -503,7 +533,7 @@ export function StoryTextEditorPanel({
             type="button"
             aria-label="إغلاق محرر القصة"
             title="إغلاق القصة"
-            onClick={onCloseStory}
+            onClick={closeStoryEditor}
             className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition active:scale-95"
           >
             <X size={18} />
@@ -512,7 +542,7 @@ export function StoryTextEditorPanel({
         </div>
         <button
           type="button"
-          onClick={onFinishTextEditing}
+          onClick={finishTextEditing}
           className="pointer-events-auto rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212]"
         >
           تم
@@ -523,6 +553,7 @@ export function StoryTextEditorPanel({
         <div
           data-story-text-editor-control="true"
           className="pointer-events-auto fixed left-2 top-1/2 z-[70] flex -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-white/15 bg-black/45 px-1.5 py-3 text-[10px] font-bold text-white/80 shadow-xl backdrop-blur-md"
+          style={{ top: `calc(50% - ${storyKeyboardInset / 2}px)` }}
         >
           <span aria-hidden="true">A+</span>
           <div
@@ -555,8 +586,8 @@ export function StoryTextEditorPanel({
         <div
           className={`relative flex w-full items-start justify-center ${storyTextTransform ? 'z-10 max-w-[90vw]' : 'max-w-md'}`}
           style={storyTextTransform ? {
-            width: '90vw',
-            maxWidth: '90vw',
+            width: storyTextLayerWidth ?? '90vw',
+            maxWidth: storyTextLayerWidth ?? '90vw',
             transform: `translate3d(${activeTransform.x}px, ${activeTransform.y}px, 0) scale(${activeTransform.scale}) rotate(${activeTransform.rotation}deg)`,
             transformOrigin: 'center center',
           } : undefined}
@@ -593,7 +624,6 @@ export function StoryTextEditorPanel({
           <textarea
             ref={storyTextAreaRef}
             data-story-text-transform-surface="true"
-            autoFocus
             value={storyText}
             onChange={event => onStoryTextChange(event.target.value)}
             placeholder="اكتب شيئاً..."

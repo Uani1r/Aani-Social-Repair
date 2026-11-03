@@ -156,7 +156,7 @@ export default function StoryMediaStage({
         return (
           <div
             key={textLayer.id}
-            className={`absolute ${currentStory.media_type === 'text' ? 'w-[90vw] max-w-[90vw]' : 'max-w-[82vw]'} whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
+            className={`absolute ${currentStory.media_type === 'text' ? 'w-[90vw] max-w-[90vw]' : 'w-[82vw] max-w-[82vw]'} whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
             dir={currentStory.media_type === 'text' ? 'rtl' : undefined}
             style={{
               top: `${textLayer.y}%`,
@@ -167,7 +167,8 @@ export default function StoryMediaStage({
               fontFamily: textLayer.fontFamily || 'Cairo',
               fontSize: textLayer.fontSize ?? (currentStory.media_type === 'text' ? 30 : undefined),
               textAlign: textLayer.textAlign || 'center',
-              overflowWrap: currentStory.media_type === 'text' ? 'anywhere' : undefined,
+              overflowWrap: 'anywhere',
+              lineHeight: 1.35,
               background: textLayer.textBackground || 'transparent',
               textShadow: '0 2px 14px rgba(0,0,0,0.42)',
             }}

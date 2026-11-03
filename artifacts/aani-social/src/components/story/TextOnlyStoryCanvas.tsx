@@ -309,6 +309,7 @@ export default function TextOnlyStoryCanvas({
                 color: layer.textColor || '#FFFFFF',
                 textAlign: layer.textAlign || 'center',
                 overflowWrap: 'anywhere',
+                lineHeight: 1.35,
                 background: layer.textBackground || 'transparent',
                 textShadow: '0 2px 14px rgba(0,0,0,0.42)',
               }}
@@ -437,9 +438,11 @@ export default function TextOnlyStoryCanvas({
         storyPreviewClassName={previewClassName}
         storyTextAnimation={textAnimation}
         storyTextFontSize={storyTextFontSize}
+        storyAlignmentGuides={storyAlignmentGuides}
         storyFontFamily={fontFamily}
         storyTextColor={textColor}
         storyTextAlign={textAlign}
+        storyTextLayerWidth="90vw"
         storyTextTransform={{
           x: storyTextOffset.x,
           y: storyTextOffset.y,
