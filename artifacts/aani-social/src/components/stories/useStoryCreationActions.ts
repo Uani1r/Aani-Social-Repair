@@ -73,8 +73,13 @@ export function useStoryCreationActions({
   setShowUploadModal,
   setStoryText,
 }: UseStoryCreationActionsOptions) {
-  const buildStoryTimedTexts = async (layers: TimedText[] = timedTexts): Promise<TimedText[]> => {
+  const buildStoryTimedTexts = async (
+    layers: TimedText[] = timedTexts,
+    onProgress?: (percent: number) => void,
+  ): Promise<TimedText[]> => {
     const persistedLayers: TimedText[] = [];
+    const imageUploadCount = layers.filter(layer => layer.type === 'image' && Boolean(layer.localFile)).length;
+    let imageUploadIndex = 0;
     for (const layer of layers) {
       if (layer.type !== 'image' || !layer.localFile) {
         persistedLayers.push(layer);
@@ -84,7 +89,14 @@ export function useStoryCreationActions({
       const { localFile, ...sticker } = layer;
       const safeName = localFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
       const filePath = `${userId}/story-sticker-${layer.id}-${Date.now()}-${safeName}`;
-      await uploadStoryMedia({ file: localFile, path: filePath });
+      await uploadStoryMedia({
+        file: localFile,
+        path: filePath,
+        onProgress: percent => onProgress?.(
+          10 + Math.round(((imageUploadIndex + percent / 100) / imageUploadCount) * 65),
+        ),
+      });
+      imageUploadIndex += 1;
       const src = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
       persistedLayers.push({ ...sticker, src });
     }
@@ -297,7 +309,10 @@ export function useStoryCreationActions({
     if ((!trimmedText && !hasImageSticker) || !supabaseConfigured) return false;
 
     setUploading(true);
+    setUploadProgress(5);
     try {
+      const persistedTextLayers = await buildStoryTimedTexts(textLayers, setUploadProgress);
+      setUploadProgress(85);
       const timedTexts = [
         {
           id: 'story-canvas-style',
@@ -305,8 +320,9 @@ export function useStoryCreationActions({
           startTime: 0,
           endTime: uploadDuration,
           ...canvasStyle,
+          background: canvasStyle.background || '#000000',
         },
-        ...await buildStoryTimedTexts(textLayers),
+        ...persistedTextLayers,
       ];
       const { data: storyId, error } = await supabase.rpc('aani_create_story', {
         p_media_url: null,
@@ -328,6 +344,7 @@ export function useStoryCreationActions({
         void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', storyMentions);
       }
 
+      setUploadProgress(100);
       setCaption('');
       setStoryText('');
       setTimedTexts([]);
@@ -338,7 +355,7 @@ export function useStoryCreationActions({
       setStoryDurationOpen(false);
       storyDurationManuallyChosenRef.current = false;
       setShowUploadModal(false);
-      await fetchStories().catch(error => console.warn('[stories] تعذر تحديث القصص بعد النشر:', error));
+      void fetchStories().catch(error => console.warn('[stories] تعذر تحديث القصص بعد النشر:', error));
       toast.success('نُشرت قصتك');
       return true;
     } catch (error) {
@@ -347,6 +364,7 @@ export function useStoryCreationActions({
       return false;
     } finally {
       setUploading(false);
+      setUploadProgress(0);
     }
   };
 

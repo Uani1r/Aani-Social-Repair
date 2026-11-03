@@ -1,5 +1,5 @@
-import type { PointerEvent as ReactPointerEvent, TouchEvent as ReactTouchEvent } from 'react';
-import { Star, X } from 'lucide-react';
+import { useRef, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { Star, Trash2, X } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import Avatar from '@/components/Avatar';
@@ -81,6 +81,9 @@ type StoryCreationEditorProps = {
   onEditTextLayer: (id: string) => void;
   onUpdateImageSticker: (id: string, update: StoryImageStickerUpdate) => void;
   onActivateImageSticker: (id: string) => void;
+  draggingStoryStickerId: string | null;
+  storyStickerOverDeleteZone: boolean;
+  onStoryStickerDragChange: (id: string, dragging: boolean, overDeleteZone: boolean) => void;
   onVideoMetadata: (durationSeconds: number) => void;
   onCanvasTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => void;
   onCanvasTouchMove: (event: ReactTouchEvent<HTMLDivElement>) => void;
@@ -172,6 +175,9 @@ export default function StoryCreationEditor({
   onEditTextLayer,
   onUpdateImageSticker,
   onActivateImageSticker,
+  draggingStoryStickerId,
+  storyStickerOverDeleteZone,
+  onStoryStickerDragChange,
   onVideoMetadata,
   onCanvasTouchStart,
   onCanvasTouchMove,
@@ -200,6 +206,14 @@ export default function StoryCreationEditor({
   onCloseDrawing,
   onQuickPublish,
 }: StoryCreationEditorProps) {
+  const stickerDeleteZoneRef = useRef<HTMLDivElement | null>(null);
+  const isPointerOverDeleteZone = (point: Point) => {
+    const bounds = stickerDeleteZoneRef.current?.getBoundingClientRect();
+    return Boolean(bounds
+      && point.x >= bounds.left && point.x <= bounds.right
+      && point.y >= bounds.top && point.y <= bounds.bottom);
+  };
+
   return (
     <div className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white" dir="rtl">
       {/* الوسيط يملأ الشاشة بالكامل، والنص داخل لوحة تُسحب وتُكبَّر كوحدة واحدة */}
@@ -292,6 +306,12 @@ export default function StoryCreationEditor({
                     sticker={layer}
                     onChange={update => onUpdateImageSticker(layer.id, update)}
                     onActivate={() => onActivateImageSticker(layer.id)}
+                    onDragMove={point => onStoryStickerDragChange(layer.id, true, isPointerOverDeleteZone(point))}
+                    onDragEnd={(point, cancelled) => onStoryStickerDragChange(
+                      layer.id,
+                      false,
+                      !cancelled && isPointerOverDeleteZone(point),
+                    )}
                   />
                 );
               }
@@ -348,6 +368,16 @@ export default function StoryCreationEditor({
           اختر وسيطاً من الاستوديو لعرضه هنا
         </div>
       )}
+
+      <div
+        ref={stickerDeleteZoneRef}
+        aria-hidden={!draggingStoryStickerId}
+        className={`pointer-events-none absolute z-[100] flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-full border text-white shadow-2xl backdrop-blur-md transition-colors duration-150 ${draggingStoryStickerId ? 'opacity-100' : 'opacity-0'} ${storyStickerOverDeleteZone ? 'border-red-200 bg-red-600' : 'border-white/25 bg-black/75'}`}
+        style={{ left: '1.25rem', bottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+      >
+        <Trash2 size={22} />
+        <span className="text-[9px] font-bold">حذف</span>
+      </div>
 
       {/* الشريط العلوي */}
       <div

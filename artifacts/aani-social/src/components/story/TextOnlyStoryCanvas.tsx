@@ -1,5 +1,5 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
-import { Paintbrush, Star } from 'lucide-react';
+import { Paintbrush, Star, Trash2 } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
@@ -25,12 +25,17 @@ interface StoryFilterOverlay {
   blend: string;
 }
 
+type StickerPoint = { x: number; y: number };
+
 interface TextOnlyStoryCanvasProps {
   userId: string;
   currentProfile: Profile | null;
   storyText: string;
   textLayers: StoryTimedText[];
   onUpdateImageSticker: (id: string, update: StoryImageStickerUpdate) => void;
+  draggingStoryStickerId: string | null;
+  storyStickerOverDeleteZone: boolean;
+  onStoryStickerDragChange: (id: string, dragging: boolean, overDeleteZone: boolean) => void;
   onClose: () => void;
   onActivateImageSticker: (id: string) => void;
   onCanvasTap: (id?: string) => void;
@@ -123,6 +128,9 @@ export default function TextOnlyStoryCanvas({
   storyText,
   textLayers,
   onUpdateImageSticker,
+  draggingStoryStickerId,
+  storyStickerOverDeleteZone,
+  onStoryStickerDragChange,
   onClose,
   onActivateImageSticker,
   onCanvasTap,
@@ -192,6 +200,13 @@ export default function TextOnlyStoryCanvas({
   onConfirmMentions,
   onCloseCloseFriends,
 }: TextOnlyStoryCanvasProps) {
+  const stickerDeleteZoneRef = useRef<HTMLDivElement | null>(null);
+  const isPointerOverDeleteZone = (point: StickerPoint) => {
+    const bounds = stickerDeleteZoneRef.current?.getBoundingClientRect();
+    return Boolean(bounds
+      && point.x >= bounds.left && point.x <= bounds.right
+      && point.y >= bounds.top && point.y <= bounds.bottom);
+  };
   const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
   const lastCanvasTouchRef = useRef(0);
   const handleCanvasTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
@@ -244,6 +259,12 @@ export default function TextOnlyStoryCanvas({
                 sticker={layer}
                 onChange={update => onUpdateImageSticker(layer.id, update)}
                 onActivate={() => onActivateImageSticker(layer.id)}
+                onDragMove={point => onStoryStickerDragChange(layer.id, true, isPointerOverDeleteZone(point))}
+                onDragEnd={(point, cancelled) => onStoryStickerDragChange(
+                  layer.id,
+                  false,
+                  !cancelled && isPointerOverDeleteZone(point),
+                )}
               />
             );
           }
@@ -292,6 +313,16 @@ export default function TextOnlyStoryCanvas({
           onTouchEnd={event => event.stopPropagation()}
           onTouchCancel={event => event.stopPropagation()}
         />
+      </div>
+
+      <div
+        ref={stickerDeleteZoneRef}
+        aria-hidden={!draggingStoryStickerId}
+        className={`pointer-events-none absolute z-[100] flex h-16 w-16 flex-col items-center justify-center gap-1 rounded-full border text-white shadow-2xl backdrop-blur-md transition-colors duration-150 ${draggingStoryStickerId ? 'opacity-100' : 'opacity-0'} ${storyStickerOverDeleteZone ? 'border-red-200 bg-red-600' : 'border-white/25 bg-black/75'}`}
+        style={{ left: '1.25rem', bottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}
+      >
+        <Trash2 size={22} />
+        <span className="text-[9px] font-bold">حذف</span>
       </div>
 
       <button

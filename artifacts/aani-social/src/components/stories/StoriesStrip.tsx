@@ -62,7 +62,8 @@ export default function StoriesStrip({
             {uploading && (
               <svg
                 viewBox="0 0 64 64"
-                className="pointer-events-none absolute inset-0 z-10 h-16 w-16 animate-spin"
+                className="pointer-events-none absolute z-10 h-16 w-16 animate-spin"
+                style={{ left: 'calc(50% - 2rem)', top: 'calc(50% - 2rem)' }}
                 role="progressbar"
                 aria-label={`جارٍ نشر القصة ${uploadProgress}%`}
                 aria-valuemin={0}

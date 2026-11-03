@@ -198,6 +198,8 @@ export default function StoriesBar({
   const [timedTexts, setTimedTexts] = useState<StoryTimedText[]>([]);
   const [editingStoryTextId, setEditingStoryTextId] = useState<string | null>(null);
   const [activeStoryStickerId, setActiveStoryStickerId] = useState<string | null>(null);
+  const [draggingStoryStickerId, setDraggingStoryStickerId] = useState<string | null>(null);
+  const [storyStickerOverDeleteZone, setStoryStickerOverDeleteZone] = useState(false);
 
   useEffect(() => {
     const activeUrls = new Set(timedTexts
@@ -826,25 +828,27 @@ export default function StoriesBar({
     setStoryText,
   });
 
+  const buildStoryTextLayer = (text: string): StoryTextOverlay => ({
+    id: editingStoryTextId || `story-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: 'text',
+    text,
+    startTime: 0,
+    endTime: uploadDuration,
+    x: Math.min(95, Math.max(5, 50 + (storyTextOffset.x / Math.max(1, window.innerWidth)) * 100)),
+    y: Math.min(95, Math.max(5, 50 + (storyTextOffset.y / Math.max(1, window.innerHeight)) * 100)),
+    fontFamily: storyFontFamily,
+    textColor: storyTextColor,
+    textAlign: storyTextAlign,
+    textBackground: storyBackgroundPreset.background,
+    textAnimation: storyTextAnimation,
+    scale: storyTextScale,
+    rotation: storyTextRotation,
+  });
+
   function finishStoryTextEditing() {
     const text = storyText.trim();
     if (text) {
-      const layer: StoryTextOverlay = {
-        id: editingStoryTextId || `story-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        type: 'text',
-        text,
-        startTime: 0,
-        endTime: uploadDuration,
-        x: Math.min(95, Math.max(5, 50 + (storyTextOffset.x / Math.max(1, window.innerWidth)) * 100)),
-        y: Math.min(95, Math.max(5, 50 + (storyTextOffset.y / Math.max(1, window.innerHeight)) * 100)),
-        fontFamily: storyFontFamily,
-        textColor: storyTextColor,
-        textAlign: storyTextAlign,
-        textBackground: storyBackgroundPreset.background,
-        textAnimation: storyTextAnimation,
-        scale: storyTextScale,
-        rotation: storyTextRotation,
-      };
+      const layer = buildStoryTextLayer(text);
       setTimedTexts(previous => editingStoryTextId
         ? previous.map(item => item.id === editingStoryTextId ? layer : item)
         : [...previous, layer]);
@@ -860,6 +864,21 @@ export default function StoriesBar({
     setTimedTexts(previous => previous.map(layer => layer.type === 'image' && layer.id === id
       ? { ...layer, ...update }
       : layer));
+  };
+
+  const handleStoryImageStickerDragChange = (id: string, dragging: boolean, overDeleteZone: boolean) => {
+    if (dragging) {
+      setDraggingStoryStickerId(id);
+      setStoryStickerOverDeleteZone(overDeleteZone);
+      return;
+    }
+
+    if (overDeleteZone) {
+      setTimedTexts(previous => previous.filter(layer => layer.id !== id));
+      setActiveStoryStickerId(current => current === id ? null : current);
+    }
+    setDraggingStoryStickerId(null);
+    setStoryStickerOverDeleteZone(false);
   };
 
   const handleStoryDurationChange = (duration: number) => {
@@ -924,6 +943,8 @@ export default function StoriesBar({
     setTimedTexts([]);
     setEditingStoryTextId(null);
     setActiveStoryStickerId(null);
+    setDraggingStoryStickerId(null);
+    setStoryStickerOverDeleteZone(false);
     setStoryDrawStrokes([]);
     setStoryDrawingOpen(false);
     activeStoryDrawStrokeRef.current = null;
@@ -941,6 +962,9 @@ export default function StoriesBar({
     setStoryText('');
     setTimedTexts([]);
     setEditingStoryTextId(null);
+    setActiveStoryStickerId(null);
+    setDraggingStoryStickerId(null);
+    setStoryStickerOverDeleteZone(false);
     setStoryTextEditorOpen(false);
     setStoryFontFamily('Cairo');
     setStoryTextColor('#FFFFFF');
@@ -972,19 +996,43 @@ export default function StoriesBar({
 
   const handlePublishTextOnlyStory = (closeFriends: boolean) => {
     const canvasStyle: StoryCanvasStyle = {
-      background: textCanvasBackground,
+      background: textCanvasBackground || '#000000',
       textBackground: storyBackgroundPreset.background,
       textColor: storyTextColor,
       fontFamily: storyFontFamily,
       textAlign: storyTextAlign,
       textAnimation: storyTextAnimation,
     };
-    void handleCreateTextStory(storyText, canvasStyle, timedTexts, closeFriends).then(published => {
-      if (!published) return;
+    const draftText = storyText.trim();
+    let textLayersToPublish = [...timedTexts];
+    if (editingStoryTextId) {
+      if (draftText) {
+        const updatedLayer = buildStoryTextLayer(draftText);
+        const hasEditingLayer = textLayersToPublish.some(layer => layer.id === editingStoryTextId);
+        textLayersToPublish = hasEditingLayer
+          ? textLayersToPublish.map(layer => layer.id === editingStoryTextId ? updatedLayer : layer)
+          : [...textLayersToPublish, updatedLayer];
+      } else {
+        textLayersToPublish = textLayersToPublish.filter(layer => layer.id !== editingStoryTextId);
+      }
+    } else if (draftText) {
+      textLayersToPublish = [...textLayersToPublish, buildStoryTextLayer(draftText)];
+    }
+
+    setShowTextOnlyStoryCanvas(false);
+    setStoryTextEditorOpen(false);
+    void handleCreateTextStory('', canvasStyle, textLayersToPublish, closeFriends).then(published => {
+      if (!published) {
+        setShowTextOnlyStoryCanvas(true);
+        setStoryTextEditorOpen(true);
+        return;
+      }
       setStoryTextEditorOpen(false);
       setStoryText('');
       setEditingStoryTextId(null);
-      setShowTextOnlyStoryCanvas(false);
+      setActiveStoryStickerId(null);
+      setDraggingStoryStickerId(null);
+      setStoryStickerOverDeleteZone(false);
     });
   };
 
@@ -1558,6 +1606,9 @@ export default function StoriesBar({
           textLayers={timedTexts}
           onUpdateImageSticker={updateStoryImageSticker}
           onActivateImageSticker={setActiveStoryStickerId}
+          draggingStoryStickerId={draggingStoryStickerId}
+          storyStickerOverDeleteZone={storyStickerOverDeleteZone}
+          onStoryStickerDragChange={handleStoryImageStickerDragChange}
           onCanvasTap={handleStoryCanvasTap}
           onClose={closeTextOnlyStory}
           fontFamily={storyFontFamily}
@@ -1810,6 +1861,8 @@ export default function StoriesBar({
             setShowUploadModal(false);
             closeStoryPanels();
             setActiveStoryStickerId(null);
+            setDraggingStoryStickerId(null);
+            setStoryStickerOverDeleteZone(false);
             setStoryDrawingOpen(false);
             setStoryTextEditorOpen(false);
             setStoryText('');
@@ -1842,6 +1895,9 @@ export default function StoriesBar({
           onEditTextLayer={openStoryTextEditor}
           onUpdateImageSticker={updateStoryImageSticker}
           onActivateImageSticker={setActiveStoryStickerId}
+          draggingStoryStickerId={draggingStoryStickerId}
+          storyStickerOverDeleteZone={storyStickerOverDeleteZone}
+          onStoryStickerDragChange={handleStoryImageStickerDragChange}
           onVideoMetadata={duration => {
             if (Number.isFinite(duration) && duration > 0 && !storyDurationManuallyChosenRef.current) {
               setUploadDuration(Math.min(120, Math.max(5, Math.ceil(duration))));

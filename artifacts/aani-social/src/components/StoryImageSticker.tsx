@@ -8,6 +8,8 @@ type StoryImageStickerProps = {
   sizeScale?: number;
   onChange?: (update: StoryImageStickerUpdate) => void;
   onActivate?: () => void;
+  onDragMove?: (point: { x: number; y: number }) => void;
+  onDragEnd?: (point: { x: number; y: number }, cancelled: boolean) => void;
 };
 
 type StickerSize = { width: number; height: number; clipPath?: string; borderRadius?: string };
@@ -71,6 +73,8 @@ export default function StoryImageSticker({
   sizeScale = 1,
   onChange,
   onActivate,
+  onDragMove,
+  onDragEnd,
 }: StoryImageStickerProps) {
   const gestureRef = useRef<StickerGesture | null>(null);
   const stickerRef = useRef<HTMLDivElement | null>(null);
@@ -231,6 +235,7 @@ export default function StoryImageSticker({
         x: clamp(gesture.baseX + (deltaX / canvas.width) * 100, 0, 100),
         y: clamp(gesture.baseY + (deltaY / canvas.height) * 100, 0, 100),
       });
+      onDragMove?.({ x: touch.clientX, y: touch.clientY });
     }
   };
 
@@ -247,6 +252,13 @@ export default function StoryImageSticker({
     }
     if (event.touches.length > 0) return;
 
+    const touch = event.changedTouches[0];
+    const point = touch
+      ? { x: touch.clientX, y: touch.clientY }
+      : { x: gesture.startX, y: gesture.startY };
+    if (gesture.mode === 'move' && gesture.moved) {
+      onDragEnd?.(point, cancelled);
+    }
     if (!cancelled && (gesture.mode !== 'pending' || gesture.moved || gesture.longPressed)) {
       suppressClickUntilRef.current = Date.now() + 450;
     }
@@ -293,14 +305,18 @@ export default function StoryImageSticker({
       x: clamp(gesture.baseX + (deltaX / canvas.width) * 100, 0, 100),
       y: clamp(gesture.baseY + (deltaY / canvas.height) * 100, 0, 100),
     });
+    onDragMove?.({ x: event.clientX, y: event.clientY });
   };
 
-  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>, cancelled = false) => {
     if (!interactive || event.pointerType !== 'mouse') return;
     const gesture = gestureRef.current;
     if (!gesture || gesture.touchCount !== 0) return;
     event.stopPropagation();
-    if (gesture.moved) suppressClickUntilRef.current = Date.now() + 450;
+    if (gesture.moved) {
+      onDragEnd?.({ x: event.clientX, y: event.clientY }, cancelled);
+      if (!cancelled) suppressClickUntilRef.current = Date.now() + 450;
+    }
     gestureRef.current = null;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -356,7 +372,7 @@ export default function StoryImageSticker({
       onPointerDown={interactive ? handlePointerDown : undefined}
       onPointerMove={interactive ? handlePointerMove : undefined}
       onPointerUp={interactive ? finishPointer : undefined}
-      onPointerCancel={interactive ? finishPointer : undefined}
+      onPointerCancel={interactive ? event => finishPointer(event, true) : undefined}
       onContextMenu={interactive ? event => event.preventDefault() : undefined}
     >
       <img
