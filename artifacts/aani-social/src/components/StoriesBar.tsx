@@ -1,37 +1,35 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { Plus, Star } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { toast } from 'sonner';
-import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import { uploadStoryMedia } from '@/lib/storyUpload';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { Profile } from '@/lib/types';
 import {
   clampCanvas,
   getStoryDrawPoint,
   STORY_DRAW_COLORS,
   STORY_DRAW_SIZES,
-  STORY_VIEWER_PREVIEW_LIMIT,
-  STORY_VIEWER_PREVIEW_TTL_MS,
   type StoryDrawStroke,
   type StoryGestureState,
   type StoryGestureTarget,
   type StoryViewerEntry,
   type StoryViewerPreviewSession,
   type StoryViewerPreviewState,
-  type StoryViewerProfile,
 } from '@/lib/appShared';
 
-import Avatar from './Avatar';
 import StoryComposerSheet from './StoryComposerSheet';
 import type { StoryRow as StoryDmCardStory } from './StoryDmCard';
 import StoryCreationEditor from '@/components/StoryCreationEditor';
 import StoryViewer from '@/components/StoryViewer';
+import StoriesStrip from '@/components/stories/StoriesStrip';
+import { useStoriesData } from '@/components/stories/useStoriesData';
+import { useStoryCreationActions } from '@/components/stories/useStoryCreationActions';
+import { useStoryViewerActions } from '@/components/stories/useStoryViewerActions';
+import { useStoryViewerData } from '@/components/stories/useStoryViewerData';
 import type { MentionCandidate } from './StoryMentionPicker';
 import {
   DEFAULT_ADJUSTMENTS as DEFAULT_FILTER_ADJUSTMENTS,
   buildStoryFilterCss,
   decodeStoryFilterKey,
-  encodeStoryFilterKey,
   getStoryFilterOverlay,
   type StoryAdjustments,
 } from '@/lib/storyFilters';
@@ -632,113 +630,54 @@ export default function StoriesBar({
     ? reshareStory.media_type === 'video'
     : Boolean(storyFile?.type.startsWith('video'));
 
-  const fetchStories = useCallback(async () => {
-    if (!supabaseConfigured || !userId) return;
+  const { fetchStories } = useStoriesData({
+    userId,
+    pendingProfileStoryOwnerId,
+    onProfileStoryHandled,
+    setGroupedStories,
+    setProfileStoryOwnerId,
+    setProfilePreviewStories,
+    setActiveUserGroup,
+    setActiveStoryIndex,
+    setProgress,
+    setCurrentTimeSec,
+  });
 
-    const { data: followings, error: followingsError } = await supabase
-      .from('follows')
-      .select('following_id')
-      .eq('follower_id', userId);
-    if (followingsError) console.warn('[stories] تعذر تحميل قائمة المتابَعين:', followingsError);
-
-    const followedIds = (followings || []).map(f => f.following_id);
-    const allowedUserIds = [userId, ...followedIds];
-
-    // صلاحية القصة ووقت انتهائها يتحقق منهما RLS بساعة قاعدة البيانات، لا ساعة الجهاز.
-    const { data, error } = await supabase
-      .from('stories')
-      .select('*')
-      .in('user_id', allowedUserIds)
-      .order('created_at', { ascending: true });
-
-    if (error) {
-      console.error('[stories] تعذر جلب القصص:', error);
-      setGroupedStories({});
-      toast.error(`تعذر تحميل القصص من قاعدة البيانات: ${error.message}`);
-      return;
-    }
-
-    const storyRows = data || [];
-    const authorIds = [...new Set(storyRows.map(story => String(story.user_id)))];
-    const { data: authors, error: authorsError } = authorIds.length
-      ? await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', authorIds)
-      : { data: [], error: null };
-    if (authorsError) console.warn('[stories] تعذر تحميل ملفات أصحاب القصص:', authorsError);
-
-    const authorById = new Map<string, any>((authors || []).map(author => [String(author.id), author] as [string, any]));
-    const groups: { [key: string]: any[] } = {};
-    storyRows.forEach(story => {
-      const authorId = String(story.user_id);
-      if (!groups[authorId]) groups[authorId] = [];
-      groups[authorId].push({ ...story, author: authorById.get(authorId) || null });
-    });
-    setGroupedStories(groups);
-  }, [userId]);
-
-  useEffect(() => { void fetchStories(); }, [fetchStories]);
+  const { handleQuickPublishStory, handleCreateTextStory } = useStoryCreationActions({
+    userId,
+    currentProfile,
+    storyFile,
+    reshareStory,
+    caption,
+    isCloseFriendsOnly,
+    uploadDuration,
+    timedTexts,
+    storyDrawStrokes,
+    storyFilterId,
+    storyFilterAdjustments,
+    storyMentions,
+    fetchStories,
+    setUploading,
+    setUploadProgress,
+    setStoryFile,
+    setReshareStory,
+    setReshareScaledDown,
+    setCaption,
+    setTimedTexts,
+    setStoryDrawStrokes,
+    setStoryDrawingOpen,
+    activeStoryDrawStrokeRef,
+    setStoryMentions,
+    setStoryDurationOpen,
+    storyDurationManuallyChosenRef,
+    setShowUploadModal,
+    setStoryText,
+  });
 
   const activeStories = useMemo(() => {
     if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories;
     return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup] : [];
   }, [activeUserGroup, groupedStories, profileStoryOwnerId, profilePreviewStories]);
-
-  useEffect(() => {
-    if (!pendingProfileStoryOwnerId) return;
-    if (!supabaseConfigured) {
-      toast.error('تعذر تحميل قصص هذا الحساب');
-      onProfileStoryHandled();
-      return;
-    }
-
-    let active = true;
-    void (async () => {
-      try {
-        const { data, error } = await supabase
-          .from('stories')
-          .select('*')
-          .eq('user_id', pendingProfileStoryOwnerId)
-          .order('created_at', { ascending: true });
-        if (!active) return;
-        if (error) {
-          console.error('[stories] تعذر تحميل قصص الملف الشخصي:', error);
-          toast.error(`تعذر تحميل القصص من قاعدة البيانات: ${error.message}`);
-          onProfileStoryHandled();
-          return;
-        }
-        if (!data?.length) {
-          toast.info('لا توجد قصص متاحة لهذا الحساب');
-          onProfileStoryHandled();
-          return;
-        }
-
-        const { data: author, error: authorError } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, avatar_url')
-          .eq('id', pendingProfileStoryOwnerId)
-          .maybeSingle();
-        if (!active) return;
-        if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة:', authorError);
-        const storiesWithAuthor = data.map(story => ({ ...story, author: author || null }));
-
-        setProfileStoryOwnerId(pendingProfileStoryOwnerId);
-        setProfilePreviewStories(storiesWithAuthor);
-        setActiveUserGroup(pendingProfileStoryOwnerId);
-        setActiveStoryIndex(0);
-        setProgress(0);
-        setCurrentTimeSec(0);
-        onProfileStoryHandled();
-      } catch (error) {
-        if (!active) return;
-        console.error('[stories] فشل طلب قصص الملف الشخصي:', error);
-        toast.error('تعذر تحميل القصص. تحقق من الاتصال ثم أعد المحاولة.');
-        onProfileStoryHandled();
-      }
-    })();
-
-    return () => {
-      active = false;
-    };
-  }, [pendingProfileStoryOwnerId, onProfileStoryHandled]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
   const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
@@ -784,12 +723,67 @@ export default function StoriesBar({
     };
   }, [currentStory]);
   const currentStoryFilterOverlay = getStoryFilterOverlay(currentStoryFilter.id);
-  const myStories = groupedStories[userId] || [];
-  const hasMyStory = myStories.length > 0;
-  const myStoryHasCloseFriends = myStories.some(story => story.is_close_friends);
-  const hasSeenAllStories = (stories: any[]) =>
-    stories.length > 0 && stories.every(story => seenStoryIds.includes(String(story.id)));
-  const hasSeenAllMyStories = hasSeenAllStories(myStories);
+  const { loadStoryViewerEntries, loadStoryViewerPreview } = useStoryViewerData({
+    userId,
+    currentStory,
+    storyViewsRequestRef,
+    setStoryViewers,
+    setStoryViewsCount,
+    setStoryViewerPreview,
+  });
+  const {
+    handleOpenStoryViews,
+    handleCloseStoryViews,
+    handleOpenViewerReport,
+    handleSubmitViewerReport,
+    handleReportStory,
+    handleBlockStoryViewer,
+    handleHideStoryFromViewer,
+    handleToggleStoryViewerFollow,
+    handleToggleLike,
+    handleSendReply,
+  } = useStoryViewerActions({
+    userId,
+    currentStory,
+    isStoryOwner,
+    isPaused,
+    storyViewsOpen,
+    storyViewers,
+    viewerActionBusyId,
+    viewerReportTarget,
+    viewerReportCategory,
+    viewerReportDetails,
+    viewerReportBusy,
+    isLiked,
+    isLikeSaving,
+    isSendingReply,
+    replyText,
+    storyViewsWasPausedRef,
+    storyVideoRef,
+    storyVideoWasPlayingRef,
+    storyViewsRequestRef,
+    storyViewsChannelRef,
+    loadStoryViewerEntries,
+    loadStoryViewerPreview,
+    setStoryViewsOpen,
+    setStoryViewsLoading,
+    setStoryViewsError,
+    setStoryViewsCount,
+    setStoryViewers,
+    setStoryViewerPreview,
+    setViewerActionBusyId,
+    setViewerReportTarget,
+    setViewerReportCategory,
+    setViewerReportDetails,
+    setViewerReportBusy,
+    setViewerRowMenuOpen,
+    setIsPaused,
+    setIsLiked,
+    setIsLikeSaving,
+    setIsSendingReply,
+    setReplyText,
+    setShowMenu,
+  });
 
   useEffect(() => {
     setReplyText('');
@@ -1031,608 +1025,6 @@ export default function StoriesBar({
     setNewText('');
   };
 
-  const loadStoryViewerEntries = async (storyId: string, requestId: number) => {
-    const [viewsResult, likesResult] = await Promise.all([
-      supabase
-        .from('story_views')
-        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, display_name, avatar_url, is_private)', { count: 'exact' })
-        .eq('story_id', storyId)
-        .order('viewed_at', { ascending: true }),
-      supabase
-        .from('story_likes')
-        .select('user_id')
-        .eq('story_id', storyId),
-    ]);
-    if (viewsResult.error) throw viewsResult.error;
-    if (likesResult.error) throw likesResult.error;
-    if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
-
-    const likedUserIds = new Set((likesResult.data || []).map(item => String(item.user_id)));
-    const viewerIds = [...new Set((viewsResult.data || []).map(item => String(item.user_id)))];
-    let followedIds = new Set<string>();
-    let pendingIds = new Set<string>();
-    if (userId && viewerIds.length > 0) {
-      const [followsResult, requestsResult] = await Promise.all([
-        supabase
-          .from('follows')
-          .select('following_id')
-          .eq('follower_id', userId)
-          .in('following_id', viewerIds),
-        supabase
-          .from('follow_requests')
-          .select('recipient_id')
-          .eq('requester_id', userId)
-          .in('recipient_id', viewerIds),
-      ]);
-      if (followsResult.error) {
-        console.warn('[story views] تعذر تحميل حالات المتابعة:', followsResult.error);
-      } else {
-        followedIds = new Set((followsResult.data || []).map(item => String(item.following_id)));
-      }
-      if (requestsResult.error) {
-        console.warn('[story views] تعذر تحميل طلبات المتابعة:', requestsResult.error);
-      } else {
-        pendingIds = new Set((requestsResult.data || []).map(item => String(item.recipient_id)));
-      }
-    }
-
-    if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
-    const rows = (viewsResult.data || []).map(item => ({
-      ...item,
-      is_liked: likedUserIds.has(String(item.user_id)),
-      is_following: followedIds.has(String(item.user_id)),
-      follow_request_pending: pendingIds.has(String(item.user_id)),
-    })) as StoryViewerEntry[];
-    setStoryViewers(rows);
-    setStoryViewsCount(viewsResult.count ?? rows.length);
-    return rows;
-  };
-
-  const loadStoryViewerPreview = async (storyId: string, actualViewerIds: string[], requestId: number) => {
-    if (!userId) return;
-    const storageKey = `aani:story-viewer-preview:${userId}:session`;
-    let session: StoryViewerPreviewSession | null = null;
-
-    try {
-      const stored = localStorage.getItem(storageKey);
-      if (stored) {
-        const parsed = JSON.parse(stored) as Partial<StoryViewerPreviewSession>;
-        if (
-          Array.isArray(parsed.profileIds)
-          && parsed.profileIds.every(id => typeof id === 'string')
-          && Number.isFinite(parsed.createdAt)
-          && Number.isFinite(parsed.expiresAt)
-        ) {
-          session = {
-            profileIds: parsed.profileIds as string[],
-            createdAt: parsed.createdAt as number,
-            expiresAt: parsed.expiresAt as number,
-            expired: parsed.expired === true,
-          };
-        }
-      }
-    } catch {
-      session = null;
-    }
-
-    if (session && (session.expired || session.expiresAt <= Date.now())) {
-      const expiredSession: StoryViewerPreviewSession = {
-        ...session,
-        profileIds: [],
-        expired: true,
-      };
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(expiredSession));
-      } catch {
-        /* التخزين المحلي غير متاح */
-      }
-      setStoryViewerPreview(null);
-      return;
-    }
-
-    let profileRows: StoryViewerProfile[] = [];
-    if (session?.profileIds.length) {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url')
-        .in('id', session.profileIds);
-      if (error) throw error;
-      const profileById = new Map<string, StoryViewerProfile>(
-        ((data || []) as StoryViewerProfile[]).map(profile => [String(profile.id), profile] as [string, StoryViewerProfile]),
-      );
-      profileRows = session.profileIds
-        .map(id => profileById.get(id))
-        .filter((profile): profile is StoryViewerProfile => Boolean(profile));
-    } else if (!session) {
-      const actualIds = new Set(actualViewerIds);
-      const pageSize = 100;
-      let offset = 0;
-      while (profileRows.length < STORY_VIEWER_PREVIEW_LIMIT) {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
-          .neq('id', userId)
-          .order('created_at', { ascending: true })
-          .range(offset, offset + pageSize - 1);
-        if (error) throw error;
-        const page = (data || []) as StoryViewerProfile[];
-        profileRows.push(...page.filter(profile => profile.id !== userId && !actualIds.has(String(profile.id))));
-        if (page.length < pageSize) break;
-        offset += pageSize;
-      }
-      profileRows = profileRows.slice(0, STORY_VIEWER_PREVIEW_LIMIT);
-      const createdAt = Date.now();
-      session = {
-        profileIds: profileRows.map(profile => String(profile.id)),
-        createdAt,
-        expiresAt: createdAt + STORY_VIEWER_PREVIEW_TTL_MS,
-      };
-      try {
-        localStorage.setItem(storageKey, JSON.stringify(session));
-      } catch {
-        /* ستبقى المعاينة مؤقتة لهذه الجلسة فقط */
-      }
-    }
-
-    if (!session || requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
-    const actualIds = new Set(actualViewerIds);
-    const previewRows = profileRows
-      .filter(profile => !actualIds.has(String(profile.id)))
-      .map((profile, index, profiles) => ({
-        user_id: String(profile.id),
-        viewed_at: new Date(session!.createdAt - (profiles.length - index) * 60_000).toISOString(),
-        viewer: profile,
-      }));
-
-    setStoryViewerPreview({
-      storyId,
-      storageKey,
-      createdAt: session.createdAt,
-      expiresAt: session.expiresAt,
-      rows: previewRows,
-    });
-  };
-
-  const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
-    if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
-
-    const storyId = currentStory.id;
-    const requestId = ++storyViewsRequestRef.current;
-    storyViewsWasPausedRef.current = wasPausedBeforeOpen;
-    storyVideoWasPlayingRef.current = Boolean(storyVideoRef.current && !storyVideoRef.current.paused);
-    storyVideoRef.current?.pause();
-    setIsPaused(true);
-    setStoryViewsOpen(true);
-    setStoryViewsLoading(true);
-    setStoryViewsError(false);
-    setStoryViewers([]);
-    setStoryViewerPreview(null);
-
-    if (storyViewsChannelRef.current) {
-      void supabase.removeChannel(storyViewsChannelRef.current);
-      storyViewsChannelRef.current = null;
-    }
-
-    try {
-      const rows = await loadStoryViewerEntries(storyId, requestId);
-      if (!rows || requestId !== storyViewsRequestRef.current) return;
-
-      try {
-        await loadStoryViewerPreview(storyId, rows.map(item => item.user_id), requestId);
-      } catch (previewError) {
-        console.warn('[story views] تعذر تحميل حسابات المعاينة المؤقتة:', previewError);
-      }
-      if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
-
-      const refreshStoryViewerEntries = () => {
-        const refreshRequestId = ++storyViewsRequestRef.current;
-        void loadStoryViewerEntries(storyId, refreshRequestId).then(rows => {
-          if (!rows) return;
-          const realViewerIds = new Set(rows.map(item => item.user_id));
-          setStoryViewerPreview(current => current?.storyId === storyId
-            ? { ...current, rows: current.rows.filter(item => !realViewerIds.has(item.user_id)) }
-            : current);
-        }).catch(error => {
-          if (refreshRequestId !== storyViewsRequestRef.current) return;
-          console.error('[story views] تعذر تحديث قائمة المشاهدين:', error);
-          setStoryViewsError(true);
-        });
-      };
-
-      const channel = supabase
-        .channel(`story-viewers:${storyId}:${requestId}`)
-        .on('postgres_changes', {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'story_views',
-          filter: `story_id=eq.${storyId}`,
-        }, refreshStoryViewerEntries)
-        .on('postgres_changes', {
-          event: '*',
-          schema: 'public',
-          table: 'story_likes',
-          filter: `story_id=eq.${storyId}`,
-        }, refreshStoryViewerEntries)
-        .subscribe();
-      storyViewsChannelRef.current = channel;
-    } catch (error) {
-      if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
-      console.error('[story views] تعذر تحميل قائمة المشاهدين:', error);
-      setStoryViewsError(true);
-      setStoryViewers([]);
-      setStoryViewsCount(0);
-      toast.error('تعذر تحميل المشاهدين والإعجابات الفعلية. تحقق من ترحيل بيانات مشاهدي الستوري.');
-    } finally {
-      if (currentStory?.id === storyId) setStoryViewsLoading(false);
-    }
-  };
-
-  const handleCloseStoryViews = () => {
-    storyViewsRequestRef.current += 1;
-    if (storyViewsChannelRef.current) {
-      void supabase.removeChannel(storyViewsChannelRef.current);
-      storyViewsChannelRef.current = null;
-    }
-    setStoryViewsOpen(false);
-    setViewerRowMenuOpen(false);
-    setViewerReportTarget(null);
-    setIsPaused(storyViewsWasPausedRef.current);
-    if (storyVideoWasPlayingRef.current) {
-      void storyVideoRef.current?.play().catch(error => {
-        console.warn('[story viewer] تعذرت متابعة تشغيل الفيديو بعد إغلاق المشاهدات:', error);
-      });
-    }
-    storyVideoWasPlayingRef.current = false;
-  };
-
-  const handleOpenViewerReport = (viewer: StoryViewerEntry) => {
-    if (!isStoryOwner || viewer.user_id === userId) return;
-    setViewerReportTarget(viewer);
-    setViewerReportCategory('spam');
-    setViewerReportDetails('');
-  };
-
-  const handleSubmitViewerReport = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const target = viewerReportTarget;
-    if (!target || !isStoryOwner || target.user_id === userId || !supabaseConfigured || viewerReportBusy) return;
-
-    setViewerReportBusy(true);
-    try {
-      const { error } = await supabase.from('user_reports').insert({
-        reporter_id: userId,
-        reported_user_id: target.user_id,
-        category: viewerReportCategory,
-        details: viewerReportDetails.trim(),
-      });
-      if (error) {
-        if (error.code === '23505') throw new Error('سبق أن أبلغت عن هذا الحساب.');
-        throw error;
-      }
-      toast.success('تم إرسال البلاغ لمراجعة الحساب.');
-      setViewerReportTarget(null);
-    } catch (error) {
-      console.error('[story views] تعذر إرسال بلاغ الحساب:', error);
-      toast.error(error instanceof Error ? error.message : 'تعذر إرسال البلاغ. تأكد من تطبيق تحديث إجراءات مشاهدي الستوري.');
-    } finally {
-      setViewerReportBusy(false);
-    }
-  };
-
-  const handleReportStory = async () => {
-    const storyId = typeof currentStory?.id === 'string' ? currentStory.id : '';
-    const reportedUserId = typeof currentStory?.user_id === 'string' ? currentStory.user_id : '';
-    setShowMenu(false);
-
-    if (!storyId || !reportedUserId || !userId || reportedUserId === userId) {
-      toast.error('تعذر تحديد الستوري للإبلاغ عنها.');
-      return;
-    }
-
-    if (!supabaseConfigured) {
-      toast.error('تعذر إرسال البلاغ لعدم توفر الاتصال بقاعدة البيانات.');
-      return;
-    }
-
-    const reason = window.prompt('ما سبب الإبلاغ عن هذه الستوري؟');
-    if (reason === null) return;
-
-    const normalizedReason = reason.trim();
-    if (!normalizedReason) {
-      toast.error('اكتب سبباً للإبلاغ عن الستوري.');
-      return;
-    }
-    if (normalizedReason.length > 1000) {
-      toast.error('يجب ألا يتجاوز سبب البلاغ 1000 حرف.');
-      return;
-    }
-
-    try {
-      const { error } = await supabase.from('story_reports').insert({
-        story_id: storyId,
-        reporter_id: userId,
-        reported_user_id: reportedUserId,
-        reason: normalizedReason,
-      });
-
-      if (error?.code === '23505') {
-        toast.info('سبق أن أبلغت عن هذه الستوري.');
-        return;
-      }
-      if (error) throw error;
-
-      toast.success('تم إرسال البلاغ لمراجعته.');
-    } catch (error) {
-      console.error('[story report] تعذر إرسال البلاغ:', error);
-      const code = (error as { code?: string } | null)?.code;
-      if (code === '42P01' || code === 'PGRST205') {
-        toast.error('جدول بلاغات القصص غير مهيأ. طبّق migration 20261117000000_story_reports.sql على Supabase.');
-      } else if (code === '42501' || code === 'PGRST301') {
-        toast.error('تعذر إرسال البلاغ بسبب صلاحيات قاعدة البيانات.');
-      } else {
-        toast.error('تعذر إرسال البلاغ. حاول مرة أخرى.');
-      }
-    }
-  };
-
-  const handleBlockStoryViewer = async (viewer: StoryViewerEntry) => {
-    if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
-    const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
-    if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع من مشاهدة قصصك والتواصل معك.`)) return;
-
-    setViewerActionBusyId(viewer.user_id);
-    try {
-      const { error } = await supabase.rpc('aani_block_user', { p_blocked_user_id: viewer.user_id });
-      if (error) throw error;
-      const wasVisible = storyViewers.some(item => item.user_id === viewer.user_id);
-      setStoryViewers(current => current.filter(item => item.user_id !== viewer.user_id));
-      setStoryViewerPreview(current => current?.storyId === currentStory?.id
-        ? { ...current, rows: current.rows.filter(item => item.user_id !== viewer.user_id) }
-        : current);
-      if (wasVisible) setStoryViewsCount(count => Math.max(0, count - 1));
-      toast.success('تم حظر الحساب ومنع التواصل وإزالة المتابعة والأصدقاء المقربين المتبادلة.');
-    } catch (error) {
-      console.error('[story views] تعذر حظر الحساب:', error);
-      toast.error(error instanceof Error ? error.message : 'تعذر حظر الحساب. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
-    } finally {
-      setViewerActionBusyId(null);
-    }
-  };
-
-  const handleHideStoryFromViewer = async (viewer: StoryViewerEntry) => {
-    if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
-    const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
-    if (!window.confirm(`إخفاء قصصك المستقبلية عن ${name}؟ لن تُحذف مشاهداته السابقة.`)) return;
-
-    setViewerActionBusyId(viewer.user_id);
-    try {
-      const { error } = await supabase.rpc('aani_hide_story_from_user', { p_hidden_user_id: viewer.user_id });
-      if (error) throw error;
-      toast.success('تم حفظ إخفاء قصصك المستقبلية عن هذا الحساب. لم تُحذف مشاهداته السابقة.');
-    } catch (error) {
-      console.error('[story views] تعذر إخفاء القصص عن الحساب:', error);
-      toast.error(error instanceof Error ? error.message : 'تعذر حفظ إعداد الإخفاء. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
-    } finally {
-      setViewerActionBusyId(null);
-    }
-  };
-
-  const handleToggleStoryViewerFollow = async (viewer: StoryViewerEntry) => {
-    if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
-
-    setViewerActionBusyId(viewer.user_id);
-    try {
-      if (viewer.is_following) {
-        const { error } = await supabase
-          .from('follows')
-          .delete()
-          .eq('follower_id', userId)
-          .eq('following_id', viewer.user_id);
-        if (error) throw error;
-        setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
-          ? { ...item, is_following: false, follow_request_pending: false }
-          : item));
-        toast.success('تم إلغاء المتابعة');
-        return;
-      }
-
-      if (viewer.follow_request_pending) {
-        const { error } = await supabase
-          .from('follow_requests')
-          .delete()
-          .eq('requester_id', userId)
-          .eq('recipient_id', viewer.user_id);
-        if (error) throw error;
-        setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
-          ? { ...item, follow_request_pending: false }
-          : item));
-        toast.success('تم إلغاء طلب المتابعة');
-        return;
-      }
-
-      if (viewer.viewer?.is_private) {
-        const { error } = await supabase.from('follow_requests').insert({
-          requester_id: userId,
-          recipient_id: viewer.user_id,
-        });
-        if (error && error.code !== '23505') throw error;
-        setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
-          ? { ...item, follow_request_pending: true }
-          : item));
-        toast.success(error ? 'سبق إرسال طلب المتابعة' : 'تم إرسال طلب المتابعة');
-        return;
-      }
-
-      const { error } = await supabase.from('follows').insert({
-        follower_id: userId,
-        following_id: viewer.user_id,
-      });
-      if (error && error.code !== '23505') throw error;
-      setStoryViewers(current => current.map(item => item.user_id === viewer.user_id
-        ? { ...item, is_following: true, follow_request_pending: false }
-        : item));
-      toast.success(error ? 'الحساب متابَع بالفعل' : 'تمت متابعة الحساب');
-    } catch (error) {
-      console.error('[story views] تعذر تحديث المتابعة:', error);
-      toast.error(error instanceof Error ? error.message : 'تعذر تحديث حالة المتابعة. تحقق من الاتصال والصلاحيات.');
-    } finally {
-      setViewerActionBusyId(null);
-    }
-  };
-
-  const handleToggleLike = async () => {
-    if (!supabaseConfigured || !currentStory || isStoryOwner || isLikeSaving) return;
-    setIsLikeSaving(true);
-
-    try {
-      if (isLiked) {
-        const { error } = await supabase
-          .from('story_likes')
-          .delete()
-          .eq('story_id', currentStory.id)
-          .eq('user_id', userId);
-        if (error) throw error;
-        setIsLiked(false);
-        toast.success('تم إلغاء الإعجاب');
-      } else {
-        const { error } = await supabase
-          .from('story_likes')
-          .upsert(
-            { story_id: currentStory.id, user_id: userId },
-            { onConflict: 'story_id,user_id', ignoreDuplicates: true },
-          );
-        if (error) throw error;
-        setIsLiked(true);
-        try {
-          const { error: notificationError } = await supabase.from('notifications').insert({
-            user_id: currentStory.user_id,
-            actor_id: userId,
-            type: 'like',
-            content: 'أعجب بستوريك',
-            reference_id: currentStory.id,
-          });
-          if (notificationError) console.warn('[story likes] تعذر إرسال إشعار الإعجاب:', notificationError);
-        } catch (notificationError) {
-          console.warn('[story likes] تعذر إرسال إشعار الإعجاب:', notificationError);
-        }
-        toast.success('تم الإعجاب بالستوري');
-      }
-    } catch (error) {
-      console.error('[story likes] تعذر حفظ الإعجاب:', error);
-      toast.error('تعذر حفظ الإعجاب. حاول مرة أخرى.');
-    } finally {
-      setIsLikeSaving(false);
-    }
-  };
-
-  const handleSendReply = async (customContent?: string) => {
-    const textToSend = (customContent ?? replyText).trim();
-    if (!supabaseConfigured || !currentStory || isStoryOwner || !textToSend || isSendingReply) return;
-
-    setIsSendingReply(true);
-    try {
-      const { error } = await supabase.from('messages').insert({
-        sender_id: userId,
-        recipient_id: currentStory.user_id,
-        content: `[story-reply]${textToSend}`,
-        story_id: currentStory.id,
-      });
-      if (error) throw error;
-
-      try {
-        const { error: notificationError } = await supabase.from('notifications').insert({
-          user_id: currentStory.user_id,
-          actor_id: userId,
-          type: 'reply',
-          content: `رد على ستوريك: ${textToSend}`,
-          reference_id: currentStory.id,
-        });
-        if (notificationError) console.warn('[story replies] تعذر إرسال إشعار الرد:', notificationError);
-      } catch (notificationError) {
-        console.warn('[story replies] تعذر إرسال إشعار الرد:', notificationError);
-      }
-
-      setReplyText('');
-      toast.success('تم إرسال الرد إلى صاحب الستوري');
-    } catch (error) {
-      console.error('[story replies] تعذر حفظ الرد:', error);
-      toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
-    } finally {
-      setIsSendingReply(false);
-    }
-  };
-
-  const buildStoryTimedTexts = () => [
-    ...timedTexts,
-    ...(storyDrawStrokes.length > 0
-      ? [{
-          id: 'story-drawing',
-          type: 'drawing' as const,
-          startTime: 0,
-          endTime: uploadDuration,
-          strokes: storyDrawStrokes,
-        }]
-      : []),
-  ];
-
-  const handleUploadStory = async () => {
-    if (!supabaseConfigured) return;
-    const sourceStory = storyFile ? null : reshareStory;
-    if (!storyFile && !caption.trim() && !sourceStory?.media_url) return;
-
-    setUploading(true);
-    try {
-      let mediaUrl = sourceStory?.media_url || '';
-      let mediaType = sourceStory?.media_type === 'video' ? 'video' : sourceStory ? 'photo' : 'text';
-
-      if (storyFile) {
-        const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-        const filePath = `${userId}/story-${Date.now()}-${safeName}`;
-        const { error: uploadErr } = await supabase.storage.from(storageBucket).upload(filePath, storyFile, { contentType: storyFile.type, upsert: true });
-        if (uploadErr) throw uploadErr;
-        mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
-        mediaType = storyFile.type.startsWith('video') ? 'video' : 'photo';
-      }
-
-      const { data: storyId, error: insertError } = await supabase.rpc('aani_create_story', {
-        p_media_url: mediaUrl || null,
-        p_media_type: mediaType,
-        p_caption: caption.trim() || sourceStory?.caption || null,
-        p_is_close_friends: isCloseFriendsOnly,
-        p_duration_seconds: uploadDuration,
-        p_timed_texts: buildStoryTimedTexts(),
-        p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
-        p_original_story_id: sourceStory?.id || null,
-        p_share_type: sourceStory ? 'reshare' : 'original',
-        p_expiry_seconds: null,
-      });
-      if (insertError) throw insertError;
-      if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
-
-      if (storyMentions.length > 0) {
-        void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', storyMentions);
-      }
-
-      setStoryFile(null);
-      setReshareStory(null);
-      setReshareScaledDown(false);
-      setCaption('');
-      setTimedTexts([]);
-      setStoryDrawStrokes([]);
-      setStoryDrawingOpen(false);
-      activeStoryDrawStrokeRef.current = null;
-      setStoryMentions([]);
-      setStoryDurationOpen(false);
-      storyDurationManuallyChosenRef.current = false;
-      setShowUploadModal(false);
-      await fetchStories();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'تعذر نشر القصة.');
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const handleDeleteStory = async () => {
     if (!supabaseConfigured || !currentStory) return;
     if (currentStory.user_id !== userId) return;
@@ -1649,154 +1041,6 @@ export default function StoriesBar({
     setShowMenu(false);
     await fetchStories();
     handleNextStory();
-  };
-
-  // ربط الإشارات بالقصة بعد نشرها فقط: سجل مستقل + إشعار + رسالة خاصة
-  const linkStoryMentions = async (storyId: string, authorName: string, mentions: MentionCandidate[]) => {
-    if (!storyId || mentions.length === 0) return;
-
-    const { error: mentionError } = await supabase.from('story_mentions').insert(
-      mentions.map(person => ({ story_id: storyId, author_id: userId, mentioned_id: person.id })),
-    );
-    if (mentionError) return;
-
-    for (const person of mentions) {
-      await supabase.from('notifications').insert({
-        user_id: person.id,
-        actor_id: userId,
-        type: 'mention',
-        content: 'قصة جديدة بانتظارك',
-        reference_id: storyId,
-      });
-
-      const message = {
-        sender_id: userId,
-        recipient_id: person.id,
-        content: `[story:${storyId}] تمت الإشارة إليك بواسطة ${authorName} في قصته.`,
-        story_id: storyId,
-      };
-
-      const { error: messageError } = await supabase.from('messages').insert(message);
-      if (messageError) {
-        // توافق مع قاعدة بيانات لم يُضَف إليها عمود story_id بعد
-        const { story_id, ...legacyMessage } = message;
-        void story_id;
-        await supabase.from('messages').insert(legacyMessage);
-      }
-    }
-  };
-
-  const handleQuickPublishStory = (closeFriends: boolean) => {
-    const mediaFile = storyFile;
-    const sourceStory = mediaFile ? null : reshareStory;
-    const storyCaption = caption.trim();
-    const mentions = [...storyMentions];
-    const durationSeconds = uploadDuration;
-    if (!supabaseConfigured || (!mediaFile && !sourceStory?.media_url)) return;
-
-    // إغلاق المحرر أولاً، ثم متابعة الرفع دون حجب التفاعل مع الصفحة الرئيسية.
-    setShowUploadModal(false);
-    setUploading(true);
-    setUploadProgress(0);
-
-    void (async () => {
-      try {
-        let mediaUrl = sourceStory?.media_url || '';
-        let mediaType = sourceStory?.media_type === 'video' ? 'video' : 'photo';
-
-        if (mediaFile) {
-          const safeName = mediaFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-          const filePath = `${userId}/story-${Date.now()}-${safeName}`;
-          await uploadStoryMedia({
-            file: mediaFile,
-            path: filePath,
-            onProgress: setUploadProgress,
-          });
-          mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
-          mediaType = mediaFile.type.startsWith('video') ? 'video' : 'photo';
-        } else {
-          setUploadProgress(85);
-        }
-
-        const { data: storyId, error: insertError } = await supabase.rpc('aani_create_story', {
-          p_media_url: mediaUrl || null,
-          p_media_type: mediaType,
-          p_caption: storyCaption || sourceStory?.caption || null,
-          p_is_close_friends: closeFriends,
-          p_duration_seconds: durationSeconds,
-          p_timed_texts: buildStoryTimedTexts(),
-          p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
-          p_original_story_id: sourceStory?.id || null,
-          p_share_type: sourceStory ? 'reshare' : 'original',
-          p_expiry_seconds: null,
-        });
-
-        if (insertError) throw insertError;
-        if (typeof storyId === 'string' && mentions.length > 0) {
-          void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', mentions);
-        }
-
-        setStoryFile(current => current === mediaFile ? null : current);
-        setReshareStory(null);
-        setReshareScaledDown(false);
-        setCaption(current => current.trim() === storyCaption ? '' : current);
-        setStoryText('');
-        setTimedTexts([]);
-        setStoryDrawStrokes([]);
-        setStoryDrawingOpen(false);
-        activeStoryDrawStrokeRef.current = null;
-        setStoryMentions([]);
-        setStoryDurationOpen(false);
-        storyDurationManuallyChosenRef.current = false;
-        await fetchStories();
-        toast.success('تم نشر القصة بنجاح', { duration: 5000 });
-      } catch (error) {
-        console.error('Story publish failed:', error);
-        const errorInfo = error && typeof error === 'object' ? error as { message?: unknown; code?: unknown } : null;
-        const details = error instanceof Error
-          ? error.message
-          : String(errorInfo?.message || '');
-        const errorCode = String(errorInfo?.code || '');
-        if (errorCode === 'PGRST202' || /aani_create_story|function.*not found|PGRST202/i.test(details)) {
-          toast.error('حدّث قاعدة البيانات بتشغيل ترحيل القصص ثم أعد المحاولة');
-        } else if (errorCode === '42501' || /row-level security|permission denied/i.test(details)) {
-          toast.error('رفضت صلاحيات قاعدة البيانات نشر القصة. تأكد من تطبيق تحديث الخصوصية والقصص.');
-        } else {
-          toast.error(details ? `تعذر نشر القصة: ${details}` : 'تعذر نشر القصة، حاول مرة أخرى');
-        }
-        setShowUploadModal(true);
-      } finally {
-        setUploading(false);
-        setUploadProgress(0);
-      }
-    })();
-  };
-
-  const handleCreateTextStory = async () => {
-    const text = window.prompt('اكتب نص القصة');
-    if (!text?.trim() || !supabaseConfigured) return;
-
-    try {
-      const { error } = await supabase.rpc('aani_create_story', {
-        p_media_url: null,
-        p_media_type: 'text',
-        p_caption: text.trim(),
-        p_is_close_friends: false,
-        p_duration_seconds: uploadDuration,
-        p_timed_texts: [],
-        p_filter_key: null,
-        p_original_story_id: null,
-        p_share_type: 'original',
-        p_expiry_seconds: null,
-      });
-
-      if (error) throw error;
-
-      await fetchStories();
-      toast.success('نُشرت قصتك');
-    } catch {
-      toast.error('تعذر نشر القصة، حاول مرة أخرى');
-    }
   };
 
   const redrawStoryDrawingCanvas = useCallback(() => {
@@ -1932,126 +1176,26 @@ export default function StoriesBar({
 
   return (
     <div className="contents" dir="rtl">
-      <div className="story-bar story-strip mb-2 w-full">
-        <div className="story-bar-content flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-1">
-        {/* قصتك */}
-        <div className="flex flex-col items-center gap-1 shrink-0">
-          <div
-            className={`relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full ${hasMyStory ? 'p-[2.5px]' : 'border-[1.5px] border-dashed border-zinc-600/70 p-[2px]'}`}
-            style={hasMyStory ? {
-              background: hasSeenAllMyStories
-                ? '#3a3a42'
-                : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
-            } : undefined}
-            onClick={() => {
-              if (uploading) return;
-              if (hasMyStory) {
-                setActiveUserGroup(userId);
-                setActiveStoryIndex(0);
-                setProgress(0);
-              } else {
-                setShowStoryPicker(true);
-              }
-            }}
-          >
-            {hasMyStory || uploading ? (
-              <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
-                <Avatar profile={currentProfile} extraLarge />
-              </span>
-            ) : (
-              <span className="text-2xl font-light text-zinc-500">+</span>
-            )}
-            {uploading && (
-              <svg
-                viewBox="0 0 64 64"
-                className="pointer-events-none absolute inset-0 z-10 h-16 w-16 animate-spin"
-                role="progressbar"
-                aria-label={`جارٍ نشر القصة ${uploadProgress}%`}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={uploadProgress}
-              >
-                <circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="2.5" />
-                <circle
-                  cx="32"
-                  cy="32"
-                  r="29"
-                  fill="none"
-                  stroke="#ec4899"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 29}
-                  strokeDashoffset={2 * Math.PI * 29 * (1 - uploadProgress / 100)}
-                  style={{ transition: 'stroke-dashoffset 120ms linear' }}
-                />
-              </svg>
-            )}
-            {hasMyStory && myStoryHasCloseFriends && (
-              <span
-                className="absolute -bottom-0.5 -left-0.5 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-[#121212] bg-emerald-500 text-white"
-                title="أصدقاء مقربون"
-              >
-                <Star size={10} fill="currentColor" />
-              </span>
-            )}
-            <button
-              type="button"
-              disabled={uploading}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!uploading) setShowStoryPicker(true);
-              }}
-              className="absolute -bottom-0.5 -right-0.5 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 disabled:opacity-50"
-              title="إضافة ستوري جديدة"
-            >
-              <Plus size={12} />
-            </button>
-          </div>
-          <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">قصتك</span>
-        </div>
-
-        {/* قصص المتابَعين بحلقة العلم العراقي */}
-        {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
-          const firstStory = groupedStories[authorId][0];
-          const isSeen = hasSeenAllStories(groupedStories[authorId]);
-          const hasCloseFriendsStory = groupedStories[authorId].some(story => story.is_close_friends);
-
-          return (
-            <div
-              key={authorId}
-              className="flex flex-col items-center gap-1 cursor-pointer shrink-0"
-              onClick={() => {
-                setActiveUserGroup(authorId);
-                setActiveStoryIndex(0);
-                setProgress(0);
-                setCurrentTimeSec(0);
-              }}
-            >
-              <span
-                className="relative flex h-16 w-16 items-center justify-center rounded-full p-[2.5px] transition-colors duration-200"
-                style={{
-                  background: isSeen
-                    ? '#3a3a42'
-                    : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
-                }}
-              >
-                <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
-                  <Avatar profile={firstStory.author} extraLarge />
-                </span>
-                {hasCloseFriendsStory && (
-                  <span className="absolute -bottom-0.5 -left-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-[#121212] bg-emerald-500 text-white" title="أصدقاء مقربون">
-                    <Star size={10} fill="currentColor" />
-                  </span>
-                )}
-              </span>
-              <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">
-                {firstStory.author?.username || 'عضو'}
-              </span>
-            </div>
-          );
-        })}
-        </div>
-      </div>
+      <StoriesStrip
+        userId={userId}
+        currentProfile={currentProfile}
+        groupedStories={groupedStories}
+        seenStoryIds={seenStoryIds}
+        uploading={uploading}
+        uploadProgress={uploadProgress}
+        onOpenMyStories={() => {
+          setActiveUserGroup(userId);
+          setActiveStoryIndex(0);
+          setProgress(0);
+        }}
+        onOpenPicker={() => setShowStoryPicker(true)}
+        onOpenStoryGroup={authorId => {
+          setActiveUserGroup(authorId);
+          setActiveStoryIndex(0);
+          setProgress(0);
+          setCurrentTimeSec(0);
+        }}
+      />
 
       <StoryComposerSheet
         open={showStoryPicker}
