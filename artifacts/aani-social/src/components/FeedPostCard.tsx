@@ -375,12 +375,14 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       )}
       <header className="flex items-start gap-3 w-full">
         <Avatar profile={post.author} large />
-        <div className="user-identity-meta h-14 min-w-0 flex-1">
-          <Link href={`/profile/${post.user_id}`} className="block min-w-0 hover:underline">
-            <strong className="block truncate text-sm font-bold text-white">{displayName(post.author)}</strong>
-          </Link>
+        <div className="user-identity-meta h-12 min-w-0 flex-1">
+          <div className="flex min-w-0 items-center justify-between gap-2">
+            <Link href={`/profile/${post.user_id}`} className="min-w-0 flex-1 hover:underline">
+              <strong className="block truncate text-sm font-bold text-white">{displayName(post.author)}</strong>
+            </Link>
+            <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
+          </div>
           <span className="truncate text-xs leading-none text-zinc-500" dir="ltr">{post.author?.username || 'user'}</span>
-          <time className="shrink-0 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
