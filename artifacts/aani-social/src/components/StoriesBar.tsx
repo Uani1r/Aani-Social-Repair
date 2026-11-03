@@ -1319,6 +1319,62 @@ export default function StoriesBar({
     }
   };
 
+  const handleReportStory = async () => {
+    const storyId = typeof currentStory?.id === 'string' ? currentStory.id : '';
+    const reportedUserId = typeof currentStory?.user_id === 'string' ? currentStory.user_id : '';
+    setShowMenu(false);
+
+    if (!storyId || !reportedUserId || !userId || reportedUserId === userId) {
+      toast.error('تعذر تحديد الستوري للإبلاغ عنها.');
+      return;
+    }
+
+    if (!supabaseConfigured) {
+      toast.error('تعذر إرسال البلاغ لعدم توفر الاتصال بقاعدة البيانات.');
+      return;
+    }
+
+    const reason = window.prompt('ما سبب الإبلاغ عن هذه الستوري؟');
+    if (reason === null) return;
+
+    const normalizedReason = reason.trim();
+    if (!normalizedReason) {
+      toast.error('اكتب سبباً للإبلاغ عن الستوري.');
+      return;
+    }
+    if (normalizedReason.length > 1000) {
+      toast.error('يجب ألا يتجاوز سبب البلاغ 1000 حرف.');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('story_reports').insert({
+        story_id: storyId,
+        reporter_id: userId,
+        reported_user_id: reportedUserId,
+        reason: normalizedReason,
+      });
+
+      if (error?.code === '23505') {
+        toast.info('سبق أن أبلغت عن هذه الستوري.');
+        return;
+      }
+      if (error) throw error;
+
+      toast.success('تم إرسال البلاغ لمراجعته.');
+    } catch (error) {
+      console.error('[story report] تعذر إرسال البلاغ:', error);
+      const code = (error as { code?: string } | null)?.code;
+      if (code === '42P01' || code === 'PGRST205') {
+        toast.error('جدول بلاغات القصص غير مهيأ. طبّق migration 20261117000000_story_reports.sql على Supabase.');
+      } else if (code === '42501' || code === 'PGRST301') {
+        toast.error('تعذر إرسال البلاغ بسبب صلاحيات قاعدة البيانات.');
+      } else {
+        toast.error('تعذر إرسال البلاغ. حاول مرة أخرى.');
+      }
+    }
+  };
+
   const handleBlockStoryViewer = async (viewer: StoryViewerEntry) => {
     if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
     const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
@@ -2060,7 +2116,7 @@ export default function StoriesBar({
           isLiked={isLiked}
           isLikeSaving={isLikeSaving}
           onMenuChange={setShowMenu}
-          onReportStory={() => { alert('تم رفع البلاغ للتحقق'); setShowMenu(false); }}
+          onReportStory={() => { void handleReportStory(); }}
           onDeleteStory={() => void handleDeleteStory()}
           onCloseViewer={() => setActiveUserGroup(null)}
           onNextStory={handleNextStory}
