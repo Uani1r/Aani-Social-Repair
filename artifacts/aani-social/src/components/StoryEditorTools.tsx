@@ -165,7 +165,13 @@ export function StoryTextEditorPanel({
   if (!storyTextEditorOpen) return null;
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm" dir="rtl">
+    <div
+      className="absolute inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm"
+      dir="rtl"
+      onClick={event => {
+        if (event.target === event.currentTarget) onFinishTextEditing();
+      }}
+    >
       <div
         className="flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}

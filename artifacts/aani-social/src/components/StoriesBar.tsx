@@ -21,7 +21,7 @@ import StoryCreationEditor from '@/components/StoryCreationEditor';
 import TextOnlyStoryCanvas from '@/components/story/TextOnlyStoryCanvas';
 import StoryViewer from '@/components/StoryViewer';
 import StoriesStrip from '@/components/stories/StoriesStrip';
-import type { StoryAuthor, StoryCanvasStyle, StoryRow } from '@/components/stories/types';
+import type { StoryAuthor, StoryCanvasStyle, StoryRow, StoryTextOverlay } from '@/components/stories/types';
 import { useStoriesData } from '@/components/stories/useStoriesData';
 import { useStoryCreationActions } from '@/components/stories/useStoryCreationActions';
 import { useStoryViewerActions } from '@/components/stories/useStoryViewerActions';
@@ -185,6 +185,9 @@ export default function StoriesBar({
   // محرر النص الغني للقصة
   const [storyTextEditorOpen, setStoryTextEditorOpen] = useState(false);
   const [storyText, setStoryText] = useState('');
+  const [timedTexts, setTimedTexts] = useState<StoryTextOverlay[]>([]);
+  const [editingStoryTextId, setEditingStoryTextId] = useState<string | null>(null);
+  const storyGestureTextIdRef = useRef<string | null>(null);
   const [storyKeyboardInset, setStoryKeyboardInset] = useState(0);
 
   // نمط نص القصة: الخط + اللون + المحاذاة + الحركة + الخلفية
@@ -263,9 +266,47 @@ export default function StoriesBar({
   const storyGestureRef = useRef<StoryGestureState | null>(null);
   const lastStoryTouchRef = useRef(0);
 
+  const openStoryTextEditor = (id?: string) => {
+    const layer = id ? timedTexts.find(item => item.id === id) : undefined;
+    setEditingStoryTextId(layer?.id ?? null);
+    setStoryText(layer?.text || '');
+    setStoryTextOffset(layer ? {
+      x: ((layer.x - 50) / 100) * window.innerWidth,
+      y: ((layer.y - 50) / 100) * window.innerHeight,
+    } : { x: 0, y: 0 });
+    setStoryTextScale(layer?.scale ?? 1);
+    setStoryTextRotation(layer?.rotation ?? 0);
+    setStoryFontFamily(layer?.fontFamily || 'Cairo');
+    setStoryTextColor(layer?.textColor || '#FFFFFF');
+    setStoryTextAlign(layer?.textAlign || 'center');
+    setStoryTextAnimation(layer?.textAnimation || 'none');
+    if (layer?.textBackground) {
+      const backgroundIndex = STORY_TEXT_BACKGROUNDS.findIndex(item => item.background === layer.textBackground);
+      setStoryBackgroundIndex(backgroundIndex >= 0 ? backgroundIndex : 0);
+    } else {
+      setStoryBackgroundIndex(0);
+    }
+    setStoryDrawingOpen(false);
+    setStoryFiltersOpen(false);
+    setStoryMoreOpen(false);
+    setStoryDurationOpen(false);
+    setStoryTextEditorOpen(true);
+  };
+
   // قيم المرجع حسب العنصر المقفل
   const readStoryGestureBase = (target: StoryGestureTarget) => {
     if (target === 'text') {
+      const selectedLayer = storyGestureTextIdRef.current
+        ? timedTexts.find(layer => layer.id === storyGestureTextIdRef.current)
+        : undefined;
+      if (selectedLayer) {
+        return {
+          x: ((selectedLayer.x - 50) / 100) * window.innerWidth,
+          y: ((selectedLayer.y - 50) / 100) * window.innerHeight,
+          scale: selectedLayer.scale ?? 1,
+          rotate: selectedLayer.rotation ?? 0,
+        };
+      }
       return { x: storyTextOffset.x, y: storyTextOffset.y, scale: storyTextScale, rotate: storyTextRotation };
     }
 
@@ -326,6 +367,7 @@ export default function StoriesBar({
     event.stopPropagation();
 
     const element = event.target as HTMLElement | null;
+    if (element?.closest('button:not([data-story-text]), input, textarea')) return;
     const gesture = storyGestureRef.current;
 
     // إصبع إضافي أثناء الإيماءة: يبقى الهدف مقفلاً ويُعاد ضبط المرجع فقط
@@ -346,7 +388,9 @@ export default function StoriesBar({
       return;
     }
 
-    const target: StoryGestureTarget = element?.closest('[data-story-text]')
+    const textElement = element?.closest('[data-story-text]');
+    storyGestureTextIdRef.current = textElement?.getAttribute('data-story-text-id') || null;
+    const target: StoryGestureTarget = textElement
       ? 'text'
       : element?.closest('[data-story-media]')
         ? 'image'
@@ -399,18 +443,30 @@ export default function StoriesBar({
       const center = storyTouchCenter(touches);
       const ratio = gesture.startDist > 0 ? center.dist / gesture.startDist : 1;
       const deltaAngle = center.angle - gesture.startAngle;
-      const deltaX = (center.x - gesture.startX) / scaleFactor;
-      const deltaY = (center.y - gesture.startY) / scaleFactor;
-
+      const deltaX = (center.x - gesture.startX) * scaleFactor;
+      const deltaY = (center.y - gesture.startY) * scaleFactor;
       gesture.moved = true;
 
       if (gesture.target === 'text') {
-        setStoryTextScale(Math.min(5, Math.max(0.3, gesture.scale * ratio)));
-        setStoryTextRotation(gesture.rotate + deltaAngle);
-        setStoryTextOffset({
+        const nextScale = Math.min(5, Math.max(0.3, gesture.scale * ratio));
+        const nextRotation = gesture.rotate + deltaAngle;
+        const nextOffset = {
           x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
           y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.45),
-        });
+        };
+        setStoryTextScale(nextScale);
+        setStoryTextRotation(nextRotation);
+        setStoryTextOffset(nextOffset);
+        const layerId = storyGestureTextIdRef.current;
+        if (layerId) {
+          setTimedTexts(previous => previous.map(layer => layer.id === layerId ? {
+            ...layer,
+            x: 50 + (nextOffset.x / window.innerWidth) * 100,
+            y: 50 + (nextOffset.y / window.innerHeight) * 100,
+            scale: nextScale,
+            rotation: nextRotation,
+          } : layer));
+        }
         return;
       }
 
@@ -433,15 +489,27 @@ export default function StoriesBar({
     }
 
     const touch = touches[0];
-    const deltaX = (touch.clientX - gesture.startX) * (1 / Math.max(0.4, storyCanvasScale));
-    const deltaY = (touch.clientY - gesture.startY) * (1 / Math.max(0.4, storyCanvasScale));
-    if (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3) gesture.moved = true;
+    const screenDeltaX = touch.clientX - gesture.startX;
+    const screenDeltaY = touch.clientY - gesture.startY;
+    if (!gesture.moved && Math.hypot(screenDeltaX, screenDeltaY) < 6) return;
+    gesture.moved = true;
+    const deltaX = screenDeltaX * scaleFactor;
+    const deltaY = screenDeltaY * scaleFactor;
 
     if (gesture.target === 'text') {
-      setStoryTextOffset({
+      const nextOffset = {
         x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
         y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.4),
-      });
+      };
+      setStoryTextOffset(nextOffset);
+      const layerId = storyGestureTextIdRef.current;
+      if (layerId) {
+        setTimedTexts(previous => previous.map(layer => layer.id === layerId ? {
+          ...layer,
+          x: 50 + (nextOffset.x / window.innerWidth) * 100,
+          y: 50 + (nextOffset.y / window.innerHeight) * 100,
+        } : layer));
+      }
       return;
     }
 
@@ -488,12 +556,12 @@ export default function StoriesBar({
     }
 
     storyGestureRef.current = null;
-    if (reshareStory) lastStoryTouchRef.current = Date.now();
+    lastStoryTouchRef.current = Date.now();
+    const textLayerId = storyGestureTextIdRef.current;
+    storyGestureTextIdRef.current = null;
 
-    // نقرة قصيرة: إن كانت إحدى النوافذ الفرعية مفتوحة تُغلق فقط،
-    // وإلا تُفتح نافذة كتابة النص (الوضع الأساسي فقط)
     if (!gesture.moved && Date.now() - gesture.startTime < 400) {
-      if (reshareStory) {
+      if (reshareStory && !textLayerId) {
         setReshareScaledDown(current => !current);
         return;
       }
@@ -502,7 +570,7 @@ export default function StoriesBar({
         closeStoryPanels();
         return;
       }
-      setStoryTextEditorOpen(true);
+      openStoryTextEditor(textLayerId || undefined);
     }
   };
 
@@ -587,10 +655,6 @@ export default function StoriesBar({
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
   const [uploadDuration, setUploadDuration] = useState<number>(60);
   const storyDurationManuallyChosenRef = useRef(true);
-  const [timedTexts, setTimedTexts] = useState<Array<{ id: string; text: string; startTime: number; endTime: number; x: number; y: number }>>([]);
-  const [newText, setNewText] = useState('');
-  const [textStart, setTextStart] = useState(0);
-  const [textEnd, setTextEnd] = useState(5);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -678,6 +742,36 @@ export default function StoriesBar({
     setStoryText,
   });
 
+  const finishStoryTextEditing = () => {
+    const text = storyText.trim();
+    if (text) {
+      const layer: StoryTextOverlay = {
+        id: editingStoryTextId || `story-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        type: 'text',
+        text,
+        startTime: 0,
+        endTime: uploadDuration,
+        x: Math.min(95, Math.max(5, 50 + (storyTextOffset.x / Math.max(1, window.innerWidth)) * 100)),
+        y: Math.min(95, Math.max(5, 50 + (storyTextOffset.y / Math.max(1, window.innerHeight)) * 100)),
+        fontFamily: storyFontFamily,
+        textColor: storyTextColor,
+        textAlign: storyTextAlign,
+        textBackground: storyBackgroundPreset.background,
+        textAnimation: storyTextAnimation,
+        scale: storyTextScale,
+        rotation: storyTextRotation,
+      };
+      setTimedTexts(previous => editingStoryTextId
+        ? previous.map(item => item.id === editingStoryTextId ? layer : item)
+        : [...previous, layer]);
+    } else if (editingStoryTextId) {
+      setTimedTexts(previous => previous.filter(item => item.id !== editingStoryTextId));
+    }
+    setStoryText('');
+    setEditingStoryTextId(null);
+    setStoryTextEditorOpen(false);
+  };
+
   const openTextOnlyStory = () => {
     textCanvasMediaPickerRef.current = false;
     setShowStoryPicker(false);
@@ -687,7 +781,9 @@ export default function StoriesBar({
     setReshareScaledDown(false);
     setCaption('');
     setStoryText('');
-    setStoryTextEditorOpen(true);
+    setTimedTexts([]);
+    setEditingStoryTextId(null);
+    setStoryTextEditorOpen(false);
     setStoryFontFamily('Cairo');
     setStoryTextColor('#FFFFFF');
     setStoryTextAlign('center');
@@ -716,7 +812,7 @@ export default function StoriesBar({
     setShowTextOnlyStoryCanvas(true);
   };
 
-  const handlePublishTextOnlyStory = () => {
+  const handlePublishTextOnlyStory = (closeFriends: boolean) => {
     const canvasStyle: StoryCanvasStyle = {
       background: textCanvasBackground,
       textBackground: storyBackgroundPreset.background,
@@ -725,9 +821,11 @@ export default function StoriesBar({
       textAlign: storyTextAlign,
       textAnimation: storyTextAnimation,
     };
-    void handleCreateTextStory(storyText, canvasStyle).then(published => {
+    void handleCreateTextStory(storyText, canvasStyle, timedTexts, closeFriends).then(published => {
       if (!published) return;
       setStoryTextEditorOpen(false);
+      setStoryText('');
+      setEditingStoryTextId(null);
       setShowTextOnlyStoryCanvas(false);
     });
   };
@@ -1070,19 +1168,6 @@ export default function StoriesBar({
     }
   };
 
-  const handleAddTimedText = () => {
-    if (!newText.trim()) return;
-    setTimedTexts([...timedTexts, {
-      id: Math.random().toString(),
-      text: newText.trim(),
-      startTime: textStart,
-      endTime: textEnd,
-      x: 50,
-      y: 50
-    }]);
-    setNewText('');
-  };
-
   const handleDeleteStory = async () => {
     if (!supabaseConfigured || !currentStory) return;
     if (currentStory.user_id !== userId) return;
@@ -1278,6 +1363,8 @@ export default function StoriesBar({
             setStoryDrawStrokes([]);
             setStoryMentions([]);
           }
+          setTimedTexts([]);
+          setEditingStoryTextId(null);
 
           if (files.length > 1) {
             toast.info('سيُستخدم أول وسيط مختار لنشر القصة');
@@ -1300,7 +1387,9 @@ export default function StoriesBar({
       {showTextOnlyStoryCanvas && (
         <TextOnlyStoryCanvas
           userId={userId}
+          currentProfile={currentProfile}
           storyText={storyText}
+          textLayers={timedTexts}
           fontFamily={storyFontFamily}
           textColor={storyTextColor}
           textAlign={storyTextAlign}
@@ -1310,12 +1399,8 @@ export default function StoriesBar({
           editorOpen={storyTextEditorOpen}
           keyboardInset={storyKeyboardInset}
           animationTick={storyAnimationTick}
-          visibleText={visibleStoryText}
           previewClassName={storyPreviewClassName}
           editorPreviewMode={storyEditorPreviewMode}
-          storyTextOffset={storyTextOffset}
-          storyTextScale={storyTextScale}
-          storyTextRotation={storyTextRotation}
           textAreaRef={storyTextAreaRef}
           storyToolsRef={storyToolsRef}
           storyDrawingCanvasRef={storyDrawingCanvasRef}
@@ -1337,23 +1422,9 @@ export default function StoriesBar({
           storyMentionsOpen={storyMentionsOpen}
           closeFriendsOpen={closeFriendsOpen}
           uploading={uploading}
-          onBackToPicker={() => {
-            setShowTextOnlyStoryCanvas(false);
-            setStoryTextEditorOpen(false);
-            setShowStoryPicker(true);
-          }}
-          onOpenMediaPicker={() => {
-            textCanvasMediaPickerRef.current = true;
-            setShowTextOnlyStoryCanvas(false);
-            setStoryTextEditorOpen(false);
-            setShowStoryPicker(true);
-          }}
           onPublish={handlePublishTextOnlyStory}
-          onOpenEditor={() => setStoryTextEditorOpen(true)}
-          onFinishEditing={() => {
-            setCaption(storyText.trim());
-            setStoryTextEditorOpen(false);
-          }}
+          onOpenTextEditor={openStoryTextEditor}
+          onFinishEditing={finishStoryTextEditing}
           onTextChange={setStoryText}
           onFontFamilyChange={setStoryFontFamily}
           onTextColorChange={setStoryTextColor}
@@ -1370,9 +1441,7 @@ export default function StoriesBar({
           onCanvasBackgroundChange={setTextCanvasBackground}
           onSelectTool={toolKey => {
             if (toolKey === 'text') {
-              setStoryDrawingOpen(false);
-              setStoryFiltersOpen(false);
-              setStoryTextEditorOpen(true);
+              openStoryTextEditor();
             } else if (toolKey === 'mention') {
               setStoryDrawingOpen(false);
               setStoryTextEditorOpen(false);
@@ -1514,6 +1583,7 @@ export default function StoriesBar({
           storyFilterValue={storyFilterValue}
           storyFilterOverlay={storyFilterOverlay}
           storyText={storyText}
+          storyTextLayers={timedTexts}
           storyTextEditorOpen={storyTextEditorOpen}
           storyTextAnimation={storyTextAnimation}
           storyTextOffset={storyTextOffset}
@@ -1570,6 +1640,10 @@ export default function StoriesBar({
           onClose={() => {
             setShowUploadModal(false);
             setStoryDrawingOpen(false);
+            setStoryTextEditorOpen(false);
+            setStoryText('');
+            setTimedTexts([]);
+            setEditingStoryTextId(null);
             activeStoryDrawStrokeRef.current = null;
             if (reshareStory) {
               setReshareStory(null);
@@ -1583,6 +1657,8 @@ export default function StoriesBar({
               setReshareScaledDown(current => !current);
             }
           }}
+          onCreateTextLayer={() => openStoryTextEditor()}
+          onEditTextLayer={openStoryTextEditor}
           onVideoMetadata={duration => {
             if (Number.isFinite(duration) && duration > 0 && !storyDurationManuallyChosenRef.current) {
               setUploadDuration(Math.min(120, Math.max(5, Math.ceil(duration))));
@@ -1596,9 +1672,7 @@ export default function StoriesBar({
           onDrawPointerUp={handleStoryDrawPointerUp}
           onSelectStoryTool={toolKey => {
             if (toolKey === 'text') {
-              setStoryDrawingOpen(false);
-              setStoryFiltersOpen(false);
-              setStoryTextEditorOpen(true);
+              openStoryTextEditor();
             } else if (toolKey === 'mention') {
               setStoryDrawingOpen(false);
               setStoryTextEditorOpen(false);
@@ -1634,10 +1708,7 @@ export default function StoriesBar({
             setUploadDuration(duration);
           }}
           onStoryTextChange={setStoryText}
-          onFinishTextEditing={() => {
-            setCaption(storyText.trim());
-            setStoryTextEditorOpen(false);
-          }}
+          onFinishTextEditing={finishStoryTextEditing}
           onFontFamilyChange={setStoryFontFamily}
           onTextColorChange={setStoryTextColor}
           onCycleAlign={() => setStoryTextAlign(prev => nextStoryTextAlign(prev))}

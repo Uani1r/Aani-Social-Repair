@@ -2,7 +2,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { toast } from 'sonner';
 
 import type { StoryDrawStroke } from '@/lib/appShared';
-import type { StoryCanvasStyle } from '@/components/stories/types';
+import type { StoryCanvasStyle, StoryTextOverlay } from '@/components/stories/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadStoryMedia } from '@/lib/storyUpload';
 import type { Profile } from '@/lib/types';
@@ -10,7 +10,7 @@ import { encodeStoryFilterKey, type StoryAdjustments } from '@/lib/storyFilters'
 import type { StoryRow as StoryDmCardStory } from '../StoryDmCard';
 import type { MentionCandidate } from '../StoryMentionPicker';
 
-type TimedText = { id: string; text: string; startTime: number; endTime: number; x: number; y: number };
+type TimedText = StoryTextOverlay;
 
 interface UseStoryCreationActionsOptions {
   userId: string;
@@ -264,8 +264,13 @@ export function useStoryCreationActions({
     })();
   };
 
-  const handleCreateTextStory = async (text: string, canvasStyle: StoryCanvasStyle): Promise<boolean> => {
-    const trimmedText = text.trim();
+  const handleCreateTextStory = async (
+    text: string,
+    canvasStyle: StoryCanvasStyle,
+    textLayers: StoryTextOverlay[],
+    closeFriends = isCloseFriendsOnly,
+  ): Promise<boolean> => {
+    const trimmedText = textLayers.map(layer => layer.text.trim()).filter(Boolean).join('\n') || text.trim();
     if (!trimmedText || !supabaseConfigured) return false;
 
     setUploading(true);
@@ -278,6 +283,7 @@ export function useStoryCreationActions({
           endTime: uploadDuration,
           ...canvasStyle,
         },
+        ...textLayers,
         ...(storyDrawStrokes.length > 0
           ? [{
               id: 'story-drawing',
@@ -292,7 +298,7 @@ export function useStoryCreationActions({
         p_media_url: null,
         p_media_type: 'text',
         p_caption: trimmedText,
-        p_is_close_friends: isCloseFriendsOnly,
+        p_is_close_friends: closeFriends,
         p_duration_seconds: uploadDuration,
         p_timed_texts: timedTexts,
         p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),

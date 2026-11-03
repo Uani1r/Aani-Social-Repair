@@ -12,6 +12,13 @@ export interface StoryTextOverlay {
   endTime: number;
   x: number;
   y: number;
+  fontFamily?: string;
+  textColor?: string;
+  textAlign?: StoryTextAlign;
+  textBackground?: string;
+  textAnimation?: StoryTextAnimation;
+  scale?: number;
+  rotation?: number;
 }
 
 export interface StoryDrawingOverlay {
@@ -123,12 +130,22 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
       && (value.strokes as unknown[]).every(isStoryDrawStroke);
   }
 
+  const validOptionalTextStyle = (key: string, validate: (candidate: unknown) => boolean) =>
+    value[key] === undefined || validate(value[key]);
+
   return (value.type === undefined || value.type === 'text')
     && typeof value.text === 'string'
     && typeof value.x === 'number'
     && Number.isFinite(value.x)
     && typeof value.y === 'number'
-    && Number.isFinite(value.y);
+    && Number.isFinite(value.y)
+    && validOptionalTextStyle('fontFamily', candidate => typeof candidate === 'string' && candidate.length <= 120 && !/(url|expression)/i.test(candidate))
+    && validOptionalTextStyle('textColor', candidate => typeof candidate === 'string' && /^#[0-9a-f]{3,8}$/i.test(candidate))
+    && validOptionalTextStyle('textAlign', candidate => candidate === 'left' || candidate === 'center' || candidate === 'right')
+    && validOptionalTextStyle('textBackground', isSafeStoryBackground)
+    && validOptionalTextStyle('textAnimation', candidate => STORY_TEXT_ANIMATIONS.includes(candidate as StoryTextAnimation))
+    && validOptionalTextStyle('scale', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0.3 && candidate <= 5)
+    && validOptionalTextStyle('rotation', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && Math.abs(candidate) <= 3600);
 }
 
 export function normalizeStoryAuthor(value: unknown): StoryAuthor | null {

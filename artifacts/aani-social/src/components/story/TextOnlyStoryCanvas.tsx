@@ -1,15 +1,15 @@
-import { useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
-import { ArrowLeft, Check, Paintbrush, Type } from 'lucide-react';
+import { useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { Paintbrush, Star } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
-import { StoryEditorPanels, StoryEditorToolbar, type StoryEditorToolKey } from '@/components/StoryEditorTools';
-import StoryTextToolbar from '@/components/StoryTextToolbar';
-import StoryCreatorModesBar from '@/components/story/StoryCreatorModesBar';
+import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
+import type { StoryTextOverlay } from '@/components/stories/types';
 import type { StoryDrawStroke } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextBackgroundPreset, StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
+import { displayName, type Profile } from '@/lib/types';
 import type { MusicTrack } from '@/lib/music';
 
 interface StoryEditorExtraTool {
@@ -26,7 +26,9 @@ interface StoryFilterOverlay {
 
 interface TextOnlyStoryCanvasProps {
   userId: string;
+  currentProfile: Profile | null;
   storyText: string;
+  textLayers: StoryTextOverlay[];
   fontFamily: string;
   textColor: string;
   textAlign: StoryTextAlign;
@@ -36,12 +38,8 @@ interface TextOnlyStoryCanvasProps {
   editorOpen: boolean;
   keyboardInset: number;
   animationTick: number;
-  visibleText: string;
   previewClassName: string;
   editorPreviewMode: boolean;
-  storyTextOffset: { x: number; y: number };
-  storyTextScale: number;
-  storyTextRotation: number;
   textAreaRef: { current: HTMLTextAreaElement | null };
   storyToolsRef: { current: HTMLDivElement | null };
   storyDrawingCanvasRef: { current: HTMLCanvasElement | null };
@@ -63,10 +61,8 @@ interface TextOnlyStoryCanvasProps {
   storyMentionsOpen: boolean;
   closeFriendsOpen: boolean;
   uploading: boolean;
-  onBackToPicker: () => void;
-  onOpenMediaPicker: () => void;
-  onPublish: () => void;
-  onOpenEditor: () => void;
+  onPublish: (closeFriends: boolean) => void;
+  onOpenTextEditor: (id?: string) => void;
   onFinishEditing: () => void;
   onTextChange: (value: string) => void;
   onFontFamilyChange: (family: string) => void;
@@ -117,7 +113,9 @@ function colorInputValue(background: string): string {
 
 export default function TextOnlyStoryCanvas({
   userId,
+  currentProfile,
   storyText,
+  textLayers,
   fontFamily,
   textColor,
   textAlign,
@@ -127,12 +125,8 @@ export default function TextOnlyStoryCanvas({
   editorOpen,
   keyboardInset,
   animationTick,
-  visibleText,
   previewClassName,
   editorPreviewMode,
-  storyTextOffset,
-  storyTextScale,
-  storyTextRotation,
   textAreaRef,
   storyToolsRef,
   storyDrawingCanvasRef,
@@ -154,10 +148,8 @@ export default function TextOnlyStoryCanvas({
   storyMentionsOpen,
   closeFriendsOpen,
   uploading,
-  onBackToPicker,
-  onOpenMediaPicker,
   onPublish,
-  onOpenEditor,
+  onOpenTextEditor,
   onFinishEditing,
   onTextChange,
   onFontFamilyChange,
@@ -191,6 +183,11 @@ export default function TextOnlyStoryCanvas({
   onCloseCloseFriends,
 }: TextOnlyStoryCanvasProps) {
   const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
+  const lastCanvasTouchRef = useRef(0);
+  const handleCanvasTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
+    lastCanvasTouchRef.current = Date.now();
+    onCanvasTouchEnd(event);
+  };
 
   return (
     <div className="aani-page-enter fixed inset-0 z-[140] overflow-hidden bg-black text-white" dir="rtl">
@@ -198,11 +195,17 @@ export default function TextOnlyStoryCanvas({
         className="absolute inset-0 overflow-hidden"
         onTouchStart={onCanvasTouchStart}
         onTouchMove={onCanvasTouchMove}
-        onTouchEnd={onCanvasTouchEnd}
+        onTouchEnd={handleCanvasTouchEnd}
         onTouchCancel={onCanvasTouchEnd}
         style={{ touchAction: 'none' }}
       >
-        <div className="absolute inset-0" style={{ background: canvasBackground, filter: storyFilterValue }} />
+        <div
+          className="absolute inset-0"
+          style={{ background: canvasBackground, filter: storyFilterValue }}
+          onClick={event => {
+            if (event.target === event.currentTarget && Date.now() - lastCanvasTouchRef.current > 500) onOpenTextEditor();
+          }}
+        />
         {storyFilterOverlay && (
           <div
             className="pointer-events-none absolute inset-0"
@@ -214,78 +217,33 @@ export default function TextOnlyStoryCanvas({
           />
         )}
 
-        {storyText.trim() && !editorOpen ? (
+        {textLayers.map(layer => (
           <button
+            key={layer.id}
             type="button"
             data-story-text="true"
-            onClick={onOpenEditor}
-            className="absolute left-1/2 top-1/2 z-10 w-[min(78vw,34rem)] -translate-x-1/2 -translate-y-1/2 whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug text-shadow-lg"
+            data-story-text-id={layer.id}
+            onClick={event => {
+              event.stopPropagation();
+              if (Date.now() - lastCanvasTouchRef.current > 500) onOpenTextEditor(layer.id);
+            }}
+            className="absolute z-10 max-w-[82vw] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug text-shadow-lg"
             style={{
-              transform: `translate(-50%, -50%) translate(${storyTextOffset.x}px, ${storyTextOffset.y}px) scale(${storyTextScale}) rotate(${storyTextRotation}deg)`,
-              fontFamily,
-              color: textColor,
-              textAlign,
-              background: textBackgroundPreset.background,
+              left: `${layer.x}%`,
+              top: `${layer.y}%`,
+              transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+              fontFamily: layer.fontFamily || 'Cairo',
+              color: layer.textColor || '#FFFFFF',
+              textAlign: layer.textAlign || 'center',
+              background: layer.textBackground || 'transparent',
               textShadow: '0 2px 14px rgba(0,0,0,0.42)',
             }}
           >
-            <span
-              key={`${textAnimation}-${animationTick}`}
-              className={textAnimation === 'none' ? undefined : `aani-story-anim-${textAnimation}`}
-            >
-              {visibleText}
+            <span className={layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : undefined}>
+              {layer.text}
             </span>
           </button>
-        ) : !editorOpen ? (
-          <button
-            type="button"
-            onClick={onOpenEditor}
-            className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/25 bg-black/20 px-5 py-3 text-sm font-semibold text-white/70 backdrop-blur-sm"
-          >
-            اكتب قصتك هنا
-          </button>
-        ) : (
-          <div className="absolute inset-x-14 top-1/2 z-10 -translate-y-1/2 px-2">
-            <textarea
-              ref={textAreaRef}
-              data-story-text="true"
-              autoFocus
-              value={storyText}
-              onChange={event => onTextChange(event.target.value)}
-              placeholder="اكتب شيئاً..."
-              dir="rtl"
-              rows={4}
-              className="w-full resize-none overflow-hidden rounded-xl bg-transparent px-3 py-2 font-bold outline-none placeholder:text-white/45"
-              style={{
-                fontFamily,
-                color: editorPreviewMode ? 'transparent' : textColor,
-                caretColor: textColor,
-                WebkitTextFillColor: editorPreviewMode ? 'transparent' : textColor,
-                fontSize: 30,
-                textAlign,
-                lineHeight: 1.35,
-                textShadow: editorPreviewMode ? 'none' : '0 2px 12px rgba(0,0,0,0.8)',
-                background: textBackgroundPreset.background,
-              }}
-            />
-            {editorPreviewMode && (
-              <p
-                key={`${textAnimation}-${animationTick}`}
-                aria-hidden="true"
-                className={`pointer-events-none absolute inset-x-3 top-2 whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug ${previewClassName}`}
-                style={{
-                  fontFamily,
-                  color: textColor,
-                  textAlign,
-                  background: textBackgroundPreset.background,
-                  textShadow: '0 2px 12px rgba(0,0,0,0.8)',
-                }}
-              >
-                {storyText}
-              </p>
-            )}
-          </div>
-        )}
+        ))}
 
         <canvas
           ref={storyDrawingCanvasRef}
@@ -302,31 +260,6 @@ export default function TextOnlyStoryCanvas({
           onTouchCancel={event => event.stopPropagation()}
         />
       </div>
-
-      <header
-        className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-4 py-3"
-        style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
-      >
-        <button
-          type="button"
-          onClick={onBackToPicker}
-          aria-label="العودة لاختيار القصة"
-          className="flex h-10 items-center gap-1 rounded-full bg-black/35 px-3 text-[11px] text-white backdrop-blur-md"
-        >
-          <ArrowLeft size={16} />
-          رجوع
-        </button>
-        <span className="text-[13px] font-bold text-white drop-shadow">قصة نصية</span>
-        <button
-          type="button"
-          onClick={onPublish}
-          disabled={uploading || !storyText.trim()}
-          className="flex h-10 items-center gap-1 rounded-full bg-white px-3 text-[11px] font-bold text-zinc-950 transition active:scale-95 disabled:opacity-45"
-        >
-          <Check size={15} />
-          {uploading ? 'جارٍ النشر' : 'مشاركة'}
-        </button>
-      </header>
 
       <button
         type="button"
@@ -407,41 +340,61 @@ export default function TextOnlyStoryCanvas({
         </div>
       )}
 
-      {editorOpen && (
-        <div
-          className="absolute inset-x-3 z-40"
-          style={{ bottom: `calc(5.35rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
-        >
-          <StoryTextToolbar
-            fontFamily={fontFamily}
-            onFontFamilyChange={onFontFamilyChange}
-            textColor={textColor}
-            onTextColorChange={onTextColorChange}
-            align={textAlign}
-            onCycleAlign={onCycleAlign}
-            backgroundLabel={textBackgroundPreset.label}
-            backgroundSwatch={textBackgroundPreset.background}
-            onCycleBackground={onCycleTextBackground}
-            animation={textAnimation}
-            onAnimationChange={onAnimationChange}
-            onInteract={onInteract}
-          />
-        </div>
-      )}
+      <StoryTextEditorPanel
+        storyTextEditorOpen={editorOpen}
+        storyText={storyText}
+        storyKeyboardInset={keyboardInset}
+        storyEditorPreviewMode={editorPreviewMode}
+        storyAnimationTick={animationTick}
+        storyPreviewClassName={previewClassName}
+        storyTextAnimation={textAnimation}
+        storyFontFamily={fontFamily}
+        storyTextColor={textColor}
+        storyTextAlign={textAlign}
+        storyHasBackground={textBackgroundPreset.key !== 'none'}
+        storyBackgroundPreset={textBackgroundPreset}
+        storyTextAreaRef={textAreaRef}
+        onStoryTextChange={onTextChange}
+        onFinishTextEditing={onFinishEditing}
+        onFontFamilyChange={onFontFamilyChange}
+        onTextColorChange={onTextColorChange}
+        onCycleAlign={onCycleAlign}
+        onCycleBackground={onCycleTextBackground}
+        onAnimationChange={onAnimationChange}
+        onInteract={onInteract}
+      />
 
-      <button
-        type="button"
-        onClick={editorOpen ? onFinishEditing : onOpenEditor}
-        aria-label={editorOpen ? 'إنهاء تحرير النص' : 'فتح محرر الكتابة'}
-        aria-pressed={editorOpen}
-        className="absolute left-1/2 z-40 flex h-14 w-14 -translate-x-1/2 items-center justify-center rounded-full border-2 border-white/90 bg-white text-xl font-black text-zinc-950 shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition active:scale-95"
-        style={{ bottom: `calc(4.15rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
+      <div
+        className="absolute inset-x-0 bottom-0 z-30 px-4 pt-2"
+        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
       >
-        <Type size={23} />
-        <span className="absolute text-[13px] font-black">Aa</span>
-      </button>
-
-      <StoryCreatorModesBar keyboardInset={keyboardInset} onOpenMediaPicker={onOpenMediaPicker} />
+        <div className="flex items-stretch gap-2.5">
+          <button
+            type="button"
+            onClick={() => onPublish(false)}
+            disabled={uploading || (!textLayers.length && !storyText.trim())}
+            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
+          >
+            {currentProfile?.avatar_url ? (
+              <img src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+            ) : (
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-white">
+                {displayName(currentProfile).replace('@', '').charAt(0)}
+              </span>
+            )}
+            {uploading ? 'جارٍ النشر...' : 'قصتك'}
+          </button>
+          <button
+            type="button"
+            onClick={() => onPublish(true)}
+            disabled={uploading || (!textLayers.length && !storyText.trim())}
+            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
+          >
+            <Star size={15} style={{ color: '#4CAF50' }} fill="#4CAF50" />
+            الأصدقاء المقربون
+          </button>
+        </div>
+      </div>
 
       <StoryMusicSheet open={storyMusicOpen} onClose={onCloseMusic} onSelect={onSelectMusic} />
       <StoryMentionPicker

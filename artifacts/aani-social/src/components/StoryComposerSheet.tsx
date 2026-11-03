@@ -1,12 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, Camera, Check, ImagePlus, Play, X } from 'lucide-react';
 
-type StoryMedia = {
-  id: string;
-  media_url: string | null;
-  media_type: string;
-  caption: string | null;
-};
+import type { StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
+
+type StoryMedia = StoryRow;
 
 type StoryComposerSheetProps = {
   open: boolean;
@@ -164,23 +161,59 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                 <p className="py-10 text-center text-xs text-zinc-500">لا توجد قصص مؤرشفة بعد</p>
               ) : (
                 <div className="grid grid-cols-3 gap-1.5">
-                  {archive.map((story, index) => (
-                    <div
-                      key={story.id}
-                      className="aani-media-tile relative aspect-square overflow-hidden rounded-lg border border-[#26262e] bg-[#17171b]"
-                      style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
-                    >
-                      {story.media_url && story.media_type !== 'text' ? (
-                        story.media_type === 'video' ? (
-                          <video src={story.media_url} muted playsInline className="h-full w-full object-cover" />
+                  {archive.map((story, index) => {
+                    const canvasStyle = story.timed_texts.find(
+                      (item): item is StoryCanvasStyleOverlay => item.type === 'canvas-style',
+                    );
+                    const textLayers = story.timed_texts.filter(
+                      (item): item is StoryTextOverlay => item.type === undefined || item.type === 'text',
+                    );
+
+                    return (
+                      <div
+                        key={story.id}
+                        className="aani-media-tile relative aspect-square overflow-hidden rounded-lg border border-[#26262e] bg-[#17171b]"
+                        style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
+                      >
+                        {story.media_url && story.media_type !== 'text' ? (
+                          story.media_type === 'video' ? (
+                            <video src={story.media_url} muted playsInline className="h-full w-full object-cover" />
+                          ) : (
+                            <img src={story.media_url} alt="" className="h-full w-full object-cover" />
+                          )
                         ) : (
-                          <img src={story.media_url} alt="" className="h-full w-full object-cover" />
-                        )
-                      ) : (
-                        <p className="line-clamp-4 p-2 text-[10px] leading-4 text-zinc-400">{story.caption}</p>
-                      )}
-                    </div>
-                  ))}
+                          <div className="absolute inset-0" style={{ background: canvasStyle?.background || '#1f1f27' }} />
+                        )}
+                        {textLayers.length > 0 ? textLayers.map(layer => (
+                          <span
+                            key={layer.id}
+                            className="absolute z-10 max-w-[88%] whitespace-pre-wrap break-words px-1 text-center text-[8px] font-bold leading-tight"
+                            style={{
+                              left: `${layer.x}%`,
+                              top: `${layer.y}%`,
+                              transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                              color: layer.textColor || canvasStyle?.textColor || '#FFFFFF',
+                              fontFamily: layer.fontFamily || canvasStyle?.fontFamily || 'Cairo',
+                              background: layer.textBackground || 'transparent',
+                            }}
+                          >
+                            {layer.text}
+                          </span>
+                        )) : (!story.media_url || story.media_type === 'text') && (
+                          <p
+                            className="absolute left-1/2 top-1/2 line-clamp-4 w-[88%] -translate-x-1/2 -translate-y-1/2 whitespace-pre-wrap text-center text-[10px] leading-4 text-zinc-200"
+                            style={{
+                              color: canvasStyle?.textColor || undefined,
+                              fontFamily: canvasStyle?.fontFamily || undefined,
+                              background: canvasStyle?.textBackground || undefined,
+                            }}
+                          >
+                            {story.caption}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

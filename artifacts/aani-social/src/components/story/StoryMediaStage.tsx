@@ -1,6 +1,6 @@
 import type { StoryDrawPoint } from '@/lib/appShared';
 
-import type { StoryCanvasStyleOverlay } from '@/components/stories/types';
+import type { StoryCanvasStyleOverlay, StoryTextOverlay } from '@/components/stories/types';
 import type { StoryViewerProps } from './types';
 
 type StoryMediaStageProps = Pick<
@@ -36,6 +36,11 @@ export default function StoryMediaStage({
       && currentTimeSec >= item.startTime
       && currentTimeSec <= item.endTime,
   );
+  const visibleTextLayers = currentStory.timed_texts.filter(
+    (item): item is StoryTextOverlay => (item.type === undefined || item.type === 'text')
+      && currentTimeSec >= item.startTime
+      && currentTimeSec <= item.endTime,
+  );
 
   return (
     <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-zinc-950">
@@ -54,28 +59,25 @@ export default function StoryMediaStage({
         ) : (
           <img src={currentStory.media_url} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css }} />
         )
-      ) : canvasStyle ? (
-        <div
-          className="flex h-full w-full items-center justify-center p-6 text-center text-2xl font-bold text-white"
-          style={{ background: canvasStyle.background, filter: currentStoryFilter.css, color: canvasStyle.textColor }}
-        >
-          <div
-            className={canvasStyle.textAnimation === 'none' ? undefined : `aani-story-anim-${canvasStyle.textAnimation}`}
-            style={{
-              fontFamily: canvasStyle.fontFamily,
-              textAlign: canvasStyle.textAlign,
-              background: canvasStyle.textBackground,
-              textShadow: '0 2px 14px rgba(0,0,0,0.42)',
-              whiteSpace: 'pre-wrap',
-              overflowWrap: 'anywhere',
-            }}
-          >
-            {currentStory.caption}
-          </div>
-        </div>
       ) : (
-        <div className="flex h-full w-full items-center justify-center bg-[#1f1f27] p-6 text-center text-base font-bold text-white">
-          {currentStory.caption}
+        <div
+          className="absolute inset-0"
+          style={{ background: canvasStyle?.background || '#1f1f27', filter: currentStoryFilter.css }}
+        >
+          {visibleTextLayers.length === 0 && currentStory.caption && (
+            <div
+              className={`absolute left-1/2 top-1/2 w-[min(82vw,40rem)] -translate-x-1/2 -translate-y-1/2 whitespace-pre-wrap break-words text-center text-2xl font-bold text-white ${canvasStyle?.textAnimation && canvasStyle.textAnimation !== 'none' ? `aani-story-anim-${canvasStyle.textAnimation}` : ''}`}
+              style={canvasStyle ? {
+                color: canvasStyle.textColor,
+                fontFamily: canvasStyle.fontFamily,
+                textAlign: canvasStyle.textAlign,
+                background: canvasStyle.textBackground,
+                textShadow: '0 2px 14px rgba(0,0,0,0.42)',
+              } : undefined}
+            >
+              {currentStory.caption}
+            </div>
+          )}
         </div>
       )}
 
@@ -128,13 +130,23 @@ export default function StoryMediaStage({
           );
         }
 
+        const textLayer = timedText as StoryTextOverlay;
         return (
           <div
-            key={timedText.id}
-            style={{ top: `${timedText.y}%`, left: `${timedText.x}%`, transform: 'translate(-50%, -50%)' }}
-            className="absolute bg-black/70 text-white font-bold px-3 py-1.5 rounded-xl text-xs border border-white/20 backdrop-blur-sm z-20"
+            key={textLayer.id}
+            className={`absolute z-20 max-w-[82vw] whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
+            style={{
+              top: `${textLayer.y}%`,
+              left: `${textLayer.x}%`,
+              transform: `translate(-50%, -50%) scale(${textLayer.scale ?? 1}) rotate(${textLayer.rotation ?? 0}deg)`,
+              color: textLayer.textColor || '#FFFFFF',
+              fontFamily: textLayer.fontFamily || 'Cairo',
+              textAlign: textLayer.textAlign || 'center',
+              background: textLayer.textBackground || 'transparent',
+              textShadow: '0 2px 14px rgba(0,0,0,0.42)',
+            }}
           >
-            {timedText.text}
+            {textLayer.text}
           </div>
         );
       })}

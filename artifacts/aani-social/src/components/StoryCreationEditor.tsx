@@ -10,6 +10,7 @@ import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
+import type { StoryTextOverlay } from '@/components/stories/types';
 import type { MusicTrack } from '@/lib/music';
 
 type Point = { x: number; y: number };
@@ -31,6 +32,7 @@ type StoryCreationEditorProps = {
   storyFilterValue: string;
   storyFilterOverlay?: StoryFilterOverlay | null;
   storyText: string;
+  storyTextLayers: StoryTextOverlay[];
   storyTextEditorOpen: boolean;
   storyTextAnimation: StoryTextAnimation;
   storyTextOffset: Point;
@@ -74,6 +76,8 @@ type StoryCreationEditorProps = {
   onCloseCloseFriends: () => void;
   onClose: () => void;
   onMediaClick: () => void;
+  onCreateTextLayer: () => void;
+  onEditTextLayer: (id: string) => void;
   onVideoMetadata: (durationSeconds: number) => void;
   onCanvasTouchStart: (event: ReactTouchEvent<HTMLDivElement>) => void;
   onCanvasTouchMove: (event: ReactTouchEvent<HTMLDivElement>) => void;
@@ -117,6 +121,7 @@ export default function StoryCreationEditor({
   storyFilterValue,
   storyFilterOverlay,
   storyText,
+  storyTextLayers,
   storyTextEditorOpen,
   storyTextAnimation,
   storyTextOffset,
@@ -160,6 +165,8 @@ export default function StoryCreationEditor({
   onCloseCloseFriends,
   onClose,
   onMediaClick,
+  onCreateTextLayer,
+  onEditTextLayer,
   onVideoMetadata,
   onCanvasTouchStart,
   onCanvasTouchMove,
@@ -194,6 +201,11 @@ export default function StoryCreationEditor({
       {editorMediaUrl ? (
         <div
           className="absolute inset-0 flex items-center justify-center"
+          onClick={event => {
+            const target = event.target as HTMLElement | null;
+            if (reshareStory || storyDrawingOpen || target?.closest('[data-story-text], button, input, textarea')) return;
+            onCreateTextLayer();
+          }}
           onTouchStart={onCanvasTouchStart}
           onTouchMove={onCanvasTouchMove}
           onTouchEnd={onCanvasTouchEnd}
@@ -263,41 +275,36 @@ export default function StoryCreationEditor({
               }}
             />
 
-            {/* النص: نقرة للتحرير، سحب بإصبع للتحريك، إصبعان للتكبير والتدوير */}
-            {storyText.trim() && !storyTextEditorOpen && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6" dir="rtl">
-                <div
-                  key={`${storyTextAnimation}-${storyText}`}
-                  className={storyTextAnimation === 'none' ? undefined : `aani-story-anim-${storyTextAnimation}`}
+            {/* كل عبارة طبقة مستقلة؛ النقر يفتح تحرير هذه الطبقة فقط */}
+            {storyTextLayers.map(layer => (
+              <div key={layer.id} className="pointer-events-none absolute inset-0" dir="rtl">
+                <button
+                  type="button"
+                  data-story-text="true"
+                  data-story-text-id={layer.id}
+                  onClick={event => {
+                    event.stopPropagation();
+                    onEditTextLayer(layer.id);
+                  }}
+                  className={`pointer-events-auto absolute max-w-[82vw] cursor-grab whitespace-pre-wrap break-words rounded-lg px-2 py-1 text-3xl font-bold active:cursor-grabbing ${layer.textAnimation && layer.textAnimation !== 'none' ? `aani-story-anim-${layer.textAnimation}` : ''}`}
+                  style={{
+                    left: `${layer.x}%`,
+                    top: `${layer.y}%`,
+                    touchAction: 'none',
+                    transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                    fontFamily: layer.fontFamily || 'Cairo',
+                    color: layer.textColor || '#FFFFFF',
+                    fontSize: 30,
+                    textAlign: layer.textAlign || 'center',
+                    lineHeight: 1.35,
+                    background: layer.textBackground || 'transparent',
+                    textShadow: '0 2px 14px rgba(0,0,0,0.9)',
+                  }}
                 >
-                  <p
-                    data-story-text="true"
-                    className="max-w-full cursor-grab whitespace-pre-wrap break-words font-bold active:cursor-grabbing"
-                    style={{
-                      pointerEvents: 'auto',
-                      touchAction: 'none',
-                      transform: `translate(${storyTextOffset.x}px, ${storyTextOffset.y}px) scale(${storyTextScale}) rotate(${storyTextRotation}deg)`,
-                      fontFamily: storyFontFamily,
-                      color: storyTextColor,
-                      fontSize: 30,
-                      textAlign: storyTextAlign,
-                      lineHeight: 1.35,
-                      display: storyHasBackground ? 'inline-block' : undefined,
-                      width: storyHasBackground ? 'fit-content' : undefined,
-                      padding: storyHasBackground ? '2px 10px' : undefined,
-                      borderRadius: storyHasBackground ? 8 : undefined,
-                      background: storyHasBackground ? storyBackgroundPreset.background : 'transparent',
-                      textShadow: '0 2px 14px rgba(0,0,0,0.9)',
-                    }}
-                  >
-                    {visibleStoryText}
-                    {storyTextAnimation === 'typewriter' && visibleStoryText.length < storyText.length && (
-                      <span className="aani-story-caret">|</span>
-                    )}
-                  </p>
-                </div>
+                  {layer.text}
+                </button>
               </div>
-            )}
+            ))}
             <canvas
               ref={storyDrawingCanvasRef}
               aria-label="لوحة الرسم على الستوري"
