@@ -8,6 +8,7 @@ type StoryMedia = StoryRow;
 
 type StoryComposerSheetProps = {
   open: boolean;
+  autoOpenGallery?: boolean;
   onClose: () => void;
   onFilesSelected: (files: File[]) => void;
   onTextMode: () => void;
@@ -33,6 +34,7 @@ const fileKey = (file: File) => `${file.name}-${file.size}`;
  */
 const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
   open,
+  autoOpenGallery = true,
   onClose,
   onFilesSelected,
   onTextMode,
@@ -60,15 +62,17 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
     const raf = requestAnimationFrame(() => setShown(true));
 
     // فتح استوديو الجهاز تلقائيًا عند ظهور الدرج (بدون زر وسيط)
-    const timer = window.setTimeout(() => {
-      galleryInputRef.current?.click();
-    }, 350);
+    const timer = autoOpenGallery
+      ? window.setTimeout(() => {
+          galleryInputRef.current?.click();
+        }, 350)
+      : null;
 
     return () => {
       cancelAnimationFrame(raf);
-      window.clearTimeout(timer);
+      if (timer !== null) window.clearTimeout(timer);
     };
-  }, [open]);
+  }, [open, autoOpenGallery]);
 
   const previews = useMemo(
     () => files.map(file => ({ file, url: URL.createObjectURL(file), key: fileKey(file) })),

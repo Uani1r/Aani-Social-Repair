@@ -3,12 +3,19 @@ import { Bot } from 'lucide-react';
 
 import AIAssistantModal from '@/components/AIAssistantModal';
 import CreatePostModal from '@/components/CreatePostModal';
+import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import SettingsModal from '@/components/SettingsModal';
 import type { Profile } from '@/lib/types';
 
 import type { NotificationsModalProps } from './types';
 
 type ShellOverlayControlsProps = {
+  showPublishOptionsSheet: boolean;
+  onClosePublishOptionsSheet: () => void;
+  onCreateTextPost: () => void;
+  onSelectPublishImages: (files: File[]) => void;
+  onSelectPublishVideo: (file: File) => void;
+  onOpenMorePublishOptions: () => void;
   showCreateModal: boolean;
   postText: string;
   selectedFiles: File[];
@@ -36,6 +43,12 @@ type ShellOverlayControlsProps = {
 };
 
 export default function ShellOverlayControls({
+  showPublishOptionsSheet,
+  onClosePublishOptionsSheet,
+  onCreateTextPost,
+  onSelectPublishImages,
+  onSelectPublishVideo,
+  onOpenMorePublishOptions,
   showCreateModal,
   postText,
   selectedFiles,
@@ -63,6 +76,15 @@ export default function ShellOverlayControls({
 }: ShellOverlayControlsProps) {
   return (
     <>
+      <PublishOptionsSheet
+        open={showPublishOptionsSheet}
+        onClose={onClosePublishOptionsSheet}
+        onCreateTextPost={onCreateTextPost}
+        onImagesSelected={onSelectPublishImages}
+        onVideoSelected={onSelectPublishVideo}
+        onOpenMore={onOpenMorePublishOptions}
+      />
+
       {showCreateModal && (
         <CreatePostModal
           postText={postText}

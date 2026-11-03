@@ -55,7 +55,7 @@ export default function ShellTopBar({
               <Settings size={20} />
             </button>
           )}
-          <button className="icon-button bg-pink-600 text-white p-1.5 rounded-full shadow" onClick={onOpenCreatePost}>
+          <button type="button" aria-label="إنشاء محتوى" className="icon-button bg-pink-600 text-white p-1.5 rounded-full shadow" onClick={onOpenCreatePost}>
             <Plus size={20} />
           </button>
         </div>

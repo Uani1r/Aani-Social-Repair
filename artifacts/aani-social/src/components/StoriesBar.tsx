@@ -140,6 +140,7 @@ export default function StoriesBar({
 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoryPicker, setShowStoryPicker] = useState(false);
+  const skipStoryGalleryAutoOpenRef = useRef(false);
   const [showTextOnlyStoryCanvas, setShowTextOnlyStoryCanvas] = useState(false);
   const [textCanvasBackground, setTextCanvasBackground] = useState('#000000');
   const textCanvasMediaPickerRef = useRef(false);
@@ -155,6 +156,18 @@ export default function StoriesBar({
       document.body.classList.remove('aani-immersive');
     };
   }, [showStoryPicker, showUploadModal, showTextOnlyStoryCanvas, activeUserGroup]);
+
+  useEffect(() => {
+    const openStoryComposer = () => {
+      setArchiveViewerOpen(false);
+      skipStoryGalleryAutoOpenRef.current = true;
+      setShowStoryPicker(true);
+    };
+
+    window.addEventListener('aani:open-story-composer', openStoryComposer);
+    return () => window.removeEventListener('aani:open-story-composer', openStoryComposer);
+  }, []);
+
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
   const [reshareStory, setReshareStory] = useState<StoryDmCardStory | null>(null);
@@ -1735,6 +1748,7 @@ export default function StoriesBar({
         }}
         onOpenPicker={() => {
           setArchiveViewerOpen(false);
+          skipStoryGalleryAutoOpenRef.current = false;
           setShowStoryPicker(true);
         }}
         onOpenStoryGroup={authorId => {
@@ -1748,6 +1762,7 @@ export default function StoriesBar({
 
       <StoryComposerSheet
         open={showStoryPicker}
+        autoOpenGallery={!skipStoryGalleryAutoOpenRef.current}
         onClose={() => {
           setShowStoryPicker(false);
           if (textCanvasMediaPickerRef.current) {

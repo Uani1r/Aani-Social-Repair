@@ -18,6 +18,8 @@ export default function Shell({
 }: ShellProps) {
   const [path, setLocation] = useLocation();
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showPublishOptionsSheet, setShowPublishOptionsSheet] = useState(false);
+  const [pendingStoryComposerRequest, setPendingStoryComposerRequest] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
@@ -35,6 +37,17 @@ export default function Shell({
   useEffect(() => () => {
     if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!pendingStoryComposerRequest || (path !== '/' && path !== '/feed')) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('aani:open-story-composer'));
+      setPendingStoryComposerRequest(false);
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [path, pendingStoryComposerRequest]);
 
   const handleHomeNavigationTap = (event: MouseEvent<HTMLAnchorElement>, navId: string) => {
     if (navId !== 'feed') {
@@ -461,10 +474,29 @@ export default function Shell({
         unreadCount={unreadCount}
         onOpenNotifications={() => setShowNotifsModal(true)}
         onOpenSettings={() => setShowSettingsModal(true)}
-        onOpenCreatePost={() => setShowCreateModal(true)}
+        onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
       />
 
       <ShellOverlayControls
+        showPublishOptionsSheet={showPublishOptionsSheet}
+        onClosePublishOptionsSheet={() => setShowPublishOptionsSheet(false)}
+        onCreateTextPost={() => setShowCreateModal(true)}
+        onSelectPublishImages={files => {
+          setSelectedFiles(files);
+          setFileType('image');
+          setCreateError('');
+          setShowCreateModal(true);
+        }}
+        onSelectPublishVideo={file => {
+          setSelectedFiles([file]);
+          setFileType('video');
+          setCreateError('');
+          setShowCreateModal(true);
+        }}
+        onOpenMorePublishOptions={() => {
+          setPendingStoryComposerRequest(true);
+          if (path !== '/' && path !== '/feed') setLocation('/feed');
+        }}
         showCreateModal={showCreateModal}
         postText={postText}
         selectedFiles={selectedFiles}
