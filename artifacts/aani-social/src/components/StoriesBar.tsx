@@ -1019,14 +1019,9 @@ export default function StoriesBar({
       textLayersToPublish = [...textLayersToPublish, buildStoryTextLayer(draftText)];
     }
 
-    setShowTextOnlyStoryCanvas(false);
-    setStoryTextEditorOpen(false);
     void handleCreateTextStory('', canvasStyle, textLayersToPublish, closeFriends).then(published => {
-      if (!published) {
-        setShowTextOnlyStoryCanvas(true);
-        setStoryTextEditorOpen(true);
-        return;
-      }
+      if (!published) return;
+      setShowTextOnlyStoryCanvas(false);
       setStoryTextEditorOpen(false);
       setStoryText('');
       setEditingStoryTextId(null);

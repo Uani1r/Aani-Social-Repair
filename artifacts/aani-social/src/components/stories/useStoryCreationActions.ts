@@ -359,8 +359,23 @@ export function useStoryCreationActions({
       toast.success('نُشرت قصتك');
       return true;
     } catch (error) {
-      const details = error instanceof Error ? error.message : '';
-      toast.error(details ? `تعذر نشر القصة: ${details}` : 'تعذر نشر القصة، حاول مرة أخرى');
+      console.error('[text story publish] تعذر حفظ القصة:', error);
+      const errorInfo = error && typeof error === 'object'
+        ? error as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
+        : null;
+      const details = error instanceof Error
+        ? error.message
+        : [errorInfo?.message, errorInfo?.details, errorInfo?.hint]
+          .filter((value): value is string => typeof value === 'string' && value.length > 0)
+          .join(' — ');
+      const errorCode = String(errorInfo?.code || '');
+      if (errorCode === 'PGRST202' || /aani_create_story|function.*not found|schema cache/i.test(details)) {
+        toast.error('قاعدة البيانات لا تحتوي على إجراء نشر القصص المطلوب. طبّق آخر ترحيلات القصص في Supabase ثم أعد المحاولة.');
+      } else if (errorCode === '42501' || /row-level security|permission denied|not allowed/i.test(details)) {
+        toast.error('رفضت صلاحيات قاعدة البيانات نشر القصة. تحقّق من ترحيلات صلاحيات القصص في Supabase.');
+      } else {
+        toast.error(details ? `تعذر نشر القصة: ${details}` : 'تعذر نشر القصة، تحقق من الاتصال ثم أعد المحاولة');
+      }
       return false;
     } finally {
       setUploading(false);
