@@ -60,11 +60,9 @@ import ShareSheet from './components/ShareSheet';
 import StoryComposerSheet from './components/StoryComposerSheet';
 import CloseFriendsSheet from './components/CloseFriendsSheet';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from './components/StoryDmCard';
-import StoryFilterBar from './components/StoryFilterBar';
-import StoryExpirySlider from './components/StoryExpirySlider';
+import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel } from '@/components/StoryEditorTools';
 import StoryMusicSheet from './components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from './components/StoryMentionPicker';
-import StoryTextToolbar from './components/StoryTextToolbar';
 import {
   DEFAULT_ADJUSTMENTS as DEFAULT_FILTER_ADJUSTMENTS,
   buildStoryFilterCss,
@@ -2844,309 +2842,116 @@ function StoriesBar({
             <span className="w-9" />
           </div>
 
-          {/* أدوات التحرير: عمود واحد على الجانب الأيمن فقط (أيقونات فقط) */}
-          <div
-            ref={storyToolsRef}
-            className="absolute right-2.5 z-20 flex flex-col items-center gap-2.5"
-            style={{ top: 'calc(3.75rem + env(safe-area-inset-top))' }}
-          >
-            {[
-              { key: 'text', icon: Type, label: 'نص' },
-              { key: 'music', icon: Music2, label: 'موسيقى' },
-              { key: 'effects', icon: Sparkles, label: 'فلاتر' },
-              { key: 'mention', icon: AtSign, label: 'إشارة' },
-              { key: 'draw', icon: Pencil, label: 'رسم' },
-            ].map(tool => {
-              const Icon = tool.icon;
-
-              return (
-                <button
-                  key={tool.key}
-                  type="button"
-                  title={tool.label}
-                  aria-label={tool.label}
-                  onClick={() => {
-                    if (tool.key === 'text') {
-                      setStoryDrawingOpen(false);
-                      setStoryFiltersOpen(false);
-                      setStoryTextEditorOpen(true);
-                    } else if (tool.key === 'mention') {
-                      setStoryDrawingOpen(false);
-                      setStoryTextEditorOpen(false);
-                      setStoryFiltersOpen(false);
-                      setStoryMentionsOpen(true);
-                    } else if (tool.key === 'music') {
-                      setStoryDrawingOpen(false);
-                      setStoryTextEditorOpen(false);
-                      setStoryMusicOpen(true);
-                    } else if (tool.key === 'effects') {
-                      setStoryDrawingOpen(false);
-                      setStoryTextEditorOpen(false);
-                      setStoryFiltersOpen(open => !open);
-                    } else if (tool.key === 'draw') {
-                      if (!editorMediaUrl) {
-                        toast.info('اختر صورة أو فيديو أولاً');
-                        return;
-                      }
-                      setStoryTextEditorOpen(false);
-                      setStoryFiltersOpen(false);
-                      setStoryMoreOpen(false);
-                      setStoryDurationOpen(false);
-                      setStoryDrawingOpen(true);
-                    }
-                  }}
-                  className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
-                >
-                  <Icon size={17} />
-                </button>
-              );
-            })}
-
-            {/* الزر السابع: قائمة أدوات إضافية قابلة للتوسعة */}
-            <div className="relative">
-              <button
-                type="button"
-                aria-label="أدوات إضافية"
-                aria-expanded={storyMoreOpen}
-                onClick={() => {
-                  const nextOpen = !storyMoreOpen;
-                  setStoryMoreOpen(nextOpen);
-                  if (!nextOpen) setStoryDurationOpen(false);
-                }}
-                className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
-              >
-                <ChevronDown
-                  size={17}
-                  className={`transition-transform duration-200 ${storyMoreOpen ? 'rotate-180' : ''}`}
-                />
-              </button>
-
-              {storyMoreOpen && (
-                <div
-                  className="absolute left-1/2 top-full z-30 mt-2 flex w-9 -translate-x-1/2 flex-col items-stretch gap-1 rounded-xl border border-white/10 bg-[#101014]/95 py-1 shadow-2xl backdrop-blur-xl"
-                  dir="rtl"
-                  role="menu"
-                >
-                  {storyExtraTools.map(item => {
-                    const Icon = item.key === 'close-friends' ? Star : Clock;
-                    return (
-                      <div key={item.key} className="relative">
-                        <button
-                          type="button"
-                          role="menuitem"
-                          aria-label={item.label}
-                          aria-expanded={item.key === 'duration' ? storyDurationOpen : undefined}
-                          onClick={item.action}
-                          className={`flex h-9 w-full items-center justify-center rounded-lg transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/85'}`}
-                        >
-                          <Icon size={19} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
-                        </button>
-                        {item.key === 'duration' && storyDurationOpen && (
-                          <div className="absolute right-full top-0 z-40 mr-2">
-                            <StoryExpirySlider
-                              durationSeconds={uploadDuration}
-                              onChange={duration => {
-                                storyDurationManuallyChosenRef.current = true;
-                                setUploadDuration(duration);
-                              }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-          </div>
+          <StoryEditorToolbar
+            storyToolsRef={storyToolsRef}
+            storyMoreOpen={storyMoreOpen}
+            storyDurationOpen={storyDurationOpen}
+            storyExtraTools={storyExtraTools}
+            uploadDuration={uploadDuration}
+            onSelectTool={toolKey => {
+              if (toolKey === 'text') {
+                setStoryDrawingOpen(false);
+                setStoryFiltersOpen(false);
+                setStoryTextEditorOpen(true);
+              } else if (toolKey === 'mention') {
+                setStoryDrawingOpen(false);
+                setStoryTextEditorOpen(false);
+                setStoryFiltersOpen(false);
+                setStoryMentionsOpen(true);
+              } else if (toolKey === 'music') {
+                setStoryDrawingOpen(false);
+                setStoryTextEditorOpen(false);
+                setStoryMusicOpen(true);
+              } else if (toolKey === 'effects') {
+                setStoryDrawingOpen(false);
+                setStoryTextEditorOpen(false);
+                setStoryFiltersOpen(open => !open);
+              } else if (toolKey === 'draw') {
+                if (!editorMediaUrl) {
+                  toast.info('اختر صورة أو فيديو أولاً');
+                  return;
+                }
+                setStoryTextEditorOpen(false);
+                setStoryFiltersOpen(false);
+                setStoryMoreOpen(false);
+                setStoryDurationOpen(false);
+                setStoryDrawingOpen(true);
+              }
+            }}
+            onToggleMore={() => {
+              const nextOpen = !storyMoreOpen;
+              setStoryMoreOpen(nextOpen);
+              if (!nextOpen) setStoryDurationOpen(false);
+            }}
+            onDurationChange={duration => {
+              storyDurationManuallyChosenRef.current = true;
+              setUploadDuration(duration);
+            }}
+          />
 
 
-          {/* محرر النص الغني (خلفية شبه شفافة تُظهر القصة) */}
-          {storyTextEditorOpen && (
-            <div className="absolute inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm" dir="rtl">
-              <div
-                className="flex items-center justify-between px-4 py-3"
-                style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
-              >
-                <span className="text-[12px] text-white/60">محرر النص</span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCaption(storyText.trim());
-                    setStoryTextEditorOpen(false);
-                  }}
-                  className="rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212]"
-                >
-                  تم
-                </button>
-              </div>
-
-              <div className="flex min-h-[96px] flex-1 items-start justify-center px-6 pt-2">
-                <div className="relative flex w-full max-w-md items-start justify-center">
-                  {/* معاينة حيّة للنص بنفس خط/لون/خلفية/حركة القصة */}
-                  {storyEditorPreviewMode && (
-                    <p
-                      key={`${storyTextAnimation}-${storyAnimationTick}`}
-                      aria-hidden="true"
-                      className={storyPreviewClassName}
-                      style={{
-                        fontFamily: storyFontFamily,
-                        color: storyTextColor,
-                        fontSize: 30,
-                        textAlign: storyTextAlign,
-                        lineHeight: 1.35,
-                        padding: storyHasBackground ? '2px 10px' : undefined,
-                        borderRadius: storyHasBackground ? 8 : undefined,
-                        background: storyHasBackground ? storyBackgroundPreset.background : 'transparent',
-                        textShadow: '0 2px 12px rgba(0,0,0,0.9)',
-                      }}
-                    >
-                      <StoryTypedPreview
-                        key={storyAnimationTick}
-                        text={storyText}
-                        animate={storyTextAnimation === 'typewriter'}
-                      />
-                    </p>
-                  )}
-
-                  <textarea
-                    ref={storyTextAreaRef}
-                    autoFocus
-                    value={storyText}
-                    onChange={event => setStoryText(event.target.value)}
-                    placeholder="اكتب شيئاً..."
-                    dir="rtl"
-                    rows={3}
-                    className="relative w-full max-w-md resize-none overflow-hidden bg-transparent font-bold outline-none placeholder:text-white/40"
-                    style={{
-                      fontFamily: storyFontFamily,
-                      color: storyEditorPreviewMode ? 'transparent' : storyTextColor,
-                      caretColor: storyTextColor,
-                      WebkitTextFillColor: storyEditorPreviewMode ? 'transparent' : storyTextColor,
-                      fontSize: 30,
-                      textAlign: storyTextAlign,
-                      lineHeight: 1.35,
-                      padding: 0,
-                      background: 'transparent',
-                      textShadow: storyEditorPreviewMode ? 'none' : '0 2px 12px rgba(0,0,0,0.9)',
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* شريط أدوات النص بنمط إنستغرام: الخيارات تنبثق فوقه مباشرة */}
-              <div
-                className="px-3"
-                style={{ paddingBottom: `calc(0.8rem + env(safe-area-inset-bottom) + ${storyKeyboardInset}px)` }}
-              >
-                <StoryTextToolbar
-                  fontFamily={storyFontFamily}
-                  onFontFamilyChange={setStoryFontFamily}
-                  textColor={storyTextColor}
-                  onTextColorChange={setStoryTextColor}
-                  align={storyTextAlign}
-                  onCycleAlign={() => setStoryTextAlign(prev => nextStoryTextAlign(prev))}
-                  backgroundLabel={storyBackgroundPreset.label}
-                  backgroundSwatch={storyBackgroundPreset.background}
-                  onCycleBackground={() =>
-                    setStoryBackgroundIndex(prev => (prev + 1) % STORY_TEXT_BACKGROUNDS.length)
-                  }
-                  animation={storyTextAnimation}
-                  onAnimationChange={value => {
-                    setStoryTextAnimation(value);
-                    setStoryAnimationTick(tick => tick + 1);
-                  }}
-                  onInteract={() => {
-                    keepStoryEditorFocus();
-                    // شبكة أمان لبعض المتصفحات التي تُزيل التركيز بعد لمسة قصيرة
-                    window.setTimeout(keepStoryEditorFocus, 80);
-                  }}
-                />
-              </div>
-            </div>
-          )}
+          <StoryTextEditorPanel
+            storyTextEditorOpen={storyTextEditorOpen}
+            storyText={storyText}
+            storyKeyboardInset={storyKeyboardInset}
+            storyEditorPreviewMode={storyEditorPreviewMode}
+            storyAnimationTick={storyAnimationTick}
+            storyPreviewClassName={storyPreviewClassName}
+            storyTextAnimation={storyTextAnimation}
+            storyFontFamily={storyFontFamily}
+            storyTextColor={storyTextColor}
+            storyTextAlign={storyTextAlign}
+            storyHasBackground={storyHasBackground}
+            storyBackgroundPreset={storyBackgroundPreset}
+            storyTextAreaRef={storyTextAreaRef}
+            onStoryTextChange={setStoryText}
+            onFinishTextEditing={() => {
+              setCaption(storyText.trim());
+              setStoryTextEditorOpen(false);
+            }}
+            onFontFamilyChange={setStoryFontFamily}
+            onTextColorChange={setStoryTextColor}
+            onCycleAlign={() => setStoryTextAlign(prev => nextStoryTextAlign(prev))}
+            onCycleBackground={() => setStoryBackgroundIndex(prev => (prev + 1) % STORY_TEXT_BACKGROUNDS.length)}
+            onAnimationChange={value => {
+              setStoryTextAnimation(value);
+              setStoryAnimationTick(tick => tick + 1);
+            }}
+            onInteract={() => {
+              keepStoryEditorFocus();
+              // شبكة أمان لبعض المتصفحات التي تُزيل التركيز بعد لمسة قصيرة
+              window.setTimeout(keepStoryEditorFocus, 80);
+            }}
+          />
 
           {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) */}
           <div
             className="absolute inset-x-0 bottom-0 z-20 px-4 pt-2"
             style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
           >
-            {storyFiltersOpen && (
-              <StoryFilterBar
-                previewUrl={editorMediaUrl}
-                isVideo={editorIsVideo}
-                activeId={storyFilterId}
-                onSelect={setStoryFilterId}
-                adjustments={storyFilterAdjustments}
-                onAdjust={(key, value) => setStoryFilterAdjustments(prev => ({ ...prev, [key]: value }))}
-                onReset={() => {
-                  setStoryFilterId('original');
-                  setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
-                }}
-                onClose={() => setStoryFiltersOpen(false)}
-              />
-            )}
-            {storyMusicTrack && (
-              <div className="mx-auto mb-2 flex w-fit items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-[10px] text-white backdrop-blur-sm">
-                <Music2 size={12} />
-                <span className="max-w-[55vw] truncate">{storyMusicTrack.title}</span>
-              </div>
-            )}
-            {storyDrawingOpen && (
-              <div className="mb-3 rounded-2xl border border-white/15 bg-black/75 p-2.5 text-white shadow-xl backdrop-blur-xl" dir="rtl">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="shrink-0 text-[10px] font-semibold text-white/70">لون القلم</span>
-                  <div className="flex items-center gap-2" dir="ltr">
-                    {STORY_DRAW_COLORS.map(color => (
-                      <button
-                        key={color}
-                        type="button"
-                        aria-label={`لون الرسم ${color}`}
-                        aria-pressed={storyDrawColor === color}
-                        onClick={() => setStoryDrawColor(color)}
-                        className={`h-6 w-6 rounded-full border-2 transition ${storyDrawColor === color ? 'border-white scale-110' : 'border-white/30'}`}
-                        style={{ backgroundColor: color }}
-                      />
-                    ))}
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-3">
-                  <span className="shrink-0 text-[10px] font-semibold text-white/70">حجم القلم</span>
-                  <div className="flex items-center gap-2" dir="ltr">
-                    {STORY_DRAW_SIZES.map(size => (
-                      <button
-                        key={size}
-                        type="button"
-                        aria-label={`حجم القلم ${size}`}
-                        aria-pressed={storyDrawSize === size}
-                        onClick={() => setStoryDrawSize(size)}
-                        className={`flex h-8 w-8 items-center justify-center rounded-full border transition ${storyDrawSize === size ? 'border-white bg-white/15' : 'border-white/20'}`}
-                      >
-                        <span className="rounded-full bg-white" style={{ width: size, height: size }} />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={undoStoryDrawStroke}
-                    disabled={storyDrawStrokes.length === 0}
-                    className="h-9 flex-1 rounded-full border border-white/25 text-[11px] font-semibold disabled:opacity-40"
-                  >
-                    تراجع
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setStoryDrawingOpen(false)}
-                    className="h-9 flex-1 rounded-full bg-white text-[11px] font-bold text-[#121212]"
-                  >
-                    تم
-                  </button>
-                </div>
-              </div>
-            )}
+            <StoryEditorPanels
+              storyFiltersOpen={storyFiltersOpen}
+              editorMediaUrl={editorMediaUrl}
+              editorIsVideo={editorIsVideo}
+              storyFilterId={storyFilterId}
+              storyFilterAdjustments={storyFilterAdjustments}
+              storyMusicTrack={storyMusicTrack}
+              storyDrawingOpen={storyDrawingOpen}
+              storyDrawColor={storyDrawColor}
+              storyDrawSize={storyDrawSize}
+              storyDrawStrokesCount={storyDrawStrokes.length}
+              onSelectFilter={setStoryFilterId}
+              onAdjustFilter={(key, value) => setStoryFilterAdjustments(prev => ({ ...prev, [key]: value }))}
+              onResetFilters={() => {
+                setStoryFilterId('original');
+                setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
+              }}
+              onCloseFilters={() => setStoryFiltersOpen(false)}
+              onDrawColorChange={setStoryDrawColor}
+              onDrawSizeChange={setStoryDrawSize}
+              onUndoDrawing={undoStoryDrawStroke}
+              onCloseDrawing={() => setStoryDrawingOpen(false)}
+            />
             <div className="flex items-stretch gap-2.5">
               <button
                 type="button"
