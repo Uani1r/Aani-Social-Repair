@@ -16,6 +16,7 @@ import type {
 } from "@supabase/supabase-js";
 
 import { storageBucket, supabase, supabaseConfigured } from "./supabase";
+import { buildCommentTree } from "./comments/tree";
 import { displayName, type Post, type Profile } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -1199,28 +1200,7 @@ export async function fetchCommentsWithReplies(
     };
   });
 
-  const commentMap = new Map<string, CommentWithDetails>();
-
-  formatted.forEach((comment) => {
-    commentMap.set(comment.id, comment);
-  });
-
-  const rootComments: CommentWithDetails[] = [];
-
-  formatted.forEach((comment) => {
-    if (comment.parent_id) {
-      const parent = commentMap.get(comment.parent_id);
-
-      if (parent) {
-        parent.replies!.push(comment);
-        return;
-      }
-    }
-
-    rootComments.push(comment);
-  });
-
-  return rootComments;
+  return buildCommentTree(formatted);
 }
 
 export async function toggleCommentLike(

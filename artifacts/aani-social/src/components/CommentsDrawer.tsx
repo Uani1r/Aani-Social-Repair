@@ -1,15 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  AtSign,
-  Image,
-  MessageCircle,
-  Send,
-  Sticker,
-  X,
-} from 'lucide-react';
+import { MessageCircle, X } from 'lucide-react';
 import { toast } from 'sonner';
 
-import CommentItem from './CommentItem';
+import CommentComposer from './comments/CommentComposer';
+import CommentsList from './comments/CommentsList';
+import type { CommentComposerProfile, MentionCandidate } from './comments/types';
+import {
+  countComments,
+  findCommentById,
+  insertCommentIntoTree,
+  patchCommentInTree,
+  removeCommentFromTree,
+  replaceCommentInTree,
+} from '../lib/comments/tree';
 import {
   fetchCommentsWithReplies,
   syncCommentCount,
@@ -34,13 +37,6 @@ type SupabaseErrorDetails = {
   code?: string;
   details?: string;
   hint?: string;
-};
-
-type MentionCandidate = {
-  id: string;
-  username: string | null;
-  full_name: string | null;
-  avatar_url: string | null;
 };
 
 const getErrorDetails = (error: unknown): SupabaseErrorDetails => {
@@ -79,91 +75,6 @@ const formatCommentsTitle = (count: number): string => {
   return `${count} تعليقاً`;
 };
 
-const countComments = (items: CommentWithDetails[]): number =>
-  items.reduce(
-    (count, item) => count + 1 + countComments(item.replies ?? []),
-    0,
-  );
-
-const insertCommentIntoTree = (
-  items: CommentWithDetails[],
-  optimistic: CommentWithDetails,
-): CommentWithDetails[] => {
-  if (!optimistic.parent_id) return [...items, optimistic];
-
-  return items.map((item) =>
-    item.id === optimistic.parent_id
-      ? {
-          ...item,
-          replies: [...(item.replies ?? []), optimistic],
-        }
-      : {
-          ...item,
-          replies: item.replies
-            ? insertCommentIntoTree(item.replies, optimistic)
-            : item.replies,
-        },
-  );
-};
-
-const replaceCommentInTree = (
-  items: CommentWithDetails[],
-  targetId: string,
-  next: CommentWithDetails,
-): CommentWithDetails[] =>
-  items.map((item) =>
-    item.id === targetId
-      ? next
-      : item.replies
-        ? {
-            ...item,
-            replies: replaceCommentInTree(item.replies, targetId, next),
-          }
-        : item,
-  );
-
-const removeCommentFromTree = (
-  items: CommentWithDetails[],
-  targetId: string,
-): CommentWithDetails[] =>
-  items
-    .filter((item) => item.id !== targetId)
-    .map((item) =>
-      item.replies
-        ? { ...item, replies: removeCommentFromTree(item.replies, targetId) }
-        : item,
-    );
-
-const patchCommentInTree = (
-  items: CommentWithDetails[],
-  targetId: string,
-  patch: Partial<CommentWithDetails>,
-): CommentWithDetails[] =>
-  items.map((item) =>
-    item.id === targetId
-      ? { ...item, ...patch }
-      : item.replies
-        ? {
-            ...item,
-            replies: patchCommentInTree(item.replies, targetId, patch),
-          }
-        : item,
-  );
-
-const findCommentById = (
-  items: CommentWithDetails[],
-  targetId: string,
-): CommentWithDetails | null => {
-  for (const item of items) {
-    if (item.id === targetId) return item;
-
-    const inReplies = findCommentById(item.replies ?? [], targetId);
-    if (inReplies) return inReplies;
-  }
-
-  return null;
-};
-
 const buildSavedComment = (
   row: Record<string, unknown>,
   profiles: CommentWithDetails['profiles'],
@@ -182,21 +93,6 @@ const buildSavedComment = (
   is_disliked: false,
   replies: [],
 });
-
-const buildInitials = (fullName?: string | null): string => {
-  const source = (fullName ?? '').trim();
-
-  if (!source) return 'آ';
-
-  const initials = source
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '')
-    .join('')
-    .slice(0, 2);
-
-  return initials || 'آ';
-};
 
 export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   postId,
@@ -270,14 +166,9 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
   const commentIdsRef = useRef<Set<string>>(new Set());
 
-  const [currentUser, setCurrentUser] = useState<{
-    full_name: string;
-    username: string;
-    avatar_url: string | null;
-  } | null>(null);
+  const [currentUser, setCurrentUser] = useState<CommentComposerProfile>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
 
   // إزالة الاعتمادية الحركية لتجنب الحلقة اللانهائية
   const loadComments = useCallback(async (showLoadingSpinner = true) => {
@@ -990,286 +881,50 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           <div className="w-8" />
         </header>
 
-        <div className="flex-1 space-y-0 overflow-y-auto overscroll-contain px-4 py-1">
-          {commentsError && (
-            <div
-              className="my-3 flex items-center justify-between gap-3 rounded-xl border border-red-900/70 bg-red-950/40 px-3 py-2 text-sm text-red-200"
-              role="alert"
-            >
-              <span>{commentsError}</span>
-              <button
-                type="button"
-                onClick={() => void loadComments(true)}
-                className="shrink-0 rounded-full px-3 py-1 text-xs font-semibold hover:bg-red-900/50"
-              >
-                إعادة المحاولة
-              </button>
-            </div>
-          )}
-
-          {loading && comments.length === 0 && !commentsError ? (
-            <div className="space-y-5 py-4" role="status" aria-label="جارٍ تحميل التعليقات">
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="flex animate-pulse items-start gap-3">
-                  <div className="h-10 w-10 shrink-0 rounded-full bg-zinc-800" />
-                  <div className="flex-1 space-y-2 pt-1">
-                    <div className="h-3 w-24 rounded bg-zinc-800" />
-                    <div className="h-3 w-full rounded bg-zinc-800/70" />
-                    <div className="h-3 w-2/3 rounded bg-zinc-800/50" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : !loading && !commentsError && comments.length === 0 ? (
-            <div className="flex h-40 flex-col items-center justify-center gap-2 text-center text-zinc-500">
-              <MessageCircle size={32} className="text-zinc-700" />
-              <p className="text-sm">
-                لا توجد تعليقات بعد... كن أول من يعلق!
-              </p>
-            </div>
-          ) : comments.length > 0 ? (
-            comments.map((comment) => (
-              <CommentItem
-                key={comment.id}
-                comment={comment}
-                currentUserId={currentUserId}
-                pendingDeleteIds={pendingDeleteIds}
-                storyOwners={storyOwners}
-                onReply={(item) => {
-                  setReplyingTo(item);
-                  setShowStickerPicker(false);
-                  window.setTimeout(() => textareaRef.current?.focus(), 0);
-                }}
-                onToggleLike={handleToggleLike}
-                onToggleDislike={handleToggleDislike}
-                onDelete={handleDeleteComment}
-              />
-            ))
-          ) : null}
-        </div>
-
-        <footer
-          className="shrink-0 space-y-2 border-t border-zinc-800/90 bg-zinc-950 px-3 pt-3 sm:px-4"
-          style={{
-            paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
+        <CommentsList
+          comments={comments}
+          currentUserId={currentUserId}
+          pendingDeleteIds={pendingDeleteIds}
+          storyOwners={storyOwners}
+          loading={loading}
+          error={commentsError}
+          onRetry={() => void loadComments(true)}
+          onReply={item => {
+            setReplyingTo(item);
+            setShowStickerPicker(false);
+            window.setTimeout(() => textareaRef.current?.focus(), 0);
           }}
-        >
-          {replyingTo && (
-            <div className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300">
-              <span>
-                الرد على{' '}
-                <strong className="text-pink-400">
-                  {replyingTo.profiles?.full_name || replyingTo.profiles?.username || 'مستخدم'}
-                </strong>
-              </span>
+          onToggleLike={handleToggleLike}
+          onToggleDislike={handleToggleDislike}
+          onDelete={handleDeleteComment}
+        />
 
-              <button
-                type="button"
-                onClick={() => setReplyingTo(null)}
-                className="text-zinc-400 hover:text-white"
-                aria-label="إلغاء الرد"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          )}
-
-          {previewUrl && (
-            <div className="relative mr-1 inline-block h-16 w-16 overflow-hidden rounded-xl border border-zinc-700">
-              <img
-                src={previewUrl}
-                alt="معاينة الصورة المرفقة"
-                className="h-full w-full object-cover"
-              />
-
-              <button
-                type="button"
-                onClick={() => setSelectedImage(null)}
-                className="absolute left-1 top-1 rounded-full bg-black/80 p-1 text-white hover:bg-black"
-                aria-label="إزالة الصورة"
-              >
-                <X size={12} />
-              </button>
-            </div>
-          )}
-
-          <form
-            className="flex items-center gap-2.5"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void handleSubmit();
-            }}
-          >
-            <div className="shrink-0">
-              {currentUser?.avatar_url ? (
-                <img
-                  src={currentUser.avatar_url}
-                  alt={currentUser.full_name}
-                  className="h-11 w-11 rounded-full object-cover ring-1 ring-zinc-700"
-                />
-              ) : (
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-bold text-white ring-1 ring-zinc-700">
-                  {buildInitials(currentUser?.full_name)}
-                </div>
-              )}
-            </div>
-
-            <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-800/90 px-3 py-2.5 transition focus-within:border-pink-500/50">
-              {mentionQuery && mentionSuggestions.length > 0 && (
-                <div
-                  className="absolute bottom-full right-0 z-30 mb-3 max-h-64 w-64 max-w-[82vw] overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl"
-                  role="listbox"
-                  aria-label="اقتراحات المنشن"
-                >
-                  {mentionSuggestions.map((person, index) => (
-                    <button
-                      key={person.id}
-                      type="button"
-                      role="option"
-                      aria-selected={index === mentionIndex}
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => applyMentionSuggestion(person)}
-                      className={`flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-right text-xs transition ${
-                        index === mentionIndex ? 'bg-zinc-800' : 'hover:bg-zinc-800/70'
-                      }`}
-                    >
-                      {person.avatar_url ? (
-                        <img
-                          src={person.avatar_url}
-                          alt=""
-                          className="h-7 w-7 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-[10px] font-bold text-white">
-                          {buildInitials(person.full_name)}
-                        </span>
-                      )}
-
-                      <span className="user-identity-meta h-7 min-w-0 flex-1">
-                        <strong className="block truncate leading-tight text-white">
-                          {person.full_name || person.username || 'مستخدم'}
-                        </strong>
-                        {person.username && (
-                          <span className="block truncate text-[10px] leading-none text-zinc-500" dir="ltr">
-                            {person.username}
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {showStickerPicker && (
-                <div
-                  className="absolute bottom-full left-0 z-20 mb-3 grid grid-cols-5 gap-1 rounded-2xl border border-zinc-700 bg-zinc-900 p-2 shadow-xl"
-                  role="group"
-                  aria-label="اختيار ملصق"
-                >
-                  {[
-                    '❤️',
-                    '🥰',
-                    '😂',
-                    '👏',
-                    '🙏',
-                    '✨',
-                    '🌷',
-                    '🤍',
-                    '🫶',
-                    '🎉',
-                  ].map((sticker) => (
-                    <button
-                      key={sticker}
-                      type="button"
-                      onClick={() => insertSticker(sticker)}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg text-xl hover:bg-zinc-800"
-                      aria-label={`إضافة ${sticker}`}
-                    >
-                      {sticker}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <textarea
-                ref={textareaRef}
-                rows={1}
-                value={content}
-                onChange={handleComposerChange}
-                onKeyDown={handleComposerKeyDown}
-                placeholder={replyingTo ? 'اكتب رداً...' : 'إضافة تعليق...'}
-                maxLength={2000}
-                className="max-h-32 min-h-7 flex-1 resize-none bg-transparent px-1 text-right text-sm leading-7 text-zinc-100 placeholder-zinc-400 focus:outline-none"
-                dir="rtl"
-                aria-label={replyingTo ? 'اكتب رداً' : 'إضافة تعليق'}
-              />
-
-              <div className="mr-1 flex shrink-0 items-center gap-2 text-zinc-300">
-                <button
-                  type="button"
-                  onClick={insertMention}
-                  className="rounded-full p-1.5 transition hover:bg-zinc-700 hover:text-white"
-                  title="إشارة @"
-                  aria-label="إضافة إشارة"
-                >
-                  <AtSign size={22} strokeWidth={2.4} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setShowStickerPicker((visible) => !visible)}
-                  className="rounded-full p-1.5 transition hover:bg-zinc-700 hover:text-white"
-                  title="ملصقات"
-                  aria-label="اختيار ملصق"
-                  aria-expanded={showStickerPicker}
-                >
-                  <Sticker size={22} strokeWidth={2.3} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => imageInputRef.current?.click()}
-                  className="rounded-full p-1.5 transition hover:bg-zinc-700 hover:text-white"
-                  title="إرفاق صورة"
-                  aria-label="إرفاق صورة"
-                >
-                  <Image size={22} strokeWidth={2.3} />
-                </button>
-
-                {(content.trim() || selectedImage) && (
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="rounded-full bg-pink-600 p-2 text-white transition hover:bg-pink-500 disabled:cursor-wait disabled:opacity-50"
-                    aria-label="نشر التعليق"
-                  >
-                    <Send size={18} className="rotate-180" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/*"
-              className="sr-only"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0] ?? null;
-                event.currentTarget.value = '';
-
-                if (!file) return;
-
-                if (file.size > 10 * 1024 * 1024) {
-                  toast.error('حجم الصورة يجب ألا يتجاوز 10 ميغابايت');
-                  return;
-                }
-
-                setSelectedImage(file);
-              }}
-            />
-          </form>
-        </footer>
+        <CommentComposer
+          content={content}
+          replyingTo={replyingTo}
+          currentUser={currentUser}
+          selectedImage={selectedImage}
+          previewUrl={previewUrl}
+          submitting={submitting}
+          showStickerPicker={showStickerPicker}
+          mentionQuery={mentionQuery}
+          mentionSuggestions={mentionSuggestions}
+          mentionIndex={mentionIndex}
+          textareaRef={textareaRef}
+          onSubmit={event => {
+            event.preventDefault();
+            void handleSubmit();
+          }}
+          onContentChange={handleComposerChange}
+          onKeyDown={handleComposerKeyDown}
+          onCancelReply={() => setReplyingTo(null)}
+          onRemoveImage={() => setSelectedImage(null)}
+          onMentionSelect={applyMentionSuggestion}
+          onInsertMention={insertMention}
+          onToggleStickerPicker={() => setShowStickerPicker(visible => !visible)}
+          onInsertSticker={insertSticker}
+          onSelectImage={file => setSelectedImage(file)}
+        />
       </section>
     </div>
   );
