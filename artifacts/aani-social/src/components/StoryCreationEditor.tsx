@@ -399,8 +399,13 @@ export default function StoryCreationEditor({
         className="pointer-events-none fixed inset-x-0 top-0 z-[120] flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
       >
-        <button type="button" onClick={onClose} aria-label="إغلاق" className="pointer-events-auto rounded-full p-1.5 text-white/90 transition hover:bg-white/10">
-          <X size={24} />
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="إغلاق معاينة القصة"
+          className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-xl border border-red-300/35 bg-red-500/20 text-red-100 shadow-lg backdrop-blur-md transition hover:bg-red-500/30 active:scale-95"
+        >
+          <X size={22} />
         </button>
         {reshareStory ? (
           <div className="flex min-w-0 flex-col items-center gap-1">
@@ -434,7 +439,6 @@ export default function StoryCreationEditor({
         storyExtraTools={storyExtraTools}
         uploadDuration={uploadDuration}
         onSelectTool={onSelectStoryTool}
-        onClose={onClose}
         onToggleMore={onToggleMore}
         onDurationChange={onDurationChange}
       />

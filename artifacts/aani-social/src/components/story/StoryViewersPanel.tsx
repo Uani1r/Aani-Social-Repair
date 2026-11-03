@@ -1,5 +1,5 @@
 import type { FormEvent } from 'react';
-import { Ban, EyeOff, Flag, Heart, Loader2, MoreVertical, UserRound, X } from 'lucide-react';
+import { Ban, Eye, EyeOff, Flag, Heart, Loader2, MoreVertical, UserRound, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import {
@@ -89,9 +89,14 @@ export default function StoryViewersPanel({
       >
         <div data-story-viewers-panel-header="true" className="mx-auto mb-3 mt-1 h-1 w-10 rounded-full bg-white/30" />
         <div data-story-viewers-panel-header="true" className="mb-1 flex items-center justify-between">
-          <h2 className="text-sm font-bold text-white">المشاهدات</h2>
+          <h2 className="text-sm font-bold text-white">المشاهدات والإعجابات</h2>
           <div className="flex items-center gap-3">
-            <span className="text-xs text-zinc-400">{storyViewsCount}</span>
+            <span className="flex items-center gap-1 text-xs text-zinc-400" aria-label={`${storyViewsCount} مشاهدة`}>
+              <Eye size={13} /> {storyViewsCount}
+            </span>
+            <span className="flex items-center gap-1 text-xs text-pink-400" aria-label={`${storyViewers.filter(item => item.is_liked).length} إعجاب`}>
+              <Heart size={13} fill="currentColor" /> {storyViewers.filter(item => item.is_liked).length}
+            </span>
             <button
               type="button"
               onClick={onCloseStoryViews}
@@ -121,7 +126,11 @@ export default function StoryViewersPanel({
                       <p className="truncate text-xs font-semibold leading-tight text-white">{storyViewerDisplayName(item.viewer)}</p>
                       <p className="truncate text-[10px] leading-none text-zinc-400" dir="ltr">{item.viewer?.username || 'اسم المستخدم غير متاح'}</p>
                     </div>
-                    <time className="mt-1 block text-[10px] text-zinc-500">{formatDate(item.viewed_at)}</time>
+                    <time className="mt-1 block text-[10px] text-zinc-500">
+                      {item.is_viewer === false
+                        ? `أعجب بالقصة ${formatDate(item.liked_at || item.viewed_at)}`
+                        : formatDate(item.viewed_at)}
+                    </time>
                   </div>
                   {item.is_liked && (
                     <Heart size={16} fill="currentColor" className="shrink-0 text-pink-500" aria-label="أعجب بالستوري" />

@@ -29,6 +29,8 @@ export function storyViewerDisplayName(profile: StoryViewerProfile | null): stri
 export type StoryViewerEntry = {
   user_id: string;
   viewed_at: string;
+  liked_at?: string | null;
+  is_viewer?: boolean;
   viewer: StoryViewerProfile | null;
   is_liked: boolean;
   is_following: boolean;

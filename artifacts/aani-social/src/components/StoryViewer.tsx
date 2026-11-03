@@ -28,6 +28,7 @@ export default function StoryViewer({
   showUI,
   isPaused,
   isStoryOwner,
+  isArchivedStory,
   originalStoryAuthor,
   userId,
   showMenu,
@@ -62,6 +63,7 @@ export default function StoryViewer({
   onReplyTextChange,
   onReplyFocusChange,
   onToggleLike,
+  onReshareArchivedStory,
   onViewerRowMenuOpenChange,
   onOpenViewerReport,
   onBlockStoryViewer,
@@ -241,6 +243,7 @@ export default function StoryViewer({
           currentStory={currentStory}
           showUI={showUI}
           isStoryOwner={isStoryOwner}
+          isArchivedStory={isArchivedStory}
           replyKeyboardInset={replyKeyboardInset}
           replyText={replyText}
           isSendingReply={isSendingReply}
@@ -251,6 +254,7 @@ export default function StoryViewer({
           onReplyTextChange={onReplyTextChange}
           onReplyFocusChange={onReplyFocusChange}
           onToggleLike={onToggleLike}
+          onReshareArchivedStory={onReshareArchivedStory}
         />
 
         <StoryViewersPanel

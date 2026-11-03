@@ -16,6 +16,7 @@ export type StoryViewerProps = {
   showUI: boolean;
   isPaused: boolean;
   isStoryOwner: boolean;
+  isArchivedStory: boolean;
   originalStoryAuthor: Partial<Profile> | null;
   userId: string;
   showMenu: boolean;
@@ -50,6 +51,7 @@ export type StoryViewerProps = {
   onReplyTextChange: (text: string) => void;
   onReplyFocusChange: (focused: boolean) => void;
   onToggleLike: () => void;
+  onReshareArchivedStory: () => void;
   onViewerRowMenuOpenChange: (open: boolean) => void;
   onOpenViewerReport: (viewer: StoryViewerEntry) => void;
   onBlockStoryViewer: (viewer: StoryViewerEntry) => void;

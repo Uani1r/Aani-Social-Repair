@@ -1,4 +1,4 @@
-import { Eye, Heart, Loader2, SendHorizontal } from 'lucide-react';
+import { Eye, Heart, Loader2, Repeat2, SendHorizontal } from 'lucide-react';
 
 import type { StoryViewerProps } from './types';
 
@@ -7,12 +7,14 @@ type StoryReplyControlsProps = Pick<
   | 'currentStory'
   | 'showUI'
   | 'isStoryOwner'
+  | 'isArchivedStory'
   | 'replyKeyboardInset'
   | 'replyText'
   | 'isSendingReply'
   | 'isLiked'
   | 'isLikeSaving'
   | 'onOpenStoryViews'
+  | 'onReshareArchivedStory'
   | 'onSendReply'
   | 'onReplyTextChange'
   | 'onReplyFocusChange'
@@ -23,12 +25,14 @@ export default function StoryReplyControls({
   currentStory,
   showUI,
   isStoryOwner,
+  isArchivedStory,
   replyKeyboardInset,
   replyText,
   isSendingReply,
   isLiked,
   isLikeSaving,
   onOpenStoryViews,
+  onReshareArchivedStory,
   onSendReply,
   onReplyTextChange,
   onReplyFocusChange,
@@ -37,6 +41,21 @@ export default function StoryReplyControls({
   return (
     <>
       {isStoryOwner && <div className="absolute inset-x-0 bottom-0 z-[25] h-24" aria-hidden="true" />}
+
+      {showUI && isStoryOwner && isArchivedStory && (
+        <button
+          type="button"
+          onClick={event => {
+            event.stopPropagation();
+            onReshareArchivedStory();
+          }}
+          aria-label="إعادة نشر القصة"
+          className="absolute right-4 z-30 flex h-10 items-center gap-2 rounded-full border border-white/25 bg-black/55 px-3 text-[11px] font-semibold text-white shadow-lg backdrop-blur-md"
+          style={{ bottom: 'calc(0.65rem + env(safe-area-inset-bottom))' }}
+        >
+          <Repeat2 size={15} /> إعادة نشر
+        </button>
+      )}
 
       {showUI && isStoryOwner && (
         <button

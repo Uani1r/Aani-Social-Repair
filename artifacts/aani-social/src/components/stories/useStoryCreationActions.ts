@@ -12,6 +12,11 @@ import type { MentionCandidate } from '../StoryMentionPicker';
 
 type TimedText = StoryTimedText;
 
+function liveReshareStoryId(story: StoryDmCardStory | null): string | null {
+  const expiresAt = story?.expires_at ? Date.parse(story.expires_at) : Number.NaN;
+  return story?.media_url && Number.isFinite(expiresAt) && expiresAt > Date.now() ? story.id : null;
+}
+
 interface UseStoryCreationActionsOptions {
   userId: string;
   currentProfile: Profile | null;
@@ -176,6 +181,7 @@ export function useStoryCreationActions({
   const handleUploadStory = async () => {
     if (!supabaseConfigured) return;
     const sourceStory = storyFile ? null : reshareStory;
+    const originalStoryId = liveReshareStoryId(sourceStory);
     if (!storyFile && !caption.trim() && !sourceStory?.media_url) return;
 
     setUploading(true);
@@ -200,8 +206,8 @@ export function useStoryCreationActions({
         p_duration_seconds: uploadDuration,
         p_timed_texts: await buildStoryTimedTexts(timedTexts, undefined, true),
         p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
-        p_original_story_id: sourceStory?.id || null,
-        p_share_type: sourceStory ? 'reshare' : 'original',
+        p_original_story_id: originalStoryId,
+        p_share_type: originalStoryId ? 'reshare' : 'original',
         p_expiry_seconds: null,
       });
       if (insertError) throw insertError;
@@ -234,6 +240,7 @@ export function useStoryCreationActions({
   const handleQuickPublishStory = (closeFriends: boolean) => {
     const mediaFile = storyFile;
     const sourceStory = mediaFile ? null : reshareStory;
+    const originalStoryId = liveReshareStoryId(sourceStory);
     const storyCaption = caption.trim();
     const mentions = [...storyMentions];
     const durationSeconds = uploadDuration;
@@ -271,8 +278,8 @@ export function useStoryCreationActions({
           p_duration_seconds: durationSeconds,
           p_timed_texts: await buildStoryTimedTexts(timedTexts, undefined, true),
           p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
-          p_original_story_id: sourceStory?.id || null,
-          p_share_type: sourceStory ? 'reshare' : 'original',
+          p_original_story_id: originalStoryId,
+          p_share_type: originalStoryId ? 'reshare' : 'original',
           p_expiry_seconds: null,
         });
 

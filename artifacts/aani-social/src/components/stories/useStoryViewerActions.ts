@@ -289,7 +289,7 @@ export function useStoryViewerActions({
     try {
       const { error } = await supabase.rpc('aani_block_user', { p_blocked_user_id: viewer.user_id });
       if (error) throw error;
-      const wasVisible = storyViewers.some(item => item.user_id === viewer.user_id);
+      const wasVisible = storyViewers.some(item => item.user_id === viewer.user_id && item.is_viewer !== false);
       setStoryViewers(current => current.filter(item => item.user_id !== viewer.user_id));
       setStoryViewerPreview(current => current?.storyId === currentStory?.id
         ? { ...current, rows: current.rows.filter(item => item.user_id !== viewer.user_id) }

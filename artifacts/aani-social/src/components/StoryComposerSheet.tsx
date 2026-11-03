@@ -12,6 +12,9 @@ type StoryComposerSheetProps = {
   onFilesSelected: (files: File[]) => void;
   onTextMode: () => void;
   archive: StoryMedia[];
+  archiveLoading: boolean;
+  onOpenArchive: () => void;
+  onOpenArchivedStory: (story: StoryMedia) => void;
 };
 
 type TabKey = 'all' | 'videos' | 'photos';
@@ -34,6 +37,9 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
   onFilesSelected,
   onTextMode,
   archive,
+  archiveLoading,
+  onOpenArchive,
+  onOpenArchivedStory,
 }) => {
   const [shown, setShown] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
@@ -47,6 +53,7 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
   useEffect(() => {
     if (!open) {
       setShown(false);
+      setShowArchive(false);
       return;
     }
 
@@ -137,7 +144,11 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
           <div className="grid grid-cols-2 gap-2.5 px-4 pt-3">
             <button
               type="button"
-              onClick={() => setShowArchive(value => !value)}
+              onClick={() => {
+                const openingArchive = !showArchive;
+                setShowArchive(openingArchive);
+                if (openingArchive) onOpenArchive();
+              }}
               className={`flex h-20 flex-col items-center justify-center gap-1.5 rounded-xl border text-[12px] font-semibold transition ${
                 showArchive ? 'border-zinc-500 bg-[#1f1f27] text-white' : 'border-[#26262e] bg-[#17171b] text-zinc-300 hover:bg-[#1f1f27]'
               }`}
@@ -158,7 +169,9 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
           {showArchive ? (
             /* الأرشيف */
             <div className="px-4 pb-6 pt-3">
-              {archive.length === 0 ? (
+              {archiveLoading ? (
+                <p className="py-10 text-center text-xs text-zinc-500">جارٍ تحميل الأرشيف...</p>
+              ) : archive.length === 0 ? (
                 <p className="py-10 text-center text-xs text-zinc-500">لا توجد قصص مؤرشفة بعد</p>
               ) : (
                 <div className="grid grid-cols-3 gap-1.5">
@@ -179,9 +192,12 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                     const hasTextLayer = visualLayers.some(layer => layer.type === undefined || layer.type === 'text');
 
                     return (
-                      <div
+                      <button
                         key={story.id}
-                        className="aani-media-tile relative aspect-square overflow-hidden rounded-lg border border-[#26262e] bg-[#17171b]"
+                        type="button"
+                        aria-label="فتح القصة في العارض"
+                        onClick={() => onOpenArchivedStory(story)}
+                        className="aani-media-tile relative aspect-square w-full overflow-hidden rounded-lg border border-[#26262e] bg-[#17171b] text-right"
                         style={{ animationDelay: `${Math.min(index, 12) * 35}ms` }}
                       >
                         {story.media_url && story.media_type !== 'text' ? (
@@ -238,7 +254,10 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                             {story.caption}
                           </p>
                         )}
-                      </div>
+                        <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 pb-1.5 pt-4 text-center text-[9px] font-semibold text-white/90">
+                          فتح القصة
+                        </span>
+                      </button>
                     );
                   })}
                 </div>

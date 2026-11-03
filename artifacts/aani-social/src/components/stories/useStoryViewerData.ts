@@ -4,9 +4,9 @@ import {
   STORY_VIEWER_PREVIEW_LIMIT,
   STORY_VIEWER_PREVIEW_TTL_MS,
   type StoryViewerEntry,
+  type StoryViewerProfile,
   type StoryViewerPreviewSession,
   type StoryViewerPreviewState,
-  type StoryViewerProfile,
 } from '@/lib/appShared';
 import { supabase } from '@/lib/supabase';
 import type { StoryRow } from './types';
@@ -37,15 +37,34 @@ export function useStoryViewerData({
         .order('viewed_at', { ascending: true }),
       supabase
         .from('story_likes')
-        .select('user_id')
+        .select('user_id, created_at')
         .eq('story_id', storyId),
     ]);
     if (viewsResult.error) throw viewsResult.error;
     if (likesResult.error) throw likesResult.error;
     if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
 
-    const likedUserIds = new Set((likesResult.data || []).map(item => String(item.user_id)));
-    const viewerIds = [...new Set((viewsResult.data || []).map(item => String(item.user_id)))];
+    const viewItems = viewsResult.data || [];
+    const likeItems = likesResult.data || [];
+    const viewedUserIds = new Set(viewItems.map(item => String(item.user_id)));
+    const likedUserIds = new Set(likeItems.map(item => String(item.user_id)));
+    const viewerIds = [...new Set([
+      ...viewItems.map(item => String(item.user_id)),
+      ...likeItems.map(item => String(item.user_id)),
+    ])];
+    const likeOnlyIds = viewerIds.filter(id => !viewedUserIds.has(id));
+    const likeOnlyProfiles = new Map<string, StoryViewerProfile>();
+    if (likeOnlyIds.length > 0) {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, display_name, avatar_url, is_private')
+        .in('id', likeOnlyIds);
+      if (error) {
+        console.warn('[story views] تعذر تحميل ملفات من أعجبوا بالقصة:', error);
+      } else {
+        ((data || []) as StoryViewerProfile[]).forEach(profile => likeOnlyProfiles.set(String(profile.id), profile));
+      }
+    }
     let followedIds = new Set<string>();
     let pendingIds = new Set<string>();
     if (userId && viewerIds.length > 0) {
@@ -74,14 +93,35 @@ export function useStoryViewerData({
     }
 
     if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return null;
-    const rows = (viewsResult.data || []).map(item => ({
-      ...item,
-      is_liked: likedUserIds.has(String(item.user_id)),
-      is_following: followedIds.has(String(item.user_id)),
-      follow_request_pending: pendingIds.has(String(item.user_id)),
-    })) as StoryViewerEntry[];
+    const likedAtByUser = new Map<string, string>(
+      likeItems.map(item => [String(item.user_id), String(item.created_at)] as [string, string]),
+    );
+    const rows = [
+      ...viewItems.map(item => ({
+        ...item,
+        user_id: String(item.user_id),
+        viewed_at: String(item.viewed_at),
+        liked_at: likedAtByUser.get(String(item.user_id)) ?? null,
+        is_viewer: true,
+        is_liked: likedUserIds.has(String(item.user_id)),
+        is_following: followedIds.has(String(item.user_id)),
+        follow_request_pending: pendingIds.has(String(item.user_id)),
+      })),
+      ...likeItems
+        .filter(item => !viewedUserIds.has(String(item.user_id)))
+        .map(item => ({
+          user_id: String(item.user_id),
+          viewed_at: String(item.created_at),
+          liked_at: String(item.created_at),
+          is_viewer: false,
+          viewer: likeOnlyProfiles.get(String(item.user_id)) ?? null,
+          is_liked: true,
+          is_following: followedIds.has(String(item.user_id)),
+          follow_request_pending: pendingIds.has(String(item.user_id)),
+        })),
+    ] as StoryViewerEntry[];
     setStoryViewers(rows);
-    setStoryViewsCount(viewsResult.count ?? rows.length);
+    setStoryViewsCount(viewsResult.count ?? viewItems.length);
     return rows;
   }, [currentStory?.id, setStoryViewers, setStoryViewsCount, storyViewsRequestRef, userId]);
 

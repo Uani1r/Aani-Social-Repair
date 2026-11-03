@@ -1,5 +1,5 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
-import { Paintbrush, Star, Trash2 } from 'lucide-react';
+import { Paintbrush, Star, Trash2, X } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
@@ -349,6 +349,22 @@ export default function TextOnlyStoryCanvas({
         <span className="text-[9px] font-bold">حذف</span>
       </div>
 
+      <div
+        className="pointer-events-none fixed inset-x-0 top-0 z-[120] flex items-center justify-between px-4 py-3"
+        style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+      >
+        <span className="w-10" />
+        <span className="text-[13px] font-semibold text-white/85">معاينة القصة</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="إغلاق معاينة القصة"
+          className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-xl border border-red-300/35 bg-red-500/20 text-red-100 shadow-lg backdrop-blur-md transition hover:bg-red-500/30 active:scale-95"
+        >
+          <X size={22} />
+        </button>
+      </div>
+
       <button
         type="button"
         onClick={() => setBackgroundPickerOpen(open => !open)}
@@ -396,7 +412,6 @@ export default function TextOnlyStoryCanvas({
         storyExtraTools={extraTools}
         uploadDuration={uploadDuration}
         onSelectTool={onSelectTool}
-        onClose={onClose}
         onToggleMore={onToggleMore}
         onDurationChange={onDurationChange}
       />

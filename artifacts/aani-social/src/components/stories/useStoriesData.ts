@@ -1,4 +1,4 @@
-import { useCallback, useEffect, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from 'react';
 import { toast } from 'sonner';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -15,6 +15,8 @@ interface UseStoriesDataOptions {
   pendingProfileStoryOwnerId: string | null;
   onProfileStoryHandled: () => void;
   setGroupedStories: Dispatch<SetStateAction<StoriesByUser>>;
+  setArchiveStories: Dispatch<SetStateAction<StoryRow[]>>;
+  setArchiveLoading: Dispatch<SetStateAction<boolean>>;
   setProfileStoryOwnerId: Dispatch<SetStateAction<string | null>>;
   setProfilePreviewStories: Dispatch<SetStateAction<StoryRow[]>>;
   setActiveUserGroup: Dispatch<SetStateAction<string | null>>;
@@ -28,6 +30,8 @@ export function useStoriesData({
   pendingProfileStoryOwnerId,
   onProfileStoryHandled,
   setGroupedStories,
+  setArchiveStories,
+  setArchiveLoading,
   setProfileStoryOwnerId,
   setProfilePreviewStories,
   setActiveUserGroup,
@@ -35,6 +39,8 @@ export function useStoriesData({
   setProgress,
   setCurrentTimeSec,
 }: UseStoriesDataOptions) {
+  const archiveRequestRef = useRef(0);
+
   const fetchStories = useCallback(async () => {
     if (!supabaseConfigured || !userId) return;
 
@@ -84,7 +90,63 @@ export function useStoriesData({
     setGroupedStories(groups);
   }, [setGroupedStories, userId]);
 
+  const fetchStoryArchive = useCallback(async () => {
+    const requestId = ++archiveRequestRef.current;
+    if (!supabaseConfigured || !userId) {
+      setArchiveStories([]);
+      setArchiveLoading(false);
+      return;
+    }
+
+    setArchiveLoading(true);
+    setArchiveStories([]);
+    try {
+      const stories: StoryRow[] = [];
+      let offset = 0;
+      const pageSize = 100;
+      while (true) {
+        const { data, error } = await supabase.rpc('aani_get_my_story_archive', {
+          p_limit: pageSize,
+          p_offset: offset,
+        });
+        if (requestId !== archiveRequestRef.current) return;
+        if (error) throw error;
+
+        const page = (data ?? []) as unknown[];
+        stories.push(...page
+          .map(normalizeStoryRow)
+          .filter((story): story is StoryRow => story !== null));
+        if (page.length < pageSize) break;
+        offset += page.length;
+      }
+
+      const { data: author, error: authorError } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, avatar_url')
+        .eq('id', userId)
+        .maybeSingle();
+      if (requestId !== archiveRequestRef.current) return;
+      if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب الأرشيف:', authorError);
+      const storyAuthor = normalizeStoryAuthor(author);
+      setArchiveStories(stories.map(story => ({ ...story, author: storyAuthor })));
+    } catch (error) {
+      if (requestId !== archiveRequestRef.current) return;
+      console.error('[stories] تعذر تحميل الأرشيف:', error);
+      setArchiveStories([]);
+      const message = error instanceof Error ? error.message : 'تعذر تحميل أرشيف القصص';
+      toast.error(`تعذر تحميل الأرشيف: ${message}`);
+    } finally {
+      if (requestId === archiveRequestRef.current) setArchiveLoading(false);
+    }
+  }, [setArchiveLoading, setArchiveStories, userId]);
+
   useEffect(() => { void fetchStories(); }, [fetchStories]);
+  useEffect(() => {
+    archiveRequestRef.current += 1;
+    setArchiveStories([]);
+    setArchiveLoading(false);
+    return () => { archiveRequestRef.current += 1; };
+  }, [setArchiveLoading, setArchiveStories, userId]);
 
   useEffect(() => {
     if (!pendingProfileStoryOwnerId) return;
@@ -157,5 +219,5 @@ export function useStoriesData({
     setProfileStoryOwnerId,
   ]);
 
-  return { fetchStories };
+  return { fetchStories, fetchStoryArchive };
 }

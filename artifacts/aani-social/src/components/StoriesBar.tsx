@@ -24,7 +24,10 @@ import StoriesStrip from '@/components/stories/StoriesStrip';
 import type {
   StoryAuthor,
   StoryCanvasStyle,
+  StoryCanvasStyleOverlay,
+  StoryDrawingOverlay,
   StoryImageOverlay,
+  StoryMediaTransformOverlay,
   StoryImageStickerUpdate,
   StoryRow,
   StoryTextOverlay,
@@ -69,6 +72,9 @@ export default function StoriesBar({
   onProfileStoryHandled: () => void;
 }) {
   const [groupedStories, setGroupedStories] = useState<Record<string, StoryRow[]>>({});
+  const [archiveStories, setArchiveStories] = useState<StoryRow[]>([]);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveViewerOpen, setArchiveViewerOpen] = useState(false);
   const [activeUserGroup, setActiveUserGroup] = useState<string | null>(null);
   const [activeStoryIndex, setActiveStoryIndex] = useState(0);
   const [profileStoryOwnerId, setProfileStoryOwnerId] = useState<string | null>(null);
@@ -838,11 +844,13 @@ export default function StoriesBar({
     ? reshareStory.media_type === 'video'
     : Boolean(storyFile?.type.startsWith('video'));
 
-  const { fetchStories } = useStoriesData({
+  const { fetchStories, fetchStoryArchive } = useStoriesData({
     userId,
     pendingProfileStoryOwnerId,
     onProfileStoryHandled,
     setGroupedStories,
+    setArchiveStories,
+    setArchiveLoading,
     setProfileStoryOwnerId,
     setProfilePreviewStories,
     setActiveUserGroup,
@@ -1064,6 +1072,79 @@ export default function StoriesBar({
     setShowTextOnlyStoryCanvas(true);
   };
 
+  const openArchivedStoryForReshare = (story: StoryRow) => {
+    setArchiveViewerOpen(false);
+    setActiveUserGroup(null);
+
+    const canvasStyle = story.timed_texts.find(
+      (layer): layer is StoryCanvasStyleOverlay => layer.type === 'canvas-style',
+    );
+    const drawing = story.timed_texts.find(
+      (layer): layer is StoryDrawingOverlay => layer.type === 'drawing',
+    );
+    const storyFilter = decodeStoryFilterKey(story.filter_key);
+    const duration = Math.min(120, Math.max(5, Number(story.duration_seconds) || 60));
+
+    if (story.media_url && story.media_type !== 'text') {
+      const mediaTransform = story.timed_texts.find(
+        (layer): layer is StoryMediaTransformOverlay => layer.type === 'media-transform',
+      );
+      setStoryFile(null);
+      setReshareStory(story);
+      setReshareScaledDown(true);
+      setCaption(story.caption || '');
+      setStoryText('');
+      setTimedTexts(story.timed_texts.filter(layer => layer.type !== 'drawing' && layer.type !== 'media-transform'));
+      setStoryDrawStrokes(drawing?.strokes || []);
+      setStoryDrawingOpen(false);
+      activeStoryDrawStrokeRef.current = null;
+      setStoryMentions([]);
+      setStoryMusicTrack(null);
+      setStoryCanvasScale(1);
+      setStoryCanvasOffset({ x: 0, y: 0 });
+      setStoryMediaOffset({
+        x: ((mediaTransform?.x ?? 0) / 100) * window.innerWidth,
+        y: ((mediaTransform?.y ?? 0) / 100) * window.innerHeight,
+      });
+      setStoryMediaZoom(mediaTransform?.scale ?? 1);
+      setStoryMediaRotate(mediaTransform?.rotation ?? 0);
+      setStoryTextOffset({ x: 0, y: 0 });
+      setStoryTextScale(1);
+      setStoryTextRotation(0);
+      setStoryFilterId(storyFilter.id);
+      setStoryFilterAdjustments(storyFilter.adjustments);
+      setStoryAlignmentGuides({ vertical: false, horizontal: false });
+      setStoryTextEditorOpen(false);
+      setStoryDurationOpen(false);
+      setIsCloseFriendsOnly(false);
+      storyDurationManuallyChosenRef.current = true;
+      setUploadDuration(duration);
+      closeStoryPanels();
+      setShowStoryPicker(false);
+      setShowTextOnlyStoryCanvas(false);
+      setShowUploadModal(true);
+      return;
+    }
+
+    const restoredLayers = story.timed_texts.filter(layer => layer.type !== 'drawing' && layer.type !== 'media-transform');
+    const hasTextLayer = restoredLayers.some(layer => layer.type === undefined || layer.type === 'text');
+    const backgroundIndex = STORY_TEXT_BACKGROUNDS.findIndex(item => item.background === canvasStyle?.textBackground);
+    openTextOnlyStory();
+    setStoryText(hasTextLayer ? '' : story.caption || '');
+    setTimedTexts(restoredLayers);
+    setStoryDrawStrokes(drawing?.strokes || []);
+    setTextCanvasBackground(canvasStyle?.background || '#000000');
+    setStoryFontFamily(canvasStyle?.fontFamily || 'Cairo');
+    setStoryTextColor(canvasStyle?.textColor || '#FFFFFF');
+    setStoryTextAlign(canvasStyle?.textAlign || 'center');
+    setStoryTextAnimation(canvasStyle?.textAnimation || 'none');
+    setStoryBackgroundIndex(backgroundIndex >= 0 ? backgroundIndex : 0);
+    setStoryFilterId(storyFilter.id);
+    setStoryFilterAdjustments(storyFilter.adjustments);
+    setStoryDrawStrokes(drawing?.strokes || []);
+    setUploadDuration(duration);
+  };
+
   const handlePublishTextOnlyStory = (closeFriends: boolean) => {
     const canvasStyle: StoryCanvasStyle = {
       background: textCanvasBackground || '#000000',
@@ -1107,9 +1188,10 @@ export default function StoriesBar({
   };
 
   const activeStories = useMemo(() => {
+    if (archiveViewerOpen) return archiveStories;
     if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories;
     return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup] : [];
-  }, [activeUserGroup, groupedStories, profileStoryOwnerId, profilePreviewStories]);
+  }, [activeUserGroup, archiveStories, archiveViewerOpen, groupedStories, profileStoryOwnerId, profilePreviewStories]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
   const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
@@ -1408,6 +1490,18 @@ export default function StoriesBar({
   const handleNextStory = () => {
     if (currentStory?.id) markStorySeen(String(currentStory.id));
 
+    if (archiveViewerOpen) {
+      if (activeStoryIndex < activeStories.length - 1) {
+        setActiveStoryIndex(index => index + 1);
+        setProgress(0);
+        setCurrentTimeSec(0);
+      } else {
+        setArchiveViewerOpen(false);
+        setActiveUserGroup(null);
+      }
+      return;
+    }
+
     if (activeStoryIndex < activeStories.length - 1) {
       setActiveStoryIndex(prev => prev + 1);
       setProgress(0);
@@ -1427,6 +1521,15 @@ export default function StoriesBar({
   };
 
   const handlePrevStory = () => {
+    if (archiveViewerOpen) {
+      if (activeStoryIndex > 0) {
+        setActiveStoryIndex(index => index - 1);
+        setProgress(0);
+        setCurrentTimeSec(0);
+      }
+      return;
+    }
+
     if (activeStoryIndex > 0) {
       setActiveStoryIndex(prev => prev - 1);
       setProgress(0);
@@ -1458,6 +1561,20 @@ export default function StoriesBar({
       return;
     }
     setShowMenu(false);
+    if (archiveViewerOpen) {
+      const archiveIndex = archiveStories.findIndex(story => story.id === currentStory.id);
+      const remainingStories = archiveStories.filter(story => story.id !== currentStory.id);
+      setArchiveStories(remainingStories);
+      if (remainingStories.length === 0) {
+        setArchiveViewerOpen(false);
+        setActiveUserGroup(null);
+      } else {
+        setActiveStoryIndex(Math.min(Math.max(0, archiveIndex), remainingStories.length - 1));
+        setProgress(0);
+        setCurrentTimeSec(0);
+      }
+      return;
+    }
     await fetchStories();
     handleNextStory();
   };
@@ -1611,12 +1728,17 @@ export default function StoriesBar({
         uploading={uploading}
         uploadProgress={uploadProgress}
         onOpenMyStories={() => {
+          setArchiveViewerOpen(false);
           setActiveUserGroup(userId);
           setActiveStoryIndex(0);
           setProgress(0);
         }}
-        onOpenPicker={() => setShowStoryPicker(true)}
+        onOpenPicker={() => {
+          setArchiveViewerOpen(false);
+          setShowStoryPicker(true);
+        }}
         onOpenStoryGroup={authorId => {
+          setArchiveViewerOpen(false);
           setActiveUserGroup(authorId);
           setActiveStoryIndex(0);
           setProgress(0);
@@ -1633,7 +1755,17 @@ export default function StoriesBar({
             setShowTextOnlyStoryCanvas(true);
           }
         }}
-        archive={groupedStories[userId] || []}
+        archive={archiveStories}
+        archiveLoading={archiveLoading}
+        onOpenArchive={() => { void fetchStoryArchive(); }}
+        onOpenArchivedStory={story => {
+          setShowStoryPicker(false);
+          setArchiveViewerOpen(true);
+          setActiveUserGroup(userId);
+          setActiveStoryIndex(Math.max(0, archiveStories.findIndex(item => item.id === story.id)));
+          setProgress(0);
+          setCurrentTimeSec(0);
+        }}
         onTextMode={openTextOnlyStory}
         onFilesSelected={files => {
           if (!files.length) return;
@@ -1825,6 +1957,7 @@ export default function StoriesBar({
           showUI={showUI}
           isPaused={isPaused}
           isStoryOwner={isStoryOwner}
+          isArchivedStory={archiveViewerOpen}
           originalStoryAuthor={originalStoryAuthor}
           userId={userId}
           showMenu={showMenu}
@@ -1848,7 +1981,10 @@ export default function StoriesBar({
           onMenuChange={setShowMenu}
           onReportStory={() => { void handleReportStory(); }}
           onDeleteStory={() => void handleDeleteStory()}
-          onCloseViewer={() => setActiveUserGroup(null)}
+          onCloseViewer={() => {
+            setArchiveViewerOpen(false);
+            setActiveUserGroup(null);
+          }}
           onNextStory={handleNextStory}
           onPreviousStory={handlePrevStory}
           onToggleShowUI={() => setShowUI(!showUI)}
@@ -1859,6 +1995,9 @@ export default function StoriesBar({
           onReplyTextChange={setReplyText}
           onReplyFocusChange={focused => setReplyFocused(focused)}
           onToggleLike={() => void handleToggleLike()}
+          onReshareArchivedStory={() => {
+            if (currentStory) openArchivedStoryForReshare(currentStory);
+          }}
           onViewerRowMenuOpenChange={setViewerRowMenuOpen}
           onOpenViewerReport={handleOpenViewerReport}
           onBlockStoryViewer={viewer => void handleBlockStoryViewer(viewer)}

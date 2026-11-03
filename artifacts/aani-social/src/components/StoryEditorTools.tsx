@@ -24,7 +24,6 @@ type StoryEditorToolbarProps = {
   storyExtraTools: StoryEditorExtraTool[];
   uploadDuration: number;
   onSelectTool: (key: StoryEditorToolKey) => void;
-  onClose: () => void;
   onToggleMore: () => void;
   onDurationChange: (duration: number) => void;
 };
@@ -36,7 +35,6 @@ export function StoryEditorToolbar({
   storyExtraTools,
   uploadDuration,
   onSelectTool,
-  onClose,
   onToggleMore,
   onDurationChange,
 }: StoryEditorToolbarProps) {
@@ -64,15 +62,6 @@ export function StoryEditorToolbar({
       onTouchCancel={event => event.stopPropagation()}
       onClick={event => event.stopPropagation()}
     >
-      <button
-        type="button"
-        aria-label="إغلاق محرر القصة"
-        title="إغلاق"
-        onClick={onClose}
-        className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
-      >
-        <X size={17} />
-      </button>
       {tools.map(tool => {
         const Icon = tool.icon;
         return (
