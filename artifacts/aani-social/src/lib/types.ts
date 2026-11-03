@@ -9,10 +9,45 @@ export type Profile = {
   is_private?: boolean;
 };
 
+export type PostMetadataTag = {
+  kind: 'location' | 'link' | 'mention';
+  label: string;
+  href: string;
+  profileId?: string;
+};
+
+export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item): PostMetadataTag[] => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const row = item as Record<string, unknown>;
+    const kind = row.kind;
+    const label = typeof row.label === 'string' ? row.label.trim() : '';
+    if (!label || (kind !== 'location' && kind !== 'link' && kind !== 'mention')) return [];
+
+    if (kind === 'mention') {
+      const profileId = typeof row.profileId === 'string' ? row.profileId.trim() : '';
+      if (!profileId) return [];
+      return [{ kind, label: label.replace(/^@+/, ''), href: `/profile/${encodeURIComponent(profileId)}`, profileId }];
+    }
+
+    if (typeof row.href !== 'string') return [];
+    try {
+      const parsed = new URL(row.href);
+      if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) return [];
+      return [{ kind, label, href: parsed.href }];
+    } catch {
+      return [];
+    }
+  });
+};
+
 export type Post = {
   id: string;
   user_id: string;
   content: string;
+  post_metadata?: PostMetadataTag[];
   media_url: string | null;
   media_urls?: string[] | null;
   type: "text" | "photo" | "reel";
@@ -47,7 +82,7 @@ export type Post = {
 
 export type PostRow = Pick<
   Post,
-  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'type' | 'created_at'
+  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'created_at'
 > & {
   reposter_id?: string | null;
 };

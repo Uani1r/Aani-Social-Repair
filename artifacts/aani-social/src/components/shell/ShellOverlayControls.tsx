@@ -5,7 +5,7 @@ import AIAssistantModal from '@/components/AIAssistantModal';
 import CreatePostModal from '@/components/CreatePostModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import SettingsModal from '@/components/SettingsModal';
-import type { Profile } from '@/lib/types';
+import type { PostMetadataTag, Profile } from '@/lib/types';
 
 import type { NotificationsModalProps } from './types';
 
@@ -25,7 +25,7 @@ type ShellOverlayControlsProps = {
   createError: string;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tagContent: string[]) => void;
+  onPublish: (tags: PostMetadataTag[]) => void;
   onCloseCreatePost: () => void;
   showSettingsModal: boolean;
   onCloseSettings: () => void;

@@ -1,23 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AtSign, Link2, Loader2, MapPin, Search, X } from 'lucide-react';
-import { Link as RouterLink } from 'wouter';
 
 import Avatar from './Avatar';
 import UserIdentity from './UserIdentity';
+import PostMetadataChips from './PostMetadataChips';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { Profile } from '@/lib/types';
+import type { PostMetadataTag, Profile } from '@/lib/types';
 
-type ComposerTagKind = 'location' | 'link' | 'mention';
+type ComposerTagKind = PostMetadataTag['kind'];
 type TagTool = ComposerTagKind | null;
-
-type ComposerTag = {
-  id: string;
-  kind: ComposerTagKind;
-  label: string;
-  href: string;
-  profileId?: string;
-  publishText: string;
-};
+type ComposerTag = PostMetadataTag & { id: string };
 
 type MentionCandidate = {
   id: string;
@@ -37,7 +29,7 @@ type CreatePostModalProps = {
   createError: string;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tagContent: string[]) => void;
+  onPublish: (tags: PostMetadataTag[]) => void;
   onClose: () => void;
 };
 
@@ -170,7 +162,7 @@ export default function CreatePostModal({
 
     if (activeTool === 'location') {
       const href = mapsUrl(value);
-      addTag({ kind: 'location', label: value, href, publishText: `الموقع: ${value} — ${href}` });
+      addTag({ kind: 'location', label: value, href });
       return;
     }
 
@@ -181,8 +173,7 @@ export default function CreatePostModal({
         if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
           throw new Error('Invalid URL');
         }
-        const href = parsed.href;
-        addTag({ kind: 'link', label: parsed.hostname, href, publishText: `الرابط: ${href}` });
+        addTag({ kind: 'link', label: parsed.hostname, href: parsed.href });
       } catch {
         setTagError('أدخل رابطاً صحيحاً يبدأ بـ https:// أو http://.');
       }
@@ -201,7 +192,7 @@ export default function CreatePostModal({
       ({ coords }) => {
         const query = `${coords.latitude.toFixed(6)},${coords.longitude.toFixed(6)}`;
         const href = mapsUrl(query);
-        addTag({ kind: 'location', label: 'موقعي الحالي', href, publishText: `الموقع: موقعي الحالي — ${href}` });
+        addTag({ kind: 'location', label: 'موقعي الحالي', href });
         setIsLocating(false);
       },
       () => {
@@ -212,7 +203,7 @@ export default function CreatePostModal({
     );
   };
 
-  const handlePublish = () => onPublish(tags.map(tag => tag.publishText));
+  const handlePublish = () => onPublish(tags.map(({ kind, label, href, profileId }) => ({ kind, label, href, profileId })));
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
@@ -284,37 +275,12 @@ export default function CreatePostModal({
           </div>
         )}
 
-        {tags.length > 0 && (
-          <div className="mx-6 mb-3 flex flex-wrap gap-2" dir="rtl">
-            {tags.map(tag => {
-              const TagIcon = tag.kind === 'location' ? MapPin : tag.kind === 'link' ? Link2 : AtSign;
-              const tagLinkClass = 'flex min-w-0 max-w-[220px] items-center gap-2 truncate px-3 py-2 text-xs text-violet-200';
-              return (
-                <div key={tag.id} className="flex min-w-0 items-center rounded-full border border-violet-400/20 bg-violet-500/15 backdrop-blur-md">
-                  {tag.kind === 'mention' && tag.profileId ? (
-                    <RouterLink href={`/profile/${tag.profileId}`} onClick={onClose} className={tagLinkClass}>
-                      <TagIcon size={14} className="shrink-0" />
-                      <span className="truncate">{tag.label}</span>
-                    </RouterLink>
-                  ) : (
-                    <a href={tag.href} target="_blank" rel="noopener noreferrer" className={tagLinkClass}>
-                      <TagIcon size={14} className="shrink-0" />
-                      <span className="truncate">{tag.label}</span>
-                    </a>
-                  )}
-                  <button
-                    type="button"
-                    aria-label={`إزالة ${tag.kind === 'location' ? 'الموقع' : tag.kind === 'link' ? 'الرابط' : 'الإشارة'}`}
-                    onClick={() => setTags(current => current.filter(item => item.id !== tag.id))}
-                    className="ml-1 grid h-7 w-7 shrink-0 place-items-center rounded-full text-violet-200/70 transition hover:bg-white/10 hover:text-white"
-                  >
-                    <X size={13} />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <PostMetadataChips
+          tags={tags}
+          className="mx-6 mb-3"
+          onRemove={index => setTags(current => current.filter((_, tagIndex) => tagIndex !== index))}
+          onMentionClick={onClose}
+        />
 
         {activeTool && (
           <div className="mx-6 mb-3 rounded-2xl border border-white/10 bg-white/[0.06] p-3 backdrop-blur-xl">
@@ -354,7 +320,6 @@ export default function CreatePostModal({
                         label: person.username,
                         href: `/profile/${person.id}`,
                         profileId: person.id,
-                        publishText: `@${person.username}`,
                       })}
                       className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-right transition hover:bg-white/10"
                     >

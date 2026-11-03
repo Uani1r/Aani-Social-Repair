@@ -4,7 +4,7 @@ import FeedPostCard from '@/components/FeedPostCard';
 import { hydratePostInteractions } from '@/hooks/usePosts';
 import { decoratePost, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { Post } from '@/lib/types';
+import { normalizePostMetadata, type Post } from '@/lib/types';
 
 export default function PostDetailPage({ postId, currentUserId, onOpenComments }: { postId: string; currentUserId: string; onOpenComments: (postId: string) => void }) {
   const [post, setPost] = useState<Post | null>(null);
@@ -24,7 +24,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     setLoading(true);
     try {
       const { data, error } = await supabase.from('posts')
-        .select('id, user_id, content, media_url, media_urls, type, created_at')
+        .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
         .eq('id', postId)
         .maybeSingle();
       if (error || !data) {
@@ -37,6 +37,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
         .maybeSingle();
       const hydrated = await hydratePostInteractions([{
         ...data,
+        post_metadata: normalizePostMetadata(data.post_metadata),
         author: author || { id: data.user_id, username: 'user', full_name: 'مستخدم آني' },
       } as unknown as Post], currentUserId);
       setPost(hydrated[0] || null);

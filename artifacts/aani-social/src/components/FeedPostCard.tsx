@@ -7,6 +7,7 @@ import { Link } from 'wouter';
 import Avatar from './Avatar';
 import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
+import PostMetadataChips from './PostMetadataChips';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -424,6 +425,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           {post.content}
         </p>
       )}
+      <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (

@@ -5,13 +5,14 @@ import { useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { postShareUrl } from '@/lib/interactions';
-import { displayName, type Profile } from '@/lib/types';
+import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile } from '@/lib/types';
+import PostMetadataChips from '@/components/PostMetadataChips';
 
 export default function SharedPostPreview({ content, postId }: { content?: string | null; postId?: string | null }) {
   const match = (content || '').match(/^\[post:(\S+)\]([\s\S]*)$/);
   const resolvedId = postId || match?.[1] || '';
   const caption = (match?.[2] || '').trim();
-  const [info, setInfo] = useState<{ author: Profile | null; media: string; text: string; type: string } | null>(null);
+  const [info, setInfo] = useState<{ author: Profile | null; media: string; text: string; type: string; metadata: PostMetadataTag[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [muted, setMuted] = useState(true);
   const [, navigateToPost] = useLocation();
@@ -30,14 +31,14 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
       try {
         const { data: p } = await supabase
           .from('posts')
-          .select('id, user_id, content, media_url, media_urls, type')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type')
           .eq('id', resolvedId)
           .maybeSingle();
 
         if (!active) return;
 
         if (!p) {
-          setInfo({ author: null, media: '', text: '', type: 'text' });
+          setInfo({ author: null, media: '', text: '', type: 'text', metadata: [] });
           return;
         }
 
@@ -49,7 +50,7 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
 
         if (!active) return;
 
-        const raw = p as { media_urls?: string[] | null; media_url?: string | null; content?: string; type?: string };
+        const raw = p as { media_urls?: string[] | null; media_url?: string | null; content?: string; type?: string; post_metadata?: unknown };
         const media = (raw.media_urls?.length ? raw.media_urls[0] : raw.media_url) || '';
 
         setInfo({
@@ -57,9 +58,10 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
           media,
           text: String(raw.content || ''),
           type: String(raw.type || 'text'),
+          metadata: normalizePostMetadata(raw.post_metadata),
         });
       } catch {
-        if (active) setInfo({ author: null, media: '', text: '', type: 'text' });
+        if (active) setInfo({ author: null, media: '', text: '', type: 'text', metadata: [] });
       } finally {
         if (active) setLoading(false);
       }
@@ -165,14 +167,15 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
           )}
         </div>
 
-        {(info?.text || caption) && !loading && (
-          <div className="space-y-0.5 px-2 py-1.5">
+        {(info?.text || caption || (info?.metadata.length ?? 0) > 0) && !loading && (
+          <div className="space-y-1 px-2 py-1.5">
             {info?.text && (
               <p className="line-clamp-2 text-right text-[11px] leading-4 text-zinc-300">{info.text}</p>
             )}
             {caption && (
               <p className="line-clamp-1 text-right text-[10px] text-zinc-500">{caption}</p>
             )}
+            <PostMetadataChips tags={info?.metadata || []} className="gap-1" />
           </div>
         )}
 

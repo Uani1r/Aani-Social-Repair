@@ -6,6 +6,7 @@ import {
 import Avatar from '@/components/Avatar';
 import ShareSheet from '@/components/ShareSheet';
 import UserIdentity from '@/components/UserIdentity';
+import PostMetadataChips from '@/components/PostMetadataChips';
 import { recordShare } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Post } from '@/lib/types';
@@ -210,6 +211,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
               />
             </div>
             {post.content && <p className="text-sm leading-snug line-clamp-3">{post.content}</p>}
+            <PostMetadataChips tags={post.post_metadata || []} className="mt-2" />
           </div>
         </div>
       </div>

@@ -50,25 +50,35 @@ create table if not exists public.posts (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles (id) on delete cascade,
   content text not null default '',
+  post_metadata jsonb not null default '[]'::jsonb,
   media_url text,
   type text not null default 'text',
   created_at timestamptz not null default now()
 );
 
 alter table public.posts add column if not exists media_url text;
+alter table public.posts add column if not exists post_metadata jsonb not null default '[]'::jsonb;
 alter table public.posts add column if not exists type text not null default 'text';
 alter table public.posts alter column content set default '';
 
 -- The previous schema required non-empty text and capped it at 500 characters.
--- Media-only posts are now valid; existing content is preserved.
+-- Metadata-only posts are now valid; existing content is preserved.
 alter table public.posts drop constraint if exists posts_content_check;
 alter table public.posts drop constraint if exists posts_content_length_check;
 alter table public.posts
   add constraint posts_content_length_check
   check (
     char_length(content) <= 2000
-    and (char_length(btrim(content)) > 0 or media_url is not null)
+    and (
+      char_length(btrim(content)) > 0
+      or media_url is not null
+      or post_metadata <> '[]'::jsonb
+    )
   );
+alter table public.posts drop constraint if exists posts_post_metadata_array_check;
+alter table public.posts
+  add constraint posts_post_metadata_array_check
+  check (jsonb_typeof(post_metadata) = 'array');
 alter table public.posts drop constraint if exists posts_type_check;
 alter table public.posts
   add constraint posts_type_check

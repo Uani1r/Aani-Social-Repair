@@ -4,6 +4,7 @@ import { Bookmark, Heart, MessageCircle, Repeat2, Share2 } from 'lucide-react';
 import { usePostInteractions } from '../lib/interactions';
 import type { Post } from '../lib/types';
 import UserIdentity from './UserIdentity';
+import PostMetadataChips from './PostMetadataChips';
 
 export interface PostCardProps {
   post: Post;
@@ -87,6 +88,7 @@ export default function PostCard({
           {post.content}
         </p>
       )}
+      <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
 
       {/* مرفق الصورة */}
       {post.media_url && (

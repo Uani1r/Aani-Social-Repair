@@ -1,5 +1,5 @@
 import { supabase, supabaseConfigured } from "../supabase";
-import { displayName, type Post, type Profile } from "../types";
+import { displayName, normalizePostMetadata, type Post, type Profile } from "../types";
 import type {
   CommentAuthor,
   PostCommentRow,
@@ -471,6 +471,7 @@ export async function decoratePosts(
     id: String(row.id),
     user_id: String(row.user_id ?? ""),
     content: String(row.content ?? ""),
+    post_metadata: normalizePostMetadata(row.post_metadata),
     media_url: optionalString(row.media_url) ?? null,
     media_urls: optionalStringArray(row.media_urls),
     type: row.type === "photo" || row.type === "reel" ? row.type : "text",

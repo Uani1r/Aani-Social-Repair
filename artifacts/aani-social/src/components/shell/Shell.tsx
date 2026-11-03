@@ -6,6 +6,7 @@ import ShellOverlayControls from './ShellOverlayControls';
 import ShellTopBar from './ShellTopBar';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import type { PostMetadataTag } from '@/lib/types';
 import type { ShellProps } from './types';
 
 export default function Shell({
@@ -405,16 +406,16 @@ export default function Shell({
     });
   }, [userId, showNotifsModal]);
 
-  const handlePublish = async (tagContent: string[] = []) => {
+  const handlePublish = async (postMetadata: PostMetadataTag[] = []) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
     }
 
-    const content = [postText.trim(), ...tagContent].filter(Boolean).join('\n');
-    if (!content && selectedFiles.length === 0) return;
+    const content = postText.trim();
+    if (!content && selectedFiles.length === 0 && postMetadata.length === 0) return;
     if (Array.from(content).length > 2000) {
-      setCreateError('محتوى المنشور مع الوسوم يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص أو أزل بعض الوسوم.');
+      setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
       return;
     }
 
@@ -444,15 +445,19 @@ export default function Shell({
 
       const { error: postError } = await supabase.from('posts').insert({
         user_id: userId,
-        content: content || null,
+        content,
+        post_metadata: postMetadata,
         media_url: uploadedUrls[0] || null,
         media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
         type,
       });
 
       if (postError) {
+        if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
+          throw new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
+        }
         if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
-          throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا لطول المنشور. طبّق الترحيل 20261121000000_posts_content_length.sql على Supabase ثم أعد المحاولة.');
+          throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا للمنشورات. طبّق الترحيل 20261122000000_post_metadata_chips.sql على Supabase ثم أعد المحاولة.');
         }
         throw new Error(`فشل حفظ المنشور: ${postError.message}`);
       }
