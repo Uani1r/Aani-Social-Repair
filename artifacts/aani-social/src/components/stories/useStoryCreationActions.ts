@@ -2,6 +2,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { toast } from 'sonner';
 
 import type { StoryDrawStroke } from '@/lib/appShared';
+import type { StoryCanvasStyle } from '@/components/stories/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadStoryMedia } from '@/lib/storyUpload';
 import type { Profile } from '@/lib/types';
@@ -263,30 +264,69 @@ export function useStoryCreationActions({
     })();
   };
 
-  const handleCreateTextStory = async () => {
-    const text = window.prompt('اكتب نص القصة');
-    if (!text?.trim() || !supabaseConfigured) return;
+  const handleCreateTextStory = async (text: string, canvasStyle: StoryCanvasStyle): Promise<boolean> => {
+    const trimmedText = text.trim();
+    if (!trimmedText || !supabaseConfigured) return false;
 
+    setUploading(true);
     try {
-      const { error } = await supabase.rpc('aani_create_story', {
+      const timedTexts = [
+        {
+          id: 'story-canvas-style',
+          type: 'canvas-style' as const,
+          startTime: 0,
+          endTime: uploadDuration,
+          ...canvasStyle,
+        },
+        ...(storyDrawStrokes.length > 0
+          ? [{
+              id: 'story-drawing',
+              type: 'drawing' as const,
+              startTime: 0,
+              endTime: uploadDuration,
+              strokes: storyDrawStrokes,
+            }]
+          : []),
+      ];
+      const { data: storyId, error } = await supabase.rpc('aani_create_story', {
         p_media_url: null,
         p_media_type: 'text',
-        p_caption: text.trim(),
-        p_is_close_friends: false,
+        p_caption: trimmedText,
+        p_is_close_friends: isCloseFriendsOnly,
         p_duration_seconds: uploadDuration,
-        p_timed_texts: [],
-        p_filter_key: null,
+        p_timed_texts: timedTexts,
+        p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
         p_original_story_id: null,
         p_share_type: 'original',
         p_expiry_seconds: null,
       });
 
       if (error) throw error;
+      if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
 
-      await fetchStories();
+      if (storyMentions.length > 0) {
+        void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', storyMentions);
+      }
+
+      setCaption('');
+      setStoryText('');
+      setTimedTexts([]);
+      setStoryDrawStrokes([]);
+      setStoryDrawingOpen(false);
+      activeStoryDrawStrokeRef.current = null;
+      setStoryMentions([]);
+      setStoryDurationOpen(false);
+      storyDurationManuallyChosenRef.current = false;
+      setShowUploadModal(false);
+      await fetchStories().catch(error => console.warn('[stories] تعذر تحديث القصص بعد النشر:', error));
       toast.success('نُشرت قصتك');
-    } catch {
-      toast.error('تعذر نشر القصة، حاول مرة أخرى');
+      return true;
+    } catch (error) {
+      const details = error instanceof Error ? error.message : '';
+      toast.error(details ? `تعذر نشر القصة: ${details}` : 'تعذر نشر القصة، حاول مرة أخرى');
+      return false;
+    } finally {
+      setUploading(false);
     }
   };
 

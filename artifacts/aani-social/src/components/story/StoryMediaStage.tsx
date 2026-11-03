@@ -1,5 +1,6 @@
 import type { StoryDrawPoint } from '@/lib/appShared';
 
+import type { StoryCanvasStyleOverlay } from '@/components/stories/types';
 import type { StoryViewerProps } from './types';
 
 type StoryMediaStageProps = Pick<
@@ -30,6 +31,12 @@ export default function StoryMediaStage({
   onToggleShowUI,
   onPauseChange,
 }: StoryMediaStageProps) {
+  const canvasStyle = currentStory.timed_texts.find(
+    (item): item is StoryCanvasStyleOverlay => item.type === 'canvas-style'
+      && currentTimeSec >= item.startTime
+      && currentTimeSec <= item.endTime,
+  );
+
   return (
     <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-zinc-950">
       {currentStory.media_url ? (
@@ -47,6 +54,25 @@ export default function StoryMediaStage({
         ) : (
           <img src={currentStory.media_url} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css }} />
         )
+      ) : canvasStyle ? (
+        <div
+          className="flex h-full w-full items-center justify-center p-6 text-center text-2xl font-bold text-white"
+          style={{ background: canvasStyle.background, filter: currentStoryFilter.css, color: canvasStyle.textColor }}
+        >
+          <div
+            className={canvasStyle.textAnimation === 'none' ? undefined : `aani-story-anim-${canvasStyle.textAnimation}`}
+            style={{
+              fontFamily: canvasStyle.fontFamily,
+              textAlign: canvasStyle.textAlign,
+              background: canvasStyle.textBackground,
+              textShadow: '0 2px 14px rgba(0,0,0,0.42)',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
+            }}
+          >
+            {currentStory.caption}
+          </div>
+        </div>
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-[#1f1f27] p-6 text-center text-base font-bold text-white">
           {currentStory.caption}
@@ -66,6 +92,7 @@ export default function StoryMediaStage({
 
       {currentStory.timed_texts.map(timedText => {
         if (currentTimeSec < timedText.startTime || currentTimeSec > timedText.endTime) return null;
+        if (timedText.type === 'canvas-style') return null;
 
         if (timedText.type === 'drawing') {
           return (

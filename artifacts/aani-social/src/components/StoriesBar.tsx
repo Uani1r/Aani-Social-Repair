@@ -18,9 +18,10 @@ import {
 
 import StoryComposerSheet from './StoryComposerSheet';
 import StoryCreationEditor from '@/components/StoryCreationEditor';
+import TextOnlyStoryCanvas from '@/components/story/TextOnlyStoryCanvas';
 import StoryViewer from '@/components/StoryViewer';
 import StoriesStrip from '@/components/stories/StoriesStrip';
-import type { StoryAuthor, StoryRow } from '@/components/stories/types';
+import type { StoryAuthor, StoryCanvasStyle, StoryRow } from '@/components/stories/types';
 import { useStoriesData } from '@/components/stories/useStoriesData';
 import { useStoryCreationActions } from '@/components/stories/useStoryCreationActions';
 import { useStoryViewerActions } from '@/components/stories/useStoryViewerActions';
@@ -123,16 +124,19 @@ export default function StoriesBar({
 
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showStoryPicker, setShowStoryPicker] = useState(false);
+  const [showTextOnlyStoryCanvas, setShowTextOnlyStoryCanvas] = useState(false);
+  const [textCanvasBackground, setTextCanvasBackground] = useState('linear-gradient(135deg, #4C1D95 0%, #DB2777 52%, #F97316 100%)');
+  const textCanvasMediaPickerRef = useRef(false);
 
   // أثناء شاشات القصص (اختيار/معاينة/عارض القصص) تُخفى أشرطة التطبيق وتُعزل الحركات
   useEffect(() => {
-    const immersive = showStoryPicker || showUploadModal || Boolean(activeUserGroup);
+    const immersive = showStoryPicker || showUploadModal || showTextOnlyStoryCanvas || Boolean(activeUserGroup);
     document.body.classList.toggle('aani-immersive', immersive);
 
     return () => {
       document.body.classList.remove('aani-immersive');
     };
-  }, [showStoryPicker, showUploadModal, activeUserGroup]);
+  }, [showStoryPicker, showUploadModal, showTextOnlyStoryCanvas, activeUserGroup]);
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
   const [reshareStory, setReshareStory] = useState<StoryDmCardStory | null>(null);
@@ -674,6 +678,60 @@ export default function StoriesBar({
     setStoryText,
   });
 
+  const openTextOnlyStory = () => {
+    textCanvasMediaPickerRef.current = false;
+    setShowStoryPicker(false);
+    setShowUploadModal(false);
+    setStoryFile(null);
+    setReshareStory(null);
+    setReshareScaledDown(false);
+    setCaption('');
+    setStoryText('');
+    setStoryTextEditorOpen(true);
+    setStoryFontFamily('Cairo');
+    setStoryTextColor('#FFFFFF');
+    setStoryTextAlign('center');
+    setStoryTextAnimation('none');
+    setStoryBackgroundIndex(0);
+    setStoryTextOffset({ x: 0, y: 0 });
+    setStoryTextScale(1);
+    setStoryTextRotation(0);
+    setTextCanvasBackground('linear-gradient(135deg, #4C1D95 0%, #DB2777 52%, #F97316 100%)');
+    setStoryDrawStrokes([]);
+    setStoryDrawingOpen(false);
+    activeStoryDrawStrokeRef.current = null;
+    setStoryFiltersOpen(false);
+    setStoryFilterId('original');
+    setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
+    setStoryMusicOpen(false);
+    setStoryMusicTrack(null);
+    setStoryMentionsOpen(false);
+    setStoryMentions([]);
+    setCloseFriendsOpen(false);
+    setStoryMoreOpen(false);
+    setStoryDurationOpen(false);
+    setUploadDuration(60);
+    setIsCloseFriendsOnly(false);
+    storyDurationManuallyChosenRef.current = true;
+    setShowTextOnlyStoryCanvas(true);
+  };
+
+  const handlePublishTextOnlyStory = () => {
+    const canvasStyle: StoryCanvasStyle = {
+      background: textCanvasBackground,
+      textBackground: storyBackgroundPreset.background,
+      textColor: storyTextColor,
+      fontFamily: storyFontFamily,
+      textAlign: storyTextAlign,
+      textAnimation: storyTextAnimation,
+    };
+    void handleCreateTextStory(storyText, canvasStyle).then(published => {
+      if (!published) return;
+      setStoryTextEditorOpen(false);
+      setShowTextOnlyStoryCanvas(false);
+    });
+  };
+
   const activeStories = useMemo(() => {
     if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories;
     return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup] : [];
@@ -1092,7 +1150,7 @@ export default function StoriesBar({
   }, [storyDrawStrokes]);
 
   useEffect(() => {
-    if (!showUploadModal || !editorMediaUrl) return;
+    if ((!showUploadModal && !showTextOnlyStoryCanvas) || (showUploadModal && !editorMediaUrl)) return;
     const canvas = storyDrawingCanvasRef.current;
     if (!canvas) return;
 
@@ -1106,7 +1164,7 @@ export default function StoriesBar({
       observer?.disconnect();
       window.removeEventListener('resize', redrawStoryDrawingCanvas);
     };
-  }, [editorMediaUrl, redrawStoryDrawingCanvas, showUploadModal]);
+  }, [editorMediaUrl, redrawStoryDrawingCanvas, showTextOnlyStoryCanvas, showUploadModal]);
 
   const handleStoryDrawPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!storyDrawingOpen) return;
@@ -1199,14 +1257,27 @@ export default function StoriesBar({
 
       <StoryComposerSheet
         open={showStoryPicker}
-        onClose={() => setShowStoryPicker(false)}
-        archive={groupedStories[userId] || []}
-        onTextMode={() => {
+        onClose={() => {
           setShowStoryPicker(false);
-          void handleCreateTextStory();
+          if (textCanvasMediaPickerRef.current) {
+            textCanvasMediaPickerRef.current = false;
+            setShowTextOnlyStoryCanvas(true);
+          }
         }}
+        archive={groupedStories[userId] || []}
+        onTextMode={openTextOnlyStory}
         onFilesSelected={files => {
           if (!files.length) return;
+
+          if (textCanvasMediaPickerRef.current) {
+            textCanvasMediaPickerRef.current = false;
+            setShowTextOnlyStoryCanvas(false);
+            setStoryTextEditorOpen(false);
+            setStoryText('');
+            setCaption('');
+            setStoryDrawStrokes([]);
+            setStoryMentions([]);
+          }
 
           if (files.length > 1) {
             toast.info('سيُستخدم أول وسيط مختار لنشر القصة');
@@ -1225,6 +1296,149 @@ export default function StoriesBar({
           setShowUploadModal(true);
         }}
       />
+
+      {showTextOnlyStoryCanvas && (
+        <TextOnlyStoryCanvas
+          userId={userId}
+          storyText={storyText}
+          fontFamily={storyFontFamily}
+          textColor={storyTextColor}
+          textAlign={storyTextAlign}
+          textAnimation={storyTextAnimation}
+          textBackgroundPreset={storyBackgroundPreset}
+          canvasBackground={textCanvasBackground}
+          editorOpen={storyTextEditorOpen}
+          keyboardInset={storyKeyboardInset}
+          animationTick={storyAnimationTick}
+          visibleText={visibleStoryText}
+          previewClassName={storyPreviewClassName}
+          editorPreviewMode={storyEditorPreviewMode}
+          storyTextOffset={storyTextOffset}
+          storyTextScale={storyTextScale}
+          storyTextRotation={storyTextRotation}
+          textAreaRef={storyTextAreaRef}
+          storyToolsRef={storyToolsRef}
+          storyDrawingCanvasRef={storyDrawingCanvasRef}
+          storyMoreOpen={storyMoreOpen}
+          storyDurationOpen={storyDurationOpen}
+          extraTools={storyExtraTools}
+          uploadDuration={uploadDuration}
+          storyFiltersOpen={storyFiltersOpen}
+          storyFilterId={storyFilterId}
+          storyFilterAdjustments={storyFilterAdjustments}
+          storyFilterValue={storyFilterValue}
+          storyFilterOverlay={storyFilterOverlay}
+          storyMusicTrack={storyMusicTrack}
+          storyDrawingOpen={storyDrawingOpen}
+          storyDrawColor={storyDrawColor}
+          storyDrawSize={storyDrawSize}
+          storyDrawStrokes={storyDrawStrokes}
+          storyMusicOpen={storyMusicOpen}
+          storyMentionsOpen={storyMentionsOpen}
+          closeFriendsOpen={closeFriendsOpen}
+          uploading={uploading}
+          onBackToPicker={() => {
+            setShowTextOnlyStoryCanvas(false);
+            setStoryTextEditorOpen(false);
+            setShowStoryPicker(true);
+          }}
+          onOpenMediaPicker={() => {
+            textCanvasMediaPickerRef.current = true;
+            setShowTextOnlyStoryCanvas(false);
+            setStoryTextEditorOpen(false);
+            setShowStoryPicker(true);
+          }}
+          onPublish={handlePublishTextOnlyStory}
+          onOpenEditor={() => setStoryTextEditorOpen(true)}
+          onFinishEditing={() => {
+            setCaption(storyText.trim());
+            setStoryTextEditorOpen(false);
+          }}
+          onTextChange={setStoryText}
+          onFontFamilyChange={setStoryFontFamily}
+          onTextColorChange={setStoryTextColor}
+          onCycleAlign={() => setStoryTextAlign(previous => nextStoryTextAlign(previous))}
+          onCycleTextBackground={() => setStoryBackgroundIndex(previous => (previous + 1) % STORY_TEXT_BACKGROUNDS.length)}
+          onAnimationChange={value => {
+            setStoryTextAnimation(value);
+            setStoryAnimationTick(tick => tick + 1);
+          }}
+          onInteract={() => {
+            keepStoryEditorFocus();
+            window.setTimeout(keepStoryEditorFocus, 80);
+          }}
+          onCanvasBackgroundChange={setTextCanvasBackground}
+          onSelectTool={toolKey => {
+            if (toolKey === 'text') {
+              setStoryDrawingOpen(false);
+              setStoryFiltersOpen(false);
+              setStoryTextEditorOpen(true);
+            } else if (toolKey === 'mention') {
+              setStoryDrawingOpen(false);
+              setStoryTextEditorOpen(false);
+              setStoryFiltersOpen(false);
+              setStoryMentionsOpen(true);
+            } else if (toolKey === 'music') {
+              setStoryDrawingOpen(false);
+              setStoryTextEditorOpen(false);
+              setStoryMusicOpen(true);
+            } else if (toolKey === 'effects') {
+              setStoryDrawingOpen(false);
+              setStoryTextEditorOpen(false);
+              setStoryFiltersOpen(open => !open);
+            } else if (toolKey === 'draw') {
+              setStoryTextEditorOpen(false);
+              setStoryFiltersOpen(false);
+              setStoryMoreOpen(false);
+              setStoryDurationOpen(false);
+              setStoryDrawingOpen(true);
+            }
+          }}
+          onToggleMore={() => {
+            const nextOpen = !storyMoreOpen;
+            setStoryMoreOpen(nextOpen);
+            if (!nextOpen) setStoryDurationOpen(false);
+          }}
+          onDurationChange={duration => {
+            storyDurationManuallyChosenRef.current = true;
+            setUploadDuration(duration);
+          }}
+          onSelectFilter={setStoryFilterId}
+          onAdjustFilter={(key, value) => setStoryFilterAdjustments(previous => ({ ...previous, [key]: value }))}
+          onResetFilters={() => {
+            setStoryFilterId('original');
+            setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
+          }}
+          onCloseFilters={() => setStoryFiltersOpen(false)}
+          onDrawColorChange={setStoryDrawColor}
+          onDrawSizeChange={setStoryDrawSize}
+          onUndoDrawing={undoStoryDrawStroke}
+          onCloseDrawing={() => setStoryDrawingOpen(false)}
+          onDrawPointerDown={handleStoryDrawPointerDown}
+          onDrawPointerMove={handleStoryDrawPointerMove}
+          onDrawPointerUp={handleStoryDrawPointerUp}
+          onCanvasTouchStart={handleStoryCanvasTouchStart}
+          onCanvasTouchMove={handleStoryCanvasTouchMove}
+          onCanvasTouchEnd={handleStoryCanvasTouchEnd}
+          onCloseMusic={() => setStoryMusicOpen(false)}
+          onSelectMusic={track => {
+            setStoryMusicTrack({ id: track.id, title: track.title, artist: track.artist });
+            setStoryMusicOpen(false);
+            toast.success(`تم اختيار: ${track.title}`);
+          }}
+          onCloseMentions={() => setStoryMentionsOpen(false)}
+          onConfirmMentions={people => {
+            setStoryMentions(people);
+            setStoryMentionsOpen(false);
+            if (people.length === 1) {
+              toast.success(`تمت الإشارة إلى ${people[0].username}`);
+            } else if (people.length > 1) {
+              toast.success(`تمت الإشارة إلى ${people.length} أشخاص`);
+            }
+          }}
+          onCloseCloseFriends={() => setCloseFriendsOpen(false)}
+        />
+      )}
 
       {currentStory && (
         <StoryViewer

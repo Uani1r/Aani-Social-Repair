@@ -1,4 +1,5 @@
 import type { StoryDrawPoint, StoryDrawStroke } from '@/lib/appShared';
+import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import type { Profile } from '@/lib/types';
 
 export type StoryAuthor = Partial<Profile> & Pick<Profile, 'id'>;
@@ -21,7 +22,23 @@ export interface StoryDrawingOverlay {
   strokes: StoryDrawStroke[];
 }
 
-export type StoryTimedText = StoryTextOverlay | StoryDrawingOverlay;
+export interface StoryCanvasStyle {
+  background: string;
+  textBackground: string;
+  textColor: string;
+  fontFamily: string;
+  textAlign: StoryTextAlign;
+  textAnimation: StoryTextAnimation;
+}
+
+export interface StoryCanvasStyleOverlay extends StoryCanvasStyle {
+  id: string;
+  type: 'canvas-style';
+  startTime: number;
+  endTime: number;
+}
+
+export type StoryTimedText = StoryTextOverlay | StoryDrawingOverlay | StoryCanvasStyleOverlay;
 
 export interface StoryRow {
   id: string;
@@ -68,6 +85,18 @@ function isStoryDrawStroke(value: unknown): value is StoryDrawStroke {
     && (value.points as unknown[]).every(isStoryDrawPoint);
 }
 
+function isSafeStoryBackground(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  if (/^#[0-9a-f]{3,8}$/i.test(value) || value === 'transparent') return true;
+  if (/^rgba?\(\s*[\d.%\s,]+\)$/i.test(value)) return true;
+  return /^linear-gradient\([\w\s#.,%()-]+\)$/i.test(value)
+    && !/(url|var|expression)/i.test(value);
+}
+
+const STORY_TEXT_ANIMATIONS: StoryTextAnimation[] = [
+  'none', 'typewriter', 'pop', 'slide-up', 'slide-down', 'slide-right', 'slide-left', 'bounce', 'glow',
+];
+
 function isStoryTimedText(value: unknown): value is StoryTimedText {
   if (!isRecord(value)
     || typeof value.id !== 'string'
@@ -76,6 +105,17 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
     || typeof value.endTime !== 'number'
     || !Number.isFinite(value.endTime)) {
     return false;
+  }
+
+  if (value.type === 'canvas-style') {
+    return isSafeStoryBackground(value.background)
+      && isSafeStoryBackground(value.textBackground)
+      && typeof value.textColor === 'string'
+      && /^#[0-9a-f]{3,8}$/i.test(value.textColor)
+      && typeof value.fontFamily === 'string'
+      && value.fontFamily.length <= 120
+      && (value.textAlign === 'left' || value.textAlign === 'center' || value.textAlign === 'right')
+      && STORY_TEXT_ANIMATIONS.includes(value.textAnimation as StoryTextAnimation);
   }
 
   if (value.type === 'drawing') {
