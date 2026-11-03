@@ -145,14 +145,17 @@ export default function StoryMediaStage({
         return (
           <div
             key={textLayer.id}
-            className={`absolute z-20 max-w-[82vw] whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
+            className={`absolute z-20 ${currentStory.media_type === 'text' ? 'w-[90vw] max-w-[90vw]' : 'max-w-[82vw]'} whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
+            dir={currentStory.media_type === 'text' ? 'rtl' : undefined}
             style={{
               top: `${textLayer.y}%`,
               left: `${textLayer.x}%`,
               transform: `translate(-50%, -50%) scale(${textLayer.scale ?? 1}) rotate(${textLayer.rotation ?? 0}deg)`,
               color: textLayer.textColor || '#FFFFFF',
               fontFamily: textLayer.fontFamily || 'Cairo',
+              fontSize: currentStory.media_type === 'text' ? textLayer.fontSize ?? 30 : undefined,
               textAlign: textLayer.textAlign || 'center',
+              overflowWrap: currentStory.media_type === 'text' ? 'anywhere' : undefined,
               background: textLayer.textBackground || 'transparent',
               textShadow: '0 2px 14px rgba(0,0,0,0.42)',
             }}

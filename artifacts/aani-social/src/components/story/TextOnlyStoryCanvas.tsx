@@ -47,6 +47,7 @@ interface TextOnlyStoryCanvasProps {
   canvasBackground: string;
   storyTextOffset: { x: number; y: number };
   storyTextScale: number;
+  storyTextFontSize: number;
   storyTextRotation: number;
   editorOpen: boolean;
   keyboardInset: number;
@@ -83,7 +84,7 @@ interface TextOnlyStoryCanvasProps {
   onCycleAlign: () => void;
   onCycleTextBackground: () => void;
   onAnimationChange: (animation: StoryTextAnimation) => void;
-  onTextScaleChange: (scale: number) => void;
+  onTextFontSizeChange: (fontSize: number) => void;
   onTextTransformChange: (transform: { x: number; y: number; scale: number; rotation: number }) => void;
   onInteract: () => void;
   onCanvasBackgroundChange: (background: string) => void;
@@ -147,6 +148,7 @@ export default function TextOnlyStoryCanvas({
   canvasBackground,
   storyTextOffset,
   storyTextScale,
+  storyTextFontSize,
   storyTextRotation,
   editorOpen,
   keyboardInset,
@@ -183,7 +185,7 @@ export default function TextOnlyStoryCanvas({
   onCycleAlign,
   onCycleTextBackground,
   onAnimationChange,
-  onTextScaleChange,
+  onTextFontSizeChange,
   onTextTransformChange,
   onInteract,
   onCanvasBackgroundChange,
@@ -290,14 +292,17 @@ export default function TextOnlyStoryCanvas({
                 event.stopPropagation();
                 if (Date.now() - lastCanvasTouchRef.current > 500) onOpenTextEditor(layer.id);
               }}
-              className="absolute z-10 max-w-[82vw] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug text-shadow-lg"
+              dir="rtl"
+              className="absolute z-10 w-[90vw] max-w-[90vw] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-3xl font-bold leading-snug text-shadow-lg"
               style={{
                 left: `${layer.x}%`,
                 top: `${layer.y}%`,
                 transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
                 fontFamily: layer.fontFamily || 'Cairo',
+                fontSize: layer.fontSize ?? 30,
                 color: layer.textColor || '#FFFFFF',
                 textAlign: layer.textAlign || 'center',
+                overflowWrap: 'anywhere',
                 background: layer.textBackground || 'transparent',
                 textShadow: '0 2px 14px rgba(0,0,0,0.42)',
               }}
@@ -423,6 +428,7 @@ export default function TextOnlyStoryCanvas({
         storyAnimationTick={animationTick}
         storyPreviewClassName={previewClassName}
         storyTextAnimation={textAnimation}
+        storyTextFontSize={storyTextFontSize}
         storyFontFamily={fontFamily}
         storyTextColor={textColor}
         storyTextAlign={textAlign}
@@ -443,7 +449,7 @@ export default function TextOnlyStoryCanvas({
         onCycleAlign={onCycleAlign}
         onCycleBackground={onCycleTextBackground}
         onAnimationChange={onAnimationChange}
-        onTextScaleChange={onTextScaleChange}
+        onTextFontSizeChange={onTextFontSizeChange}
         onTextTransformChange={onTextTransformChange}
         onInteract={onInteract}
       />

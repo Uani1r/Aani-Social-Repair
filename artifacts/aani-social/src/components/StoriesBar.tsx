@@ -295,13 +295,7 @@ export default function StoriesBar({
     field.focus({ preventScroll: true });
   }, []);
 
-  // تكبير حقل النص تلقائياً مع طول الكتابة
-  useEffect(() => {
-    const field = storyTextAreaRef.current;
-    if (!field) return;
-    field.style.height = 'auto';
-    field.style.height = `${field.scrollHeight}px`;
-  }, [storyText, storyFontFamily, storyTextAlign, storyTextEditorOpen]);
+  const [storyTextFontSize, setStoryTextFontSize] = useState(30);
 
   // محرك إيماءات واحد: يُقفل التفاعل كلياً على العنصر الذي بدأ منه اللمس
   const [storyCanvasScale, setStoryCanvasScale] = useState(1);
@@ -314,6 +308,14 @@ export default function StoriesBar({
   const [storyTextOffset, setStoryTextOffset] = useState({ x: 0, y: 0 });
   const [storyTextScale, setStoryTextScale] = useState(1);
   const [storyTextRotation, setStoryTextRotation] = useState(0);
+
+  // تكبير حقل النص تلقائياً مع طول الكتابة
+  useEffect(() => {
+    const field = storyTextAreaRef.current;
+    if (!field) return;
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight}px`;
+  }, [storyText, storyFontFamily, storyTextAlign, storyTextEditorOpen, storyTextFontSize]);
 
   const storyGestureRef = useRef<StoryGestureState | null>(null);
   const lastStoryTouchRef = useRef(0);
@@ -330,6 +332,7 @@ export default function StoriesBar({
       y: ((layer.y - 50) / 100) * window.innerHeight,
     } : { x: 0, y: 0 });
     setStoryTextScale(layer?.scale ?? 1);
+    setStoryTextFontSize(layer?.fontSize ?? 30);
     setStoryTextRotation(layer?.rotation ?? 0);
     setStoryFontFamily(layer?.fontFamily || 'Cairo');
     setStoryTextColor(layer?.textColor || '#FFFFFF');
@@ -841,6 +844,7 @@ export default function StoriesBar({
     textAlign: storyTextAlign,
     textBackground: storyBackgroundPreset.background,
     textAnimation: storyTextAnimation,
+    fontSize: storyTextFontSize,
     scale: storyTextScale,
     rotation: storyTextRotation,
   });
@@ -973,6 +977,7 @@ export default function StoriesBar({
     setStoryBackgroundIndex(0);
     setStoryTextOffset({ x: 0, y: 0 });
     setStoryTextScale(1);
+    setStoryTextFontSize(30);
     setStoryTextRotation(0);
     setTextCanvasBackground('#000000');
     setStoryDrawStrokes([]);
@@ -1614,6 +1619,7 @@ export default function StoriesBar({
           canvasBackground={textCanvasBackground}
           storyTextOffset={storyTextOffset}
           storyTextScale={storyTextScale}
+          storyTextFontSize={storyTextFontSize}
           storyTextRotation={storyTextRotation}
           editorOpen={storyTextEditorOpen}
           keyboardInset={storyKeyboardInset}
@@ -1653,7 +1659,7 @@ export default function StoriesBar({
             setStoryTextAnimation(value);
             setStoryAnimationTick(tick => tick + 1);
           }}
-          onTextScaleChange={setStoryTextScale}
+          onTextFontSizeChange={setStoryTextFontSize}
           onTextTransformChange={transform => {
             setStoryTextOffset({ x: transform.x, y: transform.y });
             setStoryTextScale(transform.scale);

@@ -17,6 +17,7 @@ export interface StoryTextOverlay {
   textAlign?: StoryTextAlign;
   textBackground?: string;
   textAnimation?: StoryTextAnimation;
+  fontSize?: number;
   scale?: number;
   rotation?: number;
 }
@@ -191,6 +192,7 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
     && validOptionalTextStyle('textAlign', candidate => candidate === 'left' || candidate === 'center' || candidate === 'right')
     && validOptionalTextStyle('textBackground', isSafeStoryBackground)
     && validOptionalTextStyle('textAnimation', candidate => STORY_TEXT_ANIMATIONS.includes(candidate as StoryTextAnimation))
+    && validOptionalTextStyle('fontSize', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 12 && candidate <= 96)
     && validOptionalTextStyle('scale', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0.3 && candidate <= 5)
     && validOptionalTextStyle('rotation', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && Math.abs(candidate) <= 3600);
 }

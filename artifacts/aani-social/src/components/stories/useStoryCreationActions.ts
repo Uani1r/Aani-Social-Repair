@@ -356,7 +356,6 @@ export function useStoryCreationActions({
       storyDurationManuallyChosenRef.current = false;
       setShowUploadModal(false);
       void fetchStories().catch(error => console.warn('[stories] تعذر تحديث القصص بعد النشر:', error));
-      toast.success('نُشرت قصتك');
       return true;
     } catch (error) {
       console.error('[text story publish] تعذر حفظ القصة:', error);

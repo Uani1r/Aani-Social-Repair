@@ -137,6 +137,8 @@ type StoryTextGesture = StoryTextTransform & {
   startY: number;
   startDistance: number;
   startAngle: number;
+  startedOnTextarea: boolean;
+  startTime: number;
 };
 
 type StoryTextEditorPanelProps = {
@@ -147,6 +149,7 @@ type StoryTextEditorPanelProps = {
   storyAnimationTick: number;
   storyPreviewClassName: string;
   storyTextAnimation: StoryTextAnimation;
+  storyTextFontSize?: number;
   storyFontFamily: string;
   storyTextColor: string;
   storyTextAlign: StoryTextAlign;
@@ -162,7 +165,7 @@ type StoryTextEditorPanelProps = {
   onCycleAlign: () => void;
   onCycleBackground: () => void;
   onAnimationChange: (animation: StoryTextAnimation) => void;
-  onTextScaleChange?: (scale: number) => void;
+  onTextFontSizeChange?: (fontSize: number) => void;
   onTextTransformChange?: (transform: StoryTextTransform) => void;
   onInteract: () => void;
 };
@@ -175,6 +178,7 @@ export function StoryTextEditorPanel({
   storyAnimationTick,
   storyPreviewClassName,
   storyTextAnimation,
+  storyTextFontSize,
   storyFontFamily,
   storyTextColor,
   storyTextAlign,
@@ -190,63 +194,75 @@ export function StoryTextEditorPanel({
   onCycleAlign,
   onCycleBackground,
   onAnimationChange,
-  onTextScaleChange,
+  onTextFontSizeChange,
   onTextTransformChange,
   onInteract,
 }: StoryTextEditorPanelProps) {
   const textGestureRef = useRef<StoryTextGesture | null>(null);
-  const scalePointerIdRef = useRef<number | null>(null);
+  const fontSizePointerIdRef = useRef<number | null>(null);
   const lastTextGestureAtRef = useRef(0);
+  const activeTransform = storyTextTransform || { x: 0, y: 0, scale: 1, rotation: 0 };
+  const latestTransformRef = useRef<StoryTextTransform>(activeTransform);
 
   useEffect(() => {
-    if (!storyTextEditorOpen || !storyTextTransform) return;
+    latestTransformRef.current = { ...activeTransform };
+  }, [activeTransform.x, activeTransform.y, activeTransform.scale, activeTransform.rotation]);
+
+  useEffect(() => {
+    if (!storyTextEditorOpen || storyTextFontSize === undefined) return;
     const field = storyTextAreaRef.current;
     if (!field) return;
     field.style.height = 'auto';
     field.style.height = `${field.scrollHeight}px`;
-  }, [storyTextEditorOpen, storyTextTransform?.scale, storyTextAreaRef]);
+  }, [storyTextEditorOpen, storyTextFontSize, storyTextAreaRef]);
 
   if (!storyTextEditorOpen) return null;
 
-  const activeTransform = storyTextTransform || { x: 0, y: 0, scale: 1, rotation: 0 };
-  const currentTransform = (): StoryTextTransform => ({ ...activeTransform });
+  const minFontSize = 12;
+  const maxFontSize = 96;
+  const activeFontSize = Math.min(maxFontSize, Math.max(minFontSize, storyTextFontSize ?? 30));
+  const currentTransform = (): StoryTextTransform => ({ ...latestTransformRef.current });
   const clamp = (value: number, limit: number) => Math.min(limit, Math.max(-limit, value));
-  const updateScaleFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
+  const updateFontSizeFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const progress = Math.min(1, Math.max(0, 1 - (event.clientY - bounds.top) / bounds.height));
-    onTextScaleChange?.(0.3 + progress * 4.7);
+    onTextFontSizeChange?.(minFontSize + progress * (maxFontSize - minFontSize));
   };
-  const handleScalePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleFontSizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    scalePointerIdRef.current = event.pointerId;
+    fontSizePointerIdRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
-    updateScaleFromPointer(event);
+    updateFontSizeFromPointer(event);
   };
-  const handleScalePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (scalePointerIdRef.current === event.pointerId) updateScaleFromPointer(event);
+  const handleFontSizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (fontSizePointerIdRef.current === event.pointerId) updateFontSizeFromPointer(event);
   };
-  const handleScalePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (scalePointerIdRef.current === event.pointerId) scalePointerIdRef.current = null;
+  const handleFontSizePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (fontSizePointerIdRef.current === event.pointerId) fontSizePointerIdRef.current = null;
   };
-  const handleScaleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+  const handleFontSizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const increments: Record<string, number> = {
-      ArrowUp: 0.05,
-      ArrowRight: 0.05,
-      ArrowDown: -0.05,
-      ArrowLeft: -0.05,
-      PageUp: 0.25,
-      PageDown: -0.25,
+      ArrowUp: 2,
+      ArrowRight: 2,
+      ArrowDown: -2,
+      ArrowLeft: -2,
+      PageUp: 10,
+      PageDown: -10,
     };
     if (event.key === 'Home') {
       event.preventDefault();
-      onTextScaleChange?.(0.3);
+      onTextFontSizeChange?.(minFontSize);
     } else if (event.key === 'End') {
       event.preventDefault();
-      onTextScaleChange?.(5);
+      onTextFontSizeChange?.(maxFontSize);
     } else if (increments[event.key]) {
       event.preventDefault();
-      onTextScaleChange?.(Math.min(5, Math.max(0.3, activeTransform.scale + increments[event.key])));
+      onTextFontSizeChange?.(Math.min(maxFontSize, Math.max(minFontSize, activeFontSize + increments[event.key])));
     }
+  };
+  const emitTransform = (transform: StoryTextTransform) => {
+    latestTransformRef.current = transform;
+    onTextTransformChange?.(transform);
   };
   const touchMetrics = (touches: React.TouchList) => {
     const first = touches[0];
@@ -268,26 +284,28 @@ export function StoryTextEditorPanel({
       startY: metrics.y,
       startDistance: metrics.distance,
       startAngle: metrics.angle,
+      startedOnTextarea: false,
+      startTime: Date.now(),
     };
   };
   const handleTextGestureStart = (event: React.TouchEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    const interactiveTarget = target.closest('input, button, select, [data-story-text-scale-control]');
+    const interactiveTarget = target.closest('input, button, select, [data-story-text-font-size-control]');
     if (interactiveTarget) {
       if (event.touches.length >= 2) textGestureRef.current = null;
       return;
     }
 
-    const gesture = textGestureRef.current;
     if (event.touches.length >= 2) {
-      if (!target.closest('textarea') && !gesture) return;
-      beginTextGesture(event.touches, gesture || { ...currentTransform() });
+      beginTextGesture(event.touches, currentTransform());
       event.preventDefault();
+      event.stopPropagation();
       return;
     }
 
-    if (event.touches.length === 1 && target.closest('textarea')) {
+    if (event.touches.length === 1) {
       const touch = event.touches[0];
+      const startedOnTextarea = Boolean(target.closest('textarea'));
       textGestureRef.current = {
         ...currentTransform(),
         active: false,
@@ -296,6 +314,8 @@ export function StoryTextEditorPanel({
         startY: touch.clientY,
         startDistance: 0,
         startAngle: 0,
+        startedOnTextarea,
+        startTime: Date.now(),
       };
     }
   };
@@ -304,10 +324,16 @@ export function StoryTextEditorPanel({
     if (!gesture) return;
     if (!gesture.active) {
       if (event.touches.length >= 2) {
-        beginTextGesture(event.touches, gesture);
+        beginTextGesture(event.touches, currentTransform());
         event.preventDefault();
+        event.stopPropagation();
+        return;
       }
-      return;
+      if (event.touches.length !== 1) return;
+      const touch = event.touches[0];
+      const dragDistance = Math.hypot(touch.clientX - gesture.startX, touch.clientY - gesture.startY);
+      if (dragDistance < 8 || (gesture.startedOnTextarea && Date.now() - gesture.startTime > 450)) return;
+      gesture.active = true;
     }
     if (event.touches.length < 1) return;
     event.preventDefault();
@@ -324,6 +350,8 @@ export function StoryTextEditorPanel({
           startY: metrics.y,
           startDistance: metrics.distance,
           startAngle: metrics.angle,
+          startedOnTextarea: false,
+          startTime: Date.now(),
         };
       } else {
         const touch = event.touches[0];
@@ -335,6 +363,8 @@ export function StoryTextEditorPanel({
           startY: touch.clientY,
           startDistance: 0,
           startAngle: 0,
+          startedOnTextarea: false,
+          startTime: Date.now(),
         };
       }
       return;
@@ -350,12 +380,12 @@ export function StoryTextEditorPanel({
         scale: Math.min(5, Math.max(0.3, gesture.scale * (gesture.startDistance > 0 ? metrics.distance / gesture.startDistance : 1))),
         rotation: gesture.rotation + angleDelta,
       };
-      onTextTransformChange?.(next);
+      emitTransform(next);
       return;
     }
 
     const touch = event.touches[0];
-    onTextTransformChange?.({
+    emitTransform({
       ...currentTransform(),
       x: clamp(gesture.x + touch.clientX - gesture.startX, window.innerWidth * 0.45),
       y: clamp(gesture.y + touch.clientY - gesture.startY, window.innerHeight * 0.4),
@@ -381,6 +411,8 @@ export function StoryTextEditorPanel({
         startY: metrics.y,
         startDistance: metrics.distance,
         startAngle: metrics.angle,
+        startedOnTextarea: false,
+        startTime: Date.now(),
       };
     } else {
       const touch = event.touches[0];
@@ -392,6 +424,8 @@ export function StoryTextEditorPanel({
         startY: touch.clientY,
         startDistance: 0,
         startAngle: 0,
+        startedOnTextarea: false,
+        startTime: Date.now(),
       };
     }
   };
@@ -434,30 +468,33 @@ export function StoryTextEditorPanel({
         </button>
       </div>
 
-      {onTextScaleChange && (
-        <div className="absolute left-2 top-1/2 z-50 flex -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-white/15 bg-black/45 px-1.5 py-3 text-[10px] font-bold text-white/80 shadow-xl backdrop-blur-md">
+      {onTextFontSizeChange && (
+        <div
+          data-story-text-font-size-control="true"
+          className="absolute left-2 top-1/2 z-50 flex -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-white/15 bg-black/45 px-1.5 py-3 text-[10px] font-bold text-white/80 shadow-xl backdrop-blur-md"
+        >
           <span aria-hidden="true">A+</span>
           <div
             role="slider"
             tabIndex={0}
-            data-story-text-scale-control="true"
+            data-story-text-font-size-control="true"
             aria-label="حجم خط الستوري"
             aria-orientation="vertical"
-            aria-valuemin={0.3}
-            aria-valuemax={5}
-            aria-valuenow={Number(activeTransform.scale.toFixed(2))}
-            onPointerDown={handleScalePointerDown}
-            onPointerMove={handleScalePointerMove}
-            onPointerUp={handleScalePointerEnd}
-            onPointerCancel={handleScalePointerEnd}
-            onKeyDown={handleScaleKeyDown}
+            aria-valuemin={minFontSize}
+            aria-valuemax={maxFontSize}
+            aria-valuenow={Math.round(activeFontSize)}
+            onPointerDown={handleFontSizePointerDown}
+            onPointerMove={handleFontSizePointerMove}
+            onPointerUp={handleFontSizePointerEnd}
+            onPointerCancel={handleFontSizePointerEnd}
+            onKeyDown={handleFontSizeKeyDown}
             className="relative flex h-48 w-8 cursor-ns-resize touch-none items-center justify-center outline-none"
             style={{ touchAction: 'none' }}
           >
             <span className="h-full w-1 rounded-full bg-white/25" />
             <span
               className="absolute h-4 w-4 rounded-full border-2 border-white bg-[#4f46e5] shadow-lg"
-              style={{ bottom: `${((activeTransform.scale - 0.3) / 4.7) * 100}%` }}
+              style={{ bottom: `${((activeFontSize - minFontSize) / (maxFontSize - minFontSize)) * 100}%` }}
             />
           </div>
           <span aria-hidden="true">A−</span>
@@ -466,9 +503,10 @@ export function StoryTextEditorPanel({
 
       <div className={`flex min-h-[96px] flex-1 items-start justify-center ${storyTextTransform ? 'pl-12 pr-4' : 'px-6'} pt-2`}>
         <div
-          className={`relative flex w-full items-start justify-center ${storyTextTransform ? 'max-w-none' : 'max-w-md'}`}
+          className={`relative flex w-full items-start justify-center ${storyTextTransform ? 'max-w-[90vw]' : 'max-w-md'}`}
           style={storyTextTransform ? {
-            width: `${82 / activeTransform.scale}vw`,
+            width: '90vw',
+            maxWidth: '90vw',
             transform: `translate3d(${activeTransform.x}px, ${activeTransform.y}px, 0) scale(${activeTransform.scale}) rotate(${activeTransform.rotation}deg)`,
             transformOrigin: 'center center',
           } : undefined}
@@ -478,12 +516,15 @@ export function StoryTextEditorPanel({
             <p
               key={`${storyTextAnimation}-${storyAnimationTick}`}
               aria-hidden="true"
-              className={storyPreviewClassName}
+              className={`${storyPreviewClassName} w-full whitespace-pre-wrap break-words`}
               style={{
                 fontFamily: storyFontFamily,
                 color: storyTextColor,
-                fontSize: 30,
+                fontSize: activeFontSize,
                 textAlign: storyTextAlign,
+                direction: 'rtl',
+                whiteSpace: 'pre-wrap',
+                overflowWrap: 'anywhere',
                 lineHeight: 1.35,
                 padding: storyHasBackground ? '2px 10px' : undefined,
                 borderRadius: storyHasBackground ? 8 : undefined,
@@ -507,14 +548,17 @@ export function StoryTextEditorPanel({
             placeholder="اكتب شيئاً..."
             dir="rtl"
             rows={3}
-            className={`relative w-full resize-none overflow-hidden bg-transparent font-bold outline-none placeholder:text-white/40 ${storyTextTransform ? 'max-w-none' : 'max-w-md'}`}
+            className="relative w-full min-w-0 max-w-none resize-none whitespace-pre-wrap break-words overflow-hidden bg-transparent font-bold outline-none placeholder:text-white/40"
             style={{
               fontFamily: storyFontFamily,
               color: storyEditorPreviewMode ? 'transparent' : storyTextColor,
               caretColor: storyTextColor,
               WebkitTextFillColor: storyEditorPreviewMode ? 'transparent' : storyTextColor,
-              fontSize: 30,
+              fontSize: activeFontSize,
               textAlign: storyTextAlign,
+              direction: 'rtl',
+              whiteSpace: 'pre-wrap',
+              overflowWrap: 'anywhere',
               lineHeight: 1.35,
               padding: 0,
               background: 'transparent',
