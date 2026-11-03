@@ -373,7 +373,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           </span>
         </div>
       )}
-      <header className="flex items-start gap-3 w-full">
+      <header className="flex w-full items-start gap-4">
         <Avatar profile={post.author} large />
         <div className="user-identity-meta h-12 min-w-0 flex-1">
           <div className="flex min-w-0 items-center justify-between gap-2">
@@ -386,7 +386,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         </div>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="absolute left-3 top-3 p-1 text-zinc-500 transition hover:text-white" aria-label="خيارات المنشور">
+            <button type="button" className="shrink-0 rounded-full p-1 text-zinc-500 transition hover:text-white" aria-label="خيارات المنشور">
               <MoreVertical size={18} />
             </button>
           </DropdownMenuTrigger>
