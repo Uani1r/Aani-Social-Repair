@@ -1,74 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { Post } from '@/lib/types';
 
-export async function hydratePostInteractions(posts: Post[], currentUserId: string): Promise<Post[]> {
-  if (!supabaseConfigured || posts.length === 0) return posts;
-
-  const postIds = posts.map(post => post.id);
-  const { data, error } = await supabase.rpc('get_post_interactions', { p_post_ids: postIds });
-  if (error) {
-    // فشل الـ RPC: نحسب جميع العدّادات مباشرة من الجداول
-    // (تعليقات، إعادات نشر، مشاركات، إعجابات) حتى لا تبقى الأرقام صفرًا
-    const [likesRes, commentsRes, repostsRes, sharesRes, feedbackRes] = await Promise.all([
-      supabase.from('likes').select('post_id,user_id').in('post_id', postIds).limit(20000),
-      supabase.from('comments').select('post_id').in('post_id', postIds).limit(20000),
-      supabase.from('reposts').select('post_id').in('post_id', postIds).limit(20000),
-      supabase.from('post_shares').select('post_id').in('post_id', postIds).limit(20000),
-      supabase.from('post_feedback').select('post_id,feedback').eq('user_id', currentUserId).in('post_id', postIds),
-    ]);
-
-    const countByPostDirect = (rows: any[] | null): Map<string, number> => {
-      const counts = new Map<string, number>();
-      (rows || []).forEach(row => counts.set(row.post_id, (counts.get(row.post_id) || 0) + 1));
-      return counts;
-    };
-
-    const likeCounts = countByPostDirect(likesRes.data);
-    const commentCounts = countByPostDirect(commentsRes.data);
-    const repostCounts = countByPostDirect(repostsRes.data);
-    const shareCounts = countByPostDirect(sharesRes.data);
-    const likesRows = (likesRes.data || []) as Array<{ post_id: string; user_id: string }>;
-    const feedbackByPost = new Map(((feedbackRes.data || []) as any[]).map(row => [row.post_id, row.feedback]));
-
-    return posts.map(post => ({
-      ...post,
-      likes_count: likeCounts.get(post.id) ?? post.likes_count ?? 0,
-      comments_count: commentCounts.get(post.id) ?? post.comments_count ?? 0,
-      reposts_count: repostCounts.get(post.id) ?? post.reposts_count ?? 0,
-      shares_count: shareCounts.get(post.id) ?? (post as any).shares_count ?? 0,
-      liked_by_me: likesRows.some(l => l.post_id === post.id && l.user_id === currentUserId),
-      reposted_by_me: Boolean(post.reposted_by_me),
-      saved_by_me: Boolean(post.saved_by_me),
-      feedback_by_me: (feedbackByPost.get(post.id) as Post['feedback_by_me']) || null,
-    }));
-  }
-  const interactionRows = (data || []) as Array<{
-    post_id: string;
-    likes_count: number;
-    comments_count: number;
-    reposts_count: number;
-    liked_by_me: boolean;
-    reposted_by_me: boolean;
-    saved_by_me: boolean;
-    feedback_by_me: string | null;
-  }>;
-  const interactionByPost = new Map(interactionRows.map(row => [row.post_id, row]));
-
-  return posts.map(post => {
-    const interaction = interactionByPost.get(post.id);
-    return {
-      ...post,
-      likes_count: Number(interaction?.likes_count || 0),
-      comments_count: Number(interaction?.comments_count || 0),
-      reposts_count: Number(interaction?.reposts_count || 0),
-      liked_by_me: Boolean(interaction?.liked_by_me),
-      reposted_by_me: Boolean(interaction?.reposted_by_me),
-      saved_by_me: Boolean(interaction?.saved_by_me),
-      feedback_by_me: (interaction?.feedback_by_me as Post['feedback_by_me']) || null,
-    };
-  });
+export async function hydratePostInteractions(
+  posts: Post[],
+  currentUserId: string,
+): Promise<Post[]> {
+  return hydratePostRows(posts, currentUserId);
 }
 
 export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, currentUserId = '') {
@@ -210,68 +150,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     return () => window.removeEventListener('aani:post-created', onPostCreated);
   }, [refresh]);
 
-  // مزامنة العدّادات في الوقت الفعلي — تُقرأ من الصفوف الحقيقية (RPC) لا من أعمدة قد تتأخر
-  useEffect(() => {
-    if (!supabaseConfigured) return;
+  const interactionVersion = useInteractionsVersion();
+  const currentPosts = useMemo(
+    () => posts.map((post) => decoratePost(post, currentUserId)),
+    [posts, currentUserId, interactionVersion],
+  );
 
-    const timers = new Map<string, number>();
-
-    const reconcileCounters = async (postId: string) => {
-      try {
-        const { data, error } = await supabase.rpc('get_post_interactions', { p_post_ids: [postId] });
-        if (error) return;
-
-        const row = (data || [])[0] as
-          | { likes_count?: number | string; comments_count?: number | string; reposts_count?: number | string }
-          | undefined;
-        if (!row) return;
-
-        setPosts(current =>
-          current.map(post =>
-            post.id === postId
-              ? {
-                  ...post,
-                  likes_count: Number(row.likes_count ?? post.likes_count ?? 0),
-                  comments_count: Number(row.comments_count ?? post.comments_count ?? 0),
-                  reposts_count: Number(row.reposts_count ?? post.reposts_count ?? 0),
-                }
-              : post,
-          ),
-        );
-      } catch {
-        /* تعذر الاتصال: نُبقي القيم الحالية دون إرباك الواجهة */
-      }
-    };
-
-    const channel = supabase
-      .channel('aani-post-counters')
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'posts' },
-        payload => {
-          const row = payload.new as { id?: string };
-          if (!row?.id) return;
-
-          const existing = timers.get(row.id);
-          if (existing) window.clearTimeout(existing);
-
-          timers.set(
-            row.id,
-            window.setTimeout(() => {
-              timers.delete(row.id);
-              void reconcileCounters(row.id as string);
-            }, 350),
-          );
-        },
-      )
-      .subscribe();
-
-    return () => {
-      timers.forEach(timer => window.clearTimeout(timer));
-      timers.clear();
-      void supabase.removeChannel(channel);
-    };
-  }, []);
-
-  return { posts, loading, refresh };
+  return { posts: currentPosts, loading, refresh };
 }

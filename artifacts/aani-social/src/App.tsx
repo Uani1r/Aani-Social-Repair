@@ -15,11 +15,13 @@ import ProfilePage from '@/pages/ProfilePage';
 import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
 import useAppSession from '@/hooks/useAppSession';
+import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import '@/index.css';
 
 function App() {
   const { authLoading, user, profile, setProfile, signOut } = useAppSession();
+  useInteractionRealtime(user?.id);
   const [selectedPostForComments, setSelectedPostForComments] = useState<string | null>(null);
   const [pendingStoryReshare, setPendingStoryReshare] = useState<StoryDmCardStory | null>(null);
   const clearPendingStoryReshare = useCallback(() => setPendingStoryReshare(null), []);

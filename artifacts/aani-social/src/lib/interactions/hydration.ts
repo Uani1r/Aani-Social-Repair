@@ -27,6 +27,7 @@ type Summary = {
   bookmarked?: boolean;
   reposted?: boolean;
   shared?: boolean;
+  feedback?: Post["feedback_by_me"];
 };
 
 export function normalizeComment(row: RawRow): PostCommentRow {
@@ -92,20 +93,30 @@ export async function attachCommentAuthors(
 }
 
 function mapSummaryRow(row: RawRow): Summary {
+  const feedback = Object.prototype.hasOwnProperty.call(row, "feedback_by_me")
+    ? row.feedback_by_me
+    : row.feedback;
+
   return {
     postId: String(row.post_id ?? row.postId ?? ""),
-    likes: optionalNumber(row.like_count ?? row.likes_count ?? row.likes),
+    likes: optionalNumber(row.likes_count ?? row.like_count ?? row.likes),
     comments: optionalNumber(
-      row.comment_count ?? row.comments_count ?? row.comments,
+      row.comments_count ?? row.comment_count ?? row.comments,
     ),
     reposts: optionalNumber(
-      row.repost_count ?? row.reposts_count ?? row.reposts,
+      row.reposts_count ?? row.repost_count ?? row.reposts,
     ),
-    shares: optionalNumber(row.share_count ?? row.shares_count ?? row.shares),
-    liked: optionalBool(row.liked ?? row.liked_by_me),
-    bookmarked: optionalBool(row.bookmarked ?? row.saved_by_me),
-    reposted: optionalBool(row.reposted ?? row.reposted_by_me),
-    shared: optionalBool(row.shared ?? row.shared_by_me),
+    shares: optionalNumber(row.shares_count ?? row.share_count ?? row.shares),
+    liked: optionalBool(row.liked_by_me ?? row.liked),
+    bookmarked: optionalBool(row.saved_by_me ?? row.bookmarked),
+    reposted: optionalBool(row.reposted_by_me ?? row.reposted),
+    shared: optionalBool(row.shared_by_me ?? row.shared),
+    feedback:
+      feedback === null
+        ? null
+        : typeof feedback === "string"
+          ? (feedback as Post["feedback_by_me"])
+          : undefined,
   };
 }
 
@@ -130,38 +141,72 @@ async function fetchSummaries(
 ): Promise<Map<string, Summary> | null> {
   if (!supabaseConfigured || postIds.length === 0) return null;
 
+  const map = new Map<string, Summary>();
+
   try {
     const { data, error } = await supabase.rpc("post_interaction_summaries", {
       post_ids: postIds,
     });
 
-    if (error || !Array.isArray(data)) return null;
-
-    const map = new Map<string, Summary>();
-
-    (data as RawRow[]).forEach((row) => {
-      const summary = mapSummaryRow(row);
-      if (summary.postId) map.set(summary.postId, summary);
-    });
-
-    if (map.size < postIds.length) {
-      const fallback = await fetchFallbackSummaries(postIds, userId);
-      fallback.forEach((value, key) => {
-        if (!map.has(key)) map.set(key, value);
+    if (!error && Array.isArray(data)) {
+      (data as RawRow[]).forEach((row) => {
+        const summary = mapSummaryRow(row);
+        if (summary.postId) map.set(summary.postId, summary);
       });
     }
-
-    return map;
   } catch {
-    return null;
+    // Use the same direct-query fallback for RPC errors and thrown requests.
   }
+
+  const fallbackIds = postIds.filter((postId) => {
+    const summary = map.get(postId);
+    return (
+      !summary ||
+      summary.likes === undefined ||
+      summary.comments === undefined ||
+      summary.reposts === undefined ||
+      summary.shares === undefined ||
+      summary.feedback === undefined
+    );
+  });
+
+  if (fallbackIds.length > 0) {
+    try {
+      const fallback = await fetchFallbackSummaries(fallbackIds, userId);
+      fallback.forEach((value, key) => {
+        const current = map.get(key);
+        map.set(key, {
+          postId: key,
+          likes: current?.likes ?? value.likes,
+          comments: current?.comments ?? value.comments,
+          reposts: current?.reposts ?? value.reposts,
+          shares: current?.shares ?? value.shares,
+          saves: current?.saves ?? value.saves,
+          liked: current?.liked ?? value.liked,
+          bookmarked: current?.bookmarked ?? value.bookmarked,
+          reposted: current?.reposted ?? value.reposted,
+          shared: current?.shared ?? value.shared,
+          feedback:
+            current?.feedback !== undefined ? current.feedback : value.feedback,
+        });
+      });
+    } catch {
+      // Keep any RPC data already received; callers preserve cached values.
+    }
+  }
+
+  return map;
 }
 
-// Keep each query independent so an unavailable table does not hide other counts.
+// Keep each query independent so an unavailable table does not hide other fields.
 export const soft = (
   request: PromiseLike<{ data: unknown; error: unknown }>,
 ): Promise<{ data: unknown; error: unknown }> =>
-  Promise.resolve(request).catch(() => ({ data: null, error: null }));
+  Promise.resolve(request).catch((error: unknown) => ({ data: null, error }));
+
+function querySucceeded(result: { data: unknown; error: unknown }): boolean {
+  return result.error == null && Array.isArray(result.data);
+}
 
 async function fetchFallbackSummaries(
   postIds: string[],
@@ -172,7 +217,7 @@ async function fetchFallbackSummaries(
 
   if (!supabaseConfigured || postIds.length === 0) return summaries;
 
-  const [likes, comments, reposts, savedPosts, bookmarks, shares, rows] =
+  const [likes, comments, reposts, savedPosts, bookmarks, shares, rows, feedback] =
     await Promise.all([
       soft(supabase.from("likes").select("post_id,user_id").in("post_id", postIds).limit(20000)),
       soft(supabase.from("comments").select("post_id").in("post_id", postIds).limit(20000)),
@@ -180,22 +225,35 @@ async function fetchFallbackSummaries(
       soft(supabase.from("saved_posts").select("post_id,user_id").in("post_id", postIds).limit(20000)),
       soft(supabase.from("bookmarks").select("post_id,user_id").in("post_id", postIds).limit(20000)),
       soft(supabase.from("post_shares").select("post_id,user_id").in("post_id", postIds).limit(20000)),
-      soft(supabase.from("posts").select("*").in("id", postIds)),
+      soft(supabase.from("posts").select("id,likes_count,comments_count,reposts_count,shares_count").in("id", postIds)),
+      soft(supabase.from("post_feedback").select("post_id,feedback").eq("user_id", userId).in("post_id", postIds)),
     ]);
 
   const likeCounts = countByPost(likes.data);
   const commentCounts = countByPost(comments.data);
   const repostCounts = countByPost(reposts.data);
+  const shareCounts = countByPost(shares.data);
 
   const counters = new Map<string, RawRow>();
-  ((rows.data ?? []) as RawRow[]).forEach((row) => {
-    counters.set(String(row.id), row);
-  });
+  if (querySucceeded(rows)) {
+    (rows.data as RawRow[]).forEach((row) => {
+      counters.set(String(row.id), row);
+    });
+  }
 
-  const likeRows = (likes.data ?? []) as RawRow[];
-  const savedRows = [...((savedPosts.data ?? []) as RawRow[]), ...((bookmarks.data ?? []) as RawRow[])];
-  const repostRows = (reposts.data ?? []) as RawRow[];
-  const shareRows = (shares.data ?? []) as RawRow[];
+  const likeRows = querySucceeded(likes) ? (likes.data as RawRow[]) : [];
+  const savedRows = [
+    ...(querySucceeded(savedPosts) ? (savedPosts.data as RawRow[]) : []),
+    ...(querySucceeded(bookmarks) ? (bookmarks.data as RawRow[]) : []),
+  ];
+  const repostRows = querySucceeded(reposts) ? (reposts.data as RawRow[]) : [];
+  const shareRows = querySucceeded(shares) ? (shares.data as RawRow[]) : [];
+  const feedbackByPost = new Map<string, string>();
+  if (querySucceeded(feedback)) {
+    (feedback.data as RawRow[]).forEach((row) => {
+      feedbackByPost.set(String(row.post_id), String(row.feedback));
+    });
+  }
 
   // Count each user's save once if rows exist in both compatibility tables.
   const savesCounts = new Map<string, number>();
@@ -212,26 +270,39 @@ async function fetchFallbackSummaries(
     const summary = summaries.get(postId) ?? { postId };
     const row = counters.get(postId);
 
-    summary.likes = toNumber(row?.likes_count, likeCounts.get(postId) ?? 0);
-    summary.comments = toNumber(
-      row?.comments_count,
-      commentCounts.get(postId) ?? 0,
-    );
-    summary.reposts = toNumber(row?.reposts_count, repostCounts.get(postId) ?? 0);
-    summary.shares = toNumber(row?.shares_count, 0);
-    summary.saves = savesCounts.get(postId) ?? 0;
-    summary.liked = likeRows.some(
-      (like) => like.post_id === postId && like.user_id === userId,
-    );
-    summary.bookmarked = savedRows.some(
-      (saved) => saved.post_id === postId && saved.user_id === userId,
-    );
-    summary.reposted = repostRows.some(
-      (repost) => repost.post_id === postId && repost.user_id === userId,
-    );
-    summary.shared = shareRows.some(
-      (share) => share.post_id === postId && share.user_id === userId,
-    );
+    summary.likes = optionalNumber(row?.likes_count) ??
+      (querySucceeded(likes) ? likeCounts.get(postId) ?? 0 : undefined);
+    summary.comments = optionalNumber(row?.comments_count) ??
+      (querySucceeded(comments) ? commentCounts.get(postId) ?? 0 : undefined);
+    summary.reposts = optionalNumber(row?.reposts_count) ??
+      (querySucceeded(reposts) ? repostCounts.get(postId) ?? 0 : undefined);
+    summary.shares = optionalNumber(row?.shares_count) ??
+      (querySucceeded(shares) ? shareCounts.get(postId) ?? 0 : undefined);
+
+    if (querySucceeded(savedPosts) || querySucceeded(bookmarks)) {
+      summary.saves = savesCounts.get(postId) ?? 0;
+      summary.bookmarked = savedRows.some(
+        (saved) => saved.post_id === postId && saved.user_id === userId,
+      );
+    }
+    if (querySucceeded(likes)) {
+      summary.liked = likeRows.some(
+        (like) => like.post_id === postId && like.user_id === userId,
+      );
+    }
+    if (querySucceeded(reposts)) {
+      summary.reposted = repostRows.some(
+        (repost) => repost.post_id === postId && repost.user_id === userId,
+      );
+    }
+    if (querySucceeded(shares)) {
+      summary.shared = shareRows.some(
+        (share) => share.post_id === postId && share.user_id === userId,
+      );
+    }
+    if (querySucceeded(feedback)) {
+      summary.feedback = (feedbackByPost.get(postId) ?? null) as Post["feedback_by_me"];
+    }
 
     summaries.set(postId, summary);
   });
@@ -252,18 +323,23 @@ function countByPost(rows: unknown): Map<string, number> {
   return counts;
 }
 
-function toNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : fallback;
-}
-
 function applySummary(summary: Summary, userId: string): void {
   if (!summary.postId) return;
   if (isPending(summary.postId, userId)) return;
 
   const local = readLocalFlags(userId)[summary.postId] ?? {};
   const current = stateOf(summary.postId, userId);
+  const hasFreshData =
+    summary.likes !== undefined ||
+    summary.comments !== undefined ||
+    summary.reposts !== undefined ||
+    summary.shares !== undefined ||
+    summary.saves !== undefined ||
+    summary.liked !== undefined ||
+    summary.bookmarked !== undefined ||
+    summary.reposted !== undefined ||
+    summary.shared !== undefined ||
+    summary.feedback !== undefined;
 
   patchCache(summary.postId, userId, {
     likes: summary.likes ?? current.likes,
@@ -275,8 +351,42 @@ function applySummary(summary: Summary, userId: string): void {
     bookmarked: summary.bookmarked ?? local.bookmarked ?? current.bookmarked,
     reposted: summary.reposted ?? local.reposted ?? current.reposted,
     shared: summary.shared ?? local.shared ?? current.shared,
-    hydrated: true,
+    feedback:
+      summary.feedback !== undefined ? summary.feedback : current.feedback,
+    hydrated: current.hydrated || hasFreshData,
   });
+}
+
+export async function hydratePostRows(
+  posts: Post[],
+  userId: string,
+): Promise<Post[]> {
+  if (!supabaseConfigured || !userId || posts.length === 0) return posts;
+
+  const ids = Array.from(new Set(posts.map((post) => post.id).filter(Boolean)));
+  ids.forEach((id) => markDirectHydration(id, userId));
+
+  try {
+    const summaries = await fetchSummaries(ids, userId);
+    if (!summaries) return posts;
+
+    summaries.forEach((summary) => applySummary(summary, userId));
+
+    return posts.map((post) => {
+      const summary = summaries.get(post.id);
+      const decorated = decoratePost(post, userId);
+      return {
+        ...decorated,
+        feedback_by_me:
+          summary?.feedback !== undefined
+            ? summary.feedback
+            : decorated.feedback_by_me ?? null,
+      };
+    });
+  } catch (error) {
+    console.warn("[interactions] post hydration failed:", error);
+    return posts;
+  }
 }
 
 export async function hydratePosts(
@@ -284,63 +394,40 @@ export async function hydratePosts(
   userId: string,
   options: { force?: boolean } = {},
 ): Promise<void> {
-  if (!userId || posts.length === 0) return;
+  if (!supabaseConfigured || !userId || posts.length === 0) return;
 
   const ids = posts
     .map((post) => post.id)
     .filter((id) => options.force || isDirectHydrationStale(id, userId));
 
+  if (ids.length === 0) return;
+
   ids.forEach((id) => markDirectHydration(id, userId));
-  const targets = ids.length > 0 ? ids : posts.map((post) => post.id);
-
-  const summaries = await fetchSummaries(targets, userId);
-
-  if (summaries) {
-    summaries.forEach((summary) => applySummary(summary, userId));
-    return;
-  }
 
   try {
-    const fallback = await fetchFallbackSummaries(targets, userId);
-    fallback.forEach((summary) => applySummary(summary, userId));
+    const summaries = await fetchSummaries(ids, userId);
+    summaries?.forEach((summary) => applySummary(summary, userId));
   } catch (error) {
-    console.warn("[interactions] fallback hydration failed:", error);
+    console.warn("[interactions] post hydration failed:", error);
   }
 }
 
 export async function hydratePostIds(
   postIds: string[],
   userId: string,
-  options: { force?: boolean } = {},
+  _options: { force?: boolean } = {},
 ): Promise<void> {
-  if (!userId || postIds.length === 0) return;
+  if (!supabaseConfigured || !userId || postIds.length === 0) return;
 
   const ids = Array.from(new Set(postIds)).filter(Boolean);
-  const summaries = await fetchSummaries(ids, userId);
+  if (ids.length === 0) return;
 
-  if (summaries) {
-    summaries.forEach((summary) => applySummary(summary, userId));
-    return;
+  try {
+    const summaries = await fetchSummaries(ids, userId);
+    summaries?.forEach((summary) => applySummary(summary, userId));
+  } catch (error) {
+    console.warn("[interactions] post hydration failed:", error);
   }
-
-  const { data } = await supabase.from("posts").select("*").in("id", ids);
-  const rows = (data ?? []) as RawRow[];
-
-  const posts = rows.map((row) => ({
-    id: String(row.id),
-    user_id: String(row.user_id ?? ""),
-    content: String(row.content ?? ""),
-    media_url: (row.media_url as string | null) ?? null,
-    type: (row.type as Post["type"]) ?? "text",
-    created_at: String(row.created_at ?? new Date().toISOString()),
-    author: null,
-    likes_count: optionalNumber(row.likes_count),
-    comments_count: optionalNumber(row.comments_count),
-    reposts_count: optionalNumber(row.reposts_count),
-    shares_count: optionalNumber(row.shares_count),
-  })) as Post[];
-
-  if (posts.length > 0) await hydratePosts(posts, userId, options);
 }
 
 export async function decoratePosts(
@@ -410,6 +497,8 @@ export function decoratePost(post: Post, userId: string): Post {
     liked_by_me: state.liked,
     saved_by_me: state.bookmarked,
     reposted_by_me: state.reposted,
+    feedback_by_me:
+      state.feedback !== undefined ? state.feedback : post.feedback_by_me,
   };
 }
 
@@ -451,7 +540,12 @@ export async function hydrateSavesCount(
       soft(supabase.from("bookmarks").select("post_id,user_id").in("post_id", ids).limit(20000)),
     ]);
 
-    const savedRows = [...((savedResult.data ?? []) as RawRow[]), ...((bookmarkResult.data ?? []) as RawRow[])];
+    if (savedResult.error && bookmarkResult.error) return;
+
+    const savedRows = [
+      ...(querySucceeded(savedResult) ? (savedResult.data as RawRow[]) : []),
+      ...(querySucceeded(bookmarkResult) ? (bookmarkResult.data as RawRow[]) : []),
+    ];
     const savesCounts = new Map<string, number>();
     const seen = new Set<string>();
 

@@ -10,6 +10,7 @@ export type InteractionSnapshot = {
   bookmarked: boolean;
   reposted: boolean;
   shared: boolean;
+  feedback?: Post["feedback_by_me"];
   hydrated: boolean;
 };
 

@@ -384,72 +384,9 @@ SET comments_count = (
     WHERE c.post_id = p.id
 );
 
--- RPC جلب العدّادات في رحلة واحدة للتطبيق
-create or replace function public.post_interaction_summaries(post_ids uuid[])
-returns table (
-  post_id uuid,
-  like_count integer,
-  comment_count integer,
-  repost_count integer,
-  share_count integer,
-  liked boolean,
-  bookmarked boolean,
-  reposted boolean,
-  shared boolean
-)
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select
-    p.id as post_id,
-    coalesce(p.likes_count, 0) as like_count,
-    coalesce(p.comments_count, 0) as comment_count,
-    coalesce(p.reposts_count, 0) as repost_count,
-    coalesce(p.shares_count, 0) as share_count,
-    exists (select 1 from public.likes l where l.post_id = p.id and l.user_id = auth.uid()) as liked,
-    exists (select 1 from public.bookmarks b where b.post_id = p.id and b.user_id = auth.uid()) as bookmarked,
-    exists (select 1 from public.reposts r where r.post_id = p.id and r.user_id = auth.uid()) as reposted,
-    exists (select 1 from public.post_shares s where s.post_id = p.id and s.user_id = auth.uid()) as shared
-  from public.posts p
-  where p.id = any(post_ids);
-$$;
-
-revoke all on function public.post_interaction_summaries(uuid[]) from public;
-grant execute on function public.post_interaction_summaries(uuid[]) to authenticated, anon;
-
--- RPC ثانية تستخدمها الواجهة لجلب العدّادات + أعلام التفاعل
-create or replace function public.get_post_interactions(p_post_ids uuid[])
-returns table (
-  post_id uuid,
-  likes_count bigint,
-  comments_count bigint,
-  reposts_count bigint,
-  liked_by_me boolean,
-  reposted_by_me boolean,
-  saved_by_me boolean,
-  feedback_by_me text
-)
-language sql
-stable
-security invoker
-set search_path = public, pg_temp
-as $$
-  select
-    p.id,
-    (select count(*) from public.likes l where l.post_id = p.id),
-    (select count(*) from public.comments c where c.post_id = p.id),
-    (select count(*) from public.reposts r where r.post_id = p.id),
-    exists (select 1 from public.likes l where l.post_id = p.id and l.user_id = auth.uid()),
-    exists (select 1 from public.reposts r where r.post_id = p.id and r.user_id = auth.uid()),
-    exists (select 1 from public.bookmarks b where b.post_id = p.id and b.user_id = auth.uid()),
-    (select f.feedback from public.post_feedback f where f.post_id = p.id and f.user_id = auth.uid())
-  from public.posts p
-  where p.id = any(coalesce(p_post_ids, '{}'::uuid[]));
-$$;
-
-grant execute on function public.get_post_interactions(uuid[]) to authenticated;
+-- توحيد دالتي RPC وإعداد Realtime يتم عبر الهجرة الأحدث التالية؛ لا تُعد
+-- إنشاء التعريفات القديمة هنا لأنها تختلف في الحقول وسياسات RLS:
+-- supabase/migrations/20261118000000_unify_post_interactions_realtime.sql
 
 commit;
 ```

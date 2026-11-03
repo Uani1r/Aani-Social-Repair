@@ -12,6 +12,7 @@ export {
   decoratePost,
   decoratePosts,
   hydratePostIds,
+  hydratePostRows,
   hydratePosts,
   hydrateSavesCount,
   syncCommentCount,

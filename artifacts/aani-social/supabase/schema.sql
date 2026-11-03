@@ -636,42 +636,11 @@ update public.posts p set
   reposts_count = coalesce((select count(*) from public.reposts r where r.post_id = p.id), 0),
   shares_count = coalesce((select count(*) from public.post_shares s where s.post_id = p.id), 0);
 
--- Counters + "did I react" flags in a single round trip for the feed.
-create or replace function public.post_interaction_summaries(post_ids uuid[])
-returns table (
-  post_id uuid,
-  like_count integer,
-  comment_count integer,
-  repost_count integer,
-  share_count integer,
-  liked boolean,
-  bookmarked boolean,
-  reposted boolean,
-  shared boolean
-)
-language sql
-security definer
-set search_path = public
-stable
-as $$
-  select
-    p.id as post_id,
-    coalesce(p.likes_count, 0) as like_count,
-    coalesce(p.comments_count, 0) as comment_count,
-    coalesce(p.reposts_count, 0) as repost_count,
-    coalesce(p.shares_count, 0) as share_count,
-    exists (select 1 from public.likes l where l.post_id = p.id and l.user_id = auth.uid()) as liked,
-    exists (select 1 from public.bookmarks b where b.post_id = p.id and b.user_id = auth.uid()) as bookmarked,
-    exists (select 1 from public.reposts r where r.post_id = p.id and r.user_id = auth.uid()) as reposted,
-    exists (select 1 from public.post_shares s where s.post_id = p.id and s.user_id = auth.uid()) as shared
-  from public.posts p
-  where p.id = any(post_ids);
-$$;
-
-revoke all on function public.post_interaction_summaries(uuid[]) from public;
-grant execute on function public.post_interaction_summaries(uuid[]) to authenticated, anon;
+-- The unified interaction RPCs are defined after post_feedback below so both
+-- endpoints expose the same counters and viewer-specific flags.
 
 -- Broadcast interactions so counters update live across clients.
+alter table public.posts replica identity full;
 alter table public.likes replica identity full;
 alter table public.comments replica identity full;
   alter table public.comment_likes replica identity full;
@@ -898,6 +867,139 @@ create table if not exists public.post_feedback (
   constraint aani_post_feedback_post_user_unique unique (post_id, user_id)
 );
 
+-- Both RPCs expose the same response and security semantics. Keep the legacy
+-- field names as aliases while clients transition to the canonical names.
+drop function if exists public.get_post_interactions(uuid[]);
+drop function if exists public.post_interaction_summaries(uuid[]);
+
+create or replace function public.aani_post_interaction_rows(p_post_ids uuid[])
+returns table (
+  post_id uuid,
+  likes_count bigint,
+  comments_count bigint,
+  reposts_count bigint,
+  shares_count bigint,
+  liked_by_me boolean,
+  reposted_by_me boolean,
+  saved_by_me boolean,
+  feedback_by_me text,
+  shared_by_me boolean,
+  like_count integer,
+  comment_count integer,
+  repost_count integer,
+  share_count integer,
+  liked boolean,
+  bookmarked boolean,
+  reposted boolean,
+  shared boolean
+)
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  with summaries as (
+    select
+      p.id as post_id,
+      (select count(*) from public.likes l where l.post_id = p.id)::bigint as likes_count,
+      (select count(*) from public.comments c where c.post_id = p.id)::bigint as comments_count,
+      (select count(*) from public.reposts r where r.post_id = p.id)::bigint as reposts_count,
+      (select count(*) from public.post_shares s where s.post_id = p.id)::bigint as shares_count,
+      exists (select 1 from public.likes l where l.post_id = p.id and l.user_id = auth.uid()) as liked_by_me,
+      exists (select 1 from public.reposts r where r.post_id = p.id and r.user_id = auth.uid()) as reposted_by_me,
+      exists (select 1 from public.bookmarks b where b.post_id = p.id and b.user_id = auth.uid()) as saved_by_me,
+      (select f.feedback from public.post_feedback f where f.post_id = p.id and f.user_id = auth.uid()) as feedback_by_me,
+      exists (select 1 from public.post_shares s where s.post_id = p.id and s.user_id = auth.uid()) as shared_by_me
+    from public.posts p
+    where p.id = any(coalesce(p_post_ids, '{}'::uuid[]))
+  )
+  select
+    s.post_id,
+    s.likes_count,
+    s.comments_count,
+    s.reposts_count,
+    s.shares_count,
+    s.liked_by_me,
+    s.reposted_by_me,
+    s.saved_by_me,
+    s.feedback_by_me,
+    s.shared_by_me,
+    s.likes_count::integer as like_count,
+    s.comments_count::integer as comment_count,
+    s.reposts_count::integer as repost_count,
+    s.shares_count::integer as share_count,
+    s.liked_by_me as liked,
+    s.saved_by_me as bookmarked,
+    s.reposted_by_me as reposted,
+    s.shared_by_me as shared
+  from summaries s;
+$$;
+
+revoke all on function public.aani_post_interaction_rows(uuid[]) from public, anon, authenticated;
+
+create function public.get_post_interactions(p_post_ids uuid[])
+returns table (
+  post_id uuid,
+  likes_count bigint,
+  comments_count bigint,
+  reposts_count bigint,
+  shares_count bigint,
+  liked_by_me boolean,
+  reposted_by_me boolean,
+  saved_by_me boolean,
+  feedback_by_me text,
+  shared_by_me boolean,
+  like_count integer,
+  comment_count integer,
+  repost_count integer,
+  share_count integer,
+  liked boolean,
+  bookmarked boolean,
+  reposted boolean,
+  shared boolean
+)
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select * from public.aani_post_interaction_rows(p_post_ids);
+$$;
+
+create function public.post_interaction_summaries(post_ids uuid[])
+returns table (
+  post_id uuid,
+  likes_count bigint,
+  comments_count bigint,
+  reposts_count bigint,
+  shares_count bigint,
+  liked_by_me boolean,
+  reposted_by_me boolean,
+  saved_by_me boolean,
+  feedback_by_me text,
+  shared_by_me boolean,
+  like_count integer,
+  comment_count integer,
+  repost_count integer,
+  share_count integer,
+  liked boolean,
+  bookmarked boolean,
+  reposted boolean,
+  shared boolean
+)
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select * from public.aani_post_interaction_rows(post_ids);
+$$;
+
+revoke all on function public.get_post_interactions(uuid[]) from public;
+revoke all on function public.post_interaction_summaries(uuid[]) from public;
+grant execute on function public.get_post_interactions(uuid[]) to authenticated, anon;
+grant execute on function public.post_interaction_summaries(uuid[]) to authenticated, anon;
+
 create index if not exists aani_post_feedback_user_idx
   on public.post_feedback (user_id, updated_at desc);
 create index if not exists aani_post_feedback_post_idx
@@ -912,6 +1014,26 @@ create policy "Users manage their own post feedback"
   with check (auth.uid() = user_id);
 
 grant select, insert, update, delete on public.post_feedback to authenticated;
+
+alter table public.post_feedback replica identity full;
+
+do $$
+begin
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (
+       select 1 from pg_publication_tables
+       where pubname = 'supabase_realtime'
+         and schemaname = 'public'
+         and tablename = 'post_feedback'
+     ) then
+    begin
+      execute 'alter publication supabase_realtime add table public.post_feedback';
+    exception
+      when duplicate_object then null;
+      when undefined_object then null;
+    end;
+  end if;
+end $$;
 
 create or replace function public.aani_touch_post_feedback()
 returns trigger

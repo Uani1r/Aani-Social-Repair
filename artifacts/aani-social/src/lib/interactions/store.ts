@@ -98,6 +98,7 @@ export function patchCache(
     next.bookmarked === current.bookmarked &&
     next.reposted === current.reposted &&
     next.shared === current.shared &&
+    next.feedback === current.feedback &&
     next.hydrated === current.hydrated
   ) {
     return;
@@ -220,6 +221,10 @@ export function snapshotFromPost(
     reposted:
       local.reposted ?? post.reposted_by_me ?? existing?.reposted ?? false,
     shared: local.shared ?? existing?.shared ?? false,
+    feedback:
+      post.feedback_by_me !== undefined
+        ? post.feedback_by_me
+        : existing?.feedback,
     hydrated: existing?.hydrated ?? false,
   };
 }

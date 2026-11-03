@@ -5,47 +5,8 @@ import type {
 } from "@supabase/supabase-js";
 import { supabase, supabaseConfigured } from "../supabase";
 import { hydratePostIds, hydrateSavesCount } from "./hydration";
-import {
-  isPending,
-  patchCache,
-  stateOf,
-} from "./store";
+import { isPending, patchCache, stateOf } from "./store";
 import type { RawRow } from "./types";
-
-const dirtyPosts = new Set<string>();
-let flushTimer: ReturnType<typeof setTimeout> | null = null;
-
-function scheduleHydration(userId: string): void {
-  if (flushTimer) return;
-
-  flushTimer = setTimeout(() => {
-    flushTimer = null;
-    const ids = Array.from(dirtyPosts);
-    dirtyPosts.clear();
-
-    if (ids.length > 0) {
-      void hydratePostIds(ids, userId, { force: true });
-    }
-  }, 450);
-}
-
-function handleChange(
-  payload: RealtimePostgresChangesPayload<RawRow>,
-  userId: string,
-  table?: string,
-): void {
-  const record = (payload.new ?? payload.old ?? {}) as RawRow;
-  const postId = record.post_id ? String(record.post_id) : "";
-
-  if (!postId) return;
-
-  dirtyPosts.add(postId);
-  scheduleHydration(userId);
-
-  if (table === "saved_posts" || table === "bookmarks") {
-    void hydrateSavesCount([postId], userId);
-  }
-}
 
 function optionalNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -81,43 +42,74 @@ function handlePostUpdate(
     return;
   }
 
+  const current = stateOf(postId, userId);
   patchCache(postId, userId, {
-    likes: likes ?? stateOf(postId, userId).likes,
-    comments: comments ?? stateOf(postId, userId).comments,
-    reposts: reposts ?? stateOf(postId, userId).reposts,
-    shares: shares ?? stateOf(postId, userId).shares,
+    likes: likes ?? current.likes,
+    comments: comments ?? current.comments,
+    reposts: reposts ?? current.reposts,
+    shares: shares ?? current.shares,
   });
 }
 
-let realtimeChannel: RealtimeChannel | null = null;
-let realtimeRefs = 0;
-let realtimeUserId: string | null = null;
+function buildChannel(userId: string): { dispose: () => void } {
+  const dirtyPosts = new Set<string>();
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
-function buildChannel(userId: string): RealtimeChannel {
-  let channel = supabase.channel(`aani-interactions-${userId}`);
+  const scheduleHydration = () => {
+    if (flushTimer) return;
 
-  (
-    [
-      "likes",
-      "comments",
-      "reposts",
-      "saved_posts",
-      "bookmarks",
-      "post_shares",
-      "comment_likes",
-    ] as const
-  ).forEach((table) => {
-    channel = channel.on(
-      "postgres_changes",
-      { event: "*", schema: "public", table },
-      (payload) =>
-        handleChange(
-          payload as RealtimePostgresChangesPayload<RawRow>,
-          userId,
-          table,
-        ),
-    );
-  });
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      const ids = Array.from(dirtyPosts);
+      dirtyPosts.clear();
+
+      if (ids.length > 0) {
+        void hydratePostIds(ids, userId, { force: true });
+      }
+    }, 450);
+  };
+
+  const handleChange = (
+    payload: RealtimePostgresChangesPayload<RawRow>,
+    table: string,
+  ) => {
+    const record = (payload.new ?? payload.old ?? {}) as RawRow;
+    const postId = record.post_id ? String(record.post_id) : "";
+
+    if (!postId) return;
+
+    dirtyPosts.add(postId);
+    scheduleHydration();
+
+    if (table === "bookmarks") {
+      void hydrateSavesCount([postId], userId);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("aani:saved-posts-changed", {
+            detail: { userId, postId },
+          }),
+        );
+      }
+    }
+  };
+
+  let channel: RealtimeChannel = supabase.channel(`aani-interactions-${userId}`);
+
+  // saved_posts is an optional legacy table and is not part of this schema's
+  // Realtime publication; bookmarks is the canonical persisted save table.
+  (["likes", "comments", "reposts", "bookmarks", "post_shares", "post_feedback"] as const).forEach(
+    (table) => {
+      channel = channel.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table },
+        (payload) =>
+          handleChange(
+            payload as RealtimePostgresChangesPayload<RawRow>,
+            table,
+          ),
+      );
+    },
+  );
 
   channel = channel.on(
     "postgres_changes",
@@ -135,7 +127,16 @@ function buildChannel(userId: string): RealtimeChannel {
     }
   });
 
-  return channel;
+  return {
+    dispose: () => {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      dirtyPosts.clear();
+      void supabase.removeChannel(channel);
+    },
+  };
 }
 
 export function useInteractionRealtime(
@@ -144,35 +145,7 @@ export function useInteractionRealtime(
   useEffect(() => {
     if (!supabaseConfigured || !userId) return;
 
-    if (realtimeChannel && realtimeUserId !== userId) {
-      void supabase.removeChannel(realtimeChannel);
-      realtimeChannel = null;
-      realtimeRefs = 0;
-    }
-
-    realtimeRefs += 1;
-
-    if (!realtimeChannel) {
-      realtimeUserId = userId;
-      realtimeChannel = buildChannel(userId);
-    }
-
-    return () => {
-      realtimeRefs -= 1;
-
-      if (realtimeRefs <= 0) {
-        if (realtimeChannel) void supabase.removeChannel(realtimeChannel);
-
-        realtimeChannel = null;
-        realtimeUserId = null;
-
-        if (flushTimer) {
-          clearTimeout(flushTimer);
-          flushTimer = null;
-        }
-
-        dirtyPosts.clear();
-      }
-    };
+    const channel = buildChannel(userId);
+    return channel.dispose;
   }, [userId]);
 }

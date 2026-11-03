@@ -77,17 +77,19 @@ export async function toggleBookmark(
     let errorToReport: any = null;
 
     if (bookmarked) {
-      const { error: savedError } = await supabase.from("saved_posts").insert({ post_id: post.id, user_id: userId });
-      if (savedError && isMissingRelation(savedError)) {
-        const { error: bookmarkError } = await supabase.from("bookmarks").insert({ post_id: post.id, user_id: userId });
-        errorToReport = bookmarkError;
-      } else {
+      const { error: bookmarkError } = await supabase.from("bookmarks").insert({ post_id: post.id, user_id: userId });
+      if (bookmarkError && isMissingRelation(bookmarkError)) {
+        const { error: savedError } = await supabase.from("saved_posts").insert({ post_id: post.id, user_id: userId });
         errorToReport = savedError;
+      } else {
+        errorToReport = bookmarkError;
       }
     } else {
-      const { error: savedError } = await supabase.from("saved_posts").delete().eq("post_id", post.id).eq("user_id", userId);
       const { error: bookmarkError } = await supabase.from("bookmarks").delete().eq("post_id", post.id).eq("user_id", userId);
-      errorToReport = savedError && bookmarkError ? savedError : null;
+      const { error: savedError } = await supabase.from("saved_posts").delete().eq("post_id", post.id).eq("user_id", userId);
+      errorToReport = [bookmarkError, savedError].find(
+        (error) => error && !isMissingRelation(error) && error.code !== "23505",
+      ) ?? null;
     }
 
     if (errorToReport && errorToReport.code !== "23505") {
