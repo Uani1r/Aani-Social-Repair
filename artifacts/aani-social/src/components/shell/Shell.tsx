@@ -405,13 +405,13 @@ export default function Shell({
     });
   }, [userId, showNotifsModal]);
 
-  const handlePublish = async () => {
+  const handlePublish = async (tagContent: string[] = []) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
     }
 
-    const content = postText.trim();
+    const content = [postText.trim(), ...tagContent].filter(Boolean).join('\n');
     if (!content && selectedFiles.length === 0) return;
 
     setIsSubmitting(true);
@@ -506,9 +506,7 @@ export default function Shell({
         createError={createError}
         onPostTextChange={setPostText}
         onRemoveFile={index => setSelectedFiles(files => files.filter((_, idx) => idx !== index))}
-        onSelectImages={files => { setSelectedFiles(files); setFileType('image'); }}
-        onSelectVideo={file => { setSelectedFiles([file]); setFileType('video'); }}
-        onPublish={() => void handlePublish()}
+        onPublish={tagContent => void handlePublish(tagContent)}
         onCloseCreatePost={() => setShowCreateModal(false)}
         showSettingsModal={showSettingsModal}
         onCloseSettings={() => setShowSettingsModal(false)}

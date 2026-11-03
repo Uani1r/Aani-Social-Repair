@@ -25,9 +25,7 @@ type ShellOverlayControlsProps = {
   createError: string;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onSelectImages: (files: File[]) => void;
-  onSelectVideo: (file: File) => void;
-  onPublish: () => void;
+  onPublish: (tagContent: string[]) => void;
   onCloseCreatePost: () => void;
   showSettingsModal: boolean;
   onCloseSettings: () => void;
@@ -58,8 +56,6 @@ export default function ShellOverlayControls({
   createError,
   onPostTextChange,
   onRemoveFile,
-  onSelectImages,
-  onSelectVideo,
   onPublish,
   onCloseCreatePost,
   showSettingsModal,
@@ -88,6 +84,7 @@ export default function ShellOverlayControls({
       {showCreateModal && (
         <CreatePostModal
           profile={profile}
+          userId={userId}
           postText={postText}
           selectedFiles={selectedFiles}
           fileType={fileType}
@@ -96,8 +93,6 @@ export default function ShellOverlayControls({
           createError={createError}
           onPostTextChange={onPostTextChange}
           onRemoveFile={onRemoveFile}
-          onSelectImages={onSelectImages}
-          onSelectVideo={onSelectVideo}
           onPublish={onPublish}
           onClose={onCloseCreatePost}
         />
