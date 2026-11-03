@@ -1,7 +1,7 @@
 import type { StoryDrawPoint } from '@/lib/appShared';
 
 import StoryImageSticker from '@/components/StoryImageSticker';
-import type { StoryCanvasStyleOverlay, StoryImageOverlay, StoryTextOverlay } from '@/components/stories/types';
+import type { StoryCanvasStyleOverlay, StoryImageOverlay, StoryMediaTransformOverlay, StoryTextOverlay } from '@/components/stories/types';
 import type { StoryViewerProps } from './types';
 
 type StoryMediaStageProps = Pick<
@@ -37,6 +37,14 @@ export default function StoryMediaStage({
       && currentTimeSec >= item.startTime
       && currentTimeSec <= item.endTime,
   );
+  const mediaTransform = currentStory.timed_texts.find(
+    (item): item is StoryMediaTransformOverlay => item.type === 'media-transform'
+      && currentTimeSec >= item.startTime
+      && currentTimeSec <= item.endTime,
+  );
+  const mediaTransformCss = mediaTransform
+    ? `translate(${mediaTransform.x}%, ${mediaTransform.y}%) scale(${mediaTransform.scale}) rotate(${mediaTransform.rotation}deg)`
+    : undefined;
   const visibleTextLayers = currentStory.timed_texts.filter(
     (item): item is StoryTextOverlay => (item.type === undefined || item.type === 'text')
       && currentTimeSec >= item.startTime
@@ -55,10 +63,10 @@ export default function StoryMediaStage({
             playsInline
             preload="metadata"
             className="h-full w-full object-contain"
-            style={{ filter: currentStoryFilter.css }}
+            style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }}
           />
         ) : (
-          <img src={currentStory.media_url} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css }} />
+          <img src={currentStory.media_url} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }} />
         )
       ) : (
         <div
@@ -93,15 +101,17 @@ export default function StoryMediaStage({
         />
       )}
 
-      {currentStory.timed_texts.map(timedText => {
+      {currentStory.timed_texts.map((timedText, index) => {
         if (currentTimeSec < timedText.startTime || currentTimeSec > timedText.endTime) return null;
-        if (timedText.type === 'canvas-style') return null;
+        if (timedText.type === 'canvas-style' || timedText.type === 'media-transform') return null;
+        const layerOrder = timedText.layerOrder ?? index + 10;
 
         if (timedText.type === 'drawing') {
           return (
             <svg
               key={timedText.id || 'story-drawing'}
-              className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+              className="pointer-events-none absolute inset-0 h-full w-full"
+              style={{ zIndex: layerOrder }}
               viewBox="0 0 1000 1000"
               preserveAspectRatio="none"
               aria-hidden="true"
@@ -137,6 +147,7 @@ export default function StoryMediaStage({
               key={timedText.id}
               sticker={timedText as StoryImageOverlay}
               interactive={false}
+              layerOrder={layerOrder}
             />
           );
         }
@@ -145,15 +156,16 @@ export default function StoryMediaStage({
         return (
           <div
             key={textLayer.id}
-            className={`absolute z-20 ${currentStory.media_type === 'text' ? 'w-[90vw] max-w-[90vw]' : 'max-w-[82vw]'} whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
+            className={`absolute ${currentStory.media_type === 'text' ? 'w-[90vw] max-w-[90vw]' : 'max-w-[82vw]'} whitespace-pre-wrap break-words px-3 py-2 text-2xl font-bold ${textLayer.textAnimation && textLayer.textAnimation !== 'none' ? `aani-story-anim-${textLayer.textAnimation}` : ''}`}
             dir={currentStory.media_type === 'text' ? 'rtl' : undefined}
             style={{
               top: `${textLayer.y}%`,
               left: `${textLayer.x}%`,
               transform: `translate(-50%, -50%) scale(${textLayer.scale ?? 1}) rotate(${textLayer.rotation ?? 0}deg)`,
+              zIndex: layerOrder,
               color: textLayer.textColor || '#FFFFFF',
               fontFamily: textLayer.fontFamily || 'Cairo',
-              fontSize: currentStory.media_type === 'text' ? textLayer.fontSize ?? 30 : undefined,
+              fontSize: textLayer.fontSize ?? (currentStory.media_type === 'text' ? 30 : undefined),
               textAlign: textLayer.textAlign || 'center',
               overflowWrap: currentStory.media_type === 'text' ? 'anywhere' : undefined,
               background: textLayer.textBackground || 'transparent',

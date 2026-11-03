@@ -5,6 +5,7 @@ import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import Avatar from '@/components/Avatar';
 import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
 import StoryImageSticker from '@/components/StoryImageSticker';
+import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
 import { displayName, type Profile } from '@/lib/types';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
@@ -39,6 +40,8 @@ type StoryCreationEditorProps = {
   storyTextOffset: Point;
   storyTextScale: number;
   storyTextRotation: number;
+  storyTextFontSize: number;
+  storyAlignmentGuides: { vertical: boolean; horizontal: boolean };
   storyFontFamily: string;
   storyTextColor: string;
   storyTextAlign: StoryTextAlign;
@@ -96,6 +99,8 @@ type StoryCreationEditorProps = {
   onDurationChange: (duration: number) => void;
   onStoryTextChange: (value: string) => void;
   onFinishTextEditing: () => void;
+  onTextFontSizeChange: (fontSize: number) => void;
+  onTextTransformChange: (transform: { x: number; y: number; scale: number; rotation: number }) => void;
   onFontFamilyChange: (family: string) => void;
   onTextColorChange: (color: string) => void;
   onCycleAlign: () => void;
@@ -133,6 +138,8 @@ export default function StoryCreationEditor({
   storyTextOffset,
   storyTextScale,
   storyTextRotation,
+  storyTextFontSize,
+  storyAlignmentGuides,
   storyFontFamily,
   storyTextColor,
   storyTextAlign,
@@ -190,6 +197,8 @@ export default function StoryCreationEditor({
   onDurationChange,
   onStoryTextChange,
   onFinishTextEditing,
+  onTextFontSizeChange,
+  onTextTransformChange,
   onFontFamilyChange,
   onTextColorChange,
   onCycleAlign,
@@ -298,12 +307,14 @@ export default function StoryCreationEditor({
             />
 
             {/* كل عبارة طبقة مستقلة؛ النقر يفتح تحرير هذه الطبقة فقط */}
-            {storyTextLayers.map(layer => {
+            {storyTextLayers.map((layer, index) => {
+              const layerOrder = layer.layerOrder ?? index + 10;
               if (layer.type === 'image') {
                 return (
                   <StoryImageSticker
                     key={layer.id}
                     sticker={layer}
+                    layerOrder={layerOrder}
                     onChange={update => onUpdateImageSticker(layer.id, update)}
                     onActivate={() => onActivateImageSticker(layer.id)}
                     onDragMove={point => onStoryStickerDragChange(layer.id, true, isPointerOverDeleteZone(point))}
@@ -315,7 +326,7 @@ export default function StoryCreationEditor({
                   />
                 );
               }
-              if (layer.type === 'drawing' || layer.type === 'canvas-style') return null;
+              if (layer.type === 'drawing' || layer.type === 'canvas-style' || layer.type === 'media-transform') return null;
 
               return (
                 <div key={layer.id} className="pointer-events-none absolute inset-0" dir="rtl">
@@ -333,9 +344,10 @@ export default function StoryCreationEditor({
                       top: `${layer.y}%`,
                       touchAction: 'none',
                       transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                      zIndex: layerOrder,
                       fontFamily: layer.fontFamily || 'Cairo',
                       color: layer.textColor || '#FFFFFF',
-                      fontSize: 30,
+                      fontSize: layer.fontSize ?? 30,
                       textAlign: layer.textAlign || 'center',
                       lineHeight: 1.35,
                       background: layer.textBackground || 'transparent',
@@ -369,6 +381,8 @@ export default function StoryCreationEditor({
         </div>
       )}
 
+      <StoryAlignmentGuides vertical={storyAlignmentGuides.vertical} horizontal={storyAlignmentGuides.horizontal} />
+
       <div
         ref={stickerDeleteZoneRef}
         aria-hidden={!draggingStoryStickerId}
@@ -381,10 +395,10 @@ export default function StoryCreationEditor({
 
       {/* الشريط العلوي */}
       <div
-        className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-4 py-3"
+        className="pointer-events-none fixed inset-x-0 top-0 z-[120] flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
       >
-        <button type="button" onClick={onClose} aria-label="إغلاق" className="rounded-full p-1.5 text-white/90 transition hover:bg-white/10">
+        <button type="button" onClick={onClose} aria-label="إغلاق" className="pointer-events-auto rounded-full p-1.5 text-white/90 transition hover:bg-white/10">
           <X size={24} />
         </button>
         {reshareStory ? (
@@ -432,6 +446,13 @@ export default function StoryCreationEditor({
         storyAnimationTick={storyAnimationTick}
         storyPreviewClassName={storyPreviewClassName}
         storyTextAnimation={storyTextAnimation}
+        storyTextFontSize={storyTextFontSize}
+        storyTextTransform={{
+          x: storyTextOffset.x,
+          y: storyTextOffset.y,
+          scale: storyTextScale,
+          rotation: storyTextRotation,
+        }}
         storyFontFamily={storyFontFamily}
         storyTextColor={storyTextColor}
         storyTextAlign={storyTextAlign}
@@ -441,6 +462,8 @@ export default function StoryCreationEditor({
         onCloseStory={onClose}
         onStoryTextChange={onStoryTextChange}
         onFinishTextEditing={onFinishTextEditing}
+        onTextFontSizeChange={onTextFontSizeChange}
+        onTextTransformChange={onTextTransformChange}
         onFontFamilyChange={onFontFamilyChange}
         onTextColorChange={onTextColorChange}
         onCycleAlign={onCycleAlign}
@@ -450,7 +473,7 @@ export default function StoryCreationEditor({
       />
 
       {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) */}
-      <div className="absolute inset-x-0 bottom-0 z-20 px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+      <div className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
         <StoryEditorPanels
           storyFiltersOpen={storyFiltersOpen}
           editorMediaUrl={editorMediaUrl}
@@ -476,7 +499,7 @@ export default function StoryCreationEditor({
             type="button"
             onClick={() => onQuickPublish(false)}
             disabled={uploading || (!storyFile && !reshareStory?.media_url)}
-            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
+            className="pointer-events-auto flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
           >
             {currentProfile?.avatar_url ? (
               <img src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
@@ -491,7 +514,7 @@ export default function StoryCreationEditor({
             type="button"
             onClick={() => onQuickPublish(true)}
             disabled={uploading || (!storyFile && !reshareStory?.media_url)}
-            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
+            className="pointer-events-auto flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
           >
             <Star size={15} style={{ color: '#4CAF50' }} fill="#4CAF50" />
             الأصدقاء المقربون

@@ -1,4 +1,9 @@
-import { useState, type MouseEvent as ReactMouseEvent } from 'react';
+import {
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
+} from 'react';
 
 import {
   STORY_FONTS_AR,
@@ -40,7 +45,7 @@ const IDLE_CHIP = 'border-white/15 bg-white/5 text-white/85';
 
 /* اللوحات تُعرض فوق الشريط داخل التدفق فلا تُغطي نص المحرر */
 const PANEL =
-  'mb-2 max-h-[34vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#101014]/95 p-2.5 shadow-2xl backdrop-blur-xl';
+  'pointer-events-auto mb-2 max-h-[34vh] overflow-y-auto rounded-2xl border border-white/10 bg-[#101014]/95 p-2.5 shadow-2xl backdrop-blur-xl';
 
 const LIGHT_BACKGROUNDS = ['#FFFFFF', '#F6E05E', '#C7C7CC', '#68D391', '#4FD1C5', '#FBD38D'];
 
@@ -89,14 +94,32 @@ export default function StoryTextToolbar({
   };
 
   // منع فقدان التركيز عند اللمس أو النقر (مع تجاهل عناصر الإدخال)
+  const stopTouchPropagation = (event: ReactTouchEvent<HTMLDivElement>) => event.stopPropagation();
+  const stopPointerPropagation = (event: ReactPointerEvent<HTMLDivElement>) => event.stopPropagation();
+
   const handleMouseDown = (event: ReactMouseEvent) => {
     const target = event.target as HTMLElement;
+    event.stopPropagation();
     if (target.closest('input, textarea, select')) return;
     event.preventDefault();
   };
 
   return (
-    <div className="w-full" dir="rtl" onMouseDown={handleMouseDown}>
+    <div
+      data-story-text-editor-control="true"
+      className="pointer-events-none w-full"
+      dir="rtl"
+      onMouseDown={handleMouseDown}
+      onPointerDown={stopPointerPropagation}
+      onPointerMove={stopPointerPropagation}
+      onPointerUp={stopPointerPropagation}
+      onPointerCancel={stopPointerPropagation}
+      onTouchStart={stopTouchPropagation}
+      onTouchMove={stopTouchPropagation}
+      onTouchEnd={stopTouchPropagation}
+      onTouchCancel={stopTouchPropagation}
+      onClick={event => event.stopPropagation()}
+    >
       {/* لوحة الخطوط: قائمة تمرير أفقية فوق الشريط */}
       {panel === 'font' && (
         <div className={PANEL}>
@@ -201,7 +224,7 @@ export default function StoryTextToolbar({
 
       {/* الشريط: من اليسار إلى اليمين — Aa، الألوان، الحركات، المحاذاة، الخلفية، مكان الأيقونة القادمة */}
       <div
-        className="flex items-center justify-center gap-2 overflow-x-auto rounded-full border border-white/10 bg-black/55 px-2 py-1.5 shadow-2xl backdrop-blur-xl aani-hscroll"
+        className="pointer-events-auto flex items-center justify-center gap-2 overflow-x-auto rounded-full border border-white/10 bg-black/55 px-2 py-1.5 shadow-2xl backdrop-blur-xl aani-hscroll"
         dir="ltr"
       >
         <button

@@ -51,6 +51,8 @@ import {
 
 // --- شريط القصص الموحد ---
 
+type Point = { x: number; y: number };
+
 export default function StoriesBar({
   userId,
   currentProfile,
@@ -308,6 +310,50 @@ export default function StoriesBar({
   const [storyTextOffset, setStoryTextOffset] = useState({ x: 0, y: 0 });
   const [storyTextScale, setStoryTextScale] = useState(1);
   const [storyTextRotation, setStoryTextRotation] = useState(0);
+  const [storyAlignmentGuides, setStoryAlignmentGuides] = useState({ vertical: false, horizontal: false });
+  const alignmentGuideTimerRef = useRef<number | null>(null);
+
+  const showStoryAlignmentGuides = (vertical: boolean, horizontal: boolean) => {
+    setStoryAlignmentGuides({ vertical, horizontal });
+    if (alignmentGuideTimerRef.current !== null) window.clearTimeout(alignmentGuideTimerRef.current);
+    alignmentGuideTimerRef.current = vertical || horizontal
+      ? window.setTimeout(() => {
+          setStoryAlignmentGuides({ vertical: false, horizontal: false });
+          alignmentGuideTimerRef.current = null;
+        }, 300)
+      : null;
+  };
+
+  const snapStoryLayerPosition = (x: number, y: number) => {
+    const vertical = Math.abs(x - 50) <= 2.5;
+    const horizontal = Math.abs(y - 50) <= 2.5;
+    showStoryAlignmentGuides(vertical, horizontal);
+    return { x: vertical ? 50 : x, y: horizontal ? 50 : y };
+  };
+
+  const snapStoryTextOffset = (offset: Point) => {
+    const position = snapStoryLayerPosition(
+      50 + (offset.x / Math.max(1, window.innerWidth)) * 100,
+      50 + (offset.y / Math.max(1, window.innerHeight)) * 100,
+    );
+    return {
+      x: ((position.x - 50) / 100) * window.innerWidth,
+      y: ((position.y - 50) / 100) * window.innerHeight,
+    };
+  };
+
+  const snapStoryMediaOffset = (offset: Point) => {
+    const vertical = Math.abs(offset.x) <= 12;
+    const horizontal = Math.abs(offset.y) <= 12;
+    showStoryAlignmentGuides(vertical, horizontal);
+    return { x: vertical ? 0 : offset.x, y: horizontal ? 0 : offset.y };
+  };
+
+  const handleStoryTextTransformChange = (transform: { x: number; y: number; scale: number; rotation: number }) => {
+    setStoryTextOffset(snapStoryTextOffset({ x: transform.x, y: transform.y }));
+    setStoryTextScale(transform.scale);
+    setStoryTextRotation(transform.rotation);
+  };
 
   // تكبير حقل النص تلقائياً مع طول الكتابة
   useEffect(() => {
@@ -455,7 +501,11 @@ export default function StoriesBar({
     event.stopPropagation();
 
     const element = event.target as HTMLElement | null;
-    if (element?.closest('button:not([data-story-text]), input, textarea')) return;
+    if (element?.closest('[data-story-editor-control], button:not([data-story-text]), input, textarea, select')) {
+      storyGestureRef.current = null;
+      storyGestureTextIdRef.current = null;
+      return;
+    }
     const gesture = storyGestureRef.current;
 
     // إصبع إضافي أثناء الإيماءة: يبقى الهدف مقفلاً ويُعاد ضبط المرجع فقط
@@ -538,10 +588,10 @@ export default function StoriesBar({
       if (gesture.target === 'text') {
         const nextScale = Math.min(5, Math.max(0.3, gesture.scale * ratio));
         const nextRotation = gesture.rotate + deltaAngle;
-        const nextOffset = {
+        const nextOffset = snapStoryTextOffset({
           x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
           y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.45),
-        };
+        });
         setStoryTextScale(nextScale);
         setStoryTextRotation(nextRotation);
         setStoryTextOffset(nextOffset);
@@ -562,10 +612,10 @@ export default function StoriesBar({
       if (gesture.target === 'image') {
         setStoryMediaZoom(Math.min(4, Math.max(0.4, gesture.scale * ratio)));
         setStoryMediaRotate(gesture.rotate + deltaAngle);
-        setStoryMediaOffset({
+        setStoryMediaOffset(snapStoryMediaOffset({
           x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.6),
           y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.6),
-        });
+        }));
         return;
       }
 
@@ -586,10 +636,10 @@ export default function StoriesBar({
     const deltaY = screenDeltaY * scaleFactor;
 
     if (gesture.target === 'text') {
-      const nextOffset = {
+      const nextOffset = snapStoryTextOffset({
         x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.45),
         y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.4),
-      };
+      });
       setStoryTextOffset(nextOffset);
       const layerId = storyGestureTextIdRef.current;
       if (layerId) {
@@ -604,10 +654,10 @@ export default function StoriesBar({
     }
 
     if (gesture.target === 'image') {
-      setStoryMediaOffset({
+      setStoryMediaOffset(snapStoryMediaOffset({
         x: clampCanvas(gesture.x + deltaX, window.innerWidth * 0.6),
         y: clampCanvas(gesture.y + deltaY, window.innerHeight * 0.6),
-      });
+      }));
       return;
     }
   };
@@ -646,6 +696,7 @@ export default function StoriesBar({
     }
 
     storyGestureRef.current = null;
+    showStoryAlignmentGuides(false, false);
     lastStoryTouchRef.current = Date.now();
     const textLayerId = storyGestureTextIdRef.current;
     storyGestureTextIdRef.current = null;
@@ -808,6 +859,9 @@ export default function StoriesBar({
     caption,
     isCloseFriendsOnly,
     uploadDuration,
+    storyMediaOffset,
+    storyMediaZoom,
+    storyMediaRotate,
     timedTexts,
     storyDrawStrokes,
     storyFilterId,
@@ -833,6 +887,8 @@ export default function StoriesBar({
 
   const buildStoryTextLayer = (text: string): StoryTextOverlay => ({
     id: editingStoryTextId || `story-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    layerOrder: timedTexts.find(layer => layer.id === editingStoryTextId)?.layerOrder
+      ?? Math.max(9, ...timedTexts.map((layer, index) => layer.layerOrder ?? index + 10)) + 1,
     type: 'text',
     text,
     startTime: 0,
@@ -862,11 +918,17 @@ export default function StoriesBar({
     setStoryText('');
     setEditingStoryTextId(null);
     setStoryTextEditorOpen(false);
+    showStoryAlignmentGuides(false, false);
   }
 
   const updateStoryImageSticker = (id: string, update: StoryImageStickerUpdate) => {
+    const current = timedTexts.find((layer): layer is StoryImageOverlay => layer.type === 'image' && layer.id === id);
+    const hasPosition = update.x !== undefined || update.y !== undefined;
+    const position = hasPosition && current
+      ? snapStoryLayerPosition(update.x ?? current.x, update.y ?? current.y)
+      : null;
     setTimedTexts(previous => previous.map(layer => layer.type === 'image' && layer.id === id
-      ? { ...layer, ...update }
+      ? { ...layer, ...update, ...(position || {}) }
       : layer));
   };
 
@@ -877,6 +939,7 @@ export default function StoriesBar({
       return;
     }
 
+    showStoryAlignmentGuides(false, false);
     if (overDeleteZone) {
       setTimedTexts(previous => previous.filter(layer => layer.id !== id));
       setActiveStoryStickerId(current => current === id ? null : current);
@@ -922,6 +985,7 @@ export default function StoriesBar({
     localStickerObjectUrlsRef.current.add(src);
     const sticker: StoryImageOverlay = {
       id: `story-sticker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      layerOrder: Math.max(9, ...timedTexts.map((layer, index) => layer.layerOrder ?? index + 10)) + 1,
       type: 'image',
       src,
       localFile: file,
@@ -979,6 +1043,7 @@ export default function StoriesBar({
     setStoryTextScale(1);
     setStoryTextFontSize(30);
     setStoryTextRotation(0);
+    setStoryAlignmentGuides({ vertical: false, horizontal: false });
     setTextCanvasBackground('#000000');
     setStoryDrawStrokes([]);
     setStoryDrawingOpen(false);
@@ -1024,7 +1089,12 @@ export default function StoriesBar({
       textLayersToPublish = [...textLayersToPublish, buildStoryTextLayer(draftText)];
     }
 
-    void handleCreateTextStory('', canvasStyle, textLayersToPublish, closeFriends).then(published => {
+    const orderedLayers = textLayersToPublish.map((layer, index) =>
+      layer.type === 'text' || layer.type === undefined || layer.type === 'image' || layer.type === 'drawing'
+        ? { ...layer, layerOrder: layer.layerOrder ?? index + 10 }
+        : layer,
+    );
+    void handleCreateTextStory('', canvasStyle, orderedLayers, closeFriends).then(published => {
       if (!published) return;
       setShowTextOnlyStoryCanvas(false);
       setStoryTextEditorOpen(false);
@@ -1585,6 +1655,12 @@ export default function StoriesBar({
           }
 
           setStoryFile(files[0]);
+          setStoryCanvasScale(1);
+          setStoryCanvasOffset({ x: 0, y: 0 });
+          setStoryMediaZoom(1);
+          setStoryMediaRotate(0);
+          setStoryMediaOffset({ x: 0, y: 0 });
+          setStoryAlignmentGuides({ vertical: false, horizontal: false });
           setStoryDrawStrokes([]);
           setStoryDrawingOpen(false);
           activeStoryDrawStrokeRef.current = null;
@@ -1621,6 +1697,7 @@ export default function StoriesBar({
           storyTextScale={storyTextScale}
           storyTextFontSize={storyTextFontSize}
           storyTextRotation={storyTextRotation}
+          storyAlignmentGuides={storyAlignmentGuides}
           editorOpen={storyTextEditorOpen}
           keyboardInset={storyKeyboardInset}
           animationTick={storyAnimationTick}
@@ -1660,11 +1737,7 @@ export default function StoriesBar({
             setStoryAnimationTick(tick => tick + 1);
           }}
           onTextFontSizeChange={setStoryTextFontSize}
-          onTextTransformChange={transform => {
-            setStoryTextOffset({ x: transform.x, y: transform.y });
-            setStoryTextScale(transform.scale);
-            setStoryTextRotation(transform.rotation);
-          }}
+          onTextTransformChange={handleStoryTextTransformChange}
           onInteract={() => {
             keepStoryEditorFocus();
             window.setTimeout(keepStoryEditorFocus, 80);
@@ -1819,6 +1892,8 @@ export default function StoriesBar({
           storyTextOffset={storyTextOffset}
           storyTextScale={storyTextScale}
           storyTextRotation={storyTextRotation}
+          storyTextFontSize={storyTextFontSize}
+          storyAlignmentGuides={storyAlignmentGuides}
           storyFontFamily={storyFontFamily}
           storyTextColor={storyTextColor}
           storyTextAlign={storyTextAlign}
@@ -1876,6 +1951,7 @@ export default function StoriesBar({
             setStoryDrawingOpen(false);
             setStoryTextEditorOpen(false);
             setStoryText('');
+            setStoryAlignmentGuides({ vertical: false, horizontal: false });
             setTimedTexts([]);
             setEditingStoryTextId(null);
             activeStoryDrawStrokeRef.current = null;
@@ -1957,6 +2033,8 @@ export default function StoriesBar({
           onDurationChange={handleStoryDurationChange}
           onStoryTextChange={setStoryText}
           onFinishTextEditing={finishStoryTextEditing}
+          onTextFontSizeChange={setStoryTextFontSize}
+          onTextTransformChange={handleStoryTextTransformChange}
           onFontFamilyChange={setStoryFontFamily}
           onTextColorChange={setStoryTextColor}
           onCycleAlign={() => setStoryTextAlign(prev => nextStoryTextAlign(prev))}

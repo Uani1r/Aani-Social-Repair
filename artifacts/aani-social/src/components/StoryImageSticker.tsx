@@ -6,6 +6,7 @@ type StoryImageStickerProps = {
   sticker: StoryImageOverlay;
   interactive?: boolean;
   sizeScale?: number;
+  layerOrder?: number;
   onChange?: (update: StoryImageStickerUpdate) => void;
   onActivate?: () => void;
   onDragMove?: (point: { x: number; y: number }) => void;
@@ -71,6 +72,7 @@ export default function StoryImageSticker({
   sticker,
   interactive = true,
   sizeScale = 1,
+  layerOrder,
   onChange,
   onActivate,
   onDragMove,
@@ -358,6 +360,7 @@ export default function StoryImageSticker({
         width: `${width}px`,
         height: `${height}px`,
         transform: `translate(-50%, -50%) scale(${sticker.scale}) rotate(${sticker.rotation}deg)`,
+        zIndex: layerOrder ?? sticker.layerOrder ?? 15,
         clipPath: shape.clipPath,
         borderRadius: shape.borderRadius,
         touchAction: interactive ? 'none' : undefined,

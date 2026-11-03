@@ -39,7 +39,7 @@ export default function StoryFilterBar({
   const [adjustOpen, setAdjustOpen] = useState(false);
 
   return (
-    <div className="rounded-t-2xl border-t border-white/10 bg-black/75 px-2 pt-2 backdrop-blur-xl" dir="rtl">
+    <div className="pointer-events-auto rounded-t-2xl border-t border-white/10 bg-black/75 px-2 pt-2 backdrop-blur-xl" dir="rtl" data-story-editor-control="true" onPointerDown={event => event.stopPropagation()} onPointerMove={event => event.stopPropagation()} onPointerUp={event => event.stopPropagation()} onPointerCancel={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()} onTouchMove={event => event.stopPropagation()} onTouchEnd={event => event.stopPropagation()} onTouchCancel={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
       <div className="flex items-center justify-between px-1 pb-1.5">
         <span className="text-[11px] font-bold text-white/80">الفلاتر</span>
         <div className="flex items-center gap-2">

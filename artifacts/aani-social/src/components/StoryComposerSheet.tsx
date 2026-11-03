@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, Camera, Check, ImagePlus, Play, X } from 'lucide-react';
 
 import StoryImageSticker from '@/components/StoryImageSticker';
-import type { StoryImageOverlay, StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
+import type { StoryImageOverlay, StoryMediaTransformOverlay, StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
 
 type StoryMedia = StoryRow;
 
@@ -166,6 +166,12 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                     const canvasStyle = story.timed_texts.find(
                       (item): item is StoryCanvasStyleOverlay => item.type === 'canvas-style',
                     );
+                    const mediaTransform = story.timed_texts.find(
+                      (item): item is StoryMediaTransformOverlay => item.type === 'media-transform',
+                    );
+                    const mediaTransformCss = mediaTransform
+                      ? `translate(${mediaTransform.x}%, ${mediaTransform.y}%) scale(${mediaTransform.scale}) rotate(${mediaTransform.rotation}deg)`
+                      : undefined;
                     const visualLayers = story.timed_texts.filter(
                       (item): item is StoryTextOverlay | StoryImageOverlay =>
                         item.type === undefined || item.type === 'text' || item.type === 'image',
@@ -180,20 +186,22 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                       >
                         {story.media_url && story.media_type !== 'text' ? (
                           story.media_type === 'video' ? (
-                            <video src={story.media_url} muted playsInline className="h-full w-full object-cover" />
+                            <video src={story.media_url} muted playsInline className="h-full w-full object-cover" style={{ transform: mediaTransformCss, transformOrigin: 'center' }} />
                           ) : (
-                            <img src={story.media_url} alt="" className="h-full w-full object-cover" />
+                            <img src={story.media_url} alt="" className="h-full w-full object-cover" style={{ transform: mediaTransformCss, transformOrigin: 'center' }} />
                           )
                         ) : (
                           <div className="absolute inset-0" style={{ background: canvasStyle?.background || '#1f1f27' }} />
                         )}
-                        {visualLayers.map(layer => {
+                        {visualLayers.map((layer, layerIndex) => {
+                          const layerOrder = layer.layerOrder ?? layerIndex + 10;
                           if (layer.type === 'image') {
                             return (
                               <StoryImageSticker
                                 key={layer.id}
                                 sticker={layer}
                                 interactive={false}
+                                layerOrder={layerOrder}
                                 sizeScale={0.3}
                               />
                             );
@@ -207,6 +215,8 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                                 left: `${layer.x}%`,
                                 top: `${layer.y}%`,
                                 transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                                zIndex: layerOrder,
+                                fontSize: layer.fontSize ? `${layer.fontSize * 0.22}px` : undefined,
                                 color: layer.textColor || canvasStyle?.textColor || '#FFFFFF',
                                 fontFamily: layer.fontFamily || canvasStyle?.fontFamily || 'Cairo',
                                 background: layer.textBackground || 'transparent',

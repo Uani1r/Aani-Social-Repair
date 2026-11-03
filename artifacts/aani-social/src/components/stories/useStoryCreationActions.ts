@@ -2,7 +2,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import { toast } from 'sonner';
 
 import type { StoryDrawStroke } from '@/lib/appShared';
-import type { StoryCanvasStyle, StoryTextOverlay, StoryTimedText } from '@/components/stories/types';
+import type { StoryCanvasStyle, StoryMediaTransformOverlay, StoryTextOverlay, StoryTimedText } from '@/components/stories/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadStoryMedia } from '@/lib/storyUpload';
 import type { Profile } from '@/lib/types';
@@ -20,6 +20,9 @@ interface UseStoryCreationActionsOptions {
   caption: string;
   isCloseFriendsOnly: boolean;
   uploadDuration: number;
+  storyMediaOffset: { x: number; y: number };
+  storyMediaZoom: number;
+  storyMediaRotate: number;
   timedTexts: TimedText[];
   storyDrawStrokes: StoryDrawStroke[];
   storyFilterId: string;
@@ -51,6 +54,9 @@ export function useStoryCreationActions({
   caption,
   isCloseFriendsOnly,
   uploadDuration,
+  storyMediaOffset,
+  storyMediaZoom,
+  storyMediaRotate,
   timedTexts,
   storyDrawStrokes,
   storyFilterId,
@@ -76,6 +82,7 @@ export function useStoryCreationActions({
   const buildStoryTimedTexts = async (
     layers: TimedText[] = timedTexts,
     onProgress?: (percent: number) => void,
+    includeMediaTransform = false,
   ): Promise<TimedText[]> => {
     const persistedLayers: TimedText[] = [];
     const imageUploadCount = layers.filter(layer => layer.type === 'image' && Boolean(layer.localFile)).length;
@@ -101,7 +108,18 @@ export function useStoryCreationActions({
       persistedLayers.push({ ...sticker, src });
     }
 
-    return [
+    const mediaTransform: StoryMediaTransformOverlay = {
+      id: 'story-media-transform',
+      type: 'media-transform',
+      startTime: 0,
+      endTime: uploadDuration,
+      x: Math.min(100, Math.max(-100, (storyMediaOffset.x / Math.max(1, window.innerWidth)) * 100)),
+      y: Math.min(100, Math.max(-100, (storyMediaOffset.y / Math.max(1, window.innerHeight)) * 100)),
+      scale: storyMediaZoom,
+      rotation: storyMediaRotate,
+    };
+    const allLayers: TimedText[] = [
+      ...(includeMediaTransform ? [mediaTransform] : []),
       ...persistedLayers,
       ...(storyDrawStrokes.length > 0
         ? [{
@@ -113,6 +131,12 @@ export function useStoryCreationActions({
           }]
         : []),
     ];
+
+    return allLayers.map((layer, index) =>
+      layer.type === undefined || layer.type === 'text' || layer.type === 'image' || layer.type === 'drawing'
+        ? { ...layer, layerOrder: layer.layerOrder ?? index + 10 }
+        : layer,
+    );
   };
 
   const linkStoryMentions = async (storyId: string, authorName: string, mentions: MentionCandidate[]) => {
@@ -174,7 +198,7 @@ export function useStoryCreationActions({
         p_caption: caption.trim() || sourceStory?.caption || null,
         p_is_close_friends: isCloseFriendsOnly,
         p_duration_seconds: uploadDuration,
-        p_timed_texts: await buildStoryTimedTexts(),
+        p_timed_texts: await buildStoryTimedTexts(timedTexts, undefined, true),
         p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
         p_original_story_id: sourceStory?.id || null,
         p_share_type: sourceStory ? 'reshare' : 'original',
@@ -245,7 +269,7 @@ export function useStoryCreationActions({
           p_caption: storyCaption || sourceStory?.caption || null,
           p_is_close_friends: closeFriends,
           p_duration_seconds: durationSeconds,
-          p_timed_texts: await buildStoryTimedTexts(),
+          p_timed_texts: await buildStoryTimedTexts(timedTexts, undefined, true),
           p_filter_key: encodeStoryFilterKey(storyFilterId, storyFilterAdjustments),
           p_original_story_id: sourceStory?.id || null,
           p_share_type: sourceStory ? 'reshare' : 'original',

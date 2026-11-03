@@ -6,6 +6,7 @@ export type StoryAuthor = Partial<Profile> & Pick<Profile, 'id'>;
 
 export interface StoryTextOverlay {
   id: string;
+  layerOrder?: number;
   type?: 'text';
   text: string;
   startTime: number;
@@ -24,6 +25,7 @@ export interface StoryTextOverlay {
 
 export interface StoryDrawingOverlay {
   id: string;
+  layerOrder?: number;
   type: 'drawing';
   startTime: number;
   endTime: number;
@@ -35,6 +37,7 @@ export type StoryStickerShape = typeof STORY_STICKER_SHAPES[number];
 
 export interface StoryImageOverlay {
   id: string;
+  layerOrder?: number;
   type: 'image';
   src: string;
   shape: StoryStickerShape;
@@ -71,7 +74,18 @@ export interface StoryCanvasStyleOverlay extends StoryCanvasStyle {
   endTime: number;
 }
 
-export type StoryTimedText = StoryTextOverlay | StoryDrawingOverlay | StoryImageOverlay | StoryCanvasStyleOverlay;
+export interface StoryMediaTransformOverlay {
+  id: string;
+  type: 'media-transform';
+  startTime: number;
+  endTime: number;
+  x: number;
+  y: number;
+  scale: number;
+  rotation: number;
+}
+
+export type StoryTimedText = StoryTextOverlay | StoryDrawingOverlay | StoryImageOverlay | StoryCanvasStyleOverlay | StoryMediaTransformOverlay;
 
 export interface StoryRow {
   id: string;
@@ -163,7 +177,15 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
 
   if (value.type === 'drawing') {
     return Array.isArray(value.strokes)
-      && (value.strokes as unknown[]).every(isStoryDrawStroke);
+      && (value.strokes as unknown[]).every(isStoryDrawStroke)
+      && (value.layerOrder === undefined || (typeof value.layerOrder === 'number' && Number.isInteger(value.layerOrder) && value.layerOrder >= 0 && value.layerOrder <= 500));
+  }
+
+  if (value.type === 'media-transform') {
+    return typeof value.x === 'number' && Number.isFinite(value.x) && Math.abs(value.x) <= 100
+      && typeof value.y === 'number' && Number.isFinite(value.y) && Math.abs(value.y) <= 100
+      && typeof value.scale === 'number' && Number.isFinite(value.scale) && value.scale >= 0.4 && value.scale <= 4
+      && typeof value.rotation === 'number' && Number.isFinite(value.rotation) && Math.abs(value.rotation) <= 3600;
   }
 
   if (value.type === 'image') {
@@ -175,7 +197,8 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
       && typeof value.rotation === 'number' && Number.isFinite(value.rotation) && Math.abs(value.rotation) <= 3600
       && typeof value.cropX === 'number' && Number.isFinite(value.cropX) && Math.abs(value.cropX) <= 150
       && typeof value.cropY === 'number' && Number.isFinite(value.cropY) && Math.abs(value.cropY) <= 150
-      && typeof value.cropScale === 'number' && Number.isFinite(value.cropScale) && value.cropScale >= 1 && value.cropScale <= 4;
+      && typeof value.cropScale === 'number' && Number.isFinite(value.cropScale) && value.cropScale >= 1 && value.cropScale <= 4
+      && (value.layerOrder === undefined || (typeof value.layerOrder === 'number' && Number.isInteger(value.layerOrder) && value.layerOrder >= 0 && value.layerOrder <= 500));
   }
 
   const validOptionalTextStyle = (key: string, validate: (candidate: unknown) => boolean) =>
@@ -194,7 +217,8 @@ function isStoryTimedText(value: unknown): value is StoryTimedText {
     && validOptionalTextStyle('textAnimation', candidate => STORY_TEXT_ANIMATIONS.includes(candidate as StoryTextAnimation))
     && validOptionalTextStyle('fontSize', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 12 && candidate <= 96)
     && validOptionalTextStyle('scale', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0.3 && candidate <= 5)
-    && validOptionalTextStyle('rotation', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && Math.abs(candidate) <= 3600);
+    && validOptionalTextStyle('rotation', candidate => typeof candidate === 'number' && Number.isFinite(candidate) && Math.abs(candidate) <= 3600)
+    && validOptionalTextStyle('layerOrder', candidate => typeof candidate === 'number' && Number.isInteger(candidate) && candidate >= 0 && candidate <= 500);
 }
 
 export function normalizeStoryAuthor(value: unknown): StoryAuthor | null {

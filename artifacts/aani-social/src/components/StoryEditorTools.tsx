@@ -50,15 +50,24 @@ export function StoryEditorToolbar({
   return (
     <div
       ref={storyToolsRef}
-      className="absolute right-2.5 z-20 flex flex-col items-center gap-2.5"
+      className="fixed right-2.5 z-[120] flex pointer-events-none flex-col items-center gap-2.5"
       style={{ top: 'calc(3.75rem + env(safe-area-inset-top))' }}
+      onPointerDown={event => event.stopPropagation()}
+      onPointerMove={event => event.stopPropagation()}
+      onPointerUp={event => event.stopPropagation()}
+      onPointerCancel={event => event.stopPropagation()}
+      onTouchStart={event => event.stopPropagation()}
+      onTouchMove={event => event.stopPropagation()}
+      onTouchEnd={event => event.stopPropagation()}
+      onTouchCancel={event => event.stopPropagation()}
+      onClick={event => event.stopPropagation()}
     >
       <button
         type="button"
         aria-label="إغلاق محرر القصة"
         title="إغلاق"
         onClick={onClose}
-        className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
+        className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
       >
         <X size={17} />
       </button>
@@ -71,7 +80,7 @@ export function StoryEditorToolbar({
             title={tool.label}
             aria-label={tool.label}
             onClick={() => onSelectTool(tool.key)}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
           >
             <Icon size={17} />
           </button>
@@ -85,7 +94,7 @@ export function StoryEditorToolbar({
           aria-label="أدوات إضافية"
           aria-expanded={storyMoreOpen}
           onClick={onToggleMore}
-          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
+          className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/35 text-white backdrop-blur-md transition active:scale-95"
         >
           <ChevronDown
             size={17}
@@ -95,7 +104,7 @@ export function StoryEditorToolbar({
 
         {storyMoreOpen && (
           <div
-            className="absolute left-1/2 top-full z-30 mt-2 flex w-9 -translate-x-1/2 flex-col items-stretch gap-1 rounded-xl border border-white/10 bg-[#101014]/95 py-1 shadow-2xl backdrop-blur-xl"
+            className="pointer-events-auto absolute left-1/2 top-full z-[130] mt-2 flex w-9 -translate-x-1/2 flex-col items-stretch gap-1 rounded-xl border border-white/10 bg-[#101014]/95 py-1 shadow-2xl backdrop-blur-xl"
             dir="rtl"
             role="menu"
           >
@@ -109,12 +118,12 @@ export function StoryEditorToolbar({
                     aria-label={item.label}
                     aria-expanded={item.key === 'duration' ? storyDurationOpen : undefined}
                     onClick={item.action}
-                    className={`flex h-9 w-full items-center justify-center rounded-lg transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/85'}`}
+                    className={`pointer-events-auto flex h-9 w-full items-center justify-center rounded-lg transition hover:bg-white/10 ${item.key === 'close-friends' ? 'text-emerald-400' : 'text-white/85'}`}
                   >
                     <Icon size={19} fill={item.key === 'close-friends' ? 'currentColor' : 'none'} />
                   </button>
                   {item.key === 'duration' && storyDurationOpen && (
-                    <div className="absolute right-full top-0 z-40 mr-2">
+                    <div className="pointer-events-auto absolute right-full top-0 z-[140] mr-2">
                       <StoryExpirySlider durationSeconds={uploadDuration} onChange={onDurationChange} />
                     </div>
                   )}
@@ -167,6 +176,7 @@ type StoryTextEditorPanelProps = {
   onAnimationChange: (animation: StoryTextAnimation) => void;
   onTextFontSizeChange?: (fontSize: number) => void;
   onTextTransformChange?: (transform: StoryTextTransform) => void;
+  onTextTransformGestureEnd?: () => void;
   onInteract: () => void;
 };
 
@@ -196,6 +206,7 @@ export function StoryTextEditorPanel({
   onAnimationChange,
   onTextFontSizeChange,
   onTextTransformChange,
+  onTextTransformGestureEnd,
   onInteract,
 }: StoryTextEditorPanelProps) {
   const textGestureRef = useRef<StoryTextGesture | null>(null);
@@ -230,15 +241,20 @@ export function StoryTextEditorPanel({
   };
   const handleFontSizePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    event.stopPropagation();
     fontSizePointerIdRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
     updateFontSizeFromPointer(event);
   };
   const handleFontSizePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (fontSizePointerIdRef.current === event.pointerId) updateFontSizeFromPointer(event);
+    if (fontSizePointerIdRef.current !== event.pointerId) return;
+    event.stopPropagation();
+    updateFontSizeFromPointer(event);
   };
   const handleFontSizePointerEnd = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (fontSizePointerIdRef.current === event.pointerId) fontSizePointerIdRef.current = null;
+    if (fontSizePointerIdRef.current !== event.pointerId) return;
+    event.stopPropagation();
+    fontSizePointerIdRef.current = null;
   };
   const handleFontSizeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const increments: Record<string, number> = {
@@ -290,13 +306,27 @@ export function StoryTextEditorPanel({
   };
   const handleTextGestureStart = (event: React.TouchEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
-    const interactiveTarget = target.closest('input, button, select, [data-story-text-font-size-control]');
+    const interactiveTarget = target.closest('input, button, select, [data-story-text-editor-control]');
     if (interactiveTarget) {
-      if (event.touches.length >= 2) textGestureRef.current = null;
+      textGestureRef.current = null;
+      event.stopPropagation();
+      return;
+    }
+
+    if (!target.closest('[data-story-text-transform-surface]')) {
+      textGestureRef.current = null;
       return;
     }
 
     if (event.touches.length >= 2) {
+      const everyTouchStartedOnText = Array.from(event.touches).every(touch => {
+        const touchTarget = touch.target as Element | null;
+        return Boolean(touchTarget?.closest('[data-story-text-transform-surface]'));
+      });
+      if (!everyTouchStartedOnText || !textGestureRef.current) {
+        textGestureRef.current = null;
+        return;
+      }
       beginTextGesture(event.touches, currentTransform());
       event.preventDefault();
       event.stopPropagation();
@@ -320,6 +350,11 @@ export function StoryTextEditorPanel({
     }
   };
   const handleTextGestureMove = (event: React.TouchEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('input, button, select, [data-story-text-editor-control]')) {
+      event.stopPropagation();
+      return;
+    }
     const gesture = textGestureRef.current;
     if (!gesture) return;
     if (!gesture.active) {
@@ -392,11 +427,17 @@ export function StoryTextEditorPanel({
     });
   };
   const handleTextGestureEnd = (event: React.TouchEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('input, button, select, [data-story-text-editor-control]')) {
+      event.stopPropagation();
+      return;
+    }
     const gesture = textGestureRef.current;
     if (!gesture) return;
     if (event.touches.length === 0) {
       if (gesture.active) lastTextGestureAtRef.current = Date.now();
       textGestureRef.current = null;
+      onTextTransformGestureEnd?.();
       return;
     }
     if (!gesture.active) return;
@@ -432,19 +473,29 @@ export function StoryTextEditorPanel({
 
   return (
     <div
-      className="absolute inset-0 z-40 flex flex-col bg-black/70 backdrop-blur-sm"
+      className={`${storyTextTransform ? 'fixed' : 'absolute'} inset-0 z-[110] flex flex-col bg-black/70 backdrop-blur-sm`}
       dir="rtl"
+      onTouchStartCapture={event => {
+        const target = event.target as HTMLElement;
+        if (target.closest('input, button, select, [data-story-text-editor-control]')) {
+          textGestureRef.current = null;
+        }
+      }}
       onTouchStart={onTextTransformChange ? handleTextGestureStart : undefined}
       onTouchMove={onTextTransformChange ? handleTextGestureMove : undefined}
       onTouchEnd={onTextTransformChange ? handleTextGestureEnd : undefined}
       onTouchCancel={onTextTransformChange ? handleTextGestureEnd : undefined}
+      onPointerDown={event => event.stopPropagation()}
+      onPointerMove={event => event.stopPropagation()}
+      onPointerUp={event => event.stopPropagation()}
+      onPointerCancel={event => event.stopPropagation()}
       onClick={event => {
         if (Date.now() - lastTextGestureAtRef.current < 500) return;
         if (event.target === event.currentTarget) onFinishTextEditing();
       }}
     >
       <div
-        className="flex items-center justify-between px-4 py-3"
+        className={`${storyTextTransform ? 'pointer-events-none relative z-[60]' : ''} flex items-center justify-between px-4 py-3`}
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
       >
         <div className="flex items-center gap-2">
@@ -453,7 +504,7 @@ export function StoryTextEditorPanel({
             aria-label="إغلاق محرر القصة"
             title="إغلاق القصة"
             onClick={onCloseStory}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition active:scale-95"
+            className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/10 text-white transition active:scale-95"
           >
             <X size={18} />
           </button>
@@ -462,7 +513,7 @@ export function StoryTextEditorPanel({
         <button
           type="button"
           onClick={onFinishTextEditing}
-          className="rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212]"
+          className="pointer-events-auto rounded-full bg-white px-4 py-1.5 text-[12px] font-bold text-[#121212]"
         >
           تم
         </button>
@@ -470,14 +521,13 @@ export function StoryTextEditorPanel({
 
       {onTextFontSizeChange && (
         <div
-          data-story-text-font-size-control="true"
-          className="absolute left-2 top-1/2 z-50 flex -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-white/15 bg-black/45 px-1.5 py-3 text-[10px] font-bold text-white/80 shadow-xl backdrop-blur-md"
+          data-story-text-editor-control="true"
+          className="pointer-events-auto fixed left-2 top-1/2 z-[70] flex -translate-y-1/2 flex-col items-center gap-2 rounded-full border border-white/15 bg-black/45 px-1.5 py-3 text-[10px] font-bold text-white/80 shadow-xl backdrop-blur-md"
         >
           <span aria-hidden="true">A+</span>
           <div
             role="slider"
             tabIndex={0}
-            data-story-text-font-size-control="true"
             aria-label="حجم خط الستوري"
             aria-orientation="vertical"
             aria-valuemin={minFontSize}
@@ -503,7 +553,7 @@ export function StoryTextEditorPanel({
 
       <div className={`flex min-h-[96px] flex-1 items-start justify-center ${storyTextTransform ? 'pl-12 pr-4' : 'px-6'} pt-2`}>
         <div
-          className={`relative flex w-full items-start justify-center ${storyTextTransform ? 'max-w-[90vw]' : 'max-w-md'}`}
+          className={`relative flex w-full items-start justify-center ${storyTextTransform ? 'z-10 max-w-[90vw]' : 'max-w-md'}`}
           style={storyTextTransform ? {
             width: '90vw',
             maxWidth: '90vw',
@@ -542,6 +592,7 @@ export function StoryTextEditorPanel({
 
           <textarea
             ref={storyTextAreaRef}
+            data-story-text-transform-surface="true"
             autoFocus
             value={storyText}
             onChange={event => onStoryTextChange(event.target.value)}
@@ -570,7 +621,7 @@ export function StoryTextEditorPanel({
 
       {/* شريط أدوات النص بنمط إنستغرام: الخيارات تنبثق فوقه مباشرة */}
       <div
-        className="px-3"
+        className={`${storyTextTransform ? 'pointer-events-none relative z-[60]' : ''} px-3`}
         style={{ paddingBottom: `calc(0.8rem + env(safe-area-inset-bottom) + ${storyKeyboardInset}px)` }}
       >
         <StoryTextToolbar
@@ -634,7 +685,7 @@ export function StoryEditorPanels({
   onCloseDrawing,
 }: StoryEditorPanelsProps) {
   return (
-    <>
+    <div className="pointer-events-none">
       {storyFiltersOpen && (
         <StoryFilterBar
           previewUrl={editorMediaUrl}
@@ -654,7 +705,7 @@ export function StoryEditorPanels({
         </div>
       )}
       {storyDrawingOpen && (
-        <div className="mb-3 rounded-2xl border border-white/15 bg-black/75 p-2.5 text-white shadow-xl backdrop-blur-xl" dir="rtl">
+        <div className="pointer-events-auto mb-3 rounded-2xl border border-white/15 bg-black/75 p-2.5 text-white shadow-xl backdrop-blur-xl" dir="rtl" data-story-editor-control="true" onPointerDown={event => event.stopPropagation()} onPointerMove={event => event.stopPropagation()} onPointerUp={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()} onTouchMove={event => event.stopPropagation()} onTouchEnd={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
           <div className="flex items-center justify-between gap-3">
             <span className="shrink-0 text-[10px] font-semibold text-white/70">لون القلم</span>
             <div className="flex items-center gap-2" dir="ltr">
@@ -707,6 +758,6 @@ export function StoryEditorPanels({
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

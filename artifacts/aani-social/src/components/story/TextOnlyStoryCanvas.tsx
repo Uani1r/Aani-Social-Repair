@@ -6,6 +6,7 @@ import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMen
 import StoryMusicSheet from '@/components/StoryMusicSheet';
 import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
 import StoryImageSticker from '@/components/StoryImageSticker';
+import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
 import type { StoryImageStickerUpdate, StoryTimedText } from '@/components/stories/types';
 import type { StoryDrawStroke } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
@@ -49,6 +50,7 @@ interface TextOnlyStoryCanvasProps {
   storyTextScale: number;
   storyTextFontSize: number;
   storyTextRotation: number;
+  storyAlignmentGuides: { vertical: boolean; horizontal: boolean };
   editorOpen: boolean;
   keyboardInset: number;
   animationTick: number;
@@ -150,6 +152,7 @@ export default function TextOnlyStoryCanvas({
   storyTextScale,
   storyTextFontSize,
   storyTextRotation,
+  storyAlignmentGuides,
   editorOpen,
   keyboardInset,
   animationTick,
@@ -263,12 +266,14 @@ export default function TextOnlyStoryCanvas({
           />
         )}
 
-        {textLayers.map(layer => {
+        {textLayers.map((layer, index) => {
+          const layerOrder = layer.layerOrder ?? index + 10;
           if (layer.type === 'image') {
             return (
               <StoryImageSticker
                 key={layer.id}
                 sticker={layer}
+                layerOrder={layerOrder}
                 onChange={update => onUpdateImageSticker(layer.id, update)}
                 onActivate={() => onActivateImageSticker(layer.id)}
                 onDragMove={point => onStoryStickerDragChange(layer.id, true, isPointerOverDeleteZone(point))}
@@ -280,7 +285,7 @@ export default function TextOnlyStoryCanvas({
               />
             );
           }
-          if (layer.type === 'drawing' || layer.type === 'canvas-style') return null;
+          if (layer.type === 'drawing' || layer.type === 'canvas-style' || layer.type === 'media-transform') return null;
 
           return (
             <button
@@ -298,6 +303,7 @@ export default function TextOnlyStoryCanvas({
                 left: `${layer.x}%`,
                 top: `${layer.y}%`,
                 transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
+                zIndex: layerOrder,
                 fontFamily: layer.fontFamily || 'Cairo',
                 fontSize: layer.fontSize ?? 30,
                 color: layer.textColor || '#FFFFFF',
@@ -330,6 +336,8 @@ export default function TextOnlyStoryCanvas({
         />
       </div>
 
+      <StoryAlignmentGuides vertical={storyAlignmentGuides.vertical} horizontal={storyAlignmentGuides.horizontal} />
+
       <div
         ref={stickerDeleteZoneRef}
         aria-hidden={!draggingStoryStickerId}
@@ -345,13 +353,13 @@ export default function TextOnlyStoryCanvas({
         onClick={() => setBackgroundPickerOpen(open => !open)}
         aria-label="تغيير خلفية لوحة القصة"
         aria-expanded={backgroundPickerOpen}
-        className="absolute left-4 top-[calc(4.25rem+env(safe-area-inset-top))] z-30 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-lg backdrop-blur-md"
+        className="fixed left-4 top-[calc(4.25rem+env(safe-area-inset-top))] z-[120] flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-lg backdrop-blur-md"
       >
         <Paintbrush size={17} />
       </button>
       {backgroundPickerOpen && (
         <div
-          className="absolute left-4 top-[calc(7.25rem+env(safe-area-inset-top))] z-40 w-52 rounded-2xl border border-white/15 bg-[#101014]/95 p-3 shadow-2xl backdrop-blur-xl"
+          className="fixed left-4 top-[calc(7.25rem+env(safe-area-inset-top))] z-[120] w-52 rounded-2xl border border-white/15 bg-[#101014]/95 p-3 shadow-2xl backdrop-blur-xl"
           dir="rtl"
         >
           <div className="grid grid-cols-4 gap-2">
@@ -394,7 +402,7 @@ export default function TextOnlyStoryCanvas({
 
       {(storyFiltersOpen || storyDrawingOpen || storyMusicTrack) && (
         <div
-          className="absolute inset-x-3 z-30"
+          className="fixed inset-x-3 z-[120] pointer-events-none"
           style={{ bottom: `calc(5.35rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
         >
           <StoryEditorPanels
@@ -455,7 +463,7 @@ export default function TextOnlyStoryCanvas({
       />
 
       <div
-        className="absolute inset-x-0 bottom-0 z-30 px-4 pt-2"
+        className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2"
         style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
       >
         <div className="flex items-stretch gap-2.5">
@@ -463,7 +471,7 @@ export default function TextOnlyStoryCanvas({
             type="button"
             onClick={() => onPublish(false)}
             disabled={uploading || (!textLayers.length && !storyText.trim())}
-            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
+            className="pointer-events-auto flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
           >
             {currentProfile?.avatar_url ? (
               <img src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
@@ -478,7 +486,7 @@ export default function TextOnlyStoryCanvas({
             type="button"
             onClick={() => onPublish(true)}
             disabled={uploading || (!textLayers.length && !storyText.trim())}
-            className="flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
+            className="pointer-events-auto flex h-11 flex-1 items-center justify-center gap-2 rounded-full border border-white/60 bg-black/40 px-3 text-[12px] font-bold text-white backdrop-blur-sm transition hover:bg-black/60 active:scale-[0.98] disabled:opacity-40"
           >
             <Star size={15} style={{ color: '#4CAF50' }} fill="#4CAF50" />
             الأصدقاء المقربون
