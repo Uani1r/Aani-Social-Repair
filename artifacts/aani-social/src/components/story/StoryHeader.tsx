@@ -37,17 +37,15 @@ export default function StoryHeader({
           <div className="flex min-w-0 flex-col items-start gap-1">
             <Link href={`/profile/${currentStory.user_id}`} className="flex min-w-0 items-center gap-2">
               <Avatar profile={currentStory.author} storyBorder={false} />
-              <div className="user-identity-meta h-8 min-w-0 flex-1">
+              <div className="user-identity-meta h-12 min-w-0 flex-1">
                 <div className="flex min-w-0 items-center gap-1">
                   <span className="truncate font-bold text-xs">{displayName(currentStory.author)}</span>
                   {currentStory.is_close_friends && (
                     <span className="shrink-0 rounded-md bg-emerald-500 px-1.5 py-0.5 text-[9px] font-semibold">أصدقاء مقربون</span>
                   )}
                 </div>
-                <div className="flex min-w-0 items-center justify-between gap-2">
-                  <span className="truncate text-[10px] text-zinc-300" dir="ltr">{currentStory.author?.username}</span>
-                  <span className="shrink-0 text-[10px] text-zinc-300">{formatDate(currentStory.created_at)}</span>
-                </div>
+                <span className="truncate text-[10px] text-zinc-300" dir="ltr">{currentStory.author?.username}</span>
+                <span className="whitespace-nowrap text-[10px] text-zinc-300">{formatDate(currentStory.created_at)}</span>
               </div>
             </Link>
             {currentStory.original_story_id && originalStoryAuthor && (

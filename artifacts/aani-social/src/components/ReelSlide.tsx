@@ -200,7 +200,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
           <div className="flex-1 min-w-0 text-white pointer-events-auto">
             <div className="flex items-center gap-2 mb-2">
               <Avatar profile={post.author} />
-              <span className="font-bold text-sm truncate">{displayName(post.author)}</span>
+              <div className="user-identity-meta min-w-0 flex-1">
+                <strong className="block truncate text-sm font-bold text-white">{displayName(post.author)}</strong>
+                {post.author?.username && (
+                  <span className="block truncate text-xs leading-none text-zinc-300" dir="ltr">{post.author.username}</span>
+                )}
+              </div>
             </div>
             {post.content && <p className="text-sm leading-snug line-clamp-3">{post.content}</p>}
           </div>

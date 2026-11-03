@@ -168,7 +168,14 @@ export default function MessagesPage({
         <div className="card flex flex-col h-[70vh]">
           <div className="flex items-center justify-between border-b border-zinc-800 pb-2 mb-2">
             <button onClick={() => setLocation('/messages')} className="text-xs text-pink-500 flex items-center gap-1"><ArrowUpLeft size={14} /> كل الرسائل</button>
-            {target && <strong className="text-xs text-white">{displayName(target)}</strong>}
+            {target && (
+              <div className="user-identity-meta h-8 min-w-0">
+                <strong className="block truncate text-xs text-white">{displayName(target)}</strong>
+                {target.username && (
+                  <span className="block truncate text-[10px] leading-none text-zinc-400" dir="ltr">{target.username}</span>
+                )}
+              </div>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto space-y-2 p-2">
             {thread.map(m => {

@@ -145,7 +145,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <div className={`user-identity-meta ${isReply ? 'h-8' : 'h-10'} min-w-0 flex-1`}>
+            <div className={`user-identity-meta ${isReply ? 'h-12' : 'h-14'} min-w-0 flex-1`}>
               <p
                 className={`truncate font-bold leading-tight text-white ${
                   isReply ? 'text-[13px]' : 'text-[15px]'
@@ -158,12 +158,12 @@ export const CommentItem: React.FC<CommentItemProps> = ({
                   {author.username}
                 </span>
               )}
+              <time className="text-[11px] text-zinc-500">
+                {formatRelativeTime(comment.created_at)}
+              </time>
             </div>
 
             <div className="flex shrink-0 items-start gap-2">
-              <span className="shrink-0 text-[11px] text-zinc-500">
-                {formatRelativeTime(comment.created_at)}
-              </span>
               {isOwnComment && (
                 <div className="relative shrink-0">
                   <button

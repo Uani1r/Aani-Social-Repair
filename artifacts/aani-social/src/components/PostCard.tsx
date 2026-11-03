@@ -68,17 +68,16 @@ export default function PostCard({
               {post.author?.full_name?.[0]?.toUpperCase() || 'آ'}
             </div>
           )}
-          <div className="user-identity-meta h-10 min-w-0">
+          <div className="user-identity-meta h-14 min-w-0">
             <div className="truncate font-semibold leading-tight text-zinc-100">
               {post.author?.display_name || post.author?.full_name || 'مستخدم'}
             </div>
             {post.author?.username && (
               <div className="truncate text-xs leading-none text-zinc-400" dir="ltr">{post.author.username}</div>
             )}
+            <div className="whitespace-nowrap text-xs text-zinc-400">{formattedDate}</div>
           </div>
         </div>
-
-        <div className="text-xs text-zinc-400">{formattedDate}</div>
       </div>
 
       {/* محتوى المنشور */}

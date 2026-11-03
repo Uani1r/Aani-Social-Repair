@@ -696,6 +696,7 @@ body {
   min-width: 0;
   flex-direction: column;
   justify-content: space-between;
+  text-align: right;
 }
 
 .story-bar {
