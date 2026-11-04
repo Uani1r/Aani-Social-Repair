@@ -7,7 +7,9 @@ alter table public.posts
   add column if not exists hide_likes boolean not null default false,
   add column if not exists hide_comments boolean not null default false,
   add column if not exists comment_privacy text not null default 'public',
-  add column if not exists allowed_commenters uuid[] not null default '{}'::uuid[];
+  add column if not exists allowed_commenters uuid[] not null default '{}'::uuid[],
+  add column if not exists audio_url text default null,
+  add column if not exists audio_title text default null;
 
 update public.posts
 set visibility = 'public'
@@ -16,6 +18,14 @@ where visibility is null or visibility not in ('public', 'private');
 update public.posts
 set comments_disabled = false
 where comments_disabled is null;
+
+update public.posts
+set hide_likes = false
+where hide_likes is null;
+
+update public.posts
+set hide_comments = false
+where hide_comments is null;
 
 update public.posts
 set comment_privacy = 'public'
@@ -59,6 +69,15 @@ grant select (
   hide_likes, hide_comments, comment_privacy
 ) on table public.posts to authenticated;
 grant select on table public.posts to service_role;
+grant update (hide_likes, hide_comments, comment_privacy, allowed_commenters)
+  on public.posts to authenticated;
+
+alter table public.posts enable row level security;
+drop policy if exists "Users can update their own posts" on public.posts;
+create policy "Users can update their own posts"
+  on public.posts for update to authenticated
+  using (user_id = (select auth.uid()))
+  with check (user_id = (select auth.uid()));
 
 create or replace function public.aani_get_allowed_commenters(p_post_id uuid)
 returns uuid[]
@@ -95,7 +114,7 @@ as $$
         p.user_id = p_viewer_id
         or (
           not p.hide_comments
-          and p.visibility <> 'private'
+          and coalesce(p.visibility, 'public') <> 'private'
         )
       )
   );
@@ -120,7 +139,7 @@ as $$
       and (
         p.user_id = p_commenter_id
         or (
-          p.visibility <> 'private'
+          coalesce(p.visibility, 'public') <> 'private'
           and not p.hide_comments
           and case p.comment_privacy
             when 'followers' then exists (
@@ -153,6 +172,11 @@ grant execute on function public.aani_can_view_post_comments(uuid, uuid) to auth
 grant execute on function public.aani_can_comment_on_post(uuid, uuid) to authenticated;
 
 -- Restrictive policies combine with the existing permissive policies using AND.
+alter table public.comments enable row level security;
+alter table public.likes enable row level security;
+alter table public.comment_likes enable row level security;
+alter table public.comment_dislikes enable row level security;
+
 drop policy if exists aani_comments_privacy_read_guard on public.comments;
 create policy aani_comments_privacy_read_guard on public.comments
   as restrictive for select to authenticated
@@ -177,7 +201,7 @@ create policy aani_likes_privacy_read_guard on public.likes
         and (
           p.user_id = (select auth.uid())
           or (
-            p.visibility <> 'private'
+            coalesce(p.visibility, 'public') <> 'private'
             and (not p.hide_likes or likes.user_id = (select auth.uid()))
           )
         )
@@ -298,6 +322,30 @@ begin
 end;
 $$;
 
+-- Recreate counter triggers only where the corresponding interaction table exists.
+do $$
+declare
+  target_table text;
+  trigger_name text;
+begin
+  foreach target_table in array array['likes', 'comments', 'reposts', 'post_shares']
+  loop
+    if exists (
+      select 1 from information_schema.tables
+      where table_schema = 'public' and table_name = target_table
+    ) then
+      trigger_name := 'aani_' || target_table || '_counter';
+      execute format('drop trigger if exists %I on public.%I', trigger_name, target_table);
+      execute format(
+        'create trigger %I after insert or delete on public.%I for each row execute function public.aani_sync_post_counters()',
+        trigger_name,
+        target_table
+      );
+    end if;
+  end loop;
+end;
+$$;
+
 create or replace function public.aani_sync_post_privacy_counters()
 returns trigger
 language plpgsql
@@ -386,7 +434,7 @@ as $$
     where p.id = any(coalesce(p_post_ids, '{}'::uuid[]))
       and (
         p.user_id = auth.uid()
-        or p.visibility <> 'private'
+        or coalesce(p.visibility, 'public') <> 'private'
       )
   )
   select
@@ -413,7 +461,12 @@ $$;
 
 revoke all on function public.aani_post_interaction_rows(uuid[]) from public, anon, authenticated;
 
-create or replace function public.get_post_interactions(p_post_ids uuid[])
+-- Earlier app versions returned different columns; drop the RPC aliases before
+-- recreating them so this script also upgrades those installations safely.
+drop function if exists public.get_post_interactions(uuid[]);
+drop function if exists public.post_interaction_summaries(uuid[]);
+
+create function public.get_post_interactions(p_post_ids uuid[])
 returns table (
   post_id uuid,
   likes_count bigint,
@@ -442,7 +495,7 @@ as $$
   select * from public.aani_post_interaction_rows(p_post_ids);
 $$;
 
-create or replace function public.post_interaction_summaries(post_ids uuid[])
+create function public.post_interaction_summaries(post_ids uuid[])
 returns table (
   post_id uuid,
   likes_count bigint,
