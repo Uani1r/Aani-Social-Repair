@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'wouter';
 
 import FeedPostCard from '@/components/FeedPostCard';
 import { hydratePostInteractions } from '@/hooks/usePosts';
@@ -6,7 +7,8 @@ import { decoratePost, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post } from '@/lib/types';
 
-export default function PostDetailPage({ postId, currentUserId, onOpenComments }: { postId: string; currentUserId: string; onOpenComments: (postId: string) => void }) {
+export default function PostDetailPage({ postId, currentUserId, onOpenComments }: { postId: string; currentUserId: string; onOpenComments: (postId: string, commentId?: string) => void }) {
+  const [location] = useLocation();
   const [post, setPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
   const interactionVersion = useInteractionsVersion();
@@ -81,6 +83,11 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
   }, [postId, currentUserId]);
 
   useEffect(() => { void refresh(); }, [refresh]);
+
+  useEffect(() => {
+    const commentId = new URLSearchParams(window.location.search).get('commentId');
+    if (commentId) onOpenComments(postId, commentId);
+  }, [location, onOpenComments, postId]);
 
   return (
     <section className="new-view mx-auto w-full max-w-lg">

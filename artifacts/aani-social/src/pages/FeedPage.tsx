@@ -46,6 +46,7 @@ interface StoriesBarProps {
   pendingReshare: StoryDmCardStory | null;
   onReshareHandled: () => void;
   pendingProfileStoryOwnerId: string | null;
+  pendingStoryId: string | null;
   onProfileStoryHandled: () => void;
 }
 
@@ -56,6 +57,7 @@ interface FeedPageProps {
   pendingStoryReshare: StoryDmCardStory | null;
   onStoryReshareHandled: () => void;
   pendingProfileStoryOwnerId: string | null;
+  pendingStoryId: string | null;
   onProfileStoryHandled: () => void;
   StoriesBarComponent: React.ComponentType<StoriesBarProps>;
 }
@@ -67,6 +69,7 @@ export default function FeedPage({
   pendingStoryReshare,
   onStoryReshareHandled,
   pendingProfileStoryOwnerId,
+  pendingStoryId,
   onProfileStoryHandled,
   StoriesBarComponent,
 }: FeedPageProps) {
@@ -273,6 +276,7 @@ export default function FeedPage({
         pendingReshare={pendingStoryReshare}
         onReshareHandled={onStoryReshareHandled}
         pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+        pendingStoryId={pendingStoryId}
         onProfileStoryHandled={onProfileStoryHandled}
       />
 

@@ -50,6 +50,8 @@ type ShellOverlayControlsProps = {
   onSignOut: () => void;
   showNotifsModal: boolean;
   onCloseNotifications: () => void;
+  onOpenComments: (postId: string, commentId?: string) => void;
+  onOpenStory: (storyId: string, ownerId: string) => void;
   NotificationsModalComponent: ComponentType<NotificationsModalProps>;
   userId: string;
   showAssistantModal: boolean;
@@ -96,6 +98,8 @@ export default function ShellOverlayControls({
   onSignOut,
   showNotifsModal,
   onCloseNotifications,
+  onOpenComments,
+  onOpenStory,
   NotificationsModalComponent,
   userId,
   showAssistantModal,
@@ -154,7 +158,13 @@ export default function ShellOverlayControls({
       )}
 
       <SettingsModal isOpen={showSettingsModal} onClose={onCloseSettings} currentProfile={profile} onSignOut={onSignOut} />
-      <NotificationsModalComponent isOpen={showNotifsModal} onClose={onCloseNotifications} currentUserId={userId} />
+      <NotificationsModalComponent
+        isOpen={showNotifsModal}
+        onClose={onCloseNotifications}
+        currentUserId={userId}
+        onOpenComments={onOpenComments}
+        onOpenStory={onOpenStory}
+      />
 
       <button
         onClick={onOpenAssistant}

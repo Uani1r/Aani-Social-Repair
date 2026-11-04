@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'wouter';
+import { useEffect, useState } from 'react';
+import { Link, useLocation } from 'wouter';
 import {
-  Bell, Heart, MessageCircle, UserRound, X,
+  Bell, Heart, MessageSquare, Repeat2, Sparkles, UserRound, X,
   type LucideIcon,
 } from 'lucide-react';
-
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
@@ -14,11 +13,15 @@ type NotificationsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   currentUserId: string;
+  onOpenComments: (postId: string, commentId?: string) => void;
+  onOpenStory: (storyId: string, ownerId: string) => void;
 };
 
 type NotificationEntry = NotificationItem & {
   reference_id?: string | null;
-  isMock?: boolean;
+  comment_id?: string | null;
+  sub_reference_id?: string | null;
+  post_id?: string | null;
 };
 
 type NotificationReferenceRow = {
@@ -26,83 +29,82 @@ type NotificationReferenceRow = {
   reference_id?: string | null;
   entity_id?: string | null;
   actor_id?: string | null;
+  comment_id?: string | null;
 };
 
-const mockProfile = (id: string, fullName: string, username: string): Profile => ({
-  id,
-  username,
-  full_name: fullName,
-  avatar_url: null,
-  bio: '',
-});
+type NotificationTarget =
+  | { kind: 'post'; postId: string }
+  | { kind: 'comment'; postId: string; commentId: string }
+  | { kind: 'story'; storyId: string; ownerId: string };
 
-const mockTime = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+const isStoryNotification = (item: NotificationEntry) => {
+  if (item.type === 'story' || item.type === 'story_like') return true;
+  return ['like', 'reply', 'mention'].includes(item.type) && /ستوري|قصة/i.test(item.content || '');
+};
 
-const MOCK_NOTIFICATIONS: NotificationEntry[] = [
-  {
-    id: 'demo-repost', user_id: 'demo', actor_id: 'demo-sara', type: 'repost',
-    content: '', is_read: false, created_at: mockTime(4), isMock: true,
-    actor: mockProfile('demo-sara', 'سارة العتيبي', 'sara'),
-  },
-  {
-    id: 'demo-like', user_id: 'demo', actor_id: 'demo-omar', type: 'like',
-    content: '', is_read: false, created_at: mockTime(18), isMock: true,
-    actor: mockProfile('demo-omar', 'عمر الحربي', 'omar'),
-  },
-  {
-    id: 'demo-comment', user_id: 'demo', actor_id: 'demo-lina', type: 'comment',
-    content: '', is_read: true, created_at: mockTime(42), isMock: true,
-    actor: mockProfile('demo-lina', 'لينا أحمد', 'lina'),
-  },
-  {
-    id: 'demo-follow', user_id: 'demo', actor_id: 'demo-nawaf', type: 'follow',
-    content: '', is_read: false, created_at: mockTime(95), isMock: true,
-    actor: mockProfile('demo-nawaf', 'نواف الشمري', 'nawaf'),
-  },
-  {
-    id: 'demo-mention', user_id: 'demo', actor_id: 'demo-noor', type: 'mention',
-    content: '', is_read: true, created_at: mockTime(180), isMock: true,
-    actor: mockProfile('demo-noor', 'نور خالد', 'noor'),
-  },
-  {
-    id: 'demo-reply', user_id: 'demo', actor_id: 'demo-yousef', type: 'reply',
-    content: '', is_read: false, created_at: mockTime(300), isMock: true,
-    actor: mockProfile('demo-yousef', 'يوسف صالح', 'yousef'),
-  },
-];
+const notificationAction = (item: NotificationEntry) => {
+  if (isStoryNotification(item)) {
+    if (item.type === 'like') return 'أعجب بقصتك';
+    if (item.type === 'reply') return 'ردّ على قصتك';
+    return item.content || 'تفاعل مع قصتك';
+  }
 
-const notificationAction = (type: string, content: string) => {
   const actions: Record<string, string> = {
     repost: 'أعاد نشر منشورك أو ريلز',
     like: 'أعجب بمنشورك أو تعليقك',
     comment: 'علّق على منشورك',
     reply: 'ردّ على تعليقك',
     follow: 'بدأ بمتابعتك',
-    mention: 'أشار إليك في تعليق أو قصة',
+    mention: 'أشار إليك في تعليق',
   };
-  return actions[type] || content || 'أرسل لك إشعاراً جديداً';
+  return actions[item.type] || item.content || 'أرسل لك إشعاراً جديداً';
 };
 
-function ActionBadge({ type }: { type: string }) {
-  let Icon: LucideIcon = Bell;
-  let color = 'text-[#e6a17b]';
-  let label = 'إشعار';
+const getNotificationTarget = (item: NotificationEntry, currentUserId: string): NotificationTarget | null => {
+  const referenceId = item.reference_id || item.entity_id;
+  if (isStoryNotification(item) && referenceId) {
+    const ownerId = item.type === 'mention' || item.type === 'story' ? item.actor_id : currentUserId;
+    return ownerId ? { kind: 'story', storyId: referenceId, ownerId } : null;
+  }
 
-  if (type === 'like') {
+  if (item.type === 'comment' || item.type === 'reply' || (item.type === 'like' && Boolean(item.comment_id))) {
+    const commentId = item.comment_id || item.sub_reference_id;
+    const postId = item.post_id || referenceId;
+    return commentId && postId ? { kind: 'comment', postId, commentId } : null;
+  }
+
+  if ((item.type === 'like' || item.type === 'repost') && (referenceId || item.post_id)) {
+    return { kind: 'post', postId: referenceId || item.post_id! };
+  }
+
+  return null;
+};
+
+function ActionBadge({ item }: { item: NotificationEntry }) {
+  let Icon: LucideIcon = Bell;
+  let label = 'إشعار';
+  let colors = 'border-[#c98d73]/30 bg-[#c98d73]/[0.15] text-[#c98d73]';
+
+  if (isStoryNotification(item)) {
+    Icon = Sparkles;
+    label = 'قصة';
+    colors = 'border-[#c084fc]/30 bg-[#c084fc]/[0.15] text-[#c084fc]';
+  } else if (item.type === 'like') {
     Icon = Heart;
-    color = 'text-rose-400';
     label = 'إعجاب';
-  } else if (type === 'comment' || type === 'reply') {
-    Icon = MessageCircle;
-    color = 'text-sky-300';
+    colors = 'border-[#f43f5e]/30 bg-[#f43f5e]/[0.15] text-[#f43f5e]';
+  } else if (item.type === 'comment' || item.type === 'reply') {
+    Icon = MessageSquare;
     label = 'تعليق';
+    colors = 'border-[#38bdf8]/30 bg-[#38bdf8]/[0.15] text-[#38bdf8]';
+  } else if (item.type === 'repost') {
+    Icon = Repeat2;
+    label = 'إعادة نشر';
+    colors = 'border-[#34d399]/30 bg-[#34d399]/[0.15] text-[#34d399]';
   }
 
   return (
-    <span
-      aria-label={label}
-      className={`absolute -bottom-1 -left-1 grid h-[22px] w-[22px] place-items-center rounded-full border border-[#e6a17b]/35 bg-[#121214] ${color}`}
-    >
+    <span aria-label={label} className={`absolute -bottom-1 -left-1 grid h-[22px] w-[22px] place-items-center rounded-full border bg-[#0a0a0a] ${colors}`}>
       <Icon size={12} strokeWidth={2.4} />
     </span>
   );
@@ -110,28 +112,33 @@ function ActionBadge({ type }: { type: string }) {
 
 function NotificationAvatar({ item }: { item: NotificationEntry }) {
   return (
-    <span aria-hidden="true" className="relative mt-0.5 grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
+    <span className="relative mt-0.5 grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
       {item.actor?.avatar_url ? (
         <img src={item.actor.avatar_url} alt="" className="h-full w-full rounded-full object-cover" />
       ) : (
         <UserRound size={23} strokeWidth={2.5} />
       )}
-      <ActionBadge type={item.type} />
+      <ActionBadge item={item} />
     </span>
   );
 }
 
-export default function NotificationsModal({ isOpen, onClose, currentUserId }: NotificationsModalProps) {
+export default function NotificationsModal({
+  isOpen,
+  onClose,
+  currentUserId,
+  onOpenComments,
+  onOpenStory,
+}: NotificationsModalProps) {
+  const [, setLocation] = useLocation();
   const [items, setItems] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [showSamples, setShowSamples] = useState(false);
-  const [readMockIds, setReadMockIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     if (!isOpen) return undefined;
     if (!supabaseConfigured) {
-      setError('إعدادات Supabase غير مكتملة. يمكنك تجربة الواجهة بالبيانات التجريبية.');
+      setError('إعدادات Supabase غير مكتملة.');
       setItems([]);
       setLoading(false);
       return undefined;
@@ -160,7 +167,7 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
         let refs: NotificationReferenceRow[] = [];
         const referenceResult = await supabase
           .from('notifications')
-          .select('id,reference_id,actor_id')
+          .select('id,reference_id,entity_id,actor_id,comment_id')
           .eq('user_id', currentUserId)
           .order('created_at', { ascending: false })
           .limit(40);
@@ -170,7 +177,7 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
         } else {
           const entityResult = await supabase
             .from('notifications')
-            .select('id,entity_id,actor_id')
+            .select('id,entity_id,actor_id,comment_id')
             .eq('user_id', currentUserId)
             .order('created_at', { ascending: false })
             .limit(40);
@@ -186,20 +193,38 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
               reference_id: row?.reference_id || row?.entity_id || null,
               entity_id: row?.entity_id || item.entity_id || null,
               actor_id: row?.actor_id || item.actor_id || null,
+              comment_id: row?.comment_id || item.comment_id || null,
             };
           });
+        }
 
-          const actorIds = Array.from(new Set(rows.map(item => item.actor_id).filter((id): id is string => Boolean(id))));
-          if (actorIds.length) {
-            const { data: profiles } = await supabase
-              .from('profiles')
-              .select('id,username,full_name,avatar_url')
-              .in('id', actorIds);
-            const profileMap = new Map(((profiles || []) as Profile[]).map(person => [person.id, person]));
-            rows = rows.map(item => item.actor_id
-              ? { ...item, actor: profileMap.get(item.actor_id) || null }
-              : item);
-          }
+        const actorIds = Array.from(new Set(rows.map(item => item.actor_id).filter((id): id is string => Boolean(id))));
+        if (actorIds.length) {
+          const { data: profiles } = await supabase
+            .from('profiles')
+            .select('id,username,full_name,avatar_url')
+            .in('id', actorIds);
+          const profileMap = new Map(((profiles || []) as Profile[]).map(person => [person.id, person]));
+          rows = rows.map(item => item.actor_id
+            ? { ...item, actor: profileMap.get(item.actor_id) || null }
+            : item);
+        }
+
+        const commentIds = Array.from(new Set(rows
+          .map(item => item.comment_id || item.sub_reference_id)
+          .filter((id): id is string => Boolean(id))));
+        if (commentIds.length) {
+          const { data: comments } = await supabase
+            .from('comments')
+            .select('id,post_id')
+            .in('id', commentIds);
+          const postIdByCommentId = new Map(((comments || []) as Array<{ id: string; post_id: string }>).map(comment => [comment.id, comment.post_id]));
+          rows = rows.map(item => {
+            const commentId = item.comment_id || item.sub_reference_id;
+            return commentId && postIdByCommentId.has(commentId)
+              ? { ...item, post_id: postIdByCommentId.get(commentId) || null }
+              : item;
+          });
         }
       } catch (enrichError) {
         console.warn('[notifications] تعذر إثراء الإشعارات:', enrichError);
@@ -223,18 +248,8 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
-  const visibleItems = useMemo(() => showSamples
-    ? MOCK_NOTIFICATIONS.map(item => ({ ...item, is_read: item.is_read || readMockIds.has(item.id) }))
-    : items,
-  [items, readMockIds, showSamples]);
-
   const markNotificationRead = async (item: NotificationEntry) => {
     if (item.is_read) return;
-    if (item.isMock) {
-      setReadMockIds(current => new Set(current).add(item.id));
-      return;
-    }
-
     setItems(current => current.map(existing => existing.id === item.id ? { ...existing, is_read: true } : existing));
     if (!supabaseConfigured) return;
     const { error: updateError } = await supabase
@@ -248,40 +263,61 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
     }
   };
 
+  const activateNotification = (item: NotificationEntry) => {
+    void markNotificationRead(item);
+    const target = getNotificationTarget(item, currentUserId);
+    if (!target) return;
+
+    onClose();
+    if (target.kind === 'post') {
+      setLocation(`/post/${encodeURIComponent(target.postId)}`);
+    } else if (target.kind === 'comment') {
+      onOpenComments(target.postId, target.commentId);
+      setLocation(`/post/${encodeURIComponent(target.postId)}?commentId=${encodeURIComponent(target.commentId)}`);
+    } else {
+      onOpenStory(target.storyId, target.ownerId);
+      setLocation('/feed');
+    }
+  };
+
   if (!isOpen) return null;
 
   const renderCard = (item: NotificationEntry) => {
     const actorName = displayName(item.actor);
-    const targetId = item.reference_id || item.entity_id;
-    const target = !item.isMock && item.type === 'repost' && targetId
-      ? `/post/${encodeURIComponent(targetId)}`
-      : null;
-    const card = (
-      <article className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}>
-        <NotificationAvatar item={item} />
-        <span className="min-w-0 flex-1">
-          <span className="block text-[14px] leading-6">
-            <strong className="font-bold">{actorName}</strong>{' '}
-            <span>{notificationAction(item.type, item.content)}</span>
+    const action = notificationAction(item);
+    const profileHref = item.actor_id ? `/profile/${encodeURIComponent(item.actor_id)}` : null;
+
+    return (
+      <article key={item.id} className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}>
+        {profileHref ? (
+          <Link
+            href={profileHref}
+            onClick={event => {
+              event.stopPropagation();
+              void markNotificationRead(item);
+              onClose();
+            }}
+            aria-label={`الانتقال إلى ملف ${actorName}`}
+            className="shrink-0 rounded-full outline-none focus-visible:ring-2 focus-visible:ring-[#e6a17b]"
+          >
+            <NotificationAvatar item={item} />
+          </Link>
+        ) : <NotificationAvatar item={item} />}
+        <button
+          type="button"
+          onClick={() => activateNotification(item)}
+          aria-label={`${actorName} ${action}`}
+          className="flex min-w-0 flex-1 items-center border-0 bg-transparent p-0 text-right outline-none focus-visible:ring-2 focus-visible:ring-[#e6a17b]"
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block text-[14px] leading-6">
+              <strong className="font-bold">{actorName}</strong>{' '}
+              <span>{action}</span>
+            </span>
+            <time className="mt-1 block text-[11px] text-[#8e8e93]/80">{formatDate(item.created_at)}</time>
           </span>
-          <time className="mt-1 block text-[11px] text-[#8e8e93]/80">{formatDate(item.created_at)}</time>
-        </span>
+        </button>
       </article>
-    );
-
-    const onActivate = () => {
-      void markNotificationRead(item);
-      if (target) onClose();
-    };
-
-    return target ? (
-      <Link key={item.id} href={target} onClick={onActivate} className="block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-[#e6a17b]">
-        {card}
-      </Link>
-    ) : (
-      <button key={item.id} type="button" onClick={onActivate} aria-label={`${actorName} ${notificationAction(item.type, item.content)}`} className="block w-full border-0 bg-transparent p-0 text-right outline-none focus-visible:ring-2 focus-visible:ring-[#e6a17b]">
-        {card}
-      </button>
     );
   };
 
@@ -303,21 +339,11 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
           </button>
         </header>
 
-        <div className="flex items-center justify-between gap-3 px-4 py-3">
-          <button type="button" onClick={() => setShowSamples(value => !value)} className="shrink-0 rounded-full border border-white/[0.18] px-3.5 py-1.5 text-xs font-medium text-[#a0a0a0] transition hover:bg-white/[0.05]">
-            {showSamples ? 'إخفاء النماذج' : 'عرض نماذج'}
-          </button>
-          <p className="text-left text-xs text-[#8e8e93]">أنت على اطلاع بكل جديد</p>
-        </div>
-
-        {showSamples && <p className="mx-4 mb-2 rounded-lg border border-[#e6a17b]/20 bg-[#e6a17b]/[0.06] px-3 py-2 text-xs text-[#e6a17b]">بيانات محلية للتجربة فقط، ولن تُحفظ في حسابك.</p>}
-
-        <div className="aani-notifications-list flex flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain px-4 pb-6 pt-1" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
-          {loading && !showSamples && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
-          {!showSamples && error && <p role="alert" className="mb-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">{error}</p>}
-          {!loading && !showSamples && !error && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">لا توجد إشعارات حالياً. يمكنك عرض النماذج لتجربة الأنواع والحالات.</p>}
-          {showSamples && visibleItems.map(renderCard)}
-          {!showSamples && !loading && !error && visibleItems.map(renderCard)}
+        <div className="aani-notifications-list flex flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain px-4 pb-6 pt-4" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
+          {loading && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
+          {error && <p role="alert" className="mb-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">{error}</p>}
+          {!loading && !error && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">لا توجد إشعارات حالياً.</p>}
+          {!loading && !error && items.map(renderCard)}
         </div>
       </section>
     </div>

@@ -6,6 +6,8 @@ export type NotificationsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   currentUserId: string;
+  onOpenComments: (postId: string, commentId?: string) => void;
+  onOpenStory: (storyId: string, ownerId: string) => void;
 };
 
 export type ShellProps = {
@@ -13,6 +15,7 @@ export type ShellProps = {
   profile: Profile | null;
   userId: string;
   onSignOut: () => void;
-  onOpenComments: (postId: string) => void;
+  onOpenComments: (postId: string, commentId?: string) => void;
+  onOpenStory: (storyId: string, ownerId: string) => void;
   NotificationsModalComponent: ComponentType<NotificationsModalProps>;
 };

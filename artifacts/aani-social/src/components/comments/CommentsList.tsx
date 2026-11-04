@@ -16,6 +16,7 @@ interface CommentsListProps {
   onToggleLike: (commentId: string, isLiked: boolean) => void | Promise<void>;
   onToggleDislike: (commentId: string, isDisliked: boolean) => void | Promise<void>;
   onDelete: (comment: CommentWithDetails) => void | Promise<void>;
+  highlightCommentId?: string | null;
 }
 
 const CommentsList: React.FC<CommentsListProps> = ({
@@ -30,6 +31,7 @@ const CommentsList: React.FC<CommentsListProps> = ({
   onToggleLike,
   onToggleDislike,
   onDelete,
+  highlightCommentId,
 }) => (
   <div className="flex-1 space-y-0 overflow-y-auto overscroll-contain px-4 py-1">
     {error && (
@@ -74,6 +76,7 @@ const CommentsList: React.FC<CommentsListProps> = ({
           currentUserId={currentUserId}
           pendingDeleteIds={pendingDeleteIds}
           storyOwners={storyOwners}
+          highlightCommentId={highlightCommentId}
           onReply={onReply}
           onToggleLike={onToggleLike}
           onToggleDislike={onToggleDislike}

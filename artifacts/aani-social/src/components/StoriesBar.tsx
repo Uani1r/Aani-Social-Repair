@@ -62,6 +62,7 @@ export default function StoriesBar({
   pendingReshare,
   onReshareHandled,
   pendingProfileStoryOwnerId,
+  pendingStoryId,
   onProfileStoryHandled,
 }: {
   userId: string;
@@ -69,6 +70,7 @@ export default function StoriesBar({
   pendingReshare: StoryDmCardStory | null;
   onReshareHandled: () => void;
   pendingProfileStoryOwnerId: string | null;
+  pendingStoryId: string | null;
   onProfileStoryHandled: () => void;
 }) {
   const [groupedStories, setGroupedStories] = useState<Record<string, StoryRow[]>>({});
@@ -860,6 +862,7 @@ export default function StoriesBar({
   const { fetchStories, fetchStoryArchive } = useStoriesData({
     userId,
     pendingProfileStoryOwnerId,
+    pendingStoryId,
     onProfileStoryHandled,
     setGroupedStories,
     setArchiveStories,

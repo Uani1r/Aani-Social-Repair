@@ -47,6 +47,7 @@ export default function Shell({
   userId,
   onSignOut,
   onOpenComments,
+  onOpenStory,
   NotificationsModalComponent,
 }: ShellProps) {
   const [path, setLocation] = useLocation();
@@ -878,6 +879,8 @@ export default function Shell({
         onSignOut={handleSignOut}
         showNotifsModal={showNotifsModal}
         onCloseNotifications={() => setShowNotifsModal(false)}
+        onOpenComments={onOpenComments}
+        onOpenStory={onOpenStory}
         NotificationsModalComponent={NotificationsModalComponent}
         userId={userId}
         showAssistantModal={showAssistantModal}

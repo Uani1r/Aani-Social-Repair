@@ -26,6 +26,7 @@ interface CommentItemProps {
   onDelete: (comment: CommentWithDetails) => void | Promise<void>;
   pendingDeleteIds?: Record<string, boolean>;
   storyOwners?: Set<string>;
+  highlightCommentId?: string | null;
 }
 
 type FlatReply = {
@@ -101,12 +102,14 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   onDelete,
   pendingDeleteIds = {},
   storyOwners = new Set<string>(),
+  highlightCommentId,
 }) => {
-  const [showReplies, setShowReplies] = useState(false);
+  const flatReplies = flattenReplies(comment.replies ?? []);
+  const shouldShowHighlightedReply = Boolean(highlightCommentId && flatReplies.some(reply => reply.comment.id === highlightCommentId));
+  const [showReplies, setShowReplies] = useState(shouldShowHighlightedReply);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
 
-  const flatReplies = flattenReplies(comment.replies ?? []);
   const replyCount = flatReplies.length;
   const author = comment.profiles;
   const displayName = author?.full_name || 'مستخدم آني';
@@ -119,7 +122,10 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const isDeleting = !!pendingDeleteIds[comment.id];
 
   return (
-    <div className="relative">
+    <div
+      id={`comment-${comment.id}`}
+      className={`relative rounded-xl transition-colors ${highlightCommentId === comment.id ? 'bg-pink-500/[0.06] ring-1 ring-pink-400/60' : ''}`}
+    >
       <div
         className="relative flex gap-4 py-2"
         dir="rtl"
@@ -298,6 +304,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               onDelete={onDelete}
               pendingDeleteIds={pendingDeleteIds}
               storyOwners={storyOwners}
+              highlightCommentId={highlightCommentId}
             />
           ))}
         </div>

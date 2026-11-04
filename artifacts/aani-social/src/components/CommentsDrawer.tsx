@@ -31,6 +31,7 @@ interface CommentsDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   initialCommentsCount?: number;
+  initialCommentId?: string | null;
 }
 
 type SupabaseErrorDetails = {
@@ -101,6 +102,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   isOpen,
   onClose,
   initialCommentsCount = 0,
+  initialCommentId,
 }) => {
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
   const [content, setContent] = useState('');
@@ -322,6 +324,14 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       cancelled = true;
     };
   }, [isOpen, postId, currentUserId, loadComments, initialCommentsCount]);
+
+  useEffect(() => {
+    if (!isOpen || !initialCommentId || loading || !commentAccess.canRead) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById(`comment-${initialCommentId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [commentAccess.canRead, comments, initialCommentId, isOpen, loading]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -797,6 +807,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         actor_id: currentUserId,
         type: 'like',
         content: `${currentUser?.full_name || 'مستخدم'} قام بالإعجاب بتعليقك`,
+        comment_id: target.id,
       });
   };
 
@@ -967,6 +978,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             currentUserId={currentUserId}
             pendingDeleteIds={pendingDeleteIds}
             storyOwners={storyOwners}
+            highlightCommentId={initialCommentId}
             loading={loading}
             error={commentsError}
             onRetry={() => void loadComments(true)}

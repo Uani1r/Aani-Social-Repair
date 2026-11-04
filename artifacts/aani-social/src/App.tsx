@@ -29,10 +29,27 @@ function App() {
   const { authLoading, user, profile, setProfile, signOut } = useAppSession();
   useInteractionRealtime(user?.id);
   const [selectedPostForComments, setSelectedPostForComments] = useState<string | null>(null);
+  const [selectedCommentIdForComments, setSelectedCommentIdForComments] = useState<string | null>(null);
+  const openComments = useCallback((postId: string, commentId?: string) => {
+    setSelectedPostForComments(postId);
+    setSelectedCommentIdForComments(commentId || null);
+  }, []);
   const [pendingStoryReshare, setPendingStoryReshare] = useState<StoryDmCardStory | null>(null);
   const clearPendingStoryReshare = useCallback(() => setPendingStoryReshare(null), []);
   const [pendingProfileStoryOwnerId, setPendingProfileStoryOwnerId] = useState<string | null>(null);
-  const clearPendingProfileStory = useCallback(() => setPendingProfileStoryOwnerId(null), []);
+  const [pendingStoryId, setPendingStoryId] = useState<string | null>(null);
+  const clearPendingProfileStory = useCallback(() => {
+    setPendingProfileStoryOwnerId(null);
+    setPendingStoryId(null);
+  }, []);
+  const openNotificationStory = useCallback((storyId: string, ownerId: string) => {
+    setPendingStoryId(storyId);
+    setPendingProfileStoryOwnerId(ownerId);
+  }, []);
+  const openProfileStories = useCallback((ownerId: string) => {
+    setPendingStoryId(null);
+    setPendingProfileStoryOwnerId(ownerId);
+  }, []);
 
   useEffect(() => {
     const handleWindowError = (event: ErrorEvent) => {
@@ -70,7 +87,8 @@ function App() {
             userId={user.id}
             profile={profile}
             onSignOut={() => void signOut()}
-            onOpenComments={id => setSelectedPostForComments(id)}
+            onOpenComments={openComments}
+            onOpenStory={openNotificationStory}
             NotificationsModalComponent={NotificationsModal}
           >
             <Switch>
@@ -78,10 +96,11 @@ function App() {
                 <FeedPage
                   userId={user.id}
                   profile={profile}
-                  onOpenComments={id => setSelectedPostForComments(id)}
+                  onOpenComments={openComments}
                   pendingStoryReshare={pendingStoryReshare}
                   onStoryReshareHandled={clearPendingStoryReshare}
                   pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+                  pendingStoryId={pendingStoryId}
                   onProfileStoryHandled={clearPendingProfileStory}
                   StoriesBarComponent={StoriesBar}
                 />
@@ -91,7 +110,7 @@ function App() {
                   <PostDetailPage
                     postId={params.postId}
                     currentUserId={user.id}
-                    onOpenComments={id => setSelectedPostForComments(id)}
+                    onOpenComments={openComments}
                   />
                 )}
               </Route>
@@ -99,15 +118,16 @@ function App() {
                 <FeedPage
                   userId={user.id}
                   profile={profile}
-                  onOpenComments={id => setSelectedPostForComments(id)}
+                  onOpenComments={openComments}
                   pendingStoryReshare={pendingStoryReshare}
                   onStoryReshareHandled={clearPendingStoryReshare}
                   pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+                  pendingStoryId={pendingStoryId}
                   onProfileStoryHandled={clearPendingProfileStory}
                   StoriesBarComponent={StoriesBar}
                 />
               </Route>
-              <Route path="/reels"><ReelsPage userId={user.id} onOpenComments={id => setSelectedPostForComments(id)} /></Route>
+              <Route path="/reels"><ReelsPage userId={user.id} onOpenComments={openComments} /></Route>
               <Route path="/search"><SearchPage userId={user.id} /></Route>
               <Route path="/messages">
                 <MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} />
@@ -128,8 +148,8 @@ function App() {
                     currentUserId={user.id}
                     profile={profile}
                     onProfileUpdate={setProfile}
-                    onOpenComments={id => setSelectedPostForComments(id)}
-                    onOpenStories={setPendingProfileStoryOwnerId}
+                    onOpenComments={openComments}
+                    onOpenStories={openProfileStories}
                   />
                 )}
               </Route>
@@ -141,8 +161,8 @@ function App() {
                     currentUserId={user.id}
                     profile={profile}
                     onProfileUpdate={setProfile}
-                    onOpenComments={id => setSelectedPostForComments(id)}
-                    onOpenStories={setPendingProfileStoryOwnerId}
+                    onOpenComments={openComments}
+                    onOpenStories={openProfileStories}
                   />
                 )}
               </Route>
@@ -154,7 +174,11 @@ function App() {
                 postId={selectedPostForComments}
                 currentUserId={user.id}
                 isOpen={Boolean(selectedPostForComments)}
-                onClose={() => setSelectedPostForComments(null)}
+                initialCommentId={selectedCommentIdForComments}
+                onClose={() => {
+                  setSelectedPostForComments(null);
+                  setSelectedCommentIdForComments(null);
+                }}
               />
             )}
           </Shell>

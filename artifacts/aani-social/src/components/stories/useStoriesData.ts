@@ -13,6 +13,7 @@ import {
 interface UseStoriesDataOptions {
   userId: string;
   pendingProfileStoryOwnerId: string | null;
+  pendingStoryId: string | null;
   onProfileStoryHandled: () => void;
   setGroupedStories: Dispatch<SetStateAction<StoriesByUser>>;
   setArchiveStories: Dispatch<SetStateAction<StoryRow[]>>;
@@ -28,6 +29,7 @@ interface UseStoriesDataOptions {
 export function useStoriesData({
   userId,
   pendingProfileStoryOwnerId,
+  pendingStoryId,
   onProfileStoryHandled,
   setGroupedStories,
   setArchiveStories,
@@ -179,6 +181,12 @@ export function useStoriesData({
           onProfileStoryHandled();
           return;
         }
+        const storyIndex = pendingStoryId ? storyRows.findIndex(story => story.id === pendingStoryId) : 0;
+        if (pendingStoryId && storyIndex < 0) {
+          toast.info('هذه القصة لم تعد متاحة');
+          onProfileStoryHandled();
+          return;
+        }
 
         const { data: author, error: authorError } = await supabase
           .from('profiles')
@@ -193,7 +201,7 @@ export function useStoriesData({
         setProfileStoryOwnerId(pendingProfileStoryOwnerId);
         setProfilePreviewStories(storiesWithAuthor);
         setActiveUserGroup(pendingProfileStoryOwnerId);
-        setActiveStoryIndex(0);
+        setActiveStoryIndex(storyIndex);
         setProgress(0);
         setCurrentTimeSec(0);
         onProfileStoryHandled();
@@ -211,6 +219,7 @@ export function useStoriesData({
   }, [
     onProfileStoryHandled,
     pendingProfileStoryOwnerId,
+    pendingStoryId,
     setActiveStoryIndex,
     setActiveUserGroup,
     setCurrentTimeSec,
