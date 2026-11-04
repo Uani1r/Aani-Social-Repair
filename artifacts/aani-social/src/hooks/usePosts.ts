@@ -175,12 +175,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
         };
 
-        const isMissingColumn = (value: unknown) => isRecord(value)
-          && (value.code === '42703' || value.code === 'PGRST204');
         let result = await buildQuery(true);
-        if (isMissingColumn(result.error)) {
-          result = await buildQuery(true, true);
-          if (isMissingColumn(result.error)) result = await buildQuery(false, true);
+        if (result.error) {
+          result = await buildQuery(false, true);
         }
         return result;
       };
