@@ -12,6 +12,7 @@ type PostVideoPreviewProps = {
   autoPlayWhenVisible?: boolean;
   showCustomControls?: boolean;
   showMuteToggle?: boolean;
+  feedVideo?: boolean;
   loop?: boolean;
 };
 
@@ -20,6 +21,10 @@ const formatVideoTime = (value: number) => {
   const seconds = Math.floor(value);
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
+
+const hasOpenFeedDialog = () => typeof document !== 'undefined' && Boolean(document.querySelector(
+  '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+));
 
 export default function PostVideoPreview({
   src,
@@ -30,6 +35,7 @@ export default function PostVideoPreview({
   autoPlayWhenVisible = false,
   showCustomControls = false,
   showMuteToggle = false,
+  feedVideo = false,
   loop = false,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -55,22 +61,37 @@ export default function PostVideoPreview({
   }, [muted]);
 
   useEffect(() => {
+    if (!feedVideo) return;
+    const pauseAndMute = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      manuallyPausedRef.current = true;
+      video.muted = true;
+      setVideoMuted(true);
+      video.pause();
+    };
+    window.addEventListener('aani:pause-feed-videos', pauseAndMute);
+    if (hasOpenFeedDialog()) pauseAndMute();
+    return () => window.removeEventListener('aani:pause-feed-videos', pauseAndMute);
+  }, [feedVideo]);
+
+  useEffect(() => {
     if (!autoPlayWhenVisible) return;
     const video = videoRef.current;
     if (!video) return;
 
     if (typeof IntersectionObserver === 'undefined') {
-      void video.play().catch(() => undefined);
+      if (!manuallyPausedRef.current && !hasOpenFeedDialog()) void video.play().catch(() => undefined);
       return () => video.pause();
     }
 
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry) return;
       if (entry.isIntersecting && entry.intersectionRatio >= 0.45) {
-        if (!manuallyPausedRef.current) void video.play().catch(() => undefined);
+        if (!manuallyPausedRef.current && !hasOpenFeedDialog()) void video.play().catch(() => undefined);
       } else {
         video.pause();
-        manuallyPausedRef.current = false;
+        if (!hasOpenFeedDialog()) manuallyPausedRef.current = false;
       }
     }, { threshold: [0, 0.45] });
 

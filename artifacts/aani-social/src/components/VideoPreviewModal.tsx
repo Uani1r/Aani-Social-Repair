@@ -47,6 +47,7 @@ export default function VideoPreviewModal({
   const draggingTrimRef = useRef<'start' | 'end' | null>(null);
   const cropDragRef = useRef<{ x: number; y: number; crop: VideoCropTransform } | null>(null);
   const initialCropRef = useRef(initialCrop);
+  const activeRangeRef = useRef<VideoTrimRange | null>(null);
   const [duration, setDuration] = useState(0);
   const [savedRange, setSavedRange] = useState<VideoTrimRange | null>(null);
   const [draftRange, setDraftRange] = useState<VideoTrimRange | null>(null);
@@ -88,6 +89,7 @@ export default function VideoPreviewModal({
     setDuration(0);
     setSavedRange(null);
     setDraftRange(null);
+    activeRangeRef.current = null;
     setSavedCrop(normalizeVideoCrop(initialCropRef.current));
     setDraftCrop(normalizeVideoCrop(initialCropRef.current));
     setThumbnails([]);
@@ -186,6 +188,7 @@ export default function VideoPreviewModal({
     if (!Number.isFinite(loadedDuration) || loadedDuration <= 0) return;
 
     const initialRange = normalizeRange(initialTrim, loadedDuration);
+    activeRangeRef.current = initialRange;
     setDuration(loadedDuration);
     setSavedRange(current => current ? normalizeRange(current, loadedDuration) : initialRange);
     setDraftRange(current => current ? normalizeRange(current, loadedDuration) : initialRange);
@@ -193,42 +196,56 @@ export default function VideoPreviewModal({
   };
 
   const activeRange = isTrimming ? draftRange : savedRange;
+  activeRangeRef.current = activeRange;
   const activeCrop = isCropping ? draftCrop : savedCrop;
 
   const handleTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
-    if (!activeRange || video.currentTime < activeRange.end - 0.04) return;
-    video.currentTime = activeRange.start;
-    if (video.paused) void video.play().catch(() => undefined);
+    const range = activeRangeRef.current;
+    if (!range) return;
+    if (video.currentTime < range.start || video.currentTime >= range.end - 0.04) {
+      video.currentTime = range.start;
+    }
   };
 
   const updateDraftRange = (part: 'start' | 'end', value: number) => {
     if (!draftRange) return;
     const minLength = minimumSelection(duration);
-    setDraftRange(current => {
-      if (!current) return current;
-      if (part === 'start') {
-        return { ...current, start: clamp(value, 0, Math.max(0, current.end - minLength)) };
-      }
-      return { ...current, end: clamp(value, Math.min(duration, current.start + minLength), duration) };
-    });
+    const nextRange = part === 'start'
+      ? { ...draftRange, start: clamp(value, 0, Math.max(0, draftRange.end - minLength)) }
+      : { ...draftRange, end: clamp(value, Math.min(duration, draftRange.start + minLength), duration) };
+    activeRangeRef.current = nextRange;
+    setDraftRange(nextRange);
+
+    const video = videoRef.current;
+    if (!video) return;
+    if (part === 'start') {
+      video.currentTime = nextRange.start;
+    } else if (video.currentTime >= nextRange.end) {
+      video.currentTime = nextRange.start;
+    }
   };
 
   const beginTrimming = () => {
     if (!duration) return;
-    setDraftRange(savedRange || normalizeRange(null, duration));
+    const range = savedRange || normalizeRange(null, duration);
+    activeRangeRef.current = range;
+    setDraftRange(range);
     setIsCropping(false);
     setIsTrimming(true);
   };
 
   const cancelTrimming = () => {
-    setDraftRange(savedRange || normalizeRange(null, duration));
+    const range = savedRange || normalizeRange(null, duration);
+    activeRangeRef.current = range;
+    setDraftRange(range);
     setIsTrimming(false);
   };
 
   const saveTrim = () => {
     if (!draftRange) return;
     const range = normalizeRange(draftRange, duration);
+    activeRangeRef.current = range;
     setSavedRange(range);
     setDraftRange(range);
     onTrimChange(range);
@@ -238,6 +255,7 @@ export default function VideoPreviewModal({
   };
 
   const beginCropping = () => {
+    activeRangeRef.current = savedRange;
     setDraftCrop(savedCrop);
     setIsTrimming(false);
     setIsCropping(true);
@@ -358,9 +376,25 @@ export default function VideoPreviewModal({
             preload="metadata"
             onLoadedMetadata={handleLoadedMetadata}
             onTimeUpdate={handleTimeUpdate}
+            onSeeking={event => {
+              const video = event.currentTarget;
+              const range = activeRangeRef.current;
+              if (!range) return;
+              if (video.currentTime < range.start || video.currentTime >= range.end) {
+                video.currentTime = range.start;
+              }
+            }}
+            onPlay={event => {
+              const video = event.currentTarget;
+              const range = activeRangeRef.current;
+              if (range && (video.currentTime < range.start || video.currentTime >= range.end)) {
+                video.currentTime = range.start;
+              }
+            }}
             onEnded={event => {
-              if (!activeRange) return;
-              event.currentTarget.currentTime = activeRange.start;
+              const range = activeRangeRef.current;
+              if (!range) return;
+              event.currentTarget.currentTime = range.start;
               void event.currentTarget.play().catch(() => undefined);
             }}
             className="absolute inset-0 h-full w-full object-cover"

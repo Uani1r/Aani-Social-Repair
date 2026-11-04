@@ -27,10 +27,15 @@ const createPostId = () => {
   });
 };
 
-const hasOpenModal = () =>
+const hasOpenDialog = () =>
   typeof document !== 'undefined' && Boolean(document.querySelector(
-    '[role="dialog"][aria-modal="true"], [role="menu"]:not([aria-hidden="true"]):not([data-state="closed"]), [role="listbox"]:not([aria-hidden="true"]):not([data-state="closed"])',
+    '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
   ));
+
+const hasOpenModal = () =>
+  typeof document !== 'undefined' && (hasOpenDialog() || Boolean(document.querySelector(
+    '[role="menu"]:not([aria-hidden="true"]):not([data-state="closed"]), [role="listbox"]:not([aria-hidden="true"]):not([data-state="closed"])',
+  )));
 
 export default function Shell({
   children,
@@ -48,6 +53,10 @@ export default function Shell({
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const currentPathRef = useRef(path);
+  const modalScrollTopRef = useRef<number | null>(null);
+  const modalRestoreFrameRef = useRef<number | null>(null);
+  currentPathRef.current = path;
 
   const handleSignOut = () => {
     // Root is valid in both session states: feed before logout, login after it.
@@ -60,6 +69,73 @@ export default function Shell({
 
   useEffect(() => () => {
     if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    let modalOpen = hasOpenDialog();
+    const isFeedPath = () => currentPathRef.current === '/' || currentPathRef.current === '/feed';
+    const getScrollTop = () => Math.max(
+      0,
+      window.scrollY || 0,
+      document.documentElement.scrollTop || 0,
+      document.body.scrollTop || 0,
+    );
+    const pauseFeedVideos = () => window.dispatchEvent(new Event('aani:pause-feed-videos'));
+
+    if (modalOpen) {
+      if (isFeedPath()) modalScrollTopRef.current = getScrollTop();
+      pauseFeedVideos();
+    }
+
+    const observer = new MutationObserver(() => {
+      const nextModalOpen = hasOpenDialog();
+      if (nextModalOpen === modalOpen) return;
+      modalOpen = nextModalOpen;
+
+      if (nextModalOpen) {
+        const restoreFrame = modalRestoreFrameRef.current;
+        const restorePending = restoreFrame !== null;
+        if (restoreFrame !== null) {
+          window.cancelAnimationFrame(restoreFrame);
+          modalRestoreFrameRef.current = null;
+        }
+        if (isFeedPath() && !restorePending) modalScrollTopRef.current = getScrollTop();
+        pauseFeedVideos();
+        return;
+      }
+
+      if (modalScrollTopRef.current === null) return;
+      if (!isFeedPath()) {
+        modalScrollTopRef.current = null;
+        return;
+      }
+
+      modalRestoreFrameRef.current = window.requestAnimationFrame(() => {
+        modalRestoreFrameRef.current = window.requestAnimationFrame(() => {
+          modalRestoreFrameRef.current = null;
+          if (!isFeedPath()) {
+            modalScrollTopRef.current = null;
+            return;
+          }
+          const savedScrollTop = modalScrollTopRef.current;
+          modalScrollTopRef.current = null;
+          if (savedScrollTop !== null) window.scrollTo({ top: savedScrollTop, behavior: 'auto' });
+        });
+      });
+    });
+
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['role', 'aria-modal', 'aria-hidden', 'data-state'],
+    });
+
+    return () => {
+      observer.disconnect();
+      if (modalRestoreFrameRef.current !== null) window.cancelAnimationFrame(modalRestoreFrameRef.current);
+      modalRestoreFrameRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -687,7 +763,7 @@ export default function Shell({
     setShowCreateModal(false);
     setIsSubmitting(false);
     setCreateError('');
-    setLocation('/feed');
+    if (path !== '/' && path !== '/feed') setLocation('/feed');
   };
 
   return (

@@ -9,6 +9,19 @@ import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
 import type { Profile } from '@/lib/types';
 
+const savedFeedScrollPositions = new Map<string, number>();
+
+const getPageScrollTop = () => Math.max(
+  0,
+  window.scrollY || 0,
+  document.documentElement.scrollTop || 0,
+  document.body.scrollTop || 0,
+);
+
+const hasOpenFeedDialog = () => Boolean(document.querySelector(
+  '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+));
+
 interface StoriesBarProps {
   userId: string;
   currentProfile: Profile | null;
@@ -47,8 +60,37 @@ export default function FeedPage({
   const refreshingRef = useRef(false);
   const feedMountedRef = useRef(false);
   const refreshIndicatorTimerRef = useRef<number | null>(null);
+  const initialScrollTopRef = useRef(savedFeedScrollPositions.get(userId) || 0);
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
 
   useEffect(() => subscribePendingPosts(() => setPendingPosts(getPendingPosts())), []);
+
+  useEffect(() => {
+    const saveScrollPosition = () => {
+      if (!loadingRef.current && !hasOpenFeedDialog()) {
+        savedFeedScrollPositions.set(userId, getPageScrollTop());
+      }
+    };
+    window.addEventListener('scroll', saveScrollPosition, { passive: true });
+    return () => {
+      if (!loadingRef.current && !hasOpenFeedDialog()) {
+        savedFeedScrollPositions.set(userId, getPageScrollTop());
+      }
+      window.removeEventListener('scroll', saveScrollPosition);
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (loading) return;
+    const savedScrollTop = savedFeedScrollPositions.get(userId) ?? initialScrollTopRef.current;
+    if (savedScrollTop <= 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (hasOpenFeedDialog()) return;
+      window.scrollTo({ top: savedScrollTop, behavior: 'auto' });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, userId]);
 
   const userPendingPosts = pendingPosts.filter(item => item.post.user_id === userId);
   const visiblePosts = [

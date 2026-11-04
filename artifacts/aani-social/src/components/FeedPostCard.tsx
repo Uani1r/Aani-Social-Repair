@@ -425,6 +425,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     autoPlayWhenVisible
                     showCustomControls
                     showMuteToggle
+                    feedVideo
                     loop
                     controls={false}
                     className="h-full w-full object-cover"
