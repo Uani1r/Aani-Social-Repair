@@ -1,7 +1,7 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import {
-  EyeOff, Flag, LockKeyhole, MoreVertical, Pencil, Star, ThumbsUp, Trash2,
+  EyeOff, Flag, Heart, LockKeyhole, MoreVertical, Pencil, Star, ThumbsUp, Trash2,
 } from 'lucide-react';
 
 type PostOptionsSheetProps = {
@@ -12,6 +12,7 @@ type PostOptionsSheetProps = {
   privacySaving?: boolean;
   onEdit: () => void;
   onTogglePrivacy: () => void;
+  onOpenPrivacySettings: () => void;
   onPromote: () => void;
   onDelete: () => void;
   onReport: () => void;
@@ -26,6 +27,7 @@ export default function PostOptionsSheet({
   privacySaving = false,
   onEdit,
   onTogglePrivacy,
+  onOpenPrivacySettings,
   onPromote,
   onDelete,
   onReport,
@@ -89,7 +91,19 @@ export default function PostOptionsSheet({
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-zinc-100">
                     <LockKeyhole size={19} />
                   </span>
-                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">تعديل الخصوصية</span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">تغيير ظهور المنشور</span>
+                </button>
+
+                <button
+                  type="button"
+                  dir="ltr"
+                  onClick={() => selectAction(onOpenPrivacySettings)}
+                  className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] bg-[#252527] px-3 text-right transition hover:bg-[#303033]"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-rose-300">
+                    <Heart size={19} />
+                  </span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">خصوصية التعليقات والإعجابات</span>
                 </button>
 
                 <button

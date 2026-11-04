@@ -50,7 +50,7 @@ export default function ProfilePage({
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
-        supabase.from('posts').select('*', { count: 'exact', head: true }).eq('user_id', activeUserId),
+        supabase.from('posts').select('id', { count: 'exact', head: true }).eq('user_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
         supabase.from('stories').select('id, is_close_friends').eq('user_id', activeUserId).limit(50),

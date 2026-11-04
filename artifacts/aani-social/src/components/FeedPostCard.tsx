@@ -12,6 +12,7 @@ import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
 import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
+import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
@@ -86,8 +87,11 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [isAnimating, setIsAnimating] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
+  const [showPrivacySheet, setShowPrivacySheet] = useState(false);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [postVisibility, setPostVisibility] = useState(post.visibility ?? 'public');
+  const likesVisible = !post.hide_likes || post.user_id === currentUserId;
+  const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
 
   const urls = useMemo(() => {
     if (post.media_urls && post.media_urls.length > 0) return post.media_urls;
@@ -393,6 +397,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             setShowEditSheet(true);
           }}
           onTogglePrivacy={() => void handleTogglePostPrivacy()}
+          onOpenPrivacySettings={() => setShowPrivacySheet(true)}
           onPromote={handlePromotePost}
           onDelete={() => void handleDeletePost()}
           onReport={() => void reportPost()}
@@ -456,14 +461,16 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               fill={liked ? 'currentColor' : 'none'}
               className={`transition-transform ${isAnimating ? 'animate-heart-pulse' : ''}`}
             />
-            <span className="text-xs">{likesCount}</span>
+            {likesVisible && <span className="text-xs">{likesCount}</span>}
           </button>
 
           {/* 2. التعليقات */}
-          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition" onClick={loadComments}>
-            <MessageSquare size={18} />
-            <span className="text-xs">{commentsCount}</span>
-          </button>
+          {commentsVisible && (
+            <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition" onClick={loadComments}>
+              <MessageSquare size={18} />
+              <span className="text-xs">{commentsCount}</span>
+            </button>
+          )}
 
           {/* 3. إعادة النشر */}
           <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
@@ -509,6 +516,14 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         onSubmit={saveEdit}
         busy={busy}
         onReplacementFileChange={event => setReplacementFile(event.target.files?.[0] || null)}
+      />
+
+      <PostPrivacySheet
+        open={showPrivacySheet}
+        post={post}
+        currentUserId={currentUserId}
+        onClose={() => setShowPrivacySheet(false)}
+        onSaved={onRefresh}
       />
 
       {showShareSheet && (

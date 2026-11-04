@@ -44,6 +44,7 @@ export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
 };
 
 export type PostVisibility = 'public' | 'private';
+export type CommentPrivacy = 'public' | 'followers' | 'custom';
 
 export type Post = {
   id: string;
@@ -68,6 +69,9 @@ export type Post = {
 
   /** Owner can close the comment thread for a single post. */
   comments_disabled?: boolean;
+  hide_likes?: boolean;
+  hide_comments?: boolean;
+  comment_privacy?: CommentPrivacy;
   /** Optional audio / music attached to the post. */
   audio_url?: string | null;
   audio_title?: string | null;
@@ -87,6 +91,9 @@ export type PostRow = Pick<
   Post,
   'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'visibility' | 'created_at'
 > & {
+  hide_likes?: boolean;
+  hide_comments?: boolean;
+  comment_privacy?: CommentPrivacy;
   reposter_id?: string | null;
 };
 

@@ -234,7 +234,7 @@ async function fetchFallbackSummaries(
       soft(supabase.from("saved_posts").select("post_id,user_id").in("post_id", postIds).limit(20000)),
       soft(supabase.from("bookmarks").select("post_id,user_id").in("post_id", postIds).limit(20000)),
       soft(supabase.from("post_shares").select("post_id,user_id").in("post_id", postIds).limit(20000)),
-      soft(supabase.from("posts").select("id,likes_count,comments_count,reposts_count,shares_count").in("id", postIds)),
+      soft(supabase.from("posts").select("id,user_id,hide_likes,hide_comments,likes_count,comments_count,reposts_count,shares_count").in("id", postIds)),
       soft(supabase.from("post_feedback").select("post_id,feedback").eq("user_id", userId).in("post_id", postIds)),
     ]);
 
@@ -279,11 +279,15 @@ async function fetchFallbackSummaries(
     const summary = summaries.get(postId) ?? { postId };
     const row = counters.get(postId);
 
-    summary.likes = querySucceeded(likes)
-      ? likeCounts.get(postId) ?? 0
-      : optionalNumber(row?.likes_count);
-    summary.comments = optionalNumber(row?.comments_count) ??
-      (querySucceeded(comments) ? commentCounts.get(postId) ?? 0 : undefined);
+    summary.likes = row?.hide_likes === true && row.user_id !== userId
+      ? 0
+      : querySucceeded(likes)
+        ? likeCounts.get(postId) ?? 0
+        : optionalNumber(row?.likes_count);
+    summary.comments = row?.hide_comments === true && row.user_id !== userId
+      ? 0
+      : optionalNumber(row?.comments_count) ??
+        (querySucceeded(comments) ? commentCounts.get(postId) ?? 0 : undefined);
     summary.reposts = optionalNumber(row?.reposts_count) ??
       (querySucceeded(reposts) ? repostCounts.get(postId) ?? 0 : undefined);
     summary.shares = optionalNumber(row?.shares_count) ??
@@ -476,6 +480,12 @@ export async function decoratePosts(
     media_url: optionalString(row.media_url) ?? null,
     media_urls: optionalStringArray(row.media_urls),
     type: row.type === "photo" || row.type === "reel" ? row.type : "text",
+    visibility: row.visibility === "private" ? "private" : "public",
+    hide_likes: row.hide_likes === true,
+    hide_comments: row.hide_comments === true,
+    comment_privacy: row.comment_privacy === "followers" || row.comment_privacy === "custom"
+      ? row.comment_privacy
+      : "public",
     created_at: String(row.created_at ?? new Date().toISOString()),
     author: byId.get(String(row.user_id ?? "")) ?? null,
     likes_count: optionalNumber(row.likes_count),

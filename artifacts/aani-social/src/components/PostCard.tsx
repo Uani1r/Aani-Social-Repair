@@ -34,6 +34,8 @@ export default function PostCard({
   const reposts = interactions?.reposts ?? post.reposts_count ?? 0;
   const saves = interactions?.saves ?? 0;
   const shares = interactions?.shares ?? 0;
+  const likesVisible = !post.hide_likes || post.user_id === currentUserId;
+  const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
   const liked = interactions?.liked ?? (post.likes || []).some((l) => l.user_id === currentUserId);
   const bookmarked = interactions?.bookmarked ?? false;
   const reposted = interactions?.reposted ?? false;
@@ -122,17 +124,19 @@ export default function PostCard({
               fill={liked ? 'currentColor' : 'none'}
               className={liked ? 'text-pink-500' : ''}
             />
-            <span className="text-[11px]">{likes}</span>
+            {likesVisible && <span className="text-[11px]">{likes}</span>}
           </button>
 
-          <button
-            type="button"
-            onClick={handleOpenComments}
-            className="inline-flex items-center gap-1.5 rounded-full bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
-          >
-            <MessageCircle size={16} />
-            <span className="text-[11px]">{comments}</span>
-          </button>
+          {commentsVisible && (
+            <button
+              type="button"
+              onClick={handleOpenComments}
+              className="inline-flex items-center gap-1.5 rounded-full bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
+            >
+              <MessageCircle size={16} />
+              <span className="text-[11px]">{comments}</span>
+            </button>
+          )}
 
           <button
             type="button"

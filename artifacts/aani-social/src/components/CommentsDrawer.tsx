@@ -108,6 +108,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [commentsError, setCommentsError] = useState<string | null>(null);
+  const [commentAccess, setCommentAccess] = useState({ canRead: true, canComment: true, checking: true, failed: false });
   const [submitting, setSubmitting] = useState(false);
   const [pendingReactionIds, setPendingReactionIds] = useState<
     Record<string, boolean>
@@ -191,6 +192,77 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       setLoading(false);
     }
   }, [postId, currentUserId]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setCommentAccess({ canRead: true, canComment: true, checking: false, failed: false });
+      return;
+    }
+    if (!postId || !currentUserId) {
+      setCommentAccess({ canRead: false, canComment: false, checking: false, failed: true });
+      return;
+    }
+
+    let active = true;
+    setCommentAccess({ canRead: true, canComment: true, checking: true, failed: false });
+    void (async () => {
+      let postRow: {
+        user_id: string;
+        comments_disabled?: boolean;
+        hide_comments?: boolean;
+      } | null = null;
+      let legacySchema = false;
+
+      const settingsResult = await supabase
+        .from('posts')
+        .select('user_id, comments_disabled, hide_comments')
+        .eq('id', postId)
+        .maybeSingle();
+      if (!settingsResult.error && settingsResult.data) {
+        postRow = settingsResult.data as typeof postRow;
+      } else if (settingsResult.error?.code === '42703' || settingsResult.error?.code === 'PGRST204') {
+        const legacyResult = await supabase
+          .from('posts')
+          .select('user_id, comments_disabled')
+          .eq('id', postId)
+          .maybeSingle();
+        if (!legacyResult.error && legacyResult.data) {
+          postRow = legacyResult.data as typeof postRow;
+          legacySchema = true;
+        }
+      }
+
+      if (!active) return;
+      if (!postRow) {
+        setCommentAccess({ canRead: false, canComment: false, checking: false, failed: true });
+        return;
+      }
+
+      const isOwner = postRow.user_id === currentUserId;
+      const canRead = isOwner || postRow.hide_comments !== true;
+      let canComment: boolean;
+      if (legacySchema) {
+        canComment = postRow.comments_disabled !== true;
+      } else {
+        const permissionResult = await supabase.rpc('aani_can_comment_on_post', {
+          p_post_id: postId,
+          p_commenter_id: currentUserId,
+        });
+        if (permissionResult.error) throw permissionResult.error;
+        canComment = Boolean(permissionResult.data);
+      }
+
+      if (!active) return;
+      setCommentAccess({ canRead, canComment, checking: false, failed: false });
+    })().catch(error => {
+      console.warn('[comments] تعذر التحقق من صلاحية التعليق:', error);
+      if (active) setCommentAccess({ canRead: false, canComment: false, checking: false, failed: true });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [isOpen, postId, currentUserId]);
 
   useEffect(() => {
     const ids = new Set<string>();
@@ -491,6 +563,11 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
     if (!currentUserId?.trim()) {
       toast.error('تعذر تحديد حسابك. سجّل الدخول ثم حاول مرة أخرى.');
+      return;
+    }
+
+    if (commentAccess.checking || !commentAccess.canComment) {
+      toast.error('لا تملك صلاحية التعليق على هذا المنشور.');
       return;
     }
 
@@ -884,50 +961,65 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           <div className="w-8" />
         </header>
 
-        <CommentsList
-          comments={comments}
-          currentUserId={currentUserId}
-          pendingDeleteIds={pendingDeleteIds}
-          storyOwners={storyOwners}
-          loading={loading}
-          error={commentsError}
-          onRetry={() => void loadComments(true)}
-          onReply={item => {
-            setReplyingTo(item);
-            setShowStickerPicker(false);
-            window.setTimeout(() => textareaRef.current?.focus(), 0);
-          }}
-          onToggleLike={handleToggleLike}
-          onToggleDislike={handleToggleDislike}
-          onDelete={handleDeleteComment}
-        />
+        {commentAccess.checking ? (
+          <div className="flex flex-1 items-center justify-center text-xs text-zinc-400">جارٍ التحقق من خصوصية التعليقات…</div>
+        ) : commentAccess.canRead ? (
+          <CommentsList
+            comments={comments}
+            currentUserId={currentUserId}
+            pendingDeleteIds={pendingDeleteIds}
+            storyOwners={storyOwners}
+            loading={loading}
+            error={commentsError}
+            onRetry={() => void loadComments(true)}
+            onReply={item => {
+              if (!commentAccess.canComment) return;
+              setReplyingTo(item);
+              setShowStickerPicker(false);
+              window.setTimeout(() => textareaRef.current?.focus(), 0);
+            }}
+            onToggleLike={handleToggleLike}
+            onToggleDislike={handleToggleDislike}
+            onDelete={handleDeleteComment}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-8 text-center text-xs leading-6 text-zinc-400">
+            {commentAccess.failed ? 'تعذر التحقق من صلاحية عرض التعليقات.' : 'أخفى صاحب المنشور التعليقات عن الآخرين.'}
+          </div>
+        )}
 
-        <CommentComposer
-          content={content}
-          replyingTo={replyingTo}
-          currentUser={currentUser}
-          selectedImage={selectedImage}
-          previewUrl={previewUrl}
-          submitting={submitting}
-          showStickerPicker={showStickerPicker}
-          mentionQuery={mentionQuery}
-          mentionSuggestions={mentionSuggestions}
-          mentionIndex={mentionIndex}
-          textareaRef={textareaRef}
-          onSubmit={event => {
-            event.preventDefault();
-            void handleSubmit();
-          }}
-          onContentChange={handleComposerChange}
-          onKeyDown={handleComposerKeyDown}
-          onCancelReply={() => setReplyingTo(null)}
-          onRemoveImage={() => setSelectedImage(null)}
-          onMentionSelect={applyMentionSuggestion}
-          onInsertMention={insertMention}
-          onToggleStickerPicker={() => setShowStickerPicker(visible => !visible)}
-          onInsertSticker={insertSticker}
-          onSelectImage={file => setSelectedImage(file)}
-        />
+        {!commentAccess.checking && commentAccess.canComment ? (
+          <CommentComposer
+            content={content}
+            replyingTo={replyingTo}
+            currentUser={currentUser}
+            selectedImage={selectedImage}
+            previewUrl={previewUrl}
+            submitting={submitting}
+            showStickerPicker={showStickerPicker}
+            mentionQuery={mentionQuery}
+            mentionSuggestions={mentionSuggestions}
+            mentionIndex={mentionIndex}
+            textareaRef={textareaRef}
+            onSubmit={event => {
+              event.preventDefault();
+              void handleSubmit();
+            }}
+            onContentChange={handleComposerChange}
+            onKeyDown={handleComposerKeyDown}
+            onCancelReply={() => setReplyingTo(null)}
+            onRemoveImage={() => setSelectedImage(null)}
+            onMentionSelect={applyMentionSuggestion}
+            onInsertMention={insertMention}
+            onToggleStickerPicker={() => setShowStickerPicker(visible => !visible)}
+            onInsertSticker={insertSticker}
+            onSelectImage={file => setSelectedImage(file)}
+          />
+        ) : !commentAccess.checking ? (
+          <div className="border-t border-zinc-800 px-4 py-4 text-center text-[11px] text-zinc-500">
+            {commentAccess.failed ? 'تعذر التحقق من صلاحية التعليق.' : commentAccess.canRead ? 'التعليق على هذا المنشور متاح لجمهور محدد فقط.' : 'لا يمكن إضافة تعليقات لأن التعليقات مخفية.'}
+          </div>
+        ) : null}
       </section>
     </div>
   );

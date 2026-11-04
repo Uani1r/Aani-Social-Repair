@@ -34,6 +34,11 @@ function normalizePostRow(value: unknown): PostRow | null {
     media_urls: mediaUrls,
     type: value.type === 'photo' || value.type === 'reel' ? value.type : 'text',
     visibility: value.visibility === 'private' ? 'private' : 'public',
+    hide_likes: value.hide_likes === true,
+    hide_comments: value.hide_comments === true,
+    comment_privacy: value.comment_privacy === 'followers' || value.comment_privacy === 'custom'
+      ? value.comment_privacy
+      : 'public',
     created_at: value.created_at,
     ...(typeof value.reposter_id === 'string' || value.reposter_id === null
       ? { reposter_id: value.reposter_id }
@@ -56,19 +61,26 @@ async function normalizePostRowsWithVisibility(value: unknown): Promise<PostRow[
   try {
     const { data, error } = await supabase
       .from('posts')
-      .select('id, visibility')
+      .select('id, visibility, hide_likes, hide_comments, comment_privacy')
       .in('id', posts.map(post => post.id));
     if (error || !Array.isArray(data)) return posts;
 
-    const visibilityById = new Map<string, 'public' | 'private'>();
+    const settingsById = new Map<string, Partial<PostRow>>();
     (data as unknown[]).forEach((row: unknown) => {
       if (!isRecord(row) || typeof row.id !== 'string') return;
-      visibilityById.set(row.id, row.visibility === 'private' ? 'private' : 'public');
+      settingsById.set(row.id, {
+        visibility: row.visibility === 'private' ? 'private' : 'public',
+        hide_likes: row.hide_likes === true,
+        hide_comments: row.hide_comments === true,
+        comment_privacy: row.comment_privacy === 'followers' || row.comment_privacy === 'custom'
+          ? row.comment_privacy
+          : 'public',
+      });
     });
 
     return posts.map(post => ({
       ...post,
-      visibility: visibilityById.get(post.id) ?? 'public',
+      ...settingsById.get(post.id),
     }));
   } catch {
     // Keep the feed usable when the visibility migration has not been applied yet.

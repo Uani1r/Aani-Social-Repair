@@ -18,6 +18,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
   const [playing, setPlaying] = useState(false);
   const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
   const likesCount = post.likes_count ?? post.likes?.length ?? 0;
+  const likesVisible = !post.hide_likes || post.user_id === currentUserId;
+  const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
   const [saved, setSaved] = useState(post.saved_by_me ?? false);
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
@@ -187,18 +189,20 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
           <span className={`p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md transition ${liked ? 'text-pink-500' : ''}`}>
             <Heart size={22} fill={liked ? 'currentColor' : 'none'} />
           </span>
-          <span className="text-[11px] font-semibold">{likesCount}</span>
+          {likesVisible && <span className="text-[11px] font-semibold">{likesCount}</span>}
         </button>
 
         {/* 2. التعليقات */}
-        <button onClick={() => onOpenComments(post.id)} className="flex flex-col items-center gap-1 text-white">
-          <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
-            <MessageSquare size={22} />
-          </span>
-          <span className="text-[11px] font-bold">
-            {post.comments_count ?? post.comments?.length ?? 0}
-          </span>
-        </button>
+        {commentsVisible && (
+          <button onClick={() => onOpenComments(post.id)} className="flex flex-col items-center gap-1 text-white">
+            <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
+              <MessageSquare size={22} />
+            </span>
+            <span className="text-[11px] font-bold">
+              {post.comments_count ?? post.comments?.length ?? 0}
+            </span>
+          </button>
+        )}
 
         {/* 3. إعادة النشر */}
         <button onClick={toggleRepost} className="flex flex-col items-center gap-1 text-white">

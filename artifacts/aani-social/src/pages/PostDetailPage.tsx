@@ -35,19 +35,33 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
         .select('id, username, full_name, avatar_url')
         .eq('id', data.user_id)
         .maybeSingle();
-      let visibility: Post['visibility'] = 'public';
+      let postSettings: Pick<Post, 'visibility' | 'hide_likes' | 'hide_comments' | 'comment_privacy'> = {
+        visibility: 'public',
+        hide_likes: false,
+        hide_comments: false,
+        comment_privacy: 'public',
+      };
       try {
-        const { data: visibilityRow, error: visibilityError } = await supabase.from('posts')
-          .select('visibility')
+        const { data: settingsRow, error: settingsError } = await supabase.from('posts')
+          .select('visibility, hide_likes, hide_comments, comment_privacy')
           .eq('id', postId)
           .maybeSingle();
-        if (!visibilityError && visibilityRow?.visibility === 'private') visibility = 'private';
+        if (!settingsError && settingsRow) {
+          postSettings = {
+            visibility: settingsRow.visibility === 'private' ? 'private' : 'public',
+            hide_likes: settingsRow.hide_likes === true,
+            hide_comments: settingsRow.hide_comments === true,
+            comment_privacy: settingsRow.comment_privacy === 'followers' || settingsRow.comment_privacy === 'custom'
+              ? settingsRow.comment_privacy
+              : 'public',
+          };
+        }
       } catch {
-        // The post itself remains available when the visibility migration is not installed.
+        // The post remains viewable when optional privacy migrations are unavailable.
       }
       const hydrated = await hydratePostInteractions([{
         ...data,
-        visibility,
+        ...postSettings,
         post_metadata: normalizePostMetadata(data.post_metadata),
         author: author || { id: data.user_id, username: 'user', full_name: 'مستخدم آني' },
       } as unknown as Post], currentUserId);
