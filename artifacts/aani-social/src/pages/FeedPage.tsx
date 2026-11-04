@@ -70,7 +70,7 @@ export default function FeedPage({
   onProfileStoryHandled,
   StoriesBarComponent,
 }: FeedPageProps) {
-  const { posts, loading, refresh, error } = usePosts('feed', undefined, userId);
+  const { posts, loading, refresh } = usePosts('feed', undefined, userId);
   const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -278,17 +278,7 @@ export default function FeedPage({
 
       {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 
-      {!loading && error && (
-        <div role="alert" className="empty-state card border border-rose-500/30 rounded-2xl bg-zinc-900/70 p-6 text-center">
-          <h2 className="text-white font-bold text-base mb-2">تعذر تحميل المنشورات</h2>
-          <p className="text-zinc-400 text-xs mb-4">{error}</p>
-          <button type="button" onClick={() => void refresh()} className="rounded-full bg-pink-600 px-4 py-2 text-xs font-semibold text-white">
-            إعادة المحاولة
-          </button>
-        </div>
-      )}
-
-      {!loading && !error && visiblePosts.length === 0 && (
+      {!loading && visiblePosts.length === 0 && (
         <div className="empty-state card text-center p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50">
           <div className="w-12 h-12 bg-pink-500/10 text-pink-500 rounded-full flex items-center justify-center mx-auto mb-3">
             <MessageCircle size={22} />

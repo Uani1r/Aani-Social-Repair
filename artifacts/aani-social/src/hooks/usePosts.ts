@@ -135,17 +135,10 @@ export async function hydratePostInteractions(
 export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, currentUserId = '') {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
 
   const refresh = useCallback(async () => {
-    if (!supabaseConfigured) {
-      setPosts([]);
-      setError('تعذر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.');
-      setLoading(false);
-      return;
-    }
+    if (!supabaseConfigured) { setPosts([]); setLoading(false); return; }
     setLoading(true);
-    setError('');
     if (query === 'feed') setPosts([]);
     try {
       const fetchPostRows = async (
@@ -153,12 +146,10 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         profileId?: string,
         postIds?: string[],
       ) => {
-        const buildQuery = (includeDestination: boolean, selectAll = false) => {
-          const columns = selectAll
-            ? '*'
-            : includeDestination
-              ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at'
-              : 'id, user_id, content, post_metadata, media_url, media_urls, type, created_at';
+        const buildQuery = (includeDestination: boolean) => {
+          const columns = includeDestination
+            ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at'
+            : 'id, user_id, content, post_metadata, media_url, media_urls, type, created_at';
           const request = supabase.from('posts').select(columns);
           if (kind === 'feed') {
             const feedRequest = includeDestination
@@ -175,13 +166,17 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
         };
 
-        const isMissingColumn = (value: unknown) => isRecord(value)
-          && (value.code === '42703' || value.code === 'PGRST204');
-        let result = await buildQuery(true);
-        if (isMissingColumn(result.error)) {
-          result = await buildQuery(true, true);
-          if (isMissingColumn(result.error)) result = await buildQuery(false, true);
-        }
+        const result = await buildQuery(true);
+        const error = result.error;
+        const isMissingDestination = isRecord(error)
+          && typeof error.message === 'string'
+          && /destination/i.test(error.message)
+          && (
+            error.code === '42703'
+            || error.code === 'PGRST204'
+            || /could not find|schema cache|does not exist/i.test(error.message)
+          );
+        if (isMissingDestination) return await buildQuery(false);
         return result;
       };
 
@@ -294,10 +289,8 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           setPosts([]);
         }
       }
-    } catch (caughtError) {
+    } catch {
       setPosts([]);
-      setError('تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
-      console.error('[usePosts] Failed to load posts:', caughtError);
     } finally {
       setLoading(false);
     }
@@ -316,5 +309,5 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     [posts, currentUserId, interactionVersion],
   );
 
-  return { posts: currentPosts, loading, error, refresh };
+  return { posts: currentPosts, loading, refresh };
 }
