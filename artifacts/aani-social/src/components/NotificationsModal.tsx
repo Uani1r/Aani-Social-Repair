@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
-  Bell, Heart, MessageSquare, Repeat2, Sparkles, UserRound, X,
+  Bell, Heart, MessageSquare, Repeat2, UserRound, X,
   type LucideIcon,
 } from 'lucide-react';
 
+import FollowRequestsSection from '@/components/FollowRequestsSection';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
 import { displayName, formatDate, type Profile } from '@/lib/types';
@@ -152,29 +153,42 @@ const getFilterForNotification = (item: NotificationEntry): Exclude<Notification
 function ActionBadge({ item }: { item: NotificationEntry }) {
   let Icon: LucideIcon = Bell;
   let label = 'إشعار';
-  let colors = 'border-[#c98d73]/30 bg-[#c98d73]/[0.15] text-[#c98d73]';
+  let color = '#c98a66';
+  let isStory = false;
 
   if (isStoryNotification(item)) {
-    Icon = Sparkles;
     label = 'قصة';
-    colors = 'border-[#c084fc]/30 bg-[#c084fc]/[0.15] text-[#c084fc]';
+    color = '#eccc68';
+    isStory = true;
   } else if (item.type === 'like') {
     Icon = Heart;
     label = 'إعجاب';
-    colors = 'border-[#f43f5e]/30 bg-[#f43f5e]/[0.15] text-[#f43f5e]';
+    color = '#ff4757';
   } else if (item.type === 'comment' || item.type === 'reply') {
     Icon = MessageSquare;
     label = 'تعليق';
-    colors = 'border-[#38bdf8]/30 bg-[#38bdf8]/[0.15] text-[#38bdf8]';
+    color = '#70a1ff';
   } else if (item.type === 'repost') {
     Icon = Repeat2;
     label = 'إعادة نشر';
-    colors = 'border-[#34d399]/30 bg-[#34d399]/[0.15] text-[#34d399]';
+    color = '#2ed573';
   }
 
   return (
-    <span aria-label={label} className={`absolute -bottom-1 -left-1 grid h-[22px] w-[22px] place-items-center rounded-full border bg-[#0a0a0a] ${colors}`}>
-      <Icon size={12} strokeWidth={2.4} />
+    <span
+      aria-label={label}
+      role="img"
+      className="absolute bottom-0 left-[-6px] z-[2] grid h-5 w-5 place-items-center"
+      style={{ color, filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.8))' }}
+    >
+      {isStory ? (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 2a10 10 0 0 1 10 10" />
+        </svg>
+      ) : (
+        <Icon size={16} strokeWidth={2.5} style={item.type === 'like' ? { fill: 'rgba(255, 71, 87, 0.2)' } : undefined} />
+      )}
     </span>
   );
 }
@@ -245,6 +259,7 @@ export default function NotificationsModal({
           .from('notifications')
           .select('id,content,type,is_read,created_at')
           .eq('user_id', currentUserId)
+          .neq('type', 'follow_request')
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(offset, offset + PAGE_SIZE - 1);
@@ -262,6 +277,7 @@ export default function NotificationsModal({
             .from('notifications')
             .select('id,reference_id,entity_id,actor_id,comment_id')
             .eq('user_id', currentUserId)
+            .neq('type', 'follow_request')
             .order('created_at', { ascending: false })
             .order('id', { ascending: false })
             .range(offset, offset + PAGE_SIZE - 1);
@@ -273,6 +289,7 @@ export default function NotificationsModal({
               .from('notifications')
               .select('id,entity_id,actor_id,comment_id')
               .eq('user_id', currentUserId)
+              .neq('type', 'follow_request')
               .order('created_at', { ascending: false })
               .order('id', { ascending: false })
               .range(offset, offset + PAGE_SIZE - 1);
@@ -349,8 +366,7 @@ export default function NotificationsModal({
     loadMoreRef.current = loadMore;
 
     const loadInitialPage = async () => {
-      const cleanupPromise = (async () => {
-        if (cleanupAttemptedUsersRef.current.has(currentUserId)) return;
+      if (!cleanupAttemptedUsersRef.current.has(currentUserId)) {
         cleanupAttemptedUsersRef.current.add(currentUserId);
         try {
           const { error: cleanupError } = await supabase.rpc('aani_cleanup_old_notifications');
@@ -358,26 +374,8 @@ export default function NotificationsModal({
         } catch (cleanupError) {
           console.warn('[notifications] تعذر حذف الإشعارات القديمة:', cleanupError);
         }
-      })();
-      const markReadPromise = (async () => {
-        try {
-          const { error: updateError } = await supabase
-            .from('notifications')
-            .update({ is_read: true })
-            .eq('user_id', currentUserId)
-            .eq('is_read', false);
-          return updateError;
-        } catch (updateError) {
-          return updateError;
-        }
-      })();
-
-      const [, markReadError] = await Promise.all([cleanupPromise, markReadPromise]);
-      if (!active) return;
-      if (markReadError) {
-        console.warn('[notifications] تعذر تحديد الإشعارات كمقروءة:', markReadError);
-        setReadError('تعذر حفظ الإشعارات كمقروءة.');
       }
+      if (!active) return;
       await fetchPage(0, true);
     };
 
@@ -458,6 +456,12 @@ export default function NotificationsModal({
 
     return (
       <article key={item.id} className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}>
+        {item.is_read === false && (
+          <span
+            aria-hidden="true"
+            className="absolute left-[14px] top-1/2 z-10 h-[7px] w-[7px] -translate-y-1/2 rounded-full bg-[#c98a66] [box-shadow:0_0_8px_#c98a66]"
+          />
+        )}
         {profileHref ? (
           <Link
             href={profileHref}
@@ -476,7 +480,7 @@ export default function NotificationsModal({
           type="button"
           onClick={() => activateNotification(item)}
           aria-label={`${actorName} ${action}`}
-          className="flex min-w-0 flex-1 items-center border-0 bg-transparent p-0 text-right outline-none focus-visible:ring-2 focus-visible:ring-[#e6a17b]"
+          className="flex min-w-0 flex-1 items-center border-0 bg-transparent p-0 pl-4 text-right outline-none focus-visible:ring-2 focus-visible:ring-[#e6a17b]"
         >
           <span className="min-w-0 flex-1">
             <span className="block text-[14px] leading-6">
@@ -514,6 +518,8 @@ export default function NotificationsModal({
             <X size={22} />
           </button>
         </header>
+
+        <FollowRequestsSection currentUserId={currentUserId} />
 
         <div role="tablist" aria-label="تصفية الإشعارات" className="flex shrink-0 gap-1 border-b border-white/[0.06] px-3 py-2">
           {FILTER_TABS.map(tab => (
