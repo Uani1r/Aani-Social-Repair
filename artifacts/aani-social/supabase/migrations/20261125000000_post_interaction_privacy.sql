@@ -2,10 +2,15 @@
 begin;
 
 alter table public.posts
+  add column if not exists visibility text not null default 'public',
   add column if not exists hide_likes boolean not null default false,
   add column if not exists hide_comments boolean not null default false,
   add column if not exists comment_privacy text not null default 'public',
   add column if not exists allowed_commenters uuid[] not null default '{}'::uuid[];
+
+update public.posts
+set visibility = 'public'
+where visibility is null or visibility not in ('public', 'private');
 
 update public.posts
 set comment_privacy = 'public'
@@ -15,6 +20,8 @@ update public.posts
 set allowed_commenters = '{}'::uuid[]
 where allowed_commenters is null;
 
+alter table public.posts alter column visibility set default 'public';
+alter table public.posts alter column visibility set not null;
 alter table public.posts alter column hide_likes set default false;
 alter table public.posts alter column hide_likes set not null;
 alter table public.posts alter column hide_comments set default false;
@@ -23,6 +30,10 @@ alter table public.posts alter column comment_privacy set default 'public';
 alter table public.posts alter column comment_privacy set not null;
 alter table public.posts alter column allowed_commenters set default '{}'::uuid[];
 alter table public.posts alter column allowed_commenters set not null;
+alter table public.posts drop constraint if exists posts_visibility_check;
+alter table public.posts
+  add constraint posts_visibility_check
+  check (visibility in ('public', 'private'));
 alter table public.posts drop constraint if exists posts_comment_privacy_check;
 alter table public.posts
   add constraint posts_comment_privacy_check
