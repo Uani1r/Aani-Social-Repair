@@ -161,7 +161,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         profileId?: string,
         postIds?: string[],
       ) => {
-        const request = supabase.from('posts').select('*');
+        const request = supabase.from('posts').select(
+          'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, hide_likes, hide_comments, comment_privacy',
+        );
         if (kind === 'profile' && postIds) {
           return request.in('id', postIds).order('created_at', { ascending: false });
         }

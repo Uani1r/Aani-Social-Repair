@@ -56,7 +56,7 @@ alter table public.reports alter column user_id drop not null;
 -- name: `create table if not exists` above may have created inline FKs
 -- with auto-generated names on a fresh database.
 -- ---------------------------------------------------------------------
-do $
+do $$
 begin
   if not exists (
     select 1
@@ -105,7 +105,7 @@ begin
       add constraint aani_reports_reported_user_fk
       foreign key (reported_user_id) references public.profiles(id) on delete set null;
   end if;
-end $;
+end $$;
 
 create unique index if not exists aani_reports_post_reporter_unique_idx
   on public.reports (post_id, reporter_id);
