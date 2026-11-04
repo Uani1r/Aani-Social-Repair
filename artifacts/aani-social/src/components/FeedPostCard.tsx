@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, EyeOff, Flag, Heart, MessageSquare, MoreVertical, Pencil, Repeat, Send, ThumbsUp, Trash2, X,
+  Bookmark, EyeOff, Flag, Heart, MessageSquare, Repeat, Send, ThumbsUp, Trash2, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 
@@ -10,12 +10,7 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+import PostOptionsSheet from './PostOptionsSheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
@@ -89,6 +84,9 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [bookmarked, setBookmarked] = useState(post.saved_by_me ?? false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
+  const [showOptionsSheet, setShowOptionsSheet] = useState(false);
+  const [privacySaving, setPrivacySaving] = useState(false);
+  const [postVisibility, setPostVisibility] = useState(post.visibility ?? 'public');
 
   const urls = useMemo(() => {
     if (post.media_urls && post.media_urls.length > 0) return post.media_urls;
@@ -101,8 +99,9 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     setReposted(post.reposted_by_me ?? false);
     setBookmarked(post.saved_by_me ?? false);
     setFeedback(post.feedback_by_me || null);
+    setPostVisibility(post.visibility ?? 'public');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.reposted_by_me, post.saved_by_me, post.feedback_by_me]);
+  }, [post.id, post.reposted_by_me, post.saved_by_me, post.feedback_by_me, post.visibility]);
 
   // Keep the non-like counters synchronized with the post data.
   useEffect(() => {
@@ -329,6 +328,36 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     }
   };
 
+  const handleTogglePostPrivacy = async () => {
+    if (privacySaving) return;
+    if (!supabaseConfigured) {
+      alert('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    const previousVisibility = postVisibility;
+    const nextVisibility = previousVisibility === 'private' ? 'public' : 'private';
+    setPostVisibility(nextVisibility);
+    setPrivacySaving(true);
+    try {
+      const { error } = await supabase
+        .from('posts')
+        .update({ visibility: nextVisibility })
+        .eq('id', post.id)
+        .eq('user_id', currentUserId);
+      if (error) throw error;
+      onRefresh();
+    } catch {
+      setPostVisibility(previousVisibility);
+      alert('تعذر تغيير خصوصية المنشور. تأكد من تطبيق ترحيل قاعدة البيانات ثم حاول مجددًا.');
+    } finally {
+      setPrivacySaving(false);
+    }
+  };
+
+  const handlePromotePost = () => {
+    alert('خدمة ترويج المنشورات غير متاحة بعد.');
+  };
+
   return (
     <article className="post-card fade-up relative">
       {post.repost_attribution && (
@@ -351,37 +380,24 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           />
           <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" className="shrink-0 rounded-full p-1 text-zinc-500 transition hover:text-white" aria-label="خيارات المنشور">
-              <MoreVertical size={18} />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {post.user_id === currentUserId ? (
-              <>
-                <DropdownMenuItem onSelect={() => { setEditContent(post.content || ''); setReplacementFile(null); setShowEditModal(true); }}>
-                  <Pencil size={16} /> تعديل المنشور
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-red-400 focus:text-red-400" onSelect={() => void handleDeletePost()}>
-                  <Trash2 size={16} /> حذف المنشور
-                </DropdownMenuItem>
-              </>
-            ) : (
-              <>
-                <DropdownMenuItem className="text-red-400 focus:text-red-400" onSelect={() => void reportPost()}>
-                  <Flag size={16} /> إبلاغ عن المنشور
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void saveFeedback('interested')}>
-                  <ThumbsUp size={16} /> {feedback === 'interested' ? 'إلغاء مهتم' : 'مهتم'}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void saveFeedback('not_interested')}>
-                  <EyeOff size={16} /> {feedback === 'not_interested' ? 'إلغاء غير مهتم' : 'غير مهتم'}
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <PostOptionsSheet
+          open={showOptionsSheet}
+          onOpenChange={setShowOptionsSheet}
+          isOwner={post.user_id === currentUserId}
+          visibility={postVisibility}
+          feedback={feedback}
+          privacySaving={privacySaving}
+          onEdit={() => {
+            setEditContent(post.content || '');
+            setReplacementFile(null);
+            setShowEditModal(true);
+          }}
+          onTogglePrivacy={() => void handleTogglePostPrivacy()}
+          onPromote={handlePromotePost}
+          onDelete={() => void handleDeletePost()}
+          onReport={() => void reportPost()}
+          onFeedback={value => void saveFeedback(value)}
+        />
       </header>
 
       {post.content && (

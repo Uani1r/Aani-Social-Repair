@@ -53,10 +53,12 @@ create table if not exists public.posts (
   post_metadata jsonb not null default '[]'::jsonb,
   media_url text,
   type text not null default 'text',
+  visibility text not null default 'public',
   created_at timestamptz not null default now()
 );
 
 alter table public.posts add column if not exists media_url text;
+alter table public.posts add column if not exists visibility text not null default 'public';
 alter table public.posts add column if not exists post_metadata jsonb not null default '[]'::jsonb;
 alter table public.posts add column if not exists type text not null default 'text';
 alter table public.posts alter column content set default '';
@@ -83,6 +85,10 @@ alter table public.posts drop constraint if exists posts_type_check;
 alter table public.posts
   add constraint posts_type_check
   check (type in ('text', 'photo', 'reel'));
+alter table public.posts drop constraint if exists posts_visibility_check;
+alter table public.posts
+  add constraint posts_visibility_check
+  check (visibility in ('public', 'private'));
 alter table public.posts drop constraint if exists posts_media_type_check;
 alter table public.posts
   add constraint posts_media_type_check
@@ -242,7 +248,7 @@ create policy "Users can update their own profile"
 drop policy if exists "Signed-in users can read posts" on public.posts;
 create policy "Signed-in users can read posts"
   on public.posts for select to authenticated
-  using (true);
+  using (user_id = (select auth.uid()) or visibility = 'public');
 drop policy if exists "Users can create their own posts" on public.posts;
 create policy "Users can create their own posts"
   on public.posts for insert to authenticated
@@ -360,7 +366,7 @@ create policy "Users can send messages as themselves"
   );
 
 grant select, insert, update on public.profiles to authenticated;
-grant select, insert, delete on public.posts to authenticated;
+grant select, insert, update, delete on public.posts to authenticated;
 grant select, insert, delete on public.likes to authenticated;
 grant select, insert, delete on public.comments to authenticated;
 grant select, insert, delete on public.comment_likes to authenticated;

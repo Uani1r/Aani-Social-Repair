@@ -1087,3 +1087,49 @@ body.aani-immersive {
     animation: none;
   }
 }
+
+
+
+/* Glassmorphic post options bottom sheet */
+@keyframes post-options-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes post-options-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes post-options-sheet-in {
+  from { transform: translate3d(0, 100%, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+
+@keyframes post-options-sheet-out {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0, 100%, 0); }
+}
+
+.post-options-overlay[data-state='open'] {
+  animation: post-options-overlay-in 180ms ease-out both;
+}
+
+.post-options-overlay[data-state='closed'] {
+  animation: post-options-overlay-out 160ms ease-in both;
+}
+
+.post-options-content[data-state='open'] {
+  animation: post-options-sheet-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.post-options-content[data-state='closed'] {
+  animation: post-options-sheet-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .post-options-overlay,
+  .post-options-content {
+    animation: none !important;
+  }
+}

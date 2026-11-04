@@ -24,7 +24,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     setLoading(true);
     try {
       const { data, error } = await supabase.from('posts')
-        .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
+        .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
         .eq('id', postId)
         .maybeSingle();
       if (error || !data) {

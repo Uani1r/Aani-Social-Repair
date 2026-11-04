@@ -33,6 +33,7 @@ function normalizePostRow(value: unknown): PostRow | null {
     media_url: typeof value.media_url === 'string' ? value.media_url : null,
     media_urls: mediaUrls,
     type: value.type === 'photo' || value.type === 'reel' ? value.type : 'text',
+    visibility: value.visibility === 'private' ? 'private' : 'public',
     created_at: value.created_at,
     ...(typeof value.reposter_id === 'string' || value.reposter_id === null
       ? { reposter_id: value.reposter_id }
@@ -103,7 +104,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       if (query === 'feed') {
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
           .in('type', ['text', 'photo'])
           .order('created_at', { ascending: false })
           .limit(50);
@@ -129,7 +130,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       } else if (query === 'profile' && targetUserId) {
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
           .eq('user_id', targetUserId)
           .order('created_at', { ascending: false });
 
@@ -157,7 +158,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         if (repostPostIds.length > 0) {
           const { data: originalPostData } = await supabase
             .from('posts')
-            .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
+            .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
             .in('id', repostPostIds);
           repostedRaw = normalizePostRows(originalPostData).map(post => ({ ...post, reposter_id: targetUserId }));
         }
@@ -201,7 +202,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       } else if (query === 'reel') {
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
           .eq('type', 'reel')
           .order('created_at', { ascending: false })
           .limit(50);
