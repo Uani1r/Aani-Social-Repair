@@ -6,7 +6,8 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { PostMetadataTag, Profile, VideoTrimRange } from '@/lib/types';
+import type { PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import { buildVideoMediaUrl } from '@/lib/videoMedia';
 
 type ComposerTagKind = PostMetadataTag['kind'];
 type TagTool = ComposerTagKind | null;
@@ -27,6 +28,7 @@ type CreatePostModalProps = {
   fileType: 'image' | 'video' | null;
   filePreviews: { file: File; url: string }[];
   videoTrim: VideoTrimRange | null;
+  videoCrop: VideoCropTransform | null;
   isSubmitting: boolean;
   createError: string;
   onPostTextChange: (text: string) => void;
@@ -51,6 +53,7 @@ export default function CreatePostModal({
   fileType,
   filePreviews,
   videoTrim,
+  videoCrop,
   isSubmitting,
   createError,
   onPostTextChange,
@@ -252,7 +255,7 @@ export default function CreatePostModal({
                   <img src={preview.url} alt="معاينة الصورة المحددة" className="h-full w-full object-cover" />
                 ) : (
                   <PostVideoPreview
-                    src={videoTrim ? `${preview.url}#t=${videoTrim.start},${videoTrim.end}` : preview.url}
+                    src={buildVideoMediaUrl(preview.url, videoTrim, videoCrop)}
                     muted
                     controls={false}
                     className="h-full w-full object-cover"

@@ -7,7 +7,7 @@ import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import VideoPreviewModal from '@/components/VideoPreviewModal';
 import SettingsModal from '@/components/SettingsModal';
-import type { PostMetadataTag, Profile, VideoTrimRange } from '@/lib/types';
+import type { PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 
 import type { NotificationsModalProps } from './types';
 
@@ -26,9 +26,11 @@ type ShellOverlayControlsProps = {
   showVideoPreviewModal: boolean;
   videoPreviewUrl: string | null;
   videoTrim: VideoTrimRange | null;
+  videoCrop: VideoCropTransform | null;
   onVideoTrimChange: (range: VideoTrimRange) => void;
+  onVideoCropChange: (crop: VideoCropTransform) => void;
   onCloseVideoPreview: () => void;
-  onNextVideoPreview: (range: VideoTrimRange) => void;
+  onNextVideoPreview: (range: VideoTrimRange, crop: VideoCropTransform) => void;
   showCreateModal: boolean;
   postText: string;
   selectedFiles: File[];
@@ -68,7 +70,9 @@ export default function ShellOverlayControls({
   showVideoPreviewModal,
   videoPreviewUrl,
   videoTrim,
+  videoCrop,
   onVideoTrimChange,
+  onVideoCropChange,
   onCloseVideoPreview,
   onNextVideoPreview,
   showCreateModal,
@@ -117,7 +121,9 @@ export default function ShellOverlayControls({
         open={showVideoPreviewModal && Boolean(videoPreviewUrl)}
         src={videoPreviewUrl || ''}
         initialTrim={videoTrim}
+        initialCrop={videoCrop}
         onTrimChange={onVideoTrimChange}
+        onCropChange={onVideoCropChange}
         onClose={onCloseVideoPreview}
         onNext={onNextVideoPreview}
       />
@@ -131,6 +137,7 @@ export default function ShellOverlayControls({
           fileType={fileType}
           filePreviews={filePreviews}
           videoTrim={videoTrim}
+          videoCrop={videoCrop}
           isSubmitting={isSubmitting}
           createError={createError}
           onPostTextChange={onPostTextChange}

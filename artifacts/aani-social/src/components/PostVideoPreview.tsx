@@ -1,5 +1,7 @@
 import { useRef, type SyntheticEvent } from 'react';
 
+import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
+
 type PostVideoPreviewProps = {
   src: string;
   className?: string;
@@ -8,16 +10,6 @@ type PostVideoPreviewProps = {
   autoPlay?: boolean;
   loop?: boolean;
 };
-
-type TimeRange = { start: number; end: number } | null;
-
-function getTimeRange(src: string): TimeRange {
-  const match = src.match(/#t=(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)/);
-  if (!match) return null;
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-  return Number.isFinite(start) && Number.isFinite(end) && end > start ? { start, end } : null;
-}
 
 export default function PostVideoPreview({
   src,
@@ -28,8 +20,9 @@ export default function PostVideoPreview({
   loop = false,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const timeRange = getTimeRange(src);
-  const mediaSrc = timeRange ? src.replace(/#t=[^#&]*/, '') : src;
+  const timeRange = parseVideoTimeRange(src);
+  const cropTransform = getVideoCropTransform(parseVideoCrop(src));
+  const mediaSrc = stripVideoEditFragment(src);
 
   const seekToStart = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
@@ -90,6 +83,7 @@ export default function PostVideoPreview({
         void video.play().catch(() => undefined);
       }}
       className={className}
+      style={{ transform: cropTransform, transformOrigin: 'center' }}
     />
   );
 }

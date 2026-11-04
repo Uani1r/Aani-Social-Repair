@@ -22,6 +22,12 @@ export type VideoTrimRange = {
   duration: number;
 };
 
+export type VideoCropTransform = {
+  zoom: number;
+  x: number;
+  y: number;
+};
+
 export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
   if (!Array.isArray(value)) return [];
 

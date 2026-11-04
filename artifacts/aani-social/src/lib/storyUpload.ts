@@ -1,4 +1,4 @@
-// رفع وسائط الستوري مع نسبة تقدّم حقيقية عبر XHR وخطة بديلة عبر عميل Supabase.
+// رفع الوسائط مع نسبة تقدّم حقيقية عبر XHR وخطة بديلة عبر عميل Supabase.
 
 import { supabase, storageBucket, supabasePublicKey, supabaseUrl } from '@/lib/supabase';
 
@@ -8,7 +8,7 @@ interface UploadOptions {
   onProgress?: (percent: number) => void;
 }
 
-export async function uploadStoryMedia({ file, path, onProgress }: UploadOptions): Promise<void> {
+export async function uploadMedia({ file, path, onProgress }: UploadOptions): Promise<void> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   const baseUrl = supabaseUrl;
@@ -40,10 +40,10 @@ export async function uploadStoryMedia({ file, path, onProgress }: UploadOptions
         resolve();
       } catch (error) {
         const message = error && typeof error === 'object' && 'message' in error
-          ? String((error as { message?: unknown }).message || 'تعذر رفع ملف القصة إلى التخزين')
+          ? String((error as { message?: unknown }).message || 'تعذر رفع ملف الوسائط إلى التخزين')
           : error instanceof Error
             ? error.message
-            : 'تعذر رفع ملف القصة إلى التخزين';
+            : 'تعذر رفع ملف الوسائط إلى التخزين';
         reject(new Error(message));
       }
     };
@@ -70,7 +70,9 @@ export async function uploadStoryMedia({ file, path, onProgress }: UploadOptions
     };
 
     xhr.onerror = () => void fallbackUpload();
-    xhr.onabort = () => reject(new Error('أُلغيت عملية رفع القصة'));
+    xhr.onabort = () => reject(new Error('أُلغيت عملية رفع الوسائط'));
     xhr.send(file);
   });
 }
+
+export const uploadStoryMedia = uploadMedia;

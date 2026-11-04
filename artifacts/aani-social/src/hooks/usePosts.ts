@@ -144,7 +144,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
           .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
-          .in('type', ['text', 'photo'])
+          .in('type', ['text', 'photo', 'reel'])
           .order('created_at', { ascending: false })
           .limit(50);
 

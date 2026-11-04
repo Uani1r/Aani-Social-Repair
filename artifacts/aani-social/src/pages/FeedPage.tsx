@@ -6,6 +6,7 @@ import FeedPostCard from '../components/FeedPostCard';
 import type { StoryRow as StoryDmCardStory } from '../components/StoryDmCard';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { usePosts } from '@/hooks/usePosts';
+import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
 import type { Profile } from '@/lib/types';
 
 interface StoriesBarProps {
@@ -39,12 +40,22 @@ export default function FeedPage({
   StoriesBarComponent,
 }: FeedPageProps) {
   const { posts, loading, refresh } = usePosts('feed', undefined, userId);
+  const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
   const [pullDistance, setPullDistance] = useState(0);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const pullGestureRef = useRef<{ x: number; y: number; lastX: number; lastY: number; pathLength: number } | null>(null);
   const refreshingRef = useRef(false);
   const feedMountedRef = useRef(false);
   const refreshIndicatorTimerRef = useRef<number | null>(null);
+
+  useEffect(() => subscribePendingPosts(() => setPendingPosts(getPendingPosts())), []);
+
+  const userPendingPosts = pendingPosts.filter(item => item.post.user_id === userId);
+  const visiblePosts = [
+    ...userPendingPosts.map(item => item.post),
+    ...posts.filter(post => !userPendingPosts.some(item => item.id === post.id)),
+  ];
+  const pendingById = new Map(userPendingPosts.map(item => [item.id, item] as const));
 
   const refreshFeed = useCallback(async () => {
     if (refreshingRef.current || loading) return;
@@ -207,7 +218,7 @@ export default function FeedPage({
 
       {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 
-      {!loading && posts.length === 0 && (
+      {!loading && visiblePosts.length === 0 && (
         <div className="empty-state card text-center p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50">
           <div className="w-12 h-12 bg-pink-500/10 text-pink-500 rounded-full flex items-center justify-center mx-auto mb-3">
             <MessageCircle size={22} />
@@ -217,7 +228,25 @@ export default function FeedPage({
         </div>
       )}
 
-      {!loading && posts.length > 0 && <div className="posts-list space-y-3">{posts.map(post => <FeedPostCard key={post.id} post={post} currentUserId={userId} onRefresh={() => void refresh()} onOpenComments={onOpenComments} />)}</div>}
+      {visiblePosts.length > 0 && (
+        <div className="posts-list space-y-3">
+          {visiblePosts.map(post => {
+            const pending = pendingById.get(post.id);
+            return (
+              <FeedPostCard
+                key={post.id}
+                post={post}
+                currentUserId={userId}
+                onRefresh={() => void refresh()}
+                onOpenComments={onOpenComments}
+                pendingState={pending}
+                onRetryPending={() => retryPendingPost(post.id)}
+                onDismissPending={() => removePendingPost(post.id)}
+              />
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

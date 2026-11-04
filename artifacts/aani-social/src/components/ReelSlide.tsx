@@ -11,24 +11,16 @@ import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Post } from '@/lib/types';
-
-type VideoTimeRange = { start: number; end: number } | null;
-
-function getVideoTimeRange(src: string): VideoTimeRange {
-  const match = src.match(/#t=(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)/);
-  if (!match) return null;
-  const start = Number(match[1]);
-  const end = Number(match[2]);
-  return Number.isFinite(start) && Number.isFinite(end) && end > start ? { start, end } : null;
-}
+import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
 export default function ReelSlide({ post, currentUserId, onOpenComments }: { post: Post; currentUserId: string; onOpenComments: (postId: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
   const [playing, setPlaying] = useState(false);
   const mediaUrl = post.media_url || '';
-  const videoTimeRange = getVideoTimeRange(mediaUrl);
-  const videoSrc = videoTimeRange ? mediaUrl.replace(/#t=[^#&]*/, '') : mediaUrl;
+  const videoTimeRange = parseVideoTimeRange(mediaUrl);
+  const videoCropTransform = getVideoCropTransform(parseVideoCrop(mediaUrl));
+  const videoSrc = stripVideoEditFragment(mediaUrl);
   const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
   const likesCount = post.likes_count ?? post.likes?.length ?? 0;
   const likesVisible = !post.hide_likes || post.user_id === currentUserId;
@@ -212,6 +204,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
         onEnded={handleVideoEnded}
         onClick={togglePlay}
         className="w-full h-full object-cover cursor-pointer"
+        style={{ transform: videoCropTransform, transformOrigin: 'center' }}
       />
 
       {!playing && (

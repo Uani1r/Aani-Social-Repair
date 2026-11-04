@@ -6,7 +6,10 @@ import ShellOverlayControls from './ShellOverlayControls';
 import ShellTopBar from './ShellTopBar';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import type { PostMetadataTag, VideoTrimRange } from '@/lib/types';
+import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
+import { uploadMedia } from '@/lib/storyUpload';
+import { buildVideoMediaUrl } from '@/lib/videoMedia';
+import type { Post, PostMetadataTag, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -15,6 +18,14 @@ const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, rej
   reader.onerror = () => reject(reader.error || new Error('تعذر قراءة الصورة المختارة.'));
   reader.readAsDataURL(file);
 });
+
+const createPostId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
+};
 
 const hasOpenModal = () =>
   typeof document !== 'undefined' && Boolean(document.querySelector(
@@ -436,6 +447,7 @@ export default function Shell({
   const [showImagePreviewModal, setShowImagePreviewModal] = useState(false);
   const [showVideoPreviewModal, setShowVideoPreviewModal] = useState(false);
   const [videoTrim, setVideoTrim] = useState<VideoTrimRange | null>(null);
+  const [videoCrop, setVideoCrop] = useState<VideoCropTransform | null>(null);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -463,6 +475,7 @@ export default function Shell({
     setShowPublishOptionsSheet(false);
     setShowVideoPreviewModal(false);
     setVideoTrim(null);
+    setVideoCrop(null);
     setCreateError('');
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
@@ -503,6 +516,7 @@ export default function Shell({
     setPostText('');
     setFileType('video');
     setVideoTrim(null);
+    setVideoCrop(null);
     setCreateError('');
     setShowVideoPreviewModal(true);
   };
@@ -511,93 +525,159 @@ export default function Shell({
     setShowVideoPreviewModal(false);
     setSelectedFiles([]);
     setVideoTrim(null);
+    setVideoCrop(null);
     setFileType(null);
   };
 
-  const continueToVideoCaption = (range: VideoTrimRange) => {
+  const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
     setVideoTrim(range);
+    setVideoCrop(crop);
     setShowVideoPreviewModal(false);
     setShowCreateModal(true);
   };
 
-  const handlePublish = async (postMetadata: PostMetadataTag[] = []) => {
+  const handlePublish = (postMetadata: PostMetadataTag[] = []) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
     }
 
     const content = postText.trim();
-    if (!content && selectedFiles.length === 0 && postMetadata.length === 0) return;
+    const files = [...selectedFiles];
+    const mediaType = fileType;
+    const trim = videoTrim;
+    const crop = videoCrop;
+    const metadata = [...postMetadata];
+    if (!content && files.length === 0 && metadata.length === 0) return;
     if (Array.from(content).length > 2000) {
       setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
       return;
     }
 
-    setIsSubmitting(true);
-    setCreateError('');
-    try {
-      const uploadedUrls: string[] = [];
-      let type: 'text' | 'photo' | 'reel' = 'text';
+    const postId = createPostId();
+    const createdAt = new Date().toISOString();
+    const objectUrls = files.map(file => URL.createObjectURL(file));
+    const localMediaUrls = objectUrls.map(url => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : url);
+    const type: Post['type'] = files.length === 0 ? 'text' : mediaType === 'image' ? 'photo' : 'reel';
+    const author = profile || {
+      id: userId,
+      username: 'user',
+      full_name: 'مستخدم آني',
+      avatar_url: null,
+      bio: '',
+    };
+    const optimisticPost: Post = {
+      id: postId,
+      user_id: userId,
+      content,
+      post_metadata: metadata,
+      media_url: localMediaUrls[0] || null,
+      media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
+      type,
+      created_at: createdAt,
+      author,
+      likes_count: 0,
+      comments_count: 0,
+      reposts_count: 0,
+      likes: [],
+      comments: [],
+    };
 
-      if (selectedFiles.length > 0 && fileType) {
-        for (const file of selectedFiles) {
-          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-');
-          const uploadedPath = `${userId}/${Date.now()}-${safeName}`;
+    let attemptInProgress = false;
+    const attemptPublish = async () => {
+      if (attemptInProgress) return;
+      attemptInProgress = true;
+      updatePendingPost(postId, { stage: 'uploading', progress: 0, error: null });
+      try {
+        const uploadedUrls = new Array<string>(files.length);
+        const fileProgress = files.map(() => 0);
+        const totalBytes = files.reduce((sum, file) => sum + Math.max(1, file.size), 0);
 
-          const { error: uploadError } = await supabase.storage
-            .from(storageBucket)
-            .upload(uploadedPath, file, { upsert: true, contentType: file.type });
+        await Promise.all(files.map(async (file, index) => {
+          const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-') || `media-${index}`;
+          const uploadedPath = `${userId}/${postId}/${index}-${safeName}`;
+          await uploadMedia({
+            file,
+            path: uploadedPath,
+            onProgress: percent => {
+              fileProgress[index] = percent;
+              const uploadedBytes = files.reduce((sum, currentFile, currentIndex) => (
+                sum + Math.max(1, currentFile.size) * (fileProgress[currentIndex] / 100)
+              ), 0);
+              updatePendingPost(postId, {
+                progress: Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)),
+              });
+            },
+          });
+          const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
+          uploadedUrls[index] = mediaType === 'video' ? buildVideoMediaUrl(publicUrl, trim, crop) : publicUrl;
+        }));
 
-          if (uploadError) throw new Error(`فشل رفع الملف: ${uploadError.message}`);
+        const publishedPost: Post = {
+          ...optimisticPost,
+          media_url: uploadedUrls[0] || null,
+          media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
+        };
+        updatePendingPost(postId, { post: publishedPost, stage: 'publishing', progress: 96, error: null });
 
-          const publicData = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath);
-          const publicUrl = publicData?.data?.publicUrl;
-          if (publicUrl) {
-            const range = fileType === 'video' ? videoTrim : null;
-            if (range && (range.start > 0.01 || range.end < range.duration - 0.05)) {
-              uploadedUrls.push(`${publicUrl}#t=${range.start.toFixed(2)},${range.end.toFixed(2)}`);
-            } else {
-              uploadedUrls.push(publicUrl);
-            }
+        const { error: postError } = await supabase.from('posts').upsert({
+          id: postId,
+          user_id: userId,
+          content,
+          post_metadata: metadata,
+          media_url: uploadedUrls[0] || null,
+          media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
+          type,
+          created_at: createdAt,
+        }, { onConflict: 'id' });
+
+        if (postError) {
+          if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
+            throw new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
           }
+          if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
+            throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا للمنشورات. طبّق الترحيل 20261122000000_post_metadata_chips.sql على Supabase ثم أعد المحاولة.');
+          }
+          throw new Error(`فشل حفظ المنشور: ${postError.message}`);
         }
-        type = fileType === 'image' ? 'photo' : 'reel';
+
+        updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
+        window.dispatchEvent(new Event('aani:post-created'));
+        window.setTimeout(() => {
+          removePendingPost(postId);
+          window.dispatchEvent(new Event('aani:post-created'));
+        }, 1200);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'حدث خطأ غير متوقع أثناء النشر.';
+        updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
+      } finally {
+        attemptInProgress = false;
       }
+    };
 
-      const { error: postError } = await supabase.from('posts').insert({
-        user_id: userId,
-        content,
-        post_metadata: postMetadata,
-        media_url: uploadedUrls[0] || null,
-        media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
-        type,
-      });
+    addPendingPost({
+      id: postId,
+      post: optimisticPost,
+      progress: 0,
+      stage: 'uploading',
+      error: null,
+      objectUrls,
+      retry: () => { void attemptPublish(); },
+    });
+    void attemptPublish();
 
-      if (postError) {
-        if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
-          throw new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
-        }
-        if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
-          throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا للمنشورات. طبّق الترحيل 20261122000000_post_metadata_chips.sql على Supabase ثم أعد المحاولة.');
-        }
-        throw new Error(`فشل حفظ المنشور: ${postError.message}`);
-      }
-
-      setPostText('');
-      setSelectedFiles([]);
-      setImagePreviewImages([]);
-      setShowImagePreviewModal(false);
-      setShowVideoPreviewModal(false);
-      setVideoTrim(null);
-      setFileType(null);
-      setShowCreateModal(false);
-      window.dispatchEvent(new Event('aani:post-created'));
-      setLocation('/feed');
-    } catch (err: any) {
-      setCreateError(err.message || 'حدث خطأ غير متوقع أثناء النشر.');
-    } finally {
-      setIsSubmitting(false);
-    }
+    setPostText('');
+    setSelectedFiles([]);
+    setImagePreviewImages([]);
+    setShowImagePreviewModal(false);
+    setShowVideoPreviewModal(false);
+    setVideoTrim(null);
+    setVideoCrop(null);
+    setFileType(null);
+    setShowCreateModal(false);
+    setIsSubmitting(false);
+    setCreateError('');
+    setLocation('/feed');
   };
 
   return (
@@ -629,7 +709,9 @@ export default function Shell({
         showVideoPreviewModal={showVideoPreviewModal}
         videoPreviewUrl={fileType === 'video' ? filePreviews[0]?.url || null : null}
         videoTrim={videoTrim}
+        videoCrop={videoCrop}
         onVideoTrimChange={setVideoTrim}
+        onVideoCropChange={setVideoCrop}
         onCloseVideoPreview={closeVideoPreview}
         onNextVideoPreview={continueToVideoCaption}
         showCreateModal={showCreateModal}
@@ -637,7 +719,6 @@ export default function Shell({
         selectedFiles={selectedFiles}
         fileType={fileType}
         filePreviews={filePreviews}
-        videoTrim={videoTrim}
         isSubmitting={isSubmitting}
         createError={createError}
         onPostTextChange={setPostText}
@@ -645,6 +726,7 @@ export default function Shell({
           setSelectedFiles(files => files.filter((_, idx) => idx !== index));
           if (fileType === 'video') {
             setVideoTrim(null);
+            setVideoCrop(null);
             setFileType(null);
           }
         }}
@@ -654,6 +736,7 @@ export default function Shell({
           if (fileType === 'video') {
             setSelectedFiles([]);
             setVideoTrim(null);
+            setVideoCrop(null);
             setFileType(null);
           }
         }}

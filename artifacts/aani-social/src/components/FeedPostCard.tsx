@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, EyeOff, Flag, Heart, MessageSquare, Repeat, Send, ThumbsUp, Trash2,
+  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, ThumbsUp, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 
@@ -17,6 +17,7 @@ import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
+import type { PendingPost } from '@/lib/pendingPosts';
 
 type FeedPostComment = {
   id: string;
@@ -61,11 +62,14 @@ function normalizeFeedPostComments(value: unknown): FeedPostComment[] {
   });
 }
 
-export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments }: {
+export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending }: {
   post: Post;
   currentUserId: string;
   onRefresh: () => void;
   onOpenComments?: (postId: string) => void;
+  pendingState?: PendingPost;
+  onRetryPending?: () => void;
+  onDismissPending?: () => void;
 }) {
   const [commentText, setCommentText] = useState('');
   const [comments, setComments] = useState<FeedPostComment[] | null>(null);
@@ -374,6 +378,40 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           onFeedback={value => void saveFeedback(value)}
         />
       </header>
+
+      {pendingState && (
+        <section className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3" aria-label="حالة نشر المنشور">
+          <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+            <span className="flex items-center gap-2 text-zinc-200">
+              {pendingState.stage === 'success' ? (
+                <CheckCircle2 size={15} className="text-emerald-400" />
+              ) : pendingState.stage === 'failed' ? (
+                <X size={15} className="text-rose-400" />
+              ) : (
+                <Loader2 size={15} className="animate-spin text-[#f1a17f]" />
+              )}
+              {pendingState.stage === 'uploading' ? 'جارٍ رفع الوسائط' : pendingState.stage === 'publishing' ? 'جارٍ حفظ المنشور' : pendingState.stage === 'success' ? 'تم نشر المنشور' : 'تعذر نشر المنشور'}
+            </span>
+            {pendingState.stage !== 'failed' && <span className="text-zinc-400">{pendingState.progress}%</span>}
+          </div>
+          {pendingState.stage !== 'failed' && (
+            <div className="h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label="تقدم النشر" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
+              <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
+            </div>
+          )}
+          {pendingState.stage === 'failed' && (
+            <>
+              <p role="alert" className="text-xs leading-5 text-rose-300">{pendingState.error || 'حدث خطأ غير متوقع أثناء النشر.'}</p>
+              <div className="mt-2 flex items-center gap-2">
+                <button type="button" onClick={onRetryPending} className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/15">
+                  <RotateCcw size={13} /> إعادة المحاولة
+                </button>
+                <button type="button" onClick={onDismissPending} className="rounded-full px-3 py-1.5 text-xs text-zinc-400 hover:bg-white/5">إزالة</button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
