@@ -75,7 +75,13 @@ export default function AIAssistantModal({ open, onClose }: { open: boolean; onC
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      aria-label="مساعد آني الذكي"
+      onClick={onClose}
+    >
       <div className="bg-zinc-900 border border-zinc-800 w-full max-w-lg h-[580px] rounded-3xl shadow-2xl flex flex-col overflow-hidden text-white" onClick={event => event.stopPropagation()}>
         <div className="p-4 bg-zinc-800/80 border-b border-zinc-700 flex items-center justify-between">
           <div className="flex items-center gap-2">

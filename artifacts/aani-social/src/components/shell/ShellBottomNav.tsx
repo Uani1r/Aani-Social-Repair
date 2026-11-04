@@ -28,7 +28,7 @@ export default function ShellBottomNav({ path, chromeHidden, onNavigationTap }: 
       }}
     >
       {nav.map(([href, Icon, label, id]) => {
-        const active = path === href || (id === 'profile' && path.startsWith('/profile'));
+        const active = path === href || (id === 'feed' && path === '/') || (id === 'profile' && path.startsWith('/profile'));
 
         return (
           <Link

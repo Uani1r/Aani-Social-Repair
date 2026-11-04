@@ -9,6 +9,9 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import type { PostMetadataTag } from '@/lib/types';
 import type { ShellProps } from './types';
 
+const hasOpenModal = () =>
+  typeof document !== 'undefined' && Boolean(document.querySelector('[role="dialog"][aria-modal="true"]'));
+
 export default function Shell({
   children,
   profile,
@@ -231,6 +234,12 @@ export default function Shell({
   const mainRef = useRef<HTMLElement | null>(null);
   const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number; pullCandidate: boolean } | null>(null);
   const swipeTimerRef = useRef<number | null>(null);
+  const swipeAnimationFrameRef = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (swipeTimerRef.current !== null) window.clearTimeout(swipeTimerRef.current);
+    if (swipeAnimationFrameRef.current !== null) window.cancelAnimationFrame(swipeAnimationFrameRef.current);
+  }, []);
 
   // ترتيب صفحات التنقل بالسحب (نفس مسارات أزرار الشريط السفلي)
   const swipeRoutes = useMemo(() => ['/feed', '/reels', '/search', '/messages', '/profile'], []);
@@ -262,16 +271,18 @@ export default function Shell({
   };
 
   const handleSwipeStart = (event: ReactTouchEvent) => {
-    // التنقل بالسحب مخصص لتبويبات الشريط السفلي فقط، ولا يعمل داخل شاشات القصص
-    if (document.body.classList.contains('aani-immersive')) {
+    // التنقل بالسحب مخصص لتبويبات الشريط السفلي فقط، ولا يعمل داخل الشاشات المغطاة أو النوافذ المنبثقة
+    if (document.body.classList.contains('aani-immersive') || hasOpenModal()) {
       swipeStartRef.current = null;
+      setMainOffset(0, true);
       return;
     }
 
     const target = event.target as HTMLElement | null;
+    const reelVideo = target?.closest('.reel-slide video:not([controls])');
 
-    // لا نلتقط السحب داخل العناصر التي تملك إيماءة أفقية أو حقول الإدخال
-    if (isHorizontalGestureArea(target)) {
+    // لا نلتقط السحب داخل العناصر التي تملك إيماءة أفقية أو حقول الإدخال، باستثناء فيديو الريلز الذي لا يملك شريط تحكم
+    if (isHorizontalGestureArea(target) && !reelVideo) {
       swipeStartRef.current = null;
       return;
     }
@@ -300,6 +311,12 @@ export default function Shell({
   };
 
   const handleSwipeMove = (event: ReactTouchEvent) => {
+    if (document.body.classList.contains('aani-immersive') || hasOpenModal()) {
+      swipeStartRef.current = null;
+      setMainOffset(0, true);
+      return;
+    }
+
     const start = swipeStartRef.current;
     if (!start || start.axis === 'y') return;
 
@@ -340,6 +357,11 @@ export default function Shell({
     const start = swipeStartRef.current;
     swipeStartRef.current = null;
 
+    if (document.body.classList.contains('aani-immersive') || hasOpenModal()) {
+      setMainOffset(0, true);
+      return;
+    }
+
     const width = window.innerWidth || 360;
     const threshold = Math.max(56, width * 0.18);
 
@@ -357,14 +379,24 @@ export default function Shell({
 
         if (nextIndex >= 0 && nextIndex < swipeRoutes.length) {
           navigated = true;
-          setSwipeDirection(goingForward ? 'forward' : 'backward');
+          const nextDirection = goingForward ? 'forward' : 'backward';
+          setSwipeDirection(null);
           setLocation(swipeRoutes[nextIndex]);
+
+          // أعد تشغيل حركة الدخول حتى عند تكرار الاتجاه بسرعة بين عدة تبويبات
+          if (swipeTimerRef.current !== null) window.clearTimeout(swipeTimerRef.current);
+          if (swipeAnimationFrameRef.current !== null) window.cancelAnimationFrame(swipeAnimationFrameRef.current);
+          swipeAnimationFrameRef.current = window.requestAnimationFrame(() => {
+            swipeAnimationFrameRef.current = null;
+            setSwipeDirection(nextDirection);
+            swipeTimerRef.current = window.setTimeout(() => {
+              setSwipeDirection(null);
+              swipeTimerRef.current = null;
+            }, 420);
+          });
 
           // بداية الصفحة الجديدة من الأعلى لتبدو الحركة انتقالًا حقيقيًا
           window.scrollTo({ top: 0, behavior: 'auto' });
-
-          if (swipeTimerRef.current) window.clearTimeout(swipeTimerRef.current);
-          swipeTimerRef.current = window.setTimeout(() => setSwipeDirection(null), 420);
         }
       }
     }
