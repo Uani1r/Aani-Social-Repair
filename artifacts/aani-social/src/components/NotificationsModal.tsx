@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import {
-  ArrowRight, AtSign, Bell, CheckCheck, Heart, MessageCircle, Repeat2, UserRound, X,
+  Bell, Heart, MessageCircle, UserRound, X,
   type LucideIcon,
 } from 'lucide-react';
+
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
@@ -87,10 +88,7 @@ function ActionBadge({ type }: { type: string }) {
   let color = 'text-[#e6a17b]';
   let label = 'إشعار';
 
-  if (type === 'repost') {
-    Icon = Repeat2;
-    label = 'إعادة نشر';
-  } else if (type === 'like') {
+  if (type === 'like') {
     Icon = Heart;
     color = 'text-rose-400';
     label = 'إعجاب';
@@ -98,14 +96,6 @@ function ActionBadge({ type }: { type: string }) {
     Icon = MessageCircle;
     color = 'text-sky-300';
     label = 'تعليق';
-  } else if (type === 'follow') {
-    Icon = UserRound;
-    color = 'text-emerald-300';
-    label = 'متابعة';
-  } else if (type === 'mention') {
-    Icon = AtSign;
-    color = 'text-violet-300';
-    label = 'إشارة';
   }
 
   return (
@@ -119,13 +109,12 @@ function ActionBadge({ type }: { type: string }) {
 }
 
 function NotificationAvatar({ item }: { item: NotificationEntry }) {
-  const name = displayName(item.actor);
   return (
-    <span className="relative mt-0.5 block h-[46px] w-[46px] shrink-0 rounded-full bg-gradient-to-br from-[#34343b] to-[#1c1c1f] text-center text-sm font-bold leading-[46px] text-[#f4f4f5]">
+    <span aria-hidden="true" className="relative mt-0.5 grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
       {item.actor?.avatar_url ? (
         <img src={item.actor.avatar_url} alt="" className="h-full w-full rounded-full object-cover" />
       ) : (
-        name.slice(0, 1)
+        <UserRound size={23} strokeWidth={2.5} />
       )}
       <ActionBadge type={item.type} />
     </span>
@@ -136,7 +125,6 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
   const [items, setItems] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [updating, setUpdating] = useState(false);
   const [showSamples, setShowSamples] = useState(false);
   const [readMockIds, setReadMockIds] = useState<Set<string>>(() => new Set());
 
@@ -260,24 +248,6 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
     }
   };
 
-  const markAllRead = async () => {
-    if (showSamples) {
-      setReadMockIds(new Set(MOCK_NOTIFICATIONS.map(item => item.id)));
-      return;
-    }
-    if (!supabaseConfigured || !items.some(item => !item.is_read)) return;
-    setUpdating(true);
-    setError('');
-    const { error: updateError } = await supabase
-      .from('notifications')
-      .update({ is_read: true })
-      .eq('user_id', currentUserId)
-      .eq('is_read', false);
-    if (updateError) setError(updateError.message);
-    else setItems(current => current.map(item => ({ ...item, is_read: true })));
-    setUpdating(false);
-  };
-
   if (!isOpen) return null;
 
   const renderCard = (item: NotificationEntry) => {
@@ -287,8 +257,7 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
       ? `/post/${encodeURIComponent(targetId)}`
       : null;
     const card = (
-      <article className={`aani-notifications-card relative flex w-full items-center gap-3 rounded-xl border border-white/[0.04] py-3.5 pr-3 pl-9 text-right ${item.is_read ? 'bg-[#121214] text-[#8e8e93]' : 'bg-gradient-to-l from-[#1c1c1f] to-[#121214] text-[#f4f4f5]'}`}>
-        {!item.is_read && <span aria-label="غير مقروء" className="absolute left-3 top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-[#e6a17b] shadow-[0_0_8px_rgba(230,161,123,0.85)]" />}
+      <article className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}>
         <NotificationAvatar item={item} />
         <span className="min-w-0 flex-1">
           <span className="block text-[14px] leading-6">
@@ -316,46 +285,34 @@ export default function NotificationsModal({ isOpen, onClose, currentUserId }: N
     );
   };
 
-  const unreadCount = visibleItems.filter(item => !item.is_read).length;
-
   return (
-    <div className="aani-notifications-page fixed inset-0 z-[150] overflow-hidden text-[#f4f4f5]" dir="rtl">
+    <div className="aani-notifications-page fixed inset-0 z-[150] overflow-hidden bg-[#0a0a0a] text-[#f4f4f5]" dir="rtl">
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="aani-notifications-title"
         className="relative z-[1] mx-auto flex h-full w-full max-w-[560px] flex-col border-x border-white/[0.04]"
       >
-        <header className="flex items-center justify-between border-b border-white/[0.07] px-4 pb-3" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
-          <button type="button" onClick={onClose} className="flex min-h-10 items-center gap-1.5 rounded-xl px-2 text-sm font-semibold text-[#e6a17b] transition hover:bg-white/[0.05] active:scale-[0.985]" aria-label="العودة للصفحة السابقة">
-            <ArrowRight size={19} />
-            <span>رجوع</span>
-          </button>
-          <h1 id="aani-notifications-title" className="flex items-center gap-2 text-lg font-bold">
-            <Bell size={18} className="text-[#e6a17b]" /> الإشعارات
+        <header className="relative flex min-h-[65px] shrink-0 items-center justify-center border-b border-white/[0.07] px-4" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
+          <h1 id="aani-notifications-title" dir="ltr" className="flex items-center gap-2 text-[21px] font-bold">
+            <Bell size={20} className="text-[#c98d73]" />
+            <span dir="rtl">الإشعارات</span>
           </h1>
-          <button type="button" onClick={onClose} className="grid h-10 w-10 place-items-center rounded-xl text-[#8e8e93] transition hover:bg-white/[0.05] hover:text-white" aria-label="إغلاق الإشعارات">
-            <X size={19} />
+          <button type="button" onClick={onClose} className="absolute right-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-[#8e8e93] transition hover:bg-white/[0.05] hover:text-white" aria-label="إغلاق الإشعارات">
+            <X size={22} />
           </button>
         </header>
 
         <div className="flex items-center justify-between gap-3 px-4 py-3">
-          <p className="text-xs text-[#8e8e93]">{unreadCount ? `${unreadCount} إشعارات غير مقروءة` : 'أنت على اطلاع بكل جديد'}</p>
-          <div className="flex shrink-0 items-center gap-3">
-            {visibleItems.some(item => !item.is_read) && (
-              <button type="button" onClick={() => void markAllRead()} disabled={updating} className="flex items-center gap-1 text-xs font-semibold text-[#e6a17b] disabled:opacity-50">
-                <CheckCheck size={14} /> {updating && !showSamples ? 'جارٍ التحديث…' : 'تحديد الكل كمقروء'}
-              </button>
-            )}
-            <button type="button" onClick={() => setShowSamples(value => !value)} className="rounded-full border border-[#e6a17b]/30 px-3 py-1.5 text-xs font-semibold text-[#e6a17b] transition hover:bg-[#e6a17b]/10">
-              {showSamples ? 'إخفاء النماذج' : 'عرض نماذج'}
-            </button>
-          </div>
+          <button type="button" onClick={() => setShowSamples(value => !value)} className="shrink-0 rounded-full border border-white/[0.18] px-3.5 py-1.5 text-xs font-medium text-[#a0a0a0] transition hover:bg-white/[0.05]">
+            {showSamples ? 'إخفاء النماذج' : 'عرض نماذج'}
+          </button>
+          <p className="text-left text-xs text-[#8e8e93]">أنت على اطلاع بكل جديد</p>
         </div>
 
         {showSamples && <p className="mx-4 mb-2 rounded-lg border border-[#e6a17b]/20 bg-[#e6a17b]/[0.06] px-3 py-2 text-xs text-[#e6a17b]">بيانات محلية للتجربة فقط، ولن تُحفظ في حسابك.</p>}
 
-        <div className="aani-notifications-list flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-1" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
+        <div className="aani-notifications-list flex flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain px-4 pb-6 pt-1" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
           {loading && !showSamples && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
           {!showSamples && error && <p role="alert" className="mb-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">{error}</p>}
           {!loading && !showSamples && !error && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">لا توجد إشعارات حالياً. يمكنك عرض النماذج لتجربة الأنواع والحالات.</p>}
