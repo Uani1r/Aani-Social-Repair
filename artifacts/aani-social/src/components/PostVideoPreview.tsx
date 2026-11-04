@@ -100,7 +100,7 @@ export default function PostVideoPreview({
       ref={videoRef}
       src={mediaSrc}
       controls={controls}
-      muted={muted || autoPlayWhenVisible}
+      muted={muted}
       autoPlay={autoPlay && !autoPlayWhenVisible}
       playsInline
       preload="metadata"

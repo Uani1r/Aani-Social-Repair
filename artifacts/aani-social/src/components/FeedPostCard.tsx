@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, ThumbsUp, X,
+  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, ThumbsUp, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 
@@ -81,6 +81,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [editContent, setEditContent] = useState(post.content || '');
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [videoMuted, setVideoMuted] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
   const repostBusyRef = useRef(false);
   const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
@@ -418,17 +419,31 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         <div className="relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800">
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
-              <div key={i} className="carousel-slide h-full">
+              <div key={i} className="carousel-slide relative h-full">
                 {post.type === 'reel' ? (
-                  <PostVideoPreview
-                    src={url}
-                    autoPlayWhenVisible
-                    tapToToggle
-                    loop
-                    controls={false}
-                    muted
-                    className="h-full w-full object-cover"
-                  />
+                  <>
+                    <PostVideoPreview
+                      src={url}
+                      autoPlayWhenVisible
+                      tapToToggle
+                      loop
+                      controls={false}
+                      muted={videoMuted}
+                      className="h-full w-full object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={event => {
+                        event.stopPropagation();
+                        setVideoMuted(value => !value);
+                      }}
+                      className="absolute bottom-3 left-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/65 text-white backdrop-blur transition hover:bg-black/80"
+                      aria-label={videoMuted ? 'تشغيل الصوت' : 'كتم الصوت'}
+                      aria-pressed={videoMuted}
+                    >
+                      {videoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                    </button>
+                  </>
                 ) : (
                   <PostImagePreview src={url} alt="" className="block h-full w-full select-none object-cover" />
                 )}
