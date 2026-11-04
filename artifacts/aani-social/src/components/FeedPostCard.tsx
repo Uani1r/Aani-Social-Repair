@@ -384,7 +384,6 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           open={showOptionsSheet}
           onOpenChange={setShowOptionsSheet}
           isOwner={post.user_id === currentUserId}
-          visibility={postVisibility}
           feedback={feedback}
           privacySaving={privacySaving}
           onEdit={() => {

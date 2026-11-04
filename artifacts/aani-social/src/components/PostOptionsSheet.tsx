@@ -4,13 +4,10 @@ import {
   EyeOff, Flag, LockKeyhole, MoreVertical, Pencil, Star, ThumbsUp, Trash2,
 } from 'lucide-react';
 
-import type { PostVisibility } from '@/lib/types';
-
 type PostOptionsSheetProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   isOwner: boolean;
-  visibility?: PostVisibility;
   feedback?: 'interested' | 'not_interested' | null;
   privacySaving?: boolean;
   onEdit: () => void;
@@ -25,7 +22,6 @@ export default function PostOptionsSheet({
   open,
   onOpenChange,
   isOwner,
-  visibility = 'public',
   feedback,
   privacySaving = false,
   onEdit,
@@ -119,92 +115,101 @@ export default function PostOptionsSheet({
             <span className="h-1 w-10 rounded-full bg-zinc-600" />
           </div>
 
-          <div className="space-y-2 pb-2">
+          <div className="space-y-2.5 pb-2">
             {isOwner ? (
               <>
                 <button
                   type="button"
+                  dir="ltr"
                   onClick={() => selectAction(onEdit)}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right transition hover:bg-white/[0.06]"
+                  className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] bg-[#252527] px-3 text-right transition hover:bg-[#303033]"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2c2c2e] text-zinc-100">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-zinc-100">
                     <Pencil size={19} />
                   </span>
-                  <span className="flex-1 text-sm font-semibold text-white">تعديل المنشور</span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">تعديل المنشور</span>
                 </button>
 
                 <button
                   type="button"
+                  dir="ltr"
                   onClick={() => selectAction(onTogglePrivacy)}
                   disabled={privacySaving}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right transition hover:bg-white/[0.06] disabled:opacity-60"
+                  aria-busy={privacySaving}
+                  className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] bg-[#252527] px-3 text-right transition hover:bg-[#303033] disabled:opacity-60"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2c2c2e] text-zinc-100">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-zinc-100">
                     <LockKeyhole size={19} />
                   </span>
-                  <span className="flex-1 text-right">
-                    <span className="block text-sm font-semibold text-white">تعديل الخصوصية</span>
-                    <span className="mt-0.5 block text-xs text-zinc-400">
-                      {privacySaving ? 'جارٍ الحفظ...' : visibility === 'private' ? 'خاص داخل آني' : 'عام — متاح للجميع'}
-                    </span>
-                  </span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">تعديل الخصوصية</span>
                 </button>
 
                 <button
                   type="button"
+                  dir="ltr"
                   onClick={() => selectAction(onPromote)}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right shadow-lg transition hover:brightness-110"
+                  className="flex min-h-[88px] w-full flex-row items-center justify-between gap-3 rounded-[14px] px-3 py-3 text-right shadow-lg transition hover:brightness-110"
                   style={{ background: 'linear-gradient(135deg, #6e8efb, #a777e3)' }}
                 >
-                  <Star size={22} fill="white" className="shrink-0 text-white" />
-                  <span className="min-w-0 flex-1 text-right">
-                    <span className="block text-sm font-bold text-white">تعزيز المنشور</span>
-                    <span className="mt-1 block text-xs leading-5 text-white/85">اجعل إبداعك يتصدر واجهة الجميع الآن</span>
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-white/20">
+                    <Star size={22} fill="white" className="text-white" />
                   </span>
-                  <span className="shrink-0 rounded-full bg-white/20 px-2 py-1 text-[10px] font-bold text-white">ترويج</span>
+                  <span dir="rtl" className="min-w-0 flex-1 text-right">
+                    <span className="block whitespace-nowrap text-sm font-bold text-white">تعزيز المنشور</span>
+                    <span className="mt-1 block truncate whitespace-nowrap text-xs leading-5 text-white/85">اجعل إبداعك يتصدر واجهة الجميع الآن</span>
+                  </span>
+                  <span dir="rtl" className="shrink-0 whitespace-nowrap rounded-full bg-white/20 px-2 py-1 text-[10px] font-bold text-white">ترويج</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => selectAction(onDelete)}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right transition hover:bg-[rgba(255,69,58,0.24)]"
-                  style={{ background: 'rgba(255, 69, 58, 0.15)', color: '#ff453a' }}
-                >
-                  <Trash2 size={19} className="shrink-0" />
-                  <span className="flex-1 text-sm font-semibold">حذف المنشور</span>
-                </button>
+                <div className="border-t border-white/10 pt-2">
+                  <button
+                    type="button"
+                    dir="ltr"
+                    onClick={() => selectAction(onDelete)}
+                    className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] px-3 text-right transition hover:bg-[rgba(255,59,48,0.2)]"
+                    style={{ background: 'rgba(255, 59, 48, 0.12)', color: '#ff453a' }}
+                  >
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[rgba(255,69,58,0.18)]">
+                      <Trash2 size={19} />
+                    </span>
+                    <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold">حذف المنشور</span>
+                  </button>
+                </div>
               </>
             ) : (
               <>
                 <button
                   type="button"
+                  dir="ltr"
                   onClick={() => selectAction(onReport)}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right transition hover:bg-white/[0.06]"
+                  className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] bg-[#252527] px-3 text-right transition hover:bg-[#303033]"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2c2c2e] text-red-400">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-red-400">
                     <Flag size={18} />
                   </span>
-                  <span className="flex-1 text-sm font-semibold text-red-400">إبلاغ عن المنشور</span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-red-400">إبلاغ عن المنشور</span>
                 </button>
                 <button
                   type="button"
+                  dir="ltr"
                   onClick={() => selectAction(() => onFeedback('interested'))}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right transition hover:bg-white/[0.06]"
+                  className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] bg-[#252527] px-3 text-right transition hover:bg-[#303033]"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2c2c2e] text-zinc-100">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-zinc-100">
                     <ThumbsUp size={18} />
                   </span>
-                  <span className="flex-1 text-sm font-semibold text-white">{feedback === 'interested' ? 'إلغاء مهتم' : 'مهتم'}</span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">{feedback === 'interested' ? 'إلغاء مهتم' : 'مهتم'}</span>
                 </button>
                 <button
                   type="button"
+                  dir="ltr"
                   onClick={() => selectAction(() => onFeedback('not_interested'))}
-                  className="flex w-full flex-row-reverse items-center gap-3 rounded-2xl px-3 py-3 text-right transition hover:bg-white/[0.06]"
+                  className="flex h-16 w-full flex-row items-center justify-between gap-3 rounded-[14px] bg-[#252527] px-3 text-right transition hover:bg-[#303033]"
                 >
-                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2c2c2e] text-zinc-100">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[10px] bg-[#38383a] text-zinc-100">
                     <EyeOff size={18} />
                   </span>
-                  <span className="flex-1 text-sm font-semibold text-white">{feedback === 'not_interested' ? 'إلغاء غير مهتم' : 'غير مهتم'}</span>
+                  <span dir="rtl" className="flex-1 whitespace-nowrap text-right text-sm font-semibold text-white">{feedback === 'not_interested' ? 'إلغاء غير مهتم' : 'غير مهتم'}</span>
                 </button>
               </>
             )}
