@@ -282,10 +282,10 @@ export default function Shell({
 
     const target = event.target as HTMLElement | null;
     const reelVideo = target?.closest('.reel-slide video:not([controls])');
-    const searchInput = path === '/search' && target?.closest('.searchbox input');
+    const isSearchPage = path === '/search';
 
-    // احتفظ بإيماءة الريلز وبحث المستخدم، مع احترام بقية المناطق ذات الإيماءات الأفقية
-    if (isHorizontalGestureArea(target) && !reelVideo && !searchInput) {
+    // اسمح بالسحب من أي موضع في البحث، مع الحفاظ على المناطق التفاعلية في بقية الصفحات
+    if (!isSearchPage && isHorizontalGestureArea(target) && !reelVideo) {
       swipeStartRef.current = null;
       return;
     }
@@ -354,10 +354,10 @@ export default function Shell({
       return;
     }
 
-    // مقاومة عند حدود البداية والنهاية: السحب لليسار يقدّم، والسحب لليمين يرجع
+    // مقاومة عند الحدود: السحب من اليسار إلى اليمين يقدّم، ومن اليمين إلى اليسار يرجع
     const index = getRouteIndex(path);
-    const atForwardLimit = index >= swipeRoutes.length - 1 && deltaX < 0;
-    const atBackwardLimit = index <= 0 && deltaX > 0;
+    const atForwardLimit = index >= swipeRoutes.length - 1 && deltaX > 0;
+    const atBackwardLimit = index <= 0 && deltaX < 0;
 
     setMainOffset(atForwardLimit || atBackwardLimit ? deltaX * 0.25 : deltaX, false);
   };
@@ -382,8 +382,8 @@ export default function Shell({
       const index = getRouteIndex(path);
 
       if (index >= 0) {
-        // السحب من اليمين إلى اليسار (deltaX < 0) يقدّم للأمام، ومن اليسار لليمين يرجع
-        const goingForward = start.dx < 0;
+        // السحب من اليسار إلى اليمين (deltaX > 0) يقدّم، ومن اليمين إلى اليسار يرجع
+        const goingForward = start.dx > 0;
         const nextIndex = goingForward ? index + 1 : index - 1;
 
         if (nextIndex >= 0 && nextIndex < swipeRoutes.length) {
@@ -586,10 +586,14 @@ export default function Shell({
                 ? 'page-slide-backward'
                 : ''
           }`}
-          onTouchStart={handleSwipeStart}
-          onTouchMove={handleSwipeMove}
-          onTouchEnd={handleSwipeEnd}
-          onTouchCancel={handleSwipeEnd}
+          onTouchStart={path === '/search' ? undefined : handleSwipeStart}
+          onTouchMove={path === '/search' ? undefined : handleSwipeMove}
+          onTouchEnd={path === '/search' ? undefined : handleSwipeEnd}
+          onTouchCancel={path === '/search' ? undefined : handleSwipeEnd}
+          onTouchStartCapture={path === '/search' ? handleSwipeStart : undefined}
+          onTouchMoveCapture={path === '/search' ? handleSwipeMove : undefined}
+          onTouchEndCapture={path === '/search' ? handleSwipeEnd : undefined}
+          onTouchCancelCapture={path === '/search' ? handleSwipeEnd : undefined}
         >
           {children}
         </main>
