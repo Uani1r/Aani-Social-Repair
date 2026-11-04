@@ -81,6 +81,7 @@ export default function Shell({
       document.body.scrollTop || 0,
     );
     const pauseFeedVideos = () => window.dispatchEvent(new Event('aani:pause-feed-videos'));
+    const resumeFeedVideos = () => window.dispatchEvent(new Event('aani:resume-feed-videos'));
 
     if (modalOpen) {
       if (isFeedPath()) modalScrollTopRef.current = getScrollTop();
@@ -104,22 +105,15 @@ export default function Shell({
         return;
       }
 
-      if (modalScrollTopRef.current === null) return;
-      if (!isFeedPath()) {
-        modalScrollTopRef.current = null;
-        return;
-      }
-
       modalRestoreFrameRef.current = window.requestAnimationFrame(() => {
         modalRestoreFrameRef.current = window.requestAnimationFrame(() => {
           modalRestoreFrameRef.current = null;
-          if (!isFeedPath()) {
-            modalScrollTopRef.current = null;
-            return;
-          }
           const savedScrollTop = modalScrollTopRef.current;
           modalScrollTopRef.current = null;
-          if (savedScrollTop !== null) window.scrollTo({ top: savedScrollTop, behavior: 'auto' });
+          if (isFeedPath() && savedScrollTop !== null) {
+            window.scrollTo({ top: savedScrollTop, behavior: 'auto' });
+          }
+          resumeFeedVideos();
         });
       });
     });

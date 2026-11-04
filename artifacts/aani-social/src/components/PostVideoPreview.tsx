@@ -40,12 +40,13 @@ export default function PostVideoPreview({
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const manuallyPausedRef = useRef(false);
+  const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
   const timeRange = parseVideoTimeRange(src);
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
   const mediaSrc = stripVideoEditFragment(src);
   const [isPlaying, setIsPlaying] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(false);
-  const [videoMuted, setVideoMuted] = useState(muted);
+  const [videoMuted, setVideoMuted] = useState(feedVideo ? false : muted);
   const [currentTime, setCurrentTime] = useState(timeRange?.start ?? 0);
   const [videoDuration, setVideoDuration] = useState(0);
   const rangeStart = timeRange?.start ?? 0;
@@ -57,22 +58,43 @@ export default function PostVideoPreview({
   const displayCurrentTime = Math.max(0, safeCurrentTime - rangeStart);
 
   useEffect(() => {
-    setVideoMuted(muted);
-  }, [muted]);
+    if (!feedVideo) setVideoMuted(muted);
+  }, [feedVideo, muted]);
 
   useEffect(() => {
     if (!feedVideo) return;
     const pauseAndMute = () => {
       const video = videoRef.current;
       if (!video) return;
+      if (!modalPlaybackStateRef.current) {
+        modalPlaybackStateRef.current = {
+          wasPlaying: !video.paused,
+          wasMuted: video.muted,
+          wasManuallyPaused: manuallyPausedRef.current,
+        };
+      }
       manuallyPausedRef.current = true;
       video.muted = true;
       setVideoMuted(true);
       video.pause();
     };
+    const resumeAfterModal = () => {
+      const video = videoRef.current;
+      const previousState = modalPlaybackStateRef.current;
+      if (!video || !previousState) return;
+      modalPlaybackStateRef.current = null;
+      video.muted = previousState.wasMuted;
+      setVideoMuted(previousState.wasMuted);
+      manuallyPausedRef.current = previousState.wasManuallyPaused;
+      if (previousState.wasPlaying) void video.play().catch(() => undefined);
+    };
     window.addEventListener('aani:pause-feed-videos', pauseAndMute);
+    window.addEventListener('aani:resume-feed-videos', resumeAfterModal);
     if (hasOpenFeedDialog()) pauseAndMute();
-    return () => window.removeEventListener('aani:pause-feed-videos', pauseAndMute);
+    return () => {
+      window.removeEventListener('aani:pause-feed-videos', pauseAndMute);
+      window.removeEventListener('aani:resume-feed-videos', resumeAfterModal);
+    };
   }, [feedVideo]);
 
   useEffect(() => {
