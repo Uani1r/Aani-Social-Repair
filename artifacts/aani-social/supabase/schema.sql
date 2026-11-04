@@ -53,6 +53,7 @@ create table if not exists public.posts (
   post_metadata jsonb not null default '[]'::jsonb,
   media_url text,
   type text not null default 'text',
+  destination text not null default 'feed',
   visibility text not null default 'public',
   created_at timestamptz not null default now()
 );
@@ -61,6 +62,10 @@ alter table public.posts add column if not exists media_url text;
 alter table public.posts add column if not exists visibility text not null default 'public';
 alter table public.posts add column if not exists post_metadata jsonb not null default '[]'::jsonb;
 alter table public.posts add column if not exists type text not null default 'text';
+alter table public.posts add column if not exists destination text not null default 'feed';
+update public.posts
+set destination = 'reels'
+where type = 'reel' and destination = 'feed';
 alter table public.posts alter column content set default '';
 
 -- The previous schema required non-empty text and capped it at 500 characters.
@@ -85,6 +90,10 @@ alter table public.posts drop constraint if exists posts_type_check;
 alter table public.posts
   add constraint posts_type_check
   check (type in ('text', 'photo', 'reel'));
+alter table public.posts drop constraint if exists posts_destination_check;
+alter table public.posts
+  add constraint posts_destination_check
+  check (destination in ('feed', 'reels') and (destination <> 'reels' or type = 'reel'));
 alter table public.posts drop constraint if exists posts_visibility_check;
 alter table public.posts
   add constraint posts_visibility_check
@@ -101,6 +110,8 @@ create index if not exists posts_created_at_idx
   on public.posts (created_at desc);
 create index if not exists posts_user_created_at_idx
   on public.posts (user_id, created_at desc);
+create index if not exists posts_destination_created_at_idx
+  on public.posts (destination, created_at desc);
 
 create table if not exists public.likes (
   post_id uuid not null references public.posts (id) on delete cascade,
@@ -1121,7 +1132,7 @@ alter table public.posts add constraint posts_allowed_commenters_no_nulls_check
 -- ordinary post fields to remain readable by authenticated users.
 revoke select on table public.posts from public, anon, authenticated;
 grant select (
-  id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at,
+  id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at,
   likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title,
   hide_likes, hide_comments, comment_privacy
 ) on table public.posts to authenticated;
