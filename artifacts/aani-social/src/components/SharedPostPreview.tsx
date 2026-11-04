@@ -7,6 +7,7 @@ import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { postShareUrl } from '@/lib/interactions';
 import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile } from '@/lib/types';
 import PostMetadataChips from '@/components/PostMetadataChips';
+import PostImagePreview from '@/components/PostImagePreview';
 
 export default function SharedPostPreview({ content, postId }: { content?: string | null; postId?: string | null }) {
   const match = (content || '').match(/^\[post:(\S+)\]([\s\S]*)$/);
@@ -127,7 +128,7 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
               className="h-full w-full object-cover"
             />
           ) : info?.media ? (
-            <img src={info.media} alt="" className="h-full w-full object-cover" />
+            <PostImagePreview src={info.media} alt="" className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-pink-600/25 to-violet-600/25 p-3">
               <p className="line-clamp-5 text-center text-[11px] leading-5 text-zinc-100">

@@ -9,6 +9,7 @@ import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
+import PostImagePreview from './PostImagePreview';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -400,7 +401,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                 {post.type === 'reel' ? (
                   <video src={url} controls className="w-full max-h-[28rem] object-cover" />
                 ) : (
-                  <img src={url} alt="" className="w-full max-h-[28rem] object-cover select-none" />
+                  <PostImagePreview src={url} alt="" className="w-full max-h-[28rem] object-cover select-none" />
                 )}
               </div>
             ))}

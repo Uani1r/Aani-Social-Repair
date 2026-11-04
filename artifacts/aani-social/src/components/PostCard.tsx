@@ -6,6 +6,7 @@ import type { Post } from '../lib/types';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
+import PostImagePreview from './PostImagePreview';
 
 export interface PostCardProps {
   post: Post;
@@ -95,7 +96,7 @@ export default function PostCard({
       {/* مرفق الصورة */}
       {post.media_url && (
         <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800">
-          <img
+          <PostImagePreview
             src={post.media_url}
             alt="مرفق المنشور"
             className="max-h-96 w-full object-cover"
