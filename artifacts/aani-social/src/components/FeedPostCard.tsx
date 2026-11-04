@@ -8,6 +8,7 @@ import Avatar from './Avatar';
 import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
+import ExpandablePostText from './ExpandablePostText';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -15,7 +16,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import { recordShare } from '@/lib/interactions';
+import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
 
 type FeedPostComment = {
@@ -78,12 +79,11 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
-  const likeBusyRef = useRef(false);
   const repostBusyRef = useRef(false);
+  const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
+  const likesCount = post.likes_count ?? post.likes?.length ?? 0;
 
   // Optimistic UI states
-  const [liked, setLiked] = useState(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
-  const [likesCount, setLikesCount] = useState(post.likes_count ?? post.likes?.length ?? 0);
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
   const [bookmarked, setBookmarked] = useState(post.saved_by_me ?? false);
   const [isAnimating, setIsAnimating] = useState(false);
@@ -97,24 +97,20 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
   // مزامنة أعلام التفاعل فقط عند تغيّرها فعليًا (وليس مع كل تحديث للعدّادات)
   useEffect(() => {
-    setLiked(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
     setReposted(post.reposted_by_me ?? false);
     setBookmarked(post.saved_by_me ?? false);
     setFeedback(post.feedback_by_me || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.liked_by_me, post.reposted_by_me, post.saved_by_me, post.feedback_by_me, currentUserId]);
+  }, [post.id, post.reposted_by_me, post.saved_by_me, post.feedback_by_me]);
 
-  // العدّادات من قاعدة البيانات، مع عدم إرباك ضغطة المستخدم أثناء تنفيذ الطلب
+  // Keep the non-like counters synchronized with the post data.
   useEffect(() => {
-    if (!likeBusyRef.current) {
-      setLikesCount(post.likes_count ?? post.likes?.length ?? 0);
-    }
     if (!repostBusyRef.current) {
       setRepostsCount(post.reposts_count || 0);
     }
     setCommentsCount(post.comments_count || 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.likes_count, post.reposts_count, post.comments_count]);
+  }, [post.id, post.reposts_count, post.comments_count]);
 
   // عدّاد التعليقات: تحديث فوري من نافذة التعليقات (Optimistic UI) دون إعادة تحميل
   useEffect(() => {
@@ -142,43 +138,10 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     el.scrollTo({ left: -i * el.clientWidth, behavior: 'smooth' });
   };
 
-  const toggleLike = async () => {
-    // حماية من الضغطات السريعة المتتالية (تمنع القفز من 0 إلى 3)
-    if (likeBusyRef.current) return;
-
-    const prevLiked = liked;
-    const prevCount = likesCount;
-    const nextLiked = !prevLiked;
-
-    likeBusyRef.current = true;
-    setLiked(nextLiked);
-    setLikesCount(Math.max(0, prevCount + (nextLiked ? 1 : -1)));
+  const toggleLike = () => {
     setIsAnimating(true);
     setTimeout(() => setIsAnimating(false), 450);
-
-    if (!supabaseConfigured) {
-      setLiked(prevLiked);
-      setLikesCount(prevCount);
-      likeBusyRef.current = false;
-      return;
-    }
-
-    try {
-      if (prevLiked) {
-        const { error } = await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        // لا يوجد صف إعجاب = الحالة المطلوبة أصلًا
-        if (error && error.code !== 'PGRST116') throw error;
-      } else {
-        const { error } = await supabase.from('likes').insert({ post_id: post.id, user_id: currentUserId });
-        // إعجاب مسجّل مسبقًا = الحالة المطلوبة أصلًا (لا تراجع عن الواجهة)
-        if (error && error.code !== '23505') throw error;
-      }
-    } catch {
-      setLiked(prevLiked);
-      setLikesCount(prevCount);
-    } finally {
-      likeBusyRef.current = false;
-    }
+    void togglePostLike(post, currentUserId);
   };
 
   const toggleRepost = async () => {
@@ -421,9 +384,10 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       </header>
 
       {post.content && (
-        <p className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed">
-          {post.content}
-        </p>
+        <ExpandablePostText
+          text={post.content}
+          className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed"
+        />
       )}
       <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
 

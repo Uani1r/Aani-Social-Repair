@@ -7,39 +7,30 @@ import Avatar from '@/components/Avatar';
 import ShareSheet from '@/components/ShareSheet';
 import UserIdentity from '@/components/UserIdentity';
 import PostMetadataChips from '@/components/PostMetadataChips';
-import { recordShare } from '@/lib/interactions';
+import ExpandablePostText from '@/components/ExpandablePostText';
+import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Post } from '@/lib/types';
 
 export default function ReelSlide({ post, currentUserId, onOpenComments }: { post: Post; currentUserId: string; onOpenComments: (postId: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
-  const likeBusyRef = useRef(false);
   const [playing, setPlaying] = useState(false);
-  const [liked, setLiked] = useState(post.liked_by_me ?? (post.likes || []).some(l => l.user_id === currentUserId));
-  const [likesCount, setLikesCount] = useState(post.likes_count ?? post.likes?.length ?? 0);
+  const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
+  const likesCount = post.likes_count ?? post.likes?.length ?? 0;
   const [saved, setSaved] = useState(post.saved_by_me ?? false);
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
 
-  // مزامنة أعلام التفاعل فقط عند تغيّرها فعليًا (وليس مع كل تحديث للعدّادات)
+  // مزامنة أعلام التفاعل غير المعتمدة على مخزن التفاعلات
   useEffect(() => {
-    setLiked(post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId));
     setSaved(post.saved_by_me ?? false);
     setReposted(post.reposted_by_me ?? false);
     setFeedback(post.feedback_by_me || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.liked_by_me, post.reposted_by_me, post.saved_by_me, post.feedback_by_me, currentUserId]);
-
-  // عدّاد الإعجاب من قاعدة البيانات، مع عدم إرباك الضغطة أثناء تنفيذ الطلب
-  useEffect(() => {
-    if (!likeBusyRef.current) {
-      setLikesCount(post.likes_count ?? post.likes?.length ?? 0);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.likes_count]);
+  }, [post.id, post.reposted_by_me, post.saved_by_me, post.feedback_by_me]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -76,37 +67,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
     }
   };
 
-  const toggleLike = async () => {
-    // حماية من الضغطات السريعة المتتالية
-    if (likeBusyRef.current) return;
-
-    const prevLiked = liked;
-    const prevCount = likesCount;
-    likeBusyRef.current = true;
-    setLiked(!prevLiked);
-    setLikesCount(Math.max(0, prevLiked ? prevCount - 1 : prevCount + 1));
-
-    if (!supabaseConfigured) {
-      likeBusyRef.current = false;
-      return;
-    }
-
-    try {
-      if (prevLiked) {
-        const { error } = await supabase.from('likes').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        // لا يوجد صف إعجاب = الحالة المطلوبة أصلًا
-        if (error && error.code !== 'PGRST116') throw error;
-      } else {
-        const { error } = await supabase.from('likes').insert({ post_id: post.id, user_id: currentUserId });
-        // إعجاب مسجّل مسبقًا = الحالة المطلوبة أصلًا (لا تراجع عن الواجهة)
-        if (error && error.code !== '23505') throw error;
-      }
-    } catch {
-      setLiked(prevLiked);
-      setLikesCount(prevCount);
-    } finally {
-      likeBusyRef.current = false;
-    }
+  const toggleLike = () => {
+    void togglePostLike(post, currentUserId);
   };
 
   const toggleBookmark = async () => {
@@ -210,7 +172,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
                 usernameClassName="text-xs text-zinc-300"
               />
             </div>
-            {post.content && <p className="text-sm leading-snug line-clamp-3">{post.content}</p>}
+            {post.content && (
+              <ExpandablePostText text={post.content} className="text-sm leading-snug" />
+            )}
             <PostMetadataChips tags={post.post_metadata || []} className="mt-2" />
           </div>
         </div>

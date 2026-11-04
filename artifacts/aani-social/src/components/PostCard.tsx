@@ -5,6 +5,7 @@ import { usePostInteractions } from '../lib/interactions';
 import type { Post } from '../lib/types';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
+import ExpandablePostText from './ExpandablePostText';
 
 export interface PostCardProps {
   post: Post;
@@ -84,9 +85,10 @@ export default function PostCard({
 
       {/* محتوى المنشور */}
       {post.content && (
-        <p className="mt-3 text-sm leading-6 text-zinc-200 whitespace-pre-line">
-          {post.content}
-        </p>
+        <ExpandablePostText
+          text={post.content}
+          className="mt-3 text-sm leading-6 text-zinc-200"
+        />
       )}
       <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
 

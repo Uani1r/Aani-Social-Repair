@@ -57,9 +57,13 @@ export function isPending(postId: string, userId: string): boolean {
 
 export function markPending(postId: string, userId: string, delta: number): void {
   const key = keyOf(postId, userId);
-  const next = (pendingWrites.get(key) ?? 0) + delta;
-  if (next <= 0) pendingWrites.delete(key);
+  const current = pendingWrites.get(key) ?? 0;
+  const next = Math.max(0, current + delta);
+  if (next === current) return;
+
+  if (next === 0) pendingWrites.delete(key);
   else pendingWrites.set(key, next);
+  emit();
 }
 
 export function readCache(

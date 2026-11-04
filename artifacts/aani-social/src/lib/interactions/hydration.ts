@@ -279,8 +279,9 @@ async function fetchFallbackSummaries(
     const summary = summaries.get(postId) ?? { postId };
     const row = counters.get(postId);
 
-    summary.likes = optionalNumber(row?.likes_count) ??
-      (querySucceeded(likes) ? likeCounts.get(postId) ?? 0 : undefined);
+    summary.likes = querySucceeded(likes)
+      ? likeCounts.get(postId) ?? 0
+      : optionalNumber(row?.likes_count);
     summary.comments = optionalNumber(row?.comments_count) ??
       (querySucceeded(comments) ? commentCounts.get(postId) ?? 0 : undefined);
     summary.reposts = optionalNumber(row?.reposts_count) ??
