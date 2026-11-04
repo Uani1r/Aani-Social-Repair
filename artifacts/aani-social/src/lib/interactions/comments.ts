@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Post, Profile } from "../types";
 import { buildCommentTree } from "../comments/tree";
+import { handleAppError } from "../appErrors";
 import { storageBucket, supabase, supabaseConfigured } from "../supabase";
 import {
   attachCommentAuthors,
@@ -416,7 +417,11 @@ export function usePostComments(
       )
       .subscribe((status) => {
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          console.warn(`[comments] realtime channel ${status}`);
+          handleAppError(
+            'فشل تحديث التعليقات مباشرة',
+            new Error(`Comments realtime channel ${status}`),
+            'تعذر تحديث التعليقات مباشرة. تحقق من الاتصال.',
+          );
         }
       });
 

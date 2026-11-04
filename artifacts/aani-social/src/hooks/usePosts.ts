@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/interactions';
+import { handleAppError } from '@/lib/appErrors';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type PostRow, type Profile } from '@/lib/types';
 
@@ -285,7 +286,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       setError(isPostsPermissionError(caughtError)
         ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
         : 'تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
-      console.error('[usePosts] Failed to load posts:', caughtError);
+      handleAppError(
+        'فشل تحميل المنشورات',
+        caughtError,
+        'تعذر تحميل المنشورات. راجع التفاصيل التشخيصية ثم أعد المحاولة.',
+      );
     } finally {
       setLoading(false);
     }

@@ -5,6 +5,9 @@ import {
   type ReactNode,
 } from 'react';
 
+import GlobalErrorToast from '@/components/GlobalErrorToast';
+import { handleAppError } from '@/lib/appErrors';
+
 export interface ErrorFallbackProps {
   error: Error;
   resetError: () => void;
@@ -38,6 +41,7 @@ function toError(value: unknown): Error {
 function DefaultFallback({ error, resetError }: ErrorFallbackProps) {
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-gray-50 p-6">
+      <GlobalErrorToast />
       <div className="max-w-lg w-full text-center">
         <h1 className="text-xl font-semibold text-gray-900">
           Something went wrong
@@ -75,10 +79,11 @@ export class ErrorBoundary extends Component<
   }
 
   componentDidCatch(error: unknown, info: ErrorInfo): void {
-    console.error(
-      'ErrorBoundary caught an error:',
-      toError(error),
-      info.componentStack,
+    const normalizedError = toError(error);
+    handleAppError(
+      'تعطل جزء من التطبيق',
+      { message: normalizedError.message, details: info.componentStack || '' },
+      'حدث خطأ غير متوقع. أعد المحاولة.',
     );
   }
 

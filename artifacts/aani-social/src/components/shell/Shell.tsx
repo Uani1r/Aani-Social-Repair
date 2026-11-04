@@ -5,6 +5,7 @@ import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import ShellTopBar from './ShellTopBar';
 import { isHorizontalGestureArea } from '@/lib/appShared';
+import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -743,19 +744,21 @@ export default function Shell({
         }
 
         if (postError) {
+          handleAppError('فشل حفظ المنشور', postError, 'تعذر حفظ المنشور. راجع التفاصيل التشخيصية.');
+          let publishError: Error;
           if (isPostsPermissionError(postError)) {
-            throw new Error('رفضت قاعدة البيانات حفظ المنشور بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated؛ لم يتم تجاوز الحماية.');
+            publishError = new Error('رفضت قاعدة البيانات حفظ المنشور بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated؛ لم يتم تجاوز الحماية.');
+          } else if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
+            publishError = new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
+          } else if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('destination')) {
+            publishError = new Error('يجب تطبيق الترحيل 20261126000000_post_destinations.sql على Supabase لفصل منشورات الواجهة عن الريلز.');
+          } else if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
+            publishError = new Error('قاعدة البيانات تستخدم قيدًا قديمًا للمنشورات. طبّق الترحيل 20261122000000_post_metadata_chips.sql على Supabase ثم أعد المحاولة.');
+          } else {
+            publishError = new Error(`فشل حفظ المنشور: ${postError.message}`);
           }
-          if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
-            throw new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
-          }
-          if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('destination')) {
-            throw new Error('يجب تطبيق الترحيل 20261126000000_post_destinations.sql على Supabase لفصل منشورات الواجهة عن الريلز.');
-          }
-          if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
-            throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا للمنشورات. طبّق الترحيل 20261122000000_post_metadata_chips.sql على Supabase ثم أعد المحاولة.');
-          }
-          throw new Error(`فشل حفظ المنشور: ${postError.message}`);
+          markAppErrorReported(publishError);
+          throw publishError;
         }
 
         updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
@@ -765,6 +768,9 @@ export default function Shell({
           window.dispatchEvent(new Event('aani:post-created'));
         }, 1200);
       } catch (error) {
+        if (!wasAppErrorReported(error)) {
+          handleAppError('فشل نشر المنشور', error, 'تعذر نشر المنشور. راجع التفاصيل التشخيصية ثم أعد المحاولة.');
+        }
         const message = error instanceof Error ? error.message : 'حدث خطأ غير متوقع أثناء النشر.';
         updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
       } finally {

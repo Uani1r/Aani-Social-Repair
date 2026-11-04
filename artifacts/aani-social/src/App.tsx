@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
+import GlobalErrorToast from '@/components/GlobalErrorToast';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
 import NotificationsModal from '@/components/NotificationsModal';
@@ -16,9 +17,13 @@ import ProfilePage from '@/pages/ProfilePage';
 import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
 import useAppSession from '@/hooks/useAppSession';
+import { handleAppError, installSupabaseErrorInterceptor } from '@/lib/appErrors';
+import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import '@/index.css';
+
+installSupabaseErrorInterceptor(supabase);
 
 function App() {
   const { authLoading, user, profile, setProfile, signOut } = useAppSession();
@@ -29,7 +34,33 @@ function App() {
   const [pendingProfileStoryOwnerId, setPendingProfileStoryOwnerId] = useState<string | null>(null);
   const clearPendingProfileStory = useCallback(() => setPendingProfileStoryOwnerId(null), []);
 
-  if (authLoading) return <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>;
+  useEffect(() => {
+    const handleWindowError = (event: ErrorEvent) => {
+      if (event.error) {
+        handleAppError('خطأ غير معالج في التطبيق', event.error, 'حدث خطأ غير متوقع. أعد المحاولة.');
+      }
+    };
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      handleAppError('فشل إجراء غير مكتمل', event.reason, 'تعذر إتمام العملية. راجع التفاصيل التشخيصية.');
+    };
+
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => {
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
+  if (authLoading) {
+    return (
+      <>
+        <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
+        <GlobalErrorToast />
+        <Toaster position="top-center" duration={10000} theme="dark" />
+      </>
+    );
+  }
 
   return (
     <TooltipProvider>
@@ -136,6 +167,7 @@ function App() {
           </Switch>
         )}
       </WouterRouter>
+      <GlobalErrorToast />
       <Toaster position="top-center" duration={10000} theme="dark" />
     </TooltipProvider>
   );

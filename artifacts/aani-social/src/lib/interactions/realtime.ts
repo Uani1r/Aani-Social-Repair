@@ -3,6 +3,7 @@ import type {
   RealtimeChannel,
   RealtimePostgresChangesPayload,
 } from "@supabase/supabase-js";
+import { handleAppError } from "../appErrors";
 import { supabase, supabaseConfigured } from "../supabase";
 import { hydratePostIds, hydrateSavesCount } from "./hydration";
 import { patchCache } from "./store";
@@ -73,7 +74,11 @@ function buildChannel(userId: string): { dispose: () => void } {
 
   channel.subscribe((status) => {
     if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-      console.warn(`[interactions] realtime channel ${status}`);
+      handleAppError(
+        'فشل تحديث التفاعلات المباشرة',
+        new Error(`Realtime channel ${status}`),
+        'تعذر تحديث الإعجابات والتعليقات مباشرة. تحقق من الاتصال.',
+      );
     }
   });
 

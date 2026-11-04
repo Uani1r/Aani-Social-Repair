@@ -21,6 +21,7 @@ import {
   uploadCommentImage,
   type CommentWithDetails,
 } from '../lib/interactions';
+import { handleAppError } from '../lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
 import { extractMentions, findActiveMention, type MentionQuery } from '../lib/mentions';
 
@@ -374,15 +375,12 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         refreshForReaction,
       )
       .subscribe((status, error) => {
-        if (error) {
-          console.error(
-            'Comments realtime subscription error:',
-            getErrorDetails(error),
+        if (error || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          handleAppError(
+            'فشل تحديث التعليقات مباشرة',
+            error || new Error(`Comments realtime channel ${status}`),
+            'تعذر تحديث التعليقات مباشرة. تحقق من الاتصال.',
           );
-        }
-
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.error('Comments realtime channel status:', status);
         }
       });
 
