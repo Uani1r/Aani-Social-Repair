@@ -7,7 +7,7 @@ import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import VideoPreviewModal from '@/components/VideoPreviewModal';
 import SettingsModal from '@/components/SettingsModal';
-import type { PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import type { PostDestination, PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 
 import type { NotificationsModalProps } from './types';
 
@@ -35,12 +35,14 @@ type ShellOverlayControlsProps = {
   postText: string;
   selectedFiles: File[];
   fileType: 'image' | 'video' | null;
+  destination: PostDestination;
+  onDestinationChange: (destination: PostDestination) => void;
   filePreviews: { file: File; url: string }[];
   isSubmitting: boolean;
   createError: string;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tags: PostMetadataTag[]) => void;
+  onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
   onCloseCreatePost: () => void;
   showSettingsModal: boolean;
   onCloseSettings: () => void;
@@ -79,6 +81,8 @@ export default function ShellOverlayControls({
   postText,
   selectedFiles,
   fileType,
+  destination,
+  onDestinationChange,
   filePreviews,
   isSubmitting,
   createError,
@@ -135,6 +139,8 @@ export default function ShellOverlayControls({
           postText={postText}
           selectedFiles={selectedFiles}
           fileType={fileType}
+          destination={destination}
+          onDestinationChange={onDestinationChange}
           filePreviews={filePreviews}
           videoTrim={videoTrim}
           videoCrop={videoCrop}

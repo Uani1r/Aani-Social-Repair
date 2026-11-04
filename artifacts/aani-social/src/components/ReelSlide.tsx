@@ -1,22 +1,42 @@
-import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
 import {
-  Bookmark, EyeOff, Flag, Heart, MessageSquare, MoreVertical, Play, Repeat, Send, ThumbsUp,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageSquare, Play, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import EditPostSheet from '@/components/EditPostSheet';
+import PostOptionsSheet from '@/components/PostOptionsSheet';
+import PostPrivacySheet from '@/components/PostPrivacySheet';
 import ShareSheet from '@/components/ShareSheet';
 import UserIdentity from '@/components/UserIdentity';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
-import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, type Post } from '@/lib/types';
+import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
-export default function ReelSlide({ post, currentUserId, onOpenComments }: { post: Post; currentUserId: string; onOpenComments: (postId: string) => void }) {
+const hasOpenFeedDialog = () => typeof document !== 'undefined' && Boolean(document.querySelector(
+  '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+));
+
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending }: {
+  post: Post;
+  currentUserId: string;
+  onOpenComments: (postId: string) => void;
+  onRefresh: () => void;
+  pendingState?: PendingPost;
+  onRetryPending?: () => void;
+  onDismissPending?: () => void;
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
+  const manuallyPausedRef = useRef(false);
+  const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
   const [playing, setPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
   const mediaUrl = post.media_url || '';
   const videoTimeRange = parseVideoTimeRange(mediaUrl);
   const videoCropTransform = getVideoCropTransform(parseVideoCrop(mediaUrl));
@@ -28,8 +48,13 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
   const [saved, setSaved] = useState(post.saved_by_me ?? false);
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
+  const [showOptionsSheet, setShowOptionsSheet] = useState(false);
+  const [showEditSheet, setShowEditSheet] = useState(false);
+  const [showPrivacySheet, setShowPrivacySheet] = useState(false);
+  const [editContent, setEditContent] = useState(post.content || '');
+  const [replacementFile, setReplacementFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
 
   // مزامنة أعلام التفاعل غير المعتمدة على مخزن التفاعلات
   useEffect(() => {
@@ -42,33 +67,71 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
   useEffect(() => {
     const video = videoRef.current;
     const container = containerRef.current;
-    if (!video || !container) return;
+    if (!video || !container || typeof IntersectionObserver === 'undefined') return;
 
     const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
+      entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
             video.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
-          } else {
+          } else if (!entry.isIntersecting) {
             video.pause();
             setPlaying(false);
+            if (!hasOpenFeedDialog()) manuallyPausedRef.current = false;
           }
         });
       },
-      { threshold: 0.6 }
+      { threshold: 0.6 },
     );
 
     observer.observe(container);
     return () => observer.disconnect();
+  }, [videoSrc]);
+
+  useEffect(() => {
+    const pauseAndMute = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (!modalPlaybackStateRef.current) {
+        modalPlaybackStateRef.current = {
+          wasPlaying: !video.paused,
+          wasMuted: video.muted,
+          wasManuallyPaused: manuallyPausedRef.current,
+        };
+      }
+      manuallyPausedRef.current = true;
+      video.muted = true;
+      setMuted(true);
+      video.pause();
+    };
+    const resumeAfterModal = () => {
+      const video = videoRef.current;
+      const previousState = modalPlaybackStateRef.current;
+      if (!video || !previousState) return;
+      modalPlaybackStateRef.current = null;
+      video.muted = previousState.wasMuted;
+      setMuted(previousState.wasMuted);
+      manuallyPausedRef.current = previousState.wasManuallyPaused;
+      if (previousState.wasPlaying) void video.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+    };
+
+    window.addEventListener('aani:pause-feed-videos', pauseAndMute);
+    window.addEventListener('aani:resume-feed-videos', resumeAfterModal);
+    if (hasOpenFeedDialog()) pauseAndMute();
+    return () => {
+      window.removeEventListener('aani:pause-feed-videos', pauseAndMute);
+      window.removeEventListener('aani:resume-feed-videos', resumeAfterModal);
+    };
   }, []);
 
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) {
-      v.play();
-      setPlaying(true);
+      manuallyPausedRef.current = false;
+      void v.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
     } else {
+      manuallyPausedRef.current = true;
       v.pause();
       setPlaying(false);
     }
@@ -190,22 +253,107 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
     void event.currentTarget.play().catch(() => undefined);
   };
 
+  const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabaseConfigured || busy) return;
+    const content = editContent.trim();
+    setBusy(true);
+    try {
+      let mediaUrl = post.media_url;
+      let mediaUrls = post.media_urls?.length ? post.media_urls : (post.media_url ? [post.media_url] : []);
+      if (replacementFile) {
+        if (!replacementFile.type.startsWith('video/')) throw new Error('اختر ملف فيديو بدلًا من الصورة.');
+        const safeName = replacementFile.name.replace(/[^a-zA-Z0-9._-]/g, '-') || 'reel-video';
+        const path = `${currentUserId}/${post.id}/edited-${Date.now()}-${safeName}`;
+        await uploadMedia({ file: replacementFile, path });
+        mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+        mediaUrls = [mediaUrl];
+      }
+
+      const { error } = await supabase.from('posts').update({
+        content,
+        media_url: mediaUrl,
+        media_urls: mediaUrls,
+      }).eq('id', post.id).eq('user_id', currentUserId);
+      if (error) throw error;
+      setShowEditSheet(false);
+      setReplacementFile(null);
+      onRefresh();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'تعذر تعديل الريل. حاول مرة أخرى.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const deletePost = async () => {
+    if (!supabaseConfigured || !window.confirm('هل أنت متأكد من رغبتك في حذف هذا الريل؟')) return;
+    const { error } = await supabase.from('posts').delete().eq('id', post.id).eq('user_id', currentUserId);
+    if (error) {
+      alert('تعذر حذف الريل. حاول مرة أخرى.');
+      return;
+    }
+    onRefresh();
+  };
+
   return (
     <section ref={containerRef} className="reel-slide relative w-full h-screen overflow-hidden bg-black">
       <video
         ref={videoRef}
         src={videoSrc}
         loop={!videoTimeRange}
+        muted={muted}
         playsInline
+        preload="metadata"
         onLoadedMetadata={handleVideoLoadedMetadata}
         onSeeking={handleVideoSeeking}
         onTimeUpdate={handleVideoTimeUpdate}
         onPlay={handleVideoPlay}
         onEnded={handleVideoEnded}
         onClick={togglePlay}
+        onPause={() => setPlaying(false)}
         className="w-full h-full object-cover cursor-pointer"
         style={{ transform: videoCropTransform, transformOrigin: 'center' }}
       />
+
+      <button
+        type="button"
+        aria-label={muted ? 'تشغيل الصوت' : 'كتم الصوت'}
+        aria-pressed={muted}
+        onClick={() => {
+          const nextMuted = !muted;
+          setMuted(nextMuted);
+          if (videoRef.current) videoRef.current.muted = nextMuted;
+        }}
+        className="absolute left-4 top-[max(1rem,env(safe-area-inset-top))] z-30 grid h-11 w-11 place-items-center rounded-full border border-white/20 bg-black/50 text-white backdrop-blur-md"
+      >
+        {muted ? <VolumeX size={19} /> : <Volume2 size={19} />}
+      </button>
+
+      {pendingState && (
+        <div className="absolute inset-x-0 top-0 z-40 bg-black/70 px-4 pb-4 pt-[max(4rem,calc(1rem+env(safe-area-inset-top)))] text-white backdrop-blur-sm">
+          <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+            <span className="flex items-center gap-2">
+              {pendingState.stage === 'success' ? <CheckCircle2 size={15} className="text-emerald-400" /> : pendingState.stage === 'failed' ? <X size={15} className="text-rose-400" /> : <Loader2 size={15} className="animate-spin text-[#f1a17f]" />}
+              {pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل'}
+            </span>
+            {pendingState.stage !== 'failed' && <span>{pendingState.progress}%</span>}
+          </div>
+          {pendingState.stage !== 'failed' ? (
+            <div className="h-1.5 overflow-hidden rounded-full bg-white/15" role="progressbar" aria-label="تقدم نشر الريل" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
+              <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
+            </div>
+          ) : (
+            <>
+              <p role="alert" className="text-xs leading-5 text-rose-200">{pendingState.error || 'حدث خطأ أثناء نشر الريل.'}</p>
+              <div className="mt-2 flex gap-2">
+                <button type="button" onClick={onRetryPending} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs"><RotateCcw size={13} /> إعادة المحاولة</button>
+                <button type="button" onClick={onDismissPending} className="rounded-full px-3 py-1.5 text-xs text-white/70">إزالة</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {!playing && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
@@ -280,26 +428,23 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
           </span>
         </button>
 
-        {/* 6. النقاط الثلاثة خيارات إضافية */}
-        <div className="relative">
-          <button onClick={() => setMenuOpen(!menuOpen)} className="p-2 rounded-full bg-black/40 border border-white/20 backdrop-blur-md text-white">
-            <MoreVertical size={18} />
-          </button>
-
-          {menuOpen && (
-            <div className="absolute right-10 bottom-0 bg-zinc-900 border border-zinc-800 rounded-xl p-2 w-48 text-xs text-white shadow-2xl z-40">
-              <button onClick={() => { void reportPost(); setMenuOpen(false); }} className="flex items-center gap-2 w-full text-red-400 p-2 hover:bg-zinc-800 rounded-lg">
-                <Flag size={14} /> إبلاغ عن الريل
-              </button>
-              <button onClick={() => { void saveFeedback('interested'); setMenuOpen(false); }} className={`flex items-center gap-2 w-full p-2 hover:bg-zinc-800 rounded-lg ${feedback === 'interested' ? 'text-cyan-300' : 'text-zinc-300'}`}>
-                <ThumbsUp size={14} /> {feedback === 'interested' ? 'إلغاء مهتم' : 'مهتم'}
-              </button>
-              <button onClick={() => { void saveFeedback('not_interested'); setMenuOpen(false); }} className={`flex items-center gap-2 w-full p-2 hover:bg-zinc-800 rounded-lg ${feedback === 'not_interested' ? 'text-zinc-100' : 'text-zinc-300'}`}>
-                <EyeOff size={14} /> {feedback === 'not_interested' ? 'إلغاء غير مهتم' : 'غير مهتم'}
-              </button>
-            </div>
-          )}
-        </div>
+        <PostOptionsSheet
+          open={showOptionsSheet}
+          onOpenChange={setShowOptionsSheet}
+          isOwner={post.user_id === currentUserId}
+          feedback={feedback}
+          onEdit={() => {
+            setEditContent(post.content || '');
+            setReplacementFile(null);
+            setShowEditSheet(true);
+          }}
+          onOpenPrivacySettings={() => setShowPrivacySheet(true)}
+          onPromote={() => alert('خدمة ترويج المنشورات غير متاحة بعد.')}
+          onDelete={() => void deletePost()}
+          onReport={() => void reportPost()}
+          onFeedback={value => void saveFeedback(value)}
+          triggerClassName="border border-white/20 bg-black/40 p-2 text-white backdrop-blur-md"
+        />
       </div>
 
       {showShareSheet && (
@@ -312,6 +457,26 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
           onClose={() => setShowShareSheet(false)}
         />
       )}
+
+      <EditPostSheet
+        open={showEditSheet}
+        onOpenChange={setShowEditSheet}
+        postId={post.id}
+        postType={post.type}
+        content={editContent}
+        onContentChange={setEditContent}
+        onSubmit={saveEdit}
+        busy={busy}
+        onReplacementFileChange={event => setReplacementFile(event.target.files?.[0] || null)}
+      />
+
+      <PostPrivacySheet
+        open={showPrivacySheet}
+        post={post}
+        currentUserId={currentUserId}
+        onClose={() => setShowPrivacySheet(false)}
+        onSaved={onRefresh}
+      />
     </section>
   );
 }

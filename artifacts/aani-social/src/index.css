@@ -161,15 +161,24 @@ body {
 
 /* ===== Reels: Full Screen ===== */
 .reels-container {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  width: 100vw;
+  height: 100vh;
   height: 100dvh;
+  overflow-x: hidden;
   overflow-y: auto;
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
   background: #000;
+  touch-action: pan-y;
 }
 .reels-container::-webkit-scrollbar { display: none; }
 
 .reel-slide {
+  width: 100vw;
+  height: 100vh;
   height: 100dvh;
   scroll-snap-align: start;
   scroll-snap-stop: always;

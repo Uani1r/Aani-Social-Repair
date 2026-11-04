@@ -1,21 +1,84 @@
+import { useEffect, useRef, useState } from 'react';
 import { Film as FilmIcon } from 'lucide-react';
 
 import ReelSlide from '@/components/ReelSlide';
 import { usePosts } from '@/hooks/usePosts';
+import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
+import { getPostDestination } from '@/lib/types';
+
+const savedReelsScrollPositions = new Map<string, number>();
+
+function saveReelsScrollPosition(userId: string, scrollTop: number) {
+  savedReelsScrollPositions.set(userId, scrollTop);
+  try {
+    window.sessionStorage.setItem(`aani:reels-scroll:${userId}`, String(scrollTop));
+  } catch {
+    // The in-memory position still covers route changes when storage is unavailable.
+  }
+}
 
 export default function ReelsPage({ userId, onOpenComments }: { userId: string; onOpenComments: (postId: string) => void }) {
-  const { posts, loading } = usePosts('reel', undefined, userId);
+  const { posts, loading, refresh } = usePosts('reel', undefined, userId);
+  const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => subscribePendingPosts(() => setPendingPosts(getPendingPosts())), []);
+
+  useEffect(() => {
+    if (loading) return undefined;
+    const container = scrollRef.current;
+    if (!container) return undefined;
+    let savedScrollTop = savedReelsScrollPositions.get(userId) || 0;
+    try {
+      savedScrollTop = Number(window.sessionStorage.getItem(`aani:reels-scroll:${userId}`)) || savedScrollTop;
+    } catch {
+      // Use the in-memory position if session storage is unavailable.
+    }
+    if (savedScrollTop <= 0) return undefined;
+    const frame = window.requestAnimationFrame(() => { container.scrollTop = savedScrollTop; });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, userId]);
+
+  useEffect(() => () => {
+    const container = scrollRef.current;
+    if (container) saveReelsScrollPosition(userId, container.scrollTop);
+  }, [userId]);
+
+  const userPendingPosts = pendingPosts.filter(item => item.post.user_id === userId && getPostDestination(item.post) === 'reels');
+  const pendingById = new Map(userPendingPosts.map(item => [item.id, item] as const));
+  const visiblePosts = [
+    ...userPendingPosts.map(item => item.post),
+    ...posts.filter(post => !userPendingPosts.some(item => item.id === post.id)),
+  ];
 
   return (
-    <div className="reels-container">
-      {loading && <div className="status-box text-white pt-20">جاري تحميل الريلز...</div>}
-      {!loading && !posts.length && (
-        <div className="empty-state text-center py-24 text-white">
-          <FilmIcon size={36} className="mx-auto text-pink-500 mb-2" />
-          <h2 className="font-bold text-lg">لا يوجد ريلز منشور حالياً</h2>
+    <div
+      ref={scrollRef}
+      className="reels-container"
+      onScroll={event => saveReelsScrollPosition(userId, event.currentTarget.scrollTop)}
+    >
+      {loading && <div className="status-box flex h-full items-center justify-center text-white">جاري تحميل الريلز...</div>}
+      {!loading && !visiblePosts.length && (
+        <div className="empty-state flex h-full flex-col items-center justify-center text-center text-white">
+          <FilmIcon size={36} className="mb-2 text-pink-500" />
+          <h2 className="text-lg font-bold">لا يوجد ريلز منشور حالياً</h2>
         </div>
       )}
-      {!loading && posts.map(post => <ReelSlide key={post.id} post={post} currentUserId={userId} onOpenComments={onOpenComments} />)}
+      {visiblePosts.map(post => {
+        const pending = pendingById.get(post.id);
+        return (
+          <ReelSlide
+            key={post.id}
+            post={post}
+            currentUserId={userId}
+            onOpenComments={onOpenComments}
+            onRefresh={() => void refresh()}
+            pendingState={pending}
+            onRetryPending={() => retryPendingPost(post.id)}
+            onDismissPending={() => removePendingPost(post.id)}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -480,6 +480,7 @@ export async function decoratePosts(
     media_url: optionalString(row.media_url) ?? null,
     media_urls: optionalStringArray(row.media_urls),
     type: row.type === "photo" || row.type === "reel" ? row.type : "text",
+    destination: row.destination === "reels" ? "reels" : row.destination === "feed" ? "feed" : row.type === "reel" ? "reels" : "feed",
     visibility: row.visibility === "private" ? "private" : "public",
     hide_likes: row.hide_likes === true,
     hide_comments: row.hide_comments === true,

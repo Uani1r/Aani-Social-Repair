@@ -7,9 +7,27 @@ import type { StoryRow as StoryDmCardStory } from '../components/StoryDmCard';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
-import type { Profile } from '@/lib/types';
+import { getPostDestination, type Profile } from '@/lib/types';
 
 const savedFeedScrollPositions = new Map<string, number>();
+
+const saveFeedScrollPosition = (userId: string, scrollTop: number) => {
+  savedFeedScrollPositions.set(userId, scrollTop);
+  try {
+    window.sessionStorage.setItem(`aani:feed-scroll:${userId}`, String(scrollTop));
+  } catch {
+    // Keep the in-memory position when session storage is unavailable.
+  }
+};
+
+const getSavedFeedScrollPosition = (userId: string) => {
+  const inMemoryPosition = savedFeedScrollPositions.get(userId) || 0;
+  try {
+    return Number(window.sessionStorage.getItem(`aani:feed-scroll:${userId}`)) || inMemoryPosition;
+  } catch {
+    return inMemoryPosition;
+  }
+};
 
 const getPageScrollTop = () => Math.max(
   0,
@@ -60,7 +78,7 @@ export default function FeedPage({
   const refreshingRef = useRef(false);
   const feedMountedRef = useRef(false);
   const refreshIndicatorTimerRef = useRef<number | null>(null);
-  const initialScrollTopRef = useRef(savedFeedScrollPositions.get(userId) || 0);
+  const initialScrollTopRef = useRef(getSavedFeedScrollPosition(userId));
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
 
@@ -69,13 +87,13 @@ export default function FeedPage({
   useEffect(() => {
     const saveScrollPosition = () => {
       if (!loadingRef.current && !hasOpenFeedDialog()) {
-        savedFeedScrollPositions.set(userId, getPageScrollTop());
+        saveFeedScrollPosition(userId, getPageScrollTop());
       }
     };
     window.addEventListener('scroll', saveScrollPosition, { passive: true });
     return () => {
       if (!loadingRef.current && !hasOpenFeedDialog()) {
-        savedFeedScrollPositions.set(userId, getPageScrollTop());
+        saveFeedScrollPosition(userId, getPageScrollTop());
       }
       window.removeEventListener('scroll', saveScrollPosition);
     };
@@ -83,7 +101,7 @@ export default function FeedPage({
 
   useEffect(() => {
     if (loading) return;
-    const savedScrollTop = savedFeedScrollPositions.get(userId) ?? initialScrollTopRef.current;
+    const savedScrollTop = Math.max(getSavedFeedScrollPosition(userId), initialScrollTopRef.current);
     if (savedScrollTop <= 0) return;
     const frame = window.requestAnimationFrame(() => {
       if (hasOpenFeedDialog()) return;
@@ -92,7 +110,7 @@ export default function FeedPage({
     return () => window.cancelAnimationFrame(frame);
   }, [loading, userId]);
 
-  const userPendingPosts = pendingPosts.filter(item => item.post.user_id === userId);
+  const userPendingPosts = pendingPosts.filter(item => item.post.user_id === userId && getPostDestination(item.post) === 'feed');
   const visiblePosts = [
     ...userPendingPosts.map(item => item.post),
     ...posts.filter(post => !userPendingPosts.some(item => item.id === post.id)),

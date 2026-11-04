@@ -57,6 +57,7 @@ export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
 
 export type PostVisibility = 'public' | 'private';
 export type CommentPrivacy = 'public' | 'followers' | 'custom';
+export type PostDestination = 'feed' | 'reels';
 
 export type Post = {
   id: string;
@@ -66,6 +67,7 @@ export type Post = {
   media_url: string | null;
   media_urls?: string[] | null;
   type: "text" | "photo" | "reel";
+  destination?: PostDestination;
   visibility?: PostVisibility;
   created_at: string;
   author: Profile | null;
@@ -99,9 +101,12 @@ export type Post = {
   comments?: PostComment[];
 };
 
+export const getPostDestination = (post: Pick<Post, 'type' | 'destination'>): PostDestination =>
+  post.destination ?? (post.type === 'reel' ? 'reels' : 'feed');
+
 export type PostRow = Pick<
   Post,
-  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'visibility' | 'created_at'
+  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'destination' | 'visibility' | 'created_at'
 > & {
   hide_likes?: boolean;
   hide_comments?: boolean;

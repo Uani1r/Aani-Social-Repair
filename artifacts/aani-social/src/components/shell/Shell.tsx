@@ -9,7 +9,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
-import type { Post, PostMetadataTag, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import type { Post, PostDestination, PostMetadataTag, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -529,6 +529,7 @@ export default function Shell({
   const [videoTrim, setVideoTrim] = useState<VideoTrimRange | null>(null);
   const [videoCrop, setVideoCrop] = useState<VideoCropTransform | null>(null);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
+  const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
 
@@ -556,6 +557,7 @@ export default function Shell({
     setShowVideoPreviewModal(false);
     setVideoTrim(null);
     setVideoCrop(null);
+    setDestination('feed');
     setCreateError('');
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
@@ -595,6 +597,7 @@ export default function Shell({
     setSelectedFiles([file]);
     setPostText('');
     setFileType('video');
+    setDestination(path === '/reels' ? 'reels' : 'feed');
     setVideoTrim(null);
     setVideoCrop(null);
     setCreateError('');
@@ -607,6 +610,7 @@ export default function Shell({
     setVideoTrim(null);
     setVideoCrop(null);
     setFileType(null);
+    setDestination('feed');
   };
 
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
@@ -616,7 +620,7 @@ export default function Shell({
     setShowCreateModal(true);
   };
 
-  const handlePublish = (postMetadata: PostMetadataTag[] = []) => {
+  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
@@ -628,6 +632,10 @@ export default function Shell({
     const trim = videoTrim;
     const crop = videoCrop;
     const metadata = [...postMetadata];
+    if (postDestination === 'reels' && mediaType !== 'video') {
+      setCreateError('يجب اختيار مقطع فيديو للنشر في الريلز.');
+      return;
+    }
     if (!content && files.length === 0 && metadata.length === 0) return;
     if (Array.from(content).length > 2000) {
       setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
@@ -654,6 +662,7 @@ export default function Shell({
       media_url: localMediaUrls[0] || null,
       media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
       type,
+      destination: postDestination,
       created_at: createdAt,
       author,
       likes_count: 0,
@@ -708,12 +717,16 @@ export default function Shell({
           media_url: uploadedUrls[0] || null,
           media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
           type,
+          destination: postDestination,
           created_at: createdAt,
         }, { onConflict: 'id' });
 
         if (postError) {
           if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
             throw new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
+          }
+          if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('destination')) {
+            throw new Error('يجب تطبيق الترحيل 20261126000000_post_destinations.sql على Supabase لفصل منشورات الواجهة عن الريلز.');
           }
           if (postError.code === '23514' && postError.message.includes('posts_content_length_check')) {
             throw new Error('قاعدة البيانات تستخدم قيدًا قديمًا للمنشورات. طبّق الترحيل 20261122000000_post_metadata_chips.sql على Supabase ثم أعد المحاولة.');
@@ -754,14 +767,16 @@ export default function Shell({
     setVideoTrim(null);
     setVideoCrop(null);
     setFileType(null);
+    setDestination('feed');
     setShowCreateModal(false);
     setIsSubmitting(false);
     setCreateError('');
-    if (path !== '/' && path !== '/feed') setLocation('/feed');
+    const destinationPath = postDestination === 'reels' ? '/reels' : '/feed';
+    if (path !== destinationPath) setLocation(destinationPath);
   };
 
   return (
-    <div className="app-frame min-h-screen bg-black text-white">
+    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''}`}>
       <ShellTopBar
         path={path}
         chromeHidden={chromeHidden}
@@ -774,7 +789,10 @@ export default function Shell({
       <ShellOverlayControls
         showPublishOptionsSheet={showPublishOptionsSheet}
         onClosePublishOptionsSheet={() => setShowPublishOptionsSheet(false)}
-        onCreateTextPost={() => setShowCreateModal(true)}
+        onCreateTextPost={() => {
+          setDestination('feed');
+          setShowCreateModal(true);
+        }}
         onSelectPublishImages={handleSelectPublishImages}
         onSelectPublishVideo={handleSelectPublishVideo}
         onOpenMorePublishOptions={() => {
@@ -798,6 +816,8 @@ export default function Shell({
         postText={postText}
         selectedFiles={selectedFiles}
         fileType={fileType}
+        destination={destination}
+        onDestinationChange={setDestination}
         filePreviews={filePreviews}
         isSubmitting={isSubmitting}
         createError={createError}
@@ -808,9 +828,10 @@ export default function Shell({
             setVideoTrim(null);
             setVideoCrop(null);
             setFileType(null);
+            setDestination('feed');
           }
         }}
-        onPublish={tagContent => void handlePublish(tagContent)}
+        onPublish={(tagContent, postDestination) => void handlePublish(tagContent, postDestination)}
         onCloseCreatePost={() => {
           setShowCreateModal(false);
           if (fileType === 'video') {
@@ -818,6 +839,7 @@ export default function Shell({
             setVideoTrim(null);
             setVideoCrop(null);
             setFileType(null);
+            setDestination('feed');
           }
         }}
         showSettingsModal={showSettingsModal}

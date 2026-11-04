@@ -6,7 +6,7 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import type { PostDestination, PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
 
 type ComposerTagKind = PostMetadataTag['kind'];
@@ -27,13 +27,15 @@ type CreatePostModalProps = {
   selectedFiles: File[];
   fileType: 'image' | 'video' | null;
   filePreviews: { file: File; url: string }[];
+  destination: PostDestination;
+  onDestinationChange: (destination: PostDestination) => void;
   videoTrim: VideoTrimRange | null;
   videoCrop: VideoCropTransform | null;
   isSubmitting: boolean;
   createError: string;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tags: PostMetadataTag[]) => void;
+  onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
   onClose: () => void;
 };
 
@@ -52,6 +54,8 @@ export default function CreatePostModal({
   selectedFiles,
   fileType,
   filePreviews,
+  destination,
+  onDestinationChange,
   videoTrim,
   videoCrop,
   isSubmitting,
@@ -209,7 +213,10 @@ export default function CreatePostModal({
     );
   };
 
-  const handlePublish = () => onPublish(tags.map(({ kind, label, href, profileId }) => ({ kind, label, href, profileId })));
+  const handlePublish = () => onPublish(
+    tags.map(({ kind, label, href, profileId }) => ({ kind, label, href, profileId })),
+    destination,
+  );
 
   return (
     <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
@@ -285,6 +292,30 @@ export default function CreatePostModal({
             rows={8}
           />
         </div>
+
+        <section className="mx-6 mb-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3" aria-label="وجهة النشر">
+          <p className="mb-2 text-right text-xs font-semibold text-white/70">مكان ظهور المنشور</p>
+          <div className="grid grid-cols-2 gap-2" role="group" aria-label="وجهة النشر">
+            <button
+              type="button"
+              aria-pressed={destination === 'feed'}
+              onClick={() => onDestinationChange('feed')}
+              className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${destination === 'feed' ? 'border-pink-400/60 bg-pink-500/15 text-white' : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/[0.06]'}`}
+            >
+              الواجهة الرئيسية
+            </button>
+            <button
+              type="button"
+              aria-pressed={destination === 'reels'}
+              disabled={fileType !== 'video'}
+              onClick={() => onDestinationChange('reels')}
+              className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 ${destination === 'reels' ? 'border-pink-400/60 bg-pink-500/15 text-white' : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/[0.06]'}`}
+            >
+              الريلز
+            </button>
+          </div>
+          {fileType !== 'video' && <p className="mt-2 text-right text-[11px] text-white/45">النشر في الريلز متاح لمقاطع الفيديو فقط.</p>}
+        </section>
 
         <PostMetadataChips
           tags={tags}

@@ -15,6 +15,7 @@ type PostOptionsSheetProps = {
   onDelete: () => void;
   onReport: () => void;
   onFeedback: (value: 'interested' | 'not_interested') => void;
+  triggerClassName?: string;
 };
 
 export default function PostOptionsSheet({
@@ -28,6 +29,7 @@ export default function PostOptionsSheet({
   onDelete,
   onReport,
   onFeedback,
+  triggerClassName = '',
 }: PostOptionsSheetProps) {
   const { dragOffset, dragging, ...dismissHandlers } = useBottomSheetDismiss(open, () => onOpenChange(false));
 
@@ -39,7 +41,7 @@ export default function PostOptionsSheet({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Trigger asChild>
-        <button type="button" className="shrink-0 rounded-full p-1 text-zinc-500 transition hover:text-white" aria-label="خيارات المنشور">
+        <button type="button" className={`shrink-0 rounded-full p-1 text-zinc-500 transition hover:text-white ${triggerClassName}`} aria-label="خيارات المنشور">
           <MoreVertical size={18} />
         </button>
       </DialogPrimitive.Trigger>
