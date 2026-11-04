@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, EyeOff, Flag, Heart, MessageSquare, Repeat, Send, ThumbsUp, Trash2, X,
+  Bookmark, EyeOff, Flag, Heart, MessageSquare, Repeat, Send, ThumbsUp, Trash2,
 } from 'lucide-react';
 import { Link } from 'wouter';
 
@@ -11,6 +11,7 @@ import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
 import PostOptionsSheet from './PostOptionsSheet';
+import EditPostSheet from './EditPostSheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
@@ -70,7 +71,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [commentsCount, setCommentsCount] = useState(post.comments_count || 0);
   const [repostsCount, setRepostsCount] = useState(post.reposts_count || 0);
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [showEditSheet, setShowEditSheet] = useState(false);
   const [editContent, setEditContent] = useState(post.content || '');
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
@@ -275,7 +276,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         media_urls: post.type === 'text' ? null : mediaUrls,
       }).eq('id', post.id).eq('user_id', currentUserId);
       if (error) throw error;
-      setShowEditModal(false);
+      setShowEditSheet(false);
       setReplacementFile(null);
       onRefresh();
     } catch (error) {
@@ -389,7 +390,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           onEdit={() => {
             setEditContent(post.content || '');
             setReplacementFile(null);
-            setShowEditModal(true);
+            setShowEditSheet(true);
           }}
           onTogglePrivacy={() => void handleTogglePostPrivacy()}
           onPromote={handlePromotePost}
@@ -498,27 +499,17 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         )}
       </footer>
 
-      {showEditModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby={`edit-post-${post.id}`}>
-          <form onSubmit={saveEdit} className="w-full max-w-lg space-y-4 rounded-xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl">
-            <div className="flex items-center justify-between">
-              <h2 id={`edit-post-${post.id}`} className="text-base font-bold text-white">تعديل المنشور</h2>
-              <button type="button" onClick={() => setShowEditModal(false)} className="p-1 text-zinc-400 hover:text-white" aria-label="إغلاق"><X size={18} /></button>
-            </div>
-            <textarea value={editContent} onChange={event => setEditContent(event.target.value)} maxLength={2000} rows={5} className="w-full resize-y rounded-lg border border-zinc-700 bg-black p-3 text-sm text-white outline-none focus:border-pink-500" placeholder="اكتب نص المنشور..." />
-            {post.type !== 'text' && (
-              <label className="block text-sm text-zinc-300">
-                استبدال {post.type === 'photo' ? 'الصورة' : 'الفيديو'} بملف من النوع نفسه
-                <input className="mt-2 block w-full text-xs text-zinc-400" type="file" accept={post.type === 'photo' ? 'image/*' : 'video/*'} onChange={event => setReplacementFile(event.target.files?.[0] || null)} />
-              </label>
-            )}
-            <div className="flex justify-end gap-2">
-              <button type="button" className="button-secondary text-xs" onClick={() => setShowEditModal(false)}>إلغاء</button>
-              <button type="submit" className="button-primary px-4 text-xs" disabled={busy}>{busy ? 'جارٍ الحفظ...' : 'حفظ التعديلات'}</button>
-            </div>
-          </form>
-        </div>
-      )}
+      <EditPostSheet
+        open={showEditSheet}
+        onOpenChange={setShowEditSheet}
+        postId={post.id}
+        postType={post.type}
+        content={editContent}
+        onContentChange={setEditContent}
+        onSubmit={saveEdit}
+        busy={busy}
+        onReplacementFileChange={event => setReplacementFile(event.target.files?.[0] || null)}
+      />
 
       {showShareSheet && (
         <ShareSheet

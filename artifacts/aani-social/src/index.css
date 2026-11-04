@@ -1133,3 +1133,170 @@ body.aani-immersive {
     animation: none !important;
   }
 }
+
+
+
+/* Edit post bottom sheet */
+.edit-post-overlay[data-state='open'] {
+  animation: post-options-overlay-in 180ms ease-out both;
+}
+
+.edit-post-overlay[data-state='closed'] {
+  animation: post-options-overlay-out 160ms ease-in both;
+}
+
+.edit-post-sheet[data-state='open'] {
+  animation: post-options-sheet-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.edit-post-sheet[data-state='closed'] {
+  animation: post-options-sheet-out 200ms cubic-bezier(0.4, 0, 1, 1) both;
+}
+
+.edit-post-drag-handle {
+  width: 40px;
+  height: 5px;
+  margin: 0 auto 8px;
+  border-radius: 10px;
+  background-color: #3a3a3c;
+}
+
+.edit-post-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.edit-post-title {
+  color: #fff;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.edit-post-close {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #8e8e93;
+  cursor: pointer;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.edit-post-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.edit-post-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.edit-post-textarea-container {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  padding: 16px;
+  background-color: #2c2c2e;
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.edit-post-textarea-container:focus-within {
+  border-color: #6e8efb;
+  box-shadow: 0 0 0 3px rgba(110, 142, 251, 0.2);
+}
+
+.edit-post-textarea {
+  display: block;
+  width: 100%;
+  min-height: 150px;
+  resize: none;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #fff;
+  font-family: 'Tajawal', sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  text-align: right;
+}
+
+.edit-post-textarea::placeholder {
+  color: #8e8e93;
+}
+
+.edit-post-media-field {
+  color: #d4d4d8;
+  font-size: 14px;
+}
+
+.edit-post-file-input {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  color: #a1a1aa;
+  font-size: 12px;
+}
+
+.edit-post-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  direction: rtl;
+}
+
+.edit-post-button {
+  flex: 1;
+  border: 0;
+  border-radius: 14px;
+  padding: 14px;
+  font-family: 'Tajawal', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.1s ease, opacity 0.2s ease, background 0.2s ease;
+}
+
+.edit-post-button:active {
+  transform: scale(0.98);
+}
+
+.edit-post-button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.edit-post-cancel {
+  border: 1px solid #3a3a3c;
+  background: transparent;
+  color: #8e8e93;
+}
+
+.edit-post-cancel:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.edit-post-save {
+  background: linear-gradient(135deg, #6e8efb, #a777e3);
+  color: #fff;
+  box-shadow: 0 4px 15px rgba(110, 142, 251, 0.4);
+}
+
+.edit-post-save:hover {
+  opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .edit-post-overlay,
+  .edit-post-sheet {
+    animation: none !important;
+  }
+}

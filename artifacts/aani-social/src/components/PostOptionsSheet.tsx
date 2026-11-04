@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
 import * as DialogPrimitive from '@radix-ui/react-dialog';
+import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import {
   EyeOff, Flag, LockKeyhole, MoreVertical, Pencil, Star, ThumbsUp, Trash2,
 } from 'lucide-react';
@@ -31,53 +31,7 @@ export default function PostOptionsSheet({
   onReport,
   onFeedback,
 }: PostOptionsSheetProps) {
-  const dragStartY = useRef<number | null>(null);
-  const dragPointerId = useRef<number | null>(null);
-  const [dragOffset, setDragOffset] = useState(0);
-  const [dragging, setDragging] = useState(false);
-
-  useEffect(() => {
-    if (!open) {
-      dragStartY.current = null;
-      dragPointerId.current = null;
-      setDragOffset(0);
-      setDragging(false);
-    }
-  }, [open]);
-
-  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0) return;
-    dragStartY.current = event.clientY;
-    dragPointerId.current = event.pointerId;
-    setDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const moveDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (dragPointerId.current !== event.pointerId || dragStartY.current === null) return;
-    setDragOffset(Math.max(0, event.clientY - dragStartY.current));
-  };
-
-  const finishDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (dragPointerId.current !== event.pointerId || dragStartY.current === null) return;
-    const distance = Math.max(0, event.clientY - dragStartY.current);
-    dragStartY.current = null;
-    dragPointerId.current = null;
-    setDragging(false);
-    setDragOffset(0);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    if (distance > 90) onOpenChange(false);
-  };
-
-  const cancelDrag = (event: PointerEvent<HTMLDivElement>) => {
-    if (dragPointerId.current !== event.pointerId) return;
-    dragStartY.current = null;
-    dragPointerId.current = null;
-    setDragging(false);
-    setDragOffset(0);
-  };
+  const { dragOffset, dragging, ...dismissHandlers } = useBottomSheetDismiss(open, () => onOpenChange(false));
 
   const selectAction = (action: () => void) => {
     onOpenChange(false);
@@ -97,21 +51,15 @@ export default function PostOptionsSheet({
           dir="rtl"
           className="post-options-content fixed inset-x-0 bottom-0 z-[91] max-h-[85vh] overflow-y-auto rounded-t-[24px] border border-white/10 bg-[#1c1c1e] px-4 pt-2 text-white shadow-[0_-12px_50px_rgba(0,0,0,0.45)] focus:outline-none"
           style={{
-            transform: dragging ? `translate3d(0, ${dragOffset}px, 0)` : undefined,
+            transform: dragOffset > 0 ? `translate3d(0, ${dragOffset}px, 0)` : undefined,
             transition: dragging ? 'none' : 'transform 220ms ease-out',
             paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
           }}
           aria-describedby={undefined}
+          {...dismissHandlers}
         >
           <DialogPrimitive.Title className="sr-only">خيارات المنشور</DialogPrimitive.Title>
-          <div
-            className="flex w-full touch-none cursor-grab justify-center py-2 active:cursor-grabbing"
-            onPointerDown={startDrag}
-            onPointerMove={moveDrag}
-            onPointerUp={finishDrag}
-            onPointerCancel={cancelDrag}
-            aria-hidden="true"
-          >
+          <div className="flex w-full justify-center py-2" aria-hidden="true">
             <span className="h-1 w-10 rounded-full bg-zinc-600" />
           </div>
 
