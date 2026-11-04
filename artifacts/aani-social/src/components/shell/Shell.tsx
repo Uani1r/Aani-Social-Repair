@@ -27,6 +27,9 @@ const createPostId = () => {
   });
 };
 
+const isPostsPermissionError = (error: { code?: string; message?: string }) =>
+  error.code === '42501' || /permission denied|row-level security/i.test(error.message || '');
+
 const hasOpenDialog = () =>
   typeof document !== 'undefined' && Boolean(document.querySelector(
     '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -678,13 +681,19 @@ export default function Shell({
       attemptInProgress = true;
       updatePendingPost(postId, { stage: 'uploading', progress: 0, error: null });
       try {
+        const { data: authData, error: authError } = await supabase.auth.getUser();
+        if (authError) throw new Error('تعذر التحقق من جلسة الحساب. أعد تسجيل الدخول ثم حاول مجدداً.');
+        const authenticatedUserId = authData.user?.id;
+        if (!authenticatedUserId) throw new Error('يجب تسجيل الدخول قبل نشر المحتوى.');
+        if (authenticatedUserId !== userId) throw new Error('تغيّر الحساب النشط. حدّث الصفحة ثم أعد المحاولة.');
+
         const uploadedUrls = new Array<string>(files.length);
         const fileProgress = files.map(() => 0);
         const totalBytes = files.reduce((sum, file) => sum + Math.max(1, file.size), 0);
 
         await Promise.all(files.map(async (file, index) => {
           const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-') || `media-${index}`;
-          const uploadedPath = `${userId}/${postId}/${index}-${safeName}`;
+          const uploadedPath = `${authenticatedUserId}/${postId}/${index}-${safeName}`;
           await uploadMedia({
             file,
             path: uploadedPath,
@@ -711,7 +720,7 @@ export default function Shell({
 
         const postPayload = {
           id: postId,
-          user_id: userId,
+          user_id: authenticatedUserId,
           content,
           post_metadata: metadata,
           media_url: uploadedUrls[0] || null,
@@ -734,6 +743,9 @@ export default function Shell({
         }
 
         if (postError) {
+          if (isPostsPermissionError(postError)) {
+            throw new Error('رفضت قاعدة البيانات حفظ المنشور بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated؛ لم يتم تجاوز الحماية.');
+          }
           if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {
             throw new Error('يجب تطبيق الترحيل 20261122000000_post_metadata_chips.sql على قاعدة Supabase قبل نشر الوسوم.');
           }

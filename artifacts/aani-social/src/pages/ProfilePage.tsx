@@ -40,7 +40,7 @@ export default function ProfilePage({
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [, setLocation] = useLocation();
 
-  const { posts, loading, refresh } = usePosts('profile', activeUserId, currentUserId);
+  const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
 
   useEffect(() => {
     if (!supabaseConfigured || !activeUserId) return;
@@ -301,7 +301,15 @@ export default function ProfilePage({
 
       <h2 className="section-label my-2 text-sm font-bold text-white">منشورات وريلز المستخدم</h2>
       {loading && <div className="status-box">جاري تحميل المنشورات...</div>}
-      {!loading && posts.length === 0 && <div className="empty-state card text-center p-6 text-zinc-400 text-xs">لا يوجد محتوى منشور حالياً لهذا المستخدم</div>}
+      {!loading && error && (
+        <div role="alert" className="empty-state card space-y-3 p-6 text-center text-zinc-300 text-xs">
+          <p>{error}</p>
+          <button type="button" onClick={() => void refresh()} className="rounded-full bg-pink-600 px-4 py-2 font-semibold text-white">
+            إعادة المحاولة
+          </button>
+        </div>
+      )}
+      {!loading && !error && posts.length === 0 && <div className="empty-state card text-center p-6 text-zinc-400 text-xs">لا يوجد محتوى منشور حالياً لهذا المستخدم</div>}
 
       {!loading && posts.length > 0 && (
         <div className="posts-list space-y-3">

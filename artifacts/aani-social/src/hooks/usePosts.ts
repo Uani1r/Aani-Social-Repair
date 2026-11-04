@@ -13,6 +13,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isPostsPermissionError(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const code = typeof value.code === 'string' ? value.code : '';
+  const message = typeof value.message === 'string' ? value.message : '';
+  return code === '42501' || /permission denied for table posts|row-level security.*posts|posts.*row-level security/i.test(message);
+}
+
 function normalizePostRow(value: unknown): PostRow | null {
   if (!isRecord(value)
     || typeof value.id !== 'string'
@@ -275,7 +282,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       }
     } catch (caughtError) {
       setPosts([]);
-      setError('تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
+      setError(isPostsPermissionError(caughtError)
+        ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
+        : 'تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
       console.error('[usePosts] Failed to load posts:', caughtError);
     } finally {
       setLoading(false);

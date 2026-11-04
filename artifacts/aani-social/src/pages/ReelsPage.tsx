@@ -18,7 +18,7 @@ function saveReelsScrollPosition(userId: string, scrollTop: number) {
 }
 
 export default function ReelsPage({ userId, onOpenComments }: { userId: string; onOpenComments: (postId: string) => void }) {
-  const { posts, loading, refresh } = usePosts('reel', undefined, userId);
+  const { posts, loading, refresh, error } = usePosts('reel', undefined, userId);
   const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -58,7 +58,15 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
       onScroll={event => saveReelsScrollPosition(userId, event.currentTarget.scrollTop)}
     >
       {loading && <div className="status-box flex h-full items-center justify-center text-white">جاري تحميل الريلز...</div>}
-      {!loading && !visiblePosts.length && (
+      {!loading && error && (
+        <div role="alert" className="status-box flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-white">
+          <p className="text-sm text-zinc-300">{error}</p>
+          <button type="button" onClick={() => void refresh()} className="rounded-full bg-pink-600 px-4 py-2 text-xs font-semibold text-white">
+            إعادة المحاولة
+          </button>
+        </div>
+      )}
+      {!loading && !error && !visiblePosts.length && (
         <div className="empty-state flex h-full flex-col items-center justify-center text-center text-white">
           <FilmIcon size={36} className="mb-2 text-pink-500" />
           <h2 className="text-lg font-bold">لا يوجد ريلز منشور حالياً</h2>
