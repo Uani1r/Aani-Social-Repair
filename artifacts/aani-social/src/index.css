@@ -625,8 +625,15 @@ body {
 .topbar {
   left: 50%;
   right: auto;
-  width: min(100%, 450px);
-  transform: translateX(-50%);
+  width: 100%;
+  max-width: 450px;
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  overflow: hidden;
+  transform: translate3d(-50%, 0, 0);
 }
 
 /* الإخفاء سريع قليلًا، والإظهار أسرع ليصل فور السحب */
@@ -752,11 +759,11 @@ body.aani-chrome-hidden .story-bar-content {
 
 @keyframes aani-header-reveal {
   from {
-    transform: translate3d(0, -100%, 0);
+    transform: translate3d(-50%, -100%, 0);
     opacity: 0;
   }
   to {
-    transform: translate3d(0, 0, 0);
+    transform: translate3d(-50%, 0, 0);
     opacity: 1;
   }
 }

@@ -21,9 +21,10 @@ export default function ShellTopBar({
   return (
     <>
       <header
-        className={`topbar fixed top-0 z-40 grid grid-cols-3 items-center overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity] ${
+        className={`topbar fixed top-0 z-50 flex w-full flex-nowrap items-center justify-between overflow-hidden border-b border-zinc-800 bg-zinc-900/95 backdrop-blur-md will-change-[transform,opacity] ${
           chromeHidden ? 'is-hidden' : ''
         }`}
+        dir="rtl"
         style={{
           paddingTop: 'env(safe-area-inset-top)',
           paddingBottom: '0.625rem',
@@ -31,32 +32,27 @@ export default function ShellTopBar({
           paddingRight: '1rem',
         }}
       >
-        <div className="flex items-center justify-start">
-          <button className="relative p-2 rounded-full hover:bg-zinc-800 text-zinc-300" onClick={onOpenNotifications}>
-            <Bell size={20} />
+        <Link href="/feed" className="brand flex shrink-0 items-center gap-1 whitespace-nowrap text-lg font-bold text-white">
+          <span className="brand-mark shrink-0 rounded-lg bg-gradient-to-r from-pink-500 to-purple-600 px-2 py-0.5 text-sm text-white">آ</span>
+          <span>آني <small className="text-[10px] font-normal text-zinc-400">Aani</small></span>
+        </Link>
+
+        <div className="flex shrink-0 items-center justify-end gap-2" dir="ltr">
+          <button type="button" aria-label="إنشاء محتوى" className="icon-button shrink-0 rounded-full bg-pink-600 p-1.5 text-white shadow" onClick={onOpenCreatePost}>
+            <Plus size={20} className="shrink-0" />
+          </button>
+          {path.startsWith('/profile') && (
+            <button type="button" aria-label="الإعدادات" className="icon-button shrink-0 text-zinc-300" onClick={onOpenSettings}>
+              <Settings size={20} className="shrink-0" />
+            </button>
+          )}
+          <button type="button" aria-label="الإشعارات" className="relative shrink-0 rounded-full p-2 text-zinc-300 hover:bg-zinc-800" onClick={onOpenNotifications}>
+            <Bell size={20} className="shrink-0" />
             {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 bg-pink-600 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center">
+              <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-pink-600 text-[9px] font-bold text-white">
                 {unreadCount}
               </span>
             )}
-          </button>
-        </div>
-
-        <div className="flex items-center justify-center">
-          <Link href="/feed" className="brand font-bold text-lg text-white flex items-center gap-1">
-            <span className="brand-mark bg-gradient-to-r from-pink-500 to-purple-600 text-white px-2 py-0.5 rounded-lg text-sm">آ</span>
-            <span>آني <small className="text-[10px] text-zinc-400 font-normal">Aani</small></span>
-          </Link>
-        </div>
-
-        <div className="flex items-center justify-end gap-2">
-          {path.startsWith('/profile') && (
-            <button className="icon-button text-zinc-300" onClick={onOpenSettings}>
-              <Settings size={20} />
-            </button>
-          )}
-          <button type="button" aria-label="إنشاء محتوى" className="icon-button bg-pink-600 text-white p-1.5 rounded-full shadow" onClick={onOpenCreatePost}>
-            <Plus size={20} />
           </button>
         </div>
       </header>
