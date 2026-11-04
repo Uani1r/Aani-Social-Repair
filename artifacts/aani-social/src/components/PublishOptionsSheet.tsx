@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { Image, MoreHorizontal, Type, Video } from 'lucide-react';
 
-import MediaPickerModal from '@/components/MediaPickerModal';
-
 type PublishOptionsSheetProps = {
   open: boolean;
   onClose: () => void;
@@ -28,7 +26,6 @@ export default function PublishOptionsSheet({
   onOpenMore,
 }: PublishOptionsSheetProps) {
   const videoInputRef = useRef<HTMLInputElement | null>(null);
-  const [mediaPickerOpen, setMediaPickerOpen] = useState(false);
   const dragStartYRef = useRef<number | null>(null);
   const dragStartTimeRef = useRef(0);
   const activePointerIdRef = useRef<number | null>(null);
@@ -51,8 +48,8 @@ export default function PublishOptionsSheet({
     }
 
     if (key === 'image') {
+      document.getElementById('native-image-input')?.click();
       onClose();
-      setMediaPickerOpen(true);
       return;
     }
 
@@ -64,6 +61,12 @@ export default function PublishOptionsSheet({
 
     onClose();
     onOpenMore();
+  };
+
+  const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files || []).filter(file => file.type.startsWith('image/'));
+    event.currentTarget.value = '';
+    if (files.length) onImagesSelected(files);
   };
 
   const handleVideoChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -196,6 +199,14 @@ export default function PublishOptionsSheet({
         </div>
 
         <input
+          id="native-image-input"
+          type="file"
+          accept="image/*"
+          multiple
+          style={{ display: 'none' }}
+          onChange={handleFileSelection}
+        />
+        <input
           ref={videoInputRef}
           type="file"
           accept="video/*"
@@ -204,13 +215,6 @@ export default function PublishOptionsSheet({
           onChange={handleVideoChange}
         />
       </section>
-      <MediaPickerModal
-        isOpen={mediaPickerOpen}
-        onClose={() => setMediaPickerOpen(false)}
-        onSelectComplete={files => {
-          if (files.length) onImagesSelected(files);
-        }}
-      />
     </div>
   );
 }
