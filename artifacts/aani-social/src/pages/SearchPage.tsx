@@ -61,7 +61,7 @@ export default function SearchPage({ userId }: { userId: string }) {
             value={term} 
             onChange={e => setTerm(e.target.value)} 
             placeholder="ابحث عن الاسم واسم المستخدم (@username)..." 
-            className="w-full bg-transparent outline-none text-sm text-white placeholder-zinc-500 font-medium"
+            className="w-full bg-transparent outline-none text-sm text-white placeholder-zinc-500 font-medium touch-pan-y"
           />
         </label>
         <button className="button-primary text-xs px-5 py-3 rounded-2xl font-bold" type="submit">بحث</button>

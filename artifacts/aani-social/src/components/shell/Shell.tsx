@@ -10,7 +10,9 @@ import type { PostMetadataTag } from '@/lib/types';
 import type { ShellProps } from './types';
 
 const hasOpenModal = () =>
-  typeof document !== 'undefined' && Boolean(document.querySelector('[role="dialog"][aria-modal="true"]'));
+  typeof document !== 'undefined' && Boolean(document.querySelector(
+    '[role="dialog"][aria-modal="true"], [role="menu"]:not([aria-hidden="true"]):not([data-state="closed"]), [role="listbox"]:not([aria-hidden="true"]):not([data-state="closed"])',
+  ));
 
 export default function Shell({
   children,
@@ -232,7 +234,7 @@ export default function Shell({
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
-  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number; pullCandidate: boolean } | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number; dy: number; pullCandidate: boolean } | null>(null);
   const swipeTimerRef = useRef<number | null>(null);
   const swipeAnimationFrameRef = useRef<number | null>(null);
 
@@ -280,9 +282,10 @@ export default function Shell({
 
     const target = event.target as HTMLElement | null;
     const reelVideo = target?.closest('.reel-slide video:not([controls])');
+    const searchInput = path === '/search' && target?.closest('.searchbox input');
 
-    // لا نلتقط السحب داخل العناصر التي تملك إيماءة أفقية أو حقول الإدخال، باستثناء فيديو الريلز الذي لا يملك شريط تحكم
-    if (isHorizontalGestureArea(target) && !reelVideo) {
+    // احتفظ بإيماءة الريلز وبحث المستخدم، مع احترام بقية المناطق ذات الإيماءات الأفقية
+    if (isHorizontalGestureArea(target) && !reelVideo && !searchInput) {
       swipeStartRef.current = null;
       return;
     }
@@ -306,6 +309,7 @@ export default function Shell({
       y: touch.clientY,
       axis: 'none',
       dx: 0,
+      dy: 0,
       pullCandidate,
     };
   };
@@ -318,39 +322,44 @@ export default function Shell({
     }
 
     const start = swipeStartRef.current;
-    if (!start || start.axis === 'y') return;
+    if (!start) return;
 
     const touch = event.touches[0];
     if (!touch) return;
 
-    const dx = touch.clientX - start.x;
-    const dy = touch.clientY - start.y;
+    const deltaX = touch.clientX - start.x;
+    const deltaY = touch.clientY - start.y;
+    const threshold = 50;
+    const horizontalDominant = Math.abs(deltaX) > Math.abs(deltaY);
 
-    if (start.pullCandidate && dy >= 24 && dy >= Math.abs(dx) * 0.55) {
+    start.dx = deltaX;
+    start.dy = deltaY;
+
+    if (start.pullCandidate && deltaY >= threshold && Math.abs(deltaY) > Math.abs(deltaX)) {
       start.axis = 'y';
-      start.dx = 0;
       setMainOffset(0, false);
       return;
     }
 
-    // تحديد نوع الحركة عند أول 6 بكسل، مع إمكانية التصحيح إذا تغيّر الاتجاه
-    if (start.axis === 'none') {
-      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-      start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-    } else if (start.axis === 'y' && Math.abs(dx) > Math.abs(dy) * 1.5 && Math.abs(dx) > 14) {
+    if (Math.abs(deltaX) >= threshold && horizontalDominant) {
       start.axis = 'x';
+    } else if (Math.abs(deltaY) >= threshold && !horizontalDominant) {
+      start.axis = 'y';
+    } else {
+      start.axis = 'none';
     }
 
-    if (start.axis !== 'x') return;
+    if (start.axis !== 'x') {
+      setMainOffset(0, false);
+      return;
+    }
 
-    start.dx = dx;
-
-    // مقاومة عند حدود البداية والنهاية (السحب من اليسار لليمين = للأمام)
+    // مقاومة عند حدود البداية والنهاية: السحب لليسار يقدّم، والسحب لليمين يرجع
     const index = getRouteIndex(path);
-    const atForwardLimit = index >= swipeRoutes.length - 1 && dx > 0;
-    const atBackwardLimit = index <= 0 && dx < 0;
+    const atForwardLimit = index >= swipeRoutes.length - 1 && deltaX < 0;
+    const atBackwardLimit = index <= 0 && deltaX > 0;
 
-    setMainOffset(atForwardLimit || atBackwardLimit ? dx * 0.25 : dx, false);
+    setMainOffset(atForwardLimit || atBackwardLimit ? deltaX * 0.25 : deltaX, false);
   };
 
   const handleSwipeEnd = () => {
@@ -362,19 +371,19 @@ export default function Shell({
       return;
     }
 
-    const width = window.innerWidth || 360;
-    const threshold = Math.max(56, width * 0.18);
-
+    const threshold = 50;
     const horizontalSwipe = Boolean(start && start.axis === 'x');
-    const shouldNavigate = Boolean(start && start.axis === 'x' && Math.abs(start.dx) >= threshold);
+    const shouldNavigate = Boolean(
+      start && Math.abs(start.dx) >= threshold && Math.abs(start.dx) > Math.abs(start.dy),
+    );
     let navigated = false;
 
     if (shouldNavigate && start) {
       const index = getRouteIndex(path);
 
       if (index >= 0) {
-        // السحب من اليسار إلى اليمين (dx > 0) يقدّم للأمام، ومن اليمين لليسار يرجع
-        const goingForward = start.dx > 0;
+        // السحب من اليمين إلى اليسار (deltaX < 0) يقدّم للأمام، ومن اليسار لليمين يرجع
+        const goingForward = start.dx < 0;
         const nextIndex = goingForward ? index + 1 : index - 1;
 
         if (nextIndex >= 0 && nextIndex < swipeRoutes.length) {
@@ -577,7 +586,6 @@ export default function Shell({
                 ? 'page-slide-backward'
                 : ''
           }`}
-          style={{ touchAction: 'pan-y' }}
           onTouchStart={handleSwipeStart}
           onTouchMove={handleSwipeMove}
           onTouchEnd={handleSwipeEnd}
