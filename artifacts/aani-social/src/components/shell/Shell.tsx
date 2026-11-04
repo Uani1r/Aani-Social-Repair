@@ -113,6 +113,14 @@ export default function Shell({
     const setHidden = (hidden: boolean) => {
       if (chromeHiddenRef.current === hidden) return;
       chromeHiddenRef.current = hidden;
+      if (hidden) {
+        document.body.classList.remove('aani-chrome-revealed');
+        if (storyRevealTimerRef.current) {
+          window.clearTimeout(storyRevealTimerRef.current);
+          storyRevealTimerRef.current = null;
+        }
+      }
+      document.body.classList.toggle('aani-chrome-hidden', hidden);
       setChromeHidden(hidden);
     };
 
@@ -221,6 +229,11 @@ export default function Shell({
       window.removeEventListener('touchcancel', onTouchEnd);
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('wheel', onWheel);
+      document.body.classList.remove('aani-chrome-hidden', 'aani-chrome-revealed');
+      if (storyRevealTimerRef.current) {
+        window.clearTimeout(storyRevealTimerRef.current);
+        storyRevealTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -229,7 +242,7 @@ export default function Shell({
     const wasHidden = prevChromeHiddenRef.current;
     prevChromeHiddenRef.current = chromeHidden;
 
-    document.body.classList.toggle('aani-chrome-hidden', chromeHidden);
+    // أُضيف كلاس الإخفاء تزامنيًا مع إيماءة السحب حتى تتحرك الأشرطة معًا.
 
     // سلسلة الظهور: الشريط العلوي أولًا، ثم ينبثق شريط القصص من خلفه إلى مكانه
     if (wasHidden && !chromeHidden) {
@@ -244,9 +257,6 @@ export default function Shell({
       }, 1000);
     }
 
-    return () => {
-      document.body.classList.remove('aani-chrome-hidden');
-    };
   }, [chromeHidden]);
 
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
