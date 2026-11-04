@@ -3,6 +3,7 @@ begin;
 
 alter table public.posts
   add column if not exists visibility text not null default 'public',
+  add column if not exists comments_disabled boolean not null default false,
   add column if not exists hide_likes boolean not null default false,
   add column if not exists hide_comments boolean not null default false,
   add column if not exists comment_privacy text not null default 'public',
@@ -11,6 +12,10 @@ alter table public.posts
 update public.posts
 set visibility = 'public'
 where visibility is null or visibility not in ('public', 'private');
+
+update public.posts
+set comments_disabled = false
+where comments_disabled is null;
 
 update public.posts
 set comment_privacy = 'public'
@@ -22,6 +27,8 @@ where allowed_commenters is null;
 
 alter table public.posts alter column visibility set default 'public';
 alter table public.posts alter column visibility set not null;
+alter table public.posts alter column comments_disabled set default false;
+alter table public.posts alter column comments_disabled set not null;
 alter table public.posts alter column hide_likes set default false;
 alter table public.posts alter column hide_likes set not null;
 alter table public.posts alter column hide_comments set default false;
@@ -108,7 +115,7 @@ as $$
     select 1
     from public.posts p
     where p.id = p_post_id
-      and p.comments_disabled = false
+      and coalesce(p.comments_disabled, false) = false
       and (p_commenter_id = auth.uid() or auth.role() = 'service_role')
       and (
         p.user_id = p_commenter_id
