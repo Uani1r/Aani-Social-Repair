@@ -153,33 +153,14 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         profileId?: string,
         postIds?: string[],
       ) => {
-        const buildQuery = (includeDestination: boolean, selectAll = false) => {
-          const columns = selectAll
-            ? '*'
-            : includeDestination
-              ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at'
-              : 'id, user_id, content, post_metadata, media_url, media_urls, type, created_at';
-          const request = supabase.from('posts').select(columns);
-          if (kind === 'feed') {
-            const feedRequest = includeDestination
-              ? request.or('destination.eq.feed,destination.is.null')
-              : request;
-            return feedRequest.order('created_at', { ascending: false }).limit(50);
-          }
-          if (kind === 'reel') {
-            const reelRequest = request.eq('type', 'reel');
-            const destinationRequest = includeDestination ? reelRequest.eq('destination', 'reels') : reelRequest;
-            return destinationRequest.order('created_at', { ascending: false }).limit(50);
-          }
-          if (postIds) return request.in('id', postIds);
-          return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
-        };
-
-        let result = await buildQuery(true);
-        if (result.error) {
-          result = await buildQuery(false, true);
+        const request = supabase.from('posts').select('*');
+        if (kind === 'profile' && postIds) {
+          return request.in('id', postIds).order('created_at', { ascending: false });
         }
-        return result;
+        if (kind === 'profile') {
+          return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
+        }
+        return request.order('created_at', { ascending: false });
       };
 
       if (query === 'feed') {
@@ -275,7 +256,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         if (postsErr) throw postsErr;
 
         const rawPosts = (await normalizePostRowsWithVisibility(postData))
-          .filter(post => post.destination === 'reels');
+          .filter(post => post.type === 'reel' && post.destination === 'reels');
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
