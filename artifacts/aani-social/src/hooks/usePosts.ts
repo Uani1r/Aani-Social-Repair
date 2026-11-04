@@ -33,7 +33,7 @@ function normalizePostRow(value: unknown): PostRow | null {
     media_url: typeof value.media_url === 'string' ? value.media_url : null,
     media_urls: mediaUrls,
     type: value.type === 'photo' || value.type === 'reel' ? value.type : 'text',
-    destination: value.destination === 'reels' ? 'reels' : value.destination === 'feed' ? 'feed' : value.type === 'reel' ? 'reels' : 'feed',
+    destination: value.destination === 'reels' ? 'reels' : 'feed',
     visibility: value.visibility === 'private' ? 'private' : 'public',
     hide_likes: value.hide_likes === true,
     hide_comments: value.hide_comments === true,
@@ -162,8 +162,8 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           const request = supabase.from('posts').select(columns);
           if (kind === 'feed') {
             const feedRequest = includeDestination
-              ? request.eq('destination', 'feed')
-              : request.neq('type', 'reel');
+              ? request.or('destination.eq.feed,destination.is.null')
+              : request;
             return feedRequest.order('created_at', { ascending: false }).limit(50);
           }
           if (kind === 'reel') {
@@ -277,7 +277,8 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         if (postsErr) throw postsErr;
 
-        const rawPosts = await normalizePostRowsWithVisibility(postData);
+        const rawPosts = (await normalizePostRowsWithVisibility(postData))
+          .filter(post => post.destination === 'reels');
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);

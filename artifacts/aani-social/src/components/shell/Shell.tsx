@@ -709,7 +709,7 @@ export default function Shell({
         };
         updatePendingPost(postId, { post: publishedPost, stage: 'publishing', progress: 96, error: null });
 
-        const { error: postError } = await supabase.from('posts').upsert({
+        const postPayload = {
           id: postId,
           user_id: userId,
           content,
@@ -717,9 +717,21 @@ export default function Shell({
           media_url: uploadedUrls[0] || null,
           media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
           type,
-          destination: postDestination,
           created_at: createdAt,
-        }, { onConflict: 'id' });
+        };
+        let postError = (await supabase.from('posts').upsert({
+          ...postPayload,
+          destination: postDestination,
+        }, { onConflict: 'id' })).error;
+
+        if (
+          postError
+          && postDestination === 'feed'
+          && (postError.code === '42703' || postError.code === 'PGRST204')
+          && postError.message.includes('destination')
+        ) {
+          postError = (await supabase.from('posts').upsert(postPayload, { onConflict: 'id' })).error;
+        }
 
         if (postError) {
           if ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata')) {

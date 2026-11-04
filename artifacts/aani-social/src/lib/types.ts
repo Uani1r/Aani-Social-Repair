@@ -102,7 +102,7 @@ export type Post = {
 };
 
 export const getPostDestination = (post: Pick<Post, 'type' | 'destination'>): PostDestination =>
-  post.destination ?? (post.type === 'reel' ? 'reels' : 'feed');
+  post.destination ?? 'feed';
 
 export type PostRow = Pick<
   Post,
