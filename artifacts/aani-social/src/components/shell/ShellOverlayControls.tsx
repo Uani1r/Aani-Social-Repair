@@ -3,6 +3,7 @@ import { Bot } from 'lucide-react';
 
 import AIAssistantModal from '@/components/AIAssistantModal';
 import CreatePostModal from '@/components/CreatePostModal';
+import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import SettingsModal from '@/components/SettingsModal';
 import type { PostMetadataTag, Profile } from '@/lib/types';
@@ -16,6 +17,11 @@ type ShellOverlayControlsProps = {
   onSelectPublishImages: (files: File[]) => void;
   onSelectPublishVideo: (file: File) => void;
   onOpenMorePublishOptions: () => void;
+  showImagePreviewModal: boolean;
+  imagePreviewImages: { file: File; dataUrl: string }[];
+  onImagePreviewImagesChange: (images: { file: File; dataUrl: string }[]) => void;
+  onCloseImagePreview: () => void;
+  onNextImagePreview: () => void;
   showCreateModal: boolean;
   postText: string;
   selectedFiles: File[];
@@ -47,6 +53,11 @@ export default function ShellOverlayControls({
   onSelectPublishImages,
   onSelectPublishVideo,
   onOpenMorePublishOptions,
+  showImagePreviewModal,
+  imagePreviewImages,
+  onImagePreviewImagesChange,
+  onCloseImagePreview,
+  onNextImagePreview,
   showCreateModal,
   postText,
   selectedFiles,
@@ -79,6 +90,14 @@ export default function ShellOverlayControls({
         onImagesSelected={onSelectPublishImages}
         onVideoSelected={onSelectPublishVideo}
         onOpenMore={onOpenMorePublishOptions}
+      />
+
+      <ImagePreviewModal
+        open={showImagePreviewModal}
+        images={imagePreviewImages}
+        onImagesChange={onImagePreviewImagesChange}
+        onClose={onCloseImagePreview}
+        onNext={onNextImagePreview}
       />
 
       {showCreateModal && (

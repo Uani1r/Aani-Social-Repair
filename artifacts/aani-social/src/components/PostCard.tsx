@@ -57,6 +57,8 @@ export default function PostCard({
   const formattedDate = post.created_at
     ? new Date(post.created_at).toLocaleDateString('ar-EG')
     : '';
+  const postImages = (post.media_urls || []).filter(Boolean);
+  if (postImages.length === 0 && post.media_url) postImages.push(post.media_url);
 
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-white shadow-sm" dir="rtl">
@@ -86,25 +88,30 @@ export default function PostCard({
         </div>
       </div>
 
+      {/* مرفقات الصور */}
+      {postImages.length > 0 && (
+        <div className="mt-3 flex gap-2 overflow-x-auto rounded-xl no-scrollbar">
+          {postImages.map((url, index) => (
+            <div key={`${url}-${index}`} className="min-w-full overflow-hidden rounded-xl border border-zinc-800">
+              <PostImagePreview
+                src={url}
+                alt={`صورة المنشور ${index + 1}`}
+                className="max-h-96 w-full object-cover"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* محتوى المنشور */}
       {post.content && (
         <ExpandablePostText
           text={post.content}
+          maxLines={2}
           className="mt-3 text-sm leading-6 text-zinc-200"
         />
       )}
       <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
-
-      {/* مرفق الصورة */}
-      {post.media_url && (
-        <div className="mt-3 overflow-hidden rounded-xl border border-zinc-800">
-          <PostImagePreview
-            src={post.media_url}
-            alt="مرفق المنشور"
-            className="max-h-96 w-full object-cover"
-          />
-        </div>
-      )}
 
       {/* شريط الأزرار */}
       <div className="mt-4 flex items-center justify-between border-t border-zinc-800/60 pt-3 text-zinc-300">

@@ -9,6 +9,13 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import type { PostMetadataTag } from '@/lib/types';
 import type { ShellProps } from './types';
 
+const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('تعذر تجهيز معاينة الصورة.'));
+  reader.onerror = () => reject(reader.error || new Error('تعذر قراءة الصورة المختارة.'));
+  reader.readAsDataURL(file);
+});
+
 const hasOpenModal = () =>
   typeof document !== 'undefined' && Boolean(document.querySelector(
     '[role="dialog"][aria-modal="true"], [role="menu"]:not([aria-hidden="true"]):not([data-state="closed"]), [role="listbox"]:not([aria-hidden="true"]):not([data-state="closed"])',
@@ -425,6 +432,8 @@ export default function Shell({
 
   const [postText, setPostText] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [imagePreviewImages, setImagePreviewImages] = useState<{ file: File; dataUrl: string }[]>([]);
+  const [showImagePreviewModal, setShowImagePreviewModal] = useState(false);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -446,6 +455,39 @@ export default function Shell({
       setUnreadCount(count || 0);
     });
   }, [userId, showNotifsModal]);
+
+  const handleSelectPublishImages = async (files: File[]) => {
+    if (!files.length) return;
+    setShowPublishOptionsSheet(false);
+    setCreateError('');
+    try {
+      const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
+      setSelectedFiles(previews.map(preview => preview.file));
+      setFileType('image');
+      setImagePreviewImages(previews);
+      setShowImagePreviewModal(true);
+    } catch {
+      setCreateError('تعذر تجهيز الصور المختارة. حاول اختيارها مرة أخرى.');
+    }
+  };
+
+  const handleImagePreviewChange = (images: { file: File; dataUrl: string }[]) => {
+    setImagePreviewImages(images);
+    setSelectedFiles(images.map(image => image.file));
+  };
+
+  const closeImagePreview = () => {
+    setShowImagePreviewModal(false);
+    setImagePreviewImages([]);
+    setSelectedFiles([]);
+    setFileType(null);
+  };
+
+  const continueToPostCaption = () => {
+    setShowImagePreviewModal(false);
+    setImagePreviewImages([]);
+    setShowCreateModal(true);
+  };
 
   const handlePublish = async (postMetadata: PostMetadataTag[] = []) => {
     if (!supabaseConfigured) {
@@ -505,6 +547,8 @@ export default function Shell({
 
       setPostText('');
       setSelectedFiles([]);
+      setImagePreviewImages([]);
+      setShowImagePreviewModal(false);
       setFileType(null);
       setShowCreateModal(false);
       window.dispatchEvent(new Event('aani:post-created'));
@@ -529,19 +573,17 @@ export default function Shell({
         unreadCount={unreadCount}
         onOpenNotifications={() => setShowNotifsModal(true)}
         onOpenSettings={() => setShowSettingsModal(true)}
-        onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
+        onOpenCreatePost={() => {
+          document.getElementById('native-image-input')?.click();
+          setShowPublishOptionsSheet(true);
+        }}
       />
 
       <ShellOverlayControls
         showPublishOptionsSheet={showPublishOptionsSheet}
         onClosePublishOptionsSheet={() => setShowPublishOptionsSheet(false)}
         onCreateTextPost={() => setShowCreateModal(true)}
-        onSelectPublishImages={files => {
-          setSelectedFiles(files);
-          setFileType('image');
-          setCreateError('');
-          setShowCreateModal(true);
-        }}
+        onSelectPublishImages={handleSelectPublishImages}
         onSelectPublishVideo={file => {
           setSelectedFiles([file]);
           setFileType('video');
@@ -552,6 +594,11 @@ export default function Shell({
           setPendingStoryComposerRequest(true);
           if (path !== '/' && path !== '/feed') setLocation('/feed');
         }}
+        showImagePreviewModal={showImagePreviewModal}
+        imagePreviewImages={imagePreviewImages}
+        onImagePreviewImagesChange={handleImagePreviewChange}
+        onCloseImagePreview={closeImagePreview}
+        onNextImagePreview={continueToPostCaption}
         showCreateModal={showCreateModal}
         postText={postText}
         selectedFiles={selectedFiles}

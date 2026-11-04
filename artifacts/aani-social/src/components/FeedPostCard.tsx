@@ -374,14 +374,6 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         />
       </header>
 
-      {post.content && (
-        <ExpandablePostText
-          text={post.content}
-          className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed"
-        />
-      )}
-      <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
-
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
         <div className="relative mt-3 rounded-xl overflow-hidden border border-zinc-800">
@@ -413,6 +405,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
         </div>
       )}
+
+      {post.content && (
+        <ExpandablePostText
+          text={post.content}
+          maxLines={2}
+          className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed"
+        />
+      )}
+      <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
 
       {/* شريط الأزرار المتجمع جهة اليمين */}
       <footer className="border-t border-zinc-800/80 pt-2.5 mt-3">

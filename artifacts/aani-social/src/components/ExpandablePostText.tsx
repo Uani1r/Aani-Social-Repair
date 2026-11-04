@@ -3,11 +3,10 @@ import { useLayoutEffect, useRef, useState } from 'react';
 type ExpandablePostTextProps = {
   text: string;
   className?: string;
+  maxLines?: number;
 };
 
-const COLLAPSED_LINES = 6;
-
-export default function ExpandablePostText({ text, className = '' }: ExpandablePostTextProps) {
+export default function ExpandablePostText({ text, className = '', maxLines = 6 }: ExpandablePostTextProps) {
   const measurementRef = useRef<HTMLParagraphElement>(null);
   const [canExpand, setCanExpand] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -21,7 +20,7 @@ export default function ExpandablePostText({ text, className = '' }: ExpandableP
       const lineHeight = Number.parseFloat(style.lineHeight);
       const fontSize = Number.parseFloat(style.fontSize);
       const effectiveLineHeight = Number.isFinite(lineHeight) ? lineHeight : fontSize * 1.5;
-      const nextCanExpand = measurement.scrollHeight > effectiveLineHeight * COLLAPSED_LINES + 2;
+      const nextCanExpand = measurement.scrollHeight > effectiveLineHeight * maxLines + 2;
       setCanExpand(current => current === nextCanExpand ? current : nextCanExpand);
     };
 
@@ -34,11 +33,14 @@ export default function ExpandablePostText({ text, className = '' }: ExpandableP
     const observer = new ResizeObserver(updateOverflow);
     observer.observe(measurement.parentElement || measurement);
     return () => observer.disconnect();
-  }, [text, className]);
+  }, [text, className, maxLines]);
 
   return (
     <div className="relative min-w-0">
-      <p className={`${className} whitespace-pre-line break-words ${expanded ? '' : 'line-clamp-6'}`}>
+      <p
+        className={`${className} whitespace-pre-line break-words ${expanded ? '' : 'line-clamp-6'}`}
+        style={expanded ? undefined : { WebkitLineClamp: maxLines }}
+      >
         {text}
       </p>
       <p

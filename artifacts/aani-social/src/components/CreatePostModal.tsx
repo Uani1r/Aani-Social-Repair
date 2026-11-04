@@ -241,18 +241,6 @@ export default function CreatePostModal({
           </button>
         </div>
 
-        <div className="px-6 pb-5">
-          <textarea
-            value={postText}
-            onChange={event => onPostTextChange(event.target.value)}
-            maxLength={2000}
-            placeholder="ما الذي يدور في ذهنك اليوم؟..."
-            aria-label="اكتب محتوى المنشور"
-            className="min-h-[280px] max-h-[42dvh] w-full resize-none border-0 bg-transparent p-0 text-right text-[18px] leading-[1.9] text-white outline-none placeholder:text-zinc-500 focus:ring-0"
-            rows={8}
-          />
-        </div>
-
         {filePreviews.length > 0 && (
           <div className="flex gap-3 overflow-x-auto px-6 pb-5 no-scrollbar">
             {filePreviews.map((preview, index) => (
@@ -274,6 +262,18 @@ export default function CreatePostModal({
             ))}
           </div>
         )}
+
+        <div className="px-6 pb-5">
+          <textarea
+            value={postText}
+            onChange={event => onPostTextChange(event.target.value)}
+            maxLength={2000}
+            placeholder="ما الذي يدور في ذهنك اليوم؟..."
+            aria-label="اكتب محتوى المنشور"
+            className="min-h-[280px] max-h-[42dvh] w-full resize-none border-0 bg-transparent p-0 text-right text-[18px] leading-[1.9] text-white outline-none placeholder:text-zinc-500 focus:ring-0"
+            rows={8}
+          />
+        </div>
 
         <PostMetadataChips
           tags={tags}
