@@ -38,7 +38,7 @@ export default function ShellTopBar({
         </Link>
 
         <div className="flex shrink-0 items-center justify-end gap-2" dir="ltr">
-          <button type="button" aria-label="اختيار صور للنشر" className="icon-button shrink-0 rounded-full bg-pink-600 p-1.5 text-white shadow" onClick={onOpenCreatePost}>
+          <button type="button" aria-label="فتح خيارات النشر" className="icon-button shrink-0 rounded-full bg-pink-600 p-1.5 text-white shadow" onClick={onOpenCreatePost}>
             <Plus size={20} className="shrink-0" />
           </button>
           {path.startsWith('/profile') && (

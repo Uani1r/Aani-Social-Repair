@@ -376,14 +376,14 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
-        <div className="relative mt-3 rounded-xl overflow-hidden border border-zinc-800">
-          <div ref={trackRef} onScroll={handleScroll} className="carousel-track">
+        <div className="relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800">
+          <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
-              <div key={i} className="carousel-slide">
+              <div key={i} className="carousel-slide h-full">
                 {post.type === 'reel' ? (
-                  <video src={url} controls className="w-full max-h-[28rem] object-cover" />
+                  <video src={url} controls className="h-full w-full object-cover" />
                 ) : (
-                  <PostImagePreview src={url} alt="" className="w-full max-h-[28rem] object-cover select-none" />
+                  <PostImagePreview src={url} alt="" className="block h-full w-full select-none object-cover" />
                 )}
               </div>
             ))}

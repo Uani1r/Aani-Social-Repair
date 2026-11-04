@@ -573,10 +573,7 @@ export default function Shell({
         unreadCount={unreadCount}
         onOpenNotifications={() => setShowNotifsModal(true)}
         onOpenSettings={() => setShowSettingsModal(true)}
-        onOpenCreatePost={() => {
-          document.getElementById('native-image-input')?.click();
-          setShowPublishOptionsSheet(true);
-        }}
+        onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
       />
 
       <ShellOverlayControls

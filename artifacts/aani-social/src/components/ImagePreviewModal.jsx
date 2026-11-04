@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, Crop, Music2, X } from 'lucide-react';
+import { Check, Crop, Minus, Music2, Plus, X } from 'lucide-react';
 
-const INITIAL_CROP = { x: 0.08, y: 0.08, width: 0.84, height: 0.84 };
-const MIN_CROP_EDGE = 0.18;
-
+const POST_ASPECT_RATIO = 4 / 5;
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 4;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const blobToDataUrl = blob => new Promise((resolve, reject) => {
@@ -13,7 +13,23 @@ const blobToDataUrl = blob => new Promise((resolve, reject) => {
   reader.readAsDataURL(blob);
 });
 
-async function cropImage(image, crop) {
+function getImageElement(frame) {
+  return frame?.querySelector('img') || null;
+}
+
+function getImageBounds(frame, image, zoom) {
+  if (!frame || !image?.naturalWidth || !image?.naturalHeight) return { maxX: 0, maxY: 0 };
+  const frameBounds = frame.getBoundingClientRect();
+  const coverScale = Math.max(frameBounds.width / image.naturalWidth, frameBounds.height / image.naturalHeight);
+  const renderedWidth = image.naturalWidth * coverScale * zoom;
+  const renderedHeight = image.naturalHeight * coverScale * zoom;
+  return {
+    maxX: Math.max(0, (renderedWidth - frameBounds.width) / 2),
+    maxY: Math.max(0, (renderedHeight - frameBounds.height) / 2),
+  };
+}
+
+async function cropImage(image, cropView, frameBounds) {
   const source = new window.Image();
   await new Promise((resolve, reject) => {
     source.onload = resolve;
@@ -21,17 +37,19 @@ async function cropImage(image, crop) {
     source.src = image.dataUrl;
   });
 
-  const sx = clamp(Math.floor(crop.x * source.naturalWidth), 0, source.naturalWidth - 1);
-  const sy = clamp(Math.floor(crop.y * source.naturalHeight), 0, source.naturalHeight - 1);
-  const sw = Math.max(1, Math.min(source.naturalWidth - sx, Math.round(crop.width * source.naturalWidth)));
-  const sh = Math.max(1, Math.min(source.naturalHeight - sy, Math.round(crop.height * source.naturalHeight)));
+  const coverScale = Math.max(frameBounds.width / source.naturalWidth, frameBounds.height / source.naturalHeight);
+  const renderedScale = coverScale * cropView.scale;
+  const sourceWidth = Math.min(source.naturalWidth, frameBounds.width / renderedScale);
+  const sourceHeight = Math.min(source.naturalHeight, frameBounds.height / renderedScale);
+  const sourceX = clamp((source.naturalWidth - sourceWidth) / 2 - cropView.x / renderedScale, 0, source.naturalWidth - sourceWidth);
+  const sourceY = clamp((source.naturalHeight - sourceHeight) / 2 - cropView.y / renderedScale, 0, source.naturalHeight - sourceHeight);
   const canvas = document.createElement('canvas');
-  canvas.width = sw;
-  canvas.height = sh;
+  canvas.width = 1080;
+  canvas.height = Math.round(canvas.width / POST_ASPECT_RATIO);
 
   const context = canvas.getContext('2d');
   if (!context) throw new Error('تعذر تجهيز مساحة القص.');
-  context.drawImage(source, sx, sy, sw, sh, 0, 0, sw, sh);
+  context.drawImage(source, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
 
   const outputType = image.file.type === 'image/png' || image.file.type === 'image/webp'
     ? image.file.type
@@ -57,7 +75,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
   const [activeIndex, setActiveIndex] = useState(0);
   const [isCropping, setIsCropping] = useState(false);
   const [isSavingCrop, setIsSavingCrop] = useState(false);
-  const [cropRect, setCropRect] = useState(INITIAL_CROP);
+  const [cropView, setCropView] = useState({ scale: MIN_ZOOM, x: 0, y: 0 });
   const [cropError, setCropError] = useState('');
   const [musicNotice, setMusicNotice] = useState(false);
   const activeImage = images[activeIndex];
@@ -93,13 +111,13 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     if (open) {
       setActiveIndex(0);
       setIsCropping(false);
-      setCropRect(INITIAL_CROP);
+      setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
       setCropError('');
     }
   }, [open, images.length]);
 
   useEffect(() => {
-    setCropRect(INITIAL_CROP);
+    setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
     setCropError('');
   }, [activeIndex]);
 
@@ -126,7 +144,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
   };
 
   const beginCropping = () => {
-    setCropRect(INITIAL_CROP);
+    setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
     setCropError('');
     setIsCropping(true);
   };
@@ -134,17 +152,11 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
   const handleCropPointerDown = event => {
     const frame = cropFrameRef.current;
     if (!frame) return;
-    const bounds = frame.getBoundingClientRect();
-    const handle = event.target instanceof HTMLElement
-      ? event.target.closest('[data-crop-handle]')?.getAttribute('data-crop-handle')
-      : null;
     cropDragRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      bounds,
-      startRect: cropRect,
-      mode: handle || 'move',
+      startView: cropView,
     };
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -152,57 +164,45 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
       // The browser may already have released this pointer.
     }
     event.preventDefault();
-    event.stopPropagation();
   };
 
   const handleCropPointerMove = event => {
     const drag = cropDragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
+    const frame = cropFrameRef.current;
+    const imageElement = getImageElement(frame);
+    if (!drag || drag.pointerId !== event.pointerId || !frame) return;
 
-    const dx = (event.clientX - drag.startClientX) / Math.max(drag.bounds.width, 1);
-    const dy = (event.clientY - drag.startClientY) / Math.max(drag.bounds.height, 1);
-    const start = drag.startRect;
-    const right = start.x + start.width;
-    const bottom = start.y + start.height;
-    let next = start;
-
-    if (drag.mode === 'move') {
-      next = {
-        ...start,
-        x: clamp(start.x + dx, 0, 1 - start.width),
-        y: clamp(start.y + dy, 0, 1 - start.height),
-      };
-    } else if (drag.mode === 'nw') {
-      const x = clamp(start.x + dx, 0, right - MIN_CROP_EDGE);
-      const y = clamp(start.y + dy, 0, bottom - MIN_CROP_EDGE);
-      next = { x, y, width: right - x, height: bottom - y };
-    } else if (drag.mode === 'ne') {
-      const y = clamp(start.y + dy, 0, bottom - MIN_CROP_EDGE);
-      const nextRight = clamp(right + dx, start.x + MIN_CROP_EDGE, 1);
-      next = { x: start.x, y, width: nextRight - start.x, height: bottom - y };
-    } else if (drag.mode === 'sw') {
-      const x = clamp(start.x + dx, 0, right - MIN_CROP_EDGE);
-      const nextBottom = clamp(bottom + dy, start.y + MIN_CROP_EDGE, 1);
-      next = { x, y: start.y, width: right - x, height: nextBottom - start.y };
-    } else if (drag.mode === 'se') {
-      const nextRight = clamp(right + dx, start.x + MIN_CROP_EDGE, 1);
-      const nextBottom = clamp(bottom + dy, start.y + MIN_CROP_EDGE, 1);
-      next = { x: start.x, y: start.y, width: nextRight - start.x, height: nextBottom - start.y };
-    }
-
-    setCropRect(next);
+    const bounds = getImageBounds(frame, imageElement, drag.startView.scale);
+    setCropView({
+      ...drag.startView,
+      x: clamp(drag.startView.x + event.clientX - drag.startClientX, -bounds.maxX, bounds.maxX),
+      y: clamp(drag.startView.y + event.clientY - drag.startClientY, -bounds.maxY, bounds.maxY),
+    });
   };
 
   const endCropPointer = event => {
     if (cropDragRef.current?.pointerId === event.pointerId) cropDragRef.current = null;
   };
 
+  const updateZoom = value => {
+    const frame = cropFrameRef.current;
+    const imageElement = getImageElement(frame);
+    const scale = clamp(Number(value), MIN_ZOOM, MAX_ZOOM);
+    const bounds = getImageBounds(frame, imageElement, scale);
+    setCropView(current => ({
+      scale,
+      x: clamp(current.x, -bounds.maxX, bounds.maxX),
+      y: clamp(current.y, -bounds.maxY, bounds.maxY),
+    }));
+  };
+
   const applyCrop = async () => {
-    if (!activeImage || isSavingCrop) return;
+    const frame = cropFrameRef.current;
+    if (!activeImage || !frame || isSavingCrop) return;
     setIsSavingCrop(true);
     setCropError('');
     try {
-      const croppedImage = await cropImage(activeImage, cropRect);
+      const croppedImage = await cropImage(activeImage, cropView, frame.getBoundingClientRect());
       onImagesChange(images.map((image, index) => index === activeIndex ? croppedImage : image));
       setIsCropping(false);
     } catch (error) {
@@ -244,35 +244,33 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
         >
           {images.map((image, index) => (
             <div key={`${image.file.name}-${image.file.lastModified}-${index}`} className="flex h-full w-full shrink-0 snap-center items-center justify-center px-4">
-              <div ref={index === activeIndex ? cropFrameRef : null} className="relative flex max-h-full max-w-full items-center justify-center">
+              <div
+                ref={index === activeIndex ? cropFrameRef : null}
+                className="relative h-full max-h-full w-auto max-w-full shrink-0 overflow-hidden rounded-xl bg-black"
+                onPointerDown={isCropping && index === activeIndex ? handleCropPointerDown : undefined}
+                onPointerMove={isCropping && index === activeIndex ? handleCropPointerMove : undefined}
+                onPointerUp={isCropping && index === activeIndex ? endCropPointer : undefined}
+                onPointerCancel={isCropping && index === activeIndex ? endCropPointer : undefined}
+                aria-label={isCropping && index === activeIndex ? 'حرّك الصورة داخل إطار المنشور' : undefined}
+                style={{
+                  aspectRatio: '4 / 5',
+                  touchAction: isCropping && index === activeIndex ? 'none' : 'pan-x',
+                }}
+              >
                 <img
                   src={image.dataUrl}
                   alt={`الصورة ${index + 1}`}
                   draggable={false}
-                  className="max-h-[calc(100dvh_-_230px)] max-w-[calc(100vw_-_32px)] select-none object-contain"
-                  style={{ touchAction: isCropping && index === activeIndex ? 'none' : 'pan-x' }}
+                  className="absolute inset-0 h-full w-full select-none object-cover"
+                  style={isCropping && index === activeIndex
+                    ? { transform: `translate3d(${cropView.x}px, ${cropView.y}px, 0) scale(${cropView.scale})`, transformOrigin: 'center' }
+                    : undefined}
                 />
                 {isCropping && index === activeIndex && (
-                  <div
-                    className="absolute inset-0 z-10"
-                    onPointerDown={handleCropPointerDown}
-                    onPointerMove={handleCropPointerMove}
-                    onPointerUp={endCropPointer}
-                    onPointerCancel={endCropPointer}
-                    style={{ touchAction: 'none' }}
-                  >
-                    <div
-                      className="absolute border border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.58)]"
-                      style={{ left: `${cropRect.x * 100}%`, top: `${cropRect.y * 100}%`, width: `${cropRect.width * 100}%`, height: `${cropRect.height * 100}%`, touchAction: 'none' }}
-                    >
-                      <div className="pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3">
-                        {[0, 1, 2].map(index => <span key={`v-${index}`} className="border-l border-white/30 first:border-l-0" />)}
-                        {[1, 2].map(index => <span key={`h-${index}`} className="absolute inset-x-0 border-t border-white/30" style={{ top: `${(index * 100) / 3}%` }} />)}
-                      </div>
-                      <span data-crop-handle="nw" className="absolute -left-2 -top-2 h-4 w-4 rounded-full border-2 border-white bg-[#f1a17f]" />
-                      <span data-crop-handle="ne" className="absolute -right-2 -top-2 h-4 w-4 rounded-full border-2 border-white bg-[#f1a17f]" />
-                      <span data-crop-handle="sw" className="absolute -bottom-2 -left-2 h-4 w-4 rounded-full border-2 border-white bg-[#f1a17f]" />
-                      <span data-crop-handle="se" className="absolute -bottom-2 -right-2 h-4 w-4 rounded-full border-2 border-white bg-[#f1a17f]" />
+                  <div className="pointer-events-none absolute inset-0 border border-white/90 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.25)]">
+                    <div className="absolute inset-0 grid grid-cols-3 grid-rows-3">
+                      {[0, 1, 2].map(line => <span key={`v-${line}`} className="border-l border-white/25 first:border-l-0" />)}
+                      {[1, 2].map(line => <span key={`h-${line}`} className="absolute inset-x-0 border-t border-white/25" style={{ top: `${(line * 100) / 3}%` }} />)}
                     </div>
                   </div>
                 )}
@@ -299,7 +297,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
         )}
       </div>
 
-      {!isCropping && (
+      {!isCropping ? (
         <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full border border-white/10 bg-[#242326]/95 px-4 py-3 shadow-2xl backdrop-blur-xl">
           <button type="button" onClick={() => setMusicNotice(true)} className="flex min-w-24 flex-col items-center gap-1 rounded-full px-4 py-1 text-[#f1a17f] transition hover:bg-white/5">
             <Music2 size={24} />
@@ -308,6 +306,25 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
           <button type="button" onClick={beginCropping} className="flex min-w-24 flex-col items-center gap-1 rounded-full px-4 py-1 text-white/85 transition hover:bg-white/5">
             <Crop size={24} />
             <span className="text-xs font-medium">قص</span>
+          </button>
+        </div>
+      ) : (
+        <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 flex w-[min(90vw,360px)] -translate-x-1/2 items-center gap-3 rounded-2xl border border-white/10 bg-[#242326]/95 px-4 py-3 shadow-2xl backdrop-blur-xl" dir="ltr">
+          <button type="button" onClick={() => updateZoom(cropView.scale - 0.2)} aria-label="تصغير الصورة" disabled={cropView.scale <= MIN_ZOOM} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-40">
+            <Minus size={18} />
+          </button>
+          <input
+            type="range"
+            aria-label="تكبير الصورة داخل إطار المنشور"
+            min={MIN_ZOOM}
+            max={MAX_ZOOM}
+            step="0.01"
+            value={cropView.scale}
+            onChange={event => updateZoom(event.currentTarget.value)}
+            className="min-w-0 flex-1 accent-[#f1a17f]"
+          />
+          <button type="button" onClick={() => updateZoom(cropView.scale + 0.2)} aria-label="تكبير الصورة" disabled={cropView.scale >= MAX_ZOOM} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-40">
+            <Plus size={18} />
           </button>
         </div>
       )}

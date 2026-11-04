@@ -90,13 +90,13 @@ export default function PostCard({
 
       {/* مرفقات الصور */}
       {postImages.length > 0 && (
-        <div className="mt-3 flex gap-2 overflow-x-auto rounded-xl no-scrollbar">
+        <div className="mt-3 flex aspect-[4/5] gap-2 overflow-x-auto rounded-xl no-scrollbar">
           {postImages.map((url, index) => (
-            <div key={`${url}-${index}`} className="min-w-full overflow-hidden rounded-xl border border-zinc-800">
+            <div key={`${url}-${index}`} className="relative h-full min-w-full shrink-0 overflow-hidden rounded-xl border border-zinc-800">
               <PostImagePreview
                 src={url}
                 alt={`صورة المنشور ${index + 1}`}
-                className="max-h-96 w-full object-cover"
+                className="block h-full w-full object-cover"
               />
             </div>
           ))}
