@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
   Bell, Heart, MessageSquare, Repeat2, Sparkles, UserRound, X,
@@ -20,8 +20,11 @@ type NotificationsModalProps = {
 type NotificationEntry = NotificationItem & {
   reference_id?: string | null;
   comment_id?: string | null;
-  sub_reference_id?: string | null;
   post_id?: string | null;
+};
+
+type NotificationDisplayEntry = NotificationEntry & {
+  aggregateCount: number;
 };
 
 type NotificationReferenceRow = {
@@ -37,27 +40,86 @@ type NotificationTarget =
   | { kind: 'comment'; postId: string; commentId: string }
   | { kind: 'story'; storyId: string; ownerId: string };
 
+type NotificationFilter = 'all' | 'likes' | 'comments' | 'other';
+
+const PAGE_SIZE = 20;
+
+const FILTER_TABS: Array<{ id: NotificationFilter; label: string }> = [
+  { id: 'all', label: 'الكل' },
+  { id: 'likes', label: 'الإعجابات' },
+  { id: 'comments', label: 'التعليقات' },
+  { id: 'other', label: 'التفاعلات والقصص' },
+];
+
 const isStoryNotification = (item: NotificationEntry) => {
   if (item.type === 'story' || item.type === 'story_like') return true;
   return ['like', 'reply', 'mention'].includes(item.type) && /ستوري|قصة/i.test(item.content || '');
 };
 
-const notificationAction = (item: NotificationEntry) => {
+const notificationAction = (item: NotificationEntry, aggregateCount = 1) => {
+  if (item.type === 'like' && aggregateCount > 1) {
+    const target = isStoryNotification(item)
+      ? 'قصتك'
+      : item.comment_id ? 'تعليقك' : 'منشورك';
+    return `و ${Intl.NumberFormat('ar-IQ').format(aggregateCount - 1)} آخرين أعجبوا بـ${target}`;
+  }
+
   if (isStoryNotification(item)) {
     if (item.type === 'like') return 'أعجب بقصتك';
     if (item.type === 'reply') return 'ردّ على قصتك';
     return item.content || 'تفاعل مع قصتك';
   }
+  if (item.type === 'like') return item.comment_id ? 'أعجب بتعليقك' : 'أعجب بمنشورك';
 
   const actions: Record<string, string> = {
     repost: 'أعاد نشر منشورك أو ريلز',
-    like: 'أعجب بمنشورك أو تعليقك',
     comment: 'علّق على منشورك',
     reply: 'ردّ على تعليقك',
     follow: 'بدأ بمتابعتك',
     mention: 'أشار إليك في تعليق',
   };
   return actions[item.type] || item.content || 'أرسل لك إشعاراً جديداً';
+};
+
+const getLikeAggregationKey = (item: NotificationEntry) => {
+  if (item.type !== 'like') return null;
+  const referenceId = item.reference_id || item.entity_id || item.post_id;
+  if (isStoryNotification(item)) return referenceId ? `story:${referenceId}` : null;
+  if (item.comment_id) return `comment:${item.comment_id}`;
+  return referenceId ? `post:${referenceId}` : null;
+};
+
+const aggregateNotifications = (items: NotificationEntry[]): NotificationDisplayEntry[] => {
+  const aggregated: NotificationDisplayEntry[] = [];
+  const groupIndexByKey = new Map<string, number>();
+  const actorIdsByKey = new Map<string, Set<string>>();
+
+  items.forEach(item => {
+    const key = getLikeAggregationKey(item);
+    if (!key) {
+      aggregated.push({ ...item, aggregateCount: 1 });
+      return;
+    }
+
+    const actorKey = item.actor_id || item.id;
+    const groupIndex = groupIndexByKey.get(key);
+    if (groupIndex === undefined) {
+      groupIndexByKey.set(key, aggregated.length);
+      actorIdsByKey.set(key, new Set([actorKey]));
+      aggregated.push({ ...item, aggregateCount: 1 });
+      return;
+    }
+
+    const actorIds = actorIdsByKey.get(key)!;
+    if (actorIds.has(actorKey)) return;
+    actorIds.add(actorKey);
+    aggregated[groupIndex] = {
+      ...aggregated[groupIndex],
+      aggregateCount: aggregated[groupIndex].aggregateCount + 1,
+    };
+  });
+
+  return aggregated;
 };
 
 const getNotificationTarget = (item: NotificationEntry, currentUserId: string): NotificationTarget | null => {
@@ -68,7 +130,7 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
   }
 
   if (item.type === 'comment' || item.type === 'reply' || (item.type === 'like' && Boolean(item.comment_id))) {
-    const commentId = item.comment_id || item.sub_reference_id;
+    const commentId = item.comment_id;
     const postId = item.post_id || referenceId;
     return commentId && postId ? { kind: 'comment', postId, commentId } : null;
   }
@@ -78,6 +140,13 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
   }
 
   return null;
+};
+
+const getFilterForNotification = (item: NotificationEntry): Exclude<NotificationFilter, 'all'> => {
+  if (isStoryNotification(item)) return 'other';
+  if (item.type === 'like') return 'likes';
+  if (item.type === 'comment' || item.type === 'reply') return 'comments';
+  return 'other';
 };
 
 function ActionBadge({ item }: { item: NotificationEntry }) {
@@ -133,7 +202,15 @@ export default function NotificationsModal({
   const [, setLocation] = useLocation();
   const [items, setItems] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState('');
+  const [readError, setReadError] = useState('');
+  const [activeFilter, setActiveFilter] = useState<NotificationFilter>('all');
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<(() => void) | null>(null);
+  const cleanupAttemptedUsersRef = useRef(new Set<string>());
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -141,103 +218,188 @@ export default function NotificationsModal({
       setError('إعدادات Supabase غير مكتملة.');
       setItems([]);
       setLoading(false);
+      setHasMore(false);
       return undefined;
     }
 
     let active = true;
-    const load = async () => {
-      setLoading(true);
-      setError('');
-      const { data, error: queryError } = await supabase
-        .from('notifications')
-        .select('id,content,type,is_read,created_at')
-        .eq('user_id', currentUserId)
-        .order('created_at', { ascending: false })
-        .limit(40);
-      if (!active) return;
-      if (queryError) {
-        setItems([]);
-        setError(queryError.message);
-        setLoading(false);
-        return;
-      }
+    let nextOffset = 0;
+    let canLoadMore = true;
+    let pageRequestInProgress = false;
+    setItems([]);
+    setLoading(true);
+    setLoadingMore(false);
+    setHasMore(true);
+    setError('');
+    setReadError('');
 
-      let rows = (data || []) as NotificationEntry[];
+    const fetchPage = async (offset: number, replace: boolean) => {
+      if (!active || pageRequestInProgress || (!replace && !canLoadMore)) return;
+      pageRequestInProgress = true;
+      if (replace) setLoading(true);
+      else setLoadingMore(true);
+      setError('');
+
       try {
-        let refs: NotificationReferenceRow[] = [];
-        const referenceResult = await supabase
+        const { data, error: queryError } = await supabase
           .from('notifications')
-          .select('id,reference_id,entity_id,actor_id,comment_id')
+          .select('id,content,type,is_read,created_at')
           .eq('user_id', currentUserId)
           .order('created_at', { ascending: false })
-          .limit(40);
+          .order('id', { ascending: false })
+          .range(offset, offset + PAGE_SIZE - 1);
+        if (!active) return;
+        if (queryError) {
+          setError(queryError.message);
+          if (replace) setItems([]);
+          return;
+        }
 
-        if (!referenceResult.error) {
-          refs = (referenceResult.data || []) as NotificationReferenceRow[];
-        } else {
-          const entityResult = await supabase
+        let rows = (data || []) as NotificationEntry[];
+        try {
+          let refs: NotificationReferenceRow[] = [];
+          const referenceResult = await supabase
             .from('notifications')
-            .select('id,entity_id,actor_id,comment_id')
+            .select('id,reference_id,entity_id,actor_id,comment_id')
             .eq('user_id', currentUserId)
             .order('created_at', { ascending: false })
-            .limit(40);
-          if (!entityResult.error) refs = (entityResult.data || []) as NotificationReferenceRow[];
+            .order('id', { ascending: false })
+            .range(offset, offset + PAGE_SIZE - 1);
+
+          if (!referenceResult.error) {
+            refs = (referenceResult.data || []) as NotificationReferenceRow[];
+          } else {
+            const entityResult = await supabase
+              .from('notifications')
+              .select('id,entity_id,actor_id,comment_id')
+              .eq('user_id', currentUserId)
+              .order('created_at', { ascending: false })
+              .order('id', { ascending: false })
+              .range(offset, offset + PAGE_SIZE - 1);
+            if (!entityResult.error) refs = (entityResult.data || []) as NotificationReferenceRow[];
+          }
+          if (!active) return;
+
+          if (refs.length) {
+            const refMap = new Map(refs.map(row => [row.id, row]));
+            rows = rows.map(item => {
+              const row = refMap.get(item.id);
+              return {
+                ...item,
+                reference_id: row?.reference_id || row?.entity_id || null,
+                entity_id: row?.entity_id || item.entity_id || null,
+                actor_id: row?.actor_id || item.actor_id || null,
+                comment_id: row?.comment_id || item.comment_id || null,
+              };
+            });
+          }
+
+          const actorIds = Array.from(new Set(rows.map(item => item.actor_id).filter((id): id is string => Boolean(id))));
+          if (actorIds.length) {
+            const { data: profiles } = await supabase
+              .from('profiles')
+              .select('id,username,full_name,avatar_url')
+              .in('id', actorIds);
+            if (!active) return;
+            const profileMap = new Map(((profiles || []) as Profile[]).map(person => [person.id, person]));
+            rows = rows.map(item => item.actor_id
+              ? { ...item, actor: profileMap.get(item.actor_id) || null }
+              : item);
+          }
+
+          const commentIds = Array.from(new Set(rows
+            .map(item => item.comment_id)
+            .filter((id): id is string => Boolean(id))));
+          if (commentIds.length) {
+            const { data: comments } = await supabase
+              .from('comments')
+              .select('id,post_id')
+              .in('id', commentIds);
+            if (!active) return;
+            const postIdByCommentId = new Map(((comments || []) as Array<{ id: string; post_id: string }>).map(comment => [comment.id, comment.post_id]));
+            rows = rows.map(item => item.comment_id && postIdByCommentId.has(item.comment_id)
+              ? { ...item, post_id: postIdByCommentId.get(item.comment_id) || null }
+              : item);
+          }
+        } catch (enrichError) {
+          console.warn('[notifications] تعذر إثراء الإشعارات:', enrichError);
         }
 
-        if (refs.length) {
-          const refMap = new Map(refs.map(row => [row.id, row]));
-          rows = rows.map(item => {
-            const row = refMap.get(item.id);
-            return {
-              ...item,
-              reference_id: row?.reference_id || row?.entity_id || null,
-              entity_id: row?.entity_id || item.entity_id || null,
-              actor_id: row?.actor_id || item.actor_id || null,
-              comment_id: row?.comment_id || item.comment_id || null,
-            };
-          });
+        if (!active) return;
+        setItems(current => {
+          if (replace) return rows;
+          const existingIds = new Set(current.map(item => item.id));
+          return [...current, ...rows.filter(item => !existingIds.has(item.id))];
+        });
+        nextOffset = offset + (data || []).length;
+        canLoadMore = (data || []).length === PAGE_SIZE;
+        setHasMore(canLoadMore);
+      } catch (loadError) {
+        if (active) setError(loadError instanceof Error ? loadError.message : 'تعذر تحميل الإشعارات.');
+      } finally {
+        pageRequestInProgress = false;
+        if (active) {
+          setLoading(false);
+          setLoadingMore(false);
         }
-
-        const actorIds = Array.from(new Set(rows.map(item => item.actor_id).filter((id): id is string => Boolean(id))));
-        if (actorIds.length) {
-          const { data: profiles } = await supabase
-            .from('profiles')
-            .select('id,username,full_name,avatar_url')
-            .in('id', actorIds);
-          const profileMap = new Map(((profiles || []) as Profile[]).map(person => [person.id, person]));
-          rows = rows.map(item => item.actor_id
-            ? { ...item, actor: profileMap.get(item.actor_id) || null }
-            : item);
-        }
-
-        const commentIds = Array.from(new Set(rows
-          .map(item => item.comment_id || item.sub_reference_id)
-          .filter((id): id is string => Boolean(id))));
-        if (commentIds.length) {
-          const { data: comments } = await supabase
-            .from('comments')
-            .select('id,post_id')
-            .in('id', commentIds);
-          const postIdByCommentId = new Map(((comments || []) as Array<{ id: string; post_id: string }>).map(comment => [comment.id, comment.post_id]));
-          rows = rows.map(item => {
-            const commentId = item.comment_id || item.sub_reference_id;
-            return commentId && postIdByCommentId.has(commentId)
-              ? { ...item, post_id: postIdByCommentId.get(commentId) || null }
-              : item;
-          });
-        }
-      } catch (enrichError) {
-        console.warn('[notifications] تعذر إثراء الإشعارات:', enrichError);
       }
-
-      if (!active) return;
-      setItems(rows);
-      setLoading(false);
     };
 
-    void load();
-    return () => { active = false; };
+    const loadMore = () => { void fetchPage(nextOffset, nextOffset === 0); };
+    loadMoreRef.current = loadMore;
+
+    const loadInitialPage = async () => {
+      const cleanupPromise = (async () => {
+        if (cleanupAttemptedUsersRef.current.has(currentUserId)) return;
+        cleanupAttemptedUsersRef.current.add(currentUserId);
+        try {
+          const { error: cleanupError } = await supabase.rpc('aani_cleanup_old_notifications');
+          if (cleanupError) console.warn('[notifications] تعذر حذف الإشعارات القديمة:', cleanupError);
+        } catch (cleanupError) {
+          console.warn('[notifications] تعذر حذف الإشعارات القديمة:', cleanupError);
+        }
+      })();
+      const markReadPromise = (async () => {
+        try {
+          const { error: updateError } = await supabase
+            .from('notifications')
+            .update({ is_read: true })
+            .eq('user_id', currentUserId)
+            .eq('is_read', false);
+          return updateError;
+        } catch (updateError) {
+          return updateError;
+        }
+      })();
+
+      const [, markReadError] = await Promise.all([cleanupPromise, markReadPromise]);
+      if (!active) return;
+      if (markReadError) {
+        console.warn('[notifications] تعذر تحديد الإشعارات كمقروءة:', markReadError);
+        setReadError('تعذر حفظ الإشعارات كمقروءة.');
+      }
+      await fetchPage(0, true);
+    };
+
+    void loadInitialPage();
+    return () => {
+      active = false;
+      if (loadMoreRef.current === loadMore) loadMoreRef.current = null;
+    };
   }, [isOpen, currentUserId]);
+
+  useEffect(() => {
+    if (!isOpen || !hasMore || loading || loadingMore || error) return undefined;
+    const root = listRef.current;
+    const target = sentinelRef.current;
+    if (!root || !target || typeof IntersectionObserver === 'undefined') return undefined;
+
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) loadMoreRef.current?.();
+    }, { root, rootMargin: '120px' });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [error, hasMore, isOpen, items.length, loading, loadingMore]);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -247,6 +409,13 @@ export default function NotificationsModal({
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
+
+  const visibleItems = useMemo(() => {
+    const aggregated = aggregateNotifications(items);
+    return activeFilter === 'all'
+      ? aggregated
+      : aggregated.filter(item => getFilterForNotification(item) === activeFilter);
+  }, [activeFilter, items]);
 
   const markNotificationRead = async (item: NotificationEntry) => {
     if (item.is_read) return;
@@ -259,7 +428,7 @@ export default function NotificationsModal({
       .eq('user_id', currentUserId);
     if (updateError) {
       setItems(current => current.map(existing => existing.id === item.id ? { ...existing, is_read: false } : existing));
-      setError('تعذر حفظ حالة الإشعار كمقروء. حاول مرة أخرى.');
+      setReadError('تعذر حفظ حالة الإشعار كمقروء. حاول مرة أخرى.');
     }
   };
 
@@ -282,9 +451,9 @@ export default function NotificationsModal({
 
   if (!isOpen) return null;
 
-  const renderCard = (item: NotificationEntry) => {
+  const renderCard = (item: NotificationDisplayEntry) => {
     const actorName = displayName(item.actor);
-    const action = notificationAction(item);
+    const action = notificationAction(item, item.aggregateCount);
     const profileHref = item.actor_id ? `/profile/${encodeURIComponent(item.actor_id)}` : null;
 
     return (
@@ -314,7 +483,14 @@ export default function NotificationsModal({
               <strong className="font-bold">{actorName}</strong>{' '}
               <span>{action}</span>
             </span>
-            <time className="mt-1 block text-[11px] text-[#8e8e93]/80">{formatDate(item.created_at)}</time>
+            <span className="mt-1 flex items-center justify-between gap-2" style={{ fontFamily: "'Tajawal', sans-serif" }}>
+              {item.aggregateCount > 1 ? (
+                <span aria-label={`إجمالي ${item.aggregateCount} تفاعلات`} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-[#aaa]">
+                  {Intl.NumberFormat('ar-IQ').format(item.aggregateCount)}
+                </span>
+              ) : <span />}
+              <time className="block text-left text-[11px] text-[#8e8e93]/80">{formatDate(item.created_at)}</time>
+            </span>
           </span>
         </button>
       </article>
@@ -339,11 +515,44 @@ export default function NotificationsModal({
           </button>
         </header>
 
-        <div className="aani-notifications-list flex flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain px-4 pb-6 pt-4" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
-          {loading && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
-          {error && <p role="alert" className="mb-3 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">{error}</p>}
-          {!loading && !error && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">لا توجد إشعارات حالياً.</p>}
-          {!loading && !error && items.map(renderCard)}
+        <div role="tablist" aria-label="تصفية الإشعارات" className="flex shrink-0 gap-1 border-b border-white/[0.06] px-3 py-2">
+          {FILTER_TABS.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={activeFilter === tab.id}
+              onClick={() => setActiveFilter(tab.id)}
+              className={`min-h-9 flex-1 rounded-full px-1.5 text-[11px] font-semibold transition sm:text-xs ${activeFilter === tab.id ? 'bg-white/[0.12] text-white' : 'text-[#8e8e93] hover:bg-white/[0.05] hover:text-white'}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        <div
+          ref={listRef}
+          className="aani-notifications-list flex flex-1 flex-col gap-2.5 overflow-y-auto overscroll-contain px-4 pb-6 pt-4"
+          style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}
+          onScroll={event => {
+            const element = event.currentTarget;
+            if (element.scrollHeight - element.scrollTop - element.clientHeight <= 120) loadMoreRef.current?.();
+          }}
+        >
+          {loading && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
+          {error && <p role="alert" className="mb-1 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">تعذر تحميل الإشعارات: {error}</p>}
+          {readError && <p role="status" className="mb-1 rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3 text-xs text-amber-100">{readError}</p>}
+          {!loading && !error && visibleItems.length === 0 && (
+            <p className="py-10 text-center text-sm text-[#8e8e93]">
+              {items.length === 0 ? 'لا توجد إشعارات حالياً.' : 'لا توجد إشعارات ضمن هذا التصنيف.'}
+            </p>
+          )}
+          {visibleItems.map(renderCard)}
+          {loadingMore && <p className="py-3 text-center text-xs text-[#8e8e93]">جارٍ تحميل المزيد…</p>}
+          {error && hasMore && (
+            <button type="button" onClick={() => loadMoreRef.current?.()} className="mx-auto rounded-full px-4 py-2 text-xs text-[#c98d73] hover:bg-white/[0.05]">إعادة المحاولة</button>
+          )}
+          <div ref={sentinelRef} aria-hidden="true" className="h-px shrink-0" />
         </div>
       </section>
     </div>

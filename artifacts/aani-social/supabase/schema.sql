@@ -534,9 +534,13 @@ create table if not exists public.notifications (
   type text not null default 'system',
   content text,
   reference_id uuid,
+  entity_id uuid,
+  comment_id uuid,
   is_read boolean not null default false,
   created_at timestamptz not null default now()
 );
+alter table public.notifications add column if not exists entity_id uuid;
+alter table public.notifications add column if not exists comment_id uuid;
 create index if not exists aani_notifications_user_idx
   on public.notifications (user_id, created_at desc);
 
@@ -1358,3 +1362,31 @@ revoke all on function public.get_post_interactions(uuid[]) from public;
 revoke all on function public.post_interaction_summaries(uuid[]) from public;
 grant execute on function public.get_post_interactions(uuid[]) to authenticated, anon;
 grant execute on function public.post_interaction_summaries(uuid[]) to authenticated, anon;
+
+
+
+-- Remove notifications older than seven days for the calling user only.
+create or replace function public.aani_cleanup_old_notifications()
+returns bigint
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  deleted_count bigint;
+  current_user_id uuid := (select auth.uid());
+begin
+  if current_user_id is null then
+    return 0;
+  end if;
+
+  delete from public.notifications
+  where user_id = current_user_id
+    and created_at < now() - interval '7 days';
+
+  get diagnostics deleted_count = row_count;
+  return deleted_count;
+end;
+$$;
+revoke all on function public.aani_cleanup_old_notifications() from public, anon;
+grant execute on function public.aani_cleanup_old_notifications() to authenticated;
