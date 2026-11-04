@@ -420,7 +420,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             {urls.map((url, i) => (
               <div key={i} className="carousel-slide h-full">
                 {post.type === 'reel' ? (
-                  <PostVideoPreview src={url} controls className="h-full w-full object-cover" />
+                  <PostVideoPreview
+                    src={url}
+                    autoPlayWhenVisible
+                    tapToToggle
+                    loop
+                    controls={false}
+                    muted
+                    className="h-full w-full object-cover"
+                  />
                 ) : (
                   <PostImagePreview src={url} alt="" className="block h-full w-full select-none object-cover" />
                 )}

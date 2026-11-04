@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
 import type { Profile } from '@/lib/types';
 
 export default function useAppSession() {
@@ -46,8 +47,34 @@ export default function useAppSession() {
 
   useEffect(() => {
     if (!supabaseConfigured || !user?.id) return;
-    void supabase.from('profiles').select('*').eq('id', user.id).maybeSingle().then(({ data }) => setProfile(data as Profile | null));
-  }, [user?.id]);
+    let active = true;
+    const validName = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const name = value.trim();
+      return name && !STORY_VIEWER_PLACEHOLDER_NAMES.has(name.toLowerCase()) ? name : null;
+    };
+    const metadataName = validName(user.user_metadata?.full_name) || validName(user.user_metadata?.name);
+
+    void supabase.from('profiles').select('*').eq('id', user.id).maybeSingle().then(({ data }) => {
+      if (!active) return;
+      const row = data as Profile | null;
+      const username = validName(row?.username) || validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'user';
+      const storedDisplayName = validName(row?.display_name);
+      setProfile({
+        ...(row || {}),
+        id: user.id,
+        username,
+        full_name: validName(row?.full_name) || metadataName || username,
+        display_name: storedDisplayName || (row?.display_name ? metadataName : row?.display_name ?? null),
+        avatar_url: row?.avatar_url || null,
+        bio: row?.bio || '',
+      });
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [user?.id, user?.email, user?.user_metadata?.full_name, user?.user_metadata?.name, user?.user_metadata?.username]);
 
   const signOut = async () => {
     if (supabaseConfigured) await supabase.auth.signOut();
