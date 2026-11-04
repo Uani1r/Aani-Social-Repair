@@ -49,6 +49,33 @@ function normalizePostRows(value: unknown): PostRow[] {
     .filter((post): post is PostRow => post !== null);
 }
 
+async function normalizePostRowsWithVisibility(value: unknown): Promise<PostRow[]> {
+  const posts = normalizePostRows(value);
+  if (posts.length === 0) return posts;
+
+  try {
+    const { data, error } = await supabase
+      .from('posts')
+      .select('id, visibility')
+      .in('id', posts.map(post => post.id));
+    if (error || !Array.isArray(data)) return posts;
+
+    const visibilityById = new Map<string, 'public' | 'private'>();
+    (data as unknown[]).forEach((row: unknown) => {
+      if (!isRecord(row) || typeof row.id !== 'string') return;
+      visibilityById.set(row.id, row.visibility === 'private' ? 'private' : 'public');
+    });
+
+    return posts.map(post => ({
+      ...post,
+      visibility: visibilityById.get(post.id) ?? 'public',
+    }));
+  } catch {
+    // Keep the feed usable when the visibility migration has not been applied yet.
+    return posts;
+  }
+}
+
 function normalizeRepostRows(value: unknown): RepostRow[] {
   if (!Array.isArray(value)) return [];
 
@@ -104,14 +131,14 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       if (query === 'feed') {
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
           .in('type', ['text', 'photo'])
           .order('created_at', { ascending: false })
           .limit(50);
 
         if (postsErr) throw postsErr;
 
-        const rawPosts = normalizePostRows(postData);
+        const rawPosts = await normalizePostRowsWithVisibility(postData);
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
@@ -130,13 +157,13 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       } else if (query === 'profile' && targetUserId) {
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
           .eq('user_id', targetUserId)
           .order('created_at', { ascending: false });
 
         if (postsErr) throw postsErr;
 
-        const rawPosts = normalizePostRows(postData);
+        const rawPosts = await normalizePostRowsWithVisibility(postData);
 
         // جلب المنشورات التي أعاد المستخدم نشرها لعرضها في ملفه الشخصي
         const { data: repostData } = await supabase
@@ -158,9 +185,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         if (repostPostIds.length > 0) {
           const { data: originalPostData } = await supabase
             .from('posts')
-            .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
+            .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
             .in('id', repostPostIds);
-          repostedRaw = normalizePostRows(originalPostData).map(post => ({ ...post, reposter_id: targetUserId }));
+          repostedRaw = (await normalizePostRowsWithVisibility(originalPostData)).map(post => ({ ...post, reposter_id: targetUserId }));
         }
 
         const allRaw: PostRow[] = [...rawPosts, ...repostedRaw];
@@ -202,14 +229,14 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       } else if (query === 'reel') {
         const { data: postData, error: postsErr } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
           .eq('type', 'reel')
           .order('created_at', { ascending: false })
           .limit(50);
 
         if (postsErr) throw postsErr;
 
-        const rawPosts = normalizePostRows(postData);
+        const rawPosts = await normalizePostRowsWithVisibility(postData);
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);

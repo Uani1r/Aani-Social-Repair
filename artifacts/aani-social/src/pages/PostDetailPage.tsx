@@ -24,7 +24,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     setLoading(true);
     try {
       const { data, error } = await supabase.from('posts')
-        .select('id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at')
+        .select('id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
         .eq('id', postId)
         .maybeSingle();
       if (error || !data) {
@@ -35,8 +35,19 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
         .select('id, username, full_name, avatar_url')
         .eq('id', data.user_id)
         .maybeSingle();
+      let visibility: Post['visibility'] = 'public';
+      try {
+        const { data: visibilityRow, error: visibilityError } = await supabase.from('posts')
+          .select('visibility')
+          .eq('id', postId)
+          .maybeSingle();
+        if (!visibilityError && visibilityRow?.visibility === 'private') visibility = 'private';
+      } catch {
+        // The post itself remains available when the visibility migration is not installed.
+      }
       const hydrated = await hydratePostInteractions([{
         ...data,
+        visibility,
         post_metadata: normalizePostMetadata(data.post_metadata),
         author: author || { id: data.user_id, username: 'user', full_name: 'مستخدم آني' },
       } as unknown as Post], currentUserId);
