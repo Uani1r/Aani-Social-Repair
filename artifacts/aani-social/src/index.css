@@ -1314,3 +1314,29 @@ body.aani-immersive {
     animation: none !important;
   }
 }
+
+
+
+.aani-notifications-page {
+  background: #09090b;
+  font-family: 'Tajawal', 'Cairo', 'Noto Sans Arabic', sans-serif;
+}
+
+.aani-notifications-page::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  content: '';
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+}
+
+.aani-notifications-card {
+  transition: transform 150ms ease, background-color 180ms ease;
+}
+
+button:active > .aani-notifications-card,
+a:active > .aani-notifications-card {
+  transform: scale(0.985);
+}
