@@ -166,7 +166,8 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
 const styles: Record<string, CSSProperties> = {
   pageContainer: {
-    minHeight: '100vh',
+    width: '100%',
+    minHeight: '100dvh',
     backgroundColor: '#1a2b27',
     display: 'flex',
     justifyContent: 'center',
@@ -177,7 +178,7 @@ const styles: Record<string, CSSProperties> = {
   card: {
     width: '100%',
     maxWidth: '420px',
-    minHeight: '100vh',
+    minHeight: '100dvh',
     background: 'linear-gradient(180deg, #243b35 0%, #36534b 32%, #f5f6f4 58%, #f5f6f4 100%)',
     display: 'flex',
     flexDirection: 'column',
