@@ -141,52 +141,17 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     setLoading(true);
     if (query === 'feed') setPosts([]);
     try {
-      const fetchPostRows = async (
-        kind: 'feed' | 'reel' | 'profile',
-        profileId?: string,
-        postIds?: string[],
-      ) => {
-        const buildQuery = (includeDestination: boolean) => {
-          const columns = includeDestination
-            ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at'
-            : 'id, user_id, content, post_metadata, media_url, media_urls, type, created_at';
-          const request = supabase.from('posts').select(columns);
-          if (kind === 'feed') {
-            const feedRequest = includeDestination
-              ? request.eq('destination', 'feed')
-              : request.neq('type', 'reel');
-            return feedRequest.order('created_at', { ascending: false }).limit(50);
-          }
-          if (kind === 'reel') {
-            const reelRequest = request.eq('type', 'reel');
-            const destinationRequest = includeDestination ? reelRequest.eq('destination', 'reels') : reelRequest;
-            return destinationRequest.order('created_at', { ascending: false }).limit(50);
-          }
-          if (postIds) return request.in('id', postIds);
-          return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
-        };
-
-        const result = await buildQuery(true);
-        const error = result.error;
-        const isMissingDestination = isRecord(error)
-          && typeof error.message === 'string'
-          && /destination/i.test(error.message)
-          && (
-            error.code === '42703'
-            || error.code === 'PGRST204'
-            || /could not find|schema cache|does not exist/i.test(error.message)
-          );
-        if (isMissingDestination) return await buildQuery(false);
-        return result;
-      };
-
       if (query === 'feed') {
-        const { data: postData, error: postsErr } = await fetchPostRows('feed');
+        const { data: postData, error: postsErr } = await supabase
+          .from('posts')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at')
+          .eq('destination', 'feed')
+          .order('created_at', { ascending: false })
+          .limit(50);
 
         if (postsErr) throw postsErr;
 
-        const rawPosts = (await normalizePostRowsWithVisibility(postData))
-          .filter(post => post.destination === 'feed');
+        const rawPosts = await normalizePostRowsWithVisibility(postData);
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
@@ -203,7 +168,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           setPosts([]);
         }
       } else if (query === 'profile' && targetUserId) {
-        const { data: postData, error: postsErr } = await fetchPostRows('profile', targetUserId);
+        const { data: postData, error: postsErr } = await supabase
+          .from('posts')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at')
+          .eq('user_id', targetUserId)
+          .order('created_at', { ascending: false });
 
         if (postsErr) throw postsErr;
 
@@ -227,7 +196,10 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         repostRows.forEach(row => repostedAtById.set(row.post_id, row.created_at));
 
         if (repostPostIds.length > 0) {
-          const { data: originalPostData } = await fetchPostRows('profile', undefined, repostPostIds);
+          const { data: originalPostData } = await supabase
+            .from('posts')
+            .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at')
+            .in('id', repostPostIds);
           repostedRaw = (await normalizePostRowsWithVisibility(originalPostData)).map(post => ({ ...post, reposter_id: targetUserId }));
         }
 
@@ -268,7 +240,13 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           setPosts([]);
         }
       } else if (query === 'reel') {
-        const { data: postData, error: postsErr } = await fetchPostRows('reel');
+        const { data: postData, error: postsErr } = await supabase
+          .from('posts')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at')
+          .eq('destination', 'reels')
+          .eq('type', 'reel')
+          .order('created_at', { ascending: false })
+          .limit(50);
 
         if (postsErr) throw postsErr;
 

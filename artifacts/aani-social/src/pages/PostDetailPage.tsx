@@ -23,21 +23,10 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     }
     setLoading(true);
     try {
-      const loadPost = (includeDestination: boolean) => supabase.from('posts')
-        .select(includeDestination
-          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at'
-          : 'id, user_id, content, post_metadata, media_url, media_urls, type, created_at')
+      const { data, error } = await supabase.from('posts')
+        .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at')
         .eq('id', postId)
         .maybeSingle();
-      let postResult = await loadPost(true);
-      if (
-        postResult.error
-        && (postResult.error.code === '42703' || postResult.error.code === 'PGRST204')
-        && /destination/i.test(postResult.error.message)
-      ) {
-        postResult = await loadPost(false);
-      }
-      const { data, error } = postResult;
       if (error || !data) {
         setPost(null);
         return;

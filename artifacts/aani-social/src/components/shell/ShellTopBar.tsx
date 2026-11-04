@@ -46,11 +46,11 @@ export default function ShellTopBar({
               <Settings size={20} className="shrink-0" />
             </button>
           )}
-          <button type="button" aria-label="الإشعارات" aria-haspopup="dialog" className="relative shrink-0 rounded-full p-2 text-[#e6a17b] transition hover:bg-[#e6a17b]/10" onClick={onOpenNotifications}>
+          <button type="button" aria-label="الإشعارات" className="relative shrink-0 rounded-full p-2 text-zinc-300 hover:bg-zinc-800" onClick={onOpenNotifications}>
             <Bell size={20} className="shrink-0" />
             {unreadCount > 0 && (
-              <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#e6a17b] px-1 text-[9px] font-bold text-[#09090b]">
-                {unreadCount > 99 ? '99+' : unreadCount}
+              <span className="absolute right-1 top-1 flex h-4 w-4 items-center justify-center rounded-full bg-pink-600 text-[9px] font-bold text-white">
+                {unreadCount}
               </span>
             )}
           </button>
