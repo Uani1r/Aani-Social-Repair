@@ -8,6 +8,7 @@ import { postShareUrl } from '@/lib/interactions';
 import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile } from '@/lib/types';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import PostImagePreview from '@/components/PostImagePreview';
+import PostVideoPreview from '@/components/PostVideoPreview';
 
 export default function SharedPostPreview({ content, postId }: { content?: string | null; postId?: string | null }) {
   const match = (content || '').match(/^\[post:(\S+)\]([\s\S]*)$/);
@@ -119,12 +120,12 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
           {loading ? (
             <div className="h-full w-full animate-pulse bg-zinc-800/80" />
           ) : isVideo && info?.media ? (
-            <video
+            <PostVideoPreview
               src={info.media}
               muted={muted}
               autoPlay
               loop
-              playsInline
+              controls={false}
               className="h-full w-full object-cover"
             />
           ) : info?.media ? (

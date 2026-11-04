@@ -4,8 +4,9 @@ import { AtSign, Link2, Loader2, MapPin, Search, X } from 'lucide-react';
 import Avatar from './Avatar';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
+import PostVideoPreview from './PostVideoPreview';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { PostMetadataTag, Profile } from '@/lib/types';
+import type { PostMetadataTag, Profile, VideoTrimRange } from '@/lib/types';
 
 type ComposerTagKind = PostMetadataTag['kind'];
 type TagTool = ComposerTagKind | null;
@@ -25,6 +26,7 @@ type CreatePostModalProps = {
   selectedFiles: File[];
   fileType: 'image' | 'video' | null;
   filePreviews: { file: File; url: string }[];
+  videoTrim: VideoTrimRange | null;
   isSubmitting: boolean;
   createError: string;
   onPostTextChange: (text: string) => void;
@@ -48,6 +50,7 @@ export default function CreatePostModal({
   selectedFiles,
   fileType,
   filePreviews,
+  videoTrim,
   isSubmitting,
   createError,
   onPostTextChange,
@@ -248,7 +251,12 @@ export default function CreatePostModal({
                 {fileType === 'image' ? (
                   <img src={preview.url} alt="معاينة الصورة المحددة" className="h-full w-full object-cover" />
                 ) : (
-                  <video src={preview.url} muted playsInline className="h-full w-full object-cover" />
+                  <PostVideoPreview
+                    src={videoTrim ? `${preview.url}#t=${videoTrim.start},${videoTrim.end}` : preview.url}
+                    muted
+                    controls={false}
+                    className="h-full w-full object-cover"
+                  />
                 )}
                 <button
                   type="button"

@@ -16,6 +16,12 @@ export type PostMetadataTag = {
   profileId?: string;
 };
 
+export type VideoTrimRange = {
+  start: number;
+  end: number;
+  duration: number;
+};
+
 export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
   if (!Array.isArray(value)) return [];
 

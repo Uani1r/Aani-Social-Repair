@@ -10,6 +10,7 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
+import PostVideoPreview from './PostVideoPreview';
 import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
@@ -381,7 +382,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             {urls.map((url, i) => (
               <div key={i} className="carousel-slide h-full">
                 {post.type === 'reel' ? (
-                  <video src={url} controls className="h-full w-full object-cover" />
+                  <PostVideoPreview src={url} controls className="h-full w-full object-cover" />
                 ) : (
                   <PostImagePreview src={url} alt="" className="block h-full w-full select-none object-cover" />
                 )}

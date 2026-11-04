@@ -70,7 +70,7 @@ export default function PublishOptionsSheet({
   };
 
   const handleVideoChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
+    const file = Array.from(event.currentTarget.files || []).find(candidate => candidate.type.startsWith('video/'));
     event.currentTarget.value = '';
     if (file) onVideoSelected(file);
   };
@@ -207,10 +207,11 @@ export default function PublishOptionsSheet({
           onChange={handleFileSelection}
         />
         <input
+          id="native-video-input"
           ref={videoInputRef}
           type="file"
           accept="video/*"
-          className="hidden"
+          style={{ display: 'none' }}
           tabIndex={-1}
           onChange={handleVideoChange}
         />

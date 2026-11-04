@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import {
   Bookmark, EyeOff, Flag, Heart, MessageSquare, MoreVertical, Play, Repeat, Send, ThumbsUp,
 } from 'lucide-react';
@@ -12,10 +12,23 @@ import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Post } from '@/lib/types';
 
+type VideoTimeRange = { start: number; end: number } | null;
+
+function getVideoTimeRange(src: string): VideoTimeRange {
+  const match = src.match(/#t=(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  return Number.isFinite(start) && Number.isFinite(end) && end > start ? { start, end } : null;
+}
+
 export default function ReelSlide({ post, currentUserId, onOpenComments }: { post: Post; currentUserId: string; onOpenComments: (postId: string) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
   const [playing, setPlaying] = useState(false);
+  const mediaUrl = post.media_url || '';
+  const videoTimeRange = getVideoTimeRange(mediaUrl);
+  const videoSrc = videoTimeRange ? mediaUrl.replace(/#t=[^#&]*/, '') : mediaUrl;
   const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
   const likesCount = post.likes_count ?? post.likes?.length ?? 0;
   const likesVisible = !post.hide_likes || post.user_id === currentUserId;
@@ -141,13 +154,62 @@ export default function ReelSlide({ post, currentUserId, onOpenComments }: { pos
     alert('تم إرسال البلاغ للمراجعة.');
   };
 
+  const getTrimEnd = (video: HTMLVideoElement) => {
+    if (!videoTimeRange) return 0;
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : videoTimeRange.end;
+    return Math.min(videoTimeRange.end, duration);
+  };
+
+  const seekToTrimStart = (video: HTMLVideoElement) => {
+    if (!videoTimeRange) return;
+    const end = getTrimEnd(video);
+    video.currentTime = Math.min(videoTimeRange.start, Math.max(0, end - 0.05));
+  };
+
+  const handleVideoLoadedMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
+    seekToTrimStart(event.currentTarget);
+  };
+
+  const handleVideoSeeking = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const video = event.currentTarget;
+    if (!videoTimeRange) return;
+    const end = getTrimEnd(video);
+    if (video.currentTime < videoTimeRange.start || video.currentTime > end) {
+      seekToTrimStart(video);
+    }
+  };
+
+  const handleVideoTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const video = event.currentTarget;
+    if (!videoTimeRange || video.currentTime < getTrimEnd(video) - 0.04) return;
+    seekToTrimStart(video);
+  };
+
+  const handleVideoPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const video = event.currentTarget;
+    if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
+      seekToTrimStart(video);
+    }
+  };
+
+  const handleVideoEnded = (event: SyntheticEvent<HTMLVideoElement>) => {
+    if (!videoTimeRange) return;
+    seekToTrimStart(event.currentTarget);
+    void event.currentTarget.play().catch(() => undefined);
+  };
+
   return (
     <section ref={containerRef} className="reel-slide relative w-full h-screen overflow-hidden bg-black">
       <video
         ref={videoRef}
-        src={post.media_url || ''}
-        loop
+        src={videoSrc}
+        loop={!videoTimeRange}
         playsInline
+        onLoadedMetadata={handleVideoLoadedMetadata}
+        onSeeking={handleVideoSeeking}
+        onTimeUpdate={handleVideoTimeUpdate}
+        onPlay={handleVideoPlay}
+        onEnded={handleVideoEnded}
         onClick={togglePlay}
         className="w-full h-full object-cover cursor-pointer"
       />

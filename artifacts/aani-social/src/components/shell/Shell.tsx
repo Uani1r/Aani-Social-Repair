@@ -6,7 +6,7 @@ import ShellOverlayControls from './ShellOverlayControls';
 import ShellTopBar from './ShellTopBar';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import type { PostMetadataTag } from '@/lib/types';
+import type { PostMetadataTag, VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
@@ -434,6 +434,8 @@ export default function Shell({
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [imagePreviewImages, setImagePreviewImages] = useState<{ file: File; dataUrl: string }[]>([]);
   const [showImagePreviewModal, setShowImagePreviewModal] = useState(false);
+  const [showVideoPreviewModal, setShowVideoPreviewModal] = useState(false);
+  const [videoTrim, setVideoTrim] = useState<VideoTrimRange | null>(null);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
@@ -459,6 +461,8 @@ export default function Shell({
   const handleSelectPublishImages = async (files: File[]) => {
     if (!files.length) return;
     setShowPublishOptionsSheet(false);
+    setShowVideoPreviewModal(false);
+    setVideoTrim(null);
     setCreateError('');
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
@@ -486,6 +490,33 @@ export default function Shell({
   const continueToPostCaption = () => {
     setShowImagePreviewModal(false);
     setImagePreviewImages([]);
+    setShowCreateModal(true);
+  };
+
+  const handleSelectPublishVideo = (file: File) => {
+    if (!file.type.startsWith('video/')) return;
+    setShowPublishOptionsSheet(false);
+    setShowImagePreviewModal(false);
+    setImagePreviewImages([]);
+    setShowCreateModal(false);
+    setSelectedFiles([file]);
+    setPostText('');
+    setFileType('video');
+    setVideoTrim(null);
+    setCreateError('');
+    setShowVideoPreviewModal(true);
+  };
+
+  const closeVideoPreview = () => {
+    setShowVideoPreviewModal(false);
+    setSelectedFiles([]);
+    setVideoTrim(null);
+    setFileType(null);
+  };
+
+  const continueToVideoCaption = (range: VideoTrimRange) => {
+    setVideoTrim(range);
+    setShowVideoPreviewModal(false);
     setShowCreateModal(true);
   };
 
@@ -521,7 +552,14 @@ export default function Shell({
 
           const publicData = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath);
           const publicUrl = publicData?.data?.publicUrl;
-          if (publicUrl) uploadedUrls.push(publicUrl);
+          if (publicUrl) {
+            const range = fileType === 'video' ? videoTrim : null;
+            if (range && (range.start > 0.01 || range.end < range.duration - 0.05)) {
+              uploadedUrls.push(`${publicUrl}#t=${range.start.toFixed(2)},${range.end.toFixed(2)}`);
+            } else {
+              uploadedUrls.push(publicUrl);
+            }
+          }
         }
         type = fileType === 'image' ? 'photo' : 'reel';
       }
@@ -549,15 +587,12 @@ export default function Shell({
       setSelectedFiles([]);
       setImagePreviewImages([]);
       setShowImagePreviewModal(false);
+      setShowVideoPreviewModal(false);
+      setVideoTrim(null);
       setFileType(null);
       setShowCreateModal(false);
       window.dispatchEvent(new Event('aani:post-created'));
-
-      if (type === 'reel') {
-        setLocation('/reels');
-      } else {
-        setLocation('/feed');
-      }
+      setLocation('/feed');
     } catch (err: any) {
       setCreateError(err.message || 'حدث خطأ غير متوقع أثناء النشر.');
     } finally {
@@ -581,12 +616,7 @@ export default function Shell({
         onClosePublishOptionsSheet={() => setShowPublishOptionsSheet(false)}
         onCreateTextPost={() => setShowCreateModal(true)}
         onSelectPublishImages={handleSelectPublishImages}
-        onSelectPublishVideo={file => {
-          setSelectedFiles([file]);
-          setFileType('video');
-          setCreateError('');
-          setShowCreateModal(true);
-        }}
+        onSelectPublishVideo={handleSelectPublishVideo}
         onOpenMorePublishOptions={() => {
           setPendingStoryComposerRequest(true);
           if (path !== '/' && path !== '/feed') setLocation('/feed');
@@ -596,17 +626,37 @@ export default function Shell({
         onImagePreviewImagesChange={handleImagePreviewChange}
         onCloseImagePreview={closeImagePreview}
         onNextImagePreview={continueToPostCaption}
+        showVideoPreviewModal={showVideoPreviewModal}
+        videoPreviewUrl={fileType === 'video' ? filePreviews[0]?.url || null : null}
+        videoTrim={videoTrim}
+        onVideoTrimChange={setVideoTrim}
+        onCloseVideoPreview={closeVideoPreview}
+        onNextVideoPreview={continueToVideoCaption}
         showCreateModal={showCreateModal}
         postText={postText}
         selectedFiles={selectedFiles}
         fileType={fileType}
         filePreviews={filePreviews}
+        videoTrim={videoTrim}
         isSubmitting={isSubmitting}
         createError={createError}
         onPostTextChange={setPostText}
-        onRemoveFile={index => setSelectedFiles(files => files.filter((_, idx) => idx !== index))}
+        onRemoveFile={index => {
+          setSelectedFiles(files => files.filter((_, idx) => idx !== index));
+          if (fileType === 'video') {
+            setVideoTrim(null);
+            setFileType(null);
+          }
+        }}
         onPublish={tagContent => void handlePublish(tagContent)}
-        onCloseCreatePost={() => setShowCreateModal(false)}
+        onCloseCreatePost={() => {
+          setShowCreateModal(false);
+          if (fileType === 'video') {
+            setSelectedFiles([]);
+            setVideoTrim(null);
+            setFileType(null);
+          }
+        }}
         showSettingsModal={showSettingsModal}
         onCloseSettings={() => setShowSettingsModal(false)}
         profile={profile}

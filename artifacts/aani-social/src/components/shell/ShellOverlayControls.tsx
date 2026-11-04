@@ -5,8 +5,9 @@ import AIAssistantModal from '@/components/AIAssistantModal';
 import CreatePostModal from '@/components/CreatePostModal';
 import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
+import VideoPreviewModal from '@/components/VideoPreviewModal';
 import SettingsModal from '@/components/SettingsModal';
-import type { PostMetadataTag, Profile } from '@/lib/types';
+import type { PostMetadataTag, Profile, VideoTrimRange } from '@/lib/types';
 
 import type { NotificationsModalProps } from './types';
 
@@ -22,6 +23,12 @@ type ShellOverlayControlsProps = {
   onImagePreviewImagesChange: (images: { file: File; dataUrl: string }[]) => void;
   onCloseImagePreview: () => void;
   onNextImagePreview: () => void;
+  showVideoPreviewModal: boolean;
+  videoPreviewUrl: string | null;
+  videoTrim: VideoTrimRange | null;
+  onVideoTrimChange: (range: VideoTrimRange) => void;
+  onCloseVideoPreview: () => void;
+  onNextVideoPreview: (range: VideoTrimRange) => void;
   showCreateModal: boolean;
   postText: string;
   selectedFiles: File[];
@@ -58,6 +65,12 @@ export default function ShellOverlayControls({
   onImagePreviewImagesChange,
   onCloseImagePreview,
   onNextImagePreview,
+  showVideoPreviewModal,
+  videoPreviewUrl,
+  videoTrim,
+  onVideoTrimChange,
+  onCloseVideoPreview,
+  onNextVideoPreview,
   showCreateModal,
   postText,
   selectedFiles,
@@ -100,6 +113,15 @@ export default function ShellOverlayControls({
         onNext={onNextImagePreview}
       />
 
+      <VideoPreviewModal
+        open={showVideoPreviewModal && Boolean(videoPreviewUrl)}
+        src={videoPreviewUrl || ''}
+        initialTrim={videoTrim}
+        onTrimChange={onVideoTrimChange}
+        onClose={onCloseVideoPreview}
+        onNext={onNextVideoPreview}
+      />
+
       {showCreateModal && (
         <CreatePostModal
           profile={profile}
@@ -108,6 +130,7 @@ export default function ShellOverlayControls({
           selectedFiles={selectedFiles}
           fileType={fileType}
           filePreviews={filePreviews}
+          videoTrim={videoTrim}
           isSubmitting={isSubmitting}
           createError={createError}
           onPostTextChange={onPostTextChange}
