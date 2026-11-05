@@ -177,6 +177,11 @@ body {
   overflow: hidden;
   border: 0;
   border-radius: 0;
+  touch-action: pan-y;
+}
+
+.video-post-media video {
+  touch-action: pan-y;
 }
 
 .video-post-pending {

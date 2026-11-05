@@ -55,7 +55,10 @@ export default function PostVideoPreview({
     onPointerMove,
     onPointerUp,
     onPointerCancel,
-  } = useFeedVideoGestures(videoRef, gestureEnabled, onExpand || (() => undefined));
+  } = useFeedVideoGestures(videoRef, gestureEnabled, onExpand || (() => undefined), {
+    allowVerticalScroll: feedVideo,
+    capturePointer: !feedVideo,
+  });
   const [videoMuted, setVideoMuted] = useState(feedVideo ? false : muted);
   const [currentTime, setCurrentTime] = useState(timeRange?.start ?? 0);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -170,6 +173,7 @@ export default function PostVideoPreview({
   return (
     <div
       className={showCustomControls ? 'relative h-full w-full' : undefined}
+      style={feedVideo ? { touchAction: 'pan-y' } : undefined}
       onClick={showCustomControls && !gestureEnabled ? revealControlsBriefly : undefined}
       onPointerDown={gestureEnabled ? onPointerDown : undefined}
       onPointerMove={gestureEnabled ? onPointerMove : undefined}
@@ -222,7 +226,7 @@ export default function PostVideoPreview({
           void video.play().catch(() => undefined);
         }}
         className={className}
-        style={{ transform: cropTransform, transformOrigin: 'center' }}
+        style={{ transform: cropTransform, transformOrigin: 'center', touchAction: feedVideo ? 'pan-y' : undefined }}
       />
 
       {showMuteToggle && (

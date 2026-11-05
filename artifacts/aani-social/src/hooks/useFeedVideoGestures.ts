@@ -11,13 +11,22 @@ type GestureState = {
 
 const HOLD_DELAY_MS = 220;
 const TAP_MOVE_THRESHOLD = 18;
+const VERTICAL_SCROLL_CANCEL_THRESHOLD = 5;
 const CONTROLS_VISIBLE_MS = 2400;
+
+type FeedVideoGestureOptions = {
+  allowVerticalScroll?: boolean;
+  capturePointer?: boolean;
+};
 
 export function useFeedVideoGestures(
   videoRef: { current: HTMLVideoElement | null },
   enabled: boolean,
   onSingleTap: () => void,
+  options: FeedVideoGestureOptions = {},
 ) {
+  const allowVerticalScroll = options.allowVerticalScroll ?? false;
+  const capturePointer = options.capturePointer ?? true;
   const [controlsVisible, setControlsVisible] = useState(false);
   const gestureRef = useRef<GestureState | null>(null);
   const holdTimerRef = useRef<number | null>(null);
@@ -43,16 +52,28 @@ export function useFeedVideoGestures(
     holdTimerRef.current = null;
   }, []);
 
+  const resumeAfterCancelledHold = (gesture: GestureState) => {
+    const video = videoRef.current;
+    if (video && gesture.activated && gesture.wasPlaying && video.paused) {
+      void video.play().catch(() => undefined);
+    }
+  };
+
+  const cancelGesture = (pointerId: number) => {
+    const gesture = gestureRef.current;
+    if (!gesture || gesture.pointerId !== pointerId) return;
+    clearHoldTimer();
+    gestureRef.current = null;
+    resumeAfterCancelledHold(gesture);
+  };
+
   const finishGesture = (pointerId: number, allowTap: boolean) => {
     const gesture = gestureRef.current;
     if (!gesture || gesture.pointerId !== pointerId) return;
     clearHoldTimer();
     gestureRef.current = null;
 
-    const video = videoRef.current;
-    if (video && gesture.activated && gesture.wasPlaying && video.paused) {
-      void video.play().catch(() => undefined);
-    }
+    resumeAfterCancelledHold(gesture);
     if (allowTap && !gesture.activated && !gesture.moved) onSingleTapRef.current();
     revealControlsBriefly();
   };
@@ -71,15 +92,19 @@ export function useFeedVideoGestures(
       activated: false,
       moved: false,
     };
-    if (controlsTimerRef.current !== null) {
-      window.clearTimeout(controlsTimerRef.current);
-      controlsTimerRef.current = null;
+    if (!allowVerticalScroll) {
+      if (controlsTimerRef.current !== null) {
+        window.clearTimeout(controlsTimerRef.current);
+        controlsTimerRef.current = null;
+      }
+      setControlsVisible(true);
     }
-    setControlsVisible(true);
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture is not available in every embedded browser.
+    if (capturePointer) {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture is not available in every embedded browser.
+      }
     }
 
     holdTimerRef.current = window.setTimeout(() => {
@@ -93,14 +118,22 @@ export function useFeedVideoGestures(
 
   const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     const gesture = gestureRef.current;
-    if (!gesture || gesture.pointerId !== event.pointerId || gesture.activated) return;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (allowVerticalScroll && Math.abs(event.clientY - gesture.startY) > VERTICAL_SCROLL_CANCEL_THRESHOLD) {
+      cancelGesture(event.pointerId);
+      return;
+    }
+    if (gesture.activated) return;
     if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) <= TAP_MOVE_THRESHOLD) return;
     gesture.moved = true;
     clearHoldTimer();
   };
 
   const onPointerUp = (event: ReactPointerEvent<HTMLElement>) => finishGesture(event.pointerId, true);
-  const onPointerCancel = (event: ReactPointerEvent<HTMLElement>) => finishGesture(event.pointerId, false);
+  const onPointerCancel = (event: ReactPointerEvent<HTMLElement>) => {
+    if (allowVerticalScroll) cancelGesture(event.pointerId);
+    else finishGesture(event.pointerId, false);
+  };
 
   useEffect(() => () => {
     clearHoldTimer();
