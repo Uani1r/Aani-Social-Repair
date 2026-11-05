@@ -1950,3 +1950,54 @@ a:active > .aani-notifications-card {
   flex: 0 0 16px;
   background: #3f3f46;
 }
+
+
+
+/* Keep comment rows unboxed; whitespace is the only separator. */
+.comment-item {
+  background: transparent !important;
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.comment-list,
+.comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.comment-row {
+  padding-block: 0;
+}
+
+.comments-text-bubble {
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.comment-item .comment-content > button.rounded-2xl {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.comment-item [class~="border-r-[1.5px]"] {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  border: none !important;
+  padding-right: 12px;
+}
+
+.comment-item [class~="border-r-[1.5px]"] > :not(:first-child) {
+  margin-top: 0 !important;
+}
+
+.comment-thread-divider {
+  display: none !important;
+}

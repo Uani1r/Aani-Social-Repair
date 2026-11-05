@@ -140,7 +140,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   return (
     <div
       id={`comment-${comment.id}`}
-      className={`relative rounded-xl transition-colors ${highlightCommentId === comment.id ? 'bg-pink-500/[0.06] ring-1 ring-pink-400/60' : ''}`}
+      className="comment-item relative"
     >
       <div className="comment-row relative flex py-2" dir="rtl">
         <div className="comment-avatar-wrap shrink-0">
