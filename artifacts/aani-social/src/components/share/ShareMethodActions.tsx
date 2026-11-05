@@ -5,11 +5,11 @@ import {
   Mail,
   MessageCircle,
   MessageSquare,
-  Repeat2,
   Send,
   Share2,
 } from 'lucide-react';
 
+import RepostIcon from '../RepostIcon';
 import ShareAction from './ShareAction';
 
 const ShareMethodActions = ({
@@ -42,9 +42,8 @@ const ShareMethodActions = ({
 
     <div className="no-scrollbar mt-2 flex gap-2.5 overflow-x-auto pb-3">
       <ShareAction
-        icon={<Repeat2 size={18} />}
+        icon={<RepostIcon active={reposted} size={18} />}
         label={reposted ? 'إلغاء الإعادة' : 'إعادة النشر'}
-        tone={reposted ? 'active' : 'default'}
         busy={repostBusy}
         onClick={onRepost}
       />

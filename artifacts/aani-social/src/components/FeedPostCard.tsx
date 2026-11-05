@@ -6,6 +6,7 @@ import { Link } from 'wouter';
 import { createPortal } from 'react-dom';
 
 import Avatar from './Avatar';
+import RepostIcon from './RepostIcon';
 import FeedReelViewer from './FeedReelViewer';
 import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
@@ -91,6 +92,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const likesCount = interactions.likes;
   const reposted = interactions.reposted;
   const repostsCount = interactions.reposts;
+  const sharesCount = interactions.shares;
   const bookmarked = interactions.bookmarked;
   const isMainFeedVideo = isMainFeed && post.type === 'reel';
 
@@ -470,14 +472,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
 
           {/* 3. إعادة النشر */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
-            <Repeat size={18} />
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 transition hover:text-zinc-200" onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
+            <RepostIcon active={reposted} size={18} />
             <span className="text-xs">{repostsCount}</span>
           </button>
 
           {/* 4. المشاركة */}
-          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition" onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 transition hover:text-purple-400" onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
             <Send size={18} />
+            <span className="text-xs">{sharesCount}</span>
           </button>
 
           {/* 5. الحفظ */}

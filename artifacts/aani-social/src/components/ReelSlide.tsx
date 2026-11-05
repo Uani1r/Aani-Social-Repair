@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import RepostIcon from '@/components/RepostIcon';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
 import EditPostSheet from '@/components/EditPostSheet';
@@ -65,6 +66,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
   const saved = interactions.bookmarked;
   const reposted = interactions.reposted;
+  const repostsCount = interactions.reposts;
+  const sharesCount = interactions.shares;
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
@@ -522,12 +525,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           </button>
         )}
 
-        <button type="button" onClick={toggleRepost} aria-label="إعادة النشر" aria-pressed={reposted} className={`reel-sidebar-button ${reposted ? 'is-reposted' : ''}`}>
-          <Repeat size={26} strokeWidth={2} />
+        <button type="button" onClick={toggleRepost} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'} aria-pressed={reposted} className={`reel-sidebar-button ${reposted ? 'is-reposted' : ''}`}>
+          <RepostIcon active={reposted} size={26} strokeWidth={2} />
+          <span>{repostsCount}</span>
         </button>
 
         <button type="button" onClick={() => setShowShareSheet(true)} aria-label="مشاركة" className="reel-sidebar-button">
           <Send size={26} strokeWidth={2} />
+          <span>{sharesCount}</span>
         </button>
 
         <button type="button" onClick={toggleBookmark} aria-label="حفظ" aria-pressed={saved} className={`reel-sidebar-button ${saved ? 'is-saved' : ''}`}>

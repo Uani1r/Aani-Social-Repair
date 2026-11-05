@@ -124,6 +124,8 @@ export async function toggleRepost(
     ? ({ id: postOrId } as Post)
     : postOrId;
 
+  if (isPending(post.id, userId)) return;
+
   const before = readInteractionState(post, userId);
   const reposted = overrideState !== undefined ? !overrideState : !before.reposted;
 
@@ -188,36 +190,48 @@ export function postShareText(post: Post): string {
   return excerpt.length > 140 ? `${excerpt.slice(0, 139)}…` : excerpt;
 }
 
-export async function recordShare(post: Post, userId: string): Promise<boolean> {
+export async function recordShares(
+  post: Post,
+  userId: string,
+  count: number,
+): Promise<boolean> {
+  const total = Math.min(500, Math.max(0, Math.trunc(count)));
+  if (!supabaseConfigured || !userId || total === 0) return false;
+
   const before = readInteractionState(post, userId);
-
-  if (before.shared) {
-    patchCache(post.id, userId, { shared: true });
-    return true;
-  }
-
-  const shares = before.shares + 1;
-  patchCache(post.id, userId, { shared: true, shares });
-  writeLocalFlag(userId, post.id, { shared: true, shares });
-
-  if (!supabaseConfigured || !userId) return false;
+  patchCache(post.id, userId, {
+    shared: true,
+    shares: before.shares + total,
+  });
 
   try {
-    const { error } = await supabase
-      .from("post_shares")
-      .insert({ post_id: post.id, user_id: userId });
+    const { error: rpcError } = await supabase.rpc("aani_register_post_share", {
+      p_post_id: post.id,
+      p_count: total,
+    });
 
-    const persisted = !error || error.code === "23505" || isMissingRelation(error);
-
-    if (persisted) {
-      void hydratePostIds([post.id], userId, { force: true });
-    } else {
-      patchCache(post.id, userId, { shares: before.shares });
+    if (rpcError) {
+      const rows = Array.from({ length: total }, () => ({
+        post_id: post.id,
+        user_id: userId,
+      }));
+      const { error: insertError } = await supabase.from("post_shares").insert(rows);
+      if (insertError) throw insertError;
     }
 
-    return persisted;
+    writeLocalFlag(userId, post.id, { shared: true });
+    void hydratePostIds([post.id], userId, { force: true });
+    return true;
   } catch {
-    patchCache(post.id, userId, { shares: before.shares });
+    patchCache(post.id, userId, {
+      shared: before.shared,
+      shares: before.shares,
+    });
+    toast.error("تعذر حفظ عدّاد المشاركة، حاول مرة أخرى");
     return false;
   }
+}
+
+export async function recordShare(post: Post, userId: string): Promise<boolean> {
+  return recordShares(post, userId, 1);
 }

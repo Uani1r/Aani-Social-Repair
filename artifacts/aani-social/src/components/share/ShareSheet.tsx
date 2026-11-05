@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 
 import { supabase, supabaseConfigured } from '../../lib/supabase';
-import { postShareText, postShareUrl } from '../../lib/interactions';
+import { postShareText, postShareUrl, recordShares } from '../../lib/interactions';
 import ShareComposerFooter from './ShareComposerFooter';
 import ShareMethodActions from './ShareMethodActions';
 import ShareRecipientList from './ShareRecipientList';
@@ -93,37 +93,6 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
   const encodedUrl = encodeURIComponent(shareUrl);
   const encodedText = encodeURIComponent(shareText);
 
-  // تسجيل كل عملية توجيه منفصلة في عدّاد المشاركات
-  const registerPostShares = async (count: number) => {
-    if (!supabaseConfigured || count <= 0) return;
-
-    try {
-      const { error } = await supabase.rpc('aani_register_post_share', {
-        p_post_id: post.id,
-        p_count: count,
-      });
-      if (!error) return;
-    } catch {
-      /* The RPC may not be installed on older databases. */
-    }
-
-    try {
-      const rows = Array.from({ length: count }, () => ({
-        post_id: post.id,
-        user_id: currentUserId,
-      }));
-      const { error } = await supabase.from('post_shares').insert(rows);
-      if (error) {
-        await supabase.from('post_shares').insert({
-          post_id: post.id,
-          user_id: currentUserId,
-        });
-      }
-    } catch (error) {
-      console.warn('[share] تعذر تسجيل عدّاد المشاركة:', error);
-    }
-  };
-
   const sendToSelected = async () => {
     if (sendingRef.current || selected.size === 0) return;
 
@@ -177,8 +146,8 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
         ok === 1 ? 'تم إرسال المنشور' : `تم إرسال المنشور إلى ${ok} أشخاص`,
       );
 
-      // عدّاد المشاركات: عملية واحدة لكل مستقبل، وتظهر التحديثات لكل المستخدمين
-      await registerPostShares(ok);
+      // يسجل نجاح الإرسال لكل مستلم ويحدّث العداد فوراً في الواجهة وقاعدة البيانات
+      await recordShares(post, currentUserId, ok);
 
       onSent?.(ok);
       setSelected(new Set());

@@ -23,6 +23,7 @@ export {
   postShareText,
   postShareUrl,
   recordShare,
+  recordShares,
   toggleBookmark,
   toggleLike,
   toggleRepost,

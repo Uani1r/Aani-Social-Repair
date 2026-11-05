@@ -1,9 +1,10 @@
 import React from 'react';
-import { Bookmark, Heart, MessageCircle, Repeat2, Share2 } from 'lucide-react';
+import { Bookmark, Heart, MessageCircle, Share2 } from 'lucide-react';
 
 import { usePostInteractions } from '../lib/interactions';
 import type { Post } from '../lib/types';
 import UserIdentity from './UserIdentity';
+import RepostIcon from './RepostIcon';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
@@ -154,13 +155,10 @@ export default function PostCard({
             type="button"
             onClick={toggleRepost}
             disabled={pending}
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition ${
-              reposted
-                ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20'
-                : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-800 hover:text-white'
-            }`}
+            aria-pressed={reposted}
+            className="inline-flex items-center gap-1.5 rounded-full bg-zinc-800/80 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-white"
           >
-            <Repeat2 size={16} className={reposted ? 'text-emerald-400' : ''} />
+            <RepostIcon active={reposted} size={16} />
             <span className="text-[11px]">{reposts}</span>
           </button>
 

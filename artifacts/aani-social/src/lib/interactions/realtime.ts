@@ -7,7 +7,7 @@ import { handleAppError } from "../appErrors";
 import { supabase, supabaseConfigured } from "../supabase";
 import { hydratePostIds, hydrateSavesCount } from "./hydration";
 import { patchCache } from "./store";
-import type { RawRow } from "./types";
+import type { InteractionSnapshot, RawRow } from "./types";
 
 function buildChannel(userId: string): { dispose: () => void } {
   const dirtyPosts = new Set<string>();
@@ -32,9 +32,20 @@ function buildChannel(userId: string): { dispose: () => void } {
     table: string,
   ) => {
     const record = (payload.new ?? payload.old ?? {}) as RawRow;
-    const postId = record.post_id ? String(record.post_id) : "";
+    const postId = String(
+      table === "posts" ? record.id ?? "" : record.post_id ?? "",
+    );
 
     if (!postId) return;
+
+    if (table === "posts") {
+      const counts: Partial<Pick<InteractionSnapshot, "likes" | "comments" | "reposts" | "shares">> = {};
+      if (typeof record.likes_count === "number") counts.likes = record.likes_count;
+      if (typeof record.comments_count === "number") counts.comments = record.comments_count;
+      if (typeof record.reposts_count === "number") counts.reposts = record.reposts_count;
+      if (typeof record.shares_count === "number") counts.shares = record.shares_count;
+      patchCache(postId, userId, counts);
+    }
 
     dirtyPosts.add(postId);
     scheduleHydration();
@@ -53,12 +64,11 @@ function buildChannel(userId: string): { dispose: () => void } {
 
   let channel: RealtimeChannel = supabase.channel(`aani-interactions-${userId}`);
 
-  // Reconcile counters from interaction rows, not posts.*_count updates: a
-  // counter-column event can arrive before the authoritative row-based summary
-  // and briefly double an optimistic count.
-  // saved_posts is an optional legacy table and is not part of this schema's
-  // Realtime publication; bookmarks is the canonical persisted save table.
-  (["likes", "comments", "reposts", "bookmarks", "post_shares", "post_feedback"] as const).forEach(
+  // Posts exposes safe aggregate columns through its select grants, so its
+  // counter updates can reach every viewer without exposing interaction rows.
+  // Interaction rows remain subscribed for per-user flags and reconciliation.
+  // saved_posts is an optional legacy table; bookmarks is canonical.
+  (["posts", "likes", "comments", "reposts", "bookmarks", "post_shares", "post_feedback"] as const).forEach(
     (table) => {
       channel = channel.on(
         "postgres_changes",
