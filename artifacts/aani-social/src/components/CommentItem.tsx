@@ -38,15 +38,31 @@ const formatRelativeTime = (value: string): string => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'الآن';
 
-  const diffMs = Date.now() - date.getTime();
-  const minutes = Math.max(1, Math.floor(diffMs / 60000));
-  if (minutes < 60) return `${minutes} د`;
+  const diffMs = Math.max(0, Date.now() - date.getTime());
+  const minutes = Math.floor(diffMs / 60000);
+  if (minutes === 0) return 'الآن';
+  if (minutes === 1) return 'منذ دقيقة';
+  if (minutes === 2) return 'منذ دقيقتين';
+  if (minutes < 11) return `منذ ${minutes} دقائق`;
+  if (minutes < 60) return `منذ ${minutes} دقيقة`;
+
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} س`;
+  if (hours === 1) return 'منذ ساعة';
+  if (hours === 2) return 'منذ ساعتين';
+  if (hours < 11) return `منذ ${hours} ساعات`;
+  if (hours < 24) return `منذ ${hours} ساعة`;
+
   const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} ي`;
+  if (days === 1) return 'منذ يوم';
+  if (days === 2) return 'منذ يومين';
+  if (days < 11) return `منذ ${days} أيام`;
+  if (days < 30) return `منذ ${days} يوم`;
+
   const months = Math.floor(days / 30);
-  return `${months} ش`;
+  if (months === 1) return 'منذ شهر';
+  if (months === 2) return 'منذ شهرين';
+  if (months < 11) return `منذ ${months} أشهر`;
+  return `منذ ${months} شهر`;
 };
 
 const buildInitials = (fullName?: string | null): string => {
@@ -126,95 +142,113 @@ export const CommentItem: React.FC<CommentItemProps> = ({
       id={`comment-${comment.id}`}
       className={`relative rounded-xl transition-colors ${highlightCommentId === comment.id ? 'bg-pink-500/[0.06] ring-1 ring-pink-400/60' : ''}`}
     >
-      <div
-        className="relative flex gap-4 py-2"
-        dir="rtl"
-      >
-        <div className="flex shrink-0">
+      <div className="comment-row relative flex py-2" dir="rtl">
+        <div className="comment-avatar-wrap shrink-0">
           {author?.avatar_url ? (
             <img
               src={author.avatar_url}
               alt={displayName}
-              className={`rounded-full object-cover ${ringClasses} ${
-                isReply ? 'h-8 w-8' : 'h-10 w-10'
-              }`}
+              className={`comment-avatar ${ringClasses}`}
             />
           ) : (
-            <div
-              className={`flex items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 font-bold text-white ${ringClasses} ${
-                isReply ? 'h-8 w-8 text-[11px]' : 'h-10 w-10 text-sm'
-              }`}
-            >
+            <div className={`comment-avatar comment-avatar-fallback ${ringClasses}`}>
               {buildInitials(displayName)}
             </div>
           )}
         </div>
 
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
+        <div className="comment-content min-w-0 flex-1">
+          <div className="comment-header">
+            <div className="comment-author-line">
               <UserIdentity
                 name={displayName}
-                username={author?.username}
-                nameClassName={`font-bold text-white ${isReply ? 'text-[13px]' : 'text-[15px]'}`}
-                usernameClassName={`text-zinc-500 ${isReply ? 'text-[10px]' : 'text-[11px]'}`}
+                username={author?.username?.replace(/^@+/, '')}
+                className="comment-author-identity"
+                nameClassName="comment-author-name"
+                usernameClassName="comment-author-username"
               />
-              <time className="mt-1 block text-[11px] text-zinc-500">
+              <time className="comment-time">
                 {formatRelativeTime(comment.created_at)}
               </time>
             </div>
 
-            <div className="flex shrink-0 items-start gap-2">
-              {isOwnComment && (
-                <div className="relative shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setShowMenu((visible) => !visible)}
-                    className="rounded-full p-1 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
-                    aria-label="خيارات التعليق"
-                    aria-expanded={showMenu}
-                  >
-                    <MoreHorizontal size={18} />
-                  </button>
-                  {showMenu && (
-                    <div className="absolute left-0 top-full z-20 min-w-32 rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
-                      <button
-                        type="button"
-                        disabled={isDeleting}
-                        onClick={() => {
-                          setShowMenu(false);
-                          void onDelete(comment);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-red-300 hover:bg-zinc-800 disabled:opacity-50"
-                      >
-                        <Trash2 size={14} />
-                        حذف التعليق
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            {isOwnComment && (
+              <div className="comment-options relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowMenu((visible) => !visible)}
+                  className="comment-options-button rounded-full text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
+                  aria-label="خيارات التعليق"
+                  aria-expanded={showMenu}
+                >
+                  <MoreHorizontal size={16} />
+                </button>
+                {showMenu && (
+                  <div className="absolute left-0 top-full z-20 min-w-32 rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+                    <button
+                      type="button"
+                      disabled={isDeleting}
+                      onClick={() => {
+                        setShowMenu(false);
+                        void onDelete(comment);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-red-300 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      <Trash2 size={14} />
+                      حذف التعليق
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
-          <div
-            className={`comments-text-bubble mt-1 whitespace-pre-wrap break-words text-right font-normal text-zinc-300 ${
-              isReply ? 'text-[13px] leading-6' : 'text-[14px] leading-7'
-            }`}
-            dir="rtl"
-            style={{ unicodeBidi: 'isolate' }}
-          >
-            {isReply && replyTo && (
-              <span className="me-1 font-semibold text-pink-400">{replyTo}</span>
-            )}
-            <CommentText text={comment.content} />
+          <div className="comment-content-row">
+            <div
+              className="comments-text-bubble whitespace-pre-wrap break-words text-right font-normal"
+              dir="rtl"
+              style={{ unicodeBidi: 'isolate' }}
+            >
+              {isReply && replyTo && (
+                <span className="me-1 font-semibold text-pink-400">{replyTo}</span>
+              )}
+              <CommentText text={comment.content} />
+            </div>
+
+            <div className="comment-reactions" dir="rtl">
+              <button
+                type="button"
+                onClick={() => void onToggleLike(comment.id, !!comment.is_liked)}
+                aria-pressed={!!comment.is_liked}
+                className={`comment-reaction-button ${comment.is_liked ? 'is-liked' : ''}`}
+                aria-label={`إعجاب، ${comment.likes_count ?? 0}`}
+              >
+                <Heart
+                  size={16}
+                  fill={comment.is_liked ? 'currentColor' : 'none'}
+                  strokeWidth={1.8}
+                />
+                <span>{comment.likes_count ?? 0}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void onToggleDislike(comment.id, !!comment.is_disliked)}
+                aria-pressed={!!comment.is_disliked}
+                className={`comment-reaction-button ${comment.is_disliked ? 'is-disliked' : ''}`}
+                aria-label={`عدم إعجاب، ${comment.dislikes_count ?? 0}`}
+              >
+                <ThumbsDown size={16} strokeWidth={1.8} />
+                <span>{comment.dislikes_count ?? 0}</span>
+              </button>
+            </div>
           </div>
 
           {comment.image_url && (
             <button
               type="button"
               onClick={() => setExpandedImage(comment.image_url || null)}
-              className="mt-3 block overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900"
+              className="mt-2 block overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900"
             >
               <img
                 src={comment.image_url}
@@ -224,91 +258,56 @@ export const CommentItem: React.FC<CommentItemProps> = ({
             </button>
           )}
 
-          <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-zinc-400">
+          <div className="comment-bottom-actions">
             <button
               type="button"
               onClick={() => onReply(comment)}
-              className="inline-flex items-center gap-1.5 py-1 transition hover:text-zinc-100"
+              className="comment-reply-button"
               aria-label={`الرد${replyCount ? `، ${replyCount} ردود` : ''}`}
             >
-              <Reply size={17} style={{ transform: 'scaleX(-1)' }} />
+              <Reply size={14} style={{ transform: 'scaleX(-1)' }} />
               <span>رد</span>
               {replyCount > 0 && <span>{replyCount}</span>}
             </button>
 
-            <button
-              type="button"
-              onClick={() => void onToggleLike(comment.id, !!comment.is_liked)}
-              aria-pressed={!!comment.is_liked}
-              className={`inline-flex items-center gap-1.5 py-1 transition ${
-                comment.is_liked
-                  ? 'text-pink-400'
-                  : 'text-zinc-400 hover:text-zinc-100'
-              }`}
-              aria-label={`إعجاب، ${comment.likes_count ?? 0}`}
-            >
-              <Heart
-                size={16}
-                fill={comment.is_liked ? 'currentColor' : 'none'}
-                strokeWidth={1.8}
-              />
-              <span className="text-[11px]">{comment.likes_count ?? 0}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                void onToggleDislike(comment.id, !!comment.is_disliked)
-              }
-              aria-pressed={!!comment.is_disliked}
-              className={`inline-flex items-center gap-1.5 py-1 transition ${
-                comment.is_disliked
-                  ? 'text-pink-400'
-                  : 'text-zinc-400 hover:text-zinc-100'
-              }`}
-              aria-label={`عدم إعجاب، ${comment.dislikes_count ?? 0}`}
-            >
-              <ThumbsDown size={16} strokeWidth={1.8} />
-              <span className="text-[11px]">{comment.dislikes_count ?? 0}</span>
-            </button>
+            {renderReplies && replyCount > 0 && (
+              <div className="comment-replies-toggle">
+                <button
+                  type="button"
+                  onClick={() => setShowReplies((prev) => !prev)}
+                  className="comment-replies-button"
+                  aria-expanded={showReplies}
+                >
+                  <span className="comment-thread-divider" aria-hidden="true" />
+                  <span>{showReplies ? 'إخفاء الردود' : formatRepliesLabel(replyCount)}</span>
+                </button>
+              </div>
+            )}
           </div>
+
+          {renderReplies && showReplies && replyCount > 0 && (
+            <div className="relative mt-1 space-y-1 border-r-[1.5px] border-zinc-700/60 pr-3">
+              {flatReplies.map(({ comment: reply, replyTo: replyMention }) => (
+                <CommentItem
+                  key={reply.id}
+                  comment={reply}
+                  depth={1}
+                  replyTo={replyMention}
+                  renderReplies={false}
+                  currentUserId={currentUserId}
+                  onReply={onReply}
+                  onToggleLike={onToggleLike}
+                  onToggleDislike={onToggleDislike}
+                  onDelete={onDelete}
+                  pendingDeleteIds={pendingDeleteIds}
+                  storyOwners={storyOwners}
+                  highlightCommentId={highlightCommentId}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
-
-      {renderReplies && replyCount > 0 && (
-        <div className="px-2 pt-2 text-right">
-          <button
-            type="button"
-            onClick={() => setShowReplies((prev) => !prev)}
-            className="inline-flex items-center gap-1 rounded-full bg-zinc-800/90 px-2.5 py-1 text-[10px] text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100"
-            aria-expanded={showReplies}
-          >
-            {showReplies ? 'إخفاء الردود' : formatRepliesLabel(replyCount)}
-          </button>
-        </div>
-      )}
-
-      {renderReplies && showReplies && replyCount > 0 && (
-        <div className="relative mt-1 space-y-1 border-r-[1.5px] border-zinc-700/60 pr-3">
-          {flatReplies.map(({ comment: reply, replyTo: replyMention }) => (
-            <CommentItem
-              key={reply.id}
-              comment={reply}
-              depth={1}
-              replyTo={replyMention}
-              renderReplies={false}
-              currentUserId={currentUserId}
-              onReply={onReply}
-              onToggleLike={onToggleLike}
-              onToggleDislike={onToggleDislike}
-              onDelete={onDelete}
-              pendingDeleteIds={pendingDeleteIds}
-              storyOwners={storyOwners}
-              highlightCommentId={highlightCommentId}
-            />
-          ))}
-        </div>
-      )}
 
       {expandedImage && (
         <div
