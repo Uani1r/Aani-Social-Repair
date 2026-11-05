@@ -116,7 +116,7 @@ body {
 
 /* Main-feed video post layout */
 .video-post-card {
-  margin: 0;
+  margin: 0 0 24px;
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -187,23 +187,6 @@ body {
   margin: 0;
   padding: 12px 14px;
   border: 0;
-}
-
-.video-post-actions {
-  gap: 14px;
-  overflow: visible;
-}
-
-.video-post-action {
-  gap: 4px !important;
-  flex-shrink: 0;
-}
-
-.video-post-count {
-  color: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1;
 }
 
 .video-post-caption {

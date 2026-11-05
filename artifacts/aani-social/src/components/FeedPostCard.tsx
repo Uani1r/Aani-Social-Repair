@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, Share2, ThumbsUp, X,
+  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, ThumbsUp, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { createPortal } from 'react-dom';
@@ -497,47 +497,45 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
       {/* شريط الأزرار المتجمع جهة اليمين */}
       <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''}`}>
-        <div className={`post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto ${isMainFeedVideo ? 'video-post-actions' : ''}`}>
+        <div className="post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto">
           {/* 1. الإعجاب */}
           <button
             type="button"
-            className={`post-action-btn flex items-center gap-1.5 ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'} ${isMainFeedVideo ? 'video-post-action' : ''}`}
+            className={`post-action-btn flex items-center gap-1.5 ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}
             onClick={toggleLike}
             aria-pressed={liked}
             aria-label={liked ? 'إلغاء الإعجاب' : 'إعجاب'}
           >
             <Heart
-              size={isMainFeedVideo ? 22 : 18}
+              size={18}
               fill={liked ? 'currentColor' : 'none'}
               className={`transition-transform ${isAnimating ? 'animate-heart-pulse' : ''}`}
             />
-            {likesVisible && <span className={isMainFeedVideo ? 'video-post-count' : 'text-xs'}>{likesCount}</span>}
+            {likesVisible && <span className="text-xs">{likesCount}</span>}
           </button>
 
           {/* 2. التعليقات */}
           {commentsVisible && (
-            <button type="button" className={`post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={loadComments}>
-              <MessageSquare size={isMainFeedVideo ? 22 : 18} />
-              <span className={isMainFeedVideo ? 'video-post-count' : 'text-xs'}>{commentsCount}</span>
+            <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition" onClick={loadComments}>
+              <MessageSquare size={18} />
+              <span className="text-xs">{commentsCount}</span>
             </button>
           )}
 
           {/* 3. إعادة النشر */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'} ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
-            <Repeat size={isMainFeedVideo ? 22 : 18} />
-            <span className={isMainFeedVideo ? 'video-post-count' : 'text-xs'}>{repostsCount}</span>
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
+            <Repeat size={18} />
+            <span className="text-xs">{repostsCount}</span>
           </button>
 
           {/* 4. المشاركة */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
-            {isMainFeedVideo ? <Share2 size={22} /> : <Send size={18} />}
-            {isMainFeedVideo && <span className="video-post-count">{post.shares_count ?? 0}</span>}
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition" onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
+            <Send size={18} />
           </button>
 
           {/* 5. الحفظ */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-zinc-400 hover:text-amber-400'} ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'}>
-            <Bookmark size={isMainFeedVideo ? 22 : 18} fill={bookmarked ? 'currentColor' : 'none'} />
-            {isMainFeedVideo && <span className="video-post-count">{post.saves_count ?? 0}</span>}
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-zinc-400 hover:text-amber-400'}`} onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'}>
+            <Bookmark size={18} fill={bookmarked ? 'currentColor' : 'none'} />
           </button>
 
         </div>
