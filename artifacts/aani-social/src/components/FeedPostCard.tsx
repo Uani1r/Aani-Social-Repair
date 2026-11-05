@@ -3,8 +3,10 @@ import {
   Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, Share2, ThumbsUp, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
+import { createPortal } from 'react-dom';
 
 import Avatar from './Avatar';
+import ReelSlide from './ReelSlide';
 import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
@@ -95,6 +97,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
   const [showPrivacySheet, setShowPrivacySheet] = useState(false);
+  const [showMainFeedReel, setShowMainFeedReel] = useState(false);
   const likesVisible = !post.hide_likes || post.user_id === currentUserId;
   const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
 
@@ -103,6 +106,22 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     if (post.media_url) return [post.media_url];
     return [];
   }, [post.media_urls, post.media_url]);
+  const activeVideoUrl = urls[currentImageIndex] || post.media_url;
+  const fullScreenPost = useMemo(() => ({
+    ...post,
+    media_url: activeVideoUrl,
+    media_urls: activeVideoUrl ? [activeVideoUrl] : [],
+  }), [post, activeVideoUrl]);
+
+  const openMainFeedReel = () => {
+    window.dispatchEvent(new Event('aani:pause-feed-videos'));
+    setShowMainFeedReel(true);
+  };
+
+  const closeMainFeedReel = () => {
+    setShowMainFeedReel(false);
+    window.requestAnimationFrame(() => window.dispatchEvent(new Event('aani:resume-feed-videos')));
+  };
 
   // مزامنة أعلام التفاعل فقط عند تغيّرها فعليًا (وليس مع كل تحديث للعدّادات)
   useEffect(() => {
@@ -437,6 +456,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     showMuteToggle
                     feedVideo
                     loop
+                    onExpand={isMainFeedVideo ? openMainFeedReel : undefined}
                     controls={false}
                     className="h-full w-full object-cover"
                   />
@@ -545,7 +565,6 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           </div>
         )}
         {isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className="video-post-metadata" />}
-        {isMainFeedVideo && <time className="video-post-created-at">{formatDate(post.created_at)}</time>}
       </footer>
 
       <EditPostSheet
@@ -577,6 +596,21 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           onRecordExternalShare={() => void recordShare(post, currentUserId)}
           onClose={() => setShowShareSheet(false)}
         />
+      )}
+
+      {showMainFeedReel && createPortal(
+        <div className="fixed inset-0 z-[100] bg-black">
+          <ReelSlide
+            post={fullScreenPost}
+            currentUserId={currentUserId}
+            onOpenComments={onOpenComments ? () => onOpenComments(post.id) : () => { void loadComments(); }}
+            onRefresh={onRefresh}
+            onClose={closeMainFeedReel}
+            showCreatedAt
+            captionSheet
+          />
+        </div>,
+        document.body,
       )}
     </article>
   );

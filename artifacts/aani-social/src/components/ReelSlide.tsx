@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, Heart, Loader2, MessageSquare, Play, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageSquare, Pause, Play, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
+import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
 import EditPostSheet from '@/components/EditPostSheet';
 import PostOptionsSheet from '@/components/PostOptionsSheet';
 import PostPrivacySheet from '@/components/PostPrivacySheet';
@@ -14,7 +16,7 @@ import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { displayName, type Post } from '@/lib/types';
+import { displayName, formatDate, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
@@ -22,7 +24,13 @@ const hasOpenFeedDialog = () => typeof document !== 'undefined' && Boolean(docum
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
 ));
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending }: {
+const formatReelTime = (value: number) => {
+  if (!Number.isFinite(value) || value < 0) return '0:00';
+  const seconds = Math.floor(value);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+};
+
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, showCreatedAt = false, captionSheet = false }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
@@ -30,13 +38,21 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   pendingState?: PendingPost;
   onRetryPending?: () => void;
   onDismissPending?: () => void;
+  onClose?: () => void;
+  showCreatedAt?: boolean;
+  captionSheet?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
   const manuallyPausedRef = useRef(false);
   const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
+  const captionRef = useRef<HTMLParagraphElement>(null);
   const [playing, setPlaying] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [playbackTime, setPlaybackTime] = useState(0);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [captionHasMore, setCaptionHasMore] = useState(false);
+  const [showCaptionSheet, setShowCaptionSheet] = useState(false);
   const mediaUrl = post.media_url || '';
   const videoTimeRange = parseVideoTimeRange(mediaUrl);
   const videoCropTransform = getVideoCropTransform(parseVideoCrop(mediaUrl));
@@ -55,6 +71,16 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const [editContent, setEditContent] = useState(post.content || '');
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const {
+    dragOffset: captionDragOffset,
+    dragging: captionDragging,
+    onClickCapture: onCaptionSheetClickCapture,
+    onPointerDown: onCaptionSheetPointerDown,
+    onTouchStart: onCaptionSheetTouchStart,
+    onTouchMove: onCaptionSheetTouchMove,
+    onTouchEnd: onCaptionSheetTouchEnd,
+    onTouchCancel: onCaptionSheetTouchCancel,
+  } = useBottomSheetDismiss(showCaptionSheet, () => setShowCaptionSheet(false));
 
   // مزامنة أعلام التفاعل غير المعتمدة على مخزن التفاعلات
   useEffect(() => {
@@ -124,6 +150,26 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     };
   }, []);
 
+  useLayoutEffect(() => {
+    const caption = captionRef.current;
+    if (!captionSheet || !post.content || !caption) {
+      setCaptionHasMore(false);
+      return undefined;
+    }
+
+    const measureCaption = () => {
+      setCaptionHasMore(caption.scrollHeight > caption.clientHeight + 1);
+    };
+    measureCaption();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measureCaption);
+      return () => window.removeEventListener('resize', measureCaption);
+    }
+    const observer = new ResizeObserver(measureCaption);
+    observer.observe(caption);
+    return () => observer.disconnect();
+  }, [captionSheet, post.content]);
+
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -136,6 +182,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       setPlaying(false);
     }
   };
+
+  const playbackGestures = useFeedVideoGestures(videoRef, true, togglePlay);
 
   const toggleLike = () => {
     void togglePostLike(post, currentUserId);
@@ -216,13 +264,17 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   };
 
   const seekToTrimStart = (video: HTMLVideoElement) => {
-    if (!videoTimeRange) return;
-    const end = getTrimEnd(video);
-    video.currentTime = Math.min(videoTimeRange.start, Math.max(0, end - 0.05));
+    if (videoTimeRange) {
+      const end = getTrimEnd(video);
+      video.currentTime = Math.min(videoTimeRange.start, Math.max(0, end - 0.05));
+    }
+    setPlaybackTime(video.currentTime);
   };
 
   const handleVideoLoadedMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
-    seekToTrimStart(event.currentTarget);
+    const video = event.currentTarget;
+    setVideoDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    seekToTrimStart(video);
   };
 
   const handleVideoSeeking = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -236,12 +288,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   const handleVideoTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
+    setPlaybackTime(video.currentTime);
     if (!videoTimeRange || video.currentTime < getTrimEnd(video) - 0.04) return;
     seekToTrimStart(video);
   };
 
   const handleVideoPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
+    setPlaying(true);
     const video = event.currentTarget;
+    setPlaybackTime(video.currentTime);
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
       seekToTrimStart(video);
     }
@@ -252,6 +307,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     seekToTrimStart(event.currentTarget);
     void event.currentTarget.play().catch(() => undefined);
   };
+
+  const timelineStart = videoTimeRange?.start ?? 0;
+  const timelineEnd = videoDuration > 0
+    ? videoTimeRange ? Math.min(videoTimeRange.end, videoDuration) : videoDuration
+    : timelineStart;
+  const safePlaybackTime = Math.min(timelineEnd, Math.max(timelineStart, playbackTime));
+  const timelineProgress = timelineEnd > timelineStart
+    ? ((safePlaybackTime - timelineStart) / (timelineEnd - timelineStart)) * 100
+    : 0;
 
   const saveEdit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -297,7 +361,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   };
 
   return (
-    <section ref={containerRef} className="reel-slide relative w-full h-screen overflow-hidden bg-black">
+    <section
+      ref={containerRef}
+      className="reel-slide relative w-full h-screen overflow-hidden bg-black"
+      onPointerDown={playbackGestures.onPointerDown}
+      onPointerMove={playbackGestures.onPointerMove}
+      onPointerUp={playbackGestures.onPointerUp}
+      onPointerCancel={playbackGestures.onPointerCancel}
+    >
       <video
         ref={videoRef}
         src={videoSrc}
@@ -310,7 +381,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         onTimeUpdate={handleVideoTimeUpdate}
         onPlay={handleVideoPlay}
         onEnded={handleVideoEnded}
-        onClick={togglePlay}
+        onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
         onPause={() => setPlaying(false)}
         className="w-full h-full object-cover cursor-pointer"
         style={{ transform: videoCropTransform, transformOrigin: 'center' }}
@@ -321,6 +392,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         aria-label={muted ? 'تشغيل الصوت' : 'كتم الصوت'}
         aria-pressed={muted}
         onClick={() => {
+          playbackGestures.revealControlsBriefly();
           const nextMuted = !muted;
           setMuted(nextMuted);
           if (videoRef.current) videoRef.current.muted = nextMuted;
@@ -329,6 +401,17 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       >
         {muted ? <VolumeX size={19} /> : <Volume2 size={19} />}
       </button>
+
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="إغلاق استعراض الريل"
+          className="absolute right-4 top-[max(1rem,env(safe-area-inset-top))] z-30 grid h-11 w-11 place-items-center rounded-full border border-white/20 bg-black/50 text-white backdrop-blur-md"
+        >
+          <X size={20} />
+        </button>
+      )}
 
       {pendingState && (
         <div className="absolute inset-x-0 top-0 z-40 bg-black/70 px-4 pb-4 pt-[max(4rem,calc(1rem+env(safe-area-inset-top)))] text-white backdrop-blur-sm">
@@ -355,11 +438,58 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         </div>
       )}
 
-      {!playing && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-          <div className="bg-black/50 rounded-full p-5 backdrop-blur-md text-white">
-            <Play size={36} fill="currentColor" />
+      {!playing && !playbackGestures.controlsVisible && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-[22%] z-10 flex justify-center">
+          <div className="rounded-full bg-black/50 p-4 text-white backdrop-blur-md">
+            <Play size={30} fill="currentColor" />
           </div>
+        </div>
+      )}
+
+      {playbackGestures.controlsVisible && (
+        <>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 h-24 bg-gradient-to-t from-black/90 via-black/45 to-transparent">
+            <button
+              type="button"
+              onClick={() => {
+                playbackGestures.revealControlsBriefly();
+                togglePlay();
+              }}
+              className="pointer-events-auto absolute bottom-7 left-1/2 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur transition hover:bg-black/80"
+              aria-label={playing ? 'إيقاف الفيديو' : 'تشغيل الفيديو'}
+            >
+              {playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
+            </button>
+            <div className="absolute inset-x-3 bottom-2 flex items-center justify-between text-[11px] text-white/90">
+              <span className="tabular-nums">{formatReelTime(Math.max(0, safePlaybackTime - timelineStart))}</span>
+              <span className="tabular-nums">{formatReelTime(Math.max(0, timelineEnd - timelineStart))}</span>
+            </div>
+          </div>
+          <div className="feed-video-timeline absolute inset-x-0 bottom-0 z-40 h-[3px] bg-white/30" aria-label="شريط تقدم الفيديو">
+            <div className="h-full bg-white" style={{ width: `${timelineProgress}%` }} />
+            <input
+              type="range"
+              min={timelineStart}
+              max={timelineEnd > timelineStart ? timelineEnd : timelineStart + 0.1}
+              step="0.1"
+              value={safePlaybackTime}
+              onPointerDown={playbackGestures.revealControlsBriefly}
+              onChange={event => {
+                const nextTime = Number(event.currentTarget.value);
+                setPlaybackTime(nextTime);
+                if (videoRef.current) videoRef.current.currentTime = nextTime;
+              }}
+              className="feed-video-timeline-input"
+              aria-label="تقدم الفيديو"
+              disabled={videoDuration <= 0}
+            />
+          </div>
+        </>
+      )}
+
+      {playbackGestures.acceleratedSide && (
+        <div className={`absolute top-1/2 z-40 -translate-y-1/2 rounded-full bg-black/65 px-3 py-1.5 text-sm font-bold text-white backdrop-blur ${playbackGestures.acceleratedSide === 'left' ? 'left-5' : 'right-5'}`} aria-live="polite">
+          2x
         </div>
       )}
 
@@ -376,14 +506,61 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 nameClassName="text-sm font-bold text-white"
                 usernameClassName="text-xs text-zinc-300"
               />
+              {showCreatedAt && <time className="reel-created-at">{formatDate(post.created_at)}</time>}
             </div>
-            {post.content && (
+            {post.content && (captionSheet ? (
+              <div className="mt-2 flex min-w-0 items-end gap-2">
+                <p ref={captionRef} className="reel-caption-preview min-w-0 flex-1 text-sm leading-snug">{post.content}</p>
+                {captionHasMore && (
+                  <button type="button" onClick={() => setShowCaptionSheet(true)} className="shrink-0 text-xs font-bold text-white underline underline-offset-2">
+                    عرض المزيد
+                  </button>
+                )}
+              </div>
+            ) : (
               <ExpandablePostText text={post.content} className="text-sm leading-snug" />
-            )}
+            ))}
             <PostMetadataChips tags={post.post_metadata || []} className="mt-2" />
           </div>
         </div>
       </div>
+
+      {captionSheet && showCaptionSheet && (
+        <div className="fixed inset-0 z-[70] bg-black/65" onClick={() => setShowCaptionSheet(false)}>
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reel-caption-sheet-title"
+            dir="rtl"
+            className="reel-caption-sheet fixed inset-x-0 bottom-0 z-[71] max-h-[70dvh] overflow-y-auto rounded-t-[24px] border border-white/10 bg-[#18181b] px-5 pt-2 text-white shadow-[0_-12px_50px_rgba(0,0,0,0.45)]"
+            style={{
+              transform: captionDragOffset > 0 ? `translate3d(0, ${captionDragOffset}px, 0)` : undefined,
+              transition: captionDragging ? 'none' : 'transform 220ms ease-out',
+              paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))',
+            }}
+            onClick={event => event.stopPropagation()}
+          >
+            <div
+              className="flex w-full touch-none justify-center py-3"
+              onClickCapture={onCaptionSheetClickCapture}
+              onPointerDown={onCaptionSheetPointerDown}
+              onTouchStart={onCaptionSheetTouchStart}
+              onTouchMove={onCaptionSheetTouchMove}
+              onTouchEnd={onCaptionSheetTouchEnd}
+              onTouchCancel={onCaptionSheetTouchCancel}
+            >
+              <span className="h-1 w-10 rounded-full bg-zinc-600" aria-hidden="true" />
+            </div>
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 id="reel-caption-sheet-title" className="text-base font-bold">الوصف</h2>
+              <button type="button" onClick={() => setShowCaptionSheet(false)} className="rounded-full p-2 text-zinc-300 hover:bg-white/10" aria-label="إغلاق الوصف">
+                <X size={18} />
+              </button>
+            </div>
+            <p className="whitespace-pre-wrap break-words text-sm leading-7 text-zinc-100">{post.content}</p>
+          </section>
+        </div>
+      )}
 
       {/* الأزرار العائمة المرتفعة عن شريط التنقل والمتحركة مع كل فيديو */}
       <div className="absolute right-4 bottom-28 z-30 flex flex-col items-center gap-4">

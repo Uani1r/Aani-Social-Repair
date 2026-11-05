@@ -1,6 +1,7 @@
 import { Pause, Play, Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react';
 
+import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
 import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
 type PostVideoPreviewProps = {
@@ -14,6 +15,7 @@ type PostVideoPreviewProps = {
   showMuteToggle?: boolean;
   feedVideo?: boolean;
   loop?: boolean;
+  onExpand?: () => void;
 };
 
 const formatVideoTime = (value: number) => {
@@ -37,6 +39,7 @@ export default function PostVideoPreview({
   showMuteToggle = false,
   feedVideo = false,
   loop = false,
+  onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const manuallyPausedRef = useRef(false);
@@ -45,7 +48,16 @@ export default function PostVideoPreview({
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
   const mediaSrc = stripVideoEditFragment(src);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [controlsVisible, setControlsVisible] = useState(false);
+  const gestureEnabled = feedVideo && Boolean(onExpand);
+  const {
+    controlsVisible,
+    acceleratedSide,
+    revealControlsBriefly,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+  } = useFeedVideoGestures(videoRef, gestureEnabled, onExpand || (() => undefined));
   const [videoMuted, setVideoMuted] = useState(feedVideo ? false : muted);
   const [currentTime, setCurrentTime] = useState(timeRange?.start ?? 0);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -56,6 +68,7 @@ export default function PostVideoPreview({
   const displayDuration = Math.max(0, rangeEnd - rangeStart);
   const safeCurrentTime = Math.min(rangeEnd, Math.max(rangeStart, currentTime));
   const displayCurrentTime = Math.max(0, safeCurrentTime - rangeStart);
+  const progressPercent = displayDuration > 0 ? Math.min(100, (displayCurrentTime / displayDuration) * 100) : 0;
 
   useEffect(() => {
     if (!feedVideo) setVideoMuted(muted);
@@ -167,13 +180,17 @@ export default function PostVideoPreview({
   const handleControlsKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!showCustomControls || event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return;
     event.preventDefault();
-    setControlsVisible(visible => !visible);
+    revealControlsBriefly();
   };
 
   return (
     <div
       className={showCustomControls ? 'relative h-full w-full' : undefined}
-      onClick={showCustomControls ? () => setControlsVisible(visible => !visible) : undefined}
+      onClick={showCustomControls && !gestureEnabled ? revealControlsBriefly : undefined}
+      onPointerDown={gestureEnabled ? onPointerDown : undefined}
+      onPointerMove={gestureEnabled ? onPointerMove : undefined}
+      onPointerUp={gestureEnabled ? onPointerUp : undefined}
+      onPointerCancel={gestureEnabled ? onPointerCancel : undefined}
       onKeyDown={showCustomControls ? handleControlsKeyDown : undefined}
       role={showCustomControls ? 'group' : undefined}
       tabIndex={showCustomControls ? 0 : undefined}
@@ -230,6 +247,7 @@ export default function PostVideoPreview({
         <button
           type="button"
           onClick={() => {
+            revealControlsBriefly();
             const nextMuted = !videoMuted;
             setVideoMuted(nextMuted);
             if (videoRef.current) videoRef.current.muted = nextMuted;
@@ -242,36 +260,48 @@ export default function PostVideoPreview({
         </button>
       )}
 
+      {acceleratedSide && (
+        <div className={`absolute top-1/2 z-30 -translate-y-1/2 rounded-full bg-black/65 px-3 py-1.5 text-sm font-bold text-white backdrop-blur ${acceleratedSide === 'left' ? 'left-5' : 'right-5'}`} aria-live="polite">
+          2x
+        </div>
+      )}
+
       {showCustomControls && controlsVisible && (
-        <div className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-3 pb-3 pt-7">
-          <button
-            type="button"
-            onClick={togglePlayback}
-            className="mx-auto mb-1 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur transition hover:bg-black/80"
-            aria-label={isPlaying ? 'إيقاف الفيديو' : 'تشغيل الفيديو'}
-          >
-            {isPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
-          </button>
-          <div className="flex items-center gap-2 text-[11px] text-white">
-            <span className="min-w-8 text-center tabular-nums">{formatVideoTime(displayCurrentTime)}</span>
+        <>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-gradient-to-t from-black/90 via-black/45 to-transparent">
+            <button
+              type="button"
+              onClick={togglePlayback}
+              className="pointer-events-auto absolute bottom-7 left-1/2 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur transition hover:bg-black/80"
+              aria-label={isPlaying ? 'إيقاف الفيديو' : 'تشغيل الفيديو'}
+            >
+              {isPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
+            </button>
+            <div className="absolute inset-x-3 bottom-2 flex items-center justify-between text-[11px] text-white/90">
+              <span className="tabular-nums">{formatVideoTime(displayCurrentTime)}</span>
+              <span className="tabular-nums">{formatVideoTime(displayDuration)}</span>
+            </div>
+          </div>
+          <div className="feed-video-timeline absolute inset-x-0 bottom-0 z-30 h-[3px] bg-white/30" aria-label="شريط تقدم الفيديو">
+            <div className="h-full bg-white" style={{ width: `${progressPercent}%` }} />
             <input
               type="range"
               min={rangeStart}
               max={rangeEnd > rangeStart ? rangeEnd : rangeStart + 0.1}
               step="0.1"
               value={safeCurrentTime}
+              onPointerDown={revealControlsBriefly}
               onChange={event => {
                 const nextTime = Number(event.currentTarget.value);
                 setCurrentTime(nextTime);
                 if (videoRef.current) videoRef.current.currentTime = nextTime;
               }}
-              className="h-1.5 min-w-0 flex-1 cursor-pointer accent-[#f1a17f]"
+              className="feed-video-timeline-input"
               aria-label="تقدم الفيديو"
               disabled={videoDuration <= 0}
             />
-            <span className="min-w-8 text-center tabular-nums">{formatVideoTime(displayDuration)}</span>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
