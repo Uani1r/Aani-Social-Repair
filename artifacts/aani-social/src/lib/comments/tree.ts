@@ -85,6 +85,12 @@ export const findCommentById = (
   return null;
 };
 
+const sortPinnedFirst = (items: CommentWithDetails[]): CommentWithDetails[] =>
+  items.sort((a, b) => {
+    const pinOrder = Number(Boolean(b.is_pinned)) - Number(Boolean(a.is_pinned));
+    return pinOrder || a.created_at.localeCompare(b.created_at);
+  });
+
 export const buildCommentTree = (
   comments: CommentWithDetails[],
 ): CommentWithDetails[] => {
@@ -109,5 +115,11 @@ export const buildCommentTree = (
     rootComments.push(comment);
   });
 
-  return rootComments;
+  const sortTree = (items: CommentWithDetails[]) => {
+    sortPinnedFirst(items);
+    items.forEach((item) => sortTree(item.replies ?? []));
+    return items;
+  };
+
+  return sortTree(rootComments);
 };

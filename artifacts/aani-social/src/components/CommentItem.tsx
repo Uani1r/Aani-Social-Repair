@@ -1,9 +1,15 @@
-
 import React, { useState } from 'react';
 import {
+  Ban,
+  Copy,
+  EyeOff,
+  Flag,
   Heart,
-  MoreHorizontal,
+  MoreVertical,
+  Pencil,
+  Pin,
   Reply,
+  ShieldCheck,
   ThumbsDown,
   Trash2,
   X,
@@ -15,6 +21,8 @@ import UserIdentity from './UserIdentity';
 interface CommentItemProps {
   comment: CommentWithDetails;
   currentUserId?: string;
+  postOwnerId?: string | null;
+  restrictedUserIds?: Set<string>;
   depth?: number;
   /** اسم صاحب التعليق الأصلي الذي يرد عليه هذا الرد (يظهر كإشارة @) */
   replyTo?: string;
@@ -23,8 +31,17 @@ interface CommentItemProps {
   onReply: (comment: CommentWithDetails) => void;
   onToggleLike: (commentId: string, isLiked: boolean) => void | Promise<void>;
   onToggleDislike: (commentId: string, isDisliked: boolean) => void | Promise<void>;
+  onEdit: (comment: CommentWithDetails, content: string) => Promise<boolean>;
   onDelete: (comment: CommentWithDetails) => void | Promise<void>;
+  onCopy: (comment: CommentWithDetails) => void | Promise<void>;
+  onReport: (comment: CommentWithDetails) => void | Promise<void>;
+  onHide: (comment: CommentWithDetails) => void | Promise<void>;
+  onTogglePin: (comment: CommentWithDetails) => void | Promise<void>;
+  onBlock: (comment: CommentWithDetails) => void | Promise<void>;
+  onToggleRestriction: (userId: string, restricted: boolean) => void | Promise<void>;
   pendingDeleteIds?: Record<string, boolean>;
+  pendingEditIds?: Record<string, boolean>;
+  pendingActionIds?: Record<string, boolean>;
   storyOwners?: Set<string>;
   highlightCommentId?: string | null;
 }
@@ -109,14 +126,25 @@ const flattenReplies = (
 export const CommentItem: React.FC<CommentItemProps> = ({
   comment,
   currentUserId,
+  postOwnerId,
+  restrictedUserIds = new Set<string>(),
   depth = 0,
   replyTo,
   renderReplies = true,
   onReply,
   onToggleLike,
   onToggleDislike,
+  onEdit,
   onDelete,
+  onCopy,
+  onReport,
+  onHide,
+  onTogglePin,
+  onBlock,
+  onToggleRestriction,
   pendingDeleteIds = {},
+  pendingEditIds = {},
+  pendingActionIds = {},
   storyOwners = new Set<string>(),
   highlightCommentId,
 }) => {
@@ -125,6 +153,9 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const [showReplies, setShowReplies] = useState(shouldShowHighlightedReply);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [showMenu, setShowMenu] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(comment.content);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const replyCount = flatReplies.length;
   const author = comment.profiles;
@@ -135,7 +166,27 @@ export const CommentItem: React.FC<CommentItemProps> = ({
     ? 'ring-[1.5px] ring-[#FF0000]'
     : 'ring-1 ring-zinc-800';
   const isOwnComment = currentUserId === comment.user_id;
+  const isPostOwner = Boolean(currentUserId && postOwnerId === currentUserId);
+  const canModerate = isPostOwner && !isOwnComment;
   const isDeleting = !!pendingDeleteIds[comment.id];
+  const isActionPending = !!pendingActionIds[comment.id] || !!pendingActionIds[comment.user_id] || isDeleting;
+  const isAuthorRestricted = restrictedUserIds.has(comment.user_id);
+  const canShowMenu = Boolean(currentUserId);
+
+  const saveEdit = async () => {
+    if (savingEdit || (!editContent.trim() && !comment.image_url)) return;
+    setSavingEdit(true);
+    try {
+      if (await onEdit(comment, editContent)) setIsEditing(false);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const selectAction = (action: () => void | Promise<void>) => {
+    setShowMenu(false);
+    void action();
+  };
 
   return (
     <div
@@ -167,52 +218,186 @@ export const CommentItem: React.FC<CommentItemProps> = ({
                 nameClassName="comment-author-name"
                 usernameClassName="comment-author-username"
               />
-              <time className="comment-time">
-                {formatRelativeTime(comment.created_at)}
-              </time>
-            </div>
-
-            {isOwnComment && (
-              <div className="comment-options relative shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setShowMenu((visible) => !visible)}
-                  className="comment-options-button rounded-full text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-200"
-                  aria-label="خيارات التعليق"
-                  aria-expanded={showMenu}
-                >
-                  <MoreHorizontal size={16} />
-                </button>
-                {showMenu && (
-                  <div className="absolute left-0 top-full z-20 min-w-32 rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+              <div className="comment-author-meta">
+                <time className="comment-time">
+                  {formatRelativeTime(comment.created_at)}
+                </time>
+                {canShowMenu && (
+                  <div className="comment-options relative shrink-0">
                     <button
                       type="button"
-                      disabled={isDeleting}
-                      onClick={() => {
-                        setShowMenu(false);
-                        void onDelete(comment);
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-red-300 hover:bg-zinc-800 disabled:opacity-50"
+                      onClick={() => setShowMenu((visible) => !visible)}
+                      className="comment-options-button rounded-full transition hover:bg-zinc-800"
+                      aria-label="خيارات التعليق"
+                      aria-expanded={showMenu}
+                      disabled={isActionPending}
                     >
-                      <Trash2 size={14} />
-                      حذف التعليق
+                      <MoreVertical size={14} />
                     </button>
+                    {showMenu && (
+                      <div className="absolute left-0 top-full z-20 min-w-40 rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+                        {isOwnComment ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditContent(comment.content);
+                                setIsEditing(true);
+                                setShowMenu(false);
+                              }}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800"
+                            >
+                              <Pencil size={14} /> تعديل التعليق
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={() => selectAction(() => onDelete(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-red-300 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              <Trash2 size={14} /> حذف التعليق
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => selectAction(() => onCopy(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800"
+                            >
+                              <Copy size={14} /> نسخ التعليق
+                            </button>
+                          </>
+                        ) : canModerate ? (
+                          <>
+                            <button
+                              type="button"
+                              disabled={isActionPending}
+                              onClick={() => selectAction(() => onTogglePin(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              <Pin size={14} /> {comment.is_pinned ? 'إلغاء تثبيت التعليق' : 'تثبيت التعليق'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isDeleting}
+                              onClick={() => selectAction(() => onDelete(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-red-300 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              <Trash2 size={14} /> حذف التعليق
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => selectAction(() => onReport(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800"
+                            >
+                              <Flag size={14} /> إبلاغ عن التعليق
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => selectAction(() => onCopy(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800"
+                            >
+                              <Copy size={14} /> نسخ التعليق
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => selectAction(() => onBlock(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-amber-300 hover:bg-zinc-800"
+                            >
+                              <Ban size={14} /> حظر الكاتب
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isActionPending}
+                              onClick={() => selectAction(() => onToggleRestriction(comment.user_id, !isAuthorRestricted))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              <ShieldCheck size={14} /> {isAuthorRestricted ? 'إلغاء تقييد الكاتب' : 'تقييد الكاتب'}
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => selectAction(() => onCopy(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800"
+                            >
+                              <Copy size={14} /> نسخ التعليق
+                            </button>
+                            {!isOwnComment && (
+                              <button
+                                type="button"
+                                onClick={() => selectAction(() => onReport(comment))}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800"
+                              >
+                                <Flag size={14} /> إبلاغ عن التعليق
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isActionPending}
+                              onClick={() => selectAction(() => onHide(comment))}
+                              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-right text-xs text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
+                            >
+                              <EyeOff size={14} /> إخفاء من قائمتي
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
+            </div>
+            {comment.is_pinned && (
+              <span className="comment-pinned-badge" aria-label="تعليق مثبت">
+                <Pin size={12} /> مثبت
+              </span>
             )}
           </div>
 
           <div className="comment-content-row">
-            <div
-              className="comments-text-bubble whitespace-pre-wrap break-words text-right font-normal"
-              dir="rtl"
-              style={{ unicodeBidi: 'isolate' }}
-            >
-              {isReply && replyTo && (
-                <span className="me-1 font-semibold text-pink-400">{replyTo}</span>
+            <div className="min-w-0 flex-1">
+              {isEditing ? (
+                <div className="space-y-2">
+                  <textarea
+                    value={editContent}
+                    onChange={event => setEditContent(event.target.value)}
+                    maxLength={2000}
+                    rows={3}
+                    dir="rtl"
+                    aria-label="تعديل التعليق"
+                    className="w-full resize-y rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-right text-sm text-zinc-100 outline-none focus:border-pink-500"
+                  />
+                  <div className="flex justify-start gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditing(false)}
+                      disabled={savingEdit || !!pendingEditIds[comment.id]}
+                      className="rounded-lg px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 disabled:opacity-50"
+                    >
+                      إلغاء
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveEdit()}
+                      disabled={savingEdit || !!pendingEditIds[comment.id] || (!editContent.trim() && !comment.image_url)}
+                      className="rounded-lg bg-pink-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-pink-500 disabled:opacity-50"
+                    >
+                      {savingEdit || pendingEditIds[comment.id] ? 'جارٍ الحفظ…' : 'حفظ التعديل'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="comments-text-bubble whitespace-pre-wrap break-words text-right font-normal"
+                  dir="rtl"
+                  style={{ unicodeBidi: 'isolate' }}
+                >
+                  {isReply && replyTo && (
+                    <span className="me-1 font-semibold text-pink-400">{replyTo}</span>
+                  )}
+                  <CommentText text={comment.content} />
+                </div>
               )}
-              <CommentText text={comment.content} />
             </div>
 
             <div className="comment-reactions" dir="rtl">
@@ -295,11 +480,22 @@ export const CommentItem: React.FC<CommentItemProps> = ({
                   replyTo={replyMention}
                   renderReplies={false}
                   currentUserId={currentUserId}
+                  postOwnerId={postOwnerId}
+                  restrictedUserIds={restrictedUserIds}
                   onReply={onReply}
                   onToggleLike={onToggleLike}
                   onToggleDislike={onToggleDislike}
+                  onEdit={onEdit}
                   onDelete={onDelete}
+                  onCopy={onCopy}
+                  onReport={onReport}
+                  onHide={onHide}
+                  onTogglePin={onTogglePin}
+                  onBlock={onBlock}
+                  onToggleRestriction={onToggleRestriction}
                   pendingDeleteIds={pendingDeleteIds}
+                  pendingEditIds={pendingEditIds}
+                  pendingActionIds={pendingActionIds}
                   storyOwners={storyOwners}
                   highlightCommentId={highlightCommentId}
                 />

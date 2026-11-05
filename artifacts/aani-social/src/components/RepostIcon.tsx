@@ -26,10 +26,10 @@ export default function RepostIcon({
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M4 7h16" />
-      <path d="m16 3 4 4-4 4" stroke={arrowColor} />
-      <path d="M20 17H4" />
-      <path d="m8 13-4 4 4 4" stroke={arrowColor} />
+      <path d="M20.7 10a8.2 8.2 0 0 0-14-5.7L4.2 7" />
+      <path d="m4.2 3.9-.1 3.1 3.1.1" stroke={arrowColor} />
+      <path d="M3.3 14a8.2 8.2 0 0 0 14 5.7l2.5-2.7" />
+      <path d="m19.8 20.1.1-3.1-3.1-.1" stroke={arrowColor} />
     </svg>
   );
 }

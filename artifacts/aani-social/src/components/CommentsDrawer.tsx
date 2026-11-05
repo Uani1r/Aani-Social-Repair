@@ -91,12 +91,40 @@ const buildSavedComment = (
   image_url: row.image_url ? String(row.image_url) : null,
   created_at: String(row.created_at ?? new Date().toISOString()),
   profiles,
+  is_pinned: Boolean(row.is_pinned),
+  is_hidden_by_me: false,
   likes_count: 0,
   dislikes_count: 0,
   is_liked: false,
   is_disliked: false,
   replies: [],
 });
+
+const filterHiddenComments = (items: CommentWithDetails[]): CommentWithDetails[] =>
+  items.flatMap((item) => {
+    const visibleReplies = filterHiddenComments(item.replies ?? []);
+    if (item.is_hidden_by_me) {
+      return visibleReplies.map((reply) => ({ ...reply, parent_id: null }));
+    }
+    return [{ ...item, replies: visibleReplies }];
+  });
+
+const copyText = async (text: string): Promise<void> => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard access is unavailable');
+};
 
 export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   postId,
@@ -107,6 +135,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   initialCommentId,
 }) => {
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
+  const [postOwnerId, setPostOwnerId] = useState<string | null>(null);
+  const [restrictedUserIds, setRestrictedUserIds] = useState<Set<string>>(new Set());
   const [content, setContent] = useState('');
   const [replyingTo, setReplyingTo] = useState<CommentWithDetails | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -121,6 +151,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const [pendingDeleteIds, setPendingDeleteIds] = useState<
     Record<string, boolean>
   >({});
+  const [pendingEditIds, setPendingEditIds] = useState<Record<string, boolean>>({});
+  const [pendingActionIds, setPendingActionIds] = useState<Record<string, boolean>>({});
   const [showStickerPicker, setShowStickerPicker] = useState(false);
   const [storyOwners, setStoryOwners] = useState<Set<string>>(new Set());
   const [peopleDirectory, setPeopleDirectory] = useState<MentionCandidate[]>([]);
@@ -219,6 +251,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
 
     let active = true;
+    setPostOwnerId(null);
+    setRestrictedUserIds(new Set());
     setCommentAccess({ canRead: true, canComment: true, checking: true, failed: false });
     void (async () => {
       let postRow: {
@@ -249,10 +283,12 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
       if (!active) return;
       if (!postRow) {
+        setPostOwnerId(null);
         setCommentAccess({ canRead: false, canComment: false, checking: false, failed: true });
         return;
       }
 
+      setPostOwnerId(postRow.user_id);
       const isOwner = postRow.user_id === currentUserId;
       const canRead = isOwner || postRow.hide_comments !== true;
       let canComment: boolean;
@@ -278,6 +314,32 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       active = false;
     };
   }, [isOpen, postId, currentUserId]);
+
+  useEffect(() => {
+    if (!isOpen || !currentUserId || postOwnerId !== currentUserId) {
+      setRestrictedUserIds(new Set());
+      return;
+    }
+
+    let active = true;
+    void supabase
+      .from('user_restrictions')
+      .select('restricted_user_id')
+      .eq('restricter_id', currentUserId)
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('[comments] تعذر تحميل الحسابات المقيدة:', error);
+          setRestrictedUserIds(new Set());
+          return;
+        }
+        setRestrictedUserIds(new Set((data ?? []).map(row => String(row.restricted_user_id))));
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [isOpen, currentUserId, postOwnerId]);
 
   useEffect(() => {
     const ids = new Set<string>();
@@ -470,10 +532,12 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   }, [content]);
 
   const totalComments = useMemo(() => {
-    const activeTreeCount = countComments(comments);
-    if (activeTreeCount > 0) return activeTreeCount;
-    return initialCommentsCount;
-  }, [comments, initialCommentsCount]);
+    if (commentsError || (loading && comments.length === 0)) {
+      return initialCommentsCount;
+    }
+    return countComments(comments);
+  }, [comments, commentsError, initialCommentsCount, loading]);
+  const visibleComments = useMemo(() => filterHiddenComments(comments), [comments]);
 
   // قائمة مرشّحي المنشن: المتابَعون/المتابِعون + أصحاب التعليقات الحالية
   const mentionCandidates = useMemo(() => {
@@ -621,6 +685,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       dislikes_count: 0,
       is_liked: false,
       is_disliked: false,
+      is_pinned: false,
+      is_hidden_by_me: false,
       replies: [],
     };
 
@@ -856,44 +922,210 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
   };
 
-  const handleDeleteComment = async (comment: CommentWithDetails) => {
-    if (
-      comment.user_id !== currentUserId ||
-      pendingDeleteIds[comment.id] ||
-      !window.confirm('هل تريد حذف هذا التعليق؟')
-    ) {
-      return;
+  const handleEditComment = async (
+    comment: CommentWithDetails,
+    nextContent: string,
+  ): Promise<boolean> => {
+    const normalized = nextContent.trim();
+    if (comment.user_id !== currentUserId || pendingEditIds[comment.id]) return false;
+    if (normalized.length > 2000 || (!normalized && !comment.image_url)) {
+      toast.error('أدخل نصاً صالحاً للتعليق');
+      return false;
     }
 
-    setPendingDeleteIds((prev) => ({
-      ...prev,
-      [comment.id]: true,
-    }));
-
+    setPendingEditIds((prev) => ({ ...prev, [comment.id]: true }));
     try {
-      const { data, error } = await supabase
-        .from('comments')
-        .delete()
-        .eq('id', comment.id)
-        .eq('user_id', currentUserId)
-        .select('id')
-        .maybeSingle();
-
+      const { error } = await supabase.rpc('aani_edit_comment', {
+        p_comment_id: comment.id,
+        p_content: normalized,
+      });
       if (error) throw error;
+      toast.success('تم تعديل التعليق');
+      await loadComments(false);
+      return true;
+    } catch (error: unknown) {
+      console.error('[comments] تعذر تعديل التعليق:', error);
+      toast.error('تعذر تعديل التعليق. تحقق من تطبيق تحديث إدارة التعليقات.');
+      return false;
+    } finally {
+      setPendingEditIds((prev) => {
+        const next = { ...prev };
+        delete next[comment.id];
+        return next;
+      });
+    }
+  };
 
-      if (!data?.id) {
-        toast.error('لم يُحذف التعليق؛ تحقق من صلاحيات الحساب');
-        return;
-      }
+  const handleDeleteComment = async (comment: CommentWithDetails) => {
+    const canDelete = comment.user_id === currentUserId || postOwnerId === currentUserId;
+    if (!canDelete || pendingDeleteIds[comment.id] || !window.confirm('هل تريد حذف هذا التعليق؟')) return;
 
+    setPendingDeleteIds((prev) => ({ ...prev, [comment.id]: true }));
+    try {
+      const { error } = await supabase.rpc('aani_delete_comment', {
+        p_comment_id: comment.id,
+      });
+      if (error) throw error;
       toast.success('تم حذف التعليق');
       await loadComments(false);
     } catch (error: unknown) {
-      toast.error('تعذر حذف التعليق');
+      console.error('[comments] تعذر حذف التعليق:', error);
+      toast.error('تعذر حذف التعليق. تحقق من صلاحيات الحساب وتحديث إدارة التعليقات.');
     } finally {
       setPendingDeleteIds((prev) => {
         const next = { ...prev };
         delete next[comment.id];
+        return next;
+      });
+    }
+  };
+
+  const handleCopyComment = async (comment: CommentWithDetails) => {
+    const text = comment.content.trim() || comment.image_url || '';
+    if (!text) {
+      toast.error('لا يوجد محتوى لنسخه');
+      return;
+    }
+    try {
+      await copyText(text);
+      toast.success('تم نسخ التعليق');
+    } catch (error) {
+      console.warn('[comments] تعذر نسخ التعليق:', error);
+      toast.error('تعذر النسخ؛ تحقق من أذونات الحافظة');
+    }
+  };
+
+  const handleReportComment = async (comment: CommentWithDetails) => {
+    if (!currentUserId || comment.user_id === currentUserId) return;
+    const details = window.prompt('ما سبب الإبلاغ عن هذا التعليق؟');
+    if (details === null) return;
+    const normalizedDetails = details.trim();
+    if (!normalizedDetails) {
+      toast.error('اكتب سبباً للإبلاغ عن التعليق');
+      return;
+    }
+    if (normalizedDetails.length > 1000) {
+      toast.error('يجب ألا يتجاوز سبب البلاغ 1000 حرف');
+      return;
+    }
+
+    try {
+      const { error } = await supabase.from('comment_reports').insert({
+        comment_id: comment.id,
+        post_id: postId,
+        reporter_id: currentUserId,
+        reported_user_id: comment.user_id,
+        category: 'other',
+        details: normalizedDetails,
+      });
+      if (error?.code === '23505') {
+        toast.info('سبق أن أبلغت عن هذا التعليق');
+        return;
+      }
+      if (error) throw error;
+      toast.success('تم إرسال البلاغ لمراجعته');
+    } catch (error) {
+      console.error('[comments] تعذر إرسال البلاغ:', error);
+      toast.error('تعذر إرسال البلاغ. تحقق من تطبيق تحديث إدارة التعليقات.');
+    }
+  };
+
+  const handleHideComment = async (comment: CommentWithDetails) => {
+    if (!currentUserId || pendingActionIds[comment.id]) return;
+    setPendingActionIds((prev) => ({ ...prev, [comment.id]: true }));
+    try {
+      const { error } = await supabase.from('comment_hides').insert({
+        user_id: currentUserId,
+        comment_id: comment.id,
+      });
+      if (error && error.code !== '23505') throw error;
+      setComments((previous) => patchCommentInTree(previous, comment.id, { is_hidden_by_me: true }));
+      toast.success('تم إخفاء التعليق من قائمتك');
+    } catch (error) {
+      console.error('[comments] تعذر إخفاء التعليق:', error);
+      toast.error('تعذر إخفاء التعليق. تحقق من تطبيق تحديث إدارة التعليقات.');
+    } finally {
+      setPendingActionIds((prev) => {
+        const next = { ...prev };
+        delete next[comment.id];
+        return next;
+      });
+    }
+  };
+
+  const handleTogglePin = async (comment: CommentWithDetails) => {
+    if (postOwnerId !== currentUserId || pendingActionIds[comment.id]) return;
+    setPendingActionIds((prev) => ({ ...prev, [comment.id]: true }));
+    try {
+      const { error } = await supabase.rpc('aani_set_comment_pinned', {
+        p_comment_id: comment.id,
+        p_is_pinned: !comment.is_pinned,
+      });
+      if (error) throw error;
+      toast.success(comment.is_pinned ? 'تم إلغاء تثبيت التعليق' : 'تم تثبيت التعليق');
+      await loadComments(false);
+    } catch (error) {
+      console.error('[comments] تعذر تحديث تثبيت التعليق:', error);
+      toast.error('تعذر تثبيت التعليق. تحقق من تطبيق تحديث إدارة التعليقات.');
+    } finally {
+      setPendingActionIds((prev) => {
+        const next = { ...prev };
+        delete next[comment.id];
+        return next;
+      });
+    }
+  };
+
+  const handleBlockCommentAuthor = async (comment: CommentWithDetails) => {
+    if (postOwnerId !== currentUserId || comment.user_id === currentUserId || pendingActionIds[comment.id]) return;
+    const name = comment.profiles?.full_name || comment.profiles?.username || 'كاتب التعليق';
+    if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع من التواصل معك.`)) return;
+
+    setPendingActionIds((prev) => ({ ...prev, [comment.id]: true }));
+    try {
+      const { error } = await supabase.rpc('aani_block_user', {
+        p_blocked_user_id: comment.user_id,
+      });
+      if (error) throw error;
+      toast.success('تم حظر الحساب');
+      await loadComments(false);
+    } catch (error) {
+      console.error('[comments] تعذر حظر كاتب التعليق:', error);
+      toast.error('تعذر حظر الحساب. تحقق من تحديث إجراءات الحسابات.');
+    } finally {
+      setPendingActionIds((prev) => {
+        const next = { ...prev };
+        delete next[comment.id];
+        return next;
+      });
+    }
+  };
+
+  const handleToggleRestriction = async (userId: string, restricted: boolean) => {
+    if (postOwnerId !== currentUserId || !userId || userId === currentUserId) return;
+    const pendingId = userId;
+    if (pendingActionIds[pendingId]) return;
+    setPendingActionIds((prev) => ({ ...prev, [pendingId]: true }));
+    try {
+      const { error } = await supabase.rpc('aani_set_user_restricted', {
+        p_user_id: userId,
+        p_restricted: restricted,
+      });
+      if (error) throw error;
+      setRestrictedUserIds((previous) => {
+        const next = new Set(previous);
+        if (restricted) next.add(userId);
+        else next.delete(userId);
+        return next;
+      });
+      toast.success(restricted ? 'تم تقييد الحساب' : 'تم إلغاء تقييد الحساب');
+    } catch (error) {
+      console.error('[comments] تعذر تحديث تقييد الحساب:', error);
+      toast.error('تعذر تحديث التقييد. تحقق من تطبيق تحديث إدارة التعليقات.');
+    } finally {
+      setPendingActionIds((prev) => {
+        const next = { ...prev };
+        delete next[pendingId];
         return next;
       });
     }
@@ -1014,9 +1246,13 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           <div className="flex flex-1 items-center justify-center text-xs text-zinc-400">جارٍ التحقق من خصوصية التعليقات…</div>
         ) : commentAccess.canRead ? (
           <CommentsList
-            comments={comments}
+            comments={visibleComments}
             currentUserId={currentUserId}
+            postOwnerId={postOwnerId}
+            restrictedUserIds={restrictedUserIds}
             pendingDeleteIds={pendingDeleteIds}
+            pendingEditIds={pendingEditIds}
+            pendingActionIds={pendingActionIds}
             storyOwners={storyOwners}
             highlightCommentId={initialCommentId}
             loading={loading}
@@ -1030,7 +1266,14 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             }}
             onToggleLike={handleToggleLike}
             onToggleDislike={handleToggleDislike}
+            onEdit={handleEditComment}
             onDelete={handleDeleteComment}
+            onCopy={handleCopyComment}
+            onReport={handleReportComment}
+            onHide={handleHideComment}
+            onTogglePin={handleTogglePin}
+            onBlock={handleBlockCommentAuthor}
+            onToggleRestriction={handleToggleRestriction}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center px-8 text-center text-xs leading-6 text-zinc-400">

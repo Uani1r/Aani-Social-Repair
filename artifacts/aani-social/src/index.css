@@ -1817,6 +1817,15 @@ a:active > .aani-notifications-card {
   direction: rtl;
 }
 
+.comment-author-meta {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
 .comment-author-identity {
   display: contents;
 }
@@ -1844,8 +1853,6 @@ a:active > .aani-notifications-card {
 }
 
 .comment-time {
-  grid-column: 2;
-  grid-row: 1;
   color: #a1a1aa;
   font-size: 11px;
   font-weight: 400;
@@ -1854,12 +1861,28 @@ a:active > .aani-notifications-card {
 
 .comment-options-button {
   display: grid;
-  width: 24px;
-  height: 24px;
+  width: 14px;
+  height: 14px;
   place-items: center;
   padding: 0;
   border: 0;
   background: transparent;
+  color: #71717a;
+}
+
+.comment-options-button:hover {
+  color: #d4d4d8;
+}
+
+.comment-pinned-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: #fbbf24;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 .comment-content-row {

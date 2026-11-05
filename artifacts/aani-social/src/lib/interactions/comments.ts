@@ -89,6 +89,20 @@ export async function fetchCommentsWithReplies(
     }
   }
 
+  const hiddenCommentIds = new Set<string>();
+  if (currentUserId && commentIds.length > 0) {
+    const { data: hiddenRows, error: hiddenError } = await supabase
+      .from("comment_hides")
+      .select("comment_id")
+      .eq("user_id", currentUserId)
+      .in("comment_id", commentIds);
+
+    if (hiddenError) throw hiddenError;
+    (hiddenRows ?? []).forEach((row: { comment_id: string }) => {
+      hiddenCommentIds.add(String(row.comment_id));
+    });
+  }
+
   const likesMap = new Map<string, { count: number; isLiked: boolean }>();
   likes.forEach((like) => {
     const current = likesMap.get(like.comment_id) ?? {
@@ -147,6 +161,8 @@ export async function fetchCommentsWithReplies(
       is_liked: likesMap.get(commentId)?.isLiked ?? false,
       dislikes_count: dislikesMap.get(commentId)?.count ?? 0,
       is_disliked: dislikesMap.get(commentId)?.isDisliked ?? false,
+      is_pinned: Boolean(comment.is_pinned),
+      is_hidden_by_me: hiddenCommentIds.has(commentId),
       replies: [],
     };
   });

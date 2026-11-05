@@ -42,6 +42,8 @@ export interface CommentWithDetails {
   dislikes_count?: number;
   is_liked?: boolean;
   is_disliked?: boolean;
+  is_pinned?: boolean;
+  is_hidden_by_me?: boolean;
   replies?: CommentWithDetails[];
 }
 

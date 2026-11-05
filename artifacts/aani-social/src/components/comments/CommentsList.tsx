@@ -7,7 +7,11 @@ import CommentItem from '../CommentItem';
 interface CommentsListProps {
   comments: CommentWithDetails[];
   currentUserId: string;
+  postOwnerId: string | null;
+  restrictedUserIds: Set<string>;
   pendingDeleteIds: Record<string, boolean>;
+  pendingEditIds: Record<string, boolean>;
+  pendingActionIds: Record<string, boolean>;
   storyOwners: Set<string>;
   loading: boolean;
   error: string | null;
@@ -15,14 +19,25 @@ interface CommentsListProps {
   onReply: (comment: CommentWithDetails) => void;
   onToggleLike: (commentId: string, isLiked: boolean) => void | Promise<void>;
   onToggleDislike: (commentId: string, isDisliked: boolean) => void | Promise<void>;
+  onEdit: (comment: CommentWithDetails, content: string) => Promise<boolean>;
   onDelete: (comment: CommentWithDetails) => void | Promise<void>;
+  onCopy: (comment: CommentWithDetails) => void | Promise<void>;
+  onReport: (comment: CommentWithDetails) => void | Promise<void>;
+  onHide: (comment: CommentWithDetails) => void | Promise<void>;
+  onTogglePin: (comment: CommentWithDetails) => void | Promise<void>;
+  onBlock: (comment: CommentWithDetails) => void | Promise<void>;
+  onToggleRestriction: (userId: string, restricted: boolean) => void | Promise<void>;
   highlightCommentId?: string | null;
 }
 
 const CommentsList: React.FC<CommentsListProps> = ({
   comments,
   currentUserId,
+  postOwnerId,
+  restrictedUserIds,
   pendingDeleteIds,
+  pendingEditIds,
+  pendingActionIds,
   storyOwners,
   loading,
   error,
@@ -30,7 +45,14 @@ const CommentsList: React.FC<CommentsListProps> = ({
   onReply,
   onToggleLike,
   onToggleDislike,
+  onEdit,
   onDelete,
+  onCopy,
+  onReport,
+  onHide,
+  onTogglePin,
+  onBlock,
+  onToggleRestriction,
   highlightCommentId,
 }) => (
   <div className="comments-list flex-1 overflow-y-auto overscroll-contain px-4 py-1">
@@ -66,7 +88,7 @@ const CommentsList: React.FC<CommentsListProps> = ({
     ) : !loading && !error && comments.length === 0 ? (
       <div className="flex h-40 flex-col items-center justify-center gap-2 text-center text-zinc-500">
         <MessageCircle size={32} className="text-zinc-700" />
-        <p className="text-sm">لا توجد تعليقات بعد... كن أول من يعلق!</p>
+        <p>لا توجد تعليقات بعد... كن أول من يعلق!</p>
       </div>
     ) : comments.length > 0 ? (
       comments.map((comment) => (
@@ -74,13 +96,24 @@ const CommentsList: React.FC<CommentsListProps> = ({
           key={comment.id}
           comment={comment}
           currentUserId={currentUserId}
+          postOwnerId={postOwnerId}
+          restrictedUserIds={restrictedUserIds}
           pendingDeleteIds={pendingDeleteIds}
+          pendingEditIds={pendingEditIds}
+          pendingActionIds={pendingActionIds}
           storyOwners={storyOwners}
           highlightCommentId={highlightCommentId}
           onReply={onReply}
           onToggleLike={onToggleLike}
           onToggleDislike={onToggleDislike}
+          onEdit={onEdit}
           onDelete={onDelete}
+          onCopy={onCopy}
+          onReport={onReport}
+          onHide={onHide}
+          onTogglePin={onTogglePin}
+          onBlock={onBlock}
+          onToggleRestriction={onToggleRestriction}
         />
       ))
     ) : null}
