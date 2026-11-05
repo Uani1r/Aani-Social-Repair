@@ -1,4 +1,4 @@
-import { Pause, Play, Volume2, VolumeX } from 'lucide-react';
+import { Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react';
 
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
@@ -47,11 +47,9 @@ export default function PostVideoPreview({
   const timeRange = parseVideoTimeRange(src);
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
   const mediaSrc = stripVideoEditFragment(src);
-  const [isPlaying, setIsPlaying] = useState(false);
   const gestureEnabled = feedVideo && Boolean(onExpand);
   const {
     controlsVisible,
-    acceleratedSide,
     revealControlsBriefly,
     onPointerDown,
     onPointerMove,
@@ -76,7 +74,7 @@ export default function PostVideoPreview({
 
   useEffect(() => {
     if (!feedVideo) return;
-    const pauseAndMute = () => {
+    const pauseForModal = () => {
       const video = videoRef.current;
       if (!video) return;
       if (!modalPlaybackStateRef.current) {
@@ -87,8 +85,6 @@ export default function PostVideoPreview({
         };
       }
       manuallyPausedRef.current = true;
-      video.muted = true;
-      setVideoMuted(true);
       video.pause();
     };
     const resumeAfterModal = () => {
@@ -101,11 +97,11 @@ export default function PostVideoPreview({
       manuallyPausedRef.current = previousState.wasManuallyPaused;
       if (previousState.wasPlaying) void video.play().catch(() => undefined);
     };
-    window.addEventListener('aani:pause-feed-videos', pauseAndMute);
+    window.addEventListener('aani:pause-feed-videos', pauseForModal);
     window.addEventListener('aani:resume-feed-videos', resumeAfterModal);
-    if (hasOpenFeedDialog()) pauseAndMute();
+    if (hasOpenFeedDialog()) pauseForModal();
     return () => {
-      window.removeEventListener('aani:pause-feed-videos', pauseAndMute);
+      window.removeEventListener('aani:pause-feed-videos', pauseForModal);
       window.removeEventListener('aani:resume-feed-videos', resumeAfterModal);
     };
   }, [feedVideo]);
@@ -136,18 +132,6 @@ export default function PostVideoPreview({
       video.pause();
     };
   }, [autoPlayWhenVisible, mediaSrc]);
-
-  const togglePlayback = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      manuallyPausedRef.current = false;
-      void video.play().catch(() => undefined);
-    } else {
-      manuallyPausedRef.current = true;
-      video.pause();
-    }
-  };
 
   const seekToStart = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
@@ -203,7 +187,7 @@ export default function PostVideoPreview({
         muted={showMuteToggle ? videoMuted : muted}
         autoPlay={autoPlay && !autoPlayWhenVisible}
         playsInline
-        preload="metadata"
+        preload="auto"
         onLoadedMetadata={seekToStart}
         onSeeking={event => {
           const video = event.currentTarget;
@@ -215,7 +199,6 @@ export default function PostVideoPreview({
         }}
         onTimeUpdate={enforceEnd}
         onPlay={event => {
-          setIsPlaying(true);
           const video = event.currentTarget;
           if (!timeRange) return;
           const end = Math.min(timeRange.end, video.duration || timeRange.end);
@@ -223,7 +206,6 @@ export default function PostVideoPreview({
             video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
           }
         }}
-        onPause={() => setIsPlaying(false)}
         onDurationChange={event => {
           const duration = event.currentTarget.duration;
           setVideoDuration(Number.isFinite(duration) ? duration : 0);
@@ -260,23 +242,9 @@ export default function PostVideoPreview({
         </button>
       )}
 
-      {acceleratedSide && (
-        <div className={`absolute top-1/2 z-30 -translate-y-1/2 rounded-full bg-black/65 px-3 py-1.5 text-sm font-bold text-white backdrop-blur ${acceleratedSide === 'left' ? 'left-5' : 'right-5'}`} aria-live="polite">
-          2x
-        </div>
-      )}
-
       {showCustomControls && controlsVisible && (
         <>
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-gradient-to-t from-black/90 via-black/45 to-transparent">
-            <button
-              type="button"
-              onClick={togglePlayback}
-              className="pointer-events-auto absolute bottom-7 left-1/2 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur transition hover:bg-black/80"
-              aria-label={isPlaying ? 'إيقاف الفيديو' : 'تشغيل الفيديو'}
-            >
-              {isPlaying ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
-            </button>
             <div className="absolute inset-x-3 bottom-2 flex items-center justify-between text-[11px] text-white/90">
               <span className="tabular-nums">{formatVideoTime(displayCurrentTime)}</span>
               <span className="tabular-nums">{formatVideoTime(displayDuration)}</span>

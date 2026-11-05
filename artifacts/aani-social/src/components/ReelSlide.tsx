@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Pause, Play, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
@@ -13,7 +13,7 @@ import ShareSheet from '@/components/ShareSheet';
 import UserIdentity from '@/components/UserIdentity';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import ExpandablePostText from '@/components/ExpandablePostText';
-import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
+import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, formatDate, type Post } from '@/lib/types';
@@ -45,12 +45,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
   const manuallyPausedRef = useRef(false);
-  const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
+  const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasManuallyPaused: boolean } | null>(null);
   const captionRef = useRef<HTMLParagraphElement>(null);
   const isOverlayOpen = Boolean(onClose);
-  const [playing, setPlaying] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
-  const [muted, setMuted] = useState(isOverlayOpen);
+  const [muted, setMuted] = useState(false);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const [captionHasMore, setCaptionHasMore] = useState(false);
@@ -59,12 +58,13 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const videoTimeRange = parseVideoTimeRange(mediaUrl);
   const videoCropTransform = getVideoCropTransform(parseVideoCrop(mediaUrl));
   const videoSrc = stripVideoEditFragment(mediaUrl);
-  const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
-  const likesCount = post.likes_count ?? post.likes?.length ?? 0;
+  const interactions = usePostInteractions(post, currentUserId);
+  const liked = interactions.liked;
+  const likesCount = interactions.likes;
   const likesVisible = !post.hide_likes || post.user_id === currentUserId;
   const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
-  const [saved, setSaved] = useState(post.saved_by_me ?? false);
-  const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
+  const saved = interactions.bookmarked;
+  const reposted = interactions.reposted;
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
@@ -86,11 +86,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   // مزامنة أعلام التفاعل غير المعتمدة على مخزن التفاعلات
   useEffect(() => {
-    setSaved(post.saved_by_me ?? false);
-    setReposted(post.reposted_by_me ?? false);
     setFeedback(post.feedback_by_me || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.reposted_by_me, post.saved_by_me, post.feedback_by_me]);
+  }, [post.id, post.feedback_by_me]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -103,10 +101,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.6;
           setIsVisible(isVisible);
           if (isVisible && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
-            video.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+            void video.play().catch(() => undefined);
           } else if (!isVisible) {
             video.pause();
-            setPlaying(false);
             if (!hasOpenFeedDialog()) manuallyPausedRef.current = false;
           }
         });
@@ -129,29 +126,23 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     if (visibleHeight < bounds.height * 0.6) return;
 
     video.muted = muted;
-    void video.play()
-      .then(() => setPlaying(true))
-      .catch(error => {
-        console.log('Autoplay issue handled:', error);
-        setPlaying(false);
-      });
+    void video.play().catch(error => {
+      console.log('Autoplay issue handled:', error);
+    });
   }, [isOverlayOpen, muted, videoSrc]);
 
   useEffect(() => {
-    const pauseAndMute = () => {
+    const pauseForModal = () => {
       const video = videoRef.current;
       if (!video) return;
       if (containerRef.current?.closest('.feed-reel-viewer') && !hasOpenFeedDialog()) return;
       if (!modalPlaybackStateRef.current) {
         modalPlaybackStateRef.current = {
           wasPlaying: !video.paused,
-          wasMuted: video.muted,
           wasManuallyPaused: manuallyPausedRef.current,
         };
       }
       manuallyPausedRef.current = true;
-      video.muted = true;
-      setMuted(true);
       video.pause();
     };
     const resumeAfterModal = () => {
@@ -159,17 +150,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       const previousState = modalPlaybackStateRef.current;
       if (!video || !previousState) return;
       modalPlaybackStateRef.current = null;
-      video.muted = previousState.wasMuted;
-      setMuted(previousState.wasMuted);
       manuallyPausedRef.current = previousState.wasManuallyPaused;
-      if (previousState.wasPlaying) void video.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
+      if (previousState.wasPlaying) void video.play().catch(() => undefined);
     };
 
-    window.addEventListener('aani:pause-feed-videos', pauseAndMute);
+    window.addEventListener('aani:pause-feed-videos', pauseForModal);
     window.addEventListener('aani:resume-feed-videos', resumeAfterModal);
-    if (hasOpenFeedDialog()) pauseAndMute();
+    if (hasOpenFeedDialog()) pauseForModal();
     return () => {
-      window.removeEventListener('aani:pause-feed-videos', pauseAndMute);
+      window.removeEventListener('aani:pause-feed-videos', pauseForModal);
       window.removeEventListener('aani:resume-feed-videos', resumeAfterModal);
     };
   }, []);
@@ -194,60 +183,25 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     return () => observer.disconnect();
   }, [captionSheet, post.content]);
 
-  const togglePlay = () => {
-    const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) {
-      manuallyPausedRef.current = false;
-      void v.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
-    } else {
-      manuallyPausedRef.current = true;
-      v.pause();
-      setPlaying(false);
-    }
+  const startPlayback = () => {
+    const video = videoRef.current;
+    if (!video || !video.paused) return;
+    manuallyPausedRef.current = false;
+    void video.play().catch(() => undefined);
   };
 
-  const playbackGestures = useFeedVideoGestures(videoRef, true, togglePlay);
+  const playbackGestures = useFeedVideoGestures(videoRef, true, startPlayback);
 
   const toggleLike = () => {
-    void togglePostLike(post, currentUserId);
+    void interactions.toggleLike();
   };
 
-  const toggleBookmark = async () => {
-    const prevSaved = saved;
-    setSaved(!prevSaved);
-
-    if (!supabaseConfigured) return;
-    try {
-      if (prevSaved) {
-        const { error } = await supabase.from('bookmarks').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from('bookmarks').insert({ post_id: post.id, user_id: currentUserId });
-        if (error) throw error;
-      }
-    } catch {
-      setSaved(prevSaved);
-    }
+  const toggleBookmark = () => {
+    void interactions.toggleBookmark();
   };
 
-  const toggleRepost = async () => {
-    const prevReposted = reposted;
-    setReposted(!prevReposted);
-
-    if (!supabaseConfigured) return;
-    try {
-      if (prevReposted) {
-        const { error } = await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error && error.code !== 'PGRST116') throw error;
-      } else {
-        const { error } = await supabase.from('reposts').insert({ post_id: post.id, user_id: currentUserId });
-        // إعادة نشر مسجّلة مسبقًا = الحالة المطلوبة أصلًا
-        if (error && error.code !== '23505') throw error;
-      }
-    } catch {
-      setReposted(prevReposted);
-    }
+  const toggleRepost = () => {
+    void interactions.toggleRepost();
   };
 
   const saveFeedback = async (value: 'interested' | 'not_interested') => {
@@ -318,7 +272,6 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   };
 
   const handleVideoPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
-    setPlaying(true);
     const video = event.currentTarget;
     setPlaybackTime(video.currentTime);
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
@@ -400,14 +353,13 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         autoPlay={isOverlayOpen && isVisible}
         muted={muted}
         playsInline
-        preload="metadata"
+        preload="auto"
         onLoadedMetadata={handleVideoLoadedMetadata}
         onSeeking={handleVideoSeeking}
         onTimeUpdate={handleVideoTimeUpdate}
         onPlay={handleVideoPlay}
         onEnded={handleVideoEnded}
         onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-        onPause={() => setPlaying(false)}
         className="w-full h-full object-cover cursor-pointer"
         style={{ transform: videoCropTransform, transformOrigin: 'center' }}
       />
@@ -460,28 +412,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         </div>
       )}
 
-      {!playing && !playbackGestures.controlsVisible && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-[22%] z-10 flex justify-center">
-          <div className="rounded-full bg-black/50 p-4 text-white backdrop-blur-md">
-            <Play size={30} fill="currentColor" />
-          </div>
-        </div>
-      )}
-
       {playbackGestures.controlsVisible && (
         <>
           <div className="pointer-events-none absolute inset-x-0 bottom-0 z-30 h-24 bg-gradient-to-t from-black/90 via-black/45 to-transparent">
-            <button
-              type="button"
-              onClick={() => {
-                playbackGestures.revealControlsBriefly();
-                togglePlay();
-              }}
-              className="pointer-events-auto absolute bottom-7 left-1/2 flex h-10 w-10 -translate-x-1/2 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur transition hover:bg-black/80"
-              aria-label={playing ? 'إيقاف الفيديو' : 'تشغيل الفيديو'}
-            >
-              {playing ? <Pause size={19} fill="currentColor" /> : <Play size={19} fill="currentColor" />}
-            </button>
             <div className="absolute inset-x-3 bottom-2 flex items-center justify-between text-[11px] text-white/90">
               <span className="tabular-nums">{formatReelTime(Math.max(0, safePlaybackTime - timelineStart))}</span>
               <span className="tabular-nums">{formatReelTime(Math.max(0, timelineEnd - timelineStart))}</span>
@@ -507,12 +440,6 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             />
           </div>
         </>
-      )}
-
-      {playbackGestures.acceleratedSide && (
-        <div className={`absolute top-1/2 z-40 -translate-y-1/2 rounded-full bg-black/65 px-3 py-1.5 text-sm font-bold text-white backdrop-blur ${playbackGestures.acceleratedSide === 'left' ? 'left-5' : 'right-5'}`} aria-live="polite">
-          2x
-        </div>
       )}
 
       <div className="reel-gradient-bottom" aria-hidden="true" />
@@ -591,7 +518,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         {commentsVisible && (
           <button type="button" onClick={() => onOpenComments(post.id)} aria-label="التعليقات" className="reel-sidebar-button">
             <MessageCircle size={26} strokeWidth={2} />
-            <span>{post.comments_count ?? post.comments?.length ?? 0}</span>
+            <span>{interactions.comments}</span>
           </button>
         )}
 

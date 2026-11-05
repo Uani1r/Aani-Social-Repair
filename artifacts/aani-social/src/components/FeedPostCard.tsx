@@ -17,7 +17,7 @@ import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import { recordShare, toggleLike as togglePostLike } from '@/lib/interactions';
+import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 
@@ -80,21 +80,21 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [comments, setComments] = useState<FeedPostComment[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [commentsCount, setCommentsCount] = useState(post.comments_count || 0);
-  const [repostsCount, setRepostsCount] = useState(post.reposts_count || 0);
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
   const [showEditSheet, setShowEditSheet] = useState(false);
   const [editContent, setEditContent] = useState(post.content || '');
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
-  const repostBusyRef = useRef(false);
-  const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
-  const likesCount = post.likes_count ?? post.likes?.length ?? 0;
+  const interactions = usePostInteractions(post, currentUserId);
+  const liked = interactions.liked;
+  const likesCount = interactions.likes;
+  const reposted = interactions.reposted;
+  const repostsCount = interactions.reposts;
+  const bookmarked = interactions.bookmarked;
   const isMainFeedVideo = isMainFeed && post.type === 'reel';
 
   // Optimistic UI states
-  const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
-  const [bookmarked, setBookmarked] = useState(post.saved_by_me ?? false);
   const [isAnimating, setIsAnimating] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
@@ -127,20 +127,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
   // مزامنة أعلام التفاعل فقط عند تغيّرها فعليًا (وليس مع كل تحديث للعدّادات)
   useEffect(() => {
-    setReposted(post.reposted_by_me ?? false);
-    setBookmarked(post.saved_by_me ?? false);
     setFeedback(post.feedback_by_me || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.reposted_by_me, post.saved_by_me, post.feedback_by_me]);
+  }, [post.id, post.feedback_by_me]);
 
   // Keep the non-like counters synchronized with the post data.
   useEffect(() => {
-    if (!repostBusyRef.current) {
-      setRepostsCount(post.reposts_count || 0);
-    }
     setCommentsCount(post.comments_count || 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post.id, post.reposts_count, post.comments_count]);
+  }, [post.id, post.comments_count]);
 
   // عدّاد التعليقات: تحديث فوري من نافذة التعليقات (Optimistic UI) دون إعادة تحميل
   useEffect(() => {
@@ -171,63 +166,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const toggleLike = () => {
     setIsAnimating(true);
     setTimeout(() => setIsAnimating(false), 450);
-    void togglePostLike(post, currentUserId);
+    void interactions.toggleLike();
   };
 
-  const toggleRepost = async () => {
-    if (repostBusyRef.current) return;
-
-    const prevReposted = reposted;
-    const prevCount = repostsCount;
-    const nextReposted = !prevReposted;
-
-    repostBusyRef.current = true;
-    setReposted(nextReposted);
-    setRepostsCount(Math.max(0, prevCount + (nextReposted ? 1 : -1)));
-
-    if (!supabaseConfigured) {
-      setReposted(prevReposted);
-      setRepostsCount(prevCount);
-      repostBusyRef.current = false;
-      return;
-    }
-
-    try {
-      if (prevReposted) {
-        const { error } = await supabase.from('reposts').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error && error.code !== 'PGRST116') throw error;
-      } else {
-        const { error } = await supabase.from('reposts').insert({ post_id: post.id, user_id: currentUserId });
-        // إعادة نشر مسجّلة مسبقًا = الحالة المطلوبة أصلًا
-        if (error && error.code !== '23505') throw error;
-      }
-    } catch {
-      setReposted(prevReposted);
-      setRepostsCount(prevCount);
-    } finally {
-      repostBusyRef.current = false;
-    }
+  const toggleRepost = () => {
+    void interactions.toggleRepost();
   };
 
-  const toggleBookmark = async () => {
-    const prevBookmarked = bookmarked;
-    setBookmarked(!prevBookmarked);
-
-    if (!supabaseConfigured) {
-      setBookmarked(prevBookmarked);
-      return;
-    }
-    try {
-      if (prevBookmarked) {
-        const { error } = await supabase.from('bookmarks').delete().eq('post_id', post.id).eq('user_id', currentUserId);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from('bookmarks').insert({ post_id: post.id, user_id: currentUserId });
-        if (error) throw error;
-      }
-    } catch {
-      setBookmarked(prevBookmarked);
-    }
+  const toggleBookmark = () => {
+    void interactions.toggleBookmark();
   };
 
   const loadComments = async () => {

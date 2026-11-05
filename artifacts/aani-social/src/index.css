@@ -1535,6 +1535,7 @@ a:active > .aani-notifications-card {
 .reel-account-row {
   display: flex;
   min-width: 0;
+  min-height: 32px;
   align-items: center;
   gap: 8px;
 }
@@ -1613,7 +1614,7 @@ a:active > .aani-notifications-card {
 .reel-sidebar {
   position: absolute;
   right: 16px;
-  bottom: 24px;
+  bottom: 27px;
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -1656,6 +1657,7 @@ a:active > .aani-notifications-card {
 
 .reel-options-trigger {
   position: relative;
+  z-index: 50;
   display: grid !important;
   width: 26px;
   height: 26px;

@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
-type HoldZone = 'center' | 'left' | 'right';
 type GestureState = {
   pointerId: number;
-  zone: HoldZone;
   startX: number;
   startY: number;
   wasPlaying: boolean;
@@ -21,7 +19,6 @@ export function useFeedVideoGestures(
   onSingleTap: () => void,
 ) {
   const [controlsVisible, setControlsVisible] = useState(false);
-  const [acceleratedSide, setAcceleratedSide] = useState<'left' | 'right' | null>(null);
   const gestureRef = useRef<GestureState | null>(null);
   const holdTimerRef = useRef<number | null>(null);
   const controlsTimerRef = useRef<number | null>(null);
@@ -40,11 +37,11 @@ export function useFeedVideoGestures(
     }, CONTROLS_VISIBLE_MS);
   }, []);
 
-  const clearHoldTimer = () => {
+  const clearHoldTimer = useCallback(() => {
     if (holdTimerRef.current === null) return;
     window.clearTimeout(holdTimerRef.current);
     holdTimerRef.current = null;
-  };
+  }, []);
 
   const finishGesture = (pointerId: number, allowTap: boolean) => {
     const gesture = gestureRef.current;
@@ -53,15 +50,9 @@ export function useFeedVideoGestures(
     gestureRef.current = null;
 
     const video = videoRef.current;
-    if (video && gesture.activated) {
-      if (gesture.zone === 'center') {
-        if (gesture.wasPlaying && video.paused) void video.play().catch(() => undefined);
-      } else {
-        video.playbackRate = 1;
-        if (!gesture.wasPlaying && !video.paused) video.pause();
-      }
+    if (video && gesture.activated && gesture.wasPlaying && video.paused) {
+      void video.play().catch(() => undefined);
     }
-    setAcceleratedSide(null);
     if (allowTap && !gesture.activated && !gesture.moved) onSingleTapRef.current();
     revealControlsBriefly();
   };
@@ -71,17 +62,9 @@ export function useFeedVideoGestures(
     const target = event.target;
     if (target instanceof Element && target.closest('button, input, textarea, select, a, [role="slider"]')) return;
 
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const position = event.clientX - bounds.left;
-    const zone: HoldZone = position < bounds.width / 3
-      ? 'left'
-      : position > bounds.width * (2 / 3)
-        ? 'right'
-        : 'center';
     const video = videoRef.current;
     gestureRef.current = {
       pointerId: event.pointerId,
-      zone,
       startX: event.clientX,
       startY: event.clientY,
       wasPlaying: Boolean(video && !video.paused),
@@ -104,14 +87,7 @@ export function useFeedVideoGestures(
       if (!activeGesture || activeGesture.pointerId !== event.pointerId || activeGesture.moved) return;
       activeGesture.activated = true;
       const activeVideo = videoRef.current;
-      if (!activeVideo) return;
-      if (activeGesture.zone === 'center') {
-        if (!activeVideo.paused) activeVideo.pause();
-      } else {
-        activeVideo.playbackRate = 2;
-        setAcceleratedSide(activeGesture.zone);
-        if (activeVideo.paused) void activeVideo.play().catch(() => undefined);
-      }
+      if (activeVideo && !activeVideo.paused) activeVideo.pause();
     }, HOLD_DELAY_MS);
   };
 
@@ -129,12 +105,10 @@ export function useFeedVideoGestures(
   useEffect(() => () => {
     clearHoldTimer();
     if (controlsTimerRef.current !== null) window.clearTimeout(controlsTimerRef.current);
-    if (videoRef.current) videoRef.current.playbackRate = 1;
-  }, [videoRef]);
+  }, []);
 
   return {
     controlsVisible,
-    acceleratedSide,
     revealControlsBriefly,
     onPointerDown,
     onPointerMove,
