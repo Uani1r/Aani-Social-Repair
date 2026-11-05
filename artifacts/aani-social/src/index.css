@@ -114,6 +114,124 @@ body {
   border-color: #3f3f46;
 }
 
+/* Main-feed video post layout */
+.video-post-card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: #000;
+}
+
+.video-post-card:hover {
+  border-color: transparent;
+}
+
+.video-post-header {
+  box-sizing: border-box;
+  align-items: center !important;
+  gap: 8px !important;
+  padding: 12px 16px;
+}
+
+.video-post-header > img,
+.video-post-header > span {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+}
+
+.video-post-identity-row {
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.video-post-identity {
+  gap: 2px !important;
+}
+
+.video-post-top-meta {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  flex-shrink: 0;
+  color: #a1a1aa;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.video-post-options-button {
+  display: flex !important;
+  width: 20px !important;
+  height: 20px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  padding: 0 !important;
+}
+
+.video-post-media {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+}
+
+.video-post-pending {
+  margin: 0 12px 12px;
+}
+
+.video-post-footer {
+  margin: 0;
+  padding: 12px 14px;
+  border: 0;
+}
+
+.video-post-actions {
+  gap: 14px;
+  overflow: visible;
+}
+
+.video-post-action {
+  gap: 4px !important;
+  flex-shrink: 0;
+}
+
+.video-post-count {
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.video-post-caption {
+  margin: 8px 0 0;
+  color: #f4f4f5;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.video-post-caption .post-content {
+  margin: 0;
+  color: #f4f4f5;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.video-post-metadata {
+  margin: 8px 0 0;
+}
+
+.video-post-created-at {
+  display: block;
+  margin: 8px 0 0;
+  color: #a1a1aa;
+  font-family: 'Tajawal', sans-serif;
+  font-size: 12px;
+}
+
 .post-body {
   width: 100%;
   display: flex;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, ThumbsUp, X,
+  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, Share2, ThumbsUp, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 
@@ -62,9 +62,10 @@ function normalizeFeedPostComments(value: unknown): FeedPostComment[] {
   });
 }
 
-export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending }: {
+export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending, isMainFeed = false }: {
   post: Post;
   currentUserId: string;
+  isMainFeed?: boolean;
   onRefresh: () => void;
   onOpenComments?: (postId: string) => void;
   pendingState?: PendingPost;
@@ -85,6 +86,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const repostBusyRef = useRef(false);
   const liked = post.liked_by_me ?? (post.likes || []).some(like => like.user_id === currentUserId);
   const likesCount = post.likes_count ?? post.likes?.length ?? 0;
+  const isMainFeedVideo = isMainFeed && post.type === 'reel';
 
   // Optimistic UI states
   const [reposted, setReposted] = useState(post.reposted_by_me ?? false);
@@ -340,7 +342,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   };
 
   return (
-    <article className="post-card fade-up relative">
+    <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''}`}>
       {post.repost_attribution && (
         <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-zinc-500">
           <Repeat size={12} />
@@ -349,23 +351,31 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           </span>
         </div>
       )}
-      <header className="flex w-full items-start gap-4">
-        <Avatar profile={post.author} large />
-        <div className="flex min-w-0 flex-1 items-start gap-2">
+      <header className={`flex w-full items-start gap-4 ${isMainFeedVideo ? 'video-post-header' : ''}`}>
+        <Avatar profile={post.author} large={!isMainFeedVideo} />
+        <div className={`flex min-w-0 flex-1 items-start gap-2 ${isMainFeedVideo ? 'video-post-identity-row' : ''}`}>
           <UserIdentity
             name={<Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>}
             username={post.author?.username || 'user'}
-            className="min-w-0 flex-1"
+            className={`min-w-0 flex-1 ${isMainFeedVideo ? 'video-post-identity' : ''}`}
             nameClassName="text-sm font-bold text-white"
             usernameClassName="text-xs text-zinc-500"
           />
-          <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
+          {isMainFeedVideo ? (
+            <div className="video-post-top-meta">
+              <time>{formatDate(post.created_at)}</time>
+              {post.audio_title && <span>♫ {post.audio_title}</span>}
+            </div>
+          ) : (
+            <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
+          )}
         </div>
         <PostOptionsSheet
           open={showOptionsSheet}
           onOpenChange={setShowOptionsSheet}
           isOwner={post.user_id === currentUserId}
           feedback={feedback}
+          triggerClassName={isMainFeedVideo ? 'video-post-options-button' : ''}
           onEdit={() => {
             setEditContent(post.content || '');
             setReplacementFile(null);
@@ -380,7 +390,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       </header>
 
       {pendingState && (
-        <section className="mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3" aria-label="حالة نشر المنشور">
+        <section className={`mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 ${isMainFeedVideo ? 'video-post-pending' : ''}`} aria-label="حالة نشر المنشور">
           <div className="mb-2 flex items-center justify-between gap-3 text-xs">
             <span className="flex items-center gap-2 text-zinc-200">
               {pendingState.stage === 'success' ? (
@@ -415,7 +425,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
-        <div className="relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800">
+        <div className={`relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${isMainFeedVideo ? 'video-post-media' : ''}`}>
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
               <div key={i} className="carousel-slide relative h-full">
@@ -454,56 +464,58 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         </div>
       )}
 
-      {post.content && (
+      {post.content && !isMainFeedVideo && (
         <ExpandablePostText
           text={post.content}
           maxLines={2}
           className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed"
         />
       )}
-      <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
+      {!isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />}
 
       {/* شريط الأزرار المتجمع جهة اليمين */}
-      <footer className="border-t border-zinc-800/80 pt-2.5 mt-3">
-        <div className="post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto">
+      <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''}`}>
+        <div className={`post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto ${isMainFeedVideo ? 'video-post-actions' : ''}`}>
           {/* 1. الإعجاب */}
           <button
             type="button"
-            className={`post-action-btn flex items-center gap-1.5 ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}
+            className={`post-action-btn flex items-center gap-1.5 ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'} ${isMainFeedVideo ? 'video-post-action' : ''}`}
             onClick={toggleLike}
             aria-pressed={liked}
             aria-label={liked ? 'إلغاء الإعجاب' : 'إعجاب'}
           >
             <Heart
-              size={18}
+              size={isMainFeedVideo ? 22 : 18}
               fill={liked ? 'currentColor' : 'none'}
               className={`transition-transform ${isAnimating ? 'animate-heart-pulse' : ''}`}
             />
-            {likesVisible && <span className="text-xs">{likesCount}</span>}
+            {likesVisible && <span className={isMainFeedVideo ? 'video-post-count' : 'text-xs'}>{likesCount}</span>}
           </button>
 
           {/* 2. التعليقات */}
           {commentsVisible && (
-            <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition" onClick={loadComments}>
-              <MessageSquare size={18} />
-              <span className="text-xs">{commentsCount}</span>
+            <button type="button" className={`post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={loadComments}>
+              <MessageSquare size={isMainFeedVideo ? 22 : 18} />
+              <span className={isMainFeedVideo ? 'video-post-count' : 'text-xs'}>{commentsCount}</span>
             </button>
           )}
 
           {/* 3. إعادة النشر */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
-            <Repeat size={18} />
-            <span className="text-xs">{repostsCount}</span>
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#E53E3E] font-bold' : 'text-zinc-400 hover:text-[#E53E3E]'} ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
+            <Repeat size={isMainFeedVideo ? 22 : 18} />
+            <span className={isMainFeedVideo ? 'video-post-count' : 'text-xs'}>{repostsCount}</span>
           </button>
 
           {/* 4. المشاركة */}
-          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition" onClick={() => setShowShareSheet(true)}>
-            <Send size={18} />
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-purple-400 transition ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
+            {isMainFeedVideo ? <Share2 size={22} /> : <Send size={18} />}
+            {isMainFeedVideo && <span className="video-post-count">{post.shares_count ?? 0}</span>}
           </button>
 
           {/* 5. الحفظ */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-zinc-400 hover:text-amber-400'}`} onClick={toggleBookmark}>
-            <Bookmark size={18} fill={bookmarked ? 'currentColor' : 'none'} />
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-zinc-400 hover:text-amber-400'} ${isMainFeedVideo ? 'video-post-action' : ''}`} onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'}>
+            <Bookmark size={isMainFeedVideo ? 22 : 18} fill={bookmarked ? 'currentColor' : 'none'} />
+            {isMainFeedVideo && <span className="video-post-count">{post.saves_count ?? 0}</span>}
           </button>
 
         </div>
@@ -522,6 +534,18 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             </form>
           </div>
         )}
+
+        {isMainFeedVideo && post.content && (
+          <div className="video-post-caption">
+            <ExpandablePostText
+              text={post.content}
+              maxLines={2}
+              className="post-content video-post-caption-text"
+            />
+          </div>
+        )}
+        {isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className="video-post-metadata" />}
+        {isMainFeedVideo && <time className="video-post-created-at">{formatDate(post.created_at)}</time>}
       </footer>
 
       <EditPostSheet

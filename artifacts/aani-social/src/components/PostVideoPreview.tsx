@@ -234,11 +234,11 @@ export default function PostVideoPreview({
             setVideoMuted(nextMuted);
             if (videoRef.current) videoRef.current.muted = nextMuted;
           }}
-          className="absolute left-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/65 text-white backdrop-blur transition hover:bg-black/80"
+          className="absolute bottom-3 left-3 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white backdrop-blur transition hover:bg-black/80"
           aria-label={videoMuted ? 'تشغيل الصوت' : 'كتم الصوت'}
           aria-pressed={videoMuted}
         >
-          {videoMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+          {videoMuted ? <VolumeX size={14} /> : <Volume2 size={14} />}
         </button>
       )}
 

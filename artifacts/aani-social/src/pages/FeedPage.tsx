@@ -311,6 +311,7 @@ export default function FeedPage({
                 key={post.id}
                 post={post}
                 currentUserId={userId}
+                isMainFeed
                 onRefresh={() => void refresh()}
                 onOpenComments={onOpenComments}
                 pendingState={pending}
