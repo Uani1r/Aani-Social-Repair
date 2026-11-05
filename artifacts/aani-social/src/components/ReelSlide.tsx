@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, Heart, Loader2, MessageSquare, Pause, Play, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Pause, Play, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
@@ -387,31 +387,28 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         style={{ transform: videoCropTransform, transformOrigin: 'center' }}
       />
 
-      <button
-        type="button"
-        aria-label={muted ? 'تشغيل الصوت' : 'كتم الصوت'}
-        aria-pressed={muted}
-        onClick={() => {
-          playbackGestures.revealControlsBriefly();
-          const nextMuted = !muted;
-          setMuted(nextMuted);
-          if (videoRef.current) videoRef.current.muted = nextMuted;
-        }}
-        className="absolute left-4 top-[max(1rem,env(safe-area-inset-top))] z-30 grid h-11 w-11 place-items-center rounded-full border border-white/20 bg-black/50 text-white backdrop-blur-md"
-      >
-        {muted ? <VolumeX size={19} /> : <Volume2 size={19} />}
-      </button>
-
-      {onClose && (
+      <div className="reel-gradient-top" aria-hidden="true" />
+      <div className="reel-top-bar" dir="ltr">
+        {onClose && (
+          <button type="button" onClick={onClose} aria-label="إغلاق استعراض الريل" className="reel-top-button">
+            <X size={26} strokeWidth={2} />
+          </button>
+        )}
         <button
           type="button"
-          onClick={onClose}
-          aria-label="إغلاق استعراض الريل"
-          className="absolute right-4 top-[max(1rem,env(safe-area-inset-top))] z-30 grid h-11 w-11 place-items-center rounded-full border border-white/20 bg-black/50 text-white backdrop-blur-md"
+          aria-label={muted ? 'تشغيل الصوت' : 'كتم الصوت'}
+          aria-pressed={muted}
+          onClick={() => {
+            playbackGestures.revealControlsBriefly();
+            const nextMuted = !muted;
+            setMuted(nextMuted);
+            if (videoRef.current) videoRef.current.muted = nextMuted;
+          }}
+          className="reel-top-button"
         >
-          <X size={20} />
+          {muted ? <VolumeX size={26} strokeWidth={2} /> : <Volume2 size={26} strokeWidth={2} />}
         </button>
-      )}
+      </div>
 
       {pendingState && (
         <div className="absolute inset-x-0 top-0 z-40 bg-black/70 px-4 pb-4 pt-[max(4rem,calc(1rem+env(safe-area-inset-top)))] text-white backdrop-blur-sm">
@@ -493,36 +490,33 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         </div>
       )}
 
-      {/* تفاصيل الريل أسفل الشاشة */}
-      <div className="absolute inset-x-0 bottom-0 pt-24 pb-12 px-4 reel-gradient-bottom z-20 pointer-events-none">
-        <div className="flex items-end justify-between gap-4">
-          <div className="flex-1 min-w-0 text-white pointer-events-auto">
-            <div className="mb-2 flex items-center gap-4">
-              <Avatar profile={post.author} />
-              <UserIdentity
-                name={displayName(post.author)}
-                username={post.author?.username}
-                className="min-w-0 flex-1"
-                nameClassName="text-sm font-bold text-white"
-                usernameClassName="text-xs text-zinc-300"
-              />
-              {showCreatedAt && <time className="reel-created-at">{formatDate(post.created_at)}</time>}
-            </div>
-            {post.content && (captionSheet ? (
-              <div className="mt-2 flex min-w-0 items-end gap-2">
-                <p ref={captionRef} className="reel-caption-preview min-w-0 flex-1 text-sm leading-snug">{post.content}</p>
-                {captionHasMore && (
-                  <button type="button" onClick={() => setShowCaptionSheet(true)} className="shrink-0 text-xs font-bold text-white underline underline-offset-2">
-                    عرض المزيد
-                  </button>
-                )}
-              </div>
-            ) : (
-              <ExpandablePostText text={post.content} className="text-sm leading-snug" />
-            ))}
-            <PostMetadataChips tags={post.post_metadata || []} className="mt-2" />
-          </div>
+      <div className="reel-gradient-bottom" aria-hidden="true" />
+      {/* معلومات الريل والوصف بمحاذاة أسفل الشاشة */}
+      <div className="reel-bottom-info" dir="rtl">
+        <div className="reel-account-row">
+          <span className="reel-avatar-frame"><Avatar profile={post.author} /></span>
+          <UserIdentity
+            name={displayName(post.author)}
+            username={post.author?.username}
+            className="reel-account-identity"
+            nameClassName="reel-account-name"
+            usernameClassName="reel-account-handle"
+          />
+          {showCreatedAt && <time className="reel-created-at">{formatDate(post.created_at)}</time>}
         </div>
+        {post.content && (captionSheet ? (
+          <div className="reel-caption-row">
+            <p ref={captionRef} className="reel-caption-preview">{post.content}</p>
+            {captionHasMore && (
+              <button type="button" onClick={() => setShowCaptionSheet(true)} className="reel-caption-more">
+                عرض المزيد
+              </button>
+            )}
+          </div>
+        ) : (
+          <ExpandablePostText text={post.content} className="reel-description" />
+        ))}
+        <PostMetadataChips tags={post.post_metadata || []} className="mt-2" />
       </div>
 
       {captionSheet && showCaptionSheet && (
@@ -562,47 +556,30 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         </div>
       )}
 
-      {/* الأزرار العائمة المرتفعة عن شريط التنقل والمتحركة مع كل فيديو */}
-      <div className="absolute right-4 bottom-28 z-30 flex flex-col items-center gap-4">
-        {/* 1. الإعجاب */}
-        <button onClick={toggleLike} className="flex flex-col items-center gap-1 text-white">
-          <span className={`p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md transition ${liked ? 'text-pink-500' : ''}`}>
-            <Heart size={22} fill={liked ? 'currentColor' : 'none'} />
-          </span>
-          {likesVisible && <span className="text-[11px] font-semibold">{likesCount}</span>}
+      {/* شريط التفاعلات الجانبي */}
+      <div className="reel-sidebar">
+        <button type="button" onClick={toggleLike} aria-label="إعجاب" aria-pressed={liked} className={`reel-sidebar-button ${liked ? 'is-liked' : ''}`}>
+          <Heart size={26} strokeWidth={2} fill={liked ? 'currentColor' : 'none'} />
+          {likesVisible && <span>{likesCount}</span>}
         </button>
 
-        {/* 2. التعليقات */}
         {commentsVisible && (
-          <button onClick={() => onOpenComments(post.id)} className="flex flex-col items-center gap-1 text-white">
-            <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
-              <MessageSquare size={22} />
-            </span>
-            <span className="text-[11px] font-bold">
-              {post.comments_count ?? post.comments?.length ?? 0}
-            </span>
+          <button type="button" onClick={() => onOpenComments(post.id)} aria-label="التعليقات" className="reel-sidebar-button">
+            <MessageCircle size={26} strokeWidth={2} />
+            <span>{post.comments_count ?? post.comments?.length ?? 0}</span>
           </button>
         )}
 
-        {/* 3. إعادة النشر */}
-        <button onClick={toggleRepost} className="flex flex-col items-center gap-1 text-white">
-          <span className={`p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md transition ${reposted ? 'text-[#E53E3E]' : ''}`}>
-            <Repeat size={22} />
-          </span>
+        <button type="button" onClick={toggleRepost} aria-label="إعادة النشر" aria-pressed={reposted} className={`reel-sidebar-button ${reposted ? 'is-reposted' : ''}`}>
+          <Repeat size={26} strokeWidth={2} />
         </button>
 
-        {/* 4. المشاركة */}
-        <button onClick={() => setShowShareSheet(true)} className="flex flex-col items-center gap-1 text-white">
-          <span className="p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md">
-            <Send size={22} />
-          </span>
+        <button type="button" onClick={() => setShowShareSheet(true)} aria-label="مشاركة" className="reel-sidebar-button">
+          <Send size={26} strokeWidth={2} />
         </button>
 
-        {/* 5. الحفظ */}
-        <button onClick={toggleBookmark} className="flex flex-col items-center gap-1 text-white">
-          <span className={`p-2.5 rounded-full bg-black/40 border border-white/20 backdrop-blur-md transition ${saved ? 'text-amber-400' : ''}`}>
-            <Bookmark size={22} fill={saved ? 'currentColor' : 'none'} />
-          </span>
+        <button type="button" onClick={toggleBookmark} aria-label="حفظ" aria-pressed={saved} className={`reel-sidebar-button ${saved ? 'is-saved' : ''}`}>
+          <Bookmark size={26} strokeWidth={2} fill={saved ? 'currentColor' : 'none'} />
         </button>
 
         <PostOptionsSheet
@@ -620,7 +597,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           onDelete={() => void deletePost()}
           onReport={() => void reportPost()}
           onFeedback={value => void saveFeedback(value)}
-          triggerClassName="border border-white/20 bg-black/40 p-2 text-white backdrop-blur-md"
+          triggerClassName="reel-options-trigger"
         />
       </div>
 

@@ -84,6 +84,8 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
             pendingState={pending}
             onRetryPending={() => retryPendingPost(post.id)}
             onDismissPending={() => removePendingPost(post.id)}
+            showCreatedAt
+            captionSheet
           />
         );
       })}
