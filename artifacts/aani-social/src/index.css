@@ -314,11 +314,21 @@ body {
   height: 100dvh;
   overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
   scroll-snap-type: y mandatory;
   scrollbar-width: none;
   background: #000;
   touch-action: pan-y;
 }
+
+.feed-reel-viewer {
+  z-index: 100;
+}
+
+[role="dialog"][aria-modal="true"] {
+  overscroll-behavior: contain;
+}
+
 .reels-container::-webkit-scrollbar { display: none; }
 
 .reel-slide {

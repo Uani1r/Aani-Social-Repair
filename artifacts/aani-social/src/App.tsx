@@ -17,6 +17,7 @@ import ProfilePage from '@/pages/ProfilePage';
 import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
 import useAppSession from '@/hooks/useAppSession';
+import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { handleAppError, installSupabaseErrorInterceptor } from '@/lib/appErrors';
 import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
@@ -26,6 +27,7 @@ import '@/index.css';
 installSupabaseErrorInterceptor(supabase);
 
 function App() {
+  useModalBodyScrollLock();
   const { authLoading, user, profile, setProfile, signOut } = useAppSession();
   useInteractionRealtime(user?.id);
   const [selectedPostForComments, setSelectedPostForComments] = useState<string | null>(null);

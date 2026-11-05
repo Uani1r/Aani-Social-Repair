@@ -255,7 +255,7 @@ export default function Shell({
     const onScroll = () => {
       const now = performance.now();
 
-      if (document.body.classList.contains('aani-immersive')) return;
+      if (document.body.classList.contains('aani-immersive') || hasOpenModal()) return;
       if (touching && now - lastTouchMoveAt < 120) return;
 
       const y = Math.max(
@@ -285,7 +285,7 @@ export default function Shell({
 
     // بديل لسطح المكتب: عجلة الفأرة
     const onWheel = (event: WheelEvent) => {
-      if (document.body.classList.contains('aani-immersive')) return;
+      if (document.body.classList.contains('aani-immersive') || hasOpenModal()) return;
       if (!event.deltaY) return;
       applyDirection(event.deltaY > 0 ? -1 : 1);
     };

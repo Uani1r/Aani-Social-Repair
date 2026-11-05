@@ -6,7 +6,7 @@ import { Link } from 'wouter';
 import { createPortal } from 'react-dom';
 
 import Avatar from './Avatar';
-import ReelSlide from './ReelSlide';
+import FeedReelViewer from './FeedReelViewer';
 import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
@@ -64,10 +64,12 @@ function normalizeFeedPostComments(value: unknown): FeedPostComment[] {
   });
 }
 
-export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending, isMainFeed = false }: {
+export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending, isMainFeed = false, feedVideoPosts, initialVideoIndex = 0 }: {
   post: Post;
   currentUserId: string;
   isMainFeed?: boolean;
+  feedVideoPosts?: Post[];
+  initialVideoIndex?: number;
   onRefresh: () => void;
   onOpenComments?: (postId: string) => void;
   pendingState?: PendingPost;
@@ -599,17 +601,19 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       )}
 
       {showMainFeedReel && createPortal(
-        <div className="fixed inset-0 z-[100] bg-black">
-          <ReelSlide
-            post={fullScreenPost}
-            currentUserId={currentUserId}
-            onOpenComments={onOpenComments ? () => onOpenComments(post.id) : () => { void loadComments(); }}
-            onRefresh={onRefresh}
-            onClose={closeMainFeedReel}
-            showCreatedAt
-            captionSheet
-          />
-        </div>,
+        <FeedReelViewer
+          posts={feedVideoPosts?.length
+            ? feedVideoPosts.map(videoPost => videoPost.id === post.id ? fullScreenPost : videoPost)
+            : [fullScreenPost]}
+          initialIndex={initialVideoIndex}
+          currentUserId={currentUserId}
+          onOpenComments={postId => {
+            if (onOpenComments) onOpenComments(postId);
+            else if (postId === post.id) void loadComments();
+          }}
+          onRefresh={onRefresh}
+          onClose={closeMainFeedReel}
+        />,
         document.body,
       )}
     </article>

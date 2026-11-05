@@ -20,9 +20,9 @@ import { displayName, formatDate, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
-const hasOpenFeedDialog = () => typeof document !== 'undefined' && Boolean(document.querySelector(
+const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
-));
+)).some(dialog => !dialog.closest('.feed-reel-viewer'));
 
 const formatReelTime = (value: number) => {
   if (!Number.isFinite(value) || value < 0) return '0:00';

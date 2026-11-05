@@ -118,6 +118,8 @@ export default function FeedPage({
     ...userPendingPosts.map(item => item.post),
     ...posts.filter(post => !userPendingPosts.some(item => item.id === post.id)),
   ];
+  const feedVideoPosts = visiblePosts.filter(post => post.type === 'reel');
+  const feedVideoIndexById = new Map(feedVideoPosts.map((post, index) => [post.id, index] as const));
   const pendingById = new Map(userPendingPosts.map(item => [item.id, item] as const));
 
   const refreshFeed = useCallback(async () => {
@@ -312,6 +314,8 @@ export default function FeedPage({
                 post={post}
                 currentUserId={userId}
                 isMainFeed
+                feedVideoPosts={post.type === 'reel' ? feedVideoPosts : undefined}
+                initialVideoIndex={feedVideoIndexById.get(post.id) ?? 0}
                 onRefresh={() => void refresh()}
                 onOpenComments={onOpenComments}
                 pendingState={pending}
