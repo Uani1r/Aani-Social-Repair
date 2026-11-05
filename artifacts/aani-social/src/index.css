@@ -127,6 +127,42 @@ body {
   border-color: transparent;
 }
 
+.main-feed-image-post {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.main-feed-image-media {
+  width: calc(100% + 32px);
+  max-height: 80vh;
+  margin-inline: -16px;
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.main-feed-image-media .carousel-track,
+.main-feed-image-media .carousel-slide {
+  height: auto;
+  max-height: 80vh;
+}
+
+.main-feed-image-media .carousel-track {
+  align-items: flex-start;
+}
+
+.main-feed-image-media .feed-image-natural {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
 .video-post-header {
   box-sizing: border-box;
   align-items: center !important;

@@ -95,6 +95,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const sharesCount = interactions.shares;
   const bookmarked = interactions.bookmarked;
   const isMainFeedVideo = isMainFeed && post.type === 'reel';
+  const isMainFeedImage = isMainFeed && post.type === 'photo';
 
   // Optimistic UI states
   const [isAnimating, setIsAnimating] = useState(false);
@@ -312,7 +313,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   };
 
   return (
-    <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''}`}>
+    <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''} ${isMainFeedImage ? 'main-feed-image-post' : ''}`}>
       {post.repost_attribution && (
         <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-zinc-500">
           <Repeat size={12} />
@@ -395,7 +396,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
-        <div className={`relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${isMainFeedVideo ? 'video-post-media' : ''}`}>
+        <div className={isMainFeedImage ? 'main-feed-image-media relative mt-3 w-full' : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${isMainFeedVideo ? 'video-post-media' : ''}`}>
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
               <div key={i} className="carousel-slide relative h-full">
@@ -412,7 +413,11 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <PostImagePreview src={url} alt="" className="block h-full w-full select-none object-cover" />
+                  <PostImagePreview
+                    src={url}
+                    alt=""
+                    className={isMainFeedImage ? 'feed-image-natural block select-none' : 'block h-full w-full select-none object-cover'}
+                  />
                 )}
               </div>
             ))}
