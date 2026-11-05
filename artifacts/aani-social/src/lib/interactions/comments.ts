@@ -21,6 +21,13 @@ import type {
   UploadedCommentImage,
 } from "./types";
 import { createComment, deleteComment } from "./commentWrites";
+import {
+  isMissingOptionalModerationRelation,
+  isOptionalModerationRelationUnavailable,
+  markOptionalModerationRelationUnavailable,
+  readLocalCommentHideIds,
+  writeLocalCommentHideIds,
+} from "../comments/localModeration";
 
 const COMMENT_SELECT =
   "id, post_id, user_id, parent_id, content, image_url, created_at";
@@ -89,18 +96,38 @@ export async function fetchCommentsWithReplies(
     }
   }
 
-  const hiddenCommentIds = new Set<string>();
-  if (currentUserId && commentIds.length > 0) {
-    const { data: hiddenRows, error: hiddenError } = await supabase
-      .from("comment_hides")
-      .select("comment_id")
-      .eq("user_id", currentUserId)
-      .in("comment_id", commentIds);
+  const hiddenCommentIds = readLocalCommentHideIds(currentUserId ?? "");
+  if (
+    currentUserId &&
+    commentIds.length > 0 &&
+    !isOptionalModerationRelationUnavailable("comment_hides")
+  ) {
+    try {
+      const { data: hiddenRows, error: hiddenError } = await supabase
+        .from("comment_hides")
+        .select("comment_id")
+        .eq("user_id", currentUserId)
+        .in("comment_id", commentIds);
 
-    if (hiddenError) throw hiddenError;
-    (hiddenRows ?? []).forEach((row: { comment_id: string }) => {
-      hiddenCommentIds.add(String(row.comment_id));
-    });
+      if (hiddenError) {
+        if (isMissingOptionalModerationRelation("comment_hides", hiddenError)) {
+          markOptionalModerationRelationUnavailable("comment_hides");
+        } else {
+          throw hiddenError;
+        }
+      } else {
+        (hiddenRows ?? []).forEach((row: { comment_id: string }) => {
+          hiddenCommentIds.add(String(row.comment_id));
+        });
+        writeLocalCommentHideIds(currentUserId, hiddenCommentIds);
+      }
+    } catch (hiddenError) {
+      if (isMissingOptionalModerationRelation("comment_hides", hiddenError)) {
+        markOptionalModerationRelationUnavailable("comment_hides");
+      } else {
+        throw hiddenError;
+      }
+    }
   }
 
   const likesMap = new Map<string, { count: number; isLiked: boolean }>();

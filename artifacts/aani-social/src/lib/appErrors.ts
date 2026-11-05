@@ -1,3 +1,9 @@
+import {
+  isMissingOptionalModerationAction,
+  isMissingOptionalModerationRelation,
+  markOptionalModerationRelationUnavailable,
+} from './comments/localModeration';
+
 export interface AppErrorNotice {
   id: string;
   operation: string;
@@ -152,8 +158,17 @@ function operationForTable(table: string, verb: QueryVerb): { operation: string;
   };
 }
 
-function reportResponseError(operation: string, userMessage: string, response: unknown): void {
+function reportResponseError(
+  operation: string,
+  userMessage: string,
+  response: unknown,
+  table?: string,
+): void {
   if (!isObject(response) || !response.error) return;
+  if (table && isMissingOptionalModerationRelation(table, response.error)) {
+    markOptionalModerationRelationUnavailable(table);
+    return;
+  }
   handleAppError(operation, response.error, userMessage);
 }
 
@@ -169,11 +184,15 @@ function wrapQueryBuilder(builder: unknown, table: string, state: { verb: QueryV
           const { operation, userMessage } = operationForTable(table, state.verb);
           return Reflect.apply(member, target, [
             (result: unknown) => {
-              reportResponseError(operation, userMessage, result);
+              reportResponseError(operation, userMessage, result, table);
               return onFulfilled ? onFulfilled(result) : result;
             },
             (reason: unknown) => {
-              handleAppError(operation, reason, userMessage);
+              if (isMissingOptionalModerationRelation(table, reason)) {
+                markOptionalModerationRelationUnavailable(table);
+              } else {
+                handleAppError(operation, reason, userMessage);
+              }
               if (onRejected) return onRejected(reason);
               throw reason;
             },
@@ -191,7 +210,11 @@ function wrapQueryBuilder(builder: unknown, table: string, state: { verb: QueryV
           return result === target ? proxy : wrapQueryBuilder(result, table, state);
         } catch (error) {
           const { operation, userMessage } = operationForTable(table, state.verb);
-          handleAppError(operation, error, userMessage);
+          if (isMissingOptionalModerationRelation(table, error)) {
+            markOptionalModerationRelationUnavailable(table);
+          } else {
+            handleAppError(operation, error, userMessage);
+          }
           throw error;
         }
       };
@@ -263,7 +286,11 @@ export function installSupabaseErrorInterceptor(client: unknown): void {
         return wrapQueryBuilder(originalFrom(table), table, { verb: 'select' });
       } catch (error) {
         const { operation, userMessage } = operationForTable(table, 'select');
-        handleAppError(operation, error, userMessage);
+        if (isMissingOptionalModerationRelation(table, error)) {
+          markOptionalModerationRelationUnavailable(table);
+        } else {
+          handleAppError(operation, error, userMessage);
+        }
         throw error;
       }
     };
@@ -273,24 +300,33 @@ export function installSupabaseErrorInterceptor(client: unknown): void {
       const functionName = String(args[0] || 'database function');
       const operation = `فشل تنفيذ الإجراء ${functionName}`;
       const userMessage = 'تعذر إتمام إجراء قاعدة البيانات. حاول مرة أخرى.';
+      const reportRpcError = (response: unknown) => {
+        if (!isObject(response) || !response.error) return;
+        if (isMissingOptionalModerationAction(functionName, response.error)) return;
+        handleAppError(operation, response.error, userMessage);
+      };
       try {
         const result = originalRpc(...args);
         if (result && typeof (result as { then?: unknown }).then === 'function') {
           return (result as Promise<unknown>).then(
             value => {
-              reportResponseError(operation, userMessage, value);
+              reportRpcError(value);
               return value;
             },
             error => {
-              handleAppError(operation, error, userMessage);
+              if (!isMissingOptionalModerationAction(functionName, error)) {
+                handleAppError(operation, error, userMessage);
+              }
               throw error;
             },
           );
         }
-        reportResponseError(operation, userMessage, result);
+        reportRpcError(result);
         return result;
       } catch (error) {
-        handleAppError(operation, error, userMessage);
+        if (!isMissingOptionalModerationAction(functionName, error)) {
+          handleAppError(operation, error, userMessage);
+        }
         throw error;
       }
     };

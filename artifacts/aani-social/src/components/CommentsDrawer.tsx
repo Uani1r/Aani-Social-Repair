@@ -26,6 +26,18 @@ import { handleAppError } from '../lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
 import { extractMentions, findActiveMention, type MentionQuery } from '../lib/mentions';
 import { useBottomSheetDismiss } from '../hooks/useBottomSheetDismiss';
+import {
+  isMissingOptionalModerationAction,
+  isMissingOptionalModerationRelation,
+  isOptionalModerationRelationUnavailable,
+  markOptionalModerationRelationUnavailable,
+  readLocalBlockedUserIds,
+  readLocalCommentHideIds,
+  readLocalRestrictedUserIds,
+  writeLocalBlockedUserIds,
+  writeLocalCommentHideIds,
+  writeLocalRestrictedUserIds,
+} from '../lib/comments/localModeration';
 
 interface CommentsDrawerProps {
   postId: string;
@@ -100,10 +112,13 @@ const buildSavedComment = (
   replies: [],
 });
 
-const filterHiddenComments = (items: CommentWithDetails[]): CommentWithDetails[] =>
+const filterHiddenComments = (
+  items: CommentWithDetails[],
+  blockedUserIds: Set<string>,
+): CommentWithDetails[] =>
   items.flatMap((item) => {
-    const visibleReplies = filterHiddenComments(item.replies ?? []);
-    if (item.is_hidden_by_me) {
+    const visibleReplies = filterHiddenComments(item.replies ?? [], blockedUserIds);
+    if (item.is_hidden_by_me || blockedUserIds.has(item.user_id)) {
       return visibleReplies.map((reply) => ({ ...reply, parent_id: null }));
     }
     return [{ ...item, replies: visibleReplies }];
@@ -137,6 +152,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
   const [postOwnerId, setPostOwnerId] = useState<string | null>(null);
   const [restrictedUserIds, setRestrictedUserIds] = useState<Set<string>>(new Set());
+  const [blockedUserIds, setBlockedUserIds] = useState<Set<string>>(new Set());
   const [content, setContent] = useState('');
   const [replyingTo, setReplyingTo] = useState<CommentWithDetails | null>(null);
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
@@ -322,24 +338,51 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
 
     let active = true;
-    void supabase
-      .from('user_restrictions')
-      .select('restricted_user_id')
-      .eq('restricter_id', currentUserId)
-      .then(({ data, error }) => {
-        if (!active) return;
-        if (error) {
-          console.warn('[comments] تعذر تحميل الحسابات المقيدة:', error);
-          setRestrictedUserIds(new Set());
-          return;
+    const localRestrictedUserIds = readLocalRestrictedUserIds(currentUserId);
+    setRestrictedUserIds(localRestrictedUserIds);
+
+    if (!isOptionalModerationRelationUnavailable('user_restrictions')) {
+      void (async () => {
+        try {
+          const { data, error } = await supabase
+            .from('user_restrictions')
+            .select('restricted_user_id')
+            .eq('restricter_id', currentUserId);
+
+          if (!active) return;
+          if (error) {
+            if (isMissingOptionalModerationRelation('user_restrictions', error)) {
+              markOptionalModerationRelationUnavailable('user_restrictions');
+            } else {
+              console.warn('[comments] تعذر تحميل الحسابات المقيدة:', error);
+            }
+            return;
+          }
+
+          const merged = new Set([
+            ...localRestrictedUserIds,
+            ...(data ?? []).map(row => String(row.restricted_user_id)),
+          ]);
+          setRestrictedUserIds(merged);
+          writeLocalRestrictedUserIds(currentUserId, merged);
+        } catch (error) {
+          if (isMissingOptionalModerationRelation('user_restrictions', error)) {
+            markOptionalModerationRelationUnavailable('user_restrictions');
+          } else {
+            console.warn('[comments] تعذر تحميل الحسابات المقيدة:', error);
+          }
         }
-        setRestrictedUserIds(new Set((data ?? []).map(row => String(row.restricted_user_id))));
-      });
+      })();
+    }
 
     return () => {
       active = false;
     };
   }, [isOpen, currentUserId, postOwnerId]);
+
+  useEffect(() => {
+    setBlockedUserIds(readLocalBlockedUserIds(currentUserId));
+  }, [currentUserId]);
 
   useEffect(() => {
     const ids = new Set<string>();
@@ -537,7 +580,10 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
     return countComments(comments);
   }, [comments, commentsError, initialCommentsCount, loading]);
-  const visibleComments = useMemo(() => filterHiddenComments(comments), [comments]);
+  const visibleComments = useMemo(
+    () => filterHiddenComments(comments, blockedUserIds),
+    [blockedUserIds, comments],
+  );
 
   // قائمة مرشّحي المنشن: المتابَعون/المتابِعون + أصحاب التعليقات الحالية
   const mentionCandidates = useMemo(() => {
@@ -1033,17 +1079,38 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const handleHideComment = async (comment: CommentWithDetails) => {
     if (!currentUserId || pendingActionIds[comment.id]) return;
     setPendingActionIds((prev) => ({ ...prev, [comment.id]: true }));
+
+    const hiddenCommentIds = readLocalCommentHideIds(currentUserId);
+    hiddenCommentIds.add(comment.id);
+    writeLocalCommentHideIds(currentUserId, hiddenCommentIds);
+    setComments((previous) => patchCommentInTree(previous, comment.id, { is_hidden_by_me: true }));
+
     try {
-      const { error } = await supabase.from('comment_hides').insert({
-        user_id: currentUserId,
-        comment_id: comment.id,
-      });
-      if (error && error.code !== '23505') throw error;
-      setComments((previous) => patchCommentInTree(previous, comment.id, { is_hidden_by_me: true }));
-      toast.success('تم إخفاء التعليق من قائمتك');
+      if (!isOptionalModerationRelationUnavailable('comment_hides')) {
+        const { error } = await supabase.from('comment_hides').insert({
+          user_id: currentUserId,
+          comment_id: comment.id,
+        });
+        if (error && error.code !== '23505') {
+          if (isMissingOptionalModerationRelation('comment_hides', error)) {
+            markOptionalModerationRelationUnavailable('comment_hides');
+          } else {
+            console.warn('[comments] تم حفظ الإخفاء محلياً فقط:', error);
+          }
+        }
+      }
+      toast.success(
+        isOptionalModerationRelationUnavailable('comment_hides')
+          ? 'تم إخفاء التعليق على هذا الجهاز'
+          : 'تم إخفاء التعليق من قائمتك',
+      );
     } catch (error) {
-      console.error('[comments] تعذر إخفاء التعليق:', error);
-      toast.error('تعذر إخفاء التعليق. تحقق من تطبيق تحديث إدارة التعليقات.');
+      if (isMissingOptionalModerationRelation('comment_hides', error)) {
+        markOptionalModerationRelationUnavailable('comment_hides');
+      } else {
+        console.warn('[comments] تم حفظ الإخفاء محلياً فقط:', error);
+      }
+      toast.success('تم إخفاء التعليق على هذا الجهاز');
     } finally {
       setPendingActionIds((prev) => {
         const next = { ...prev };
@@ -1081,7 +1148,12 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     const name = comment.profiles?.full_name || comment.profiles?.username || 'كاتب التعليق';
     if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع من التواصل معك.`)) return;
 
+    const localBlockedUserIds = readLocalBlockedUserIds(currentUserId);
+    localBlockedUserIds.add(comment.user_id);
+    writeLocalBlockedUserIds(currentUserId, localBlockedUserIds);
+    setBlockedUserIds(localBlockedUserIds);
     setPendingActionIds((prev) => ({ ...prev, [comment.id]: true }));
+
     try {
       const { error } = await supabase.rpc('aani_block_user', {
         p_blocked_user_id: comment.user_id,
@@ -1090,8 +1162,12 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       toast.success('تم حظر الحساب');
       await loadComments(false);
     } catch (error) {
-      console.error('[comments] تعذر حظر كاتب التعليق:', error);
-      toast.error('تعذر حظر الحساب. تحقق من تحديث إجراءات الحسابات.');
+      if (isMissingOptionalModerationAction('aani_block_user', error)) {
+        toast.success('تم حظر الحساب على هذا الجهاز');
+      } else {
+        console.warn('[comments] تم حفظ الحظر محلياً فقط:', error);
+        toast.success('تم حظر الحساب على هذا الجهاز');
+      }
     } finally {
       setPendingActionIds((prev) => {
         const next = { ...prev };
@@ -1105,23 +1181,32 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     if (postOwnerId !== currentUserId || !userId || userId === currentUserId) return;
     const pendingId = userId;
     if (pendingActionIds[pendingId]) return;
+
+    const localRestrictedUserIds = readLocalRestrictedUserIds(currentUserId);
+    if (restricted) localRestrictedUserIds.add(userId);
+    else localRestrictedUserIds.delete(userId);
+    writeLocalRestrictedUserIds(currentUserId, localRestrictedUserIds);
+    setRestrictedUserIds(localRestrictedUserIds);
     setPendingActionIds((prev) => ({ ...prev, [pendingId]: true }));
+
     try {
-      const { error } = await supabase.rpc('aani_set_user_restricted', {
-        p_user_id: userId,
-        p_restricted: restricted,
-      });
-      if (error) throw error;
-      setRestrictedUserIds((previous) => {
-        const next = new Set(previous);
-        if (restricted) next.add(userId);
-        else next.delete(userId);
-        return next;
-      });
-      toast.success(restricted ? 'تم تقييد الحساب' : 'تم إلغاء تقييد الحساب');
+      if (!isOptionalModerationRelationUnavailable('user_restrictions')) {
+        const { error } = await supabase.rpc('aani_set_user_restricted', {
+          p_user_id: userId,
+          p_restricted: restricted,
+        });
+        if (error) throw error;
+        toast.success(restricted ? 'تم تقييد الحساب' : 'تم إلغاء تقييد الحساب');
+      } else {
+        toast.success(restricted ? 'تم تقييد الحساب على هذا الجهاز' : 'تم إلغاء التقييد على هذا الجهاز');
+      }
     } catch (error) {
-      console.error('[comments] تعذر تحديث تقييد الحساب:', error);
-      toast.error('تعذر تحديث التقييد. تحقق من تطبيق تحديث إدارة التعليقات.');
+      if (isMissingOptionalModerationAction('aani_set_user_restricted', error)) {
+        markOptionalModerationRelationUnavailable('user_restrictions');
+      } else {
+        console.warn('[comments] تم حفظ التقييد محلياً فقط:', error);
+      }
+      toast.success(restricted ? 'تم تقييد الحساب على هذا الجهاز' : 'تم إلغاء التقييد على هذا الجهاز');
     } finally {
       setPendingActionIds((prev) => {
         const next = { ...prev };
