@@ -88,9 +88,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     if (!open) return undefined;
 
     const previousBodyOverflow = document.body.style.overflow;
-    const previousDocumentOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
 
     const closeOnEscape = event => {
       if (event.key !== 'Escape') return;
@@ -101,7 +99,6 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
 
     return () => {
       document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousDocumentOverflow;
       window.removeEventListener('keydown', closeOnEscape);
       cropDragRef.current = null;
     };

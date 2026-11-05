@@ -5,23 +5,40 @@ const OPEN_DIALOG_SELECTOR = '[role="dialog"]:not([aria-hidden="true"]):not([ari
 export function useModalBodyScrollLock() {
   useLayoutEffect(() => {
     const body = document.body;
-    const documentElement = document.documentElement;
     let locked = false;
     let scrollTop = 0;
     let previousBodyOverflow = '';
-    let previousDocumentOverflow = '';
     let previousBodyOverscroll = '';
-    let previousDocumentOverscroll = '';
     let unlockFrame: number | null = null;
+    let restoreFrame: number | null = null;
 
-    const unlock = () => {
+    const restorePageScroll = () => {
+      if (window.scrollY !== scrollTop) {
+        window.scrollTo({ left: window.scrollX, top: scrollTop, behavior: 'auto' });
+      }
+    };
+
+    const cancelRestoreFrame = () => {
+      if (restoreFrame === null) return;
+      window.cancelAnimationFrame(restoreFrame);
+      restoreFrame = null;
+    };
+
+    const scheduleScrollRestore = (expectedLockedState: boolean) => {
+      cancelRestoreFrame();
+      restoreFrame = window.requestAnimationFrame(() => {
+        restoreFrame = null;
+        if (locked === expectedLockedState) restorePageScroll();
+      });
+    };
+
+    const unlock = (scheduleRestore = true) => {
       if (!locked) return;
       locked = false;
       body.style.overflow = previousBodyOverflow;
-      documentElement.style.overflow = previousDocumentOverflow;
       body.style.overscrollBehavior = previousBodyOverscroll;
-      documentElement.style.overscrollBehavior = previousDocumentOverscroll;
-      if (window.scrollY !== scrollTop) window.scrollTo({ top: scrollTop, behavior: 'auto' });
+      restorePageScroll();
+      if (scheduleRestore) scheduleScrollRestore(false);
     };
 
     const syncScrollLock = () => {
@@ -35,22 +52,25 @@ export function useModalBodyScrollLock() {
         }
         return;
       }
+
       if (unlockFrame !== null) {
         window.cancelAnimationFrame(unlockFrame);
         unlockFrame = null;
       }
-      if (locked) return;
+      cancelRestoreFrame();
+      if (locked) {
+        restorePageScroll();
+        return;
+      }
 
       locked = true;
-      scrollTop = Math.max(window.scrollY, documentElement.scrollTop, body.scrollTop);
+      scrollTop = Math.max(0, window.scrollY);
       previousBodyOverflow = body.style.overflow;
-      previousDocumentOverflow = documentElement.style.overflow;
       previousBodyOverscroll = body.style.overscrollBehavior;
-      previousDocumentOverscroll = documentElement.style.overscrollBehavior;
       body.style.overflow = 'hidden';
-      documentElement.style.overflow = 'hidden';
       body.style.overscrollBehavior = 'none';
-      documentElement.style.overscrollBehavior = 'none';
+      restorePageScroll();
+      scheduleScrollRestore(true);
     };
 
     const observer = new MutationObserver(syncScrollLock);
@@ -66,7 +86,8 @@ export function useModalBodyScrollLock() {
       observer.disconnect();
       if (unlockFrame !== null) window.cancelAnimationFrame(unlockFrame);
       unlockFrame = null;
-      unlock();
+      cancelRestoreFrame();
+      unlock(false);
     };
   }, []);
 }

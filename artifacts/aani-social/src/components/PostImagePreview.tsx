@@ -33,9 +33,7 @@ export default function PostImagePreview({ src, alt, className }: {
     if (!isOpen) return;
 
     const previousBodyOverflow = document.body.style.overflow;
-    const previousDocumentOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
 
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setIsOpen(false);
@@ -44,7 +42,6 @@ export default function PostImagePreview({ src, alt, className }: {
 
     return () => {
       document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousDocumentOverflow;
       window.removeEventListener('keydown', closeOnEscape);
       pointersRef.current.clear();
       pinchStartRef.current = null;

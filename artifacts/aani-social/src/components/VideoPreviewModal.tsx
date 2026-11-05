@@ -62,9 +62,7 @@ export default function VideoPreviewModal({
     if (!open) return undefined;
 
     const previousBodyOverflow = document.body.style.overflow;
-    const previousDocumentOverflow = document.documentElement.style.overflow;
     document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (isTrimming) setIsTrimming(false);
@@ -75,7 +73,6 @@ export default function VideoPreviewModal({
 
     return () => {
       document.body.style.overflow = previousBodyOverflow;
-      document.documentElement.style.overflow = previousDocumentOverflow;
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [isCropping, isTrimming, onClose, open]);

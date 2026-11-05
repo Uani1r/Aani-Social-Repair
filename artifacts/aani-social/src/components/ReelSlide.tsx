@@ -47,8 +47,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const manuallyPausedRef = useRef(false);
   const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
   const captionRef = useRef<HTMLParagraphElement>(null);
+  const isOverlayOpen = Boolean(onClose);
   const [playing, setPlaying] = useState(false);
-  const [muted, setMuted] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const [muted, setMuted] = useState(isOverlayOpen);
   const [playbackTime, setPlaybackTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const [captionHasMore, setCaptionHasMore] = useState(false);
@@ -98,9 +100,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     const observer = new IntersectionObserver(
       entries => {
         entries.forEach(entry => {
-          if (entry.isIntersecting && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
+          const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.6;
+          setIsVisible(isVisible);
+          if (isVisible && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
             video.play().then(() => setPlaying(true)).catch(() => setPlaying(false));
-          } else if (!entry.isIntersecting) {
+          } else if (!isVisible) {
             video.pause();
             setPlaying(false);
             if (!hasOpenFeedDialog()) manuallyPausedRef.current = false;
@@ -115,9 +119,29 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   }, [videoSrc]);
 
   useEffect(() => {
+    if (!isOverlayOpen) return;
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container || manuallyPausedRef.current || hasOpenFeedDialog()) return;
+
+    const bounds = container.getBoundingClientRect();
+    const visibleHeight = Math.min(bounds.bottom, window.innerHeight) - Math.max(bounds.top, 0);
+    if (visibleHeight < bounds.height * 0.6) return;
+
+    video.muted = muted;
+    void video.play()
+      .then(() => setPlaying(true))
+      .catch(error => {
+        console.log('Autoplay issue handled:', error);
+        setPlaying(false);
+      });
+  }, [isOverlayOpen, muted, videoSrc]);
+
+  useEffect(() => {
     const pauseAndMute = () => {
       const video = videoRef.current;
       if (!video) return;
+      if (containerRef.current?.closest('.feed-reel-viewer') && !hasOpenFeedDialog()) return;
       if (!modalPlaybackStateRef.current) {
         modalPlaybackStateRef.current = {
           wasPlaying: !video.paused,
@@ -373,6 +397,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         ref={videoRef}
         src={videoSrc}
         loop={!videoTimeRange}
+        autoPlay={isOverlayOpen && isVisible}
         muted={muted}
         playsInline
         preload="metadata"

@@ -36,6 +36,11 @@ const hasOpenDialog = () =>
     '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
   ));
 
+const hasBlockingFeedDialog = () =>
+  typeof document !== 'undefined' && Array.from(document.querySelectorAll(
+    '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+  )).some(dialog => !dialog.closest('.feed-reel-viewer'));
+
 const hasOpenModal = () =>
   typeof document !== 'undefined' && (hasOpenDialog() || Boolean(document.querySelector(
     '[role="menu"]:not([aria-hidden="true"]):not([data-state="closed"]), [role="listbox"]:not([aria-hidden="true"]):not([data-state="closed"])',
@@ -59,8 +64,6 @@ export default function Shell({
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const currentPathRef = useRef(path);
-  const modalScrollTopRef = useRef<number | null>(null);
-  const modalRestoreFrameRef = useRef<number | null>(null);
   currentPathRef.current = path;
 
   const handleSignOut = () => {
@@ -77,50 +80,18 @@ export default function Shell({
   }, []);
 
   useEffect(() => {
-    let modalOpen = hasOpenDialog();
-    const isFeedPath = () => currentPathRef.current === '/' || currentPathRef.current === '/feed';
-    const getScrollTop = () => Math.max(
-      0,
-      window.scrollY || 0,
-      document.documentElement.scrollTop || 0,
-      document.body.scrollTop || 0,
-    );
+    let modalOpen = hasBlockingFeedDialog();
     const pauseFeedVideos = () => window.dispatchEvent(new Event('aani:pause-feed-videos'));
     const resumeFeedVideos = () => window.dispatchEvent(new Event('aani:resume-feed-videos'));
 
-    if (modalOpen) {
-      if (isFeedPath()) modalScrollTopRef.current = getScrollTop();
-      pauseFeedVideos();
-    }
+    if (modalOpen) pauseFeedVideos();
 
     const observer = new MutationObserver(() => {
-      const nextModalOpen = hasOpenDialog();
+      const nextModalOpen = hasBlockingFeedDialog();
       if (nextModalOpen === modalOpen) return;
       modalOpen = nextModalOpen;
-
-      if (nextModalOpen) {
-        const restoreFrame = modalRestoreFrameRef.current;
-        const restorePending = restoreFrame !== null;
-        if (restoreFrame !== null) {
-          window.cancelAnimationFrame(restoreFrame);
-          modalRestoreFrameRef.current = null;
-        }
-        if (isFeedPath() && !restorePending) modalScrollTopRef.current = getScrollTop();
-        pauseFeedVideos();
-        return;
-      }
-
-      modalRestoreFrameRef.current = window.requestAnimationFrame(() => {
-        modalRestoreFrameRef.current = window.requestAnimationFrame(() => {
-          modalRestoreFrameRef.current = null;
-          const savedScrollTop = modalScrollTopRef.current;
-          modalScrollTopRef.current = null;
-          if (isFeedPath() && savedScrollTop !== null) {
-            window.scrollTo({ top: savedScrollTop, behavior: 'auto' });
-          }
-          resumeFeedVideos();
-        });
-      });
+      if (nextModalOpen) pauseFeedVideos();
+      else resumeFeedVideos();
     });
 
     observer.observe(document.body, {
@@ -130,11 +101,7 @@ export default function Shell({
       attributeFilter: ['role', 'aria-modal', 'aria-hidden', 'data-state'],
     });
 
-    return () => {
-      observer.disconnect();
-      if (modalRestoreFrameRef.current !== null) window.cancelAnimationFrame(modalRestoreFrameRef.current);
-      modalRestoreFrameRef.current = null;
-    };
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
