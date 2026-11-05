@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { MessageCircle, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -24,6 +25,7 @@ import {
 import { handleAppError } from '../lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
 import { extractMentions, findActiveMention, type MentionQuery } from '../lib/mentions';
+import { useBottomSheetDismiss } from '../hooks/useBottomSheetDismiss';
 
 interface CommentsDrawerProps {
   postId: string;
@@ -124,6 +126,16 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   const [peopleDirectory, setPeopleDirectory] = useState<MentionCandidate[]>([]);
   const [mentionQuery, setMentionQuery] = useState<MentionQuery | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
+  const {
+    dragOffset,
+    dragging,
+    onClickCapture: onHandleClickCapture,
+    onPointerDown: onHandlePointerDown,
+    onTouchStart: onHandleTouchStart,
+    onTouchMove: onHandleTouchMove,
+    onTouchEnd: onHandleTouchEnd,
+    onTouchCancel: onHandleTouchCancel,
+  } = useBottomSheetDismiss(isOpen, onClose);
 
   // أشخاص يمكن ذكرهم: من أتابعهم ومن يتابعونني (بدون مستخدمين عشوائيين)
   useEffect(() => {
@@ -933,9 +945,9 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
   if (!isOpen) return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm"
+      className="comments-sheet-overlay fixed inset-0 z-[2000] flex items-end justify-center"
       dir="rtl"
       role="dialog"
       aria-modal="true"
@@ -945,12 +957,40 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
       <section
         aria-label="التعليقات"
-        className="relative z-10 flex w-full max-w-2xl flex-col rounded-t-[28px] border border-b-0 border-zinc-800 bg-zinc-950 text-white shadow-2xl sm:rounded-t-3xl"
+        className="comments-sheet-panel relative z-10 flex w-full flex-col text-white"
         style={{
-          height: 'min(88dvh, calc(100dvh - env(safe-area-inset-top)))',
+          transform: dragOffset > 0 ? `translate3d(0, ${dragOffset}px, 0)` : undefined,
+          transition: dragging ? 'none' : undefined,
         }}
       >
-        <header className="flex shrink-0 items-center justify-between border-b border-zinc-800/80 px-4 py-3">
+        <div
+          className="comments-sheet-handle-area"
+          onClickCapture={onHandleClickCapture}
+          onPointerDown={event => {
+            event.stopPropagation();
+            onHandlePointerDown(event);
+          }}
+          onTouchStart={event => {
+            event.stopPropagation();
+            onHandleTouchStart(event);
+          }}
+          onTouchMove={event => {
+            event.stopPropagation();
+            onHandleTouchMove(event);
+          }}
+          onTouchEnd={event => {
+            event.stopPropagation();
+            onHandleTouchEnd(event);
+          }}
+          onTouchCancel={event => {
+            event.stopPropagation();
+            onHandleTouchCancel();
+          }}
+        >
+          <span className="comments-sheet-handle" aria-hidden="true" />
+        </div>
+
+        <header className="comments-sheet-header flex shrink-0 items-center justify-between px-4 py-3">
           <button
             type="button"
             onClick={onClose}
@@ -1031,7 +1071,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           </div>
         ) : null}
       </section>
-    </div>
+    </div>,
+    document.body,
   );
 };
 

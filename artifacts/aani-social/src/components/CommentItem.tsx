@@ -198,7 +198,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           </div>
 
           <div
-            className={`mt-1 whitespace-pre-wrap break-words text-right font-normal text-zinc-300 ${
+            className={`comments-text-bubble mt-1 whitespace-pre-wrap break-words text-right font-normal text-zinc-300 ${
               isReply ? 'text-[13px] leading-6' : 'text-[14px] leading-7'
             }`}
             dir="rtl"

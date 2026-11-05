@@ -59,7 +59,7 @@ const CommentComposer: React.FC<CommentComposerProps> = ({
   onSelectImage,
 }) => (
   <footer
-    className="shrink-0 space-y-2 border-t border-zinc-800/90 bg-zinc-950 px-3 pt-3 sm:px-4"
+    className="comments-composer-footer shrink-0 space-y-2"
     style={{
       paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))',
     }}
@@ -103,7 +103,7 @@ const CommentComposer: React.FC<CommentComposerProps> = ({
         )}
       </div>
 
-      <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-800/90 px-3 py-2.5 transition focus-within:border-pink-500/50">
+      <div className="comments-composer-pill relative flex min-w-0 flex-1 items-center px-3 py-2.5">
         {mentionQuery && mentionSuggestions.length > 0 && (
           <CommentMentionSuggestions
             suggestions={mentionSuggestions}
