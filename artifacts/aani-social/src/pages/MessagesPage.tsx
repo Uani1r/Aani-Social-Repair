@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 import { ArrowLeft, Check, ChevronDown, MessageCircle, Pencil, Search, Send, Users, X } from 'lucide-react';
-
 import Avatar from '@/components/Avatar';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
+import useGroupConversations from '@/hooks/useGroupConversations';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -24,13 +24,6 @@ interface ConversationSummary {
   lastMessage: MessageRow | null;
   hasStory: boolean;
   isRequest: boolean;
-}
-
-interface LocalGroupConversation {
-  id: string;
-  name: string;
-  memberIds: string[];
-  created_at: string;
 }
 
 type InboxTab = 'messages' | 'groups' | 'requests';
@@ -75,38 +68,6 @@ function readConversationReadTimes(userId: string): Record<string, string> {
   }
 }
 
-function readLocalGroupConversations(userId: string): LocalGroupConversation[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(`aani_message_groups_${userId}`) || '[]');
-    if (!Array.isArray(stored)) return [];
-    return stored.flatMap((item: unknown) => {
-      if (!isRecord(item)
-        || typeof item.id !== 'string'
-        || typeof item.name !== 'string'
-        || !Array.isArray(item.memberIds)) {
-        return [];
-      }
-      const memberIds = item.memberIds.filter((memberId): memberId is string => typeof memberId === 'string');
-      const name = item.name.trim();
-      if (!name || memberIds.length === 0) return [];
-      return [{
-        id: item.id,
-        name,
-        memberIds,
-        created_at: typeof item.created_at === 'string' ? item.created_at : '',
-      }];
-    });
-  } catch {
-    return [];
-  }
-}
-
-function createGroupId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-  return `group-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 function messagePreview(message: MessageRow | null, currentUserId: string): string {
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
@@ -144,8 +105,18 @@ export default function MessagesPage({
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [friends, setFriends] = useState<Profile[]>([]);
-  const [groups, setGroups] = useState<LocalGroupConversation[]>(() => readLocalGroupConversations(currentUserId));
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const {
+    groups,
+    groupsLoading,
+    groupsError,
+    loadGroups,
+    groupMessages,
+    groupMessagesLoading,
+    groupMessagesError,
+    createGroup: createServerGroup,
+    sendGroupMessage,
+  } = useGroupConversations(currentUserId, selectedGroupId);
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
@@ -171,6 +142,7 @@ export default function MessagesPage({
   const [groupSearch, setGroupSearch] = useState('');
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
   const [groupError, setGroupError] = useState<string | null>(null);
+  const [groupSaving, setGroupSaving] = useState(false);
   const [createGroupClosing, setCreateGroupClosing] = useState(false);
   const groupModalCloseTimerRef = useRef<number | null>(null);
   const threadRequestRef = useRef(0);
@@ -178,7 +150,6 @@ export default function MessagesPage({
   const threadEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setGroups(readLocalGroupConversations(currentUserId));
     setSelectedGroupId(null);
   }, [currentUserId]);
 
@@ -396,8 +367,8 @@ export default function MessagesPage({
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: thread.length ? 'smooth' : 'auto' });
-  }, [thread, selectedId]);
+    threadEndRef.current?.scrollIntoView({ behavior: thread.length || groupMessages.length ? 'smooth' : 'auto' });
+  }, [thread, selectedId, groupMessages, selectedGroupId]);
 
   useEffect(() => {
     if (!newMessageOpen || !supabaseConfigured) return;
@@ -456,21 +427,26 @@ export default function MessagesPage({
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = text.trim();
-    if (!supabaseConfigured || !selectedId || !content || sending) return;
+    if ((!selectedId && !selectedGroup) || !content || sending) return;
 
     setSending(true);
     try {
-      const { error } = await supabase.from('messages').insert({
-        sender_id: currentUserId,
-        recipient_id: selectedId,
-        content,
-      });
-      if (error) throw error;
+      if (selectedGroup) {
+        await sendGroupMessage(selectedGroup.id, content);
+      } else {
+        if (!supabaseConfigured || !selectedId) return;
+        const { error } = await supabase.from('messages').insert({
+          sender_id: currentUserId,
+          recipient_id: selectedId,
+          content,
+        });
+        if (error) throw error;
+        await Promise.all([loadThread(), loadConversationList()]);
+      }
       setText('');
-      await Promise.all([loadThread(), loadConversationList()]);
     } catch (error) {
       console.error('[messages] تعذر إرسال الرسالة:', error);
-      alert('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
+      alert(error instanceof Error ? error.message : 'تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setSending(false);
     }
@@ -486,7 +462,7 @@ export default function MessagesPage({
     `${displayName(conversation.profile)} ${conversation.profile.username || ''}`.toLocaleLowerCase().includes(searchNeedle)
   )).length;
   const visibleGroups = groups.filter(group => (
-    `${group.name} ${group.memberIds.map(memberId => {
+    `${group.name} ${group.members.map(memberId => {
       const member = friends.find(friend => friend.id === memberId);
       return member ? `${displayName(member)} ${member.username || ''}` : '';
     }).join(' ')}`.toLocaleLowerCase().includes(searchNeedle)
@@ -527,36 +503,32 @@ export default function MessagesPage({
       : [...current, memberId]);
   };
 
-  const createGroup = (event: FormEvent<HTMLFormElement>) => {
+  const createGroup = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const name = groupName.trim();
-    const members = friends.filter(friend => selectedGroupMemberIds.includes(friend.id));
-    if (!name || members.length === 0) return;
+    const memberIds = friends
+      .filter(friend => selectedGroupMemberIds.includes(friend.id))
+      .map(friend => friend.id);
+    if (!name || memberIds.length === 0 || groupSaving) return;
 
-    const group: LocalGroupConversation = {
-      id: createGroupId(),
-      name,
-      memberIds: members.map(member => member.id),
-      created_at: new Date().toISOString(),
-    };
-    const nextGroups = [group, ...groups];
-    try {
-      localStorage.setItem(`aani_message_groups_${currentUserId}`, JSON.stringify(nextGroups));
-    } catch {
-      setGroupError('تعذر حفظ المجموعة على هذا الجهاز. تحقق من مساحة التخزين وحاول مجدداً.');
-      return;
-    }
-
-    setGroups(nextGroups);
-    setActiveTab('groups');
-    setSearchTerm('');
-    setSelectedGroupId(null);
-    if (selectedId) setLocation('/messages?tab=groups');
-    closeCreateGroup();
-    setGroupName('');
-    setGroupSearch('');
-    setSelectedGroupMemberIds([]);
+    setGroupSaving(true);
     setGroupError(null);
+    try {
+      const group = await createServerGroup(name, memberIds);
+      setActiveTab('groups');
+      setSearchTerm('');
+      setSelectedGroupId(group.id);
+      if (selectedId) setLocation('/messages?tab=groups');
+      closeCreateGroup();
+      setGroupName('');
+      setGroupSearch('');
+      setSelectedGroupMemberIds([]);
+    } catch (error) {
+      console.error('[messages] تعذر إنشاء المجموعة:', error);
+      setGroupError(error instanceof Error ? error.message : 'تعذر إنشاء المجموعة الآن. حاول مرة أخرى.');
+    } finally {
+      setGroupSaving(false);
+    }
   };
 
   return (
@@ -622,7 +594,14 @@ export default function MessagesPage({
           <div className="messages-list-wrap">
             {activeTab === 'groups' ? (
               <>
-                {visibleGroups.map(group => (
+                {groupsLoading && <div className="messages-list-status">جارٍ تحميل المجموعات...</div>}
+                {!groupsLoading && groupsError && (
+                  <div className="messages-list-status" role="alert">
+                    <span>{groupsError}</span>
+                    <button type="button" onClick={() => void loadGroups()}>إعادة المحاولة</button>
+                  </div>
+                )}
+                {!groupsLoading && !groupsError && visibleGroups.map(group => (
                   <button
                     key={group.id}
                     type="button"
@@ -633,24 +612,24 @@ export default function MessagesPage({
                       if (selectedId) setLocation('/messages');
                     }}
                   >
-                    <span className="messages-group-avatar"><Users size={23} /></span>
+                    <span className="messages-group-avatar">{group.avatar || group.name.trim().slice(0, 1) || <Users size={23} />}</span>
                     <span className="messages-chat-copy">
                       <span className="messages-chat-topline">
                         <span className="messages-chat-name">{group.name}</span>
-                        <time className="messages-chat-time" dateTime={group.created_at || undefined}>
-                          {group.created_at ? formatConversationTime(group.created_at) : ''}
+                        <time className="messages-chat-time" dateTime={group.createdAt || undefined}>
+                          {group.createdAt ? formatConversationTime(group.createdAt) : ''}
                         </time>
                       </span>
                       <span className="messages-chat-preview-row">
-                        <span className="messages-chat-preview">مجموعة · {group.memberIds.length + 1} أعضاء</span>
+                        <span className="messages-chat-preview">مجموعة · {group.members.length} أعضاء</span>
                       </span>
                     </span>
                   </button>
                 ))}
-                {groups.length > 0 && visibleGroups.length === 0 && (
+                {!groupsLoading && !groupsError && groups.length > 0 && visibleGroups.length === 0 && (
                   <div className="messages-list-status">لا توجد مجموعات مطابقة.</div>
                 )}
-                {groups.length === 0 && (
+                {!groupsLoading && !groupsError && groups.length === 0 && (
                   <div className="messages-list-empty">
                     <Users size={26} />
                     <span>لا توجد مجموعات بعد</span>
@@ -741,10 +720,10 @@ export default function MessagesPage({
                 </button>
                 {selectedGroup ? (
                   <div className="messages-thread-person">
-                    <span className="messages-group-avatar is-thread"><Users size={21} /></span>
+                    <span className="messages-group-avatar is-thread">{selectedGroup.avatar || selectedGroup.name.trim().slice(0, 1) || <Users size={21} />}</span>
                     <span className="messages-group-thread-copy">
                       <strong>{selectedGroup.name}</strong>
-                      <small>{selectedGroup.memberIds.length + 1} أعضاء</small>
+                      <small>{selectedGroup.members.length} أعضاء</small>
                     </span>
                   </div>
                 ) : target ? (
@@ -767,12 +746,30 @@ export default function MessagesPage({
               </header>
               <div className="messages-thread-list" aria-live="polite">
                 {selectedGroup ? (
-                  <div className="messages-group-notice">
-                    <span className="messages-group-avatar is-thread"><Users size={24} /></span>
-                    <strong>{selectedGroup.name}</strong>
-                    <p>تم إنشاء المجموعة وحفظها على هذا الجهاز.</p>
-                    <small>إرسال رسائل المجموعات غير مدعوم في قاعدة البيانات الحالية.</small>
-                  </div>
+                  <>
+                    {groupMessagesLoading && groupMessages.length === 0 && <div className="messages-thread-status">جارٍ تحميل رسائل المجموعة...</div>}
+                    {groupMessagesError && <div className="messages-thread-status" role="alert">{groupMessagesError}</div>}
+                    {!groupMessagesLoading && !groupMessagesError && groupMessages.length === 0 && (
+                      <div className="messages-group-notice">
+                        <span className="messages-group-avatar is-thread">{selectedGroup.avatar || selectedGroup.name.trim().slice(0, 1) || <Users size={24} />}</span>
+                        <strong>{selectedGroup.name}</strong>
+                        <p>ابدأ المحادثة برسالة إلى أعضاء المجموعة.</p>
+                      </div>
+                    )}
+                    {groupMessages.map(message => {
+                      const isMine = message.senderId === currentUserId;
+                      const sender = isMine ? currentProfile : friends.find(friend => friend.id === message.senderId) || null;
+                      return (
+                        <div key={message.id} className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
+                          <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
+                            {!isMine && <span className="messages-group-message-sender">{displayName(sender)}</span>}
+                            {message.content}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div ref={threadEndRef} />
+                  </>
                 ) : (
                   <>
                     {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
@@ -821,8 +818,7 @@ export default function MessagesPage({
                   </>
                 )}
               </div>
-              {!selectedGroup && (
-                <form className="messages-composer" onSubmit={sendMessage}>
+              <form className="messages-composer" onSubmit={sendMessage}>
                 <input
                   value={text}
                   onChange={event => setText(event.target.value)}
@@ -830,11 +826,10 @@ export default function MessagesPage({
                   aria-label="اكتب رسالة"
                   autoComplete="off"
                 />
-                  <button type="submit" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
-                    <Send size={19} />
-                  </button>
-                </form>
-              )}
+                <button type="submit" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
+                  <Send size={19} />
+                </button>
+              </form>
             </>
           )}
         </main>
@@ -898,7 +893,7 @@ export default function MessagesPage({
                       />
                       <span className="messages-group-friend-copy">
                         <strong>{displayName(friend)}</strong>
-                        <small dir="ltr">{friend.username ? `@${friend.username.replace(/^@+/, '')}` : ''}</small>
+                        <small dir="ltr">{friend.username ? friend.username.replace(/^@+/, '') : ''}</small>
                       </span>
                       <span className="messages-group-checkbox-wrap">
                         <input
@@ -924,10 +919,10 @@ export default function MessagesPage({
               </div>
               {groupError && <div className="messages-group-error" role="alert">{groupError}</div>}
               <footer className="messages-group-footer">
-                <p className="messages-group-storage-note">تُحفظ المجموعة على هذا الجهاز فقط؛ قاعدة البيانات الحالية لا تدعم محادثات المجموعات.</p>
+                <p className="messages-group-storage-note">تُحفظ المجموعة ورسائلها على الخادم وتُزامن لحظياً مع أعضائها.</p>
                 <span className="messages-group-count"><span id="selectedCount">{selectedGroupMemberIds.length}</span> أعضاء محددون</span>
-                <button type="submit" disabled={!groupName.trim() || selectedGroupMemberIds.length === 0}>
-                  إنشاء المجموعة
+                <button type="submit" disabled={groupSaving || !groupName.trim() || selectedGroupMemberIds.length === 0}>
+                  {groupSaving ? 'جارٍ الإنشاء...' : 'إنشاء المجموعة'}
                 </button>
               </footer>
             </form>

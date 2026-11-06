@@ -1,15 +1,15 @@
 modules = ["nodejs-24", "python-base-3.13"]
 
-# زر Run في المعاينة يشغّل خادم Vite التطويري على منفذ 5000 المعرَّف أدناه.
-run = "PORT=5000 pnpm --filter @workspace/aani-social run dev"
+# يشغّل Run خادم API على 8080 وواجهة Vite على 5000 مع تمرير /api عبر الوكيل.
+run = "PORT=8080 pnpm --filter @workspace/api-server run dev & PORT=5000 pnpm --filter @workspace/aani-social run dev"
 
 [[ports]]
 localPort = 5000
 externalPort = 80
 
 [deployment]
-build = ["sh", "-c", "npx vite build artifacts/aani-social"]
-run = ["node", "dist/index.js"]
+build = ["sh", "-c", "pnpm --filter @workspace/aani-social run build && pnpm --filter @workspace/api-server run build"]
+run = ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
 router = "application"
 deploymentTarget = "autoscale"
 

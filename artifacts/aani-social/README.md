@@ -19,11 +19,14 @@ pnpm install
 pnpm --filter @workspace/aani-social run typecheck
 pnpm --filter @workspace/aani-social run typecheck:edge
 pnpm --filter @workspace/aani-social run test:edge
-PORT=5173 BASE_PATH=/ pnpm --filter @workspace/aani-social run build
+pnpm --filter @workspace/api-server run typecheck
+pnpm --filter @workspace/aani-social run build
+pnpm --filter @workspace/api-server run build
 ```
 
-يستخدم التطبيق Supabase مباشرة للمصادقة وقاعدة البيانات والتخزين وRealtime؛ لا
-يستخدم PostgreSQL المرفق بقالب Replit أو خادم API التجريبي لهذا الغرض.
+يستخدم التطبيق Supabase للمصادقة والبيانات والوسائط. تُدار المجموعات ورسائلها عبر
+خادم API في `artifacts/api-server` مع مصادقة JWT وSocket.IO؛ يجب تشغيل الواجهة
+والخادم على النطاق نفسه حتى تعمل مسارات `/api` والاتصال اللحظي.
 
 ## إعداد الاتصال
 
@@ -32,8 +35,10 @@ PORT=5173 BASE_PATH=/ pnpm --filter @workspace/aani-social run build
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_KEY` أو `VITE_SUPABASE_ANON_KEY`
 - `VITE_SUPABASE_STORAGE_BUCKET` اختياري؛ الافتراضي `aani-media`
+- لخادم API: `SUPABASE_URL` و`SUPABASE_ANON_KEY` (مفتاح publishable/anon عام، وليس `service_role`)
 
-إذا كان مشروع Supabase القائم يستخدم حاوية تخزين اسمها `media`، عيّن
+يجب أن تشير متغيرات الخادم إلى مشروع Supabase نفسه المستخدم في الواجهة. إذا كان
+مشروع Supabase القائم يستخدم حاوية تخزين اسمها `media`، عيّن
 `VITE_SUPABASE_STORAGE_BUCKET=media` بدل نقل الملفات أو إعادة تسمية الحاوية.
 لا تضع مفتاح `service_role` أو مفتاح Gemini في واجهة المتصفح.
 
@@ -70,6 +75,12 @@ supabase/migrations/20261026000000_interaction_persistence.sql
 المتبادلة. إذا كان مشروعك يستخدم قائمة أصدقاء مقربين مستقلة، راجع هذه السياسة
 قبل تطبيق الترحيل.
 
+لتفعيل المجموعات والرسائل الجماعية، نفّذ الترحيل
+`supabase/migrations/20261202000000_group_messages.sql` على مشروع Supabase.
+ينشئ الجداول وسياسات RLS ودوال إنشاء/جلب المجموعات، ولا يحذف بيانات موجودة.
+يرتبط Socket.IO بمسار `/api/socket.io` ويستخدم أحداث `join_group` و`send_group_message`
+و`receive_group_message`؛ يتطلب تشغيل خادم API مع الواجهة.
+
 ## ملاحظات أمنية
 
 - ملف النشر `fix.js` واللقطة النصية المحتوية على اعتماد مضمّن لم يُنسخا إلى
@@ -82,10 +93,13 @@ supabase/migrations/20261026000000_interaction_persistence.sql
 - لم يُجرَ اختبار تسجيل دخول أو قراءة/كتابة أو محادثة حقيقية؛ تتطلب هذه
   الاختبارات إعداد Supabase وGemini المملوكين لك.
 
-## نتائج التحقق الحالية
+## نتائج التحقق السابقة
+
+النتائج التالية تخص التحقق السابق، قبل إضافة دعم المجموعات:
 
 - فحص TypeScript للواجهة: ناجح.
 - فحص TypeScript لدوال Supabase: ناجح.
 - اختبارات الدالة بمحاكاة HTTP: 6 ناجحة.
 - بناء Vite: ناجح؛ يعرض تحذيرًا غير مانع عن مصدر خرائط `tooltip` وحجم حزمة
   JavaScript يتجاوز 500 كيلوبايت.
+- فحوصات API وSocket.IO والترحيل الجديد لم تُشغّل بعد.
