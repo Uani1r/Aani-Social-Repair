@@ -3,7 +3,6 @@ import { useLocation } from 'wouter';
 
 import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
-import ShellTopBar from './ShellTopBar';
 import UnifiedTopBar from './UnifiedTopBar';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
@@ -764,26 +763,20 @@ export default function Shell({
     if (path !== destinationPath) setLocation(destinationPath);
   };
 
+  const isFeedPath = path === '/' || path === '/feed';
+
   return (
     <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''}`}>
-      {path === '/' || path === '/feed' ? (
-        <UnifiedTopBar
-          hidden={unifiedTopBarHidden}
-          unreadCount={unreadCount}
-          stories={headerStories}
-          onOpenNotifications={() => setShowNotifsModal(true)}
-          onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
-        />
-      ) : (
-        <ShellTopBar
-          path={path}
-          chromeHidden={chromeHidden}
-          unreadCount={unreadCount}
-          onOpenNotifications={() => setShowNotifsModal(true)}
-          onOpenSettings={() => setShowSettingsModal(true)}
-          onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
-        />
-      )}
+      <UnifiedTopBar
+        hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
+        path={path}
+        profile={profile}
+        unreadCount={unreadCount}
+        stories={isFeedPath ? headerStories : undefined}
+        onOpenNotifications={() => setShowNotifsModal(true)}
+        onOpenSettings={() => setShowSettingsModal(true)}
+        onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
+      />
 
       <ShellOverlayControls
         showPublishOptionsSheet={showPublishOptionsSheet}
