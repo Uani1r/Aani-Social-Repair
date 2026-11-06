@@ -42,7 +42,7 @@ type ConversationContextState = {
   conversation: ConversationSummary;
   rect: { top: number; left: number; width: number; height: number };
   menuTop: number;
-  menuLeft: number;
+  menuRight: number;
 };
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
@@ -549,14 +549,12 @@ export default function MessagesPage({
       width: targetRect.width,
       height: targetRect.height,
     };
-    const menuWidth = Math.min(260, window.innerWidth - 24);
     const menuHeight = 6 * 48 + 16;
     const belowTop = rect.top + rect.height + 8;
     const menuTop = belowTop + menuHeight <= window.innerHeight - 12
       ? belowTop
       : Math.max(12, rect.top - menuHeight - 8);
-    const menuLeft = Math.min(Math.max(rect.left, 12), Math.max(12, window.innerWidth - menuWidth - 12));
-    setConversationContext({ conversation, rect, menuTop, menuLeft });
+    setConversationContext({ conversation, rect, menuTop, menuRight: 12 });
   };
 
   const cancelLongPress = () => {
@@ -974,7 +972,7 @@ export default function MessagesPage({
             className="messages-context-menu"
             role="menu"
             aria-label={`إجراءات محادثة ${displayName(conversationContext.conversation.profile)}`}
-            style={{ top: conversationContext.menuTop, left: conversationContext.menuLeft }}
+            style={{ top: conversationContext.menuTop, right: conversationContext.menuRight }}
             onClick={event => event.stopPropagation()}
           >
             <button type="button" role="menuitem" onClick={() => void handleConversationAction('pin', conversationContext.conversation)}>
