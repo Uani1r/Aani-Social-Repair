@@ -5,6 +5,8 @@ import { Archive, ArrowLeft, Ban, BellOff, Camera, ChevronDown, Flag, MessageCir
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
+import ChatImageMessage, { parseChatMediaMessage } from '@/components/ChatImageMessage';
+import ChatMediaPicker from '@/components/ChatMediaPicker';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
@@ -143,8 +145,11 @@ function readConversationReadTimes(userId: string): Record<string, string> {
 function messagePreview(message: MessageRow | null, currentUserId: string): string {
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
+  const mediaMessage = parseChatMediaMessage(content);
   let preview = content;
-  if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
+  if (mediaMessage) {
+    preview = mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
+  } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
   else if (content.startsWith('[story-reply]')) preview = 'رد على قصة';
   else if (content.startsWith('[story:')) preview = 'أرسل قصة';
   else if (!preview) preview = 'رسالة';
@@ -211,6 +216,15 @@ export default function MessagesPage({
   useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
   }, [currentUserId]);
+
+  useEffect(() => {
+    const handleMediaCaptionUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ caption?: string }>).detail;
+      setText(typeof detail?.caption === 'string' ? detail.caption : '');
+    };
+    window.addEventListener('aani-chat-media-caption-update', handleMediaCaptionUpdate);
+    return () => window.removeEventListener('aani-chat-media-caption-update', handleMediaCaptionUpdate);
+  }, []);
 
   const markConversationRead = useCallback((contactId: string) => {
     const readAt = new Date().toISOString();
@@ -509,6 +523,12 @@ export default function MessagesPage({
     setText(value => `${value}${symbol}`);
     setEmojiPickerOpen(false);
     messageInputRef.current?.focus();
+  };
+
+  const openChatMediaPicker = () => {
+    if (!selectedId) return;
+    setEmojiPickerOpen(false);
+    window.dispatchEvent(new CustomEvent('aani-open-chat-media-picker', { detail: { caption: text, recipientId: selectedId } }));
   };
 
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
@@ -966,6 +986,7 @@ export default function MessagesPage({
                   const sharedStoryId = storyFromColumn || storyFromContent;
                   const isStoryReply = Boolean(message.story_id) && content.startsWith('[story-reply]');
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
+                  const mediaMessage = parseChatMediaMessage(content);
                   return (
                     <div key={message.id} className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
                       {isSharedPost ? (
@@ -982,6 +1003,8 @@ export default function MessagesPage({
                             }}
                           />
                         </div>
+                      ) : mediaMessage ? (
+                        <ChatImageMessage messageId={message.id} currentUserId={currentUserId} payload={mediaMessage} isMine={isMine} />
                       ) : (
                         <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                           {isStoryReply ? (
@@ -1006,8 +1029,8 @@ export default function MessagesPage({
                 <button
                   type="button"
                   className="messages-composer-control messages-composer-attach"
-                  aria-label="إضافة مرفق"
-                  onClick={() => toast.info('إرسال الصور والملفات غير متاح حالياً.')}
+                  aria-label="إضافة صور"
+                  onClick={openChatMediaPicker}
                 >
                   <Plus size={24} />
                 </button>
@@ -1045,7 +1068,7 @@ export default function MessagesPage({
                       <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="تسجيل رسالة صوتية" onClick={() => toast.info('الرسائل الصوتية غير متاحة حالياً.')}>
                         <Mic size={22} />
                       </button>
-                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="التقاط صورة" onClick={() => toast.info('إرسال الصور غير متاح حالياً.')}>
+                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="اختيار صورة أو التقاط صورة" onClick={openChatMediaPicker}>
                         <Camera size={22} />
                       </button>
                     </>
@@ -1075,6 +1098,12 @@ export default function MessagesPage({
           )}
         </main>
       </div>
+
+      <ChatMediaPicker
+        currentUserId={currentUserId}
+        recipientId={selectedId}
+        onSent={() => { void Promise.all([loadThread(), loadConversationList()]); }}
+      />
 
       {conversationContext && createPortal(
         <div className="messages-context-backdrop" role="presentation" onClick={() => setConversationContext(null)}>
