@@ -220,7 +220,7 @@ export default function SearchPage({ userId }: { userId: string }) {
         </div>
       </form>
 
-      {searchHistory.length > 0 && (
+      {searchHistory.length > 0 && term.length === 0 && (
         <section className="space-y-2">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-bold text-white">الأبحاث الأخيرة</h2>
