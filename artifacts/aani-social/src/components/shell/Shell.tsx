@@ -811,6 +811,7 @@ export default function Shell({
 
   const isFeedPath = path === '/' || path === '/feed';
   const isMessageThread = path.startsWith('/messages/');
+  const isMessagesPath = path === '/messages' || isMessageThread;
 
   return (
     <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}`}>
@@ -906,14 +907,14 @@ export default function Shell({
                 ? 'page-slide-backward'
                 : ''
           }`}
-          onTouchStart={path === '/search' ? undefined : handleSwipeStart}
-          onTouchMove={path === '/search' ? undefined : handleSwipeMove}
-          onTouchEnd={path === '/search' ? undefined : handleSwipeEnd}
-          onTouchCancel={path === '/search' ? undefined : handleSwipeEnd}
-          onTouchStartCapture={path === '/search' ? handleSwipeStart : undefined}
-          onTouchMoveCapture={path === '/search' ? handleSwipeMove : undefined}
-          onTouchEndCapture={path === '/search' ? handleSwipeEnd : undefined}
-          onTouchCancelCapture={path === '/search' ? handleSwipeEnd : undefined}
+          onTouchStart={path === '/search' || isMessagesPath ? undefined : handleSwipeStart}
+          onTouchMove={path === '/search' || isMessagesPath ? undefined : handleSwipeMove}
+          onTouchEnd={path === '/search' || isMessagesPath ? undefined : handleSwipeEnd}
+          onTouchCancel={path === '/search' || isMessagesPath ? undefined : handleSwipeEnd}
+          onTouchStartCapture={path === '/search' && !isMessagesPath ? handleSwipeStart : undefined}
+          onTouchMoveCapture={path === '/search' && !isMessagesPath ? handleSwipeMove : undefined}
+          onTouchEndCapture={path === '/search' && !isMessagesPath ? handleSwipeEnd : undefined}
+          onTouchCancelCapture={path === '/search' && !isMessagesPath ? handleSwipeEnd : undefined}
         >
           {children}
         </main>
