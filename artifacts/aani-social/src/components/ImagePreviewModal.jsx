@@ -100,9 +100,6 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
   useEffect(() => {
     if (!open) return undefined;
 
-    const previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
     const closeOnEscape = event => {
       if (event.key !== 'Escape') return;
       if (isCropping) setIsCropping(false);
@@ -111,7 +108,6 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     window.addEventListener('keydown', closeOnEscape);
 
     return () => {
-      document.body.style.overflow = previousBodyOverflow;
       window.removeEventListener('keydown', closeOnEscape);
       cropPointersRef.current.clear();
       cropGestureRef.current = null;

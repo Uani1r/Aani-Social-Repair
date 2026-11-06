@@ -264,6 +264,8 @@ export default function CreatePostModal({
                   <PostVideoPreview
                     src={buildVideoMediaUrl(preview.url, videoTrim, videoCrop)}
                     muted
+                    autoPlay
+                    loop
                     controls={false}
                     className="h-full w-full object-cover"
                   />

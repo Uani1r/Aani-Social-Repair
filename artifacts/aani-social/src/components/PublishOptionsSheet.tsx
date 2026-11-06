@@ -49,13 +49,11 @@ export default function PublishOptionsSheet({
 
     if (key === 'image') {
       document.getElementById('native-image-input')?.click();
-      onClose();
       return;
     }
 
     if (key === 'video') {
       videoInputRef.current?.click();
-      onClose();
       return;
     }
 
@@ -67,12 +65,14 @@ export default function PublishOptionsSheet({
     const files = Array.from(event.currentTarget.files || []).filter(file => file.type.startsWith('image/'));
     event.currentTarget.value = '';
     if (files.length) onImagesSelected(files);
+    else onCloseRef.current();
   };
 
   const handleVideoChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = Array.from(event.currentTarget.files || []).find(candidate => candidate.type.startsWith('video/'));
     event.currentTarget.value = '';
     if (file) onVideoSelected(file);
+    else onCloseRef.current();
   };
 
   const handleDragStart = (event: ReactPointerEvent<HTMLElement>) => {
@@ -85,6 +85,18 @@ export default function PublishOptionsSheet({
     setDragOffset(0);
     setIsDragging(true);
   };
+
+  useEffect(() => {
+    const closeOnPickerCancel = () => onCloseRef.current();
+    const imageInput = document.getElementById('native-image-input');
+    const videoInput = videoInputRef.current;
+    imageInput?.addEventListener('cancel', closeOnPickerCancel);
+    videoInput?.addEventListener('cancel', closeOnPickerCancel);
+    return () => {
+      imageInput?.removeEventListener('cancel', closeOnPickerCancel);
+      videoInput?.removeEventListener('cancel', closeOnPickerCancel);
+    };
+  }, []);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {

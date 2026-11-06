@@ -80,8 +80,6 @@ export default function VideoPreviewModal({
   useEffect(() => {
     if (!open) return undefined;
 
-    const previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       if (isTrimming) setIsTrimming(false);
@@ -91,7 +89,6 @@ export default function VideoPreviewModal({
     window.addEventListener('keydown', closeOnEscape);
 
     return () => {
-      document.body.style.overflow = previousBodyOverflow;
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [isCropping, isTrimming, onClose, open]);

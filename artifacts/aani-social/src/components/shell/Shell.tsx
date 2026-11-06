@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type TouchEvent as ReactTouchEvent } from 'react';
 import { useLocation } from 'wouter';
 
 import ShellBottomNav from './ShellBottomNav';
@@ -45,6 +45,15 @@ const hasOpenModal = () =>
   typeof document !== 'undefined' && (hasOpenDialog() || Boolean(document.querySelector(
     '[role="menu"]:not([aria-hidden="true"]):not([data-state="closed"]), [role="listbox"]:not([aria-hidden="true"]):not([data-state="closed"])',
   )));
+
+const releasePageInteraction = () => {
+  if (typeof document === 'undefined') return;
+  window.requestAnimationFrame(() => {
+    if (hasOpenModal()) return;
+    document.body.style.overflow = 'unset';
+    document.body.style.pointerEvents = 'auto';
+  });
+};
 
 export default function Shell({
   children,
@@ -494,6 +503,21 @@ export default function Shell({
   const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
+  const isPublishFlowOpen = showPublishOptionsSheet || showImagePreviewModal || showVideoPreviewModal || showCreateModal;
+  const publishFlowWasOpenRef = useRef(false);
+
+  useLayoutEffect(() => {
+    const wasOpen = publishFlowWasOpenRef.current;
+    publishFlowWasOpenRef.current = isPublishFlowOpen;
+    if (wasOpen === isPublishFlowOpen) return;
+
+    if (isPublishFlowOpen) {
+      window.dispatchEvent(new Event('aani:pause-feed-videos'));
+    } else {
+      if (!hasOpenDialog()) window.dispatchEvent(new Event('aani:resume-feed-videos'));
+      releasePageInteraction();
+    }
+  }, [isPublishFlowOpen]);
 
   // معاينات الملفات: إنشاء الروابط مرة واحدة لكل ملف مع تنظيفها بعد الاستخدام
   const filePreviews = useMemo(
@@ -515,7 +539,6 @@ export default function Shell({
 
   const handleSelectPublishImages = async (files: File[]) => {
     if (!files.length) return;
-    setShowPublishOptionsSheet(false);
     setShowVideoPreviewModal(false);
     setVideoTrim(null);
     setVideoCrop(null);
@@ -526,8 +549,10 @@ export default function Shell({
       setSelectedFiles(previews.map(preview => preview.file));
       setFileType('image');
       setImagePreviewImages(previews);
+      setShowPublishOptionsSheet(false);
       setShowImagePreviewModal(true);
     } catch {
+      setShowPublishOptionsSheet(false);
       setCreateError('تعذر تجهيز الصور المختارة. حاول اختيارها مرة أخرى.');
     }
   };
@@ -733,6 +758,7 @@ export default function Shell({
         updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
       } finally {
         attemptInProgress = false;
+        releasePageInteraction();
       }
     };
 
