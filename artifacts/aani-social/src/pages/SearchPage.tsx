@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link } from 'wouter';
 import { Search, X } from 'lucide-react';
 
@@ -35,6 +35,41 @@ const readSearchHistory = (key: string): Profile[] => {
   }
 };
 
+const normalizeSearchText = (value: string): string => value
+  .trim()
+  .replace(/\s+/g, ' ')
+  .toLowerCase()
+  .replace(/[أإآ]/g, 'ا')
+  .replace(/ة/g, 'ه')
+  .replace(/ى/g, 'ي');
+
+const normalizeSearchQuery = (value: string): string => normalizeSearchText(value).replace(/^@+/, '').trim();
+
+const getSearchVariants = (normalizedQuery: string): string[] => {
+  const alternatives: Record<string, string[]> = {
+    ا: ['ا', 'أ', 'إ', 'آ'],
+    ه: ['ه', 'ة'],
+    ي: ['ي', 'ى'],
+  };
+  let variants = [''];
+
+  for (const character of normalizedQuery) {
+    const characters = alternatives[character] || [character];
+    variants = variants.flatMap(prefix => characters.map(alternative => `${prefix}${alternative}`)).slice(0, 128);
+  }
+
+  return [...new Set(variants)];
+};
+
+const quotePostgrestValue = (value: string): string =>
+  `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+
+const matchesProfile = (profile: Profile, normalizedQuery: string): boolean => [
+  profile.display_name,
+  profile.full_name,
+  profile.username,
+].some(value => typeof value === 'string' && normalizeSearchText(value).includes(normalizedQuery));
+
 export default function SearchPage({ userId }: { userId: string }) {
   const [term, setTerm] = useState('');
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -42,12 +77,17 @@ export default function SearchPage({ userId }: { userId: string }) {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchHistory, setSearchHistory] = useState<Profile[]>([]);
   const searchRequestRef = useRef(0);
+  const searchTimeoutRef = useRef<number | null>(null);
 
   const historyKey = `aani_search_history_${userId}`;
 
   useEffect(() => {
     setSearchHistory(readSearchHistory(historyKey));
-    return () => { searchRequestRef.current += 1; };
+    return () => {
+      searchRequestRef.current += 1;
+      if (searchTimeoutRef.current !== null) window.clearTimeout(searchTimeoutRef.current);
+      searchTimeoutRef.current = null;
+    };
   }, [historyKey]);
 
   const persistHistory = (nextHistory: Profile[]) => {
@@ -77,10 +117,17 @@ export default function SearchPage({ userId }: { userId: string }) {
   };
 
   const handleSearch = async (queryTerm: string) => {
-    const query = queryTerm.trim();
-    if (!query) return;
+    const normalizedQuery = normalizeSearchQuery(queryTerm);
+    if (!normalizedQuery) {
+      searchRequestRef.current += 1;
+      setProfiles([]);
+      setLoading(false);
+      setSearchError(null);
+      return;
+    }
     if (!supabaseConfigured) {
       setProfiles([]);
+      setLoading(false);
       setSearchError('تعذر الاتصال بالحسابات الآن.');
       return;
     }
@@ -89,15 +136,21 @@ export default function SearchPage({ userId }: { userId: string }) {
     setLoading(true);
     setSearchError(null);
     try {
+      const fields = ['username', 'full_name', 'display_name'];
+      const filters = getSearchVariants(normalizedQuery).flatMap(variant =>
+        fields.map(field => `${field}.ilike.${quotePostgrestValue(`%${variant}%`)}`),
+      );
       const { data, error } = await supabase
         .from('profiles')
         .select('id, username, full_name, display_name, avatar_url, bio')
-        .or(`username.ilike.%${query}%,full_name.ilike.%${query}%,display_name.ilike.%${query}%`)
-        .limit(30);
+        .or(filters.join(','))
+        .limit(100);
 
       if (requestId !== searchRequestRef.current) return;
       if (error) throw error;
-      setProfiles((data || []) as Profile[]);
+      setProfiles(((data || []) as Profile[])
+        .filter(profile => matchesProfile(profile, normalizedQuery))
+        .slice(0, 30));
     } catch {
       if (requestId !== searchRequestRef.current) return;
       setProfiles([]);
@@ -107,29 +160,47 @@ export default function SearchPage({ userId }: { userId: string }) {
     }
   };
 
+  const handleSearchInput = (nextTerm: string) => {
+    setTerm(nextTerm);
+    setSearchError(null);
+    if (searchTimeoutRef.current !== null) window.clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = null;
+    searchRequestRef.current += 1;
+
+    if (!normalizeSearchQuery(nextTerm)) {
+      setProfiles([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    searchTimeoutRef.current = window.setTimeout(() => {
+      searchTimeoutRef.current = null;
+      void handleSearch(nextTerm);
+    }, 220);
+  };
+
+  const handleSearchSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (searchTimeoutRef.current !== null) window.clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = null;
+    void handleSearch(term);
+  };
+
   return (
-    <section className="new-view mx-auto max-w-lg space-y-4" dir="rtl">
-      <form
-        className="flex items-center gap-3"
-        onSubmit={event => {
-          event.preventDefault();
-          void handleSearch(term);
-        }}
-      >
+    <section className="new-view mx-auto w-full max-w-lg space-y-4 px-4" dir="rtl">
+      <form className="flex w-full items-center gap-3" onSubmit={handleSearchSubmit}>
         <h1 className="shrink-0 text-xl font-bold text-white">بحث</h1>
-        <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-zinc-800 bg-zinc-950 px-4 py-3 shadow-inner">
+        <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-zinc-800 bg-zinc-950 shadow-inner">
           <input
             value={term}
-            onChange={event => {
-              setTerm(event.target.value);
-              setSearchError(null);
-            }}
+            onChange={event => handleSearchInput(event.target.value)}
             placeholder="ابحث عن الاسم أو اسم المستخدم..."
             aria-label="ابحث عن الاسم أو اسم المستخدم"
-            className="w-full bg-transparent pl-10 text-sm font-medium text-white outline-none placeholder:text-zinc-500 touch-pan-y"
+            className="search-input bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 touch-pan-y"
           />
           <button
-            className="absolute left-3 flex h-8 w-8 items-center justify-center rounded-full text-[#FF007A] transition-colors hover:bg-pink-500/10 hover:text-pink-300"
+            className="absolute left-2 flex h-8 w-8 items-center justify-center rounded-full text-[#FF007A] transition-colors hover:bg-pink-500/10 hover:text-pink-300"
             type="submit"
             aria-label="بحث عن الحسابات"
           >
@@ -209,7 +280,7 @@ export default function SearchPage({ userId }: { userId: string }) {
         </div>
       )}
 
-      {!loading && !searchError && term.trim() && profiles.length === 0 && (
+      {!loading && !searchError && normalizeSearchQuery(term) && profiles.length === 0 && (
         <div className="empty-state card">
           <h2>لا توجد نتائج مطابقة</h2>
           <p className="text-xs text-zinc-400">تأكد من كتابة اسم المستخدم أو الاسم الصحيح.</p>

@@ -2409,3 +2409,14 @@ body.aani-immersive .unified-top-bar {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+
+
+.search-input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 16px 10px 45px;
+  direction: rtl;
+  text-align: right;
+  outline: none;
+}
