@@ -413,8 +413,12 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
         <div
-          className={isMainFeedImage ? 'post-image-container relative mt-3 w-full' : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''} ${isMainFeedVideo ? 'video-post-media' : ''}`}
-          style={activeVideoAspectRatio ? { aspectRatio: String(activeVideoAspectRatio) } : undefined}
+          className={isMainFeedImage
+            ? 'post-image-container relative mt-3 w-full'
+            : isMainFeedVideo
+              ? 'feed-video-container mt-3'
+              : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''}`}
+          style={!isMainFeedVideo && activeVideoAspectRatio ? { aspectRatio: String(activeVideoAspectRatio) } : undefined}
         >
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
@@ -430,7 +434,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     restoreTime={i === currentImageIndex ? feedResumeTime : undefined}
                     onExpand={isMainFeedVideo && i === currentImageIndex ? openMainFeedReel : undefined}
                     controls={false}
-                    className="block h-full w-full object-cover"
+                    className={isMainFeedVideo ? 'feed-video-element' : 'block h-full w-full object-cover'}
                   />
                 ) : (
                   <PostImagePreview
