@@ -224,7 +224,13 @@ export default function StoryCreationEditor({
   };
 
   return (
-    <div className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white" dir="rtl">
+    <div
+      className="aani-page-enter fixed inset-0 z-[130] overflow-hidden bg-black text-white"
+      dir="rtl"
+      role="dialog"
+      aria-modal="true"
+      aria-label="معاينة القصة"
+    >
       {/* الوسيط يملأ الشاشة بالكامل، والنص داخل لوحة تُسحب وتُكبَّر كوحدة واحدة */}
       {editorMediaUrl ? (
         <div

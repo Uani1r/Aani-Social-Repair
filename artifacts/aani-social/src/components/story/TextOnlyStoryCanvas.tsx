@@ -234,7 +234,13 @@ export default function TextOnlyStoryCanvas({
   };
 
   return (
-    <div className="aani-page-enter fixed inset-0 z-[140] overflow-hidden bg-black text-white" dir="rtl">
+    <div
+      className="aani-page-enter fixed inset-0 z-[140] overflow-hidden bg-black text-white"
+      dir="rtl"
+      role="dialog"
+      aria-modal="true"
+      aria-label="إنشاء قصة نصية"
+    >
       <div
         className="absolute inset-0 overflow-hidden"
         onTouchStart={onCanvasTouchStart}

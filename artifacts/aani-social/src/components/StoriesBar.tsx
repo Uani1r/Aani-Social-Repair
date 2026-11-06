@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { createPortal } from 'react-dom';
 
 import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -1840,7 +1841,9 @@ export default function StoriesBar({
         }}
       />
 
-      <StoryComposerSheet
+      {createPortal(
+        <>
+          <StoryComposerSheet
         open={showStoryPicker}
         autoOpenGallery={!skipStoryGalleryAutoOpenRef.current}
         onClose={() => {
@@ -2258,6 +2261,9 @@ export default function StoriesBar({
           onCloseDrawing={() => setStoryDrawingOpen(false)}
           onQuickPublish={closeFriends => void handleQuickPublishStory(closeFriends)}
         />
+      )}
+        </>,
+        document.body,
       )}
     </div>
   );
