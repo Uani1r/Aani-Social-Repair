@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
-import { Check, Crop, Music2, Scissors, X } from 'lucide-react';
+import { Check, Crop, Music2, Scissors, Volume2, VolumeX, X } from 'lucide-react';
 
 import type { VideoAspectRatio, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 import { DEFAULT_VIDEO_CROP, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
@@ -70,6 +70,7 @@ export default function VideoPreviewModal({
   const [draftRange, setDraftRange] = useState<VideoTrimRange | null>(null);
   const [savedCrop, setSavedCrop] = useState<VideoCropTransform>(NEW_VIDEO_CROP);
   const [draftCrop, setDraftCrop] = useState<VideoCropTransform>(NEW_VIDEO_CROP);
+  const [isMuted, setIsMuted] = useState(false);
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [isTrimming, setIsTrimming] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
@@ -101,6 +102,11 @@ export default function VideoPreviewModal({
 
   useEffect(() => {
     if (!open) return;
+    setIsMuted(false);
+    if (videoRef.current) {
+      videoRef.current.muted = false;
+      videoRef.current.volume = 1;
+    }
     setDuration(0);
     setSavedRange(null);
     setDraftRange(null);
@@ -239,7 +245,9 @@ export default function VideoPreviewModal({
       setSavedCrop(current => normalizeVideoCrop({ ...current, sourceAspectRatio }));
       setDraftCrop(current => normalizeVideoCrop({ ...current, sourceAspectRatio }));
     }
+    if (!isMuted) video.volume = 1;
     video.currentTime = initialRange.start;
+    void video.play().catch(() => undefined);
   };
 
   const activeRange = isTrimming ? draftRange : savedRange;
@@ -514,7 +522,7 @@ export default function VideoPreviewModal({
             ref={videoRef}
             src={src}
             autoPlay
-            muted
+            muted={isMuted}
             playsInline
             controls={!isCropping}
             preload="metadata"
@@ -544,6 +552,26 @@ export default function VideoPreviewModal({
             className="absolute inset-0 h-full w-full object-cover"
             style={{ transform: getVideoCropTransform(activeCrop), transformOrigin: 'center' }}
           />
+          <button
+            type="button"
+            aria-label={isMuted ? 'تشغيل الصوت' : 'كتم الصوت'}
+            aria-pressed={!isMuted}
+            onPointerDown={event => event.stopPropagation()}
+            onClick={() => {
+              const nextMuted = !isMuted;
+              setIsMuted(nextMuted);
+              const video = videoRef.current;
+              if (!video) return;
+              video.muted = nextMuted;
+              if (!nextMuted) {
+                video.volume = 1;
+                void video.play().catch(() => undefined);
+              }
+            }}
+            className="absolute right-3 top-3 z-20 grid h-10 w-10 place-items-center rounded-full bg-black/65 text-white shadow-lg backdrop-blur"
+          >
+            {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+          </button>
         </div>
       </div>
 
