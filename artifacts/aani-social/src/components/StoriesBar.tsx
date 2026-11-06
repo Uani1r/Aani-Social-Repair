@@ -173,6 +173,7 @@ export default function StoriesBar({
 
   const [storyFile, setStoryFile] = useState<File | null>(null);
   const [previewStoryUrl, setPreviewStoryUrl] = useState<string | null>(null);
+  const previewStoryUrlRef = useRef<{ file: File; url: string } | null>(null);
   const [reshareStory, setReshareStory] = useState<StoryDmCardStory | null>(null);
   const [reshareScaledDown, setReshareScaledDown] = useState(false);
 
@@ -804,14 +805,34 @@ export default function StoriesBar({
 
   useEffect(() => {
     if (!storyFile) {
+      const preview = previewStoryUrlRef.current;
+      if (preview) URL.revokeObjectURL(preview.url);
+      previewStoryUrlRef.current = null;
       setPreviewStoryUrl(null);
       return;
     }
 
+    const existingPreview = previewStoryUrlRef.current;
+    if (existingPreview?.file === storyFile) {
+      setPreviewStoryUrl(existingPreview.url);
+      return () => {
+        if (previewStoryUrlRef.current?.url === existingPreview.url) {
+          URL.revokeObjectURL(existingPreview.url);
+          previewStoryUrlRef.current = null;
+        }
+      };
+    }
+
     const url = URL.createObjectURL(storyFile);
+    previewStoryUrlRef.current = { file: storyFile, url };
     setPreviewStoryUrl(url);
 
-    return () => URL.revokeObjectURL(url);
+    return () => {
+      if (previewStoryUrlRef.current?.url === url) {
+        URL.revokeObjectURL(url);
+        previewStoryUrlRef.current = null;
+      }
+    };
   }, [storyFile]);
   const [caption, setCaption] = useState('');
   const [isCloseFriendsOnly, setIsCloseFriendsOnly] = useState(false);
@@ -1746,6 +1767,12 @@ export default function StoriesBar({
       toast.info('سيُستخدم أول وسيط مختار لنشر القصة');
     }
 
+    if (previewStoryUrlRef.current) {
+      URL.revokeObjectURL(previewStoryUrlRef.current.url);
+    }
+    const previewUrl = URL.createObjectURL(files[0]);
+    previewStoryUrlRef.current = { file: files[0], url: previewUrl };
+    setPreviewStoryUrl(previewUrl);
     setStoryFile(files[0]);
     setStoryCanvasScale(1);
     setStoryCanvasOffset({ x: 0, y: 0 });
