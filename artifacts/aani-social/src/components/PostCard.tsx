@@ -113,7 +113,7 @@ export default function PostCard({
       {post.content && (
         <ExpandablePostText
           text={post.content}
-          maxLines={2}
+          maxLines={post.type === 'text' ? 7 : 2}
           className="mt-3 text-sm leading-6 text-zinc-200"
         />
       )}

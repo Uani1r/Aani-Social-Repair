@@ -443,7 +443,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       {post.content && !isMainFeedVideo && (
         <ExpandablePostText
           text={post.content}
-          maxLines={2}
+          maxLines={post.type === 'text' ? 7 : 2}
           className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed"
         />
       )}

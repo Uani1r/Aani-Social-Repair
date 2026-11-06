@@ -10,6 +10,7 @@ export default function ExpandablePostText({ text, className = '', maxLines = 6 
   const measurementRef = useRef<HTMLParagraphElement>(null);
   const [canExpand, setCanExpand] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [lineMetrics, setLineMetrics] = useState({ lineHeight: 0, contentHeight: 0 });
 
   useLayoutEffect(() => {
     const measurement = measurementRef.current;
@@ -20,8 +21,14 @@ export default function ExpandablePostText({ text, className = '', maxLines = 6 
       const lineHeight = Number.parseFloat(style.lineHeight);
       const fontSize = Number.parseFloat(style.fontSize);
       const effectiveLineHeight = Number.isFinite(lineHeight) ? lineHeight : fontSize * 1.5;
-      const nextCanExpand = measurement.scrollHeight > effectiveLineHeight * maxLines + 2;
+      const contentHeight = measurement.scrollHeight;
+      const nextCanExpand = contentHeight > effectiveLineHeight * maxLines + 2;
       setCanExpand(current => current === nextCanExpand ? current : nextCanExpand);
+      setLineMetrics(current => (
+        current.lineHeight === effectiveLineHeight && current.contentHeight === contentHeight
+          ? current
+          : { lineHeight: effectiveLineHeight, contentHeight }
+      ));
     };
 
     updateOverflow();
@@ -38,8 +45,10 @@ export default function ExpandablePostText({ text, className = '', maxLines = 6 
   return (
     <div className="relative min-w-0">
       <p
-        className={`${className} whitespace-pre-line break-words ${expanded ? '' : 'line-clamp-6'}`}
-        style={expanded ? undefined : { WebkitLineClamp: maxLines }}
+        className={`${className} whitespace-pre-line break-words overflow-hidden transition-[max-height] duration-300 ease-in-out`}
+        style={lineMetrics.contentHeight > 0 ? {
+          maxHeight: `${expanded ? lineMetrics.contentHeight : lineMetrics.lineHeight * maxLines + 2}px`,
+        } : undefined}
       >
         {text}
       </p>
