@@ -810,17 +810,20 @@ export default function Shell({
   };
 
   const isFeedPath = path === '/' || path === '/feed';
+  const isMessageThread = path.startsWith('/messages/');
 
   return (
-    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || path.startsWith('/messages/') ? 'is-messages' : ''}`}>
-      <UnifiedTopBar
-        hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
-        unreadCount={unreadCount}
-        stories={isFeedPath ? headerStories : undefined}
-        onOpenNotifications={() => setShowNotifsModal(true)}
-        onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
-        onRefresh={requestContentRefresh}
-      />
+    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}`}>
+      {!isMessageThread && (
+        <UnifiedTopBar
+          hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
+          unreadCount={unreadCount}
+          stories={isFeedPath ? headerStories : undefined}
+          onOpenNotifications={() => setShowNotifsModal(true)}
+          onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
+          onRefresh={requestContentRefresh}
+        />
+      )}
 
       <ShellOverlayControls
         showPublishOptionsSheet={showPublishOptionsSheet}
@@ -893,7 +896,7 @@ export default function Shell({
         onCloseAssistant={() => setShowAssistantModal(false)}
       />
 
-      <div className="content-shell" style={{ paddingBottom: 'calc(6rem + env(safe-area-inset-bottom))' }}>
+      <div className="content-shell" style={{ paddingBottom: isMessageThread ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main
           ref={mainRef}
           className={`main-content ${
@@ -914,11 +917,13 @@ export default function Shell({
         >
           {children}
         </main>
-        <ShellBottomNav
-          path={path}
-          chromeHidden={chromeHidden}
-          onNavigationTap={handleHomeNavigationTap}
-        />
+        {!isMessageThread && (
+          <ShellBottomNav
+            path={path}
+            chromeHidden={chromeHidden}
+            onNavigationTap={handleHomeNavigationTap}
+          />
+        )}
       </div>
     </div>
   );
