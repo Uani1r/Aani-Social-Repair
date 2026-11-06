@@ -812,7 +812,7 @@ export default function Shell({
   const isFeedPath = path === '/' || path === '/feed';
 
   return (
-    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''}`}>
+    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || path.startsWith('/messages/') ? 'is-messages' : ''}`}>
       <UnifiedTopBar
         hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
         unreadCount={unreadCount}
