@@ -3,7 +3,9 @@ import { Star, Trash2, X } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import Avatar from '@/components/Avatar';
-import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
+import { StoryDrawingOverlay, StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
+import StoryCropOverlay from '@/components/StoryCropOverlay';
+import type { StoryDrawTool } from '@/lib/appShared';
 import StoryImageSticker from '@/components/StoryImageSticker';
 import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
 import { displayName, type Profile } from '@/lib/types';
@@ -49,6 +51,8 @@ type StoryCreationEditorProps = {
   storyBackgroundPreset: StoryBackgroundPreset;
   visibleStoryText: string;
   storyDrawingOpen: boolean;
+  storyDrawTool: StoryDrawTool;
+  storyCropOpen: boolean;
   storyDrawingCanvasRef: { current: HTMLCanvasElement | null };
   storyToolsRef: { current: HTMLDivElement | null };
   storyMoreOpen: boolean;
@@ -113,8 +117,11 @@ type StoryCreationEditorProps = {
   onCloseFilters: () => void;
   onDrawColorChange: (color: string) => void;
   onDrawSizeChange: (size: number) => void;
+  onDrawToolChange: (tool: StoryDrawTool) => void;
   onUndoDrawing: () => void;
   onCloseDrawing: () => void;
+  onCloseCrop: () => void;
+  onApplyCrop: (transform: { zoom: number; offset: Point }) => void;
   onQuickPublish: (closeFriends: boolean) => void;
 };
 
@@ -147,6 +154,8 @@ export default function StoryCreationEditor({
   storyBackgroundPreset,
   visibleStoryText,
   storyDrawingOpen,
+  storyDrawTool,
+  storyCropOpen,
   storyDrawingCanvasRef,
   storyToolsRef,
   storyMoreOpen,
@@ -211,8 +220,11 @@ export default function StoryCreationEditor({
   onCloseFilters,
   onDrawColorChange,
   onDrawSizeChange,
+  onDrawToolChange,
   onUndoDrawing,
   onCloseDrawing,
+  onCloseCrop,
+  onApplyCrop,
   onQuickPublish,
 }: StoryCreationEditorProps) {
   const stickerDeleteZoneRef = useRef<HTMLDivElement | null>(null);
@@ -438,16 +450,18 @@ export default function StoryCreationEditor({
         <span className="w-9" />
       </div>
 
-      <StoryEditorToolbar
-        storyToolsRef={storyToolsRef}
-        storyMoreOpen={storyMoreOpen}
-        storyDurationOpen={storyDurationOpen}
-        storyExtraTools={storyExtraTools}
-        uploadDuration={uploadDuration}
-        onSelectTool={onSelectStoryTool}
-        onToggleMore={onToggleMore}
-        onDurationChange={onDurationChange}
-      />
+      {!storyDrawingOpen && !storyCropOpen && (
+        <StoryEditorToolbar
+          storyToolsRef={storyToolsRef}
+          storyMoreOpen={storyMoreOpen}
+          storyDurationOpen={storyDurationOpen}
+          storyExtraTools={storyExtraTools}
+          uploadDuration={uploadDuration}
+          onSelectTool={onSelectStoryTool}
+          onToggleMore={onToggleMore}
+          onDurationChange={onDurationChange}
+        />
+      )}
 
       <StoryTextEditorPanel
         storyTextEditorOpen={storyTextEditorOpen}
@@ -486,7 +500,8 @@ export default function StoryCreationEditor({
       />
 
       {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) */}
-      <div className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+      {!storyDrawingOpen && !storyCropOpen && (
+        <div className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
         <StoryEditorPanels
           storyFiltersOpen={storyFiltersOpen}
           editorMediaUrl={editorMediaUrl}
@@ -494,18 +509,10 @@ export default function StoryCreationEditor({
           storyFilterId={storyFilterId}
           storyFilterAdjustments={storyFilterAdjustments}
           storyMusicTrack={storyMusicTrack}
-          storyDrawingOpen={storyDrawingOpen}
-          storyDrawColor={storyDrawColor}
-          storyDrawSize={storyDrawSize}
-          storyDrawStrokesCount={storyDrawStrokesCount}
           onSelectFilter={onSelectFilter}
           onAdjustFilter={onAdjustFilter}
           onResetFilters={onResetFilters}
           onCloseFilters={onCloseFilters}
-          onDrawColorChange={onDrawColorChange}
-          onDrawSizeChange={onDrawSizeChange}
-          onUndoDrawing={onUndoDrawing}
-          onCloseDrawing={onCloseDrawing}
         />
         <div className="flex items-stretch gap-2.5">
           <button
@@ -533,7 +540,31 @@ export default function StoryCreationEditor({
             الأصدقاء المقربون
           </button>
         </div>
-      </div>
+        </div>
+      )}
+      <StoryDrawingOverlay
+        open={storyDrawingOpen}
+        color={storyDrawColor}
+        size={storyDrawSize}
+        tool={storyDrawTool}
+        strokesCount={storyDrawStrokesCount}
+        onColorChange={onDrawColorChange}
+        onSizeChange={onDrawSizeChange}
+        onToolChange={onDrawToolChange}
+        onUndo={onUndoDrawing}
+        onDone={onCloseDrawing}
+      />
+      {storyCropOpen && editorMediaUrl && (
+        <StoryCropOverlay
+          mediaUrl={editorMediaUrl}
+          isVideo={editorIsVideo}
+          initialZoom={storyMediaZoom}
+          initialOffset={storyMediaOffset}
+          initialRotation={storyMediaRotate}
+          onCancel={onCloseCrop}
+          onApply={onApplyCrop}
+        />
+      )}
       <StoryMusicSheet
         open={storyMusicOpen}
         onClose={onCloseMusic}

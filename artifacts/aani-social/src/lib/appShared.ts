@@ -65,7 +65,78 @@ export const STORY_VIEWER_PREVIEW_TTL_MS = 60 * 60 * 1000;
 export const STORY_VIEWER_PREVIEW_LIMIT = 4;
 
 export type StoryDrawPoint = { x: number; y: number };
-export type StoryDrawStroke = { id: string; color: string; size: number; points: StoryDrawPoint[] };
+export type StoryDrawTool = 'smooth' | 'arrow' | 'highlighter' | 'neon' | 'eraser';
+export type StoryDrawStroke = {
+  id: string;
+  color: string;
+  size: number;
+  points: StoryDrawPoint[];
+  tool?: StoryDrawTool;
+};
+
+export function drawStoryStroke(
+  context: CanvasRenderingContext2D,
+  stroke: StoryDrawStroke,
+  width: number,
+  height: number,
+): void {
+  const points = stroke.points.map(point => ({ x: point.x * width, y: point.y * height }));
+  if (!points.length) return;
+
+  const tool = stroke.tool || 'smooth';
+  const lineWidth = Math.max(1, stroke.size * (tool === 'highlighter' ? 2.8 : tool === 'eraser' ? 2.5 : 1));
+  context.save();
+  context.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+  context.globalAlpha = tool === 'highlighter' ? 0.34 : 1;
+  context.strokeStyle = stroke.color;
+  context.fillStyle = stroke.color;
+  context.lineWidth = lineWidth;
+  context.lineCap = 'round';
+  context.lineJoin = 'round';
+  context.shadowColor = tool === 'neon' ? stroke.color : 'transparent';
+  context.shadowBlur = tool === 'neon' ? stroke.size * 2.5 : 0;
+
+  if (points.length === 1) {
+    context.beginPath();
+    context.arc(points[0].x, points[0].y, Math.max(1, lineWidth / 2), 0, Math.PI * 2);
+    context.fill();
+    context.restore();
+    return;
+  }
+
+  context.beginPath();
+  context.moveTo(points[0].x, points[0].y);
+  for (let index = 1; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[index + 1];
+    if (next) {
+      context.quadraticCurveTo(
+        current.x,
+        current.y,
+        (current.x + next.x) / 2,
+        (current.y + next.y) / 2,
+      );
+    } else {
+      context.lineTo(current.x, current.y);
+    }
+  }
+  context.stroke();
+
+  if (tool === 'arrow') {
+    const tip = points[points.length - 1];
+    const tail = points[points.length - 2];
+    const angle = Math.atan2(tip.y - tail.y, tip.x - tail.x);
+    const arrowSize = Math.max(12, stroke.size * 3.5);
+    context.beginPath();
+    context.moveTo(tip.x, tip.y);
+    context.lineTo(tip.x - arrowSize * Math.cos(angle - Math.PI / 6), tip.y - arrowSize * Math.sin(angle - Math.PI / 6));
+    context.lineTo(tip.x - arrowSize * Math.cos(angle + Math.PI / 6), tip.y - arrowSize * Math.sin(angle + Math.PI / 6));
+    context.closePath();
+    context.fill();
+  }
+
+  context.restore();
+}
 
 export const STORY_DRAW_COLORS = ['#FFFFFF', '#FF3B30', '#FFCC00', '#34C759', '#007AFF', '#AF52DE'];
 export const STORY_DRAW_SIZES = [3, 6, 10];

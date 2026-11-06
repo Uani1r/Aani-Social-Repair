@@ -7,10 +7,12 @@ import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import {
   clampCanvas,
+  drawStoryStroke,
   getStoryDrawPoint,
   STORY_DRAW_COLORS,
   STORY_DRAW_SIZES,
   type StoryDrawStroke,
+  type StoryDrawTool,
   type StoryGestureState,
   type StoryGestureTarget,
   type StoryViewerEntry,
@@ -182,12 +184,14 @@ export default function StoriesBar({
   const [storyMoreOpen, setStoryMoreOpen] = useState(false);
   const [storyDurationOpen, setStoryDurationOpen] = useState(false);
   const [storyDrawingOpen, setStoryDrawingOpen] = useState(false);
+  const [storyDrawingTool, setStoryDrawingTool] = useState<StoryDrawTool>('smooth');
+  const [storyCropOpen, setStoryCropOpen] = useState(false);
   const [storyDrawColor, setStoryDrawColor] = useState(STORY_DRAW_COLORS[0]);
   const [storyDrawSize, setStoryDrawSize] = useState(STORY_DRAW_SIZES[1]);
   const [storyDrawStrokes, setStoryDrawStrokes] = useState<StoryDrawStroke[]>([]);
   const storyDrawingCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStoryDrawStrokeRef = useRef<StoryDrawStroke | null>(null);
-  // أدوات إضافية للمحرر: الأصدقاء المقربون ومدة عرض القصة على الشاشة.
+  // أدوات إضافية للمحرر: الأصدقاء المقربون ومدة عرض القصة وأداة القص.
   const storyExtraTools: Array<{ key: string; label: string; action: () => void }> = [
     {
       key: 'close-friends',
@@ -202,6 +206,22 @@ export default function StoriesBar({
       key: 'duration',
       label: 'مدة عرض الستوري',
       action: () => setStoryDurationOpen(open => !open),
+    },
+    {
+      key: 'crop',
+      label: 'قص الوسيط',
+      action: () => {
+        if (!storyFile && !reshareStory?.media_url) {
+          toast.info('اختر صورة أو فيديو أولاً');
+          return;
+        }
+        setStoryMoreOpen(false);
+        setStoryDurationOpen(false);
+        setStoryDrawingOpen(false);
+        setStoryTextEditorOpen(false);
+        setStoryFiltersOpen(false);
+        setStoryCropOpen(true);
+      },
     },
   ];
   const [storyFiltersOpen, setStoryFiltersOpen] = useState(false);
@@ -293,6 +313,7 @@ export default function StoriesBar({
     setStoryTextEditorOpen(false);
     setStoryMoreOpen(false);
     setStoryDrawingOpen(false);
+    setStoryCropOpen(false);
     setStoryDurationOpen(false);
     setStoryMusicOpen(false);
     setStoryMentionsOpen(false);
@@ -1640,31 +1661,10 @@ export default function StoriesBar({
     context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     context.clearRect(0, 0, width, height);
 
-    storyDrawStrokes.forEach(stroke => {
-      if (stroke.points.length === 0) return;
-      context.strokeStyle = stroke.color;
-      context.fillStyle = stroke.color;
-      context.lineWidth = stroke.size;
-      context.lineCap = 'round';
-      context.lineJoin = 'round';
-      context.beginPath();
-      context.moveTo(stroke.points[0].x * width, stroke.points[0].y * height);
-      if (stroke.points.length === 1) {
-        context.arc(
-          stroke.points[0].x * width,
-          stroke.points[0].y * height,
-          Math.max(1, stroke.size / 2),
-          0,
-          Math.PI * 2,
-        );
-        context.fill();
-        return;
-      }
-      for (const point of stroke.points.slice(1)) {
-        context.lineTo(point.x * width, point.y * height);
-      }
-      context.stroke();
-    });
+    const strokes = activeStoryDrawStrokeRef.current
+      ? [...storyDrawStrokes, activeStoryDrawStrokeRef.current]
+      : storyDrawStrokes;
+    strokes.forEach(stroke => drawStoryStroke(context, stroke, width, height));
   }, [storyDrawStrokes]);
 
   useEffect(() => {
@@ -1695,18 +1695,11 @@ export default function StoriesBar({
       color: storyDrawColor,
       size: storyDrawSize,
       points: [point],
+      tool: storyDrawingTool,
     };
     activeStoryDrawStrokeRef.current = stroke;
-    const context = canvas.getContext('2d');
-    if (context) {
-      const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-      context.fillStyle = stroke.color;
-      context.beginPath();
-      context.arc(point.x * canvas.clientWidth, point.y * canvas.clientHeight, Math.max(1, stroke.size / 2), 0, Math.PI * 2);
-      context.fill();
-    }
     canvas.setPointerCapture(event.pointerId);
+    redrawStoryDrawingCanvas();
   };
 
   const handleStoryDrawPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1716,21 +1709,8 @@ export default function StoriesBar({
     event.stopPropagation();
 
     const canvas = event.currentTarget;
-    const point = getStoryDrawPoint(canvas, event.clientX, event.clientY);
-    const previous = stroke.points[stroke.points.length - 1];
-    stroke.points.push(point);
-    const context = canvas.getContext('2d');
-    if (!context) return;
-    const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-    context.strokeStyle = stroke.color;
-    context.lineWidth = stroke.size;
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
-    context.beginPath();
-    context.moveTo(previous.x * canvas.clientWidth, previous.y * canvas.clientHeight);
-    context.lineTo(point.x * canvas.clientWidth, point.y * canvas.clientHeight);
-    context.stroke();
+    stroke.points.push(getStoryDrawPoint(canvas, event.clientX, event.clientY));
+    redrawStoryDrawingCanvas();
   };
 
   const handleStoryDrawPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1912,6 +1892,7 @@ export default function StoriesBar({
           storyFilterOverlay={storyFilterOverlay}
           storyMusicTrack={storyMusicTrack}
           storyDrawingOpen={storyDrawingOpen}
+          storyDrawTool={storyDrawingTool}
           storyDrawColor={storyDrawColor}
           storyDrawSize={storyDrawSize}
           storyDrawStrokes={storyDrawStrokes}
@@ -1979,8 +1960,13 @@ export default function StoriesBar({
           onCloseFilters={() => setStoryFiltersOpen(false)}
           onDrawColorChange={setStoryDrawColor}
           onDrawSizeChange={setStoryDrawSize}
+          onDrawToolChange={setStoryDrawingTool}
           onUndoDrawing={undoStoryDrawStroke}
-          onCloseDrawing={() => setStoryDrawingOpen(false)}
+          onCloseDrawing={() => {
+            activeStoryDrawStrokeRef.current = null;
+            redrawStoryDrawingCanvas();
+            setStoryDrawingOpen(false);
+          }}
           onDrawPointerDown={handleStoryDrawPointerDown}
           onDrawPointerMove={handleStoryDrawPointerMove}
           onDrawPointerUp={handleStoryDrawPointerUp}
@@ -2103,6 +2089,8 @@ export default function StoriesBar({
           storyBackgroundPreset={storyBackgroundPreset}
           visibleStoryText={visibleStoryText}
           storyDrawingOpen={storyDrawingOpen}
+          storyDrawTool={storyDrawingTool}
+          storyCropOpen={storyCropOpen}
           storyDrawingCanvasRef={storyDrawingCanvasRef}
           storyToolsRef={storyToolsRef}
           storyMoreOpen={storyMoreOpen}
@@ -2258,8 +2246,19 @@ export default function StoriesBar({
           onCloseFilters={() => setStoryFiltersOpen(false)}
           onDrawColorChange={setStoryDrawColor}
           onDrawSizeChange={setStoryDrawSize}
+          onDrawToolChange={setStoryDrawingTool}
           onUndoDrawing={undoStoryDrawStroke}
-          onCloseDrawing={() => setStoryDrawingOpen(false)}
+          onCloseDrawing={() => {
+            activeStoryDrawStrokeRef.current = null;
+            redrawStoryDrawingCanvas();
+            setStoryDrawingOpen(false);
+          }}
+          onCloseCrop={() => setStoryCropOpen(false)}
+          onApplyCrop={transform => {
+            setStoryMediaZoom(transform.zoom);
+            setStoryMediaOffset(transform.offset);
+            setStoryCropOpen(false);
+          }}
           onQuickPublish={closeFriends => void handleQuickPublishStory(closeFriends)}
         />
       )}

@@ -1,5 +1,6 @@
-import type { StoryDrawPoint } from '@/lib/appShared';
+import { useEffect, useRef } from 'react';
 
+import { drawStoryStroke, type StoryDrawStroke } from '@/lib/appShared';
 import StoryImageSticker from '@/components/StoryImageSticker';
 import type { StoryCanvasStyleOverlay, StoryImageOverlay, StoryMediaTransformOverlay, StoryTextOverlay } from '@/components/stories/types';
 import type { StoryViewerProps } from './types';
@@ -107,38 +108,7 @@ export default function StoryMediaStage({
         const layerOrder = timedText.layerOrder ?? index + 10;
 
         if (timedText.type === 'drawing') {
-          return (
-            <svg
-              key={timedText.id || 'story-drawing'}
-              className="pointer-events-none absolute inset-0 h-full w-full"
-              style={{ zIndex: layerOrder }}
-              viewBox="0 0 1000 1000"
-              preserveAspectRatio="none"
-              aria-hidden="true"
-            >
-              {timedText.strokes.map((stroke, index) => {
-                const points = stroke.points.filter(point => Number.isFinite(point.x) && Number.isFinite(point.y));
-                if (points.length === 0) return null;
-                const first = points[0];
-                const path = points.length === 1
-                  ? `M ${first.x * 1000} ${first.y * 1000} L ${first.x * 1000 + 0.01} ${first.y * 1000}`
-                  : points.map((point: StoryDrawPoint, pointIndex: number) => `${pointIndex === 0 ? 'M' : 'L'} ${point.x * 1000} ${point.y * 1000}`).join(' ');
-                const width = Number.isFinite(stroke.size) ? Math.min(24, Math.max(1, stroke.size)) : 5;
-                return (
-                  <path
-                    key={stroke.id || index}
-                    d={path}
-                    fill="none"
-                    stroke={typeof stroke.color === 'string' ? stroke.color : '#FFFFFF'}
-                    strokeWidth={width}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    vectorEffect="non-scaling-stroke"
-                  />
-                );
-              })}
-            </svg>
-          );
+          return <StoryDrawingLayer key={timedText.id || 'story-drawing'} strokes={timedText.strokes} layerOrder={layerOrder} />;
         }
 
         if (timedText.type === 'image') {
@@ -200,5 +170,54 @@ export default function StoryMediaStage({
         onTouchEnd={() => onPauseChange(false)}
       />
     </div>
+  );
+}
+
+
+
+function StoryDrawingLayer({ strokes, layerOrder }: { strokes: StoryDrawStroke[]; layerOrder: number }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const redraw = () => {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      if (!width || !height) return;
+
+      const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
+      const pixelWidth = Math.round(width * pixelRatio);
+      const pixelHeight = Math.round(height * pixelRatio);
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.clearRect(0, 0, width, height);
+      strokes.forEach(stroke => drawStoryStroke(context, stroke, width, height));
+    };
+
+    redraw();
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(redraw);
+    observer?.observe(canvas);
+    window.addEventListener('resize', redraw);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', redraw);
+    };
+  }, [strokes]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      className="pointer-events-none absolute inset-0 h-full w-full"
+      style={{ zIndex: layerOrder }}
+      aria-hidden="true"
+    />
   );
 }

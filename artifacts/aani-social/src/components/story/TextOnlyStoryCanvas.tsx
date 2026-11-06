@@ -4,11 +4,11 @@ import { Paintbrush, Star, Trash2, X } from 'lucide-react';
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
-import { StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
+import { StoryDrawingOverlay, StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
 import StoryImageSticker from '@/components/StoryImageSticker';
 import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
 import type { StoryImageStickerUpdate, StoryTimedText } from '@/components/stories/types';
-import type { StoryDrawStroke } from '@/lib/appShared';
+import type { StoryDrawStroke, StoryDrawTool } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextBackgroundPreset, StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import { displayName, type Profile } from '@/lib/types';
@@ -70,6 +70,7 @@ interface TextOnlyStoryCanvasProps {
   storyFilterOverlay: StoryFilterOverlay | null;
   storyMusicTrack: { id: string; title: string; artist: string } | null;
   storyDrawingOpen: boolean;
+  storyDrawTool: StoryDrawTool;
   storyDrawColor: string;
   storyDrawSize: number;
   storyDrawStrokes: StoryDrawStroke[];
@@ -99,6 +100,7 @@ interface TextOnlyStoryCanvasProps {
   onCloseFilters: () => void;
   onDrawColorChange: (color: string) => void;
   onDrawSizeChange: (size: number) => void;
+  onDrawToolChange: (tool: StoryDrawTool) => void;
   onUndoDrawing: () => void;
   onCloseDrawing: () => void;
   onDrawPointerDown: (event: ReactPointerEvent<HTMLCanvasElement>) => void;
@@ -172,6 +174,7 @@ export default function TextOnlyStoryCanvas({
   storyFilterOverlay,
   storyMusicTrack,
   storyDrawingOpen,
+  storyDrawTool,
   storyDrawColor,
   storyDrawSize,
   storyDrawStrokes,
@@ -201,6 +204,7 @@ export default function TextOnlyStoryCanvas({
   onCloseFilters,
   onDrawColorChange,
   onDrawSizeChange,
+  onDrawToolChange,
   onUndoDrawing,
   onCloseDrawing,
   onDrawPointerDown,
@@ -411,18 +415,20 @@ export default function TextOnlyStoryCanvas({
         </div>
       )}
 
-      <StoryEditorToolbar
-        storyToolsRef={storyToolsRef}
-        storyMoreOpen={storyMoreOpen}
-        storyDurationOpen={storyDurationOpen}
-        storyExtraTools={extraTools}
-        uploadDuration={uploadDuration}
-        onSelectTool={onSelectTool}
-        onToggleMore={onToggleMore}
-        onDurationChange={onDurationChange}
-      />
+      {!storyDrawingOpen && (
+        <StoryEditorToolbar
+          storyToolsRef={storyToolsRef}
+          storyMoreOpen={storyMoreOpen}
+          storyDurationOpen={storyDurationOpen}
+          storyExtraTools={extraTools.filter(item => item.key !== 'crop')}
+          uploadDuration={uploadDuration}
+          onSelectTool={onSelectTool}
+          onToggleMore={onToggleMore}
+          onDurationChange={onDurationChange}
+        />
+      )}
 
-      {(storyFiltersOpen || storyDrawingOpen || storyMusicTrack) && (
+      {(storyFiltersOpen || storyMusicTrack) && (
         <div
           className="fixed inset-x-3 z-[120] pointer-events-none"
           style={{ bottom: `calc(5.35rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
@@ -434,18 +440,10 @@ export default function TextOnlyStoryCanvas({
             storyFilterId={storyFilterId}
             storyFilterAdjustments={storyFilterAdjustments}
             storyMusicTrack={storyMusicTrack}
-            storyDrawingOpen={storyDrawingOpen}
-            storyDrawColor={storyDrawColor}
-            storyDrawSize={storyDrawSize}
-            storyDrawStrokesCount={storyDrawStrokes.length}
             onSelectFilter={onSelectFilter}
             onAdjustFilter={onAdjustFilter}
             onResetFilters={onResetFilters}
             onCloseFilters={onCloseFilters}
-            onDrawColorChange={onDrawColorChange}
-            onDrawSizeChange={onDrawSizeChange}
-            onUndoDrawing={onUndoDrawing}
-            onCloseDrawing={onCloseDrawing}
           />
         </div>
       )}
@@ -486,10 +484,11 @@ export default function TextOnlyStoryCanvas({
         onInteract={onInteract}
       />
 
-      <div
-        className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2"
-        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
-      >
+      {!storyDrawingOpen && (
+        <div
+          className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+        >
         <div className="flex items-stretch gap-2.5">
           <button
             type="button"
@@ -516,7 +515,20 @@ export default function TextOnlyStoryCanvas({
             الأصدقاء المقربون
           </button>
         </div>
-      </div>
+        </div>
+      )}
+      <StoryDrawingOverlay
+        open={storyDrawingOpen}
+        color={storyDrawColor}
+        size={storyDrawSize}
+        tool={storyDrawTool}
+        strokesCount={storyDrawStrokes.length}
+        onColorChange={onDrawColorChange}
+        onSizeChange={onDrawSizeChange}
+        onToolChange={onDrawToolChange}
+        onUndo={onUndoDrawing}
+        onDone={onCloseDrawing}
+      />
 
       <StoryMusicSheet open={storyMusicOpen} onClose={onCloseMusic} onSelect={onSelectMusic} />
       <StoryMentionPicker

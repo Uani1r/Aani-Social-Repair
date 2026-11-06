@@ -123,11 +123,17 @@ function isStoryDrawPoint(value: unknown): value is StoryDrawPoint {
 }
 
 function isStoryDrawStroke(value: unknown): value is StoryDrawStroke {
+  const validTool = value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>).tool === undefined
+      || ['smooth', 'arrow', 'highlighter', 'neon', 'eraser'].includes(String((value as Record<string, unknown>).tool))
+    : false;
   return isRecord(value)
     && typeof value.id === 'string'
     && typeof value.color === 'string'
+    && /^#[0-9a-f]{3,8}$/i.test(value.color)
     && typeof value.size === 'number'
     && Number.isFinite(value.size)
+    && validTool
     && Array.isArray(value.points)
     && (value.points as unknown[]).every(isStoryDrawPoint);
 }

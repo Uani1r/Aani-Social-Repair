@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { LucideIcon } from 'lucide-react';
-import { AtSign, ChevronDown, Clock, ImagePlus, Music2, Pencil, Sparkles, Star, Type, X } from 'lucide-react';
+import { AtSign, ArrowUpRight, Check, ChevronDown, Clock, Crop, Eraser, Highlighter, ImagePlus, Music2, Pencil, Pipette, Sparkles, Star, Type, Undo2, X } from 'lucide-react';
 
 import StoryExpirySlider from '@/components/StoryExpirySlider';
 import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
@@ -8,7 +8,7 @@ import StoryFilterBar from '@/components/StoryFilterBar';
 import StoryTextToolbar from '@/components/StoryTextToolbar';
 import StoryTypedPreview from '@/components/StoryTypedPreview';
 import { useStoryViewportLock } from '@/components/stories/useStoryViewportLock';
-import { STORY_DRAW_COLORS, STORY_DRAW_SIZES } from '@/lib/appShared';
+import { STORY_DRAW_COLORS, type StoryDrawTool } from '@/lib/appShared';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 
@@ -100,7 +100,7 @@ export function StoryEditorToolbar({
             role="menu"
           >
             {storyExtraTools.map(item => {
-              const Icon = item.key === 'close-friends' ? Star : Clock;
+              const Icon = item.key === 'close-friends' ? Star : item.key === 'crop' ? Crop : Clock;
               return (
                 <div key={item.key} className="relative">
                   <button
@@ -669,18 +669,10 @@ type StoryEditorPanelsProps = {
   storyFilterId: string;
   storyFilterAdjustments: StoryAdjustments;
   storyMusicTrack: { id: string; title: string; artist: string } | null;
-  storyDrawingOpen: boolean;
-  storyDrawColor: string;
-  storyDrawSize: number;
-  storyDrawStrokesCount: number;
   onSelectFilter: (id: string) => void;
   onAdjustFilter: (key: keyof StoryAdjustments, value: number) => void;
   onResetFilters: () => void;
   onCloseFilters: () => void;
-  onDrawColorChange: (color: string) => void;
-  onDrawSizeChange: (size: number) => void;
-  onUndoDrawing: () => void;
-  onCloseDrawing: () => void;
 };
 
 export function StoryEditorPanels({
@@ -690,18 +682,10 @@ export function StoryEditorPanels({
   storyFilterId,
   storyFilterAdjustments,
   storyMusicTrack,
-  storyDrawingOpen,
-  storyDrawColor,
-  storyDrawSize,
-  storyDrawStrokesCount,
   onSelectFilter,
   onAdjustFilter,
   onResetFilters,
   onCloseFilters,
-  onDrawColorChange,
-  onDrawSizeChange,
-  onUndoDrawing,
-  onCloseDrawing,
 }: StoryEditorPanelsProps) {
   return (
     <div className="pointer-events-none">
@@ -723,60 +707,163 @@ export function StoryEditorPanels({
           <span className="max-w-[55vw] truncate">{storyMusicTrack.title}</span>
         </div>
       )}
-      {storyDrawingOpen && (
-        <div className="pointer-events-auto mb-3 rounded-2xl border border-white/15 bg-black/75 p-2.5 text-white shadow-xl backdrop-blur-xl" dir="rtl" data-story-editor-control="true" onPointerDown={event => event.stopPropagation()} onPointerMove={event => event.stopPropagation()} onPointerUp={event => event.stopPropagation()} onTouchStart={event => event.stopPropagation()} onTouchMove={event => event.stopPropagation()} onTouchEnd={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
-          <div className="flex items-center justify-between gap-3">
-            <span className="shrink-0 text-[10px] font-semibold text-white/70">لون القلم</span>
-            <div className="flex items-center gap-2" dir="ltr">
-              {STORY_DRAW_COLORS.map(color => (
-                <button
-                  key={color}
-                  type="button"
-                  aria-label={`لون الرسم ${color}`}
-                  aria-pressed={storyDrawColor === color}
-                  onClick={() => onDrawColorChange(color)}
-                  className={`h-6 w-6 rounded-full border-2 transition ${storyDrawColor === color ? 'border-white scale-110' : 'border-white/30'}`}
-                  style={{ backgroundColor: color }}
-                />
-              ))}
-            </div>
-          </div>
-          <div className="mt-2 flex items-center justify-between gap-3">
-            <span className="shrink-0 text-[10px] font-semibold text-white/70">حجم القلم</span>
-            <div className="flex items-center gap-2" dir="ltr">
-              {STORY_DRAW_SIZES.map(size => (
-                <button
-                  key={size}
-                  type="button"
-                  aria-label={`حجم القلم ${size}`}
-                  aria-pressed={storyDrawSize === size}
-                  onClick={() => onDrawSizeChange(size)}
-                  className={`flex h-8 w-8 items-center justify-center rounded-full border transition ${storyDrawSize === size ? 'border-white bg-white/15' : 'border-white/20'}`}
-                >
-                  <span className="rounded-full bg-white" style={{ width: size, height: size }} />
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="mt-2 flex gap-2">
-            <button
-              type="button"
-              onClick={onUndoDrawing}
-              disabled={storyDrawStrokesCount === 0}
-              className="h-9 flex-1 rounded-full border border-white/25 text-[11px] font-semibold disabled:opacity-40"
-            >
-              تراجع
-            </button>
-            <button
-              type="button"
-              onClick={onCloseDrawing}
-              className="h-9 flex-1 rounded-full bg-white text-[11px] font-bold text-[#121212]"
-            >
-              تم
-            </button>
-          </div>
+    </div>
+  );
+}
+
+type StoryDrawingOverlayProps = {
+  open: boolean;
+  color: string;
+  size: number;
+  tool: StoryDrawTool;
+  strokesCount: number;
+  onColorChange: (color: string) => void;
+  onSizeChange: (size: number) => void;
+  onToolChange: (tool: StoryDrawTool) => void;
+  onUndo: () => void;
+  onDone: () => void;
+};
+
+const STORY_DRAW_PALETTE = [
+  ...STORY_DRAW_COLORS,
+  '#000000', '#FF9F0A', '#0A84FF', '#FF2D55', '#64D2FF', '#FFD60A', '#BF5AF2',
+];
+
+const STORY_DRAW_TOOLS: Array<{ key: StoryDrawTool; label: string; icon: LucideIcon }> = [
+  { key: 'smooth', label: 'قلم انسيابي', icon: Pencil },
+  { key: 'arrow', label: 'قلم السهم', icon: ArrowUpRight },
+  { key: 'highlighter', label: 'قلم التمييز', icon: Highlighter },
+  { key: 'neon', label: 'قلم النيون', icon: Sparkles },
+  { key: 'eraser', label: 'ممحاة', icon: Eraser },
+];
+
+type EyeDropperLike = { open: () => Promise<{ sRGBHex: string }> };
+type EyeDropperWindow = Window & { EyeDropper?: new () => EyeDropperLike };
+
+export function StoryDrawingOverlay({
+  open,
+  color,
+  size,
+  tool,
+  strokesCount,
+  onColorChange,
+  onSizeChange,
+  onToolChange,
+  onUndo,
+  onDone,
+}: StoryDrawingOverlayProps) {
+  const colorInputRef = useRef<HTMLInputElement | null>(null);
+
+  if (!open) return null;
+
+  const openColorPicker = async () => {
+    const EyeDropper = (window as EyeDropperWindow).EyeDropper;
+    if (!EyeDropper) {
+      colorInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const picked = await new EyeDropper().open();
+      onColorChange(picked.sRGBHex);
+    } catch {
+      // إلغاء اختيار اللون لا يغيّر لون القلم.
+    }
+  };
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[150]" aria-label="أدوات الرسم">
+      <div
+        className="pointer-events-none fixed inset-x-0 top-0 grid grid-cols-[1fr_auto_1fr] items-center gap-1 px-3"
+        style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+        dir="ltr"
+      >
+        <button
+          type="button"
+          onClick={onUndo}
+          disabled={strokesCount === 0}
+          aria-label="تراجع عن آخر خطوة رسم"
+          className="pointer-events-auto flex h-10 w-10 items-center justify-center justify-self-start rounded-full border border-white/15 bg-black/55 text-white backdrop-blur-md disabled:opacity-40"
+        >
+          <Undo2 size={20} />
+        </button>
+        <div className="pointer-events-auto flex max-w-[62vw] items-center gap-0.5 overflow-x-auto rounded-full border border-white/10 bg-black/60 p-1 backdrop-blur-xl" dir="ltr">
+          {STORY_DRAW_TOOLS.map(item => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => onToolChange(item.key)}
+                aria-label={item.label}
+                aria-pressed={tool === item.key}
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition ${tool === item.key ? 'bg-white text-black' : 'text-white/80 hover:bg-white/10'}`}
+              >
+                <Icon size={16} />
+              </button>
+            );
+          })}
         </div>
-      )}
+        <button
+          type="button"
+          onClick={onDone}
+          className="pointer-events-auto flex h-10 items-center gap-1 rounded-full bg-white px-3 text-xs font-bold text-black justify-self-end"
+        >
+          <Check size={16} />
+          تم
+        </button>
+      </div>
+
+      <div className="pointer-events-auto fixed left-3 top-1/2 z-[151] flex -translate-y-1/2 flex-col items-center gap-3 rounded-full border border-white/15 bg-black/50 px-2 py-3 text-white shadow-xl backdrop-blur-md">
+        <span className="flex h-8 w-8 items-center justify-center" aria-hidden="true">
+          <span className="rounded-full bg-white" style={{ width: Math.min(30, size), height: Math.min(30, size) }} />
+        </span>
+        <input
+          type="range"
+          min="2"
+          max="40"
+          step="1"
+          value={size}
+          onChange={event => onSizeChange(Number(event.target.value))}
+          aria-label="سمك القلم"
+          aria-orientation="vertical"
+          className="h-44 w-7 cursor-ns-resize accent-white"
+          style={{ writingMode: 'vertical-lr', direction: 'rtl', touchAction: 'none' }}
+        />
+      </div>
+
+      <div className="pointer-events-auto fixed inset-x-0 bottom-0 z-[151] flex justify-center px-3" style={{ paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
+        <div className="flex max-w-full items-center gap-1.5 overflow-x-auto rounded-full border border-white/10 bg-black/65 p-2 shadow-xl backdrop-blur-xl" dir="ltr">
+          {STORY_DRAW_PALETTE.map(swatch => (
+            <button
+              key={swatch}
+              type="button"
+              onClick={() => onColorChange(swatch)}
+              aria-label={`لون الرسم ${swatch}`}
+              aria-pressed={color.toLowerCase() === swatch.toLowerCase()}
+              className={`h-7 w-7 shrink-0 rounded-full border-2 transition ${color.toLowerCase() === swatch.toLowerCase() ? 'scale-110 border-white' : 'border-white/25'}`}
+              style={{ backgroundColor: swatch }}
+            />
+          ))}
+          <button
+            type="button"
+            onClick={() => void openColorPicker()}
+            aria-label="اختيار لون من الصورة"
+            title="اختيار لون من الصورة"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/20 bg-white/10 text-white"
+          >
+            <Pipette size={16} />
+          </button>
+          <input
+            ref={colorInputRef}
+            type="color"
+            value={/^#[0-9a-f]{6}$/i.test(color) ? color : '#ffffff'}
+            onChange={event => onColorChange(event.target.value)}
+            aria-label="اختيار لون مخصص"
+            className="sr-only"
+          />
+        </div>
+      </div>
     </div>
   );
 }
