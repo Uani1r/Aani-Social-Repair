@@ -38,6 +38,10 @@ function buildChannel(userId: string): { dispose: () => void } {
 
     if (!postId) return;
 
+    if (table === "reposts" && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("aani:repost-changed"));
+    }
+
     if (table === "posts") {
       const counts: Partial<Pick<InteractionSnapshot, "likes" | "comments" | "reposts" | "shares">> = {};
       if (typeof record.likes_count === "number") counts.likes = record.likes_count;

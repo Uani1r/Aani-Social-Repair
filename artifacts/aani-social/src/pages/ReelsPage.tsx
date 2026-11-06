@@ -76,7 +76,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
         const pending = pendingById.get(post.id);
         return (
           <ReelSlide
-            key={post.id}
+            key={`${post.id}:${post.reposter_id || 'original'}`}
             post={post}
             currentUserId={userId}
             onOpenComments={onOpenComments}

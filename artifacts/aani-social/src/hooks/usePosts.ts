@@ -7,6 +7,7 @@ import { normalizePostMetadata, type Post, type PostRow, type Profile } from '@/
 
 interface RepostRow {
   post_id: string;
+  user_id: string;
   created_at: string;
 }
 
@@ -102,7 +103,11 @@ function normalizeRepostRows(value: unknown): RepostRow[] {
 
   return (value as unknown[]).flatMap((item: unknown) => {
     if (!isRecord(item) || typeof item.post_id !== 'string' || typeof item.created_at !== 'string') return [];
-    return [{ post_id: item.post_id, created_at: item.created_at }];
+    return [{
+      post_id: item.post_id,
+      user_id: typeof item.user_id === 'string' ? item.user_id : '',
+      created_at: item.created_at,
+    }];
   });
 }
 
@@ -136,6 +141,62 @@ function fallbackProfile(id: string, fullName: string): Profile {
   return { id, username: 'user', full_name: fullName, avatar_url: null, bio: '' };
 }
 
+async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]> {
+  try {
+    const { data: repostData, error: repostError } = await supabase
+      .from('reposts')
+      .select('post_id, user_id, created_at')
+      .order('created_at', { ascending: false })
+      .limit(1000);
+    if (repostError) return [];
+
+    const repostRows = normalizeRepostRows(repostData).filter(row => row.user_id);
+    if (repostRows.length === 0) return [];
+
+    const postIds = Array.from(new Set(repostRows.map(row => row.post_id)));
+    const { data: postData, error: postsError } = await supabase
+      .from('posts')
+      .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, hide_likes, hide_comments, comment_privacy')
+      .in('id', postIds);
+    if (postsError) return [];
+
+    const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
+      post.visibility === 'public'
+      && post.destination === destination
+      && (destination !== 'reels' || post.type === 'reel'),
+    );
+    const postsById = new Map(originalPosts.map(post => [post.id, post] as const));
+    const visibleReposts = repostRows.filter(row => postsById.has(row.post_id));
+    if (visibleReposts.length === 0) return [];
+
+    const profileIds = Array.from(new Set([
+      ...originalPosts.map(post => post.user_id),
+      ...visibleReposts.map(repost => repost.user_id),
+    ]));
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('id, username, full_name, display_name, avatar_url')
+      .in('id', profileIds);
+    const profiles = profileMap(profileData);
+
+    return visibleReposts.flatMap((repost): Post[] => {
+      const post = postsById.get(repost.post_id);
+      if (!post) return [];
+      return [{
+        ...post,
+        author: profiles.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
+        reposter_id: repost.user_id,
+        reposted_at: repost.created_at,
+        repost_attribution: profiles.get(repost.user_id) || fallbackProfile(repost.user_id, 'مستخدم'),
+        likes: [],
+        comments: [],
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
 export async function hydratePostInteractions(
   posts: Post[],
   currentUserId: string,
@@ -148,16 +209,16 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (silent = false) => {
     if (!supabaseConfigured) {
       setPosts([]);
       setError('تعذر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.');
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError('');
-    if (query === 'feed') setPosts([]);
+    if (query === 'feed' && !silent) setPosts([]);
     try {
       const fetchPostRows = async (
         kind: 'feed' | 'reel' | 'profile',
@@ -183,21 +244,25 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         const rawPosts = (await normalizePostRowsWithVisibility(postData))
           .filter(post => post.destination === 'feed');
+        let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', uIds);
           const profMap = profileMap(profileData);
 
-          const formatted: Post[] = rawPosts.map(post => ({
+          formatted = rawPosts.map(post => ({
             ...post,
             author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
             likes: [],
             comments: [],
           }));
-          setPosts(await hydratePostInteractions(formatted, currentUserId));
-        } else {
-          setPosts([]);
         }
+
+        const repostedPosts = await fetchGlobalReposts('feed');
+        const feedPosts = [...repostedPosts, ...formatted].sort((first, second) =>
+          Date.parse(second.reposted_at || second.created_at) - Date.parse(first.reposted_at || first.created_at),
+        );
+        setPosts(await hydratePostInteractions(feedPosts, currentUserId));
       } else if (query === 'profile' && targetUserId) {
         const { data: postData, error: postsErr } = await fetchPostRows('profile', targetUserId);
 
@@ -208,7 +273,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         // جلب المنشورات التي أعاد المستخدم نشرها لعرضها في ملفه الشخصي
         const { data: repostData } = await supabase
           .from('reposts')
-          .select('post_id, created_at')
+          .select('post_id, user_id, created_at')
           .eq('user_id', targetUserId)
           .order('created_at', { ascending: false })
           .limit(50);
@@ -270,42 +335,61 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         const rawPosts = (await normalizePostRowsWithVisibility(postData))
           .filter(post => post.type === 'reel' && post.destination === 'reels');
+        let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
           const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', uIds);
           const profMap = profileMap(profileData);
 
-          const formatted: Post[] = rawPosts.map(post => ({
+          formatted = rawPosts.map(post => ({
             ...post,
             author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
             likes: [],
             comments: [],
           }));
-          setPosts(await hydratePostInteractions(formatted, currentUserId));
-        } else {
-          setPosts([]);
         }
+
+        const repostedPosts = await fetchGlobalReposts('reels');
+        const reelPosts = [...repostedPosts, ...formatted].sort((first, second) =>
+          Date.parse(second.reposted_at || second.created_at) - Date.parse(first.reposted_at || first.created_at),
+        );
+        setPosts(await hydratePostInteractions(reelPosts, currentUserId));
       }
     } catch (caughtError) {
-      setPosts([]);
-      setError(isPostsPermissionError(caughtError)
-        ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
-        : 'تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
+      if (!silent) {
+        setPosts([]);
+        setError(isPostsPermissionError(caughtError)
+          ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
+          : 'تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
+      }
       handleAppError(
         'فشل تحميل المنشورات',
         caughtError,
         'تعذر تحميل المنشورات. راجع التفاصيل التشخيصية ثم أعد المحاولة.',
       );
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [query, targetUserId, currentUserId]);
 
   useEffect(() => {
     void refresh();
+    let repostRefreshTimer: number | null = null;
     const onPostCreated = () => void refresh();
+    const onRepostChanged = () => {
+      if (repostRefreshTimer !== null) window.clearTimeout(repostRefreshTimer);
+      repostRefreshTimer = window.setTimeout(() => {
+        repostRefreshTimer = null;
+        void refresh(true);
+      }, 80);
+    };
     window.addEventListener('aani:post-created', onPostCreated);
-    return () => window.removeEventListener('aani:post-created', onPostCreated);
+    window.addEventListener('aani:repost-changed', onRepostChanged);
+    return () => {
+      if (repostRefreshTimer !== null) window.clearTimeout(repostRefreshTimer);
+      window.removeEventListener('aani:post-created', onPostCreated);
+      window.removeEventListener('aani:repost-changed', onRepostChanged);
+    };
   }, [refresh]);
 
   const interactionVersion = useInteractionsVersion();

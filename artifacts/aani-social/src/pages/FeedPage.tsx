@@ -273,7 +273,7 @@ export default function FeedPage({
             const pending = pendingById.get(post.id);
             return (
               <FeedPostCard
-                key={post.id}
+                key={`${post.id}:${post.reposter_id || 'original'}`}
                 post={post}
                 currentUserId={userId}
                 isMainFeed

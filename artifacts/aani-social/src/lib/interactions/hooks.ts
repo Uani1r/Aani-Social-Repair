@@ -51,13 +51,10 @@ export function usePostInteractions(
     () => toggleBookmark(post, userId),
     [post, userId],
   );
-  const onRepost = useCallback(async () => {
-    await toggleRepost(post, userId);
-
-    if (typeof window !== "undefined") {
-      window.dispatchEvent(new CustomEvent("aani:repost-changed"));
-    }
-  }, [post, userId]);
+  const onRepost = useCallback(
+    () => toggleRepost(post, userId),
+    [post, userId],
+  );
   const onShare = useCallback(
     () => recordShare(post, userId).then(() => {}),
     [post, userId],

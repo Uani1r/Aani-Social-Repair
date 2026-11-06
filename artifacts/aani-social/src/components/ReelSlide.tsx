@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, RotateCcw, Send, Volume2, VolumeX, X,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
@@ -59,6 +59,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const [videoDuration, setVideoDuration] = useState(0);
   const [captionHasMore, setCaptionHasMore] = useState(false);
   const [showCaptionSheet, setShowCaptionSheet] = useState(false);
+  const [repostNoticeExpanded, setRepostNoticeExpanded] = useState(false);
+  const repostNoticeTimerRef = useRef<number | null>(null);
+  const shownRepostNoticeRef = useRef<string | null>(null);
   const mediaUrl = post.media_url || '';
   const videoTimeRange = parseVideoTimeRange(mediaUrl);
   const videoCrop = parseVideoCrop(mediaUrl);
@@ -124,6 +127,24 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     observer.observe(container);
     return () => observer.disconnect();
   }, [videoSrc]);
+
+  useEffect(() => {
+    const reposterId = post.repost_attribution?.id;
+    if (!isVisible || !reposterId) return;
+    const noticeKey = `${post.id}:${reposterId}`;
+    if (shownRepostNoticeRef.current === noticeKey) return;
+
+    shownRepostNoticeRef.current = noticeKey;
+    setRepostNoticeExpanded(true);
+    repostNoticeTimerRef.current = window.setTimeout(() => {
+      setRepostNoticeExpanded(false);
+      repostNoticeTimerRef.current = null;
+    }, 6000);
+  }, [isVisible, post.id, post.repost_attribution?.id]);
+
+  useEffect(() => () => {
+    if (repostNoticeTimerRef.current !== null) window.clearTimeout(repostNoticeTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!isOverlayOpen) return;
@@ -427,6 +448,21 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           {muted ? <VolumeX size={26} strokeWidth={2} /> : <Volume2 size={26} strokeWidth={2} />}
         </button>
       </div>
+
+      {post.repost_attribution && (
+        <div
+          className={`reel-repost-pill${repostNoticeExpanded ? ' is-expanded' : ''}`}
+          aria-label={`${displayName(post.repost_attribution)} أعاد نشر هذا الريل`}
+          dir="rtl"
+        >
+          <span className="reel-repost-avatar"><Avatar profile={post.repost_attribution} /></span>
+          <span className="reel-repost-copy">
+            <strong>{displayName(post.repost_attribution)}</strong>
+            <span>أعاد النشر</span>
+            <Repeat size={14} aria-hidden="true" />
+          </span>
+        </div>
+      )}
 
       {pendingState && (
         <div className="absolute inset-x-0 top-0 z-40 bg-black/70 px-4 pb-4 pt-[max(4rem,calc(1rem+env(safe-area-inset-top)))] text-white backdrop-blur-sm">

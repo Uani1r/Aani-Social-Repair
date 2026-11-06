@@ -334,9 +334,9 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''} ${isMainFeedImage ? 'main-feed-image-post' : ''}`}>
       {post.repost_attribution && (
         <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-zinc-500">
-          <Repeat size={12} />
+          <Repeat size={12} aria-hidden="true" />
           <span>
-            أعاد <strong className="font-bold text-zinc-400">{displayName(post.repost_attribution)}</strong> نشر هذا
+            قام <Link href={`/profile/${post.repost_attribution.id}`} className="font-bold text-zinc-300 hover:underline">{displayName(post.repost_attribution)}</Link> بإعادة نشر هذا المنشور
           </span>
         </div>
       )}
@@ -516,7 +516,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
 
           {/* 3. إعادة النشر */}
-          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 transition hover:text-zinc-200" onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#FF0000]' : 'text-zinc-400 hover:text-zinc-200'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
             <RepostIcon active={reposted} size={18} />
             <span className="text-xs">{repostsCount}</span>
           </button>

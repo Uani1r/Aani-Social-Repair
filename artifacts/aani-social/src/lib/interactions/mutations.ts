@@ -170,7 +170,12 @@ export async function toggleRepost(
     markPending(post.id, userId, -1);
   }
 
-  if (stored) await hydratePostIds([post.id], userId, { force: true });
+  if (stored) {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("aani:repost-changed"));
+    }
+    await hydratePostIds([post.id], userId, { force: true });
+  }
 }
 
 export function buildPostUrl(postId: string): string {
