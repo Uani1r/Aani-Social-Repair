@@ -2575,26 +2575,6 @@ body.aani-immersive .unified-top-bar {
   font-size: 11px;
 }
 
-.messages-new-button {
-  display: inline-flex;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
-  color: var(--messages-primary);
-  background: transparent;
-  cursor: pointer;
-  transition: background .18s ease, transform .18s ease;
-}
-
-.messages-new-button:hover {
-  background: #1f1f1f;
-  transform: scale(1.04);
-}
-
 .messages-search-wrap {
   display: flex;
   min-height: 48px;
@@ -2651,7 +2631,7 @@ body.aani-immersive .unified-top-bar {
   display: grid;
   min-height: 58px;
   flex: 0 0 auto;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border-bottom: 1px solid var(--messages-border);
 }
 
@@ -3258,4 +3238,242 @@ body.aani-immersive .unified-top-bar {
     height: calc(100dvh - 170px);
     min-height: 320px;
   }
+}
+
+
+
+/* Long-press conversation actions */
+.messages-chat-item {
+  -webkit-touch-callout: none;
+  touch-action: pan-y;
+  user-select: none;
+}
+
+.messages-chat-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.messages-chat-name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-chat-name > svg {
+  flex: 0 0 auto;
+  color: var(--messages-secondary);
+}
+
+.messages-context-backdrop {
+  --messages-black: #000;
+  --messages-surface: #121212;
+  --messages-raised: #1a1a1a;
+  --messages-border: #303030;
+  --messages-primary: #fafafa;
+  --messages-secondary: #a8a8a8;
+  --messages-muted: #737373;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgb(0 0 0 / 40%);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: messages-context-fade-in .18s ease-out both;
+}
+
+.messages-context-focus {
+  position: fixed;
+  z-index: 1001;
+  border-radius: 12px;
+  background: #1c1c1c;
+  box-shadow: 0 12px 34px rgb(0 0 0 / 28%);
+  pointer-events: none;
+  transform: scale(1.02);
+  transform-origin: center;
+}
+
+.messages-context-menu {
+  position: fixed;
+  z-index: 1002;
+  display: flex;
+  width: min(260px, calc(100vw - 28px));
+  max-height: min(320px, calc(100dvh - 24px));
+  flex-direction: column;
+  overflow-y: auto;
+  border: 1px solid #333;
+  border-radius: 14px;
+  padding: 7px;
+  color: #fafafa;
+  background: #171717;
+  box-shadow: 0 18px 54px rgb(0 0 0 / 48%);
+  font-family: 'Cairo', 'Tajawal', 'Noto Sans Arabic', sans-serif;
+  animation: messages-context-pop-in .2s cubic-bezier(.2, .8, .2, 1) both;
+  transform-origin: top center;
+}
+
+.messages-context-menu button {
+  display: flex;
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 11px;
+  color: #f5f5f5;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: right;
+  transition: background .14s ease;
+}
+
+.messages-context-menu button:hover,
+.messages-context-menu button:focus-visible {
+  outline: none;
+  background: #292929;
+}
+
+.messages-context-menu button:disabled {
+  cursor: wait;
+  opacity: .5;
+}
+
+.messages-context-menu button svg {
+  flex: 0 0 auto;
+  color: #c8c8c8;
+}
+
+.messages-context-menu button.is-destructive {
+  color: #ff5b68;
+}
+
+.messages-context-menu button.is-destructive svg {
+  color: #ff5b68;
+}
+
+.messages-delete-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 68%);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: 'Cairo', 'Tajawal', 'Noto Sans Arabic', sans-serif;
+  animation: messages-context-fade-in .16s ease-out both;
+}
+
+.messages-delete-dialog {
+  display: flex;
+  width: min(100%, 380px);
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid #303030;
+  border-radius: 16px;
+  padding: 22px;
+  color: #fafafa;
+  background: #171717;
+  box-shadow: 0 20px 60px rgb(0 0 0 / 52%);
+  animation: messages-context-pop-in .2s cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.messages-delete-dialog h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.messages-delete-dialog p {
+  margin: 0 0 4px;
+  color: #b4b4b4;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.messages-delete-dialog > button {
+  min-height: 42px;
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 12px;
+  color: #fff;
+  background: #292929;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.messages-delete-dialog > button:hover:not(:disabled) {
+  background: #383838;
+}
+
+.messages-delete-dialog > button.is-destructive {
+  color: #fff;
+  background: #d93646;
+}
+
+.messages-delete-dialog > button.is-destructive:hover:not(:disabled) {
+  background: #ba2938;
+}
+
+.messages-delete-dialog > button:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.messages-delete-dialog small {
+  color: #858585;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.messages-delete-dialog > button.messages-delete-cancel {
+  color: #bdbdbd;
+  background: transparent;
+}
+
+@keyframes messages-context-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes messages-context-pop-in {
+  from { opacity: 0; transform: scale(.94); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .messages-context-backdrop,
+  .messages-context-menu,
+  .messages-delete-backdrop,
+  .messages-delete-dialog {
+    animation-duration: .01ms;
+  }
+}
+
+
+
+.messages-new-text-button {
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--messages-blue);
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.messages-new-text-button:hover {
+  background: #1f1f1f;
 }

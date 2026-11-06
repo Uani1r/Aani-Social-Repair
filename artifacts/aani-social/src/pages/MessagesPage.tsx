@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { ArrowLeft, ChevronDown, MessageCircle, Pencil, Search, Send, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, ChevronDown, Flag, MessageCircle, Pin, Search, Send, Trash2, X } from 'lucide-react';
+import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import SharedPostPreview from '@/components/SharedPostPreview';
@@ -26,12 +28,80 @@ interface ConversationSummary {
   isRequest: boolean;
 }
 
-type InboxTab = 'messages' | 'requests';
+type InboxTab = 'messages' | 'requests' | 'archived';
+
+type ConversationPreferences = {
+  pinnedIds: string[];
+  archivedIds: string[];
+  mutedIds: string[];
+};
+
+type ConversationPreferenceKey = keyof ConversationPreferences;
+
+type ConversationContextState = {
+  conversation: ConversationSummary;
+  rect: { top: number; left: number; width: number; height: number };
+  menuTop: number;
+  menuLeft: number;
+};
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
+const EMPTY_CONVERSATION_PREFERENCES: ConversationPreferences = {
+  pinnedIds: [],
+  archivedIds: [],
+  mutedIds: [],
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readConversationPreferences(userId: string): ConversationPreferences {
+  if (typeof window === 'undefined') return EMPTY_CONVERSATION_PREFERENCES;
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(`aani_message_preferences_${userId}`) || '{}');
+    if (!isRecord(stored)) return EMPTY_CONVERSATION_PREFERENCES;
+    const readIds = (value: unknown) => Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [];
+    return {
+      pinnedIds: readIds(stored.pinnedIds),
+      archivedIds: readIds(stored.archivedIds),
+      mutedIds: readIds(stored.mutedIds),
+    };
+  } catch {
+    return EMPTY_CONVERSATION_PREFERENCES;
+  }
+}
+
+function writeConversationPreferences(userId: string, preferences: ConversationPreferences): void {
+  try {
+    localStorage.setItem(`aani_message_preferences_${userId}`, JSON.stringify(preferences));
+  } catch {
+    /* التخزين المحلي غير متاح */
+  }
+}
+
+function updatePreferenceList(
+  preferences: ConversationPreferences,
+  key: ConversationPreferenceKey,
+  contactId: string,
+  enabled: boolean,
+): ConversationPreferences {
+  const ids = new Set(preferences[key]);
+  if (enabled) ids.add(contactId);
+  else ids.delete(contactId);
+  return { ...preferences, [key]: [...ids] };
+}
+
+async function loadHiddenMessageIds(userId: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('message_hides')
+    .select('message_id')
+    .eq('user_id', userId);
+  if (error) {
+    console.warn('[messages] تعذر جلب الرسائل المخفية:', error);
+    return new Set();
+  }
+  return new Set((data || []).flatMap(row => typeof row.message_id === 'string' ? [row.message_id] : []));
 }
 
 function normalizeMessageRows(value: unknown): MessageRow[] {
@@ -120,9 +190,21 @@ export default function MessagesPage({
   const [newMessageProfiles, setNewMessageProfiles] = useState<Profile[]>([]);
   const [newMessageLoading, setNewMessageLoading] = useState(false);
   const [newMessageError, setNewMessageError] = useState<string | null>(null);
+  const [conversationPreferences, setConversationPreferences] = useState<ConversationPreferences>(() => readConversationPreferences(currentUserId));
+  const [conversationContext, setConversationContext] = useState<ConversationContextState | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const suppressNextConversationClickRef = useRef(false);
+
+  useEffect(() => {
+    setConversationPreferences(readConversationPreferences(currentUserId));
+  }, [currentUserId]);
 
   const markConversationRead = useCallback((contactId: string) => {
     const readAt = new Date().toISOString();
@@ -149,7 +231,7 @@ export default function MessagesPage({
     setContactsLoading(true);
     setContactsError(null);
     try {
-      const [profileResult, messagesResult, followsResult] = await Promise.all([
+      const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
         supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle(),
         supabase
           .from('messages')
@@ -160,6 +242,7 @@ export default function MessagesPage({
           .from('follows')
           .select('follower_id, following_id')
           .or(`follower_id.eq.${currentUserId},following_id.eq.${currentUserId}`),
+        loadHiddenMessageIds(currentUserId),
       ]);
 
       if (requestId !== contactsRequestRef.current) return;
@@ -169,7 +252,7 @@ export default function MessagesPage({
       setCurrentProfile((profileResult.data || null) as Profile | null);
 
       const latestByContact = new Map<string, MessageRow>();
-      normalizeMessageRows(messagesResult.data).forEach(message => {
+      normalizeMessageRows(messagesResult.data).filter(message => !hiddenMessageIds.has(message.id)).forEach(message => {
         const contactId = message.sender_id === currentUserId ? message.recipient_id : message.sender_id;
         if (!latestByContact.has(contactId)) latestByContact.set(contactId, message);
       });
@@ -227,6 +310,8 @@ export default function MessagesPage({
         .select('id, sender_id, recipient_id, content, post_id, story_id, created_at')
         .or(threadFilter)
         .order('created_at', { ascending: true });
+      const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
+      const visibleMessages = (rows: unknown) => normalizeMessageRows(rows).filter(message => !hiddenMessageIds.has(message.id));
 
       if (error) {
         const code = (error as { code?: string }).code;
@@ -237,12 +322,12 @@ export default function MessagesPage({
             .or(threadFilter)
             .order('created_at', { ascending: true });
           if (fallbackError) throw fallbackError;
-          if (requestId === threadRequestRef.current) setThread(normalizeMessageRows(fallback));
+          if (requestId === threadRequestRef.current) setThread(visibleMessages(fallback));
         } else {
           throw error;
         }
       } else if (requestId === threadRequestRef.current) {
-        setThread(normalizeMessageRows(data));
+        setThread(visibleMessages(data));
       }
     } catch (error) {
       if (requestId !== threadRequestRef.current) return;
@@ -253,6 +338,25 @@ export default function MessagesPage({
     }
   }, [currentUserId, selectedId]);
 
+  const realtimeRefreshTimerRef = useRef<number | null>(null);
+  const realtimeRefreshThreadRef = useRef(false);
+  const scheduleMessageRefresh = useCallback((includeThread: boolean) => {
+    realtimeRefreshThreadRef.current = realtimeRefreshThreadRef.current || includeThread;
+    if (realtimeRefreshTimerRef.current !== null) window.clearTimeout(realtimeRefreshTimerRef.current);
+    realtimeRefreshTimerRef.current = window.setTimeout(() => {
+      realtimeRefreshTimerRef.current = null;
+      const refreshThread = realtimeRefreshThreadRef.current;
+      realtimeRefreshThreadRef.current = false;
+      void loadConversationList();
+      if (refreshThread) void loadThread();
+    }, 120);
+  }, [loadConversationList, loadThread]);
+  const clearScheduledMessageRefresh = useCallback(() => {
+    if (realtimeRefreshTimerRef.current !== null) window.clearTimeout(realtimeRefreshTimerRef.current);
+    realtimeRefreshTimerRef.current = null;
+    realtimeRefreshThreadRef.current = false;
+  }, []);
+
   useEffect(() => {
     void loadConversationList();
     if (!supabaseConfigured) return;
@@ -262,13 +366,21 @@ export default function MessagesPage({
         schema: 'public',
         table: 'messages',
         filter: `recipient_id=eq.${currentUserId}`,
-      }, () => void loadConversationList())
+      }, () => scheduleMessageRefresh(false))
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'message_hides',
+        filter: `user_id=eq.${currentUserId}`,
+      }, () => scheduleMessageRefresh(false))
       .subscribe();
     return () => {
       contactsRequestRef.current += 1;
+      clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, loadConversationList]);
+  }, [currentUserId, loadConversationList, scheduleMessageRefresh, clearScheduledMessageRefresh]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -301,16 +413,20 @@ export default function MessagesPage({
     void loadThread();
     if (!supabaseConfigured) return;
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
-        void loadThread();
-        void loadConversationList();
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(true))
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'message_hides',
+        filter: `user_id=eq.${currentUserId}`,
+      }, () => scheduleMessageRefresh(true))
       .subscribe();
     return () => {
       threadRequestRef.current += 1;
+      clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, selectedId, loadConversationList, loadThread]);
+  }, [currentUserId, selectedId, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh]);
 
   const lastThreadMessageId = thread[thread.length - 1]?.id;
   useEffect(() => {
@@ -399,16 +515,181 @@ export default function MessagesPage({
   };
 
   const tabConversations = useMemo(() => (
-    activeTab === 'requests'
-      ? conversations.filter(conversation => conversation.isRequest)
-      : conversations.filter(conversation => !conversation.isRequest)
-  ), [activeTab, conversations]);
+    activeTab === 'archived'
+      ? conversations.filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id))
+      : activeTab === 'requests'
+        ? conversations.filter(conversation => !conversationPreferences.archivedIds.includes(conversation.profile.id) && conversation.isRequest)
+        : conversations.filter(conversation => !conversationPreferences.archivedIds.includes(conversation.profile.id) && !conversation.isRequest)
+  ), [activeTab, conversations, conversationPreferences.archivedIds]);
+  const orderedTabConversations = useMemo(() => [...tabConversations].sort((left, right) => (
+    Number(conversationPreferences.pinnedIds.includes(right.profile.id)) - Number(conversationPreferences.pinnedIds.includes(left.profile.id))
+  )), [conversationPreferences.pinnedIds, tabConversations]);
   const searchNeedle = searchTerm.trim().toLocaleLowerCase();
   const matchingConversationCount = tabConversations.filter(conversation => (
     `${displayName(conversation.profile)} ${conversation.profile.username || ''}`.toLocaleLowerCase().includes(searchNeedle)
   )).length;
-  const requestCount = conversations.filter(conversation => conversation.isRequest).length;
+  const requestCount = conversations.filter(conversation => (
+    conversation.isRequest && !conversationPreferences.archivedIds.includes(conversation.profile.id)
+  )).length;
+  const archivedCount = conversations.filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id)).length;
   const target = conversations.find(conversation => conversation.profile.id === selectedId)?.profile || null;
+
+  const setConversationPreference = (key: ConversationPreferenceKey, contactId: string, enabled: boolean) => {
+    setConversationPreferences(current => {
+      const next = updatePreferenceList(current, key, contactId, enabled);
+      writeConversationPreferences(currentUserId, next);
+      return next;
+    });
+  };
+
+  const openConversationContextMenu = (conversation: ConversationSummary, targetRect: DOMRect) => {
+    const rect = {
+      top: targetRect.top,
+      left: targetRect.left,
+      width: targetRect.width,
+      height: targetRect.height,
+    };
+    const menuWidth = Math.min(260, window.innerWidth - 24);
+    const menuHeight = 6 * 48 + 16;
+    const belowTop = rect.top + rect.height + 8;
+    const menuTop = belowTop + menuHeight <= window.innerHeight - 12
+      ? belowTop
+      : Math.max(12, rect.top - menuHeight - 8);
+    const menuLeft = Math.min(Math.max(rect.left, 12), Math.max(12, window.innerWidth - menuWidth - 12));
+    setConversationContext({ conversation, rect, menuTop, menuLeft });
+  };
+
+  const cancelLongPress = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressOriginRef.current = null;
+  };
+
+  const handleConversationAction = async (
+    action: 'pin' | 'archive' | 'mute' | 'block' | 'report' | 'delete',
+    conversation: ConversationSummary,
+  ) => {
+    const contactId = conversation.profile.id;
+    const name = displayName(conversation.profile);
+    setConversationContext(null);
+
+    if (action === 'delete') {
+      setDeleteTarget(conversation);
+      return;
+    }
+    if (action === 'pin') {
+      const pinned = conversationPreferences.pinnedIds.includes(contactId);
+      setConversationPreference('pinnedIds', contactId, !pinned);
+      toast.success(pinned ? 'تم إلغاء تثبيت المحادثة' : 'تم تثبيت المحادثة');
+      return;
+    }
+    if (action === 'archive') {
+      const archived = conversationPreferences.archivedIds.includes(contactId);
+      setConversationPreference('archivedIds', contactId, !archived);
+      if (archived) {
+        setActiveTab(conversation.isRequest ? 'requests' : 'messages');
+      } else {
+        setActiveTab('messages');
+        if (selectedId === contactId) setLocation('/messages');
+      }
+      toast.success(archived ? 'تم إلغاء أرشفة المحادثة' : 'تمت أرشفة المحادثة');
+      return;
+    }
+    if (action === 'mute') {
+      const muted = conversationPreferences.mutedIds.includes(contactId);
+      setConversationPreference('mutedIds', contactId, !muted);
+      toast.success(muted ? 'تم إلغاء كتم المحادثة' : 'تم كتم المحادثة');
+      return;
+    }
+
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    if (action === 'block') {
+      if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع الحساب من التواصل معك.`)) return;
+      if (moderationBusy) return;
+      setModerationBusy(true);
+      try {
+        const { error } = await supabase.rpc('aani_block_user', { p_blocked_user_id: contactId });
+        if (error) throw error;
+        if (selectedId === contactId) setLocation('/messages');
+        await loadConversationList();
+        toast.success('تم حظر الحساب');
+      } catch (error) {
+        console.error('[messages] تعذر حظر الحساب:', error);
+        toast.error('تعذر حظر الحساب. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
+      } finally {
+        setModerationBusy(false);
+      }
+      return;
+    }
+
+    const details = window.prompt(`ما سبب الإبلاغ عن ${name}؟`);
+    if (details === null) return;
+    const normalizedDetails = details.trim();
+    if (!normalizedDetails) {
+      toast.error('اكتب سبباً للإبلاغ عن الحساب.');
+      return;
+    }
+    if (normalizedDetails.length > 1000) {
+      toast.error('يجب ألا يتجاوز سبب البلاغ 1000 حرف.');
+      return;
+    }
+    if (moderationBusy) return;
+    setModerationBusy(true);
+    try {
+      const { error } = await supabase.from('user_reports').insert({
+        reporter_id: currentUserId,
+        reported_user_id: contactId,
+        category: 'other',
+        details: normalizedDetails,
+      });
+      if (error?.code === '23505') {
+        toast.info('سبق أن أبلغت عن هذا الحساب.');
+        return;
+      }
+      if (error) throw error;
+      toast.success('تم إرسال البلاغ لمراجعة الحساب.');
+    } catch (error) {
+      console.error('[messages] تعذر إرسال بلاغ الحساب:', error);
+      toast.error('تعذر إرسال البلاغ. تحقق من تطبيق تحديث إجراءات مشاهدي الستوري.');
+    } finally {
+      setModerationBusy(false);
+    }
+  };
+
+  const deleteConversation = async (forEveryone: boolean) => {
+    const conversation = deleteTarget;
+    if (!conversation || deleteBusy) return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+
+    setDeleteBusy(true);
+    try {
+      const { error } = await supabase.rpc(
+        forEveryone ? 'aani_delete_message_conversation_for_everyone' : 'aani_hide_message_conversation',
+        { p_other_user_id: conversation.profile.id },
+      );
+      if (error) throw error;
+      setDeleteTarget(null);
+      if (selectedId === conversation.profile.id) {
+        setThread([]);
+        setLocation('/messages');
+      }
+      await loadConversationList();
+      toast.success(forEveryone ? 'تم حذف المحادثة لدى الجميع' : 'تم حذف المحادثة من قائمتك');
+    } catch (error) {
+      console.error('[messages] تعذر حذف المحادثة:', error);
+      toast.error('تعذر حذف المحادثة. تأكد من تطبيق تحديث أدوات المحادثات في Supabase.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
 
   const openNewMessage = () => {
     setUserMenuOpen(false);
@@ -448,9 +729,7 @@ export default function MessagesPage({
                 </div>
               )}
             </div>
-            <button type="button" className="messages-new-button" aria-label="رسالة جديدة" title="رسالة جديدة" onClick={openNewMessage}>
-              <Pencil size={20} strokeWidth={2} />
-            </button>
+            <button type="button" className="messages-new-text-button" onClick={openNewMessage}>رسالة جديدة</button>
           </header>
 
           <div className="messages-search-wrap">
@@ -475,6 +754,10 @@ export default function MessagesPage({
               <span>الطلبات</span>
               {requestCount > 0 && <span className="messages-tab-badge">{requestCount > 99 ? '99+' : requestCount}</span>}
             </button>
+            <button type="button" role="tab" aria-selected={activeTab === 'archived'} className={`messages-tab${activeTab === 'archived' ? ' active' : ''}`} onClick={() => setActiveTab('archived')}>
+              <span>المؤرشفة</span>
+              {archivedCount > 0 && <span className="messages-tab-badge">{archivedCount > 99 ? '99+' : archivedCount}</span>}
+            </button>
           </div>
 
           <div className="messages-list-wrap">
@@ -485,7 +768,7 @@ export default function MessagesPage({
                 <button type="button" onClick={() => void loadConversationList()}>إعادة المحاولة</button>
               </div>
             )}
-            {!contactsLoading && !contactsError && tabConversations.map(conversation => {
+            {!contactsLoading && !contactsError && orderedTabConversations.map(conversation => {
               const isUnread = Boolean(conversation.lastMessage
                 && conversation.lastMessage.sender_id !== currentUserId
                 && Date.parse(conversation.lastMessage.created_at) > (Date.parse(readAtByContact[conversation.profile.id] || '') || 0));
@@ -493,14 +776,48 @@ export default function MessagesPage({
                 .toLocaleLowerCase()
                 .includes(searchNeedle);
               const isOnline = onlineUserIds.has(conversation.profile.id);
+              const isPinned = conversationPreferences.pinnedIds.includes(conversation.profile.id);
+              const isMuted = conversationPreferences.mutedIds.includes(conversation.profile.id);
               return (
                 <Link
                   key={conversation.profile.id}
                   href={`/messages/${encodeURIComponent(conversation.profile.id)}`}
                   hidden={!matchesSearch}
                   aria-current={selectedId === conversation.profile.id ? 'page' : undefined}
-                  onClick={() => markConversationRead(conversation.profile.id)}
-                  className={`messages-chat-item${selectedId === conversation.profile.id ? ' active' : ''}${isUnread ? ' unread' : ''}`}
+                  onPointerDown={event => {
+                    if (event.button !== 0) return;
+                    suppressNextConversationClickRef.current = false;
+                    cancelLongPress();
+                    longPressOriginRef.current = { x: event.clientX, y: event.clientY };
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    longPressTimerRef.current = window.setTimeout(() => {
+                      longPressTimerRef.current = null;
+                      suppressNextConversationClickRef.current = true;
+                      openConversationContextMenu(conversation, rect);
+                    }, 450);
+                  }}
+                  onPointerMove={event => {
+                    const origin = longPressOriginRef.current;
+                    if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10) cancelLongPress();
+                  }}
+                  onPointerUp={cancelLongPress}
+                  onPointerLeave={cancelLongPress}
+                  onPointerCancel={cancelLongPress}
+                  onContextMenu={event => {
+                    event.preventDefault();
+                    cancelLongPress();
+                    openConversationContextMenu(conversation, event.currentTarget.getBoundingClientRect());
+                  }}
+                  onClick={event => {
+                    if (suppressNextConversationClickRef.current) {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      suppressNextConversationClickRef.current = false;
+                      return;
+                    }
+                    markConversationRead(conversation.profile.id);
+                  }}
+                  className={`messages-chat-item${selectedId === conversation.profile.id ? ' active' : ''}${isUnread ? ' unread' : ''}${isPinned ? ' is-pinned' : ''}`}
                 >
                   <span className={`messages-avatar-wrap${conversation.hasStory ? ' has-story' : ''}${isOnline ? ' is-online' : ''}`}>
                     <span className="messages-avatar-inner"><Avatar profile={conversation.profile} large /></span>
@@ -508,7 +825,11 @@ export default function MessagesPage({
                   </span>
                   <span className="messages-chat-copy">
                     <span className="messages-chat-topline">
-                      <span className={`messages-chat-name${isUnread ? ' is-unread' : ''}`}>{displayName(conversation.profile)}</span>
+                      <span className={`messages-chat-name${isUnread ? ' is-unread' : ''}`}>
+                        <span>{displayName(conversation.profile)}</span>
+                        {isPinned && <Pin size={13} aria-label="مثبتة" />}
+                        {isMuted && <BellOff size={13} aria-label="مكتومة" />}
+                      </span>
                       <time className="messages-chat-time" dateTime={conversation.lastMessage?.created_at || undefined}>
                         {conversation.lastMessage ? formatConversationTime(conversation.lastMessage.created_at) : ''}
                       </time>
@@ -527,8 +848,8 @@ export default function MessagesPage({
             {!contactsLoading && !contactsError && tabConversations.length === 0 && (
               <div className="messages-list-empty">
                 <MessageCircle size={26} />
-                <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : 'لا توجد محادثات بعد'}</span>
-                <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
+                <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : activeTab === 'archived' ? 'لا توجد محادثات مؤرشفة' : 'لا توجد محادثات بعد'}</span>
+                <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : activeTab === 'archived' ? 'ستظهر هنا المحادثات التي أرشفتها.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
                 {activeTab === 'messages' && <button type="button" onClick={openNewMessage}>إرسال رسالة</button>}
               </div>
             )}
@@ -628,6 +949,83 @@ export default function MessagesPage({
           )}
         </main>
       </div>
+
+      {conversationContext && createPortal(
+        <div className="messages-context-backdrop" role="presentation" onClick={() => setConversationContext(null)}>
+          <div
+            className="messages-chat-item messages-context-focus"
+            style={{
+              top: conversationContext.rect.top,
+              left: conversationContext.rect.left,
+              width: conversationContext.rect.width,
+              height: conversationContext.rect.height,
+            }}
+            aria-hidden="true"
+          >
+            <span className="messages-avatar-wrap">
+              <span className="messages-avatar-inner"><Avatar profile={conversationContext.conversation.profile} large /></span>
+            </span>
+            <span className="messages-chat-copy">
+              <span className="messages-chat-name">{displayName(conversationContext.conversation.profile)}</span>
+              <span className="messages-chat-preview">{messagePreview(conversationContext.conversation.lastMessage, currentUserId)}</span>
+            </span>
+          </div>
+          <section
+            className="messages-context-menu"
+            role="menu"
+            aria-label={`إجراءات محادثة ${displayName(conversationContext.conversation.profile)}`}
+            style={{ top: conversationContext.menuTop, left: conversationContext.menuLeft }}
+            onClick={event => event.stopPropagation()}
+          >
+            <button type="button" role="menuitem" onClick={() => void handleConversationAction('pin', conversationContext.conversation)}>
+              <Pin size={18} />
+              <span>{conversationPreferences.pinnedIds.includes(conversationContext.conversation.profile.id) ? 'إلغاء التثبيت' : 'تثبيت'}</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => void handleConversationAction('archive', conversationContext.conversation)}>
+              <Archive size={18} />
+              <span>{conversationPreferences.archivedIds.includes(conversationContext.conversation.profile.id) ? 'إلغاء الأرشفة' : 'أرشفة'}</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => void handleConversationAction('mute', conversationContext.conversation)}>
+              <BellOff size={18} />
+              <span>{conversationPreferences.mutedIds.includes(conversationContext.conversation.profile.id) ? 'إلغاء الكتم' : 'كتم'}</span>
+            </button>
+            <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => void handleConversationAction('block', conversationContext.conversation)}>
+              <Ban size={18} />
+              <span>حظر</span>
+            </button>
+            <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => void handleConversationAction('report', conversationContext.conversation)}>
+              <Flag size={18} />
+              <span>إبلاغ</span>
+            </button>
+            <button type="button" role="menuitem" className="is-destructive" onClick={() => void handleConversationAction('delete', conversationContext.conversation)}>
+              <Trash2 size={18} />
+              <span>حذف</span>
+            </button>
+          </section>
+        </div>,
+        document.body,
+      )}
+
+      {deleteTarget && createPortal(
+        <div className="messages-delete-backdrop" role="presentation" onClick={() => { if (!deleteBusy) setDeleteTarget(null); }}>
+          <section
+            className="messages-delete-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="messages-delete-title"
+            aria-describedby="messages-delete-description"
+            onClick={event => event.stopPropagation()}
+          >
+            <h2 id="messages-delete-title">حذف المحادثة؟</h2>
+            <p id="messages-delete-description">اختر طريقة حذف محادثتك مع {displayName(deleteTarget.profile)}.</p>
+            <button type="button" disabled={deleteBusy} onClick={() => void deleteConversation(false)}>حذف لدي</button>
+            <button type="button" className="is-destructive" disabled={deleteBusy} onClick={() => void deleteConversation(true)}>حذف لدى الجميع</button>
+            <small>الحذف لدى الجميع يزيل كل رسائل هذه المحادثة للطرفين.</small>
+            <button type="button" className="messages-delete-cancel" disabled={deleteBusy} onClick={() => setDeleteTarget(null)}>إلغاء</button>
+          </section>
+        </div>,
+        document.body,
+      )}
 
       {newMessageOpen && (
         <div className="messages-modal-backdrop" role="presentation" onClick={() => setNewMessageOpen(false)}>
