@@ -100,9 +100,8 @@ export function useStoryViewerActions({
   setShowMenu,
 }: UseStoryViewerActionsOptions) {
   const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
-    if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
-
-    const storyId = currentStory.id;
+    const storyId = currentStory?.id;
+    if (!storyId || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
     const requestId = ++storyViewsRequestRef.current;
     storyViewsWasPausedRef.current = wasPausedBeforeOpen;
     storyVideoWasPlayingRef.current = Boolean(storyVideoRef.current && !storyVideoRef.current.paused);
