@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
-import { ArrowLeft, ChevronDown, MessageCircle, Pencil, Search, Send, Users, X } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, MessageCircle, Pencil, Search, Send, Users, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import SharedPostPreview from '@/components/SharedPostPreview';
@@ -869,7 +869,6 @@ export default function MessagesPage({
                   }}
                   maxLength={60}
                   placeholder="أدخل اسم المجموعة"
-                  autoFocus
                 />
               </div>
               <div className="messages-group-search">
@@ -884,21 +883,38 @@ export default function MessagesPage({
               </div>
               <div className="messages-group-friends">
                 {contactsLoading && <div className="messages-list-status">جارٍ تحميل الأصدقاء...</div>}
-                {!contactsLoading && visibleFriends.map(friend => (
-                  <label key={friend.id} className="messages-group-friend">
-                    <input
-                      type="checkbox"
-                      checked={selectedGroupMemberIds.includes(friend.id)}
-                      onChange={() => toggleGroupMember(friend.id)}
-                      aria-label={`إضافة ${displayName(friend)} إلى المجموعة`}
-                    />
-                    <Avatar profile={friend} large />
-                    <span className="messages-group-friend-copy">
-                      <strong>{displayName(friend)}</strong>
-                      <small dir="ltr">{friend.username ? `@${friend.username.replace(/^@+/, '')}` : ''}</small>
-                    </span>
-                  </label>
-                ))}
+                {!contactsLoading && visibleFriends.map(friend => {
+                  const isSelected = selectedGroupMemberIds.includes(friend.id);
+                  return (
+                    <label key={friend.id} className={`messages-group-friend${isSelected ? ' is-selected' : ''}`}>
+                      <Avatar
+                        profile={{
+                          ...friend,
+                          full_name: displayName(friend).trim().slice(0, 1),
+                          display_name: null,
+                          username: '',
+                        }}
+                        large
+                      />
+                      <span className="messages-group-friend-copy">
+                        <strong>{displayName(friend)}</strong>
+                        <small dir="ltr">{friend.username ? `@${friend.username.replace(/^@+/, '')}` : ''}</small>
+                      </span>
+                      <span className="messages-group-checkbox-wrap">
+                        <input
+                          className="messages-group-checkbox-input"
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleGroupMember(friend.id)}
+                          aria-label={`إضافة ${displayName(friend)} إلى المجموعة`}
+                        />
+                        <span className="messages-group-checkbox" aria-hidden="true">
+                          {isSelected && <Check size={14} strokeWidth={3} />}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
                 {!contactsLoading && friends.length > 0 && visibleFriends.length === 0 && (
                   <div className="messages-list-status">لا يوجد أصدقاء مطابقون.</div>
                 )}
@@ -907,9 +923,9 @@ export default function MessagesPage({
                 )}
               </div>
               {groupError && <div className="messages-group-error" role="alert">{groupError}</div>}
-              <p className="messages-group-storage-note">تُحفظ المجموعة على هذا الجهاز فقط؛ قاعدة البيانات الحالية لا تدعم محادثات المجموعات.</p>
               <footer className="messages-group-footer">
-                <span>{selectedGroupMemberIds.length} أعضاء محددون</span>
+                <p className="messages-group-storage-note">تُحفظ المجموعة على هذا الجهاز فقط؛ قاعدة البيانات الحالية لا تدعم محادثات المجموعات.</p>
+                <span className="messages-group-count"><span id="selectedCount">{selectedGroupMemberIds.length}</span> أعضاء محددون</span>
                 <button type="submit" disabled={!groupName.trim() || selectedGroupMemberIds.length === 0}>
                   إنشاء المجموعة
                 </button>
