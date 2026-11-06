@@ -117,10 +117,10 @@ const filterHiddenComments = (
   items: CommentWithDetails[],
   blockedUserIds: Set<string>,
 ): CommentWithDetails[] =>
-  items.flatMap((item) => {
-    const visibleReplies = filterHiddenComments(item.replies ?? [], blockedUserIds);
+  items.flatMap<CommentWithDetails>((item): CommentWithDetails[] => {
+    const visibleReplies: CommentWithDetails[] = filterHiddenComments(item.replies ?? [], blockedUserIds);
     if (item.is_hidden_by_me || blockedUserIds.has(item.user_id)) {
-      return visibleReplies.map((reply) => ({ ...reply, parent_id: null }));
+      return visibleReplies.map((reply): CommentWithDetails => ({ ...reply, parent_id: null }));
     }
     return [{ ...item, replies: visibleReplies }];
   });
@@ -274,8 +274,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     void (async () => {
       let postRow: {
         user_id: string;
-        comments_disabled?: boolean;
-        hide_comments?: boolean;
+        comments_disabled?: boolean | null;
+        hide_comments?: boolean | null;
       } | null = null;
       let legacySchema = false;
 

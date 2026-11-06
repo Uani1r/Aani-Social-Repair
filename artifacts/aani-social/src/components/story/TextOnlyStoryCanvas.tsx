@@ -28,12 +28,6 @@ interface StoryFilterOverlay {
 
 type StickerPoint = { x: number; y: number };
 
-interface StoryLayerOrder {
-  layerOrder?: number;
-}
-
-type StoryTimedTextLayer = StoryTimedText & StoryLayerOrder;
-
 interface TextOnlyStoryCanvasProps {
   userId: string;
   currentProfile: Profile | null;
@@ -283,7 +277,7 @@ export default function TextOnlyStoryCanvas({
         )}
 
         {textLayers.map((layer, index) => {
-          const layerOrder = (layer as StoryTimedTextLayer).layerOrder ?? index + 10;
+          const layerOrder = layer.layerOrder ?? index + 10;
           if (layer.type === 'image') {
             return (
               <StoryImageSticker

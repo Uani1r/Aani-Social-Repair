@@ -1448,15 +1448,21 @@ export default function StoriesBar({
             localStorage.removeItem(key);
             continue;
           }
-          if (!session || !Number.isFinite(session.expiresAt) || !Number.isFinite(session.createdAt)) {
+          const createdAt = session?.createdAt;
+          const expiresAt = session?.expiresAt;
+          if (!session
+            || typeof createdAt !== 'number'
+            || !Number.isFinite(createdAt)
+            || typeof expiresAt !== 'number'
+            || !Number.isFinite(expiresAt)) {
             localStorage.removeItem(key);
             continue;
           }
-          if ((session.expiresAt as number) <= Date.now() && !session.expired) {
+          if (expiresAt <= Date.now() && !session.expired) {
             localStorage.setItem(key, JSON.stringify({
               profileIds: [],
-              createdAt: session.createdAt,
-              expiresAt: session.expiresAt,
+              createdAt,
+              expiresAt,
               expired: true,
             } satisfies StoryViewerPreviewSession));
             setStoryViewerPreview(current => current?.storageKey === key ? null : current);

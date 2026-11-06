@@ -69,6 +69,7 @@ export interface StoryCanvasStyle {
 
 export interface StoryCanvasStyleOverlay extends StoryCanvasStyle {
   id: string;
+  layerOrder?: number;
   type: 'canvas-style';
   startTime: number;
   endTime: number;
@@ -76,6 +77,7 @@ export interface StoryCanvasStyleOverlay extends StoryCanvasStyle {
 
 export interface StoryMediaTransformOverlay {
   id: string;
+  layerOrder?: number;
   type: 'media-transform';
   startTime: number;
   endTime: number;

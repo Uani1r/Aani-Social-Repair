@@ -52,9 +52,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function touchCenter(touches: TouchList) {
-  const first = touches.item(0);
-  const second = touches.item(1);
+function getTouches(touchList: TouchList): Touch[] {
+  const touches: Touch[] = [];
+  for (let index = 0; index < touchList.length; index += 1) {
+    const touch = touchList.item(index);
+    if (touch) touches.push(touch);
+  }
+  return touches;
+}
+
+function touchCenter(touches: readonly Touch[]) {
+  const first = touches[0];
+  const second = touches[1];
   if (!first || !second) return null;
 
   return {
@@ -147,7 +156,7 @@ export default function StoryImageSticker({
     gestureRef.current = gesture;
   };
 
-  const beginTransform = (touches: TouchList) => {
+  const beginTransform = (touches: readonly Touch[]) => {
     const center = touchCenter(touches);
     if (!center) return;
     gestureRef.current = {
@@ -174,27 +183,29 @@ export default function StoryImageSticker({
     event.stopPropagation();
     onActivate?.();
     clearGestureTimer(gestureRef.current);
-    if (event.touches.length >= 2) {
-      beginTransform(event.touches);
-    } else if (event.touches.length === 1) {
-      beginSingleTouch(event.touches.item(0));
+    const touches = getTouches(event.touches);
+    if (touches.length >= 2) {
+      beginTransform(touches);
+    } else if (touches.length === 1) {
+      beginSingleTouch(touches[0]);
     }
   };
 
   const handleTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
     if (!interactive) return;
     event.stopPropagation();
+    const touches = getTouches(event.touches);
     const gesture = gestureRef.current;
-    if (!gesture || event.touches.length === 0) return;
+    if (!gesture || touches.length === 0) return;
 
-    if (event.touches.length >= 2) {
+    if (touches.length >= 2) {
       if (gesture.mode !== 'transform' || gesture.touchCount < 2) {
         clearGestureTimer(gesture);
-        beginTransform(event.touches);
+        beginTransform(touches);
         return;
       }
 
-      const center = touchCenter(event.touches);
+      const center = touchCenter(touches);
       if (!center) return;
       const ratio = gesture.startDistance > 0 ? center.distance / gesture.startDistance : 1;
       let angleDelta = center.angle - gesture.startAngle;
@@ -214,11 +225,11 @@ export default function StoryImageSticker({
     }
 
     if (gesture.touchCount !== 1) {
-      beginSingleTouch(event.touches.item(0));
+      beginSingleTouch(touches[0]);
       return;
     }
 
-    const touch = event.touches.item(0);
+    const touch = touches[0];
     if (!touch) return;
     const deltaX = touch.clientX - gesture.startX;
     const deltaY = touch.clientY - gesture.startY;
@@ -250,17 +261,18 @@ export default function StoryImageSticker({
   const finishTouch = (event: ReactTouchEvent<HTMLDivElement>, cancelled = false) => {
     if (!interactive) return;
     event.stopPropagation();
+    const touches = getTouches(event.touches);
     const gesture = gestureRef.current;
     if (!gesture) return;
     clearGestureTimer(gesture);
 
-    if (event.touches.length === 1 && gesture.touchCount >= 2) {
-      beginSingleTouch(event.touches.item(0));
+    if (touches.length === 1 && gesture.touchCount >= 2) {
+      beginSingleTouch(touches[0]);
       return;
     }
-    if (event.touches.length > 0) return;
+    if (touches.length > 0) return;
 
-    const touch = event.changedTouches.item(0);
+    const touch = getTouches(event.changedTouches)[0];
     const point = touch
       ? { x: touch.clientX, y: touch.clientY }
       : { x: gesture.startX, y: gesture.startY };
