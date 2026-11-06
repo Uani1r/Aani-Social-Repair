@@ -6,6 +6,7 @@ import { Link } from 'wouter';
 import { createPortal } from 'react-dom';
 
 import Avatar from './Avatar';
+import LikesListSheet from './LikesListSheet';
 import RepostIcon from './RepostIcon';
 import FeedReelViewer from './FeedReelViewer';
 import ShareSheet from './ShareSheet';
@@ -101,6 +102,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   // Optimistic UI states
   const [isAnimating, setIsAnimating] = useState(false);
   const [showShareSheet, setShowShareSheet] = useState(false);
+  const [showLikesSheet, setShowLikesSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
   const [showPrivacySheet, setShowPrivacySheet] = useState(false);
   const [showMainFeedReel, setShowMainFeedReel] = useState(false);
@@ -477,20 +479,33 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''}`}>
         <div className="post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto">
           {/* 1. الإعجاب */}
-          <button
-            type="button"
-            className={`post-action-btn flex items-center gap-1.5 ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}
-            onClick={toggleLike}
-            aria-pressed={liked}
-            aria-label={liked ? 'إلغاء الإعجاب' : 'إعجاب'}
-          >
-            <Heart
-              size={18}
-              fill={liked ? 'currentColor' : 'none'}
-              className={`transition-transform ${isAnimating ? 'animate-heart-pulse' : ''}`}
-            />
-            {likesVisible && <span className="text-xs">{likesCount}</span>}
-          </button>
+          <div className={`post-action-btn ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}>
+            <button
+              type="button"
+              onClick={toggleLike}
+              aria-pressed={liked}
+              aria-label={liked ? 'إلغاء الإعجاب' : 'إعجاب'}
+              className="inline-flex items-center justify-center border-0 bg-transparent p-0 text-inherit"
+            >
+              <Heart
+                size={18}
+                fill={liked ? 'currentColor' : 'none'}
+                className={`transition-transform ${isAnimating ? 'animate-heart-pulse' : ''}`}
+              />
+            </button>
+            {likesVisible && (post.hide_likes ? (
+              <span className="cursor-default text-xs">{likesCount}</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowLikesSheet(true)}
+                className="cursor-pointer border-0 bg-transparent p-0 text-xs text-inherit"
+                aria-label="عرض قائمة الإعجابات"
+              >
+                {likesCount}
+              </button>
+            ))}
+          </div>
 
           {/* 2. التعليقات */}
           {commentsVisible && (
@@ -574,6 +589,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           onToggleRepost={toggleRepost}
           onRecordExternalShare={() => void recordShare(post, currentUserId)}
           onClose={() => setShowShareSheet(false)}
+        />
+      )}
+
+      {!post.hide_likes && (
+        <LikesListSheet
+          postId={post.id}
+          currentUserId={currentUserId}
+          open={showLikesSheet}
+          onClose={() => setShowLikesSheet(false)}
         />
       )}
 

@@ -11,6 +11,7 @@ import EditPostSheet from '@/components/EditPostSheet';
 import PostOptionsSheet from '@/components/PostOptionsSheet';
 import PostPrivacySheet from '@/components/PostPrivacySheet';
 import ShareSheet from '@/components/ShareSheet';
+import LikesListSheet from '@/components/LikesListSheet';
 import UserIdentity from '@/components/UserIdentity';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import ExpandablePostText from '@/components/ExpandablePostText';
@@ -75,6 +76,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const sharesCount = interactions.shares;
   const [feedback, setFeedback] = useState<Post['feedback_by_me']>(post.feedback_by_me || null);
   const [showShareSheet, setShowShareSheet] = useState(false);
+  const [showLikesSheet, setShowLikesSheet] = useState(false);
   const [showOptionsSheet, setShowOptionsSheet] = useState(false);
   const [showEditSheet, setShowEditSheet] = useState(false);
   const [showPrivacySheet, setShowPrivacySheet] = useState(false);
@@ -549,10 +551,29 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
       {/* شريط التفاعلات الجانبي */}
       <div className="reel-sidebar">
-        <button type="button" onClick={toggleLike} aria-label="إعجاب" aria-pressed={liked} className={`reel-sidebar-button ${liked ? 'is-liked' : ''}`}>
-          <Heart size={26} strokeWidth={2} fill={liked ? 'currentColor' : 'none'} />
-          {likesVisible && <span>{likesCount}</span>}
-        </button>
+        <div className={`reel-sidebar-button ${liked ? 'is-liked' : ''}`}>
+          <button
+            type="button"
+            onClick={toggleLike}
+            aria-label={liked ? 'إلغاء الإعجاب' : 'إعجاب'}
+            aria-pressed={liked}
+            className="border-0 bg-transparent p-0 text-inherit"
+          >
+            <Heart size={26} strokeWidth={2} fill={liked ? 'currentColor' : 'none'} />
+          </button>
+          {likesVisible && (post.hide_likes ? (
+            <span className="cursor-default">{likesCount}</span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowLikesSheet(true)}
+              aria-label="عرض قائمة الإعجابات"
+              className="border-0 bg-transparent p-0 text-[11px] font-semibold leading-none text-white"
+            >
+              {likesCount}
+            </button>
+          ))}
+        </div>
 
         {commentsVisible && (
           <button type="button" onClick={() => onOpenComments(post.id)} aria-label="التعليقات" className="reel-sidebar-button">
@@ -603,6 +624,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           onToggleRepost={toggleRepost}
           onRecordExternalShare={() => void recordShare(post, currentUserId)}
           onClose={() => setShowShareSheet(false)}
+        />
+      )}
+
+      {!post.hide_likes && (
+        <LikesListSheet
+          postId={post.id}
+          currentUserId={currentUserId}
+          open={showLikesSheet}
+          onClose={() => setShowLikesSheet(false)}
         />
       )}
 

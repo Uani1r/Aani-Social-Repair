@@ -9,6 +9,7 @@ import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
 import PostVideoPreview from './PostVideoPreview';
+import LikesListSheet from './LikesListSheet';
 import { getVideoAspectRatio, parseVideoCrop } from '../lib/videoMedia';
 
 export interface PostCardProps {
@@ -24,6 +25,8 @@ export default function PostCard({
   onRefresh,
   onOpenComments,
 }: PostCardProps) {
+  const [showLikesSheet, setShowLikesSheet] = React.useState(false);
+
   // 1. حماية من انهيار الشاشة إذا كانت بيانات المنشور فارغة
   if (!post || !post.id) {
     return null;
@@ -128,23 +131,38 @@ export default function PostCard({
       {/* شريط الأزرار */}
       <div className="mt-4 flex items-center justify-between border-t border-zinc-800/60 pt-3 text-zinc-300">
         <div className="flex items-center gap-2 sm:gap-3">
-          <button
-            type="button"
-            onClick={toggleLike}
-            disabled={pending}
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition ${
-              liked
-                ? 'bg-pink-500/15 text-pink-400 hover:bg-pink-500/20'
-                : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-800 hover:text-white'
-            }`}
-          >
-            <Heart
-              size={16}
-              fill={liked ? 'currentColor' : 'none'}
-              className={liked ? 'text-pink-500' : ''}
-            />
-            {likesVisible && <span className="text-[11px]">{likes}</span>}
-          </button>
+          <div className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition ${
+            liked
+              ? 'bg-pink-500/15 text-pink-400 hover:bg-pink-500/20'
+              : 'bg-zinc-800/80 text-zinc-300 hover:bg-zinc-800 hover:text-white'
+          }`}>
+            <button
+              type="button"
+              onClick={toggleLike}
+              disabled={pending}
+              aria-pressed={liked}
+              aria-label={liked ? 'إلغاء الإعجاب' : 'إعجاب'}
+              className="inline-flex items-center justify-center border-0 bg-transparent p-0 text-inherit disabled:opacity-50"
+            >
+              <Heart
+                size={16}
+                fill={liked ? 'currentColor' : 'none'}
+                className={liked ? 'text-pink-500' : ''}
+              />
+            </button>
+            {likesVisible && (post.hide_likes ? (
+              <span className="cursor-default text-[11px]">{likes}</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowLikesSheet(true)}
+                className="border-0 bg-transparent p-0 text-[11px] text-inherit"
+                aria-label="عرض قائمة الإعجابات"
+              >
+                {likes}
+              </button>
+            ))}
+          </div>
 
           {commentsVisible && (
             <button
@@ -200,6 +218,14 @@ export default function PostCard({
           <span className="text-[11px]">{saves}</span>
         </button>
       </div>
+      {!post.hide_likes && (
+        <LikesListSheet
+          postId={post.id}
+          currentUserId={currentUserId}
+          open={showLikesSheet}
+          onClose={() => setShowLikesSheet(false)}
+        />
+      )}
     </div>
   );
 }
