@@ -48,13 +48,19 @@ export default function StoriesStrip({
               else onOpenPicker();
             }}
           >
-            {hasMyStory || uploading ? (
-              <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
-                <Avatar profile={currentProfile} extraLarge />
-              </span>
-            ) : (
-              <span className="unified-story-plus-center">+</span>
-            )}
+            <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
+              {currentProfile?.avatar_url ? (
+                <img
+                  src={currentProfile.avatar_url}
+                  alt=""
+                  className="h-full w-full rounded-full object-cover"
+                />
+              ) : (
+                <span className="unified-story-avatar-fallback">
+                  {(currentProfile?.display_name || currentProfile?.full_name || currentProfile?.username || 'آ').trim().slice(0, 1) || 'آ'}
+                </span>
+              )}
+            </span>
             {uploading && (
               <svg
                 viewBox="0 0 64 64"

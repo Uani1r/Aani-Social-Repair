@@ -147,6 +147,7 @@ export default function StoriesBar({
   const [textCanvasBackground, setTextCanvasBackground] = useState('#000000');
   const textCanvasMediaPickerRef = useRef(false);
   const storyStickerInputRef = useRef<HTMLInputElement | null>(null);
+  const storyFileInputRef = useRef<HTMLInputElement | null>(null);
   const localStickerObjectUrlsRef = useRef<Set<string>>(new Set());
 
   // أثناء شاشات القصص (اختيار/معاينة/عارض القصص) تُخفى أشرطة التطبيق وتُعزل الحركات
@@ -1726,6 +1727,44 @@ export default function StoriesBar({
     setStoryDrawStrokes(previous => previous.slice(0, -1));
   };
 
+  const handleStoryFilesSelected = (files: File[]) => {
+    if (!files.length) return;
+
+    if (textCanvasMediaPickerRef.current) {
+      textCanvasMediaPickerRef.current = false;
+      setShowTextOnlyStoryCanvas(false);
+      setStoryTextEditorOpen(false);
+      setStoryText('');
+      setCaption('');
+      setStoryDrawStrokes([]);
+      setStoryMentions([]);
+    }
+    setTimedTexts([]);
+    setEditingStoryTextId(null);
+
+    if (files.length > 1) {
+      toast.info('سيُستخدم أول وسيط مختار لنشر القصة');
+    }
+
+    setStoryFile(files[0]);
+    setStoryCanvasScale(1);
+    setStoryCanvasOffset({ x: 0, y: 0 });
+    setStoryMediaZoom(1);
+    setStoryMediaRotate(0);
+    setStoryMediaOffset({ x: 0, y: 0 });
+    setStoryAlignmentGuides({ vertical: false, horizontal: false });
+    setStoryDrawStrokes([]);
+    setStoryDrawingOpen(false);
+    activeStoryDrawStrokeRef.current = null;
+    setReshareStory(null);
+    setReshareScaledDown(false);
+    storyDurationManuallyChosenRef.current = true;
+    setUploadDuration(60);
+    setStoryDurationOpen(false);
+    setShowStoryPicker(false);
+    setShowUploadModal(true);
+  };
+
   return (
     <div className="contents" dir="rtl">
       <input
@@ -1735,6 +1774,18 @@ export default function StoriesBar({
         className="hidden"
         aria-label="اختيار صورة كملصق للقصة"
         onChange={handleStoryStickerFileChange}
+      />
+      <input
+        ref={storyFileInputRef}
+        type="file"
+        accept="image/*,video/*"
+        className="sr-only"
+        aria-label="اختيار صورة أو فيديو للقصة"
+        onChange={event => {
+          const files = Array.from(event.currentTarget.files || []);
+          event.currentTarget.value = '';
+          handleStoryFilesSelected(files);
+        }}
       />
       <StoriesStrip
         userId={userId}
@@ -1751,8 +1802,7 @@ export default function StoriesBar({
         }}
         onOpenPicker={() => {
           setArchiveViewerOpen(false);
-          skipStoryGalleryAutoOpenRef.current = false;
-          setShowStoryPicker(true);
+          storyFileInputRef.current?.click();
         }}
         onOpenStoryGroup={authorId => {
           setArchiveViewerOpen(false);
@@ -1785,43 +1835,7 @@ export default function StoriesBar({
           setCurrentTimeSec(0);
         }}
         onTextMode={openTextOnlyStory}
-        onFilesSelected={files => {
-          if (!files.length) return;
-
-          if (textCanvasMediaPickerRef.current) {
-            textCanvasMediaPickerRef.current = false;
-            setShowTextOnlyStoryCanvas(false);
-            setStoryTextEditorOpen(false);
-            setStoryText('');
-            setCaption('');
-            setStoryDrawStrokes([]);
-            setStoryMentions([]);
-          }
-          setTimedTexts([]);
-          setEditingStoryTextId(null);
-
-          if (files.length > 1) {
-            toast.info('سيُستخدم أول وسيط مختار لنشر القصة');
-          }
-
-          setStoryFile(files[0]);
-          setStoryCanvasScale(1);
-          setStoryCanvasOffset({ x: 0, y: 0 });
-          setStoryMediaZoom(1);
-          setStoryMediaRotate(0);
-          setStoryMediaOffset({ x: 0, y: 0 });
-          setStoryAlignmentGuides({ vertical: false, horizontal: false });
-          setStoryDrawStrokes([]);
-          setStoryDrawingOpen(false);
-          activeStoryDrawStrokeRef.current = null;
-          setReshareStory(null);
-          setReshareScaledDown(false);
-          storyDurationManuallyChosenRef.current = true;
-          setUploadDuration(60);
-          setStoryDurationOpen(false);
-          setShowStoryPicker(false);
-          setShowUploadModal(true);
-        }}
+        onFilesSelected={handleStoryFilesSelected}
       />
 
       {showTextOnlyStoryCanvas && (
