@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, ChevronDown, Flag, MessageCircle, Pin, Search, Send, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, Camera, ChevronDown, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -46,6 +46,8 @@ type ConversationContextState = {
 };
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
+const MESSAGE_EMOJIS = ['😀', '😂', '🥰', '😍', '😊', '😭', '👍', '❤️', '🔥', '✨', '🙏', '😎'];
+const MESSAGE_STICKERS = ['🥹', '🫶', '🎉', '🤍', '🌙', '💜'];
 const EMPTY_CONVERSATION_PREFERENCES: ConversationPreferences = {
   pinnedIds: [],
   archivedIds: [],
@@ -180,6 +182,9 @@ export default function MessagesPage({
   const [threadLoading, setThreadLoading] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [emojiPickerTab, setEmojiPickerTab] = useState<'emoji' | 'stickers'>('emoji');
+  const [threadOptionsOpen, setThreadOptionsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<InboxTab>('messages');
   const [searchTerm, setSearchTerm] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -198,6 +203,7 @@ export default function MessagesPage({
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressNextConversationClickRef = useRef(false);
@@ -218,6 +224,14 @@ export default function MessagesPage({
       return next;
     });
   }, [currentUserId]);
+
+  useLayoutEffect(() => {
+    const input = messageInputRef.current;
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
+    input.scrollTop = input.scrollHeight;
+  }, [text, selectedId]);
 
   const loadConversationList = useCallback(async () => {
     const requestId = ++contactsRequestRef.current;
@@ -491,11 +505,18 @@ export default function MessagesPage({
     };
   }, [currentUserId, newMessageOpen, newMessageSearch]);
 
+  const insertComposerSymbol = (symbol: string) => {
+    setText(value => `${value}${symbol}`);
+    setEmojiPickerOpen(false);
+    messageInputRef.current?.focus();
+  };
+
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = text.trim();
     if (!supabaseConfigured || !selectedId || !content || sending) return;
 
+    setEmojiPickerOpen(false);
     setSending(true);
     try {
       const { error } = await supabase.from('messages').insert({
@@ -532,7 +553,8 @@ export default function MessagesPage({
     conversation.isRequest && !conversationPreferences.archivedIds.includes(conversation.profile.id)
   )).length;
   const archivedCount = conversations.filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id)).length;
-  const target = conversations.find(conversation => conversation.profile.id === selectedId)?.profile || null;
+  const selectedConversation = conversations.find(conversation => conversation.profile.id === selectedId) || null;
+  const target = selectedConversation?.profile || null;
 
   const setConversationPreference = (key: ConversationPreferenceKey, contactId: string, enabled: boolean) => {
     setConversationPreferences(current => {
@@ -885,14 +907,58 @@ export default function MessagesPage({
                     <span className="messages-thread-placeholder">جارٍ تحميل الحساب...</span>
                   </div>
                 )}
+                <div className="messages-thread-actions">
+                  <button type="button" aria-label="اتصال صوتي" onClick={() => toast.info('المكالمات الصوتية غير متاحة حالياً.')}>
+                    <Phone size={20} />
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="خيارات المحادثة"
+                    aria-expanded={threadOptionsOpen}
+                    onClick={() => setThreadOptionsOpen(value => !value)}
+                  >
+                    <MoreVertical size={21} />
+                  </button>
+                  {threadOptionsOpen && selectedConversation && (
+                    <div className="messages-thread-options-menu" role="menu" aria-label="خيارات المحادثة">
+                      <button type="button" role="menuitem" onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('pin', selectedConversation); }}>
+                        <Pin size={17} />
+                        <span>{conversationPreferences.pinnedIds.includes(selectedConversation.profile.id) ? 'إلغاء التثبيت' : 'تثبيت'}</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('archive', selectedConversation); }}>
+                        <Archive size={17} />
+                        <span>{conversationPreferences.archivedIds.includes(selectedConversation.profile.id) ? 'إلغاء الأرشفة' : 'أرشفة'}</span>
+                      </button>
+                      <button type="button" role="menuitem" onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('mute', selectedConversation); }}>
+                        <BellOff size={17} />
+                        <span>{conversationPreferences.mutedIds.includes(selectedConversation.profile.id) ? 'إلغاء الكتم' : 'كتم'}</span>
+                      </button>
+                      <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('block', selectedConversation); }}>
+                        <Ban size={17} />
+                        <span>حظر</span>
+                      </button>
+                      <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('report', selectedConversation); }}>
+                        <Flag size={17} />
+                        <span>إبلاغ</span>
+                      </button>
+                      <button type="button" role="menuitem" className="is-destructive" disabled={deleteBusy} onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('delete', selectedConversation); }}>
+                        <Trash2 size={17} />
+                        <span>حذف</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </header>
               <div className="messages-thread-list" aria-live="polite">
                 {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
                 {!threadLoading && thread.length === 0 && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
-                {thread.map(message => {
+                {thread.map((message, index) => {
                   const isMine = message.sender_id === currentUserId;
+                  const showSenderAvatar = !isMine && (
+                    index === thread.length - 1 || thread[index + 1]?.sender_id !== message.sender_id
+                  );
                   const content = message.content.trim();
                   const isSharedPost = Boolean(message.post_id) || content.startsWith('[post:');
                   const storyFromColumn = message.story_id ? String(message.story_id) : null;
@@ -926,22 +992,84 @@ export default function MessagesPage({
                           ) : content.startsWith('[story:') ? 'أرسل لك قصة' : message.content}
                         </div>
                       )}
+                      {!isMine && (
+                        <span className="messages-sender-avatar" aria-hidden="true">
+                          {showSenderAvatar && <Avatar profile={target} />}
+                        </span>
+                      )}
                     </div>
                   );
                 })}
                 <div ref={threadEndRef} />
               </div>
               <form className="messages-composer" onSubmit={sendMessage}>
-                <input
-                  value={text}
-                  onChange={event => setText(event.target.value)}
-                  placeholder="اكتب رسالة..."
-                  aria-label="اكتب رسالة"
-                  autoComplete="off"
-                />
-                <button type="submit" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
-                  <Send size={19} />
+                <button
+                  type="button"
+                  className="messages-composer-control messages-composer-attach"
+                  aria-label="إضافة مرفق"
+                  onClick={() => toast.info('إرسال الصور والملفات غير متاح حالياً.')}
+                >
+                  <Plus size={24} />
                 </button>
+                <div className="messages-composer-field">
+                  <textarea
+                    ref={messageInputRef}
+                    value={text}
+                    onChange={event => setText(event.target.value)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        event.currentTarget.form?.requestSubmit();
+                      }
+                    }}
+                    placeholder="اكتب رسالة..."
+                    aria-label="اكتب رسالة"
+                    autoComplete="off"
+                    enterKeyHint="send"
+                    rows={1}
+                  />
+                  <button
+                    type="button"
+                    className="messages-composer-control messages-composer-emoji"
+                    aria-label="إيموجي وملصقات"
+                    aria-haspopup="dialog"
+                    aria-expanded={emojiPickerOpen}
+                    onClick={() => setEmojiPickerOpen(value => !value)}
+                  >
+                    <Smile size={19} />
+                  </button>
+                </div>
+                <div className="messages-composer-actions">
+                  {text.length === 0 ? (
+                    <>
+                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="التقاط صورة" onClick={() => toast.info('إرسال الصور غير متاح حالياً.')}>
+                        <Camera size={22} />
+                      </button>
+                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="تسجيل رسالة صوتية" onClick={() => toast.info('الرسائل الصوتية غير متاحة حالياً.')}>
+                        <Mic size={22} />
+                      </button>
+                    </>
+                  ) : (
+                    <button type="submit" className="messages-composer-control messages-composer-send" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
+                      <Send size={20} />
+                    </button>
+                  )}
+                </div>
+                {emojiPickerOpen && (
+                  <div className="messages-emoji-picker" role="dialog" aria-label="الإيموجي والملصقات">
+                    <div className="messages-emoji-tabs" role="tablist" aria-label="نوع التعبير">
+                      <button type="button" role="tab" aria-selected={emojiPickerTab === 'emoji'} className={emojiPickerTab === 'emoji' ? 'active' : ''} onClick={() => setEmojiPickerTab('emoji')}>إيموجي</button>
+                      <button type="button" role="tab" aria-selected={emojiPickerTab === 'stickers'} className={emojiPickerTab === 'stickers' ? 'active' : ''} onClick={() => setEmojiPickerTab('stickers')}>ملصقات</button>
+                    </div>
+                    <div className={`messages-emoji-grid${emojiPickerTab === 'stickers' ? ' is-stickers' : ''}`}>
+                      {(emojiPickerTab === 'emoji' ? MESSAGE_EMOJIS : MESSAGE_STICKERS).map(symbol => (
+                        <button key={symbol} type="button" className="messages-emoji-option" aria-label={`إضافة ${symbol}`} onClick={() => insertComposerSymbol(symbol)}>
+                          {symbol}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </form>
             </>
           )}
