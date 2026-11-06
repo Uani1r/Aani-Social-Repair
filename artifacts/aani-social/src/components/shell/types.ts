@@ -18,4 +18,5 @@ export type ShellProps = {
   onOpenComments: (postId: string, commentId?: string) => void;
   onOpenStory: (storyId: string, ownerId: string) => void;
   NotificationsModalComponent: ComponentType<NotificationsModalProps>;
+  headerStories?: ReactNode;
 };

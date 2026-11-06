@@ -36,17 +36,12 @@ export default function StoriesStrip({
   const hasSeenAllMyStories = hasSeenAllStories(myStories);
 
   return (
-    <div className="story-bar story-strip mb-2 w-full">
-      <div className="story-bar-content flex w-full items-center gap-[18px] overflow-x-auto no-scrollbar px-1 pb-1 pt-1">
+    <div className="story-bar story-strip unified-story-strip w-full">
+      <div className="story-bar-content unified-stories-content flex w-full items-center overflow-x-auto no-scrollbar">
         {/* قصتك */}
-        <div className="flex flex-col items-center gap-1 shrink-0">
+        <div className="unified-story-item">
           <div
-            className={`relative flex h-16 w-16 cursor-pointer items-center justify-center rounded-full ${hasMyStory ? 'p-[2.5px]' : 'border-[1.5px] border-dashed border-zinc-600/70 p-[2px]'}`}
-            style={hasMyStory ? {
-              background: hasSeenAllMyStories
-                ? '#3a3a42'
-                : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
-            } : undefined}
+            className={`unified-story-ring ${hasMyStory ? (hasSeenAllMyStories ? 'is-seen' : 'is-unseen') : 'is-own-story'}`}
             onClick={() => {
               if (uploading) return;
               if (hasMyStory) onOpenMyStories();
@@ -54,11 +49,11 @@ export default function StoriesStrip({
             }}
           >
             {hasMyStory || uploading ? (
-              <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
+              <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
                 <Avatar profile={currentProfile} extraLarge />
               </span>
             ) : (
-              <span className="text-2xl font-light text-zinc-500">+</span>
+              <span className="unified-story-plus-center">+</span>
             )}
             {uploading && (
               <svg
@@ -101,16 +96,16 @@ export default function StoriesStrip({
                 event.stopPropagation();
                 if (!uploading) onOpenPicker();
               }}
-              className="absolute -bottom-0.5 -right-0.5 z-20 flex h-5 w-5 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 disabled:opacity-50"
+              className="unified-story-badge absolute -bottom-0.5 -right-0.5 z-20 flex h-5 w-5 items-center justify-center rounded-full disabled:opacity-50"
               title="إضافة ستوري جديدة"
             >
               <Plus size={12} />
             </button>
           </div>
-          <span className="text-[11.5px] text-zinc-400 truncate w-16 text-center">قصتك</span>
+          <span className="unified-story-label">قصتك</span>
         </div>
 
-        {/* قصص المتابَعين بحلقة العلم العراقي */}
+        {/* قصص المتابَعين */}
         {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
           const firstStory = groupedStories[authorId][0];
           const isSeen = hasSeenAllStories(groupedStories[authorId]);
@@ -119,18 +114,13 @@ export default function StoriesStrip({
           return (
             <div
               key={authorId}
-              className="flex flex-col items-center gap-1 cursor-pointer shrink-0"
+              className="unified-story-item"
               onClick={() => onOpenStoryGroup(authorId)}
             >
               <span
-                className="relative flex h-16 w-16 items-center justify-center rounded-full p-[2.5px] transition-colors duration-200"
-                style={{
-                  background: isSeen
-                    ? '#3a3a42'
-                    : 'conic-gradient(from 0deg, #FF0055, #ff6b8a, #FF0055)',
-                }}
+                className={`unified-story-ring ${isSeen ? 'is-seen' : 'is-unseen'}`}
               >
-                <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
+                <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
                   <Avatar profile={firstStory.author} extraLarge />
                 </span>
                 {hasCloseFriendsStory && (
@@ -142,9 +132,9 @@ export default function StoriesStrip({
               <UserIdentity
                 name={firstStory.author?.full_name || firstStory.author?.username || 'عضو'}
                 username={firstStory.author?.full_name ? firstStory.author.username : null}
-                className="w-16"
-                nameClassName="text-[10px] text-zinc-400"
-                usernameClassName="text-[9px] text-zinc-500"
+                className="unified-story-identity"
+                nameClassName="unified-story-name"
+                usernameClassName="unified-story-username"
               />
             </div>
           );

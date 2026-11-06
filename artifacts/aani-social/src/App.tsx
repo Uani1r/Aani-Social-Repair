@@ -92,19 +92,24 @@ function App() {
             onOpenComments={openComments}
             onOpenStory={openNotificationStory}
             NotificationsModalComponent={NotificationsModal}
+            headerStories={
+              <StoriesBar
+                key={user.id}
+                userId={user.id}
+                currentProfile={profile}
+                pendingReshare={pendingStoryReshare}
+                onReshareHandled={clearPendingStoryReshare}
+                pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
+                pendingStoryId={pendingStoryId}
+                onProfileStoryHandled={clearPendingProfileStory}
+              />
+            }
           >
             <Switch>
               <Route path="/feed">
                 <FeedPage
                   userId={user.id}
-                  profile={profile}
                   onOpenComments={openComments}
-                  pendingStoryReshare={pendingStoryReshare}
-                  onStoryReshareHandled={clearPendingStoryReshare}
-                  pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
-                  pendingStoryId={pendingStoryId}
-                  onProfileStoryHandled={clearPendingProfileStory}
-                  StoriesBarComponent={StoriesBar}
                 />
               </Route>
               <Route path="/post/:postId">
@@ -119,14 +124,7 @@ function App() {
               <Route path="/">
                 <FeedPage
                   userId={user.id}
-                  profile={profile}
                   onOpenComments={openComments}
-                  pendingStoryReshare={pendingStoryReshare}
-                  onStoryReshareHandled={clearPendingStoryReshare}
-                  pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
-                  pendingStoryId={pendingStoryId}
-                  onProfileStoryHandled={clearPendingProfileStory}
-                  StoriesBarComponent={StoriesBar}
                 />
               </Route>
               <Route path="/reels"><ReelsPage userId={user.id} onOpenComments={openComments} /></Route>

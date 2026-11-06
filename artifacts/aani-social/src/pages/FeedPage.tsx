@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type * as React from 'react';
 import { Loader2, MessageCircle } from 'lucide-react';
 
 import FeedPostCard from '../components/FeedPostCard';
-import type { StoryRow as StoryDmCardStory } from '../components/StoryDmCard';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
-import { getPostDestination, type Profile } from '@/lib/types';
+import { getPostDestination } from '@/lib/types';
 
 const savedFeedScrollPositions = new Map<string, number>();
 
@@ -40,38 +38,14 @@ const hasOpenFeedDialog = () => Boolean(document.querySelector(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
 ));
 
-interface StoriesBarProps {
-  userId: string;
-  currentProfile: Profile | null;
-  pendingReshare: StoryDmCardStory | null;
-  onReshareHandled: () => void;
-  pendingProfileStoryOwnerId: string | null;
-  pendingStoryId: string | null;
-  onProfileStoryHandled: () => void;
-}
-
 interface FeedPageProps {
   userId: string;
-  profile: Profile | null;
   onOpenComments: (postId: string) => void;
-  pendingStoryReshare: StoryDmCardStory | null;
-  onStoryReshareHandled: () => void;
-  pendingProfileStoryOwnerId: string | null;
-  pendingStoryId: string | null;
-  onProfileStoryHandled: () => void;
-  StoriesBarComponent: React.ComponentType<StoriesBarProps>;
 }
 
 export default function FeedPage({
   userId,
-  profile,
   onOpenComments,
-  pendingStoryReshare,
-  onStoryReshareHandled,
-  pendingProfileStoryOwnerId,
-  pendingStoryId,
-  onProfileStoryHandled,
-  StoriesBarComponent,
 }: FeedPageProps) {
   const { posts, loading, refresh, error } = usePosts('feed', undefined, userId);
   const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
@@ -270,17 +244,6 @@ export default function FeedPage({
           />
         </div>
       )}
-
-      <StoriesBarComponent
-        key={userId}
-        userId={userId}
-        currentProfile={profile}
-        pendingReshare={pendingStoryReshare}
-        onReshareHandled={onStoryReshareHandled}
-        pendingProfileStoryOwnerId={pendingProfileStoryOwnerId}
-        pendingStoryId={pendingStoryId}
-        onProfileStoryHandled={onProfileStoryHandled}
-      />
 
       {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 

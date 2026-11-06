@@ -134,33 +134,24 @@ body {
   border-radius: 0;
 }
 
-.main-feed-image-media {
-  width: calc(100% + 32px);
-  max-height: 80vh;
-  margin-inline: -16px;
-  overflow: visible;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.main-feed-image-media .carousel-track,
-.main-feed-image-media .carousel-slide {
-  height: auto;
-  max-height: 80vh;
-}
-
-.main-feed-image-media .carousel-track {
-  align-items: flex-start;
-}
-
-.main-feed-image-media .feed-image-natural {
-  display: block;
+.post-image-container {
   width: 100%;
-  height: auto;
-  max-height: 80vh;
-  object-fit: contain;
+  aspect-ratio: 4 / 5;
+  position: relative;
+  background-color: #111;
+  overflow: hidden;
+}
+
+.post-image-container .carousel-track,
+.post-image-container .carousel-slide {
+  height: 100%;
+}
+
+.post-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .video-post-header {
@@ -804,8 +795,7 @@ body {
    لا يتم تحريك أي خاصية تسبب إعادة تخطيط أثناء التمرير
    ===================================================================== */
 .topbar,
-.mobile-nav,
-.story-bar-content {
+.mobile-nav {
   transition:
     transform 160ms cubic-bezier(0.2, 0, 0, 1),
     opacity 140ms ease-out;
@@ -937,70 +927,15 @@ body.aani-chrome-hidden .mobile-nav {
 }
 
 .story-bar {
-  position: sticky;
-  top: calc(2.9375rem + env(safe-area-inset-top));
-  z-index: 30;
-  background: rgba(9, 9, 11, 0.96);
-}
-
-.story-bar-content {
-  transition-timing-function: cubic-bezier(0.2, 0, 0, 1), ease-out;
-}
-
-body.aani-chrome-hidden .story-bar {
+  position: relative;
+  top: auto;
+  z-index: auto;
+  margin: 0;
   background: transparent;
 }
 
-body.aani-chrome-hidden .story-bar-content {
-  transform: translate3d(0, -105%, 0);
-  opacity: 0;
-  pointer-events: none;
-}
-
-@keyframes aani-header-reveal {
-  from {
-    transform: translate3d(-50%, -100%, 0);
-    opacity: 0;
-  }
-  to {
-    transform: translate3d(-50%, 0, 0);
-    opacity: 1;
-  }
-}
-
-@keyframes aani-story-pop {
-  0% {
-    opacity: 0;
-    transform: translate3d(0, -18px, 0) scale(0.96);
-  }
-  55% {
-    opacity: 1;
-    transform: translate3d(0, 2px, 0) scale(1.01);
-  }
-  100% {
-    opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-}
-
-body.aani-chrome-revealed .topbar {
-  animation: aani-header-reveal 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-}
-
-body.aani-chrome-revealed .story-bar-content {
-  animation: aani-story-pop 250ms cubic-bezier(0.18, 0.89, 0.32, 1.08) 30ms both;
-  transform-origin: top center;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .story-bar-content {
-    transition: none;
-  }
-
-  body.aani-chrome-revealed .topbar,
-  body.aani-chrome-revealed .story-bar-content {
-    animation: none;
-  }
+.story-bar-content {
+  transition: none;
 }
 
 
@@ -1054,7 +989,8 @@ body.aani-chrome-revealed .story-bar-content {
 /* =====================================================================
    شاشات القصص والواجهات المغطاة: إخفاء أشرطة التطبيق كليًا وثابتًا
    ===================================================================== */
-body.aani-immersive .topbar {
+body.aani-immersive .topbar,
+body.aani-immersive .unified-top-bar {
   transform: translate3d(0, -100%, 0);
   opacity: 0;
   pointer-events: none;
@@ -2064,4 +2000,271 @@ a:active > .aani-notifications-card {
 
 .comment-thread-divider {
   display: none !important;
+}
+
+
+
+/* Unified OLED header and feed stories */
+.unified-top-bar {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 50;
+  width: min(100%, 450px);
+  margin-inline: auto;
+  overflow: visible;
+  border-bottom: 0.5px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+.unified-top-bar.is-hidden {
+  transform: translate3d(0, -100%, 0);
+  pointer-events: none;
+}
+
+.unified-top-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(14px + env(safe-area-inset-top)) 20px 14px;
+}
+
+.unified-profile-section {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  color: #fff;
+  text-decoration: none;
+}
+
+.unified-profile-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.unified-name-ar {
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.unified-name-en {
+  margin-top: 2px;
+  color: #8e8e93;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.2;
+}
+
+.unified-avatar-container {
+  display: flex;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 14px;
+  background: linear-gradient(145deg, #1c1c1e, #121212);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+
+.unified-avatar-letter {
+  color: #d4af37;
+  font-size: 18px;
+  font-weight: 500;
+}
+
+.unified-actions-section {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.unified-icon-button,
+.unified-add-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.unified-icon-button {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: #fff;
+}
+
+.unified-add-button {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 12px;
+  background: #f5f5f7;
+  color: #000;
+  transition: transform 120ms ease, background-color 160ms ease;
+}
+
+.unified-add-button:active {
+  transform: scale(0.94);
+}
+
+.unified-unread-count {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0 4px;
+  background: #f5f5f7;
+  color: #000;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.unified-story-strip {
+  width: 100%;
+  margin: 0;
+  background: transparent;
+}
+
+.unified-stories-content {
+  gap: 20px;
+  padding: 12px 20px 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  touch-action: pan-x;
+}
+
+.unified-stories-content::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.unified-story-item {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.unified-story-ring {
+  position: relative;
+  display: flex;
+  width: 68px;
+  height: 68px;
+  flex: 0 0 68px;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 2.5px;
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  border-radius: 50%;
+  background: #0a0a0a;
+  transition: border-color 180ms ease;
+}
+
+.unified-story-ring.is-own-story {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.unified-story-avatar {
+  width: 100%;
+  height: 100%;
+  border-color: #000 !important;
+  background: #0a0a0a;
+}
+
+.unified-story-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.unified-story-plus-center {
+  margin-top: -4px;
+  color: #fff;
+  font-size: 32px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.unified-story-badge {
+  right: -2px;
+  bottom: -2px;
+  width: 24px;
+  height: 24px;
+  border: 3px solid #000;
+  border-radius: 50%;
+  background: #f5f5f7;
+  color: #000;
+}
+
+.unified-story-label,
+.unified-story-name {
+  width: 68px;
+  overflow: hidden;
+  color: #8e8e93;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.unified-story-identity {
+  display: flex;
+  width: 68px;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.unified-story-identity .unified-story-name {
+  text-align: center;
+}
+
+.unified-story-username {
+  display: none;
+}
+
+body.aani-immersive .unified-top-bar {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .unified-top-bar,
+  .unified-add-button,
+  .unified-story-ring {
+    transition: none;
+  }
+}
+
+
+
+.unified-top-bar-spacer {
+  height: calc(189px + env(safe-area-inset-top));
 }

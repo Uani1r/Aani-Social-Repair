@@ -4,6 +4,7 @@ import { useLocation } from 'wouter';
 import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import ShellTopBar from './ShellTopBar';
+import UnifiedTopBar from './UnifiedTopBar';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
@@ -54,6 +55,7 @@ export default function Shell({
   onOpenComments,
   onOpenStory,
   NotificationsModalComponent,
+  headerStories,
 }: ShellProps) {
   const [path, setLocation] = useLocation();
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -63,6 +65,12 @@ export default function Shell({
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [unifiedTopBarHidden, setUnifiedTopBarHidden] = useState(() => Math.max(
+    window.scrollY || 0,
+    document.documentElement.scrollTop || 0,
+    document.body.scrollTop || 0,
+  ) > 10);
+  const unifiedTopBarHiddenRef = useRef(unifiedTopBarHidden);
   const currentPathRef = useRef(path);
   currentPathRef.current = path;
 
@@ -105,6 +113,18 @@ export default function Shell({
   }, []);
 
   useEffect(() => {
+    const isFeedPath = path === '/' || path === '/feed';
+    const scrollTop = Math.max(
+      window.scrollY || 0,
+      document.documentElement.scrollTop || 0,
+      document.body.scrollTop || 0,
+    );
+    const hidden = isFeedPath && scrollTop > 10;
+    unifiedTopBarHiddenRef.current = hidden;
+    setUnifiedTopBarHidden(hidden);
+  }, [path]);
+
+  useEffect(() => {
     if (!pendingStoryComposerRequest || (path !== '/' && path !== '/feed')) return;
 
     const frame = window.requestAnimationFrame(() => {
@@ -145,23 +165,14 @@ export default function Shell({
     if (path === '/feed') event.preventDefault();
   };
 
-  // إخفاء/إظهار الشريطين: يعتمد على اتجاه حركة الإصبع مباشرة
+  // إخفاء/إظهار شريط التنقل السفلي حسب اتجاه حركة الإصبع
   const [chromeHidden, setChromeHidden] = useState(false);
   const chromeHiddenRef = useRef(false);
-  const prevChromeHiddenRef = useRef(false);
-  const storyRevealTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const setHidden = (hidden: boolean) => {
       if (chromeHiddenRef.current === hidden) return;
       chromeHiddenRef.current = hidden;
-      if (hidden) {
-        document.body.classList.remove('aani-chrome-revealed');
-        if (storyRevealTimerRef.current) {
-          window.clearTimeout(storyRevealTimerRef.current);
-          storyRevealTimerRef.current = null;
-        }
-      }
       document.body.classList.toggle('aani-chrome-hidden', hidden);
       setChromeHidden(hidden);
     };
@@ -221,16 +232,22 @@ export default function Shell({
     let lastScrollToggleAt = 0;
     const onScroll = () => {
       const now = performance.now();
-
-      if (document.body.classList.contains('aani-immersive') || hasOpenModal()) return;
-      if (touching && now - lastTouchMoveAt < 120) return;
-
       const y = Math.max(
         0,
         window.scrollY || 0,
         document.documentElement.scrollTop || 0,
         document.body.scrollTop || 0,
       );
+      const isFeedPath = currentPathRef.current === '/' || currentPathRef.current === '/feed';
+      const shouldHideUnifiedTopBar = isFeedPath && y > 10;
+      if (unifiedTopBarHiddenRef.current !== shouldHideUnifiedTopBar) {
+        unifiedTopBarHiddenRef.current = shouldHideUnifiedTopBar;
+        setUnifiedTopBarHidden(shouldHideUnifiedTopBar);
+      }
+
+      if (document.body.classList.contains('aani-immersive') || hasOpenModal()) return;
+      if (touching && now - lastTouchMoveAt < 120) return;
+
       const delta = y - lastScrollY;
       lastScrollY = y;
 
@@ -271,35 +288,9 @@ export default function Shell({
       window.removeEventListener('touchcancel', onTouchEnd);
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('wheel', onWheel);
-      document.body.classList.remove('aani-chrome-hidden', 'aani-chrome-revealed');
-      if (storyRevealTimerRef.current) {
-        window.clearTimeout(storyRevealTimerRef.current);
-        storyRevealTimerRef.current = null;
-      }
+      document.body.classList.remove('aani-chrome-hidden');
     };
   }, []);
-
-  // تمرير حالة الإخفاء إلى شريط القصص عبر كلاس على الصفحة (بدون تغيير منطقها)
-  useEffect(() => {
-    const wasHidden = prevChromeHiddenRef.current;
-    prevChromeHiddenRef.current = chromeHidden;
-
-    // أُضيف كلاس الإخفاء تزامنيًا مع إيماءة السحب حتى تتحرك الأشرطة معًا.
-
-    // سلسلة الظهور: الشريط العلوي أولًا، ثم ينبثق شريط القصص من خلفه إلى مكانه
-    if (wasHidden && !chromeHidden) {
-      document.body.classList.remove('aani-chrome-revealed');
-      // إعادة تشغيل الأنيميشن من البداية
-      void document.body.offsetWidth;
-      document.body.classList.add('aani-chrome-revealed');
-
-      if (storyRevealTimerRef.current) window.clearTimeout(storyRevealTimerRef.current);
-      storyRevealTimerRef.current = window.setTimeout(() => {
-        document.body.classList.remove('aani-chrome-revealed');
-      }, 1000);
-    }
-
-  }, [chromeHidden]);
 
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
@@ -775,14 +766,24 @@ export default function Shell({
 
   return (
     <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''}`}>
-      <ShellTopBar
-        path={path}
-        chromeHidden={chromeHidden}
-        unreadCount={unreadCount}
-        onOpenNotifications={() => setShowNotifsModal(true)}
-        onOpenSettings={() => setShowSettingsModal(true)}
-        onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
-      />
+      {path === '/' || path === '/feed' ? (
+        <UnifiedTopBar
+          hidden={unifiedTopBarHidden}
+          unreadCount={unreadCount}
+          stories={headerStories}
+          onOpenNotifications={() => setShowNotifsModal(true)}
+          onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
+        />
+      ) : (
+        <ShellTopBar
+          path={path}
+          chromeHidden={chromeHidden}
+          unreadCount={unreadCount}
+          onOpenNotifications={() => setShowNotifsModal(true)}
+          onOpenSettings={() => setShowSettingsModal(true)}
+          onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
+        />
+      )}
 
       <ShellOverlayControls
         showPublishOptionsSheet={showPublishOptionsSheet}
