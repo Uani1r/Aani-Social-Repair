@@ -48,7 +48,7 @@ export default function StoriesStrip({
               else onOpenPicker();
             }}
           >
-            <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
+            <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full">
               {currentProfile?.avatar_url ? (
                 <img
                   src={currentProfile.avatar_url}
@@ -126,7 +126,7 @@ export default function StoriesStrip({
               <span
                 className={`unified-story-ring ${isSeen ? 'is-seen' : 'is-unseen'}`}
               >
-                <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-[#121212] bg-zinc-900">
+                <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full">
                   <Avatar profile={firstStory.author} extraLarge />
                 </span>
                 {hasCloseFriendsStory && (
