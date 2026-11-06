@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { displayName } from "../types";
 import type { Post, Profile } from "../types";
 import { buildCommentTree } from "../comments/tree";
 import { handleAppError } from "../appErrors";
@@ -177,7 +178,8 @@ export async function fetchCommentsWithReplies(
       created_at: String(comment.created_at ?? new Date().toISOString()),
       profiles: author
         ? {
-            full_name: String(author.full_name ?? author.display_name ?? ""),
+            full_name: displayName(author),
+            display_name: typeof author.display_name === 'string' ? author.display_name : null,
             username: String(author.username ?? ""),
             avatar_url: author.avatar_url
               ? String(author.avatar_url)

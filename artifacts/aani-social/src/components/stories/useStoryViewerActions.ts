@@ -6,6 +6,7 @@ import type {
   StoryViewerPreviewState,
 } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { displayName } from '@/lib/types';
 import type { StoryRow } from './types';
 
 type StoryReportCategory = 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';
@@ -282,7 +283,7 @@ export function useStoryViewerActions({
 
   const handleBlockStoryViewer = async (viewer: StoryViewerEntry) => {
     if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
-    const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
+    const name = displayName(viewer.viewer);
     if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع من مشاهدة قصصك والتواصل معك.`)) return;
 
     setViewerActionBusyId(viewer.user_id);
@@ -306,7 +307,7 @@ export function useStoryViewerActions({
 
   const handleHideStoryFromViewer = async (viewer: StoryViewerEntry) => {
     if (!isStoryOwner || viewer.user_id === userId || !supabaseConfigured || viewerActionBusyId) return;
-    const name = viewer.viewer?.display_name || viewer.viewer?.full_name || viewer.viewer?.username || 'هذا المستخدم';
+    const name = displayName(viewer.viewer);
     if (!window.confirm(`إخفاء قصصك المستقبلية عن ${name}؟ لن تُحذف مشاهداته السابقة.`)) return;
 
     setViewerActionBusyId(viewer.user_id);

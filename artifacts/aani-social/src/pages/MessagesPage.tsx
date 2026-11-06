@@ -105,7 +105,7 @@ export default function MessagesPage({
       if (selectedId && !ids.includes(selectedId)) ids.unshift(selectedId);
 
       if (ids.length) {
-        const { data: profs } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', ids);
+        const { data: profs } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', ids);
         setContacts((profs || []) as Profile[]);
       } else {
         setContacts([]);

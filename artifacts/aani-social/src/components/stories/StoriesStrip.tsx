@@ -2,6 +2,7 @@ import { Plus, Star } from 'lucide-react';
 
 import Avatar from '../Avatar';
 import UserIdentity from '../UserIdentity';
+import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import type { StoriesByUser, StoryRow } from './types';
 
@@ -57,7 +58,7 @@ export default function StoriesStrip({
                 />
               ) : (
                 <span className="unified-story-avatar-fallback">
-                  {(currentProfile?.display_name || currentProfile?.full_name || currentProfile?.username || 'آ').trim().slice(0, 1) || 'آ'}
+                  {displayName(currentProfile).slice(0, 1) || 'آ'}
                 </span>
               )}
             </span>
@@ -136,8 +137,8 @@ export default function StoriesStrip({
                 )}
               </span>
               <UserIdentity
-                name={firstStory.author?.full_name || firstStory.author?.username || 'عضو'}
-                username={firstStory.author?.full_name ? firstStory.author.username : null}
+                name={displayName(firstStory.author)}
+                username={firstStory.author?.username}
                 className="unified-story-identity"
                 nameClassName="unified-story-name"
                 usernameClassName="unified-story-username"

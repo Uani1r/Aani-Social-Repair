@@ -35,6 +35,7 @@ export interface CommentWithDetails {
   created_at: string;
   profiles: {
     full_name: string;
+    display_name?: string | null;
     username: string;
     avatar_url: string | null;
   } | null;

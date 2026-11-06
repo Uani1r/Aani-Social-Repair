@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 
 import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import {
   clampCanvas,
@@ -1261,7 +1262,7 @@ export default function StoriesBar({
 
         const { data: author, error: authorError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url')
           .eq('id', originalStory.user_id)
           .maybeSingle();
         if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة الأصلية:', authorError);
@@ -1997,7 +1998,7 @@ export default function StoriesBar({
             setStoryMentions(people);
             setStoryMentionsOpen(false);
             if (people.length === 1) {
-              toast.success(`تمت الإشارة إلى ${people[0].username}`);
+              toast.success(`تمت الإشارة إلى ${displayName(people[0])}`);
             } else if (people.length > 1) {
               toast.success(`تمت الإشارة إلى ${people.length} أشخاص`);
             }
@@ -2137,7 +2138,7 @@ export default function StoriesBar({
             setStoryMentions(people);
             setStoryMentionsOpen(false);
             if (people.length === 1) {
-              toast.success(`تمت الإشارة إلى ${people[0].username}`);
+              toast.success(`تمت الإشارة إلى ${displayName(people[0])}`);
             } else if (people.length > 1) {
               toast.success(`تمت الإشارة إلى ${people.length} أشخاص`);
             }

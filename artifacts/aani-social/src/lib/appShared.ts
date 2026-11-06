@@ -1,3 +1,4 @@
+import { displayName } from './types';
 import type { Profile } from './types';
 
 export type StoryViewerProfile = {
@@ -11,19 +12,21 @@ export type StoryViewerProfile = {
 
 export const STORY_VIEWER_PLACEHOLDER_NAMES = new Set([
   'new member',
+  'new user',
   'member',
+  'user',
+  'unknown',
+  'unknown user',
+  'username',
   'عضو جديد',
   'عضو آني',
   'مستخدم',
+  'مستخدم جديد',
+  'مستخدم آني',
 ]);
 
 export function storyViewerDisplayName(profile: StoryViewerProfile | null): string {
-  for (const candidate of [profile?.full_name, profile?.display_name]) {
-    const name = candidate?.trim();
-    if (name && !STORY_VIEWER_PLACEHOLDER_NAMES.has(name.toLowerCase())) return name;
-  }
-
-  return profile?.username?.trim() || 'مستخدم';
+  return displayName(profile);
 }
 
 export type StoryViewerEntry = {

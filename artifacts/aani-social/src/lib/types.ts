@@ -131,12 +131,38 @@ export type PostComment = {
   createdAt?: string;
 };
 
+const PLACEHOLDER_PROFILE_NAMES = new Set([
+  'new member',
+  'new user',
+  'member',
+  'user',
+  'unknown',
+  'unknown user',
+  'username',
+  'عضو جديد',
+  'عضو آني',
+  'مستخدم',
+  'مستخدم جديد',
+  'مستخدم آني',
+]);
+
+export const cleanUsername = (username?: string | null): string =>
+  (username || '').trim().replace(/^@+/, '').trim();
+
+type DisplayNameProfile = {
+  full_name?: string | null;
+  display_name?: string | null;
+  username?: string | null;
+};
+
 export const displayName = (
-  profile?: Partial<Profile> | null,
-): string =>
-  profile?.display_name ||
-  profile?.full_name ||
-  (profile?.username || "عضو آني");
+  profile?: DisplayNameProfile | null,
+): string => {
+  const name = [profile?.full_name, profile?.display_name]
+    .map(value => value?.trim() || '')
+    .find(value => value && !PLACEHOLDER_PROFILE_NAMES.has(value.toLowerCase()));
+  return name || cleanUsername(profile?.username) || 'عضو آني';
+};
 
 export const normalizeProfile = (
   value: unknown,

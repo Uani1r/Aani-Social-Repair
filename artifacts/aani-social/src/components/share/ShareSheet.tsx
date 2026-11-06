@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 
 import { supabase, supabaseConfigured } from '../../lib/supabase';
+import { displayName } from '../../lib/types';
 import { postShareText, postShareUrl, recordShares } from '../../lib/interactions';
 import ShareComposerFooter from './ShareComposerFooter';
 import ShareMethodActions from './ShareMethodActions';
@@ -71,11 +72,11 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
 
     void supabase
       .from('profiles')
-      .select('full_name, username')
+      .select('full_name, display_name, username')
       .eq('id', currentUserId)
       .maybeSingle()
       .then(({ data }) => {
-        if (data) setMyName(String(data.full_name || data.username || 'مستخدم'));
+        if (data) setMyName(displayName(data));
       });
   }, [currentUserId]);
 

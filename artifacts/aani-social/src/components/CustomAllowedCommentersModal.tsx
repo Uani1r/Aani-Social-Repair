@@ -3,11 +3,13 @@ import { Check, Loader2, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { displayName } from '@/lib/types';
 
 type Person = {
   id: string;
   username: string;
   full_name: string | null;
+  display_name?: string | null;
   avatar_url: string | null;
 };
 
@@ -67,7 +69,7 @@ export default function CustomAllowedCommentersModal({
       const { data, error } = mutualIds.length
         ? await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url')
           .in('id', mutualIds)
           .order('full_name', { ascending: true, nullsFirst: false })
           .limit(2000)
@@ -93,7 +95,7 @@ export default function CustomAllowedCommentersModal({
     const term = search.trim().toLocaleLowerCase();
     if (!term) return people;
     return people.filter(person =>
-      `${person.full_name || ''} ${person.username || ''}`.toLocaleLowerCase().includes(term),
+      `${person.full_name || ''} ${person.display_name || ''} ${person.username || ''}`.toLocaleLowerCase().includes(term),
     );
   }, [people, search]);
 
@@ -165,11 +167,11 @@ export default function CustomAllowedCommentersModal({
                   <img src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
                 ) : (
                   <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/10 text-sm font-bold text-white/70">
-                    {(person.full_name || person.username || 'آ').slice(0, 1)}
+                    {displayName(person).slice(0, 1)}
                   </span>
                 )}
                 <UserIdentity
-                  name={person.full_name || person.username}
+                  name={displayName(person)}
                   username={person.username}
                   className="min-w-0 flex-1"
                   nameClassName="text-xs font-semibold text-white"

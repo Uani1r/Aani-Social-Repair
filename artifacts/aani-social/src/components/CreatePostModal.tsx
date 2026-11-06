@@ -6,7 +6,7 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import type { PostDestination, PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import { cleanUsername, displayName, type PostDestination, type PostMetadataTag, type Profile, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
 
 type ComposerTagKind = PostMetadataTag['kind'];
@@ -17,6 +17,7 @@ type MentionCandidate = {
   id: string;
   username: string;
   full_name: string;
+  display_name?: string | null;
   avatar_url: string | null;
 };
 
@@ -39,11 +40,7 @@ type CreatePostModalProps = {
   onClose: () => void;
 };
 
-const composerDisplayName = (profile: Profile | null) => {
-  const candidate = [profile?.display_name, profile?.full_name, profile?.username]
-    .find(value => Boolean(value?.trim()) && value?.trim().toLowerCase() !== 'new member');
-  return candidate?.trim() || 'عضو آني';
-};
+const composerDisplayName = (profile: Profile | null) => displayName(profile);
 
 const mapsUrl = (query: string) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 
@@ -120,14 +117,14 @@ export default function CreatePostModal({
         try {
           const [usernameResult, nameResult] = await Promise.all([
             supabase.from('profiles')
-              .select('id, username, full_name, avatar_url')
+              .select('id, username, full_name, display_name, avatar_url')
               .neq('id', userId)
               .ilike('username', `%${term}%`)
               .limit(8),
             supabase.from('profiles')
-              .select('id, username, full_name, avatar_url')
+              .select('id, username, full_name, display_name, avatar_url')
               .neq('id', userId)
-              .ilike('full_name', `%${term}%`)
+              .or(`full_name.ilike.%${term}%,display_name.ilike.%${term}%`)
               .limit(8),
           ]);
 
@@ -239,7 +236,7 @@ export default function CreatePostModal({
             <Avatar profile={profile} extraLarge />
             <UserIdentity
               name={composerDisplayName(profile)}
-              username={profile?.username?.replace(/^@+/, '') || null}
+              username={cleanUsername(profile?.username) || null}
               nameClassName="text-base font-bold text-white"
               usernameClassName="text-sm text-zinc-400"
             />
@@ -369,7 +366,7 @@ export default function CreatePostModal({
                     >
                       <Avatar profile={person} />
                       <UserIdentity
-                        name={person.full_name || person.username}
+                        name={displayName(person)}
                         username={person.username}
                         className="min-w-0 flex-1"
                         nameClassName="text-xs font-semibold text-white"

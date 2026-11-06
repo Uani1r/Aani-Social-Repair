@@ -32,8 +32,8 @@ export default function SearchPage({ userId }: { userId: string }) {
     setLoading(true);
     const { data } = await supabase
       .from('profiles')
-      .select('id, username, full_name, avatar_url, bio')
-      .or(`username.ilike.%${queryTerm.trim()}%,full_name.ilike.%${queryTerm.trim()}%`)
+      .select('id, username, full_name, display_name, avatar_url, bio')
+      .or(`username.ilike.%${queryTerm.trim()}%,full_name.ilike.%${queryTerm.trim()}%,display_name.ilike.%${queryTerm.trim()}%`)
       .limit(30);
 
     setProfiles((data || []) as Profile[]);
@@ -60,7 +60,7 @@ export default function SearchPage({ userId }: { userId: string }) {
           <input 
             value={term} 
             onChange={e => setTerm(e.target.value)} 
-            placeholder="ابحث عن الاسم واسم المستخدم (@username)..." 
+            placeholder="ابحث عن الاسم أو اسم المستخدم..." 
             className="w-full bg-transparent outline-none text-sm text-white placeholder-zinc-500 font-medium touch-pan-y"
           />
         </label>

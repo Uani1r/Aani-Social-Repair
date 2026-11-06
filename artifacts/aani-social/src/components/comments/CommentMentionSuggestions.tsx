@@ -3,6 +3,7 @@ import React from 'react';
 import UserIdentity from '../UserIdentity';
 import type { MentionCandidate } from './types';
 import { buildInitials } from './utils';
+import { displayName } from '../../lib/types';
 
 interface CommentMentionSuggestionsProps {
   suggestions: MentionCandidate[];
@@ -43,12 +44,12 @@ const CommentMentionSuggestions: React.FC<CommentMentionSuggestionsProps> = ({
             />
           ) : (
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-[10px] font-bold text-white">
-              {buildInitials(person.full_name)}
+              {buildInitials(displayName(person))}
             </span>
           )}
 
           <UserIdentity
-            name={person.full_name || person.username || 'مستخدم'}
+            name={displayName(person)}
             username={person.username}
             className="min-w-0 flex-1"
             nameClassName="font-bold text-white"

@@ -5,6 +5,7 @@ import type { CommentWithDetails } from '../../lib/interactions';
 import type { MentionQuery } from '../../lib/mentions';
 import type { CommentComposerProfile, MentionCandidate } from './types';
 import { buildInitials } from './utils';
+import { displayName } from '../../lib/types';
 import CommentMediaPicker from './CommentMediaPicker';
 import CommentMediaPreview from './CommentMediaPreview';
 import CommentMentionSuggestions from './CommentMentionSuggestions';
@@ -69,7 +70,7 @@ const CommentComposer: React.FC<CommentComposerProps> = ({
         <span>
           الرد على{' '}
           <strong className="text-pink-400">
-            {replyingTo.profiles?.full_name || replyingTo.profiles?.username || 'مستخدم'}
+            {displayName(replyingTo.profiles)}
           </strong>
         </span>
 
@@ -93,12 +94,12 @@ const CommentComposer: React.FC<CommentComposerProps> = ({
         {currentUser?.avatar_url ? (
           <img
             src={currentUser.avatar_url}
-            alt={currentUser.full_name}
+            alt={displayName(currentUser)}
             className="h-11 w-11 rounded-full object-cover ring-1 ring-zinc-700"
           />
         ) : (
           <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-bold text-white ring-1 ring-zinc-700">
-            {buildInitials(currentUser?.full_name)}
+            {buildInitials(displayName(currentUser))}
           </div>
         )}
       </div>

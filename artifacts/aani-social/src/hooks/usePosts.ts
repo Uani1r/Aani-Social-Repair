@@ -113,6 +113,9 @@ function normalizePostProfile(value: unknown): Profile | null {
     id: value.id,
     username: typeof value.username === 'string' ? value.username : 'user',
     full_name: typeof value.full_name === 'string' ? value.full_name : 'مستخدم',
+    display_name: typeof value.display_name === 'string' || value.display_name === null
+      ? value.display_name
+      : undefined,
     avatar_url: typeof value.avatar_url === 'string' ? value.avatar_url : null,
     bio: typeof value.bio === 'string' ? value.bio : '',
   };
@@ -182,7 +185,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           .filter(post => post.destination === 'feed');
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
-          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
+          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', uIds);
           const profMap = profileMap(profileData);
 
           const formatted: Post[] = rawPosts.map(post => ({
@@ -230,11 +233,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           const authorIds = [...new Set(allRaw.map(post => post.user_id))];
           const { data: profileData } = await supabase
             .from('profiles')
-            .select('id, username, full_name, avatar_url')
+            .select('id, username, full_name, display_name, avatar_url')
             .in('id', authorIds);
           const { data: reposterProfileData } = await supabase
             .from('profiles')
-            .select('id, username, full_name, avatar_url')
+            .select('id, username, full_name, display_name, avatar_url')
             .eq('id', targetUserId)
             .maybeSingle();
 
@@ -269,7 +272,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           .filter(post => post.type === 'reel' && post.destination === 'reels');
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
-          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', uIds);
+          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', uIds);
           const profMap = profileMap(profileData);
 
           const formatted: Post[] = rawPosts.map(post => ({

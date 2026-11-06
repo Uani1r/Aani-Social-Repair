@@ -62,7 +62,7 @@ export default function ProfilePage({
       const requestRows = (incomingRequests || []) as Array<{ requester_id: string; created_at: string }>;
       const requesterIds = [...new Set(requestRows.map(row => row.requester_id))];
       const { data: requesterProfiles } = requesterIds.length
-        ? await supabase.from('profiles').select('id, username, full_name, avatar_url, bio, is_private').in('id', requesterIds)
+        ? await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url, bio, is_private').in('id', requesterIds)
         : { data: [] };
       if (!active) return;
       if (activeStoriesError) {

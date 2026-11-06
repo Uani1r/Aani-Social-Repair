@@ -17,6 +17,7 @@ import {
 import type { CommentWithDetails } from '../lib/interactions';
 import CommentText from './CommentText';
 import UserIdentity from './UserIdentity';
+import { cleanUsername, displayName } from '../lib/types';
 
 interface CommentItemProps {
   comment: CommentWithDetails;
@@ -159,7 +160,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
 
   const replyCount = flatReplies.length;
   const author = comment.profiles;
-  const displayName = author?.full_name || 'مستخدم آني';
+  const authorName = displayName(author);
   const isReply = depth > 0;
   const hasActiveStory = storyOwners.has(comment.user_id);
   const ringClasses = hasActiveStory
@@ -198,12 +199,12 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           {author?.avatar_url ? (
             <img
               src={author.avatar_url}
-              alt={displayName}
+              alt={authorName}
               className={`comment-avatar ${ringClasses}`}
             />
           ) : (
             <div className={`comment-avatar comment-avatar-fallback ${ringClasses}`}>
-              {buildInitials(displayName)}
+              {buildInitials(authorName)}
             </div>
           )}
         </div>
@@ -212,8 +213,8 @@ export const CommentItem: React.FC<CommentItemProps> = ({
           <div className="comment-header">
             <div className="comment-author-line">
               <UserIdentity
-                name={displayName}
-                username={author?.username?.replace(/^@+/, '')}
+                name={authorName}
+                username={cleanUsername(author?.username)}
                 className="comment-author-identity"
                 nameClassName="comment-author-name"
                 usernameClassName="comment-author-username"

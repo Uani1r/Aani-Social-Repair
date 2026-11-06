@@ -7,7 +7,7 @@ import { toast } from 'sonner';
 import Avatar from './Avatar';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { displayName, type Profile } from '@/lib/types';
+import { cleanUsername, displayName, type Profile } from '@/lib/types';
 
 type LikeUser = {
   id: string;
@@ -299,8 +299,8 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
           ) : (
             <ul className="space-y-1">
               {sortedUsers.map(user => {
-                const name = user.profile.display_name || user.profile.full_name || displayName(user.profile);
-                const username = user.profile.username?.replace(/^@+/, '');
+                const name = displayName(user.profile);
+                const username = cleanUsername(user.profile.username);
                 return (
                   <li key={user.id} dir="rtl" className="flex min-w-0 flex-row items-center gap-3 rounded-xl px-1 py-2">
                     <Link href={`/profile/${encodeURIComponent(user.id)}`} aria-label={`الملف الشخصي لـ ${name}`} className="shrink-0">
@@ -319,7 +319,7 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
                         className="block whitespace-normal break-all text-right leading-5"
                         style={{ color: '#a0a0a0', fontSize: 13 }}
                       >
-                        {username ? `@${username}` : 'اسم المستخدم غير متاح'}
+                        {username || 'اسم المستخدم غير متاح'}
                       </span>
                     </div>
                     {user.id !== currentUserId && currentUserId && (

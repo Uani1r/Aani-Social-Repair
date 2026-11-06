@@ -2,7 +2,7 @@ import React from 'react';
 import { Bookmark, Heart, MessageCircle, Share2 } from 'lucide-react';
 
 import { usePostInteractions } from '../lib/interactions';
-import type { Post } from '../lib/types';
+import { displayName, type Post } from '../lib/types';
 import UserIdentity from './UserIdentity';
 import RepostIcon from './RepostIcon';
 import PostMetadataChips from './PostMetadataChips';
@@ -74,17 +74,17 @@ export default function PostCard({
           {post.author?.avatar_url ? (
             <img
               src={post.author.avatar_url}
-              alt={post.author.full_name || 'مستخدم'}
+              alt={displayName(post.author)}
               className="h-10 w-10 rounded-full object-cover ring-1 ring-zinc-700"
             />
           ) : (
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-bold text-white">
-              {post.author?.full_name?.[0]?.toUpperCase() || 'آ'}
+              {displayName(post.author).charAt(0) || 'آ'}
             </div>
           )}
           <div className="min-w-0">
             <UserIdentity
-              name={post.author?.display_name || post.author?.full_name || 'مستخدم'}
+              name={displayName(post.author)}
               username={post.author?.username}
               nameClassName="font-semibold text-zinc-100"
               usernameClassName="text-xs text-zinc-400"

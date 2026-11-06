@@ -74,7 +74,7 @@ export function useStoriesData({
       .filter((story): story is StoryRow => story !== null);
     const authorIds = [...new Set(storyRows.map(story => story.user_id))];
     const { data: authors, error: authorsError } = authorIds.length
-      ? await supabase.from('profiles').select('id, username, full_name, avatar_url').in('id', authorIds)
+      ? await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', authorIds)
       : { data: [], error: null };
     if (authorsError) console.warn('[stories] تعذر تحميل ملفات أصحاب القصص:', authorsError);
 
@@ -124,7 +124,7 @@ export function useStoriesData({
 
       const { data: author, error: authorError } = await supabase
         .from('profiles')
-        .select('id, username, full_name, avatar_url')
+        .select('id, username, full_name, display_name, avatar_url')
         .eq('id', userId)
         .maybeSingle();
       if (requestId !== archiveRequestRef.current) return;
@@ -190,7 +190,7 @@ export function useStoriesData({
 
         const { data: author, error: authorError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url')
           .eq('id', pendingProfileStoryOwnerId)
           .maybeSingle();
         if (!active) return;

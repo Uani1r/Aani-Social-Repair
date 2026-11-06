@@ -10,7 +10,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { storyViewerDisplayName, type StoryViewerEntry } from '@/lib/appShared';
-import { formatDate } from '@/lib/types';
+import { cleanUsername, formatDate } from '@/lib/types';
 
 import type { StoryViewerProps } from './types';
 
@@ -125,7 +125,7 @@ export default function StoryViewersPanel({
                   <div className="min-w-0 flex-1">
                     <UserIdentity
                       name={storyViewerDisplayName(item.viewer)}
-                      username={item.viewer?.username || 'اسم المستخدم غير متاح'}
+                      username={cleanUsername(item.viewer?.username) || 'اسم المستخدم غير متاح'}
                       nameClassName="text-xs font-semibold text-white"
                       usernameClassName="text-[10px] text-zinc-400"
                     />
@@ -142,7 +142,7 @@ export default function StoryViewersPanel({
                     <DropdownMenuTrigger asChild>
                       <button
                         type="button"
-                        aria-label={`خيارات ${item.viewer?.username || 'المشاهد'}`}
+                        aria-label={`خيارات ${cleanUsername(item.viewer?.username) || 'المشاهد'}`}
                         disabled={Boolean(viewerActionBusyId)}
                         className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
                       >
@@ -185,7 +185,7 @@ export default function StoryViewersPanel({
                     <div className="min-w-0 flex-1">
                       <UserIdentity
                         name={storyViewerDisplayName(item.viewer)}
-                        username={item.viewer?.username || 'اسم المستخدم غير متاح'}
+                        username={cleanUsername(item.viewer?.username) || 'اسم المستخدم غير متاح'}
                         nameClassName="text-xs font-semibold text-white"
                         usernameClassName="text-[10px] text-zinc-400"
                       />

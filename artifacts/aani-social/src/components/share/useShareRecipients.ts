@@ -43,7 +43,7 @@ export function useShareRecipients(currentUserId: string, term: string) {
 
         const { data } = await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url')
           .in('id', Array.from(ids))
           .limit(500);
 
@@ -52,6 +52,7 @@ export function useShareRecipients(currentUserId: string, term: string) {
           if (!needle) return true;
           return (
             String(profile.full_name || '').toLowerCase().includes(needle) ||
+            String(profile.display_name || '').toLowerCase().includes(needle) ||
             String(profile.username || '').toLowerCase().includes(needle)
           );
         });

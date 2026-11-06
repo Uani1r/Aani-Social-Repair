@@ -24,6 +24,7 @@ import {
 } from '../lib/interactions';
 import { handleAppError } from '../lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
+import { cleanUsername, displayName } from '../lib/types';
 import { extractMentions, findActiveMention, type MentionQuery } from '../lib/mentions';
 import { useBottomSheetDismiss } from '../hooks/useBottomSheetDismiss';
 import {
@@ -213,7 +214,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
         const { data } = await supabase
           .from('profiles')
-          .select('id, username, full_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url')
           .in('id', Array.from(ids))
           .limit(500);
 
@@ -409,7 +410,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     void (async () => {
       const { data, error } = await supabase
         .from('profiles')
-        .select('full_name, username, avatar_url')
+        .select('full_name, display_name, username, avatar_url')
         .eq('id', currentUserId)
         .maybeSingle();
 
@@ -598,6 +599,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             id: item.user_id,
             username: item.profiles.username ?? null,
             full_name: item.profiles.full_name ?? null,
+            display_name: item.profiles.display_name ?? null,
             avatar_url: item.profiles.avatar_url ?? null,
           });
         }
@@ -621,8 +623,9 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       .filter((person) => {
         const username = (person.username ?? '').toLowerCase();
         const fullName = (person.full_name ?? '').toLowerCase();
+        const displayName = (person.display_name ?? '').toLowerCase();
         if (!needle) return true;
-        return username.includes(needle) || fullName.includes(needle);
+        return username.includes(needle) || fullName.includes(needle) || displayName.includes(needle);
       })
       .slice(0, 6);
   }, [mentionCandidates, mentionQuery]);
@@ -631,7 +634,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     const prefix = content && !content.endsWith(' ') ? `${content} ` : content;
 
     if (replyingTo) {
-      const token = `@${replyingTo.profiles?.username || 'user'} `;
+      const token = `@${cleanUsername(replyingTo.profiles?.username) || 'user'} `;
       setContent(`${prefix}${token}`);
       setMentionQuery(null);
     } else {
@@ -653,7 +656,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   };
 
   const applyMentionSuggestion = (person: MentionCandidate) => {
-    const token = `@${person.username || person.full_name || 'user'}`;
+    const token = `@${cleanUsername(person.username) || person.full_name || 'user'}`;
 
     setContent((prev) => {
       const active = mentionQuery;
@@ -805,7 +808,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
             user_id: replyingTo.user_id,
             actor_id: currentUserId,
             type: 'reply',
-            content: `${currentUser?.full_name || 'مستخدم'} رد على تعليقك`,
+            content: `${displayName(currentUser)} رد على تعليقك`,
             comment_id: replyingTo.id,
           });
       }
@@ -831,7 +834,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
               user_id: person.id,
               actor_id: currentUserId,
               type: 'mention',
-              content: `${currentUser?.full_name || 'مستخدم'} ذكرك في تعليق`,
+              content: `${displayName(currentUser)} ذكرك في تعليق`,
               comment_id: realComment.id,
             });
         });
@@ -930,7 +933,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         user_id: target.user_id,
         actor_id: currentUserId,
         type: 'like',
-        content: `${currentUser?.full_name || 'مستخدم'} قام بالإعجاب بتعليقك`,
+        content: `${displayName(currentUser)} قام بالإعجاب بتعليقك`,
         comment_id: target.id,
       });
   };
@@ -1145,7 +1148,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
   const handleBlockCommentAuthor = async (comment: CommentWithDetails) => {
     if (postOwnerId !== currentUserId || comment.user_id === currentUserId || pendingActionIds[comment.id]) return;
-    const name = comment.profiles?.full_name || comment.profiles?.username || 'كاتب التعليق';
+    const name = displayName(comment.profiles);
     if (!window.confirm(`هل تريد حظر ${name}؟ سيُمنع من التواصل معك.`)) return;
 
     const localBlockedUserIds = readLocalBlockedUserIds(currentUserId);

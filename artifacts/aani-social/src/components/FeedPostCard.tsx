@@ -205,7 +205,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     }
     if (!supabaseConfigured) return;
     setBusy(true);
-    const { data } = await supabase.from('comments').select('id,post_id,user_id,content,created_at,author:profiles(id,username,full_name,avatar_url)').eq('post_id', post.id).order('created_at', { ascending: true });
+    const { data } = await supabase.from('comments').select('id,post_id,user_id,content,created_at,author:profiles(id,username,full_name,display_name,avatar_url)').eq('post_id', post.id).order('created_at', { ascending: true });
     setComments(normalizeFeedPostComments(data));
     setBusy(false);
   };

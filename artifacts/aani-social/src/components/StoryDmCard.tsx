@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { cleanUsername, displayName } from '@/lib/types';
 
 export interface StoryRow {
   id: string;
@@ -75,7 +76,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
   const expired = !story || !Number.isFinite(expiresAt) || expiresAt <= Date.now();
   const canReshare = Boolean(story && !expired && story.user_id !== currentUserId && story.media_url);
 
-  const authorLabel = story?.author?.display_name || story?.author?.full_name || story?.author?.username || senderName || 'مستخدم';
+  const authorLabel = story?.author ? displayName(story.author) : senderName || 'مستخدم';
 
   return (
     <div className="w-[78%] max-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl">
@@ -104,7 +105,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
             <img src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
           ) : (
             <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
-              {(story?.author?.username || 'A').charAt(0).toUpperCase()}
+              {(cleanUsername(story?.author?.username).charAt(0) || 'A').toUpperCase()}
             </span>
           )}
           <UserIdentity

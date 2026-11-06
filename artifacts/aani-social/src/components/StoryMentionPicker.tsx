@@ -3,11 +3,13 @@ import { Check, Loader2, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { displayName } from '@/lib/types';
 
 export interface MentionCandidate {
   id: string;
   username: string;
   full_name: string | null;
+  display_name?: string | null;
   avatar_url: string | null;
 }
 
@@ -76,13 +78,13 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
       const term = query.trim();
       let request = supabase
         .from('profiles')
-        .select('id, username, full_name, avatar_url')
+        .select('id, username, full_name, display_name, avatar_url')
         .in('id', allowedIds)
         .order('full_name', { ascending: true, nullsFirst: false })
         .range(nextOffset, nextOffset + PAGE_SIZE - 1);
 
       if (term) {
-        request = request.or(`username.ilike.%${term}%,full_name.ilike.%${term}%`);
+        request = request.or(`username.ilike.%${term}%,full_name.ilike.%${term}%,display_name.ilike.%${term}%`);
       }
 
       const { data, error } = await request;
@@ -202,11 +204,11 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
                   <img src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
                 ) : (
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-[12px] font-bold">
-                    {(person.username || '?').charAt(0).toUpperCase()}
+                    {(displayName(person).charAt(0) || '?').toUpperCase()}
                   </span>
                 )}
                 <UserIdentity
-                  name={person.full_name || person.username}
+                  name={displayName(person)}
                   username={person.username}
                   className="min-w-0 flex-1"
                   nameClassName="text-[12px] font-bold text-white"
