@@ -2,10 +2,8 @@ import path from "path";
 import { existsSync } from "node:fs";
 import { createServer } from "node:http";
 import express from "express";
-import { Server } from "socket.io";
 import app from "./app";
 import { logger } from "./lib/logger";
-import { configureGroupSockets } from "./realtime/groupSockets";
 
 // تحديد مسار ملفات الواجهة حسب طريقة تشغيل المستودع.
 const defaultPublicPath = path.resolve(process.cwd(), "dist/public");
@@ -36,8 +34,6 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 const server = createServer(app);
-const io = new Server(server, { path: "/api/socket.io", cors: { origin: true } });
-configureGroupSockets(io);
 
 server.on("error", (err: Error) => {
   logger.error({ err }, "Error listening on port");

@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
-import { ArrowLeft, Check, ChevronDown, MessageCircle, Pencil, Search, Send, Users, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, MessageCircle, Pencil, Search, Send, X } from 'lucide-react';
 import Avatar from '@/components/Avatar';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
-import useGroupConversations from '@/hooks/useGroupConversations';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -26,7 +25,7 @@ interface ConversationSummary {
   isRequest: boolean;
 }
 
-type InboxTab = 'messages' | 'groups' | 'requests';
+type InboxTab = 'messages' | 'requests';
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
 
@@ -104,28 +103,6 @@ export default function MessagesPage({
   const [, setLocation] = useLocation();
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [friends, setFriends] = useState<Profile[]>([]);
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const {
-    groups,
-    groupsLoading,
-    groupsError,
-    loadGroups,
-    groupMessages,
-    groupMessagesLoading,
-    groupMessagesError,
-    createGroup: createServerGroup,
-    sendGroupMessage,
-  } = useGroupConversations(currentUserId, selectedGroupId);
-  const safeGroups = Array.isArray(groups)
-    ? groups.filter(group => Boolean(group && typeof group.id === 'string' && typeof group.name === 'string' && Array.isArray(group.members)))
-    : [];
-  const safeGroupMessages = Array.isArray(groupMessages)
-    ? groupMessages.filter(message => Boolean(message && typeof message.id === 'string' && typeof message.senderId === 'string' && typeof message.content === 'string'))
-    : [];
-  const safeFriends = Array.isArray(friends)
-    ? friends.filter(friend => Boolean(friend && typeof friend.id === 'string'))
-    : [];
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
@@ -135,11 +112,7 @@ export default function MessagesPage({
   const [threadLoading, setThreadLoading] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [activeTab, setActiveTab] = useState<InboxTab>(() => (
-    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('tab') === 'groups'
-      ? 'groups'
-      : 'messages'
-  ));
+  const [activeTab, setActiveTab] = useState<InboxTab>('messages');
   const [searchTerm, setSearchTerm] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(() => new Set());
@@ -149,35 +122,9 @@ export default function MessagesPage({
   const [newMessageProfiles, setNewMessageProfiles] = useState<Profile[]>([]);
   const [newMessageLoading, setNewMessageLoading] = useState(false);
   const [newMessageError, setNewMessageError] = useState<string | null>(null);
-  const [createGroupOpen, setCreateGroupOpen] = useState(false);
-  const [groupName, setGroupName] = useState('');
-  const [groupSearch, setGroupSearch] = useState('');
-  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
-  const [groupError, setGroupError] = useState<string | null>(null);
-  const [groupSaving, setGroupSaving] = useState(false);
-  const [createGroupClosing, setCreateGroupClosing] = useState(false);
-  const groupModalCloseTimerRef = useRef<number | null>(null);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    setSelectedGroupId(null);
-  }, [currentUserId]);
-
-  useEffect(() => () => {
-    if (groupModalCloseTimerRef.current !== null) window.clearTimeout(groupModalCloseTimerRef.current);
-  }, []);
-
-  const closeCreateGroup = () => {
-    if (!createGroupOpen || createGroupClosing) return;
-    setCreateGroupClosing(true);
-    groupModalCloseTimerRef.current = window.setTimeout(() => {
-      setCreateGroupOpen(false);
-      setCreateGroupClosing(false);
-      groupModalCloseTimerRef.current = null;
-    }, 180);
-  };
 
   const markConversationRead = useCallback((contactId: string) => {
     const readAt = new Date().toISOString();
@@ -197,7 +144,6 @@ export default function MessagesPage({
     if (!supabaseConfigured) {
       setCurrentProfile(null);
       setConversations([]);
-      setFriends([]);
       setContactsLoading(false);
       return;
     }
@@ -236,10 +182,8 @@ export default function MessagesPage({
         if (follow.follower_id === currentUserId) connectedIds.add(follow.following_id);
         if (follow.following_id === currentUserId) connectedIds.add(follow.follower_id);
       });
-      const profileIds = [...new Set([...contactIds, ...connectedIds])];
-
-      const profilesResult = profileIds.length
-        ? await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds)
+      const profilesResult = contactIds.length
+        ? await supabase.from('profiles').select(PROFILE_FIELDS).in('id', contactIds)
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       if (profilesResult.error) throw profilesResult.error;
@@ -250,10 +194,6 @@ export default function MessagesPage({
       if (requestId !== contactsRequestRef.current) return;
       const storyUserIds = new Set((storiesResult.data || []).map(story => story.user_id as string));
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
-      setFriends([...connectedIds]
-        .flatMap(contactId => profileById.get(contactId) || [])
-        .sort((first, second) => displayName(first).localeCompare(displayName(second), 'ar')));
-
       setConversations(contactIds.flatMap(contactId => {
         const profile = profileById.get(contactId);
         if (!profile) return [];
@@ -270,7 +210,6 @@ export default function MessagesPage({
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
       setConversations([]);
-      setFriends([]);
     } finally {
       if (requestId === contactsRequestRef.current) setContactsLoading(false);
     }
@@ -379,8 +318,8 @@ export default function MessagesPage({
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: safeThread.length || safeGroupMessages.length ? 'smooth' : 'auto' });
-  }, [thread, selectedId, groupMessages, selectedGroupId]);
+    threadEndRef.current?.scrollIntoView({ behavior: safeThread.length ? 'smooth' : 'auto' });
+  }, [thread, selectedId]);
 
   useEffect(() => {
     if (!newMessageOpen || !supabaseConfigured) return;
@@ -439,22 +378,17 @@ export default function MessagesPage({
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = text.trim();
-    if ((!selectedId && !selectedGroup) || !content || sending) return;
+    if (!selectedId || !content || sending || !supabaseConfigured) return;
 
     setSending(true);
     try {
-      if (selectedGroup) {
-        await sendGroupMessage(selectedGroup.id, content);
-      } else {
-        if (!supabaseConfigured || !selectedId) return;
-        const { error } = await supabase.from('messages').insert({
-          sender_id: currentUserId,
-          recipient_id: selectedId,
-          content,
-        });
-        if (error) throw error;
-        await Promise.all([loadThread(), loadConversationList()]);
-      }
+      const { error } = await supabase.from('messages').insert({
+        sender_id: currentUserId,
+        recipient_id: selectedId,
+        content,
+      });
+      if (error) throw error;
+      await Promise.all([loadThread(), loadConversationList()]);
       setText('');
     } catch (error) {
       console.error('[messages] تعذر إرسال الرسالة:', error);
@@ -464,92 +398,29 @@ export default function MessagesPage({
     }
   };
 
-  const tabConversations = useMemo(() => {
-    if (activeTab === 'requests') return conversations.filter(conversation => conversation.isRequest);
-    if (activeTab === 'groups') return [];
-    return conversations.filter(conversation => !conversation.isRequest);
-  }, [activeTab, conversations]);
+  const tabConversations = useMemo(() => (
+    activeTab === 'requests'
+      ? conversations.filter(conversation => conversation.isRequest)
+      : conversations.filter(conversation => !conversation.isRequest)
+  ), [activeTab, conversations]);
   const searchNeedle = searchTerm.trim().toLocaleLowerCase();
   const matchingConversationCount = tabConversations.filter(conversation => (
     `${displayName(conversation.profile)} ${conversation.profile.username || ''}`.toLocaleLowerCase().includes(searchNeedle)
   )).length;
-  const visibleGroups = safeGroups.filter(group => {
-    const memberIds = Array.isArray(group?.members)
-      ? group.members.filter((memberId): memberId is string => typeof memberId === 'string')
-      : [];
-    const memberSearch = memberIds.map(memberId => {
-      const member = safeFriends.find(friend => friend.id === memberId);
-      return member ? `${displayName(member)} ${member.username || ''}` : '';
-    }).join(' ');
-    return `${group?.name || ''} ${memberSearch}`.toLocaleLowerCase().includes(searchNeedle);
-  });
-  const visibleFriends = safeFriends.filter(friend => (
-    `${displayName(friend)} ${friend.username || ''}`.toLocaleLowerCase().includes(groupSearch.trim().toLocaleLowerCase())
-  ));
   const requestCount = conversations.filter(conversation => conversation.isRequest).length;
   const target = conversations.find(conversation => conversation.profile.id === selectedId)?.profile || null;
-  const selectedGroup = safeGroups.find(group => group?.id === selectedGroupId) || null;
 
   const openNewMessage = () => {
     setUserMenuOpen(false);
-    setSelectedGroupId(null);
     setNewMessageSearch('');
     setNewMessageProfiles([]);
     setNewMessageError(null);
     setNewMessageOpen(true);
   };
 
-  const openCreateGroup = () => {
-    if (groupModalCloseTimerRef.current !== null) window.clearTimeout(groupModalCloseTimerRef.current);
-    groupModalCloseTimerRef.current = null;
-    setCreateGroupClosing(false);
-    setUserMenuOpen(false);
-    setNewMessageOpen(false);
-    setGroupName('');
-    setGroupSearch('');
-    setSelectedGroupMemberIds([]);
-    setGroupError(null);
-    setCreateGroupOpen(true);
-  };
-
-  const toggleGroupMember = (memberId: string) => {
-    setGroupError(null);
-    setSelectedGroupMemberIds(current => current.includes(memberId)
-      ? current.filter(id => id !== memberId)
-      : [...current, memberId]);
-  };
-
-  const createGroup = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const name = groupName.trim();
-    const memberIds = friends
-      .filter(friend => selectedGroupMemberIds.includes(friend.id))
-      .map(friend => friend.id);
-    if (!name || memberIds.length === 0 || groupSaving) return;
-
-    setGroupSaving(true);
-    setGroupError(null);
-    try {
-      const group = await createServerGroup(name, memberIds);
-      setActiveTab('groups');
-      setSearchTerm('');
-      setSelectedGroupId(group.id);
-      if (selectedId) setLocation('/messages?tab=groups');
-      closeCreateGroup();
-      setGroupName('');
-      setGroupSearch('');
-      setSelectedGroupMemberIds([]);
-    } catch (error) {
-      console.error('[messages] تعذر إنشاء المجموعة:', error);
-      setGroupError(error instanceof Error ? error.message : 'تعذر إنشاء المجموعة الآن. حاول مرة أخرى.');
-    } finally {
-      setGroupSaving(false);
-    }
-  };
-
   return (
     <section className="messages-view" dir="rtl">
-      <div className={`messages-layout${selectedId || selectedGroup ? ' is-thread-open' : ''}`}>
+      <div className={`messages-layout${selectedId ? ' is-thread-open' : ''}`}>
         <aside className="messages-sidebar">
           <header className="messages-side-header">
             <div className="messages-account-wrap">
@@ -577,7 +448,7 @@ export default function MessagesPage({
                 </div>
               )}
             </div>
-            <button type="button" className="messages-new-button" aria-label="إنشاء مجموعة جديدة" title="إنشاء مجموعة جديدة" onClick={openCreateGroup}>
+            <button type="button" className="messages-new-button" aria-label="رسالة جديدة" title="رسالة جديدة" onClick={openNewMessage}>
               <Pencil size={20} strokeWidth={2} />
             </button>
           </header>
@@ -600,7 +471,6 @@ export default function MessagesPage({
 
           <div className="messages-tabs" role="tablist" aria-label="أقسام الرسائل">
             <button type="button" role="tab" aria-selected={activeTab === 'messages'} className={`messages-tab${activeTab === 'messages' ? ' active' : ''}`} onClick={() => setActiveTab('messages')}>الرسائل</button>
-            <button type="button" role="tab" aria-selected={activeTab === 'groups'} className={`messages-tab${activeTab === 'groups' ? ' active' : ''}`} onClick={() => setActiveTab('groups')}>المجموعات</button>
             <button type="button" role="tab" aria-selected={activeTab === 'requests'} className={`messages-tab${activeTab === 'requests' ? ' active' : ''}`} onClick={() => setActiveTab('requests')}>
               <span>الطلبات</span>
               {requestCount > 0 && <span className="messages-tab-badge">{requestCount > 99 ? '99+' : requestCount}</span>}
@@ -608,55 +478,7 @@ export default function MessagesPage({
           </div>
 
           <div className="messages-list-wrap">
-            {activeTab === 'groups' ? (
-              <>
-                {groupsLoading && <div className="messages-list-status">جارٍ تحميل المجموعات...</div>}
-                {!groupsLoading && groupsError && (
-                  <div className="messages-list-status" role="alert">
-                    <span>{groupsError}</span>
-                    <button type="button" onClick={() => void loadGroups()}>إعادة المحاولة</button>
-                  </div>
-                )}
-                {!groupsLoading && !groupsError && visibleGroups?.map(group => (
-                  <button
-                    key={group.id}
-                    type="button"
-                    aria-current={selectedGroupId === group.id ? 'page' : undefined}
-                    className={`messages-chat-item messages-group-item${selectedGroupId === group.id ? ' active' : ''}`}
-                    onClick={() => {
-                      setSelectedGroupId(group.id);
-                      if (selectedId) setLocation('/messages');
-                    }}
-                  >
-                    <span className="messages-group-avatar">{group.avatar || group.name.trim().slice(0, 1) || <Users size={23} />}</span>
-                    <span className="messages-chat-copy">
-                      <span className="messages-chat-topline">
-                        <span className="messages-chat-name">{group.name}</span>
-                        <time className="messages-chat-time" dateTime={group.createdAt || undefined}>
-                          {group.createdAt ? formatConversationTime(group.createdAt) : ''}
-                        </time>
-                      </span>
-                      <span className="messages-chat-preview-row">
-                        <span className="messages-chat-preview">مجموعة · {group.members?.length ?? 0} أعضاء</span>
-                      </span>
-                    </span>
-                  </button>
-                ))}
-                {!groupsLoading && !groupsError && safeGroups.length > 0 && visibleGroups.length === 0 && (
-                  <div className="messages-list-status">لا توجد مجموعات مطابقة.</div>
-                )}
-                {!groupsLoading && !groupsError && safeGroups.length === 0 && (
-                  <div className="messages-list-empty">
-                    <Users size={26} />
-                    <span>لا توجد مجموعات بعد</span>
-                    <small>أنشئ مجموعة وابدأ محادثة مع أصدقائك.</small>
-                    <button type="button" onClick={openCreateGroup}>إنشاء مجموعة</button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <>
-                {contactsLoading && <div className="messages-list-status">جارٍ تحميل المحادثات...</div>}
+            {contactsLoading && <div className="messages-list-status">جارٍ تحميل المحادثات...</div>}
                 {!contactsLoading && contactsError && (
                   <div className="messages-list-status" role="alert">
                     <span>{contactsError}</span>
@@ -710,13 +532,11 @@ export default function MessagesPage({
                     {activeTab === 'messages' && <button type="button" onClick={openNewMessage}>إرسال رسالة</button>}
                   </div>
                 )}
-              </>
-            )}
           </div>
         </aside>
 
-        <main className={`messages-chat-area${selectedId || selectedGroup ? ' is-open' : ''}`}>
-          {!selectedId && !selectedGroup ? (
+        <main className={`messages-chat-area${selectedId ? ' is-open' : ''}`}>
+          {!selectedId ? (
             <div className="messages-empty-state">
               <div className="messages-empty-icon"><MessageCircle size={34} strokeWidth={1.5} /></div>
               <h1>رسائلك</h1>
@@ -730,19 +550,11 @@ export default function MessagesPage({
                   type="button"
                   className="messages-mobile-back"
                   aria-label="العودة إلى قائمة الرسائل"
-                  onClick={() => selectedGroup ? setSelectedGroupId(null) : setLocation('/messages')}
+                  onClick={() => setLocation('/messages')}
                 >
                   <ArrowLeft size={22} />
                 </button>
-                {selectedGroup ? (
-                  <div className="messages-thread-person">
-                    <span className="messages-group-avatar is-thread">{selectedGroup.avatar || selectedGroup.name.trim().slice(0, 1) || <Users size={21} />}</span>
-                    <span className="messages-group-thread-copy">
-                      <strong>{selectedGroup.name}</strong>
-                      <small>{selectedGroup.members?.length ?? 0} أعضاء</small>
-                    </span>
-                  </div>
-                ) : target ? (
+                {target ? (
                   <Link href={`/profile/${encodeURIComponent(target.id)}`} className="messages-thread-person">
                     <Avatar profile={target} />
                     <UserIdentity
@@ -761,34 +573,7 @@ export default function MessagesPage({
                 )}
               </header>
               <div className="messages-thread-list" aria-live="polite">
-                {selectedGroup ? (
-                  <>
-                    {groupMessagesLoading && safeGroupMessages.length === 0 && <div className="messages-thread-status">جارٍ تحميل رسائل المجموعة...</div>}
-                    {groupMessagesError && <div className="messages-thread-status" role="alert">{groupMessagesError}</div>}
-                    {!groupMessagesLoading && !groupMessagesError && safeGroupMessages.length === 0 && (
-                      <div className="messages-group-notice">
-                        <span className="messages-group-avatar is-thread">{selectedGroup.avatar || selectedGroup.name.trim().slice(0, 1) || <Users size={24} />}</span>
-                        <strong>{selectedGroup.name}</strong>
-                        <p>ابدأ المحادثة برسالة إلى أعضاء المجموعة.</p>
-                      </div>
-                    )}
-                    {safeGroupMessages?.map(message => {
-                      const isMine = message.senderId === currentUserId;
-                      const sender = isMine ? currentProfile : safeFriends.find(friend => friend.id === message.senderId) || null;
-                      return (
-                        <div key={message.id} className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
-                          <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
-                            {!isMine && <span className="messages-group-message-sender">{displayName(sender)}</span>}
-                            {message.content}
-                          </div>
-                        </div>
-                      );
-                    })}
-                    <div ref={threadEndRef} />
-                  </>
-                ) : (
-                  <>
-                    {threadLoading && safeThread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
+                {threadLoading && safeThread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
                 {!threadLoading && safeThread.length === 0 && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
@@ -831,8 +616,6 @@ export default function MessagesPage({
                   );
                 })}
                     <div ref={threadEndRef} />
-                  </>
-                )}
               </div>
               <form className="messages-composer" onSubmit={sendMessage}>
                 <input
@@ -850,101 +633,6 @@ export default function MessagesPage({
           )}
         </main>
       </div>
-
-      {createGroupOpen && (
-        <div
-          className={`messages-modal-backdrop messages-group-modal-backdrop${createGroupClosing ? ' is-closing' : ''}`}
-          role="presentation"
-          onClick={closeCreateGroup}
-        >
-          <section
-            className="messages-group-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="messages-group-title"
-            onClick={event => event.stopPropagation()}
-          >
-            <header className="messages-modal-header">
-              <h2 id="messages-group-title">مجموعة جديدة</h2>
-              <button type="button" aria-label="إغلاق" onClick={closeCreateGroup}><X size={20} /></button>
-            </header>
-            <form className="messages-group-form" onSubmit={createGroup}>
-              <div className="messages-group-name-field">
-                <label htmlFor="messages-group-name">اسم المجموعة</label>
-                <input
-                  id="messages-group-name"
-                  value={groupName}
-                  onChange={event => {
-                    setGroupName(event.target.value);
-                    setGroupError(null);
-                  }}
-                  maxLength={60}
-                  placeholder="أدخل اسم المجموعة"
-                />
-              </div>
-              <div className="messages-group-search">
-                <Search size={18} aria-hidden="true" />
-                <input
-                  type="search"
-                  value={groupSearch}
-                  onChange={event => setGroupSearch(event.target.value)}
-                  placeholder="ابحث عن الأصدقاء"
-                  aria-label="ابحث عن الأصدقاء"
-                />
-              </div>
-              <div className="messages-group-friends">
-                {contactsLoading && <div className="messages-list-status">جارٍ تحميل الأصدقاء...</div>}
-                {!contactsLoading && visibleFriends?.map(friend => {
-                  const isSelected = selectedGroupMemberIds.includes(friend.id);
-                  return (
-                    <label key={friend.id} className={`messages-group-friend${isSelected ? ' is-selected' : ''}`}>
-                      <Avatar
-                        profile={{
-                          ...friend,
-                          full_name: displayName(friend).trim().slice(0, 1),
-                          display_name: null,
-                          username: '',
-                        }}
-                        large
-                      />
-                      <span className="messages-group-friend-copy">
-                        <strong>{displayName(friend)}</strong>
-                        <small dir="ltr">{friend.username ? friend.username.replace(/^@+/, '') : ''}</small>
-                      </span>
-                      <span className="messages-group-checkbox-wrap">
-                        <input
-                          className="messages-group-checkbox-input"
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleGroupMember(friend.id)}
-                          aria-label={`إضافة ${displayName(friend)} إلى المجموعة`}
-                        />
-                        <span className="messages-group-checkbox" aria-hidden="true">
-                          {isSelected && <Check size={14} strokeWidth={3} />}
-                        </span>
-                      </span>
-                    </label>
-                  );
-                })}
-                {!contactsLoading && safeFriends.length > 0 && visibleFriends.length === 0 && (
-                  <div className="messages-list-status">لا يوجد أصدقاء مطابقون.</div>
-                )}
-                {!contactsLoading && safeFriends.length === 0 && (
-                  <div className="messages-list-status">لا توجد حسابات متاحة للاختيار من علاقاتك الحالية.</div>
-                )}
-              </div>
-              {groupError && <div className="messages-group-error" role="alert">{groupError}</div>}
-              <footer className="messages-group-footer">
-                <p className="messages-group-storage-note">تُحفظ المجموعة ورسائلها على الخادم وتُزامن لحظياً مع أعضائها.</p>
-                <span className="messages-group-count"><span id="selectedCount">{selectedGroupMemberIds.length}</span> أعضاء محددون</span>
-                <button type="submit" disabled={groupSaving || !groupName.trim() || selectedGroupMemberIds.length === 0}>
-                  {groupSaving ? 'جارٍ الإنشاء...' : 'إنشاء المجموعة'}
-                </button>
-              </footer>
-            </form>
-          </section>
-        </div>
-      )}
 
       {newMessageOpen && (
         <div className="messages-modal-backdrop" role="presentation" onClick={() => setNewMessageOpen(false)}>

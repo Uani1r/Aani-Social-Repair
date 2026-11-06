@@ -30,7 +30,7 @@ RUN pnpm --filter @workspace/aani-social run build
 RUN pnpm --filter @workspace/api-server run build
 
 ############################
-# Runtime stage — API, Socket.IO and SPA
+# Runtime stage — API and SPA
 ############################
 FROM node:22-alpine AS runtime
 WORKDIR /app

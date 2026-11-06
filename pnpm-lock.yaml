@@ -187,9 +187,6 @@ importers:
       '@supabase/supabase-js':
         specifier: ^2.118.0
         version: 2.118.0
-      socket.io-client:
-        specifier: ^4.8.1
-        version: 4.8.4
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0
@@ -410,9 +407,6 @@ importers:
       pino-http:
         specifier: ^10.5.0
         version: 10.5.0
-      socket.io:
-        specifier: ^4.8.1
-        version: 4.8.4
     devDependencies:
       '@types/cookie-parser':
         specifier: ^1.4.10
