@@ -2046,49 +2046,14 @@ a:active > .aani-notifications-card {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
   color: #fff;
   text-decoration: none;
 }
 
-.unified-profile-text {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-}
-
-.unified-name-ar {
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.unified-name-en {
-  margin-top: 2px;
-  color: #8e8e93;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.2;
-}
-
-.unified-avatar-container {
-  display: flex;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 42px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 14px;
-  background: linear-gradient(145deg, #1c1c1e, #121212);
-  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1), 0 4px 10px rgba(0, 0, 0, 0.5);
-}
-
-.unified-avatar-letter {
-  color: #d4af37;
-  font-size: 18px;
-  font-weight: 500;
+.unified-brand-logo {
+  display: block;
+  width: auto;
+  height: 40px;
 }
 
 .unified-actions-section {
