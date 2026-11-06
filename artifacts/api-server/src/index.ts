@@ -39,11 +39,11 @@ const server = createServer(app);
 const io = new Server(server, { path: "/api/socket.io", cors: { origin: true } });
 configureGroupSockets(io);
 
-server.listen(port, "0.0.0.0", (err) => {
-  if (err) {
-    logger.error({ err }, "Error listening on port");
-    process.exit(1);
-  }
+server.on("error", (err: Error) => {
+  logger.error({ err }, "Error listening on port");
+  process.exit(1);
+});
 
+server.listen(port, "0.0.0.0", () => {
   logger.info({ port }, "Server listening");
 });
