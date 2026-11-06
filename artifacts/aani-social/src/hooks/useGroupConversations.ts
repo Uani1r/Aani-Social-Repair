@@ -74,9 +74,12 @@ async function groupApiRequest<T>(path: string, init: RequestInit = {}): Promise
   return result as T;
 }
 
-function mergeMessage(current: GroupMessage[], next: GroupMessage): GroupMessage[] {
-  if (current.some(message => message.id === next.id)) return current;
-  return [...current, next].sort((first, second) => first.createdAt.localeCompare(second.createdAt));
+function mergeMessage(current: GroupMessage[] | null | undefined, next: GroupMessage): GroupMessage[] {
+  const currentMessages = Array.isArray(current)
+    ? current.filter(message => Boolean(message && typeof message.id === 'string' && typeof message.createdAt === 'string'))
+    : [];
+  if (currentMessages.some(message => message.id === next.id)) return currentMessages;
+  return [...currentMessages, next].sort((first, second) => first.createdAt.localeCompare(second.createdAt));
 }
 
 export default function useGroupConversations(currentUserId: string, selectedGroupId: string | null) {
@@ -91,7 +94,7 @@ export default function useGroupConversations(currentUserId: string, selectedGro
   const selectedGroupIdRef = useRef<string | null>(selectedGroupId);
 
   useEffect(() => {
-    groupsRef.current = groups;
+    groupsRef.current = Array.isArray(groups) ? groups : [];
   }, [groups]);
 
   useEffect(() => {
@@ -104,7 +107,7 @@ export default function useGroupConversations(currentUserId: string, selectedGro
     try {
       const result = await groupApiRequest<unknown>('/api/groups');
       const nextGroups = Array.isArray(result)
-        ? result.map(normalizeGroup).filter((group): group is GroupConversation => group !== null)
+        ? result.filter(Boolean).map(normalizeGroup).filter((group): group is GroupConversation => group !== null)
         : [];
       setGroups(nextGroups);
     } catch (error) {
@@ -126,21 +129,28 @@ export default function useGroupConversations(currentUserId: string, selectedGro
     let active = true;
     let socket: ReturnType<typeof io> | null = null;
 
-    void supabase.auth.getSession().then(({ data, error }) => {
-      if (!active || error || !data.session?.access_token) return;
-      socket = io({
+    void Promise.resolve().then(() => supabase.auth.getSession()).then(({ data, error }) => {
+      if (!active || typeof window === 'undefined' || error || !data.session?.access_token) return;
+      const socketOrigin = window.location.origin || `${window.location.protocol}//${window.location.host}`;
+      if (!socketOrigin || socketOrigin === 'null') return;
+
+      socket = io(socketOrigin, {
         autoConnect: false,
         path: '/api/socket.io',
         auth: { token: data.session.access_token },
       });
       socketRef.current = socket;
       socket.on('connect', () => {
-        groupsRef.current.forEach(group => socket?.emit('join_group', group.id));
+        const currentGroups = Array.isArray(groupsRef.current) ? groupsRef.current : [];
+        currentGroups.forEach(group => group?.id && socket?.emit('join_group', group.id));
       });
       socket.on('group_created', (payload: unknown) => {
         const group = normalizeGroup(payload);
         if (!group) return;
-        setGroups(current => [group, ...current.filter(existing => existing.id !== group.id)]);
+        setGroups(current => {
+          const currentGroups = Array.isArray(current) ? current : [];
+          return [group, ...currentGroups.filter(existing => existing?.id !== group.id)];
+        });
         socket?.emit('join_group', group.id);
       });
       socket.on('receive_group_message', (payload: unknown) => {
@@ -162,7 +172,10 @@ export default function useGroupConversations(currentUserId: string, selectedGro
 
   useEffect(() => {
     const socket = socketRef.current;
-    if (socket?.connected) groups.forEach(group => socket.emit('join_group', group.id));
+    const currentGroups = Array.isArray(groups) ? groups : [];
+    if (socket?.connected) {
+      currentGroups.forEach(group => group?.id && socket.emit('join_group', group.id));
+    }
   }, [groups]);
 
   useEffect(() => {
@@ -179,9 +192,12 @@ export default function useGroupConversations(currentUserId: string, selectedGro
       .then(result => {
         if (!active) return;
         const messages = Array.isArray(result)
-          ? result.map(normalizeGroupMessage).filter((message): message is GroupMessage => message !== null)
+          ? result.filter(Boolean).map(normalizeGroupMessage).filter((message): message is GroupMessage => message !== null)
           : [];
-        setGroupMessages(current => messages.reduce((merged, message) => mergeMessage(merged, message), current));
+        setGroupMessages(current => {
+          const currentMessages = Array.isArray(current) ? current : [];
+          return messages.reduce((merged, message) => mergeMessage(merged, message), currentMessages);
+        });
       })
       .catch(error => {
         if (!active) return;
@@ -202,7 +218,10 @@ export default function useGroupConversations(currentUserId: string, selectedGro
     });
     const group = normalizeGroup(result);
     if (!group) throw new Error('أُنشئت المجموعة لكن تعذر قراءة بياناتها.');
-    setGroups(current => [group, ...current.filter(existing => existing.id !== group.id)]);
+    setGroups(current => {
+      const currentGroups = Array.isArray(current) ? current : [];
+      return [group, ...currentGroups.filter(existing => existing?.id !== group.id)];
+    });
     socketRef.current?.emit('join_group', group.id);
     return group;
   }, []);

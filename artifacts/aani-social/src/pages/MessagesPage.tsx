@@ -117,9 +117,21 @@ export default function MessagesPage({
     createGroup: createServerGroup,
     sendGroupMessage,
   } = useGroupConversations(currentUserId, selectedGroupId);
+  const safeGroups = Array.isArray(groups)
+    ? groups.filter(group => Boolean(group && typeof group.id === 'string' && typeof group.name === 'string' && Array.isArray(group.members)))
+    : [];
+  const safeGroupMessages = Array.isArray(groupMessages)
+    ? groupMessages.filter(message => Boolean(message && typeof message.id === 'string' && typeof message.senderId === 'string' && typeof message.content === 'string'))
+    : [];
+  const safeFriends = Array.isArray(friends)
+    ? friends.filter(friend => Boolean(friend && typeof friend.id === 'string'))
+    : [];
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
+  const safeThread = Array.isArray(thread)
+    ? thread.filter(message => Boolean(message && typeof message.id === 'string' && typeof message.sender_id === 'string' && typeof message.content === 'string'))
+    : [];
   const [threadLoading, setThreadLoading] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -361,13 +373,13 @@ export default function MessagesPage({
     };
   }, [currentUserId, selectedId, loadConversationList, loadThread]);
 
-  const lastThreadMessageId = thread[thread.length - 1]?.id;
+  const lastThreadMessageId = safeThread[safeThread.length - 1]?.id;
   useEffect(() => {
     if (selectedId) markConversationRead(selectedId);
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: thread.length || groupMessages.length ? 'smooth' : 'auto' });
+    threadEndRef.current?.scrollIntoView({ behavior: safeThread.length || safeGroupMessages.length ? 'smooth' : 'auto' });
   }, [thread, selectedId, groupMessages, selectedGroupId]);
 
   useEffect(() => {
@@ -461,18 +473,22 @@ export default function MessagesPage({
   const matchingConversationCount = tabConversations.filter(conversation => (
     `${displayName(conversation.profile)} ${conversation.profile.username || ''}`.toLocaleLowerCase().includes(searchNeedle)
   )).length;
-  const visibleGroups = groups.filter(group => (
-    `${group.name} ${group.members.map(memberId => {
-      const member = friends.find(friend => friend.id === memberId);
+  const visibleGroups = safeGroups.filter(group => {
+    const memberIds = Array.isArray(group?.members)
+      ? group.members.filter((memberId): memberId is string => typeof memberId === 'string')
+      : [];
+    const memberSearch = memberIds.map(memberId => {
+      const member = safeFriends.find(friend => friend.id === memberId);
       return member ? `${displayName(member)} ${member.username || ''}` : '';
-    }).join(' ')}`.toLocaleLowerCase().includes(searchNeedle)
-  ));
-  const visibleFriends = friends.filter(friend => (
+    }).join(' ');
+    return `${group?.name || ''} ${memberSearch}`.toLocaleLowerCase().includes(searchNeedle);
+  });
+  const visibleFriends = safeFriends.filter(friend => (
     `${displayName(friend)} ${friend.username || ''}`.toLocaleLowerCase().includes(groupSearch.trim().toLocaleLowerCase())
   ));
   const requestCount = conversations.filter(conversation => conversation.isRequest).length;
   const target = conversations.find(conversation => conversation.profile.id === selectedId)?.profile || null;
-  const selectedGroup = groups.find(group => group.id === selectedGroupId) || null;
+  const selectedGroup = safeGroups.find(group => group?.id === selectedGroupId) || null;
 
   const openNewMessage = () => {
     setUserMenuOpen(false);
@@ -601,7 +617,7 @@ export default function MessagesPage({
                     <button type="button" onClick={() => void loadGroups()}>إعادة المحاولة</button>
                   </div>
                 )}
-                {!groupsLoading && !groupsError && visibleGroups.map(group => (
+                {!groupsLoading && !groupsError && visibleGroups?.map(group => (
                   <button
                     key={group.id}
                     type="button"
@@ -621,15 +637,15 @@ export default function MessagesPage({
                         </time>
                       </span>
                       <span className="messages-chat-preview-row">
-                        <span className="messages-chat-preview">مجموعة · {group.members.length} أعضاء</span>
+                        <span className="messages-chat-preview">مجموعة · {group.members?.length ?? 0} أعضاء</span>
                       </span>
                     </span>
                   </button>
                 ))}
-                {!groupsLoading && !groupsError && groups.length > 0 && visibleGroups.length === 0 && (
+                {!groupsLoading && !groupsError && safeGroups.length > 0 && visibleGroups.length === 0 && (
                   <div className="messages-list-status">لا توجد مجموعات مطابقة.</div>
                 )}
-                {!groupsLoading && !groupsError && groups.length === 0 && (
+                {!groupsLoading && !groupsError && safeGroups.length === 0 && (
                   <div className="messages-list-empty">
                     <Users size={26} />
                     <span>لا توجد مجموعات بعد</span>
@@ -723,7 +739,7 @@ export default function MessagesPage({
                     <span className="messages-group-avatar is-thread">{selectedGroup.avatar || selectedGroup.name.trim().slice(0, 1) || <Users size={21} />}</span>
                     <span className="messages-group-thread-copy">
                       <strong>{selectedGroup.name}</strong>
-                      <small>{selectedGroup.members.length} أعضاء</small>
+                      <small>{selectedGroup.members?.length ?? 0} أعضاء</small>
                     </span>
                   </div>
                 ) : target ? (
@@ -747,18 +763,18 @@ export default function MessagesPage({
               <div className="messages-thread-list" aria-live="polite">
                 {selectedGroup ? (
                   <>
-                    {groupMessagesLoading && groupMessages.length === 0 && <div className="messages-thread-status">جارٍ تحميل رسائل المجموعة...</div>}
+                    {groupMessagesLoading && safeGroupMessages.length === 0 && <div className="messages-thread-status">جارٍ تحميل رسائل المجموعة...</div>}
                     {groupMessagesError && <div className="messages-thread-status" role="alert">{groupMessagesError}</div>}
-                    {!groupMessagesLoading && !groupMessagesError && groupMessages.length === 0 && (
+                    {!groupMessagesLoading && !groupMessagesError && safeGroupMessages.length === 0 && (
                       <div className="messages-group-notice">
                         <span className="messages-group-avatar is-thread">{selectedGroup.avatar || selectedGroup.name.trim().slice(0, 1) || <Users size={24} />}</span>
                         <strong>{selectedGroup.name}</strong>
                         <p>ابدأ المحادثة برسالة إلى أعضاء المجموعة.</p>
                       </div>
                     )}
-                    {groupMessages.map(message => {
+                    {safeGroupMessages?.map(message => {
                       const isMine = message.senderId === currentUserId;
-                      const sender = isMine ? currentProfile : friends.find(friend => friend.id === message.senderId) || null;
+                      const sender = isMine ? currentProfile : safeFriends.find(friend => friend.id === message.senderId) || null;
                       return (
                         <div key={message.id} className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
                           <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
@@ -772,11 +788,11 @@ export default function MessagesPage({
                   </>
                 ) : (
                   <>
-                    {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
-                {!threadLoading && thread.length === 0 && (
+                    {threadLoading && safeThread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
+                {!threadLoading && safeThread.length === 0 && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
-                {thread.map(message => {
+                {safeThread?.map(message => {
                   const isMine = message.sender_id === currentUserId;
                   const content = message.content.trim();
                   const isSharedPost = Boolean(message.post_id) || content.startsWith('[post:');
@@ -878,7 +894,7 @@ export default function MessagesPage({
               </div>
               <div className="messages-group-friends">
                 {contactsLoading && <div className="messages-list-status">جارٍ تحميل الأصدقاء...</div>}
-                {!contactsLoading && visibleFriends.map(friend => {
+                {!contactsLoading && visibleFriends?.map(friend => {
                   const isSelected = selectedGroupMemberIds.includes(friend.id);
                   return (
                     <label key={friend.id} className={`messages-group-friend${isSelected ? ' is-selected' : ''}`}>
@@ -910,10 +926,10 @@ export default function MessagesPage({
                     </label>
                   );
                 })}
-                {!contactsLoading && friends.length > 0 && visibleFriends.length === 0 && (
+                {!contactsLoading && safeFriends.length > 0 && visibleFriends.length === 0 && (
                   <div className="messages-list-status">لا يوجد أصدقاء مطابقون.</div>
                 )}
-                {!contactsLoading && friends.length === 0 && (
+                {!contactsLoading && safeFriends.length === 0 && (
                   <div className="messages-list-status">لا توجد حسابات متاحة للاختيار من علاقاتك الحالية.</div>
                 )}
               </div>
