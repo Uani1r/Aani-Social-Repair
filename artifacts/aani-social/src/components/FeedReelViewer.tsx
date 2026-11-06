@@ -6,10 +6,12 @@ import type { Post } from '@/lib/types';
 type FeedReelViewerProps = {
   posts: Post[];
   initialIndex: number;
+  initialPostId: string;
+  initialPlaybackTime: number;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
   onRefresh: () => void;
-  onClose: () => void;
+  onClose: (currentTime: number) => void;
 };
 
 type HorizontalDismissGesture = {
@@ -25,12 +27,21 @@ const EXIT_DISTANCE_RATIO = 0.22;
 const DISMISS_TRANSITION_MS = 230;
 const DISMISS_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export default function FeedReelViewer({ posts, initialIndex, currentUserId, onOpenComments, onRefresh, onClose }: FeedReelViewerProps) {
+export default function FeedReelViewer({ posts, initialIndex, initialPostId, initialPlaybackTime, currentUserId, onOpenComments, onRefresh, onClose }: FeedReelViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const initialIndexRef = useRef(initialIndex);
+  const matchingInitialIndex = posts.findIndex(post => post.id === initialPostId);
+  const initialIndexRef = useRef(matchingInitialIndex >= 0 ? matchingInitialIndex : initialIndex);
+  const playbackTimeRef = useRef(initialPlaybackTime);
   const gestureRef = useRef<HorizontalDismissGesture | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const resetTimerRef = useRef<number | null>(null);
+  const closeViewer = () => {
+    const video = scrollRef.current?.children[initialIndexRef.current]?.querySelector('video');
+    if (video && video.readyState >= 1 && Number.isFinite(video.currentTime)) {
+      playbackTimeRef.current = video.currentTime;
+    }
+    onClose(playbackTimeRef.current);
+  };
 
   useLayoutEffect(() => {
     const container = scrollRef.current;
@@ -103,7 +114,7 @@ export default function FeedReelViewer({ posts, initialIndex, currentUserId, onO
       if (closeTimerRef.current !== null) window.clearTimeout(closeTimerRef.current);
       closeTimerRef.current = window.setTimeout(() => {
         closeTimerRef.current = null;
-        onClose();
+        closeViewer();
       }, DISMISS_TRANSITION_MS);
       return;
     }
@@ -152,7 +163,11 @@ export default function FeedReelViewer({ posts, initialIndex, currentUserId, onO
           currentUserId={currentUserId}
           onOpenComments={onOpenComments}
           onRefresh={onRefresh}
-          onClose={onClose}
+          onClose={closeViewer}
+          initialPlaybackTime={post.id === initialPostId ? initialPlaybackTime : undefined}
+          onPlaybackTimeChange={post.id === initialPostId ? time => {
+            playbackTimeRef.current = time;
+          } : undefined}
           showCreatedAt
           captionSheet
         />

@@ -1,5 +1,5 @@
 import { Volume2, VolumeX } from 'lucide-react';
-import { useEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react';
 
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
 import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
@@ -15,7 +15,8 @@ type PostVideoPreviewProps = {
   showMuteToggle?: boolean;
   feedVideo?: boolean;
   loop?: boolean;
-  onExpand?: () => void;
+  restoreTime?: number;
+  onExpand?: (currentTime: number) => void;
 };
 
 const formatVideoTime = (value: number) => {
@@ -39,6 +40,7 @@ export default function PostVideoPreview({
   showMuteToggle = false,
   feedVideo = false,
   loop = false,
+  restoreTime,
   onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -48,17 +50,6 @@ export default function PostVideoPreview({
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
   const mediaSrc = stripVideoEditFragment(src);
   const gestureEnabled = feedVideo && Boolean(onExpand);
-  const {
-    controlsVisible,
-    revealControlsBriefly,
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-    onPointerCancel,
-  } = useFeedVideoGestures(videoRef, gestureEnabled, onExpand || (() => undefined), {
-    allowVerticalScroll: feedVideo,
-    capturePointer: !feedVideo,
-  });
   const [videoMuted, setVideoMuted] = useState(feedVideo ? false : muted);
   const [currentTime, setCurrentTime] = useState(timeRange?.start ?? 0);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -70,6 +61,41 @@ export default function PostVideoPreview({
   const safeCurrentTime = Math.min(rangeEnd, Math.max(rangeStart, currentTime));
   const displayCurrentTime = Math.max(0, safeCurrentTime - rangeStart);
   const progressPercent = displayDuration > 0 ? Math.min(100, (displayCurrentTime / displayDuration) * 100) : 0;
+
+  const expandVideo = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    video.volume = 1;
+    setVideoMuted(false);
+    onExpand?.(video.currentTime);
+  };
+
+  const {
+    controlsVisible,
+    revealControlsBriefly,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+  } = useFeedVideoGestures(videoRef, gestureEnabled, expandVideo, {
+    allowVerticalScroll: feedVideo,
+    capturePointer: !feedVideo,
+  });
+
+  useLayoutEffect(() => {
+    const video = videoRef.current;
+    if (!video || typeof restoreTime !== 'number' || !Number.isFinite(restoreTime)) return;
+    const range = parseVideoTimeRange(src);
+    const start = range?.start ?? 0;
+    const end = range
+      ? Math.min(range.end, video.duration || range.end)
+      : video.duration;
+    const maxTime = Number.isFinite(end) && end > start ? Math.max(start, end - 0.05) : restoreTime;
+    const nextTime = Math.min(maxTime, Math.max(start, restoreTime));
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }, [restoreTime, src]);
 
   useEffect(() => {
     if (!feedVideo) setVideoMuted(muted);

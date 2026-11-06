@@ -31,7 +31,7 @@ const formatReelTime = (value: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, showCreatedAt = false, captionSheet = false }: {
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
@@ -40,11 +40,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   onRetryPending?: () => void;
   onDismissPending?: () => void;
   onClose?: () => void;
+  initialPlaybackTime?: number;
+  onPlaybackTimeChange?: (currentTime: number) => void;
   showCreatedAt?: boolean;
   captionSheet?: boolean;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
+  const initialPlaybackAppliedRef = useRef(initialPlaybackTime === undefined);
   const manuallyPausedRef = useRef(false);
   const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasManuallyPaused: boolean } | null>(null);
   const captionRef = useRef<HTMLParagraphElement>(null);
@@ -244,17 +247,37 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     return Math.min(videoTimeRange.end, duration);
   };
 
+  const reportPlaybackTime = (time: number) => {
+    setPlaybackTime(time);
+    onPlaybackTimeChange?.(time);
+  };
+
+  const seekToTime = (video: HTMLVideoElement, requestedTime: number) => {
+    const trimStart = videoTimeRange?.start ?? 0;
+    const end = videoTimeRange ? getTrimEnd(video) : video.duration;
+    const start = Number.isFinite(end) && end > 0
+      ? Math.min(trimStart, Math.max(0, end - 0.05))
+      : trimStart;
+    const maxTime = Number.isFinite(end) && end > start ? Math.max(start, end - 0.05) : start;
+    video.currentTime = Math.min(maxTime, Math.max(start, requestedTime));
+    reportPlaybackTime(video.currentTime);
+  };
+
   const seekToTrimStart = (video: HTMLVideoElement) => {
-    if (videoTimeRange) {
-      const end = getTrimEnd(video);
-      video.currentTime = Math.min(videoTimeRange.start, Math.max(0, end - 0.05));
-    }
-    setPlaybackTime(video.currentTime);
+    seekToTime(video, videoTimeRange?.start ?? 0);
   };
 
   const handleVideoLoadedMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
     setVideoDuration(Number.isFinite(video.duration) ? video.duration : 0);
+    if (!initialPlaybackAppliedRef.current && typeof initialPlaybackTime === 'number' && Number.isFinite(initialPlaybackTime)) {
+      initialPlaybackAppliedRef.current = true;
+      video.muted = false;
+      video.volume = 1;
+      setMuted(false);
+      seekToTime(video, initialPlaybackTime);
+      return;
+    }
     seekToTrimStart(video);
   };
 
@@ -269,14 +292,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   const handleVideoTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
-    setPlaybackTime(video.currentTime);
+    reportPlaybackTime(video.currentTime);
     if (!videoTimeRange || video.currentTime < getTrimEnd(video) - 0.04) return;
     seekToTrimStart(video);
   };
 
   const handleVideoPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
-    setPlaybackTime(video.currentTime);
+    reportPlaybackTime(video.currentTime);
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
       seekToTrimStart(video);
     }
@@ -434,7 +457,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
               onPointerDown={playbackGestures.revealControlsBriefly}
               onChange={event => {
                 const nextTime = Number(event.currentTarget.value);
-                setPlaybackTime(nextTime);
+                reportPlaybackTime(nextTime);
                 if (videoRef.current) videoRef.current.currentTime = nextTime;
               }}
               className="feed-video-timeline-input"

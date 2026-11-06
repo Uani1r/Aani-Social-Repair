@@ -118,12 +118,26 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     media_urls: activeVideoUrl ? [activeVideoUrl] : [],
   }), [post, activeVideoUrl]);
 
-  const openMainFeedReel = () => {
+  const [mainFeedReelStartTime, setMainFeedReelStartTime] = useState(0);
+  const [feedResumeTime, setFeedResumeTime] = useState<number | undefined>();
+  const mainFeedReelTimeRef = useRef(0);
+
+  const openMainFeedReel = (currentTime: number) => {
+    const startTime = Number.isFinite(currentTime) ? currentTime : 0;
+    mainFeedReelTimeRef.current = startTime;
+    setMainFeedReelStartTime(startTime);
     window.dispatchEvent(new Event('aani:pause-feed-videos'));
     setShowMainFeedReel(true);
   };
 
-  const closeMainFeedReel = () => {
+  const closeMainFeedReel = (currentTime?: number) => {
+    const resumeTime = typeof currentTime === 'number' && Number.isFinite(currentTime)
+      ? currentTime
+      : mainFeedReelTimeRef.current;
+    mainFeedReelTimeRef.current = resumeTime;
+    const feedVideo = trackRef.current?.children[currentImageIndex]?.querySelector('video');
+    if (feedVideo) feedVideo.currentTime = resumeTime;
+    setFeedResumeTime(resumeTime);
     setShowMainFeedReel(false);
     window.requestAnimationFrame(() => window.dispatchEvent(new Event('aani:resume-feed-videos')));
   };
@@ -396,7 +410,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
-        <div className={isMainFeedImage ? 'post-image-container relative mt-3 w-full' : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${isMainFeedVideo ? 'video-post-media' : ''}`}>
+        <div className={isMainFeedImage ? 'post-image-container relative mt-3 w-full' : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''} ${isMainFeedVideo ? 'video-post-media' : ''}`}>
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
               <div key={i} className="carousel-slide relative h-full">
@@ -408,9 +422,10 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     showMuteToggle
                     feedVideo
                     loop
-                    onExpand={isMainFeedVideo ? openMainFeedReel : undefined}
+                    restoreTime={i === currentImageIndex ? feedResumeTime : undefined}
+                    onExpand={isMainFeedVideo && i === currentImageIndex ? openMainFeedReel : undefined}
                     controls={false}
-                    className="h-full w-full object-cover"
+                    className="block h-full w-full object-cover"
                   />
                 ) : (
                   <PostImagePreview
@@ -559,6 +574,11 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             ? feedVideoPosts.map(videoPost => videoPost.id === post.id ? fullScreenPost : videoPost)
             : [fullScreenPost]}
           initialIndex={initialVideoIndex}
+          initialPostId={post.id}
+          initialPlaybackTime={mainFeedReelStartTime}
+          onPlaybackTimeChange={time => {
+            mainFeedReelTimeRef.current = time;
+          }}
           currentUserId={currentUserId}
           onOpenComments={postId => {
             if (onOpenComments) onOpenComments(postId);

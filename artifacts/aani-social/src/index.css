@@ -337,7 +337,7 @@ body {
 }
 
 .feed-reel-viewer {
-  z-index: 100;
+  z-index: 1000;
 }
 
 [role="dialog"][aria-modal="true"] {
