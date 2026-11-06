@@ -67,7 +67,7 @@ function normalizeFeedPostComments(value: unknown): FeedPostComment[] {
   });
 }
 
-export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending, isMainFeed = false, feedVideoPosts, initialVideoIndex = 0, onPlaybackTimeChange }: {
+export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenComments, pendingState, onRetryPending, onDismissPending, isMainFeed = false, feedVideoPosts, initialVideoIndex = 0 }: {
   post: Post;
   currentUserId: string;
   isMainFeed?: boolean;
@@ -75,7 +75,6 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   initialVideoIndex?: number;
   onRefresh: () => void;
   onOpenComments?: (postId: string) => void;
-  onPlaybackTimeChange?: (time: number) => void;
   pendingState?: PendingPost;
   onRetryPending?: () => void;
   onDismissPending?: () => void;
@@ -612,7 +611,6 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           initialPlaybackTime={mainFeedReelStartTime}
           onPlaybackTimeChange={time => {
             mainFeedReelTimeRef.current = time;
-            onPlaybackTimeChange?.(time);
           }}
           currentUserId={currentUserId}
           onOpenComments={postId => {

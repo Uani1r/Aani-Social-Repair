@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 import { ArrowLeft, ChevronDown, MessageCircle, Pencil, Search, Send, X } from 'lucide-react';
+
 import Avatar from '@/components/Avatar';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -106,9 +107,6 @@ export default function MessagesPage({
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
-  const safeThread = Array.isArray(thread)
-    ? thread.filter(message => Boolean(message && typeof message.id === 'string' && typeof message.sender_id === 'string' && typeof message.content === 'string'))
-    : [];
   const [threadLoading, setThreadLoading] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -177,11 +175,7 @@ export default function MessagesPage({
       });
       const contactIds = [...latestByContact.keys()];
       if (selectedId && !contactIds.includes(selectedId)) contactIds.push(selectedId);
-      const connectedIds = new Set<string>();
-      (followsResult.data || []).forEach(follow => {
-        if (follow.follower_id === currentUserId) connectedIds.add(follow.following_id);
-        if (follow.following_id === currentUserId) connectedIds.add(follow.follower_id);
-      });
+
       const profilesResult = contactIds.length
         ? await supabase.from('profiles').select(PROFILE_FIELDS).in('id', contactIds)
         : { data: [], error: null };
@@ -193,7 +187,13 @@ export default function MessagesPage({
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       const storyUserIds = new Set((storiesResult.data || []).map(story => story.user_id as string));
+      const connectedIds = new Set<string>();
+      (followsResult.data || []).forEach(follow => {
+        if (follow.follower_id === currentUserId) connectedIds.add(follow.following_id);
+        if (follow.following_id === currentUserId) connectedIds.add(follow.follower_id);
+      });
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
+
       setConversations(contactIds.flatMap(contactId => {
         const profile = profileById.get(contactId);
         if (!profile) return [];
@@ -312,13 +312,13 @@ export default function MessagesPage({
     };
   }, [currentUserId, selectedId, loadConversationList, loadThread]);
 
-  const lastThreadMessageId = safeThread[safeThread.length - 1]?.id;
+  const lastThreadMessageId = thread[thread.length - 1]?.id;
   useEffect(() => {
     if (selectedId) markConversationRead(selectedId);
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: safeThread.length ? 'smooth' : 'auto' });
+    threadEndRef.current?.scrollIntoView({ behavior: thread.length ? 'smooth' : 'auto' });
   }, [thread, selectedId]);
 
   useEffect(() => {
@@ -378,7 +378,7 @@ export default function MessagesPage({
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = text.trim();
-    if (!selectedId || !content || sending || !supabaseConfigured) return;
+    if (!supabaseConfigured || !selectedId || !content || sending) return;
 
     setSending(true);
     try {
@@ -388,11 +388,11 @@ export default function MessagesPage({
         content,
       });
       if (error) throw error;
-      await Promise.all([loadThread(), loadConversationList()]);
       setText('');
+      await Promise.all([loadThread(), loadConversationList()]);
     } catch (error) {
       console.error('[messages] تعذر إرسال الرسالة:', error);
-      alert(error instanceof Error ? error.message : 'تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
+      alert('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setSending(false);
     }
@@ -479,59 +479,59 @@ export default function MessagesPage({
 
           <div className="messages-list-wrap">
             {contactsLoading && <div className="messages-list-status">جارٍ تحميل المحادثات...</div>}
-                {!contactsLoading && contactsError && (
-                  <div className="messages-list-status" role="alert">
-                    <span>{contactsError}</span>
-                    <button type="button" onClick={() => void loadConversationList()}>إعادة المحاولة</button>
-                  </div>
-                )}
-                {!contactsLoading && !contactsError && tabConversations.map(conversation => {
-                  const isUnread = Boolean(conversation.lastMessage
-                    && conversation.lastMessage.sender_id !== currentUserId
-                    && Date.parse(conversation.lastMessage.created_at) > (Date.parse(readAtByContact[conversation.profile.id] || '') || 0));
-                  const matchesSearch = `${displayName(conversation.profile)} ${conversation.profile.username || ''}`
-                    .toLocaleLowerCase()
-                    .includes(searchNeedle);
-                  const isOnline = onlineUserIds.has(conversation.profile.id);
-                  return (
-                    <Link
-                      key={conversation.profile.id}
-                      href={`/messages/${encodeURIComponent(conversation.profile.id)}`}
-                      hidden={!matchesSearch}
-                      aria-current={selectedId === conversation.profile.id ? 'page' : undefined}
-                      onClick={() => markConversationRead(conversation.profile.id)}
-                      className={`messages-chat-item${selectedId === conversation.profile.id ? ' active' : ''}${isUnread ? ' unread' : ''}`}
-                    >
-                      <span className={`messages-avatar-wrap${conversation.hasStory ? ' has-story' : ''}${isOnline ? ' is-online' : ''}`}>
-                        <span className="messages-avatar-inner"><Avatar profile={conversation.profile} large /></span>
-                        {isOnline && <span className="messages-online-dot" aria-label="متصل الآن" />}
-                      </span>
-                      <span className="messages-chat-copy">
-                        <span className="messages-chat-topline">
-                          <span className={`messages-chat-name${isUnread ? ' is-unread' : ''}`}>{displayName(conversation.profile)}</span>
-                          <time className="messages-chat-time" dateTime={conversation.lastMessage?.created_at || undefined}>
-                            {conversation.lastMessage ? formatConversationTime(conversation.lastMessage.created_at) : ''}
-                          </time>
-                        </span>
-                        <span className="messages-chat-preview-row">
-                          <span className={`messages-chat-preview${isUnread ? ' is-unread' : ''}`}>{messagePreview(conversation.lastMessage, currentUserId)}</span>
-                          {isUnread && <span className="messages-unread-dot" aria-label="رسالة غير مقروءة" />}
-                        </span>
-                      </span>
-                    </Link>
-                  );
-                })}
-                {!contactsLoading && !contactsError && tabConversations.length > 0 && matchingConversationCount === 0 && (
-                  <div className="messages-list-status">لا توجد محادثات مطابقة.</div>
-                )}
-                {!contactsLoading && !contactsError && tabConversations.length === 0 && (
-                  <div className="messages-list-empty">
-                    <MessageCircle size={26} />
-                    <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : 'لا توجد محادثات بعد'}</span>
-                    <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
-                    {activeTab === 'messages' && <button type="button" onClick={openNewMessage}>إرسال رسالة</button>}
-                  </div>
-                )}
+            {!contactsLoading && contactsError && (
+              <div className="messages-list-status" role="alert">
+                <span>{contactsError}</span>
+                <button type="button" onClick={() => void loadConversationList()}>إعادة المحاولة</button>
+              </div>
+            )}
+            {!contactsLoading && !contactsError && tabConversations.map(conversation => {
+              const isUnread = Boolean(conversation.lastMessage
+                && conversation.lastMessage.sender_id !== currentUserId
+                && Date.parse(conversation.lastMessage.created_at) > (Date.parse(readAtByContact[conversation.profile.id] || '') || 0));
+              const matchesSearch = `${displayName(conversation.profile)} ${conversation.profile.username || ''}`
+                .toLocaleLowerCase()
+                .includes(searchNeedle);
+              const isOnline = onlineUserIds.has(conversation.profile.id);
+              return (
+                <Link
+                  key={conversation.profile.id}
+                  href={`/messages/${encodeURIComponent(conversation.profile.id)}`}
+                  hidden={!matchesSearch}
+                  aria-current={selectedId === conversation.profile.id ? 'page' : undefined}
+                  onClick={() => markConversationRead(conversation.profile.id)}
+                  className={`messages-chat-item${selectedId === conversation.profile.id ? ' active' : ''}${isUnread ? ' unread' : ''}`}
+                >
+                  <span className={`messages-avatar-wrap${conversation.hasStory ? ' has-story' : ''}${isOnline ? ' is-online' : ''}`}>
+                    <span className="messages-avatar-inner"><Avatar profile={conversation.profile} large /></span>
+                    {isOnline && <span className="messages-online-dot" aria-label="متصل الآن" />}
+                  </span>
+                  <span className="messages-chat-copy">
+                    <span className="messages-chat-topline">
+                      <span className={`messages-chat-name${isUnread ? ' is-unread' : ''}`}>{displayName(conversation.profile)}</span>
+                      <time className="messages-chat-time" dateTime={conversation.lastMessage?.created_at || undefined}>
+                        {conversation.lastMessage ? formatConversationTime(conversation.lastMessage.created_at) : ''}
+                      </time>
+                    </span>
+                    <span className="messages-chat-preview-row">
+                      <span className={`messages-chat-preview${isUnread ? ' is-unread' : ''}`}>{messagePreview(conversation.lastMessage, currentUserId)}</span>
+                      {isUnread && <span className="messages-unread-dot" aria-label="رسالة غير مقروءة" />}
+                    </span>
+                  </span>
+                </Link>
+              );
+            })}
+            {!contactsLoading && !contactsError && tabConversations.length > 0 && matchingConversationCount === 0 && (
+              <div className="messages-list-status">لا توجد محادثات مطابقة.</div>
+            )}
+            {!contactsLoading && !contactsError && tabConversations.length === 0 && (
+              <div className="messages-list-empty">
+                <MessageCircle size={26} />
+                <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : 'لا توجد محادثات بعد'}</span>
+                <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
+                {activeTab === 'messages' && <button type="button" onClick={openNewMessage}>إرسال رسالة</button>}
+              </div>
+            )}
           </div>
         </aside>
 
@@ -546,12 +546,7 @@ export default function MessagesPage({
           ) : (
             <>
               <header className="messages-thread-header">
-                <button
-                  type="button"
-                  className="messages-mobile-back"
-                  aria-label="العودة إلى قائمة الرسائل"
-                  onClick={() => setLocation('/messages')}
-                >
+                <button type="button" className="messages-mobile-back" aria-label="العودة إلى قائمة الرسائل" onClick={() => setLocation('/messages')}>
                   <ArrowLeft size={22} />
                 </button>
                 {target ? (
@@ -573,11 +568,11 @@ export default function MessagesPage({
                 )}
               </header>
               <div className="messages-thread-list" aria-live="polite">
-                {threadLoading && safeThread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
-                {!threadLoading && safeThread.length === 0 && (
+                {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
+                {!threadLoading && thread.length === 0 && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
-                {safeThread?.map(message => {
+                {thread.map(message => {
                   const isMine = message.sender_id === currentUserId;
                   const content = message.content.trim();
                   const isSharedPost = Boolean(message.post_id) || content.startsWith('[post:');
@@ -615,7 +610,7 @@ export default function MessagesPage({
                     </div>
                   );
                 })}
-                    <div ref={threadEndRef} />
+                <div ref={threadEndRef} />
               </div>
               <form className="messages-composer" onSubmit={sendMessage}>
                 <input

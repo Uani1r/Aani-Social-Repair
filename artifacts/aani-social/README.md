@@ -19,13 +19,11 @@ pnpm install
 pnpm --filter @workspace/aani-social run typecheck
 pnpm --filter @workspace/aani-social run typecheck:edge
 pnpm --filter @workspace/aani-social run test:edge
-pnpm --filter @workspace/api-server run typecheck
-pnpm --filter @workspace/aani-social run build
-pnpm --filter @workspace/api-server run build
+PORT=5173 BASE_PATH=/ pnpm --filter @workspace/aani-social run build
 ```
 
-يستخدم التطبيق Supabase للمصادقة والبيانات والوسائط والرسائل المباشرة الفردية.
-لا تتضمن الواجهة أو خادم API مسارات للمحادثات الجماعية.
+يستخدم التطبيق Supabase مباشرة للمصادقة وقاعدة البيانات والتخزين وRealtime؛ لا
+يستخدم PostgreSQL المرفق بقالب Replit أو خادم API التجريبي لهذا الغرض.
 
 ## إعداد الاتصال
 
@@ -34,10 +32,8 @@ pnpm --filter @workspace/api-server run build
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_PUBLISHABLE_KEY` أو `VITE_SUPABASE_ANON_KEY`
 - `VITE_SUPABASE_STORAGE_BUCKET` اختياري؛ الافتراضي `aani-media`
-- لخادم API: `SUPABASE_URL` و`SUPABASE_ANON_KEY` (مفتاح publishable/anon عام، وليس `service_role`)
 
-يجب أن تشير متغيرات الخادم إلى مشروع Supabase نفسه المستخدم في الواجهة. إذا كان
-مشروع Supabase القائم يستخدم حاوية تخزين اسمها `media`، عيّن
+إذا كان مشروع Supabase القائم يستخدم حاوية تخزين اسمها `media`، عيّن
 `VITE_SUPABASE_STORAGE_BUCKET=media` بدل نقل الملفات أو إعادة تسمية الحاوية.
 لا تضع مفتاح `service_role` أو مفتاح Gemini في واجهة المتصفح.
 
@@ -74,10 +70,6 @@ supabase/migrations/20261026000000_interaction_persistence.sql
 المتبادلة. إذا كان مشروعك يستخدم قائمة أصدقاء مقربين مستقلة، راجع هذه السياسة
 قبل تطبيق الترحيل.
 
-ترحيل `supabase/migrations/20261202000000_group_messages.sql` محفوظ كسجل تاريخي
-ولا تُستخدم جداول المجموعات أو مساراتها من التطبيق. لا يحذف هذا التغيير المخطط
-أو البيانات الموجودة في Supabase.
-
 ## ملاحظات أمنية
 
 - ملف النشر `fix.js` واللقطة النصية المحتوية على اعتماد مضمّن لم يُنسخا إلى
@@ -90,7 +82,10 @@ supabase/migrations/20261026000000_interaction_persistence.sql
 - لم يُجرَ اختبار تسجيل دخول أو قراءة/كتابة أو محادثة حقيقية؛ تتطلب هذه
   الاختبارات إعداد Supabase وGemini المملوكين لك.
 
-## التحقق
+## نتائج التحقق الحالية
 
-لم يُشغّل `pnpm build` أو فحوص TypeScript بعد إزالة دعم المجموعات في هذا التغيير؛
-ينبغي تشغيلها قبل النشر.
+- فحص TypeScript للواجهة: ناجح.
+- فحص TypeScript لدوال Supabase: ناجح.
+- اختبارات الدالة بمحاكاة HTTP: 6 ناجحة.
+- بناء Vite: ناجح؛ يعرض تحذيرًا غير مانع عن مصدر خرائط `tooltip` وحجم حزمة
+  JavaScript يتجاوز 500 كيلوبايت.

@@ -35,19 +35,7 @@ const env = readEnv();
 const fromEnv = (value: string | undefined): string =>
   typeof value === "string" ? value.trim() : "";
 
-function isValidSupabaseUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-    return (parsed.protocol === "https:" || parsed.protocol === "http:") && Boolean(parsed.host);
-  } catch {
-    return false;
-  }
-}
-
-const configuredSupabaseUrl = fromEnv(env.VITE_SUPABASE_URL);
-const supabaseUrl = isValidSupabaseUrl(configuredSupabaseUrl)
-  ? configuredSupabaseUrl
-  : FALLBACK_SUPABASE_URL;
+const supabaseUrl = fromEnv(env.VITE_SUPABASE_URL) || FALLBACK_SUPABASE_URL;
 
 const supabasePublicKey =
   fromEnv(env.VITE_SUPABASE_PUBLISHABLE_KEY) ||

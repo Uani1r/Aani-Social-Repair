@@ -25,29 +25,23 @@ ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     NODE_ENV=production \
     CI=true
 
-RUN pnpm install --no-frozen-lockfile --config.confirmModulesPurge=false
+RUN pnpm install --frozen-lockfile --config.confirmModulesPurge=false
 RUN pnpm --filter @workspace/aani-social run build
-RUN pnpm --filter @workspace/api-server run build
 
 ############################
-# Runtime stage — API and SPA
+# Runtime stage — static SPA
 ############################
 FROM node:22-alpine AS runtime
 WORKDIR /app
 
-ARG VITE_SUPABASE_URL=
-ARG VITE_SUPABASE_ANON_KEY=
-ARG VITE_SUPABASE_PUBLISHABLE_KEY=
 ENV NODE_ENV=production \
-    PORT=8080 \
-    SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
-    VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
-    VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY
+    PORT=80 \
+    STATIC_DIR=/app/public
 
-COPY --from=build /app/artifacts/aani-social/dist/public ./dist/public
-COPY --from=build /app/artifacts/api-server/dist ./artifacts/api-server/dist
+COPY --from=build /app/artifacts/aani-social/dist/public ./public
+COPY --from=build /app/scripts/serve-static.mjs ./serve-static.mjs
 
-EXPOSE 8080
+EXPOSE 80
 
-CMD ["node", "--enable-source-maps", "artifacts/api-server/dist/index.mjs"]
+# Serves ./public on 0.0.0.0:$PORT with SPA fallback for client-side routes.
+CMD ["node", "serve-static.mjs", "./public"]

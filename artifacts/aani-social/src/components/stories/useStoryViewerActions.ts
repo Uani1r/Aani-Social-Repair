@@ -100,8 +100,9 @@ export function useStoryViewerActions({
   setShowMenu,
 }: UseStoryViewerActionsOptions) {
   const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
-    const storyId = currentStory?.id;
-    if (typeof storyId !== 'string' || !storyId || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
+    if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
+
+    const storyId = currentStory.id;
     const requestId = ++storyViewsRequestRef.current;
     storyViewsWasPausedRef.current = wasPausedBeforeOpen;
     storyVideoWasPlayingRef.current = Boolean(storyVideoRef.current && !storyVideoRef.current.paused);
@@ -134,7 +135,7 @@ export function useStoryViewerActions({
         void loadStoryViewerEntries(storyId, refreshRequestId).then(rows => {
           if (!rows) return;
           const realViewerIds = new Set(rows.map(item => item.user_id));
-          setStoryViewerPreview(current => current && current.storyId === storyId
+          setStoryViewerPreview(current => current?.storyId === storyId
             ? { ...current, rows: current.rows.filter(item => !realViewerIds.has(item.user_id)) }
             : current);
         }).catch(error => {
@@ -291,7 +292,7 @@ export function useStoryViewerActions({
       if (error) throw error;
       const wasVisible = storyViewers.some(item => item.user_id === viewer.user_id && item.is_viewer !== false);
       setStoryViewers(current => current.filter(item => item.user_id !== viewer.user_id));
-      setStoryViewerPreview(current => current && current.storyId === currentStory?.id
+      setStoryViewerPreview(current => current?.storyId === currentStory?.id
         ? { ...current, rows: current.rows.filter(item => item.user_id !== viewer.user_id) }
         : current);
       if (wasVisible) setStoryViewsCount(count => Math.max(0, count - 1));

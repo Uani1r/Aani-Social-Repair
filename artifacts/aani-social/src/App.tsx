@@ -3,7 +3,6 @@ import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
-import { ErrorBoundary } from '@/components/error-boundary';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
 import NotificationsModal from '@/components/NotificationsModal';
@@ -131,19 +130,15 @@ function App() {
               <Route path="/reels"><ReelsPage userId={user.id} onOpenComments={openComments} /></Route>
               <Route path="/search"><SearchPage userId={user.id} /></Route>
               <Route path="/messages">
-                <ErrorBoundary resetKey={user.id}>
-                  <MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} />
-                </ErrorBoundary>
+                <MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} />
               </Route>
               <Route path="/messages/:userId">
                 {params => (
-                  <ErrorBoundary resetKey={`${user.id}:${params.userId}`}>
-                    <MessagesPage
-                      currentUserId={user.id}
-                      selectedId={params.userId}
-                      onReshareStory={setPendingStoryReshare}
-                    />
-                  </ErrorBoundary>
+                  <MessagesPage
+                    currentUserId={user.id}
+                    selectedId={params.userId}
+                    onReshareStory={setPendingStoryReshare}
+                  />
                 )}
               </Route>
               <Route path="/profile">

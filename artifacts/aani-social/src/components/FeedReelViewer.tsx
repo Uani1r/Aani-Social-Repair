@@ -12,7 +12,6 @@ type FeedReelViewerProps = {
   onOpenComments: (postId: string) => void;
   onRefresh: () => void;
   onClose: (currentTime: number) => void;
-  onPlaybackTimeChange?: (time: number) => void;
 };
 
 type HorizontalDismissGesture = {
@@ -28,7 +27,7 @@ const EXIT_DISTANCE_RATIO = 0.22;
 const DISMISS_TRANSITION_MS = 230;
 const DISMISS_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
 
-export default function FeedReelViewer({ posts, initialIndex, initialPostId, initialPlaybackTime, currentUserId, onOpenComments, onRefresh, onClose, onPlaybackTimeChange }: FeedReelViewerProps) {
+export default function FeedReelViewer({ posts, initialIndex, initialPostId, initialPlaybackTime, currentUserId, onOpenComments, onRefresh, onClose }: FeedReelViewerProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const matchingInitialIndex = posts.findIndex(post => post.id === initialPostId);
   const initialIndexRef = useRef(matchingInitialIndex >= 0 ? matchingInitialIndex : initialIndex);
@@ -168,7 +167,6 @@ export default function FeedReelViewer({ posts, initialIndex, initialPostId, ini
           initialPlaybackTime={post.id === initialPostId ? initialPlaybackTime : undefined}
           onPlaybackTimeChange={post.id === initialPostId ? time => {
             playbackTimeRef.current = time;
-            onPlaybackTimeChange?.(time);
           } : undefined}
           showCreatedAt
           captionSheet

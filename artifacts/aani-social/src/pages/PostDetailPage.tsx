@@ -7,11 +7,6 @@ import { decoratePost, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post } from '@/lib/types';
 
-type PostDetailRow = Pick<
-  Post,
-  'id' | 'user_id' | 'content' | 'post_metadata' | 'media_url' | 'media_urls' | 'type' | 'destination' | 'created_at'
->;
-
 export default function PostDetailPage({ postId, currentUserId, onOpenComments }: { postId: string; currentUserId: string; onOpenComments: (postId: string, commentId?: string) => void }) {
   const [location] = useLocation();
   const [post, setPost] = useState<Post | null>(null);
@@ -40,8 +35,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
       if (postResult.error?.code === '42703' || postResult.error?.code === 'PGRST204') {
         postResult = await loadPost(false);
       }
-      const { data: rowData, error } = postResult;
-      const data = rowData as unknown as PostDetailRow | null;
+      const { data, error } = postResult;
       if (error || !data) {
         setPost(null);
         return;
