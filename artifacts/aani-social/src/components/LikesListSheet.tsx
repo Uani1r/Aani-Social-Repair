@@ -303,25 +303,29 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
                 const username = cleanUsername(user.profile.username);
                 return (
                   <li key={user.id} dir="rtl" className="flex min-w-0 flex-row items-center gap-3 rounded-xl px-1 py-2">
-                    <Link href={`/profile/${encodeURIComponent(user.id)}`} aria-label={`الملف الشخصي لـ ${name}`} className="shrink-0">
+                    <Link
+                      href={`/profile/${encodeURIComponent(user.id)}`}
+                      aria-label={`الملف الشخصي لـ ${name}`}
+                      className="flex min-w-0 flex-1 cursor-pointer items-center gap-3"
+                      onClick={onClose}
+                    >
                       <Avatar profile={user.profile} />
+                      <div className="min-w-0 flex-1 text-right" dir="rtl">
+                        <span
+                          className="block whitespace-normal break-words leading-5 hover:underline"
+                          style={{ color: '#ffffff', fontWeight: 600 }}
+                        >
+                          {name}
+                        </span>
+                        <span
+                          dir="ltr"
+                          className="block whitespace-normal break-all text-right leading-5"
+                          style={{ color: '#a0a0a0', fontSize: 13 }}
+                        >
+                          {username || 'اسم المستخدم غير متاح'}
+                        </span>
+                      </div>
                     </Link>
-                    <div className="min-w-0 flex-1 text-right" dir="rtl">
-                      <Link
-                        href={`/profile/${encodeURIComponent(user.id)}`}
-                        className="block whitespace-normal break-words leading-5 hover:underline"
-                        style={{ color: '#ffffff', fontWeight: 600 }}
-                      >
-                        {name}
-                      </Link>
-                      <span
-                        dir="ltr"
-                        className="block whitespace-normal break-all text-right leading-5"
-                        style={{ color: '#a0a0a0', fontSize: 13 }}
-                      >
-                        {username || 'اسم المستخدم غير متاح'}
-                      </span>
-                    </div>
                     {user.id !== currentUserId && currentUserId && (
                       <button
                         type="button"
