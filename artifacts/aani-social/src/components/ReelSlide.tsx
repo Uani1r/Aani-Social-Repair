@@ -19,7 +19,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, formatDate, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
-import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
+import { getVideoAspectRatio, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -60,7 +60,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const [showCaptionSheet, setShowCaptionSheet] = useState(false);
   const mediaUrl = post.media_url || '';
   const videoTimeRange = parseVideoTimeRange(mediaUrl);
-  const videoCropTransform = getVideoCropTransform(parseVideoCrop(mediaUrl));
+  const videoCrop = parseVideoCrop(mediaUrl);
+  const videoCropTransform = getVideoCropTransform(videoCrop);
+  const videoAspectRatio = getVideoAspectRatio(videoCrop);
   const videoSrc = stripVideoEditFragment(mediaUrl);
   const interactions = usePostInteractions(post, currentUserId);
   const liked = interactions.liked;
@@ -372,23 +374,34 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       onPointerUp={playbackGestures.onPointerUp}
       onPointerCancel={playbackGestures.onPointerCancel}
     >
-      <video
-        ref={videoRef}
-        src={videoSrc}
-        loop={!videoTimeRange}
-        autoPlay={isOverlayOpen && isVisible}
-        muted={muted}
-        playsInline
-        preload="auto"
-        onLoadedMetadata={handleVideoLoadedMetadata}
-        onSeeking={handleVideoSeeking}
-        onTimeUpdate={handleVideoTimeUpdate}
-        onPlay={handleVideoPlay}
-        onEnded={handleVideoEnded}
-        onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-        className="w-full h-full object-cover cursor-pointer"
-        style={{ transform: videoCropTransform, transformOrigin: 'center' }}
-      />
+      <div className="absolute inset-0 z-0 flex items-center justify-center bg-black">
+        <div
+          className="relative overflow-hidden"
+          style={videoAspectRatio ? {
+            aspectRatio: String(videoAspectRatio),
+            width: `min(100vw, ${videoAspectRatio * 100}dvh)`,
+            height: `min(100dvh, ${100 / videoAspectRatio}vw)`,
+          } : { width: '100%', height: '100%' }}
+        >
+          <video
+            ref={videoRef}
+            src={videoSrc}
+            loop={!videoTimeRange}
+            autoPlay={isOverlayOpen && isVisible}
+            muted={muted}
+            playsInline
+            preload="auto"
+            onLoadedMetadata={handleVideoLoadedMetadata}
+            onSeeking={handleVideoSeeking}
+            onTimeUpdate={handleVideoTimeUpdate}
+            onPlay={handleVideoPlay}
+            onEnded={handleVideoEnded}
+            onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+            className="w-full h-full object-cover cursor-pointer"
+            style={{ transform: videoCropTransform, transformOrigin: 'center' }}
+          />
+        </div>
+      </div>
 
       <div className="reel-gradient-top" aria-hidden="true" />
       <div className="reel-top-bar" dir="ltr">

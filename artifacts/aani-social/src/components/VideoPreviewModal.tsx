@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
 import { Check, Crop, Music2, Scissors, X } from 'lucide-react';
 
-import type { VideoCropTransform, VideoTrimRange } from '@/lib/types';
-import { getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
+import type { VideoAspectRatio, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import { DEFAULT_VIDEO_CROP, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
 
 type VideoPreviewModalProps = {
   open: boolean;
@@ -15,7 +15,21 @@ type VideoPreviewModalProps = {
   onNext: (range: VideoTrimRange, crop: VideoCropTransform) => void;
 };
 
+type CropPointer = { x: number; y: number };
+type CropGesture =
+  | { type: 'pan'; pointerId: number; startPoint: CropPointer; startCrop: VideoCropTransform }
+  | { type: 'pinch'; startDistance: number; startCrop: VideoCropTransform }
+  | { type: 'resize'; pointerId: number; corner: string; startPoint: CropPointer; startCrop: VideoCropTransform };
+
+const ASPECT_RATIOS: { key: VideoAspectRatio; label: string }[] = [
+  { key: 'free', label: 'حر / أصلي' },
+  { key: '4:5', label: '4:5' },
+  { key: '1:1', label: '1:1' },
+  { key: '9:16', label: '9:16' },
+];
+const NEW_VIDEO_CROP: VideoCropTransform = { ...DEFAULT_VIDEO_CROP, aspectRatio: 'free' };
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+const distanceBetween = (first: CropPointer, second: CropPointer) => Math.hypot(second.x - first.x, second.y - first.y);
 const minimumSelection = (duration: number) => Math.min(0.1, duration);
 
 function normalizeRange(range: VideoTrimRange | null, duration: number): VideoTrimRange {
@@ -43,20 +57,24 @@ export default function VideoPreviewModal({
   onNext,
 }: VideoPreviewModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const cropFrameRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const draggingTrimRef = useRef<'start' | 'end' | null>(null);
-  const cropDragRef = useRef<{ x: number; y: number; crop: VideoCropTransform } | null>(null);
+  const cropPointersRef = useRef(new Map<number, CropPointer>());
+  const cropGestureRef = useRef<CropGesture | null>(null);
   const initialCropRef = useRef(initialCrop);
   const activeRangeRef = useRef<VideoTrimRange | null>(null);
   const [duration, setDuration] = useState(0);
   const [savedRange, setSavedRange] = useState<VideoTrimRange | null>(null);
   const [draftRange, setDraftRange] = useState<VideoTrimRange | null>(null);
-  const [savedCrop, setSavedCrop] = useState<VideoCropTransform>({ zoom: 1, x: 0, y: 0 });
-  const [draftCrop, setDraftCrop] = useState<VideoCropTransform>({ zoom: 1, x: 0, y: 0 });
+  const [savedCrop, setSavedCrop] = useState<VideoCropTransform>(NEW_VIDEO_CROP);
+  const [draftCrop, setDraftCrop] = useState<VideoCropTransform>(NEW_VIDEO_CROP);
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [isTrimming, setIsTrimming] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
   const [musicNotice, setMusicNotice] = useState(false);
+  const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
 
   useEffect(() => {
     if (!open) return undefined;
@@ -87,12 +105,38 @@ export default function VideoPreviewModal({
     setSavedRange(null);
     setDraftRange(null);
     activeRangeRef.current = null;
-    setSavedCrop(normalizeVideoCrop(initialCropRef.current));
-    setDraftCrop(normalizeVideoCrop(initialCropRef.current));
+    const startingCrop = normalizeVideoCrop(initialCropRef.current ?? NEW_VIDEO_CROP);
+    setSavedCrop(startingCrop);
+    setDraftCrop(startingCrop);
     setThumbnails([]);
     setIsTrimming(false);
-    setIsCropping(false);
+    setIsCropping(true);
+    cropPointersRef.current.clear();
+    cropGestureRef.current = null;
   }, [open, src]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const stage = stageRef.current;
+    if (!stage) return undefined;
+    const measureStage = () => {
+      const style = window.getComputedStyle(stage);
+      const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
+      const verticalPadding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+      setStageSize({
+        width: Math.max(0, stage.clientWidth - (Number.isFinite(horizontalPadding) ? horizontalPadding : 0)),
+        height: Math.max(0, stage.clientHeight - (Number.isFinite(verticalPadding) ? verticalPadding : 0)),
+      });
+    };
+    measureStage();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measureStage);
+      return () => window.removeEventListener('resize', measureStage);
+    }
+    const observer = new ResizeObserver(measureStage);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, [open, isCropping, isTrimming]);
 
   useEffect(() => {
     if (!musicNotice) return undefined;
@@ -181,20 +225,27 @@ export default function VideoPreviewModal({
   }, [duration, open, src]);
 
   const handleLoadedMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
-    const loadedDuration = event.currentTarget.duration;
+    const video = event.currentTarget;
+    const loadedDuration = video.duration;
     if (!Number.isFinite(loadedDuration) || loadedDuration <= 0) return;
 
     const initialRange = normalizeRange(initialTrim, loadedDuration);
+    const sourceAspectRatio = video.videoWidth > 0 && video.videoHeight > 0 ? video.videoWidth / video.videoHeight : undefined;
     activeRangeRef.current = initialRange;
     setDuration(loadedDuration);
     setSavedRange(current => current ? normalizeRange(current, loadedDuration) : initialRange);
     setDraftRange(current => current ? normalizeRange(current, loadedDuration) : initialRange);
-    event.currentTarget.currentTime = initialRange.start;
+    if (sourceAspectRatio && Number.isFinite(sourceAspectRatio)) {
+      setSavedCrop(current => normalizeVideoCrop({ ...current, sourceAspectRatio }));
+      setDraftCrop(current => normalizeVideoCrop({ ...current, sourceAspectRatio }));
+    }
+    video.currentTime = initialRange.start;
   };
 
   const activeRange = isTrimming ? draftRange : savedRange;
   activeRangeRef.current = activeRange;
   const activeCrop = isCropping ? draftCrop : savedCrop;
+  const frameAspectRatio = getVideoAspectRatio(activeCrop) ?? 4 / 5;
 
   const handleTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
@@ -288,27 +339,86 @@ export default function VideoPreviewModal({
 
   const endTimelinePointer = () => { draggingTrimRef.current = null; };
 
-  const beginCropDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!isCropping) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    cropDragRef.current = { x: event.clientX, y: event.clientY, crop: draftCrop };
+  const selectAspectRatio = (aspectRatio: VideoAspectRatio) => {
+    setDraftCrop(current => normalizeVideoCrop({ ...current, aspectRatio, zoom: 1, x: 0, y: 0 }));
   };
 
-  const moveCrop = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = cropDragRef.current;
-    if (!drag || !isCropping || drag.crop.zoom <= 1.001) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const maxX = Math.max(1, rect.width * (drag.crop.zoom - 1) * 0.5);
-    const maxY = Math.max(1, rect.height * (drag.crop.zoom - 1) * 0.5);
+  const beginCropDrag = (event: ReactPointerEvent<HTMLElement>, corner?: string) => {
+    if (!isCropping) return;
+    event.preventDefault();
+    if (corner) event.stopPropagation();
+    const point = { x: event.clientX, y: event.clientY };
+    if (corner) {
+      cropGestureRef.current = { type: 'resize', pointerId: event.pointerId, corner, startPoint: point, startCrop: draftCrop };
+    } else {
+      cropPointersRef.current.set(event.pointerId, point);
+      const pointers = Array.from(cropPointersRef.current.values());
+      cropGestureRef.current = pointers.length >= 2
+        ? { type: 'pinch', startDistance: distanceBetween(pointers[0], pointers[1]), startCrop: draftCrop }
+        : { type: 'pan', pointerId: event.pointerId, startPoint: point, startCrop: draftCrop };
+    }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // The pointer may already have been released by the browser.
+    }
+  };
+
+  const moveCrop = (event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = cropGestureRef.current;
+    if (!gesture || !isCropping) return;
+    if (gesture.type !== 'resize') {
+      if (!cropPointersRef.current.has(event.pointerId)) return;
+      cropPointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    const cropFrame = cropFrameRef.current;
+    if (!cropFrame) return;
+    const rect = cropFrame.getBoundingClientRect();
+    if (gesture.type === 'pinch') {
+      const pointers = Array.from(cropPointersRef.current.values());
+      if (pointers.length < 2) return;
+      const zoom = clamp(gesture.startCrop.zoom * distanceBetween(pointers[0], pointers[1]) / Math.max(gesture.startDistance, 1), 1, 3);
+      setDraftCrop(normalizeVideoCrop({ ...gesture.startCrop, zoom }));
+      return;
+    }
+
+    if (gesture.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - gesture.startPoint.x;
+    const deltaY = event.clientY - gesture.startPoint.y;
+    if (gesture.type === 'resize') {
+      const directionX = gesture.corner.includes('right') ? 1 : -1;
+      const directionY = gesture.corner.includes('bottom') ? 1 : -1;
+      const outwardDelta = (deltaX * directionX + deltaY * directionY) / 2;
+      const zoom = clamp(gesture.startCrop.zoom - outwardDelta / Math.max(1, Math.min(rect.width, rect.height)) * 2, 1, 3);
+      setDraftCrop(normalizeVideoCrop({ ...gesture.startCrop, zoom }));
+      return;
+    }
+
+    if (gesture.startCrop.zoom <= 1.001) return;
+    const maxX = Math.max(1, rect.width * (gesture.startCrop.zoom - 1) * 0.5);
+    const maxY = Math.max(1, rect.height * (gesture.startCrop.zoom - 1) * 0.5);
     setDraftCrop(normalizeVideoCrop({
-      ...drag.crop,
-      x: drag.crop.x + (event.clientX - drag.x) / maxX,
-      y: drag.crop.y + (event.clientY - drag.y) / maxY,
+      ...gesture.startCrop,
+      x: gesture.startCrop.x + deltaX / maxX,
+      y: gesture.startCrop.y + deltaY / maxY,
     }));
   };
 
-  const endCropDrag = () => { cropDragRef.current = null; };
+  const endCropDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = cropGestureRef.current;
+    cropPointersRef.current.delete(event.pointerId);
+    if (gesture?.type === 'pinch' && cropPointersRef.current.size === 1) {
+      const [pointerId, point] = Array.from(cropPointersRef.current.entries())[0];
+      cropGestureRef.current = { type: 'pan', pointerId, startPoint: point, startCrop: draftCrop };
+    } else if (gesture?.type === 'resize' && gesture.pointerId === event.pointerId) {
+      cropGestureRef.current = null;
+    } else if (gesture?.type === 'pan' && gesture.pointerId === event.pointerId) {
+      cropGestureRef.current = null;
+    } else if (cropPointersRef.current.size === 0) {
+      cropGestureRef.current = null;
+    }
+  };
 
   const continueToCaption = () => {
     const range = savedRange || normalizeRange(null, duration);
@@ -323,6 +433,10 @@ export default function VideoPreviewModal({
   const range = draftRange || savedRange || normalizeRange(null, duration || 0.1);
   const startPosition = duration > 0 ? (range.start / duration) * 100 : 0;
   const endPosition = duration > 0 ? (range.end / duration) * 100 : 100;
+  const frameWidth = stageSize.width > 0 && stageSize.height > 0
+    ? Math.min(stageSize.width, stageSize.height * frameAspectRatio)
+    : undefined;
+  const frameHeight = frameWidth ? frameWidth / frameAspectRatio : undefined;
 
   return (
     <div className="fixed inset-0 z-[140] flex flex-col bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label="معاينة الفيديو المختار">
@@ -354,15 +468,48 @@ export default function VideoPreviewModal({
         )}
       </header>
 
-      <div className={`relative flex min-h-0 flex-1 flex-col items-center justify-center ${isTrimming ? 'pb-[19rem]' : isCropping ? 'pb-56' : 'pb-28'}`}>
+      <div ref={stageRef} className={`relative flex min-h-0 flex-1 flex-col items-center justify-center ${isTrimming ? 'pb-[19rem]' : isCropping ? 'pb-56' : 'pb-28'}`}>
         <div
-          className={`relative h-full max-h-full w-auto max-w-full shrink-0 overflow-hidden rounded-xl bg-black ${isCropping ? 'cursor-grab active:cursor-grabbing' : ''}`}
-          style={{ aspectRatio: '4 / 5', touchAction: isCropping ? 'none' : undefined }}
+          ref={cropFrameRef}
+          className={`relative max-h-full shrink-0 overflow-hidden rounded-xl bg-black ${isCropping ? 'cursor-grab active:cursor-grabbing' : ''}`}
+          style={{
+            aspectRatio: String(frameAspectRatio),
+            width: frameWidth ? `${frameWidth}px` : '100%',
+            height: frameHeight ? `${frameHeight}px` : '100%',
+            touchAction: isCropping ? 'none' : undefined,
+          }}
           onPointerDown={beginCropDrag}
           onPointerMove={moveCrop}
           onPointerUp={endCropDrag}
           onPointerCancel={endCropDrag}
         >
+          {isCropping && (
+            <div className="pointer-events-none absolute inset-0 z-10 border border-white/90 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2)]">
+              {[1, 2].map(line => (
+                <Fragment key={line}>
+                  <span className="absolute inset-y-0 border-l border-white/30" style={{ left: `${(line * 100) / 3}%` }} />
+                  <span className="absolute inset-x-0 border-t border-white/30" style={{ top: `${(line * 100) / 3}%` }} />
+                </Fragment>
+              ))}
+              {[
+                { corner: 'top-left', position: '-left-2 -top-2' },
+                { corner: 'top-right', position: '-right-2 -top-2' },
+                { corner: 'bottom-left', position: '-bottom-2 -left-2' },
+                { corner: 'bottom-right', position: '-bottom-2 -right-2' },
+              ].map(({ corner, position }) => (
+                <button
+                  key={corner}
+                  type="button"
+                  aria-label={`تغيير إطار القص من الزاوية ${corner}`}
+                  onPointerDown={event => beginCropDrag(event, corner)}
+                  onPointerMove={moveCrop}
+                  onPointerUp={endCropDrag}
+                  onPointerCancel={endCropDrag}
+                  className={`pointer-events-auto absolute z-10 h-5 w-5 rounded-full border-2 border-black bg-white shadow ${position}`}
+                />
+              ))}
+            </div>
+          )}
           <video
             ref={videoRef}
             src={src}
@@ -462,10 +609,23 @@ export default function VideoPreviewModal({
       )}
 
       {isCropping && (
-        <section className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 w-[min(92vw,420px)] -translate-x-1/2 rounded-3xl border border-white/10 bg-[#1a1b22]/95 p-4 shadow-2xl backdrop-blur-xl" aria-label="قص إطار الفيديو">
+        <section className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 w-[min(94vw,420px)] -translate-x-1/2 rounded-3xl border border-white/10 bg-[#1a1b22]/95 p-3 shadow-2xl backdrop-blur-xl" aria-label="قص إطار الفيديو">
           <div className="mb-2 flex items-center justify-between text-xs text-white/70" dir="rtl">
-            <span>اسحب الفيديو لتحريك الإطار</span>
+            <span>حرّك الفيديو أو اسحب مقابض الزوايا</span>
             <span dir="ltr">{draftCrop.zoom.toFixed(1)}×</span>
+          </div>
+          <div className="mb-3 flex items-center justify-between gap-1" role="group" aria-label="نسبة أبعاد الفيديو" dir="rtl">
+            {ASPECT_RATIOS.map(preset => (
+              <button
+                key={preset.key}
+                type="button"
+                aria-pressed={(draftCrop.aspectRatio || 'free') === preset.key}
+                onClick={() => selectAspectRatio(preset.key)}
+                className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold transition ${((draftCrop.aspectRatio || 'free') === preset.key) ? 'bg-[#f1a17f] text-black' : 'bg-white/10 text-white/75 hover:bg-white/15'}`}
+              >
+                {preset.label}
+              </button>
+            ))}
           </div>
           <label className="mb-1 flex items-center justify-between text-xs text-white/80" dir="rtl">
             <span>التكبير</span><span dir="ltr">{draftCrop.zoom.toFixed(1)}×</span>

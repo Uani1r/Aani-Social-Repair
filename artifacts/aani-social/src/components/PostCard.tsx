@@ -9,6 +9,7 @@ import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
 import PostVideoPreview from './PostVideoPreview';
+import { getVideoAspectRatio, parseVideoCrop } from '../lib/videoMedia';
 
 export interface PostCardProps {
   post: Post;
@@ -92,7 +93,12 @@ export default function PostCard({
 
       {/* مرفقات الوسائط */}
       {postImages.length > 0 && (
-        <div className="mt-3 flex aspect-[4/5] gap-2 overflow-x-auto rounded-xl no-scrollbar">
+        <div
+          className="mt-3 flex aspect-[4/5] gap-2 overflow-x-auto rounded-xl no-scrollbar"
+          style={post.type === 'reel' && getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))
+            ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))) }
+            : undefined}
+        >
           {postImages.map((url, index) => (
             <div key={`${url}-${index}`} className="relative h-full min-w-full shrink-0 overflow-hidden rounded-xl border border-zinc-800">
               {post.type === 'reel' ? (
@@ -101,7 +107,7 @@ export default function PostCard({
                 <PostImagePreview
                   src={url}
                   alt={`صورة المنشور ${index + 1}`}
-                  className="block h-full w-full object-cover"
+                  className="block h-full w-full object-contain"
                 />
               )}
             </div>

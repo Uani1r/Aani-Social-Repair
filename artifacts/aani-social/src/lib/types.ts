@@ -22,10 +22,14 @@ export type VideoTrimRange = {
   duration: number;
 };
 
+export type VideoAspectRatio = 'free' | '4:5' | '1:1' | '9:16';
+
 export type VideoCropTransform = {
   zoom: number;
   x: number;
   y: number;
+  aspectRatio?: VideoAspectRatio;
+  sourceAspectRatio?: number;
 };
 
 export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {

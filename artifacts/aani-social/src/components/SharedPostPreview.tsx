@@ -9,6 +9,7 @@ import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile 
 import PostMetadataChips from '@/components/PostMetadataChips';
 import PostImagePreview from '@/components/PostImagePreview';
 import PostVideoPreview from '@/components/PostVideoPreview';
+import { getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 
 export default function SharedPostPreview({ content, postId }: { content?: string | null; postId?: string | null }) {
   const match = (content || '').match(/^\[post:(\S+)\]([\s\S]*)$/);
@@ -116,7 +117,12 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
         }}
         className="w-[62%] min-w-0 shrink-0 cursor-pointer overflow-hidden rounded-2xl border-[1.5px] border-dashed border-zinc-300/60 bg-zinc-900/75 transition hover:border-pink-500/60"
       >
-        <div className="relative aspect-[4/5] w-full overflow-hidden bg-black">
+        <div
+          className="relative aspect-[4/5] w-full overflow-hidden bg-black"
+          style={isVideo && info?.media && getVideoAspectRatio(parseVideoCrop(info.media))
+            ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(info.media))) }
+            : undefined}
+        >
           {loading ? (
             <div className="h-full w-full animate-pulse bg-zinc-800/80" />
           ) : isVideo && info?.media ? (
@@ -129,7 +135,7 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
               className="h-full w-full object-cover"
             />
           ) : info?.media ? (
-            <PostImagePreview src={info.media} alt="" className="h-full w-full object-cover" />
+            <PostImagePreview src={info.media} alt="" className="h-full w-full object-contain" />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-pink-600/25 to-violet-600/25 p-3">
               <p className="line-clamp-5 text-center text-[11px] leading-5 text-zinc-100">

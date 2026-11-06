@@ -17,19 +17,46 @@ export function parseVideoTimeRange(src: string): VideoTimeRange | null {
 
 export function normalizeVideoCrop(crop: VideoCropTransform | null | undefined): VideoCropTransform {
   if (!crop) return DEFAULT_VIDEO_CROP;
+  const aspectRatio = crop.aspectRatio === 'free' || crop.aspectRatio === '4:5' || crop.aspectRatio === '1:1' || crop.aspectRatio === '9:16'
+    ? crop.aspectRatio
+    : undefined;
+  const sourceAspectRatio = Number.isFinite(crop.sourceAspectRatio) && crop.sourceAspectRatio! >= 0.2 && crop.sourceAspectRatio! <= 5
+    ? crop.sourceAspectRatio
+    : undefined;
   return {
     zoom: clamp(Number.isFinite(crop.zoom) ? crop.zoom : 1, 1, 3),
     x: clamp(Number.isFinite(crop.x) ? crop.x : 0, -1, 1),
     y: clamp(Number.isFinite(crop.y) ? crop.y : 0, -1, 1),
+    ...(aspectRatio ? { aspectRatio } : {}),
+    ...(sourceAspectRatio ? { sourceAspectRatio } : {}),
   };
 }
 
 export function parseVideoCrop(src: string): VideoCropTransform {
-  const match = src.match(new RegExp(`[#&]crop=${numberPattern},${numberPattern},${numberPattern}(?=&|$)`));
-  if (!match) return DEFAULT_VIDEO_CROP;
-  const [zoom, x, y] = match.slice(1).map(Number);
-  if (![zoom, x, y].every(Number.isFinite)) return DEFAULT_VIDEO_CROP;
-  return normalizeVideoCrop({ zoom, x, y });
+  const cropMatch = src.match(new RegExp(`[#&]crop=${numberPattern},${numberPattern},${numberPattern}(?=&|$)`));
+  const aspectMatch = src.match(/[#&]ar=(free|4:5|1:1|9:16)(?=&|$)/);
+  const sourceAspectMatch = src.match(new RegExp(`[#&]ratio=${numberPattern}(?=&|$)`));
+  const [zoom, x, y] = cropMatch ? cropMatch.slice(1).map(Number) : [1, 0, 0];
+  const sourceAspectRatio = sourceAspectMatch ? Number(sourceAspectMatch[1]) : undefined;
+  if (![zoom, x, y].every(Number.isFinite) || (sourceAspectRatio !== undefined && !Number.isFinite(sourceAspectRatio))) {
+    return DEFAULT_VIDEO_CROP;
+  }
+  return normalizeVideoCrop({
+    zoom,
+    x,
+    y,
+    ...(aspectMatch ? { aspectRatio: aspectMatch[1] as VideoCropTransform['aspectRatio'] } : {}),
+    ...(sourceAspectRatio !== undefined ? { sourceAspectRatio } : {}),
+  });
+}
+
+export function getVideoAspectRatio(crop: VideoCropTransform | null | undefined): number | undefined {
+  const normalized = normalizeVideoCrop(crop);
+  if (normalized.aspectRatio === 'free') return normalized.sourceAspectRatio;
+  if (normalized.aspectRatio === '1:1') return 1;
+  if (normalized.aspectRatio === '9:16') return 9 / 16;
+  if (normalized.aspectRatio === '4:5') return 4 / 5;
+  return undefined;
 }
 
 export function stripVideoEditFragment(src: string): string {
@@ -57,6 +84,10 @@ export function buildVideoMediaUrl(
   const normalizedCrop = normalizeVideoCrop(crop);
   if (normalizedCrop.zoom > 1.001 || Math.abs(normalizedCrop.x) > 0.01 || Math.abs(normalizedCrop.y) > 0.01) {
     edits.push(`crop=${normalizedCrop.zoom.toFixed(3)},${normalizedCrop.x.toFixed(3)},${normalizedCrop.y.toFixed(3)}`);
+  }
+  if (normalizedCrop.aspectRatio) edits.push(`ar=${normalizedCrop.aspectRatio}`);
+  if (normalizedCrop.aspectRatio === 'free' && normalizedCrop.sourceAspectRatio) {
+    edits.push(`ratio=${normalizedCrop.sourceAspectRatio.toFixed(5)}`);
   }
 
   const baseUrl = stripVideoEditFragment(src);

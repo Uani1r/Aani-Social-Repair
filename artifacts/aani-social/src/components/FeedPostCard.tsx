@@ -18,6 +18,7 @@ import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
@@ -112,6 +113,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     return [];
   }, [post.media_urls, post.media_url]);
   const activeVideoUrl = urls[currentImageIndex] || post.media_url;
+  const activeVideoAspectRatio = post.type === 'reel' ? getVideoAspectRatio(parseVideoCrop(activeVideoUrl || '')) : undefined;
   const fullScreenPost = useMemo(() => ({
     ...post,
     media_url: activeVideoUrl,
@@ -410,7 +412,10 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
-        <div className={isMainFeedImage ? 'post-image-container relative mt-3 w-full' : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''} ${isMainFeedVideo ? 'video-post-media' : ''}`}>
+        <div
+          className={isMainFeedImage ? 'post-image-container relative mt-3 w-full' : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''} ${isMainFeedVideo ? 'video-post-media' : ''}`}
+          style={activeVideoAspectRatio ? { aspectRatio: String(activeVideoAspectRatio) } : undefined}
+        >
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (
               <div key={i} className="carousel-slide relative h-full">
@@ -431,7 +436,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                   <PostImagePreview
                     src={url}
                     alt=""
-                    className={isMainFeedImage ? 'post-image' : 'block h-full w-full select-none object-cover'}
+                    className={isMainFeedImage ? 'post-image' : 'block h-full w-full select-none object-contain'}
                   />
                 )}
               </div>
