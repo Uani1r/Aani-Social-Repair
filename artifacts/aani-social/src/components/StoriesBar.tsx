@@ -1248,6 +1248,26 @@ export default function StoriesBar({
     });
   };
 
+  const orderedStoryUserIds = useMemo(() => {
+    const seenIds = new Set(seenStoryIds);
+    const newestStoryTime = (stories: StoryRow[]) => Math.max(
+      0,
+      ...stories.map(story => Date.parse(story.created_at)).filter(Number.isFinite),
+    );
+
+    return Object.keys(groupedStories).sort((firstId, secondId) => {
+      if (firstId === userId) return secondId === userId ? 0 : -1;
+      if (secondId === userId) return 1;
+
+      const firstUnseen = groupedStories[firstId].some(story => !seenIds.has(story.id));
+      const secondUnseen = groupedStories[secondId].some(story => !seenIds.has(story.id));
+      if (firstUnseen !== secondUnseen) return firstUnseen ? -1 : 1;
+
+      const newestDifference = newestStoryTime(groupedStories[secondId]) - newestStoryTime(groupedStories[firstId]);
+      return newestDifference || firstId.localeCompare(secondId, 'ar');
+    });
+  }, [groupedStories, seenStoryIds, userId]);
+
   const activeStories = useMemo(() => {
     if (archiveViewerOpen) return archiveStories;
     if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories;
@@ -1568,7 +1588,7 @@ export default function StoriesBar({
       setProgress(0);
       setCurrentTimeSec(0);
     } else {
-      const userIds = Object.keys(groupedStories);
+      const userIds = orderedStoryUserIds;
       const currentIdx = userIds.indexOf(activeUserGroup || '');
       if (currentIdx !== -1 && currentIdx < userIds.length - 1) {
         setActiveUserGroup(userIds[currentIdx + 1]);
@@ -1596,7 +1616,7 @@ export default function StoriesBar({
       setProgress(0);
       setCurrentTimeSec(0);
     } else {
-      const userIds = Object.keys(groupedStories);
+      const userIds = orderedStoryUserIds;
       const currentIdx = userIds.indexOf(activeUserGroup || '');
       if (currentIdx > 0) {
         const prevUser = userIds[currentIdx - 1];
@@ -1801,6 +1821,7 @@ export default function StoriesBar({
         currentProfile={currentProfile}
         groupedStories={groupedStories}
         seenStoryIds={seenStoryIds}
+        orderedUserIds={orderedStoryUserIds}
         uploading={uploading}
         uploadProgress={uploadProgress}
         onOpenMyStories={() => {

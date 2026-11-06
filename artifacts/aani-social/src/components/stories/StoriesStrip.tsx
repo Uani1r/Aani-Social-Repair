@@ -11,6 +11,7 @@ interface StoriesStripProps {
   currentProfile: Profile | null;
   groupedStories: StoriesByUser;
   seenStoryIds: string[];
+  orderedUserIds: string[];
   uploading: boolean;
   uploadProgress: number;
   onOpenMyStories: () => void;
@@ -23,6 +24,7 @@ export default function StoriesStrip({
   currentProfile,
   groupedStories,
   seenStoryIds,
+  orderedUserIds,
   uploading,
   uploadProgress,
   onOpenMyStories,
@@ -113,7 +115,7 @@ export default function StoriesStrip({
         </div>
 
         {/* قصص المتابَعين */}
-        {Object.keys(groupedStories).filter(id => id !== userId).map(authorId => {
+        {orderedUserIds.filter(id => id !== userId && groupedStories[id]?.length).map(authorId => {
           const firstStory = groupedStories[authorId][0];
           const isSeen = hasSeenAllStories(groupedStories[authorId]);
           const hasCloseFriendsStory = groupedStories[authorId].some(story => story.is_close_friends);

@@ -12,6 +12,7 @@ import { uploadMedia } from '@/lib/storyUpload';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
 import type { Post, PostDestination, PostMetadataTag, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
+import { requestContentRefresh } from '@/lib/contentRefresh';
 
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -89,10 +90,13 @@ export default function Shell({
   };
 
   const homeTapAtRef = useRef(0);
+  const reelsTapAtRef = useRef(0);
   const homeTapResetTimerRef = useRef<number | null>(null);
+  const reelsTapResetTimerRef = useRef<number | null>(null);
 
   useEffect(() => () => {
     if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+    if (reelsTapResetTimerRef.current) window.clearTimeout(reelsTapResetTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -144,33 +148,49 @@ export default function Shell({
   }, [path, pendingStoryComposerRequest]);
 
   const handleHomeNavigationTap = (event: MouseEvent<HTMLAnchorElement>, navId: string) => {
-    if (navId !== 'feed') {
+    if (navId !== 'feed' && navId !== 'reels') {
       homeTapAtRef.current = 0;
+      reelsTapAtRef.current = 0;
       if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
+      if (reelsTapResetTimerRef.current) window.clearTimeout(reelsTapResetTimerRef.current);
       homeTapResetTimerRef.current = null;
+      reelsTapResetTimerRef.current = null;
       return;
     }
+
+    const isFeed = navId === 'feed';
+    const tapAtRef = isFeed ? homeTapAtRef : reelsTapAtRef;
+    const resetTimerRef = isFeed ? homeTapResetTimerRef : reelsTapResetTimerRef;
+    const otherTapAtRef = isFeed ? reelsTapAtRef : homeTapAtRef;
+    const otherResetTimerRef = isFeed ? reelsTapResetTimerRef : homeTapResetTimerRef;
+    otherTapAtRef.current = 0;
+    if (otherResetTimerRef.current) window.clearTimeout(otherResetTimerRef.current);
+    otherResetTimerRef.current = null;
 
     const now = Date.now();
-    if (homeTapAtRef.current > 0 && now - homeTapAtRef.current <= 450) {
+    if (tapAtRef.current > 0 && now - tapAtRef.current <= 450) {
       event.preventDefault();
-      homeTapAtRef.current = 0;
-      if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
-      homeTapResetTimerRef.current = null;
-      setLocation('/feed');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      window.setTimeout(() => window.dispatchEvent(new Event('aani:feed-refresh')), 0);
+      tapAtRef.current = 0;
+      if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+      if (isFeed) {
+        setLocation('/feed');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } else {
+        setLocation('/reels');
+      }
+      void requestContentRefresh();
       return;
     }
 
-    homeTapAtRef.current = now;
-    if (homeTapResetTimerRef.current) window.clearTimeout(homeTapResetTimerRef.current);
-    homeTapResetTimerRef.current = window.setTimeout(() => {
-      homeTapAtRef.current = 0;
-      homeTapResetTimerRef.current = null;
+    tapAtRef.current = now;
+    if (resetTimerRef.current) window.clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = window.setTimeout(() => {
+      tapAtRef.current = 0;
+      resetTimerRef.current = null;
     }, 450);
 
-    if (path === '/feed') event.preventDefault();
+    if ((isFeed && path === '/feed') || (!isFeed && path === '/reels')) event.preventDefault();
   };
 
   // إخفاء/إظهار شريط التنقل السفلي حسب اتجاه حركة الإصبع
@@ -799,6 +819,7 @@ export default function Shell({
         stories={isFeedPath ? headerStories : undefined}
         onOpenNotifications={() => setShowNotifsModal(true)}
         onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
+        onRefresh={requestContentRefresh}
       />
 
       <ShellOverlayControls

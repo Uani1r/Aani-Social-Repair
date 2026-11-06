@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } fr
 import { toast } from 'sonner';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { registerContentRefreshRequest } from '@/lib/contentRefresh';
 import {
   normalizeStoryAuthor,
   normalizeStoryRow,
@@ -143,6 +144,13 @@ export function useStoriesData({
   }, [setArchiveLoading, setArchiveStories, userId]);
 
   useEffect(() => { void fetchStories(); }, [fetchStories]);
+  useEffect(() => {
+    const onContentRefresh = (event: Event) => {
+      registerContentRefreshRequest(event, fetchStories());
+    };
+    window.addEventListener('aani:content-refresh', onContentRefresh);
+    return () => window.removeEventListener('aani:content-refresh', onContentRefresh);
+  }, [fetchStories]);
   useEffect(() => {
     archiveRequestRef.current += 1;
     setArchiveStories([]);

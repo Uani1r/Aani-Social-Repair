@@ -4,6 +4,7 @@ import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/int
 import { handleAppError } from '@/lib/appErrors';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type PostRow, type Profile } from '@/lib/types';
+import { registerContentRefreshRequest } from '@/lib/contentRefresh';
 
 interface RepostRow {
   post_id: string;
@@ -383,12 +384,18 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         void refresh(true);
       }, 80);
     };
+    const onContentRefresh = (event: Event) => {
+      if (query !== 'feed' && query !== 'reel') return;
+      registerContentRefreshRequest(event, refresh(true));
+    };
     window.addEventListener('aani:post-created', onPostCreated);
     window.addEventListener('aani:repost-changed', onRepostChanged);
+    window.addEventListener('aani:content-refresh', onContentRefresh);
     return () => {
       if (repostRefreshTimer !== null) window.clearTimeout(repostRefreshTimer);
       window.removeEventListener('aani:post-created', onPostCreated);
       window.removeEventListener('aani:repost-changed', onRepostChanged);
+      window.removeEventListener('aani:content-refresh', onContentRefresh);
     };
   }, [refresh]);
 
