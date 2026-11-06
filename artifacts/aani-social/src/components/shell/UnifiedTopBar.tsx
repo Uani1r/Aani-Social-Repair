@@ -1,29 +1,20 @@
 import type { ReactNode } from 'react';
 import { Link } from 'wouter';
-import { Bell, Plus, Settings } from 'lucide-react';
-
-import Avatar from '@/components/Avatar';
-import type { Profile } from '@/lib/types';
+import { Bell, Plus } from 'lucide-react';
 
 type UnifiedTopBarProps = {
   hidden: boolean;
-  path: string;
-  profile: Profile | null;
   unreadCount: number;
   stories?: ReactNode;
   onOpenNotifications: () => void;
-  onOpenSettings: () => void;
   onOpenCreatePost: () => void;
 };
 
 export default function UnifiedTopBar({
   hidden,
-  path,
-  profile,
   unreadCount,
   stories,
   onOpenNotifications,
-  onOpenSettings,
   onOpenCreatePost,
 }: UnifiedTopBarProps) {
   return (
@@ -41,19 +32,6 @@ export default function UnifiedTopBar({
           </Link>
 
           <div className="unified-actions-section">
-            <Link href="/profile" className="unified-user-profile-link" aria-label="ملفي الشخصي">
-              <Avatar profile={profile} />
-            </Link>
-            {path.startsWith('/profile') && (
-              <button
-                type="button"
-                aria-label="الإعدادات"
-                className="unified-icon-button"
-                onClick={onOpenSettings}
-              >
-                <Settings size={20} />
-              </button>
-            )}
             <button
               type="button"
               aria-label="الإشعارات"

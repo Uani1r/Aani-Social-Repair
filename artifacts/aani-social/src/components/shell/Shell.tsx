@@ -769,12 +769,9 @@ export default function Shell({
     <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''}`}>
       <UnifiedTopBar
         hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
-        path={path}
-        profile={profile}
         unreadCount={unreadCount}
         stories={isFeedPath ? headerStories : undefined}
         onOpenNotifications={() => setShowNotifsModal(true)}
-        onOpenSettings={() => setShowSettingsModal(true)}
         onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
       />
 
