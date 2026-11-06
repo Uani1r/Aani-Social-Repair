@@ -1028,6 +1028,8 @@ export default function MessagesPage({
                     enterKeyHint="send"
                     rows={1}
                   />
+                </div>
+                <div className="messages-composer-actions">
                   <button
                     type="button"
                     className="messages-composer-control messages-composer-emoji"
@@ -1038,15 +1040,13 @@ export default function MessagesPage({
                   >
                     <Smile size={19} />
                   </button>
-                </div>
-                <div className="messages-composer-actions">
                   {text.length === 0 ? (
                     <>
-                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="التقاط صورة" onClick={() => toast.info('إرسال الصور غير متاح حالياً.')}>
-                        <Camera size={22} />
-                      </button>
                       <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="تسجيل رسالة صوتية" onClick={() => toast.info('الرسائل الصوتية غير متاحة حالياً.')}>
                         <Mic size={22} />
+                      </button>
+                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="التقاط صورة" onClick={() => toast.info('إرسال الصور غير متاح حالياً.')}>
+                        <Camera size={22} />
                       </button>
                     </>
                   ) : (
