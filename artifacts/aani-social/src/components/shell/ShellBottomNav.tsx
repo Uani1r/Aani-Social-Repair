@@ -9,6 +9,7 @@ type ShellBottomNavProps = {
 };
 
 export default function ShellBottomNav({ path, chromeHidden, onNavigationTap }: ShellBottomNavProps) {
+  const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
   const nav = [
     ['/feed', Home, 'الرئيسية', 'feed'],
     ['/reels', Film, 'ريلز', 'reels'],
@@ -28,7 +29,10 @@ export default function ShellBottomNav({ path, chromeHidden, onNavigationTap }: 
       }}
     >
       {nav.map(([href, Icon, label, id]) => {
-        const active = path === href || (id === 'feed' && path === '/') || (id === 'profile' && path.startsWith('/profile'));
+        const active = path === href
+          || (id === 'feed' && path === '/')
+          || (id === 'profile' && path === '/profile')
+          || (id === 'search' && path.startsWith('/profile/') && fromSearch);
 
         return (
           <Link

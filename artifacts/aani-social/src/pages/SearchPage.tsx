@@ -7,6 +7,8 @@ import UserIdentity from '@/components/UserIdentity';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
+const searchStateCache = new Map<string, { term: string; profiles: Profile[] }>();
+
 const readSearchHistory = (key: string): Profile[] => {
   try {
     const saved = localStorage.getItem(key);
@@ -71,8 +73,9 @@ const matchesProfile = (profile: Profile, normalizedQuery: string): boolean => [
 ].some(value => typeof value === 'string' && normalizeSearchText(value).includes(normalizedQuery));
 
 export default function SearchPage({ userId }: { userId: string }) {
-  const [term, setTerm] = useState('');
-  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const cachedSearch = searchStateCache.get(userId);
+  const [term, setTerm] = useState(cachedSearch?.term || '');
+  const [profiles, setProfiles] = useState<Profile[]>(cachedSearch?.profiles || []);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchHistory, setSearchHistory] = useState<Profile[]>([]);
@@ -89,6 +92,14 @@ export default function SearchPage({ userId }: { userId: string }) {
       searchTimeoutRef.current = null;
     };
   }, [historyKey]);
+
+  useEffect(() => {
+    searchStateCache.set(userId, { term, profiles });
+  }, [userId, term, profiles]);
+
+  const preserveSearchState = () => {
+    searchStateCache.set(userId, { term, profiles });
+  };
 
   const persistHistory = (nextHistory: Profile[]) => {
     setSearchHistory(nextHistory);
@@ -210,7 +221,7 @@ export default function SearchPage({ userId }: { userId: string }) {
       </form>
 
       {searchHistory.length > 0 && (
-        <section className="rounded-2xl border border-zinc-800 bg-zinc-950/90 p-3">
+        <section className="space-y-2">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-bold text-white">الأبحاث الأخيرة</h2>
             <button
@@ -223,10 +234,13 @@ export default function SearchPage({ userId }: { userId: string }) {
           </div>
           <div className="space-y-1">
             {searchHistory.map(profile => (
-              <div key={profile.id} className="flex items-center gap-2 rounded-xl px-2 py-2 transition-colors hover:bg-zinc-800/60">
+              <div key={profile.id} className="flex items-center gap-2 py-2">
                 <Link
-                  href={`/profile/${encodeURIComponent(profile.id)}`}
-                  onClick={() => addProfileToHistory(profile)}
+                  href={`/profile/${encodeURIComponent(profile.id)}?from=search`}
+                  onClick={() => {
+                    preserveSearchState();
+                    addProfileToHistory(profile);
+                  }}
                   className="flex min-w-0 flex-1 items-center gap-3"
                 >
                   <Avatar profile={profile} large />
@@ -261,8 +275,11 @@ export default function SearchPage({ userId }: { userId: string }) {
           {profiles.map(profile => (
             <Link
               key={profile.id}
-              href={`/profile/${encodeURIComponent(profile.id)}`}
-              onClick={() => addProfileToHistory(profile)}
+              href={`/profile/${encodeURIComponent(profile.id)}?from=search`}
+              onClick={() => {
+                preserveSearchState();
+                addProfileToHistory(profile);
+              }}
               className="flex items-center justify-between rounded-xl p-2.5 hover:bg-zinc-800/50"
             >
               <div className="flex min-w-0 items-center gap-4">

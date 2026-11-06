@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
+import { ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -39,8 +40,21 @@ export default function ProfilePage({
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [, setLocation] = useLocation();
+  const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
 
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
+  const searchBackButton = !own && fromSearch ? (
+    <div className="flex justify-start">
+      <button
+        type="button"
+        aria-label="العودة إلى البحث"
+        onClick={() => setLocation('/search')}
+        className="back-btn flex h-10 w-10 items-center justify-center rounded-full text-white transition-colors hover:bg-zinc-800"
+      >
+        <ArrowRight size={22} />
+      </button>
+    </div>
+  ) : null;
 
   useEffect(() => {
     if (!supabaseConfigured || !activeUserId) return;
@@ -180,10 +194,16 @@ export default function ProfilePage({
     setPrivacySaving(false);
   };
 
-  if (!person) return <div className="status-box">جاري تحميل البروفايل...</div>;
+  if (!person) return (
+    <section className="new-view space-y-4 max-w-lg mx-auto">
+      {searchBackButton}
+      <div className="status-box">جاري تحميل البروفايل...</div>
+    </section>
+  );
 
   return (
     <section className="new-view space-y-4 max-w-lg mx-auto">
+      {searchBackButton}
       <div className="profile-banner card flex items-start gap-5 p-4 border border-zinc-800 rounded-2xl bg-zinc-900/80">
         <button
           type="button"
