@@ -326,7 +326,7 @@ export default function StoryCreationEditor({
 
             {/* كل عبارة طبقة مستقلة؛ النقر يفتح تحرير هذه الطبقة فقط */}
             {storyTextLayers.map((layer, index) => {
-              const layerOrder = layer.layerOrder ?? index + 10;
+              const layerOrder = typeof layer.layerOrder === 'number' ? layer.layerOrder : index + 10;
               if (layer.type === 'image') {
                 return (
                   <StoryImageSticker

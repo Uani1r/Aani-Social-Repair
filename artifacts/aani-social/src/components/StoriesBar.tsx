@@ -954,25 +954,34 @@ export default function StoriesBar({
     setStoryText,
   });
 
-  const buildStoryTextLayer = (text: string): StoryTextOverlay => ({
-    id: editingStoryTextId || `story-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    layerOrder: timedTexts.find(layer => layer.id === editingStoryTextId)?.layerOrder
-      ?? Math.max(9, ...timedTexts.map((layer, index) => layer.layerOrder ?? index + 10)) + 1,
-    type: 'text',
-    text,
-    startTime: 0,
-    endTime: uploadDuration,
-    x: Math.min(95, Math.max(5, 50 + (storyTextOffset.x / Math.max(1, window.innerWidth)) * 100)),
-    y: Math.min(95, Math.max(5, 50 + (storyTextOffset.y / Math.max(1, window.innerHeight)) * 100)),
-    fontFamily: storyFontFamily,
-    textColor: storyTextColor,
-    textAlign: storyTextAlign,
-    textBackground: storyBackgroundPreset.background,
-    textAnimation: storyTextAnimation,
-    fontSize: storyTextFontSize,
-    scale: storyTextScale,
-    rotation: storyTextRotation,
-  });
+  const getNextStoryLayerOrder = () => Math.max(
+    9,
+    ...timedTexts.map((layer, index) =>
+      typeof layer.layerOrder === 'number' ? layer.layerOrder : index + 10,
+    ),
+  ) + 1;
+
+  const buildStoryTextLayer = (text: string): StoryTextOverlay => {
+    const existingLayerOrder = timedTexts.find(layer => layer.id === editingStoryTextId)?.layerOrder;
+    return {
+      id: editingStoryTextId || `story-text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      layerOrder: typeof existingLayerOrder === 'number' ? existingLayerOrder : getNextStoryLayerOrder(),
+      type: 'text',
+      text,
+      startTime: 0,
+      endTime: uploadDuration,
+      x: Math.min(95, Math.max(5, 50 + (storyTextOffset.x / Math.max(1, window.innerWidth)) * 100)),
+      y: Math.min(95, Math.max(5, 50 + (storyTextOffset.y / Math.max(1, window.innerHeight)) * 100)),
+      fontFamily: storyFontFamily,
+      textColor: storyTextColor,
+      textAlign: storyTextAlign,
+      textBackground: storyBackgroundPreset.background,
+      textAnimation: storyTextAnimation,
+      fontSize: storyTextFontSize,
+      scale: storyTextScale,
+      rotation: storyTextRotation,
+    };
+  };
 
   function finishStoryTextEditing() {
     const text = storyText.trim();
@@ -1054,7 +1063,7 @@ export default function StoriesBar({
     localStickerObjectUrlsRef.current.add(src);
     const sticker: StoryImageOverlay = {
       id: `story-sticker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      layerOrder: Math.max(9, ...timedTexts.map((layer, index) => layer.layerOrder ?? index + 10)) + 1,
+      layerOrder: getNextStoryLayerOrder(),
       type: 'image',
       src,
       localFile: file,
@@ -1233,7 +1242,7 @@ export default function StoriesBar({
 
     const orderedLayers = textLayersToPublish.map((layer, index) =>
       layer.type === 'text' || layer.type === undefined || layer.type === 'image' || layer.type === 'drawing'
-        ? { ...layer, layerOrder: layer.layerOrder ?? index + 10 }
+        ? { ...layer, layerOrder: typeof layer.layerOrder === 'number' ? layer.layerOrder : index + 10 }
         : layer,
     );
     void handleCreateTextStory('', canvasStyle, orderedLayers, closeFriends).then(published => {

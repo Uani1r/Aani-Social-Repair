@@ -52,15 +52,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function getTouches(touchList: TouchList): Touch[] {
-  const touches: Touch[] = [];
-  for (let index = 0; index < touchList.length; index += 1) {
-    const touch = touchList.item(index);
-    if (touch) touches.push(touch);
-  }
-  return touches;
-}
-
 function touchCenter(touches: readonly Touch[]) {
   const first = touches[0];
   const second = touches[1];
@@ -183,7 +174,7 @@ export default function StoryImageSticker({
     event.stopPropagation();
     onActivate?.();
     clearGestureTimer(gestureRef.current);
-    const touches = getTouches(event.touches);
+    const touches = Array.from(event.touches);
     if (touches.length >= 2) {
       beginTransform(touches);
     } else if (touches.length === 1) {
@@ -194,7 +185,7 @@ export default function StoryImageSticker({
   const handleTouchMove = (event: ReactTouchEvent<HTMLDivElement>) => {
     if (!interactive) return;
     event.stopPropagation();
-    const touches = getTouches(event.touches);
+    const touches = Array.from(event.touches);
     const gesture = gestureRef.current;
     if (!gesture || touches.length === 0) return;
 
@@ -261,7 +252,7 @@ export default function StoryImageSticker({
   const finishTouch = (event: ReactTouchEvent<HTMLDivElement>, cancelled = false) => {
     if (!interactive) return;
     event.stopPropagation();
-    const touches = getTouches(event.touches);
+    const touches = Array.from(event.touches);
     const gesture = gestureRef.current;
     if (!gesture) return;
     clearGestureTimer(gesture);
@@ -272,7 +263,7 @@ export default function StoryImageSticker({
     }
     if (touches.length > 0) return;
 
-    const touch = getTouches(event.changedTouches)[0];
+    const touch = Array.from(event.changedTouches)[0];
     const point = touch
       ? { x: touch.clientX, y: touch.clientY }
       : { x: gesture.startX, y: gesture.startY };

@@ -92,6 +92,9 @@ const formatCommentsTitle = (count: number): string => {
   return `${count} تعليقاً`;
 };
 
+const getCommentParentId = (value: unknown): CommentWithDetails['parent_id'] =>
+  value === null || value === undefined || value === '' ? null : String(value);
+
 const buildSavedComment = (
   row: Record<string, unknown>,
   profiles: CommentWithDetails['profiles'],
@@ -99,7 +102,7 @@ const buildSavedComment = (
   id: String(row.id),
   post_id: String(row.post_id ?? ''),
   user_id: String(row.user_id ?? ''),
-  parent_id: row.parent_id ? String(row.parent_id) : null,
+  parent_id: getCommentParentId(row.parent_id),
   content: String(row.content ?? ''),
   image_url: row.image_url ? String(row.image_url) : null,
   created_at: String(row.created_at ?? new Date().toISOString()),
@@ -711,7 +714,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
     setSubmitting(true);
 
-    const parentId = replyingTo?.id ?? null;
+    const parentId: CommentWithDetails['parent_id'] = replyingTo?.id ?? null;
     const optimisticId = `temp-${crypto.randomUUID()}`;
 
     // تعليق مؤقت يظهر فورًا في القائمة قبل اكتمال الحفظ (Optimistic UI)
