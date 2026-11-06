@@ -591,6 +591,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           onReport={() => void reportPost()}
           onFeedback={value => void saveFeedback(value)}
           triggerClassName="reel-options-trigger"
+          reelOverlay
         />
       </div>
 
