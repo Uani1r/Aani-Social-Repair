@@ -26,6 +26,13 @@ interface ConversationSummary {
   isRequest: boolean;
 }
 
+interface LocalGroupConversation {
+  id: string;
+  name: string;
+  memberIds: string[];
+  created_at: string;
+}
+
 type InboxTab = 'messages' | 'groups' | 'requests';
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
@@ -68,6 +75,38 @@ function readConversationReadTimes(userId: string): Record<string, string> {
   }
 }
 
+function readLocalGroupConversations(userId: string): LocalGroupConversation[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(`aani_message_groups_${userId}`) || '[]');
+    if (!Array.isArray(stored)) return [];
+    return stored.flatMap((item: unknown) => {
+      if (!isRecord(item)
+        || typeof item.id !== 'string'
+        || typeof item.name !== 'string'
+        || !Array.isArray(item.memberIds)) {
+        return [];
+      }
+      const memberIds = item.memberIds.filter((memberId): memberId is string => typeof memberId === 'string');
+      const name = item.name.trim();
+      if (!name || memberIds.length === 0) return [];
+      return [{
+        id: item.id,
+        name,
+        memberIds,
+        created_at: typeof item.created_at === 'string' ? item.created_at : '',
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function createGroupId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return `group-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function messagePreview(message: MessageRow | null, currentUserId: string): string {
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
@@ -104,13 +143,20 @@ export default function MessagesPage({
   const [, setLocation] = useLocation();
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [friends, setFriends] = useState<Profile[]>([]);
+  const [groups, setGroups] = useState<LocalGroupConversation[]>(() => readLocalGroupConversations(currentUserId));
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [contactsLoading, setContactsLoading] = useState(true);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-  const [activeTab, setActiveTab] = useState<InboxTab>('messages');
+  const [activeTab, setActiveTab] = useState<InboxTab>(() => (
+    typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('tab') === 'groups'
+      ? 'groups'
+      : 'messages'
+  ));
   const [searchTerm, setSearchTerm] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(() => new Set());
@@ -120,9 +166,35 @@ export default function MessagesPage({
   const [newMessageProfiles, setNewMessageProfiles] = useState<Profile[]>([]);
   const [newMessageLoading, setNewMessageLoading] = useState(false);
   const [newMessageError, setNewMessageError] = useState<string | null>(null);
+  const [createGroupOpen, setCreateGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupSearch, setGroupSearch] = useState('');
+  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
+  const [groupError, setGroupError] = useState<string | null>(null);
+  const [createGroupClosing, setCreateGroupClosing] = useState(false);
+  const groupModalCloseTimerRef = useRef<number | null>(null);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const threadEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setGroups(readLocalGroupConversations(currentUserId));
+    setSelectedGroupId(null);
+  }, [currentUserId]);
+
+  useEffect(() => () => {
+    if (groupModalCloseTimerRef.current !== null) window.clearTimeout(groupModalCloseTimerRef.current);
+  }, []);
+
+  const closeCreateGroup = () => {
+    if (!createGroupOpen || createGroupClosing) return;
+    setCreateGroupClosing(true);
+    groupModalCloseTimerRef.current = window.setTimeout(() => {
+      setCreateGroupOpen(false);
+      setCreateGroupClosing(false);
+      groupModalCloseTimerRef.current = null;
+    }, 180);
+  };
 
   const markConversationRead = useCallback((contactId: string) => {
     const readAt = new Date().toISOString();
@@ -142,6 +214,7 @@ export default function MessagesPage({
     if (!supabaseConfigured) {
       setCurrentProfile(null);
       setConversations([]);
+      setFriends([]);
       setContactsLoading(false);
       return;
     }
@@ -175,9 +248,15 @@ export default function MessagesPage({
       });
       const contactIds = [...latestByContact.keys()];
       if (selectedId && !contactIds.includes(selectedId)) contactIds.push(selectedId);
+      const connectedIds = new Set<string>();
+      (followsResult.data || []).forEach(follow => {
+        if (follow.follower_id === currentUserId) connectedIds.add(follow.following_id);
+        if (follow.following_id === currentUserId) connectedIds.add(follow.follower_id);
+      });
+      const profileIds = [...new Set([...contactIds, ...connectedIds])];
 
-      const profilesResult = contactIds.length
-        ? await supabase.from('profiles').select(PROFILE_FIELDS).in('id', contactIds)
+      const profilesResult = profileIds.length
+        ? await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds)
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       if (profilesResult.error) throw profilesResult.error;
@@ -187,12 +266,10 @@ export default function MessagesPage({
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       const storyUserIds = new Set((storiesResult.data || []).map(story => story.user_id as string));
-      const connectedIds = new Set<string>();
-      (followsResult.data || []).forEach(follow => {
-        if (follow.follower_id === currentUserId) connectedIds.add(follow.following_id);
-        if (follow.following_id === currentUserId) connectedIds.add(follow.follower_id);
-      });
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
+      setFriends([...connectedIds]
+        .flatMap(contactId => profileById.get(contactId) || [])
+        .sort((first, second) => displayName(first).localeCompare(displayName(second), 'ar')));
 
       setConversations(contactIds.flatMap(contactId => {
         const profile = profileById.get(contactId);
@@ -210,6 +287,7 @@ export default function MessagesPage({
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
       setConversations([]);
+      setFriends([]);
     } finally {
       if (requestId === contactsRequestRef.current) setContactsLoading(false);
     }
@@ -407,20 +485,83 @@ export default function MessagesPage({
   const matchingConversationCount = tabConversations.filter(conversation => (
     `${displayName(conversation.profile)} ${conversation.profile.username || ''}`.toLocaleLowerCase().includes(searchNeedle)
   )).length;
+  const visibleGroups = groups.filter(group => (
+    `${group.name} ${group.memberIds.map(memberId => {
+      const member = friends.find(friend => friend.id === memberId);
+      return member ? `${displayName(member)} ${member.username || ''}` : '';
+    }).join(' ')}`.toLocaleLowerCase().includes(searchNeedle)
+  ));
+  const visibleFriends = friends.filter(friend => (
+    `${displayName(friend)} ${friend.username || ''}`.toLocaleLowerCase().includes(groupSearch.trim().toLocaleLowerCase())
+  ));
   const requestCount = conversations.filter(conversation => conversation.isRequest).length;
   const target = conversations.find(conversation => conversation.profile.id === selectedId)?.profile || null;
+  const selectedGroup = groups.find(group => group.id === selectedGroupId) || null;
 
   const openNewMessage = () => {
     setUserMenuOpen(false);
+    setSelectedGroupId(null);
     setNewMessageSearch('');
     setNewMessageProfiles([]);
     setNewMessageError(null);
     setNewMessageOpen(true);
   };
 
+  const openCreateGroup = () => {
+    if (groupModalCloseTimerRef.current !== null) window.clearTimeout(groupModalCloseTimerRef.current);
+    groupModalCloseTimerRef.current = null;
+    setCreateGroupClosing(false);
+    setUserMenuOpen(false);
+    setNewMessageOpen(false);
+    setGroupName('');
+    setGroupSearch('');
+    setSelectedGroupMemberIds([]);
+    setGroupError(null);
+    setCreateGroupOpen(true);
+  };
+
+  const toggleGroupMember = (memberId: string) => {
+    setGroupError(null);
+    setSelectedGroupMemberIds(current => current.includes(memberId)
+      ? current.filter(id => id !== memberId)
+      : [...current, memberId]);
+  };
+
+  const createGroup = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = groupName.trim();
+    const members = friends.filter(friend => selectedGroupMemberIds.includes(friend.id));
+    if (!name || members.length === 0) return;
+
+    const group: LocalGroupConversation = {
+      id: createGroupId(),
+      name,
+      memberIds: members.map(member => member.id),
+      created_at: new Date().toISOString(),
+    };
+    const nextGroups = [group, ...groups];
+    try {
+      localStorage.setItem(`aani_message_groups_${currentUserId}`, JSON.stringify(nextGroups));
+    } catch {
+      setGroupError('تعذر حفظ المجموعة على هذا الجهاز. تحقق من مساحة التخزين وحاول مجدداً.');
+      return;
+    }
+
+    setGroups(nextGroups);
+    setActiveTab('groups');
+    setSearchTerm('');
+    setSelectedGroupId(null);
+    if (selectedId) setLocation('/messages?tab=groups');
+    closeCreateGroup();
+    setGroupName('');
+    setGroupSearch('');
+    setSelectedGroupMemberIds([]);
+    setGroupError(null);
+  };
+
   return (
     <section className="messages-view" dir="rtl">
-      <div className={`messages-layout${selectedId ? ' is-thread-open' : ''}`}>
+      <div className={`messages-layout${selectedId || selectedGroup ? ' is-thread-open' : ''}`}>
         <aside className="messages-sidebar">
           <header className="messages-side-header">
             <div className="messages-account-wrap">
@@ -448,7 +589,7 @@ export default function MessagesPage({
                 </div>
               )}
             </div>
-            <button type="button" className="messages-new-button" aria-label="رسالة جديدة" title="رسالة جديدة" onClick={openNewMessage}>
+            <button type="button" className="messages-new-button" aria-label="إنشاء مجموعة جديدة" title="إنشاء مجموعة جديدة" onClick={openCreateGroup}>
               <Pencil size={20} strokeWidth={2} />
             </button>
           </header>
@@ -480,11 +621,44 @@ export default function MessagesPage({
 
           <div className="messages-list-wrap">
             {activeTab === 'groups' ? (
-              <div className="messages-list-empty">
-                <Users size={26} />
-                <span>لا توجد مجموعات بعد</span>
-                <small>ستظهر محادثات المجموعات هنا.</small>
-              </div>
+              <>
+                {visibleGroups.map(group => (
+                  <button
+                    key={group.id}
+                    type="button"
+                    aria-current={selectedGroupId === group.id ? 'page' : undefined}
+                    className={`messages-chat-item messages-group-item${selectedGroupId === group.id ? ' active' : ''}`}
+                    onClick={() => {
+                      setSelectedGroupId(group.id);
+                      if (selectedId) setLocation('/messages');
+                    }}
+                  >
+                    <span className="messages-group-avatar"><Users size={23} /></span>
+                    <span className="messages-chat-copy">
+                      <span className="messages-chat-topline">
+                        <span className="messages-chat-name">{group.name}</span>
+                        <time className="messages-chat-time" dateTime={group.created_at || undefined}>
+                          {group.created_at ? formatConversationTime(group.created_at) : ''}
+                        </time>
+                      </span>
+                      <span className="messages-chat-preview-row">
+                        <span className="messages-chat-preview">مجموعة · {group.memberIds.length + 1} أعضاء</span>
+                      </span>
+                    </span>
+                  </button>
+                ))}
+                {groups.length > 0 && visibleGroups.length === 0 && (
+                  <div className="messages-list-status">لا توجد مجموعات مطابقة.</div>
+                )}
+                {groups.length === 0 && (
+                  <div className="messages-list-empty">
+                    <Users size={26} />
+                    <span>لا توجد مجموعات بعد</span>
+                    <small>أنشئ مجموعة وابدأ محادثة مع أصدقائك.</small>
+                    <button type="button" onClick={openCreateGroup}>إنشاء مجموعة</button>
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 {contactsLoading && <div className="messages-list-status">جارٍ تحميل المحادثات...</div>}
@@ -546,8 +720,8 @@ export default function MessagesPage({
           </div>
         </aside>
 
-        <main className={`messages-chat-area${selectedId ? ' is-open' : ''}`}>
-          {!selectedId ? (
+        <main className={`messages-chat-area${selectedId || selectedGroup ? ' is-open' : ''}`}>
+          {!selectedId && !selectedGroup ? (
             <div className="messages-empty-state">
               <div className="messages-empty-icon"><MessageCircle size={34} strokeWidth={1.5} /></div>
               <h1>رسائلك</h1>
@@ -557,10 +731,23 @@ export default function MessagesPage({
           ) : (
             <>
               <header className="messages-thread-header">
-                <button type="button" className="messages-mobile-back" aria-label="العودة إلى قائمة الرسائل" onClick={() => setLocation('/messages')}>
+                <button
+                  type="button"
+                  className="messages-mobile-back"
+                  aria-label="العودة إلى قائمة الرسائل"
+                  onClick={() => selectedGroup ? setSelectedGroupId(null) : setLocation('/messages')}
+                >
                   <ArrowLeft size={22} />
                 </button>
-                {target ? (
+                {selectedGroup ? (
+                  <div className="messages-thread-person">
+                    <span className="messages-group-avatar is-thread"><Users size={21} /></span>
+                    <span className="messages-group-thread-copy">
+                      <strong>{selectedGroup.name}</strong>
+                      <small>{selectedGroup.memberIds.length + 1} أعضاء</small>
+                    </span>
+                  </div>
+                ) : target ? (
                   <Link href={`/profile/${encodeURIComponent(target.id)}`} className="messages-thread-person">
                     <Avatar profile={target} />
                     <UserIdentity
@@ -579,7 +766,16 @@ export default function MessagesPage({
                 )}
               </header>
               <div className="messages-thread-list" aria-live="polite">
-                {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
+                {selectedGroup ? (
+                  <div className="messages-group-notice">
+                    <span className="messages-group-avatar is-thread"><Users size={24} /></span>
+                    <strong>{selectedGroup.name}</strong>
+                    <p>تم إنشاء المجموعة وحفظها على هذا الجهاز.</p>
+                    <small>إرسال رسائل المجموعات غير مدعوم في قاعدة البيانات الحالية.</small>
+                  </div>
+                ) : (
+                  <>
+                    {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
                 {!threadLoading && thread.length === 0 && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
@@ -621,9 +817,12 @@ export default function MessagesPage({
                     </div>
                   );
                 })}
-                <div ref={threadEndRef} />
+                    <div ref={threadEndRef} />
+                  </>
+                )}
               </div>
-              <form className="messages-composer" onSubmit={sendMessage}>
+              {!selectedGroup && (
+                <form className="messages-composer" onSubmit={sendMessage}>
                 <input
                   value={text}
                   onChange={event => setText(event.target.value)}
@@ -631,14 +830,94 @@ export default function MessagesPage({
                   aria-label="اكتب رسالة"
                   autoComplete="off"
                 />
-                <button type="submit" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
-                  <Send size={19} />
-                </button>
-              </form>
+                  <button type="submit" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
+                    <Send size={19} />
+                  </button>
+                </form>
+              )}
             </>
           )}
         </main>
       </div>
+
+      {createGroupOpen && (
+        <div
+          className={`messages-modal-backdrop messages-group-modal-backdrop${createGroupClosing ? ' is-closing' : ''}`}
+          role="presentation"
+          onClick={closeCreateGroup}
+        >
+          <section
+            className="messages-group-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="messages-group-title"
+            onClick={event => event.stopPropagation()}
+          >
+            <header className="messages-modal-header">
+              <h2 id="messages-group-title">مجموعة جديدة</h2>
+              <button type="button" aria-label="إغلاق" onClick={closeCreateGroup}><X size={20} /></button>
+            </header>
+            <form className="messages-group-form" onSubmit={createGroup}>
+              <div className="messages-group-name-field">
+                <label htmlFor="messages-group-name">اسم المجموعة</label>
+                <input
+                  id="messages-group-name"
+                  value={groupName}
+                  onChange={event => {
+                    setGroupName(event.target.value);
+                    setGroupError(null);
+                  }}
+                  maxLength={60}
+                  placeholder="أدخل اسم المجموعة"
+                  autoFocus
+                />
+              </div>
+              <div className="messages-group-search">
+                <Search size={18} aria-hidden="true" />
+                <input
+                  type="search"
+                  value={groupSearch}
+                  onChange={event => setGroupSearch(event.target.value)}
+                  placeholder="ابحث عن الأصدقاء"
+                  aria-label="ابحث عن الأصدقاء"
+                />
+              </div>
+              <div className="messages-group-friends">
+                {contactsLoading && <div className="messages-list-status">جارٍ تحميل الأصدقاء...</div>}
+                {!contactsLoading && visibleFriends.map(friend => (
+                  <label key={friend.id} className="messages-group-friend">
+                    <input
+                      type="checkbox"
+                      checked={selectedGroupMemberIds.includes(friend.id)}
+                      onChange={() => toggleGroupMember(friend.id)}
+                      aria-label={`إضافة ${displayName(friend)} إلى المجموعة`}
+                    />
+                    <Avatar profile={friend} large />
+                    <span className="messages-group-friend-copy">
+                      <strong>{displayName(friend)}</strong>
+                      <small dir="ltr">{friend.username ? `@${friend.username.replace(/^@+/, '')}` : ''}</small>
+                    </span>
+                  </label>
+                ))}
+                {!contactsLoading && friends.length > 0 && visibleFriends.length === 0 && (
+                  <div className="messages-list-status">لا يوجد أصدقاء مطابقون.</div>
+                )}
+                {!contactsLoading && friends.length === 0 && (
+                  <div className="messages-list-status">لا توجد حسابات متاحة للاختيار من علاقاتك الحالية.</div>
+                )}
+              </div>
+              {groupError && <div className="messages-group-error" role="alert">{groupError}</div>}
+              <p className="messages-group-storage-note">تُحفظ المجموعة على هذا الجهاز فقط؛ قاعدة البيانات الحالية لا تدعم محادثات المجموعات.</p>
+              <footer className="messages-group-footer">
+                <span>{selectedGroupMemberIds.length} أعضاء محددون</span>
+                <button type="submit" disabled={!groupName.trim() || selectedGroupMemberIds.length === 0}>
+                  إنشاء المجموعة
+                </button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      )}
 
       {newMessageOpen && (
         <div className="messages-modal-backdrop" role="presentation" onClick={() => setNewMessageOpen(false)}>
