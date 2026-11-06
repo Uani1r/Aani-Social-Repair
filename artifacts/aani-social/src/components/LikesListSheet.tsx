@@ -5,7 +5,6 @@ import { Link } from 'wouter';
 import { toast } from 'sonner';
 
 import Avatar from './Avatar';
-import UserIdentity from './UserIdentity';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
@@ -14,6 +13,7 @@ type LikeUser = {
   id: string;
   profile: Partial<Profile>;
   isFollowing: boolean;
+  isFollower: boolean;
   requestPending: boolean;
 };
 
@@ -108,16 +108,22 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
 
       const otherIds = likerIds.filter(id => id !== currentUserId);
       const followingIds = new Set<string>();
+      const followerIds = new Set<string>();
       const pendingRequestIds = new Set<string>();
       if (otherIds.length > 0 && currentUserId) {
         for (let offset = 0; offset < otherIds.length; offset += 200) {
           const userIds = otherIds.slice(offset, offset + 200);
-          const [followsResult, requestsResult] = await Promise.all([
+          const [followsResult, followersResult, requestsResult] = await Promise.all([
             supabase
               .from('follows')
               .select('following_id')
               .eq('follower_id', currentUserId)
               .in('following_id', userIds),
+            supabase
+              .from('follows')
+              .select('follower_id')
+              .eq('following_id', currentUserId)
+              .in('follower_id', userIds),
             supabase
               .from('follow_requests')
               .select('recipient_id')
@@ -125,8 +131,10 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
               .in('recipient_id', userIds),
           ]);
           if (followsResult.error) throw followsResult.error;
+          if (followersResult.error) throw followersResult.error;
           if (requestsResult.error) throw requestsResult.error;
           (followsResult.data ?? []).forEach((row: { following_id: string }) => followingIds.add(row.following_id));
+          (followersResult.data ?? []).forEach((row: { follower_id: string }) => followerIds.add(row.follower_id));
           (requestsResult.data ?? []).forEach((row: { recipient_id: string }) => pendingRequestIds.add(row.recipient_id));
         }
       }
@@ -136,6 +144,7 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
         id,
         profile: profilesById.get(id) ?? { id, full_name: 'مستخدم' },
         isFollowing: followingIds.has(id),
+        isFollower: followerIds.has(id),
         requestPending: pendingRequestIds.has(id),
       })));
     })().catch(loadError => {
@@ -149,6 +158,11 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
       active = false;
     };
   }, [currentUserId, open, postId]);
+
+  const sortedUsers = [...users].sort((first, second) => {
+    const priority = (user: LikeUser) => user.isFollowing ? 0 : user.isFollower ? 1 : 2;
+    return priority(first) - priority(second);
+  });
 
   const toggleFollow = async (user: LikeUser) => {
     if (!supabaseConfigured || !currentUserId || user.id === currentUserId || pendingFollowId) return;
@@ -284,39 +298,51 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
             <p className="py-8 text-center text-xs text-zinc-400">لا توجد إعجابات بعد.</p>
           ) : (
             <ul className="space-y-1">
-              {users.map(user => (
-                <li key={user.id} className="flex items-center gap-3 rounded-xl px-1 py-2">
-                  <Link href={`/profile/${encodeURIComponent(user.id)}`} aria-label={`الملف الشخصي لـ ${displayName(user.profile)}`}>
-                    <Avatar profile={user.profile} />
-                  </Link>
-                  <div className="min-w-0 flex-1">
-                    <UserIdentity
-                      name={<Link href={`/profile/${encodeURIComponent(user.id)}`} className="hover:underline">{displayName(user.profile)}</Link>}
-                      username={user.profile.username || 'اسم المستخدم غير متاح'}
-                      nameClassName="text-xs font-semibold text-white"
-                      usernameClassName="text-[10px] text-zinc-400"
-                    />
-                  </div>
-                  {user.id !== currentUserId && currentUserId && (
-                    <button
-                      type="button"
-                      onClick={() => void toggleFollow(user)}
-                      disabled={pendingFollowId !== null}
-                      className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${user.isFollowing || user.requestPending
-                        ? 'border-white/15 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]'
-                        : 'border-pink-400/40 bg-pink-500/15 text-pink-200 hover:bg-pink-500/25'
-                      }`}
-                      aria-label={user.isFollowing
-                        ? `إلغاء متابعة ${displayName(user.profile)}`
-                        : user.requestPending
-                          ? `إلغاء طلب متابعة ${displayName(user.profile)}`
-                          : `متابعة ${displayName(user.profile)}`}
-                    >
-                      {user.isFollowing ? 'إلغاء المتابعة' : user.requestPending ? 'إلغاء الطلب' : 'متابعة'}
-                    </button>
-                  )}
-                </li>
-              ))}
+              {sortedUsers.map(user => {
+                const name = user.profile.display_name || user.profile.full_name || displayName(user.profile);
+                const username = user.profile.username?.replace(/^@+/, '');
+                return (
+                  <li key={user.id} dir="rtl" className="flex min-w-0 flex-row items-center gap-3 rounded-xl px-1 py-2">
+                    <Link href={`/profile/${encodeURIComponent(user.id)}`} aria-label={`الملف الشخصي لـ ${name}`} className="shrink-0">
+                      <Avatar profile={user.profile} />
+                    </Link>
+                    <div className="min-w-0 flex-1 text-right" dir="rtl">
+                      <Link
+                        href={`/profile/${encodeURIComponent(user.id)}`}
+                        className="block whitespace-normal break-words leading-5 hover:underline"
+                        style={{ color: '#ffffff', fontWeight: 600 }}
+                      >
+                        {name}
+                      </Link>
+                      <span
+                        dir="ltr"
+                        className="block whitespace-normal break-all text-right leading-5"
+                        style={{ color: '#a0a0a0', fontSize: 13 }}
+                      >
+                        {username ? `@${username}` : 'اسم المستخدم غير متاح'}
+                      </span>
+                    </div>
+                    {user.id !== currentUserId && currentUserId && (
+                      <button
+                        type="button"
+                        onClick={() => void toggleFollow(user)}
+                        disabled={pendingFollowId !== null}
+                        className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${user.isFollowing || user.requestPending
+                          ? 'border-white/15 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]'
+                          : 'border-pink-400/40 bg-pink-500/15 text-pink-200 hover:bg-pink-500/25'
+                        }`}
+                        aria-label={user.isFollowing
+                          ? `إلغاء متابعة ${displayName(user.profile)}`
+                          : user.requestPending
+                            ? `إلغاء طلب متابعة ${displayName(user.profile)}`
+                            : `متابعة ${displayName(user.profile)}`}
+                      >
+                        {user.isFollowing ? 'إلغاء المتابعة' : user.requestPending ? 'إلغاء الطلب' : 'متابعة'}
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
