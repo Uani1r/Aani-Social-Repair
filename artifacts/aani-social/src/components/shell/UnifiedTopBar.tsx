@@ -30,8 +30,7 @@ export default function UnifiedTopBar({
               viewBox="0 0 430 160"
               aria-hidden="true"
             >
-              <rect width="100%" height="100%" fill="transparent" />
-              <g fill="#251B14" stroke="#C89B53" strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" fillRule="evenodd">
+              <g fill="#ffffff" stroke="#ffffff" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" fillRule="evenodd">
                 <path d="M 159 23 L 156 21 L 147 21 L 136 25 L 125 31 L 108 42 L 97 50 L 79 65 L 70 74 L 65 75 L 55 75 L 43 77 L 35 79 L 25 83 L 23 85 L 24 90 L 29 89 L 32 87 L 45 84 L 58 82 L 59 84 L 29 116 L 26 120 L 24 124 L 25 126 L 29 127 L 34 122 L 41 113 L 50 103 L 71 82 L 99 82 L 106 83 L 116 86 L 119 86 L 122 83 L 121 79 L 119 78 L 106 75 L 81 73 L 97 59 L 109 50 L 124 40 L 141 31 L 148 29 L 152 30 L 152 35 L 149 43 L 144 53 L 129 78 L 116 97 L 106 110 L 104 114 L 105 116 L 109 117 L 116 109 L 132 86 L 146 64 L 156 45 L 160 34 L 160 25 Z" />
                 <path d="M 158 115 L 159 118 L 161 119 L 164 119 L 170 116 L 178 108 L 185 99 L 190 91 L 197 84 L 198 87 L 192 100 L 190 106 L 190 115 L 192 117 L 194 118 L 203 118 L 222 109 L 247 95 L 246 110 L 248 114 L 252 118 L 257 120 L 264 120 L 273 117 L 283 112 L 298 102 L 313 90 L 316 86 L 316 84 L 314 82 L 311 82 L 308 84 L 298 93 L 282 104 L 267 111 L 259 111 L 255 107 L 254 105 L 254 99 L 261 78 L 259 76 L 256 76 L 251 82 L 250 82 L 247 85 L 233 94 L 210 107 L 205 109 L 200 110 L 198 108 L 198 106 L 200 100 L 204 92 L 207 83 L 207 77 L 204 74 L 199 74 L 195 76 L 190 80 L 173 103 L 167 109 L 166 106 L 167 105 L 170 90 L 174 79 L 174 76 L 172 74 L 170 74 L 167 76 L 165 80 L 158 107 Z" />
                 <path d="M 259 53 L 256 57 L 256 60 L 257 62 L 259 64 L 264 64 L 266 63 L 268 60 L 268 57 L 267 55 L 264 53 Z" />

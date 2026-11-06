@@ -2036,16 +2036,21 @@ a:active > .aani-notifications-card {
 }
 
 .unified-top-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: calc(68px + env(safe-area-inset-top));
   padding: calc(14px + env(safe-area-inset-top)) 20px 14px;
 }
 
 .unified-profile-section {
+  position: absolute;
+  left: 50%;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  transform: translateX(-50%);
   color: #fff;
   text-decoration: none;
 }
@@ -2060,6 +2065,7 @@ a:active > .aani-notifications-card {
   display: flex;
   align-items: center;
   gap: 16px;
+  margin-inline-start: auto;
 }
 
 .unified-icon-button,
