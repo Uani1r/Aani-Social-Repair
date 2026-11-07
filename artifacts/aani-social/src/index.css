@@ -4386,13 +4386,15 @@ body.aani-immersive .unified-top-bar {
 .app-frame.is-message-thread .messages-view {
   position: fixed;
   inset: 0;
+  top: var(--messages-visual-viewport-top, 0px);
+  bottom: auto;
   z-index: 60;
   width: 100vw;
   max-width: none;
-  height: 100vh;
-  height: 100dvh;
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: var(--messages-visual-viewport-height, 100vh);
+  height: var(--messages-visual-viewport-height, 100dvh);
+  min-height: var(--messages-visual-viewport-height, 100vh);
+  min-height: var(--messages-visual-viewport-height, 100dvh);
   margin: 0;
   box-sizing: border-box;
 }

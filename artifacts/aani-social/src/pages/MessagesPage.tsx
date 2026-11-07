@@ -322,7 +322,9 @@ export default function MessagesPage({
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const selectedIdRef = useRef(selectedId);
+  const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
+  const threadEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
@@ -393,6 +395,27 @@ export default function MessagesPage({
     input.style.height = `${Math.min(input.scrollHeight, 132)}px`;
     input.scrollTop = input.scrollHeight;
   }, [text, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const viewport = window.visualViewport;
+    const syncVisualViewport = () => {
+      const view = messagesViewRef.current;
+      if (!view) return;
+      view.style.setProperty('--messages-visual-viewport-height', `${Math.round(viewport?.height ?? window.innerHeight)}px`);
+      view.style.setProperty('--messages-visual-viewport-top', `${Math.round(viewport?.offsetTop ?? 0)}px`);
+    };
+
+    syncVisualViewport();
+    viewport?.addEventListener('resize', syncVisualViewport);
+    viewport?.addEventListener('scroll', syncVisualViewport);
+    window.addEventListener('resize', syncVisualViewport);
+    return () => {
+      viewport?.removeEventListener('resize', syncVisualViewport);
+      viewport?.removeEventListener('scroll', syncVisualViewport);
+      window.removeEventListener('resize', syncVisualViewport);
+    };
+  }, [selectedId]);
 
   const loadConversationList = useCallback(async () => {
     const requestId = ++contactsRequestRef.current;
@@ -657,11 +680,17 @@ export default function MessagesPage({
     if (selectedId) markConversationRead(selectedId);
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
-  useLayoutEffect(() => {
+  const scrollThreadToBottom = useCallback(() => {
     const threadList = threadListRef.current;
-    if (!threadList) return;
+    const threadEnd = threadEndRef.current;
+    if (!threadList || !threadEnd) return;
+    threadEnd.scrollIntoView({ behavior: 'instant', block: 'end' });
     threadList.scrollTop = threadList.scrollHeight;
-  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id]);
+  }, []);
+
+  useLayoutEffect(() => {
+    scrollThreadToBottom();
+  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
 
   useEffect(() => {
     if (!newMessageOpen || !supabaseConfigured) return;
@@ -766,7 +795,9 @@ export default function MessagesPage({
       read_at: null,
       sendState: 'pending',
     };
-    setThread(current => mergeThreadRows(current, [optimisticMessage]));
+    setThread(current => current.some(message => message.id === optimisticMessage.id)
+      ? current
+      : [...current, optimisticMessage]);
     setText('');
     setReplyMessage(null);
     setSending(true);
@@ -1011,6 +1042,7 @@ export default function MessagesPage({
 
   return (
     <section
+      ref={messagesViewRef}
       className="messages-view"
       dir="rtl"
       onPointerDown={event => {
@@ -1367,6 +1399,7 @@ export default function MessagesPage({
                     </div>
                   </div>
                 )}
+                <div ref={threadEndRef} aria-hidden="true" />
               </div>
               <form className={`messages-composer${replyMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}`} onSubmit={sendMessage}>
                 {replyMessage && (
@@ -1432,6 +1465,9 @@ export default function MessagesPage({
                       className="messages-composer-control messages-composer-send"
                       aria-label="إرسال الرسالة"
                       disabled={!text.trim() || sending}
+                      onMouseDown={event => {
+                        if (document.activeElement === messageInputRef.current) event.preventDefault();
+                      }}
                       onPointerDown={event => {
                         if (document.activeElement === messageInputRef.current) event.preventDefault();
                       }}
