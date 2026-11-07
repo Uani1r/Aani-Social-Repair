@@ -61,6 +61,7 @@ export default function StoryCropOverlay({
   onApply,
 }: StoryCropOverlayProps) {
   const [viewport, setViewport] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  const [mediaSize, setMediaSize] = useState({ width: 0, height: 0 });
   const [ratioKey, setRatioKey] = useState<CropRatioKey>('9:16');
   const [originalAspect, setOriginalAspect] = useState(9 / 16);
   const [frame, setFrame] = useState(() => makeFrame(window.innerWidth, window.innerHeight, RATIO_VALUES['9:16']));
@@ -78,7 +79,26 @@ export default function StoryCropOverlay({
   }, [aspect, viewport.height, viewport.width]);
 
   const setOriginalRatio = (width: number, height: number) => {
-    if (width > 0 && height > 0) setOriginalAspect(width / height);
+    if (width > 0 && height > 0) {
+      setOriginalAspect(width / height);
+      setMediaSize({ width, height });
+    }
+  };
+
+  const isQuarterTurn = Math.abs(Math.round(initialRotation / 90)) % 2 === 1;
+  const mediaCoverScale = mediaSize.width && mediaSize.height
+    ? Math.max(
+        viewport.width / (isQuarterTurn ? mediaSize.height : mediaSize.width),
+        viewport.height / (isQuarterTurn ? mediaSize.width : mediaSize.height),
+      )
+    : 1;
+  const mediaStyle = {
+    width: mediaSize.width ? `${mediaSize.width * mediaCoverScale}px` : '100%',
+    height: mediaSize.height ? `${mediaSize.height * mediaCoverScale}px` : '100%',
+    maxWidth: 'none',
+    maxHeight: 'none',
+    transform: `translate(-50%, -50%) translate3d(${initialOffset.x}px, ${initialOffset.y}px, 0) scale(${initialZoom}) rotate(${initialRotation}deg)`,
+    transformOrigin: 'center',
   };
 
   const beginPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -198,8 +218,8 @@ export default function StoryCropOverlay({
           muted
           playsInline
           onLoadedMetadata={event => setOriginalRatio(event.currentTarget.videoWidth, event.currentTarget.videoHeight)}
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-          style={{ transform: `translate3d(${initialOffset.x}px, ${initialOffset.y}px, 0) scale(${initialZoom}) rotate(${initialRotation}deg)`, transformOrigin: 'center' }}
+          className="pointer-events-none absolute left-1/2 top-1/2"
+          style={mediaStyle}
         />
       ) : (
         <img
@@ -207,8 +227,8 @@ export default function StoryCropOverlay({
           alt=""
           draggable={false}
           onLoad={event => setOriginalRatio(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
-          className="pointer-events-none absolute inset-0 h-full w-full select-none object-cover"
-          style={{ transform: `translate3d(${initialOffset.x}px, ${initialOffset.y}px, 0) scale(${initialZoom}) rotate(${initialRotation}deg)`, transformOrigin: 'center' }}
+          className="pointer-events-none absolute left-1/2 top-1/2 select-none"
+          style={mediaStyle}
         />
       )}
 

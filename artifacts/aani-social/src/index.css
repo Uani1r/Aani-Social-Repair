@@ -4241,16 +4241,20 @@ body.aani-immersive .unified-top-bar {
 .chat-photo-editor-stage {
   position: absolute;
   inset: 0;
+  z-index: 0;
   overflow: hidden;
   background: #000;
 }
 
 .chat-photo-editor-image {
   position: absolute;
-  inset: 0;
+  top: 50%;
+  left: 50%;
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  max-width: none;
+  max-height: none;
+  object-fit: fill;
   transform-origin: center;
   user-select: none;
 }
@@ -4276,7 +4280,23 @@ body.aani-immersive .unified-top-bar {
   text-align: center;
   text-shadow: 0 2px 14px rgb(0 0 0 / 75%);
   white-space: pre-wrap;
-  pointer-events: none;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.chat-photo-editor-text-animation {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: inherit;
+  white-space: inherit;
+}
+
+.chat-photo-editor-text.is-selected,
+.chat-photo-editor-sticker.is-selected {
+  outline: 1px dashed rgb(255 255 255 / 72%);
+  outline-offset: 6px;
 }
 
 .chat-photo-editor-text.has-background {
@@ -4291,7 +4311,10 @@ body.aani-immersive .unified-top-bar {
   transform: translate(-50%, -50%);
   font-family: 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
   font-size: clamp(42px, 16vw, 74px);
-  pointer-events: none;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
 }
 
 .chat-photo-editor-drawing {
@@ -4484,6 +4507,11 @@ body.aani-immersive .unified-top-bar {
 }
 
 .chat-photo-editor-sticker-panel {
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+}
+
+.chat-photo-editor-sticker-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 5px;
@@ -4499,6 +4527,10 @@ body.aani-immersive .unified-top-bar {
   background: rgb(255 255 255 / 8%);
   cursor: pointer;
   font-size: 25px;
+}
+
+.chat-photo-editor-sticker-panel .chat-photo-editor-sticker-delete {
+  aspect-ratio: auto;
 }
 
 .messages-image-message {
@@ -4712,3 +4744,68 @@ body.aani-immersive .unified-top-bar {
     gap: 2px;
   }
 }
+
+.chat-photo-editor-text-size {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgb(255 255 255 / 75%);
+  font-size: 11px;
+}
+
+.chat-photo-editor-text-size input {
+  min-width: 0;
+  flex: 1;
+  accent-color: #fff;
+}
+
+.chat-photo-editor-text-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+}
+
+.chat-photo-editor-text-actions button,
+.chat-photo-editor-sticker-delete {
+  min-height: 32px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 9px;
+  padding: 0 10px;
+  color: #fff;
+  background: rgb(255 255 255 / 9%);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.chat-photo-editor-text-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.chat-photo-editor-text-actions button.is-done {
+  color: #071f12;
+  background: #25cf78;
+  font-weight: 800;
+}
+
+.chat-photo-editor-sticker-delete {
+  justify-self: start;
+  margin-top: 5px;
+  color: #ffb4b4;
+}
+
+.chat-photo-editor-sticker-panel .chat-photo-editor-sticker-delete {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: auto;
+  border: 1px solid rgb(255 255 255 / 12%);
+  padding: 0 10px;
+  color: #ffb4b4;
+  background: rgb(255 255 255 / 7%);
+  font-size: 11px;
+}
+
