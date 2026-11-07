@@ -100,6 +100,21 @@ function normalizeVoiceMimeType(value: string): { mimeType: 'audio/mp4' | 'audio
   return null;
 }
 
+function isMicrophonePermissionDenied(error: unknown): boolean {
+  const name = error instanceof Error
+    ? error.name
+    : isRecord(error) && typeof error.name === 'string'
+      ? error.name
+      : '';
+  const message = error instanceof Error
+    ? error.message
+    : isRecord(error) && typeof error.message === 'string'
+      ? error.message
+      : '';
+  return /^(?:NotAllowedError|PermissionDeniedError|SecurityError)$/i.test(name)
+    || /not allowed|permission (?:was )?denied|user denied|dismiss(?:ed|al)?/i.test(message);
+}
+
 function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -1281,6 +1296,20 @@ export default function MessagesPage({
   }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
 
   useLayoutEffect(() => {
+    if (!pendingMediaMessage || pendingMediaMessage.recipientId !== selectedId) return;
+    scrollThreadToBottom();
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      scrollThreadToBottom();
+      secondFrame = window.requestAnimationFrame(scrollThreadToBottom);
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [pendingMediaMessage?.id, pendingMediaMessage?.recipientId, selectedId, scrollThreadToBottom]);
+
+  useLayoutEffect(() => {
     const hasPendingVoiceMessage = () => thread.some(message => voiceScrollLockRef.current.has(message.id));
     if (!hasPendingVoiceMessage()) return;
 
@@ -1579,9 +1608,13 @@ export default function MessagesPage({
     } catch (error) {
       const isCurrentSession = voiceRecordingSessionRef.current === session;
       cancelVoiceRecording(session);
-      if (isCurrentSession) {
-        console.warn('[messages] تعذر بدء التسجيل الصوتي:', error);
-        toast.error(error instanceof Error ? error.message : 'تعذر بدء التسجيل الصوتي. اسمح بالوصول إلى الميكروفون.');
+      if (isCurrentSession) console.warn('[messages] تعذر بدء التسجيل الصوتي:', error);
+      if (isMicrophonePermissionDenied(error)) {
+        toast.info('يرجى السماح بالوصول إلى الميكروفون من إعدادات المتصفح لإرسال البصمة الصوتية');
+      } else if (isCurrentSession && error instanceof Error && /غير مدعوم/.test(error.message)) {
+        toast.info(error.message);
+      } else if (isCurrentSession) {
+        toast.error('تعذر بدء التسجيل الصوتي. حاول مرة أخرى وتحقق من إعدادات المتصفح.');
       }
     }
   };
@@ -2752,12 +2785,17 @@ export default function MessagesPage({
                 })}
                 {selectedPendingMediaMessage && (
                   <div key={selectedPendingMediaMessage.id} className="messages-message-row is-mine">
-                    <div className="messages-image-message messages-media-pending" aria-label="جارٍ إرسال الصور">
+                    <div className="messages-image-message messages-media-pending" aria-label={selectedPendingMediaMessage.isUploading ? 'جارٍ رفع الصور' : 'تم رفع الصور'}>
                       <div className={`messages-image-grid messages-media-pending-grid${selectedPendingMediaMessage.urls.length > 1 ? ' has-multiple' : ''}`}>
                         {selectedPendingMediaMessage.urls.map((url, index) => (
-                          <img key={`${selectedPendingMediaMessage.id}-${index}`} src={url} alt={`صورة قيد الإرسال ${index + 1}`} />
+                          <img key={`${selectedPendingMediaMessage.id}-${index}`} src={url} alt={`صورة مرسلة ${index + 1}`} onLoad={scrollThreadToBottom} />
                         ))}
-                        <span className="messages-media-pending-indicator" role="status" aria-label="جارٍ إرسال الصور">
+                        <span
+                          className={`messages-media-pending-indicator${selectedPendingMediaMessage.isUploading ? '' : ' is-complete'}`}
+                          role={selectedPendingMediaMessage.isUploading ? 'status' : undefined}
+                          aria-hidden={!selectedPendingMediaMessage.isUploading}
+                          aria-label="جارٍ رفع الصور"
+                        >
                           <span className="messages-media-pending-spinner" />
                         </span>
                       </div>
@@ -2945,6 +2983,11 @@ export default function MessagesPage({
         currentUserId={currentUserId}
         recipientId={selectedId}
         onSendStart={message => setPendingMediaMessage(message)}
+        onUploaded={(pendingId, recipientId, urls) => {
+          setPendingMediaMessage(current => current?.id === pendingId && current.recipientId === recipientId
+            ? { ...current, urls, isUploading: false }
+            : current);
+        }}
         onSent={async (pendingId, recipientId) => {
           const refreshes: Promise<void>[] = [loadConversationList()];
           if (recipientId === selectedIdRef.current) refreshes.push(loadThread());

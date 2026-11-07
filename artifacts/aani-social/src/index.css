@@ -5293,6 +5293,12 @@ body.aani-immersive .unified-top-bar {
   place-items: center;
   background: rgb(0 0 0 / 28%);
   pointer-events: none;
+  transition: opacity 180ms ease, visibility 180ms ease;
+}
+
+.messages-media-pending-indicator.is-complete {
+  opacity: 0;
+  visibility: hidden;
 }
 
 .messages-media-pending-spinner {

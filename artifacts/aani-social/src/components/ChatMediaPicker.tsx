@@ -18,12 +18,14 @@ export type PendingChatMediaMessage = {
   caption: string;
   viewOnce: boolean;
   createdAt: string;
+  isUploading: boolean;
 };
 
 type ChatMediaPickerProps = {
   currentUserId: string;
   recipientId: string | null | undefined;
   onSendStart?: (message: PendingChatMediaMessage) => void;
+  onUploaded?: (pendingId: string, recipientId: string, urls: string[]) => void;
   onSent?: (pendingId: string, recipientId: string) => void | Promise<void>;
   onSendFailed?: (pendingId: string) => void;
 };
@@ -62,7 +64,7 @@ function notifyCaptionChange(caption: string): void {
   window.dispatchEvent(new CustomEvent('aani-chat-media-caption-update', { detail: { caption } }));
 }
 
-export default function ChatMediaPicker({ currentUserId, recipientId, onSendStart, onSent, onSendFailed }: ChatMediaPickerProps) {
+export default function ChatMediaPicker({ currentUserId, recipientId, onSendStart, onUploaded, onSent, onSendFailed }: ChatMediaPickerProps) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<PickerTab>('photos');
   const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
@@ -171,13 +173,34 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
     const captionSnapshot = caption.trim();
     const viewOnceSnapshot = viewOnce;
     const hdSnapshot = hd;
+    const localUrls: string[] = [];
+    try {
+      selectedPhotosSnapshot.forEach(photo => {
+        const url = URL.createObjectURL(photo.file);
+        localUrls.push(url);
+        objectUrlsRef.current.add(url);
+      });
+    } catch (error) {
+      localUrls.forEach(url => {
+        URL.revokeObjectURL(url);
+        objectUrlsRef.current.delete(url);
+      });
+      console.error('[messages] تعذر تجهيز معاينة الصور المحلية:', error);
+      toast.error('تعذر عرض معاينة الصور. حاول اختيارها مرة أخرى.');
+      return;
+    }
+    const releaseLocalUrls = () => localUrls.forEach(url => {
+      URL.revokeObjectURL(url);
+      objectUrlsRef.current.delete(url);
+    });
     const pendingMessage: PendingChatMediaMessage = {
       id: `pending-media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       recipientId: recipientIdSnapshot,
-      urls: selectedPhotosSnapshot.map(photo => photo.url),
+      urls: localUrls,
       caption: captionSnapshot,
       viewOnce: viewOnceSnapshot,
       createdAt: new Date().toISOString(),
+      isUploading: true,
     };
 
     setSending(true);
@@ -209,7 +232,10 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
       });
       if (error) throw error;
       messageInserted = true;
+      onUploaded?.(pendingMessage.id, recipientIdSnapshot, urls);
+      await new Promise(resolve => window.setTimeout(resolve, 200));
       await onSent?.(pendingMessage.id, recipientIdSnapshot);
+      releaseLocalUrls();
 
       photosSnapshot.forEach(photo => {
         URL.revokeObjectURL(photo.url);
@@ -223,6 +249,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
       toast.success('تم إرسال الصور');
     } catch (error) {
       if (messageInserted) {
+        releaseLocalUrls();
         photosSnapshot.forEach(photo => {
           URL.revokeObjectURL(photo.url);
           objectUrlsRef.current.delete(photo.url);
@@ -245,6 +272,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
           console.warn('[messages] تعذر تنظيف الصور غير المرسلة:', cleanupError);
         }
       }
+      releaseLocalUrls();
       onSendFailed?.(pendingMessage.id);
       notifyCaptionChange(captionSnapshot);
       console.error('[messages] تعذر إرسال الصور:', error);
