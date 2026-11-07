@@ -3098,11 +3098,11 @@ body.aani-immersive .unified-top-bar {
 
 .messages-bubble {
   width: fit-content;
-  max-width: min(78%, 440px);
+  max-width: min(75%, 440px);
   flex: 0 1 auto;
   box-sizing: border-box;
-  border-radius: 20px;
-  padding: 10px 14px;
+  border-radius: 16px;
+  padding: 8px 12px;
   direction: rtl;
   font-size: 14px;
   line-height: 1.55;
@@ -3112,15 +3112,24 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-bubble-content {
-  display: block;
+  display: inline;
 }
 
 .messages-bubble-footer {
-  display: flex;
-  min-height: 12px;
+  display: inline-flex;
+  min-height: 0;
   align-items: center;
   justify-content: flex-start;
-  margin-top: 4px;
+  gap: 4px;
+  margin-inline-start: 6px;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.messages-bubble-time {
+  color: rgb(255 255 255 / 62%);
+  font-size: 10px;
+  line-height: 1;
 }
 
 .messages-bubble .twemoji-image {
@@ -3175,7 +3184,7 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-message-row.is-theirs .messages-bubble {
-  max-width: min(calc(100% - 44px), 440px);
+  max-width: min(calc(100% - 44px), 75%, 440px);
 }
 
 .messages-sender-avatar {

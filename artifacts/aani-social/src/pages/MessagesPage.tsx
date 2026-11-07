@@ -281,6 +281,12 @@ function formatConversationTime(value: string): string {
   return new Intl.DateTimeFormat('ar', { month: 'numeric', day: 'numeric' }).format(date);
 }
 
+function formatMessageTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ar', { hour: 'numeric', minute: '2-digit' }).format(date);
+}
+
 export default function MessagesPage({
   currentUserId,
   selectedId,
@@ -691,6 +697,25 @@ export default function MessagesPage({
   useLayoutEffect(() => {
     scrollThreadToBottom();
   }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const viewport = window.visualViewport;
+    let animationFrame = 0;
+    const keepLatestMessageVisible = () => {
+      scrollThreadToBottom();
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      animationFrame = window.requestAnimationFrame(scrollThreadToBottom);
+    };
+
+    viewport?.addEventListener('resize', keepLatestMessageVisible);
+    window.addEventListener('resize', keepLatestMessageVisible);
+    return () => {
+      viewport?.removeEventListener('resize', keepLatestMessageVisible);
+      window.removeEventListener('resize', keepLatestMessageVisible);
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+    };
+  }, [selectedId, scrollThreadToBottom]);
 
   useEffect(() => {
     if (!newMessageOpen || !supabaseConfigured) return;
@@ -1358,19 +1383,18 @@ export default function MessagesPage({
                           />
                         ) : (
                           <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
-                            <div className="messages-bubble-content">
+                            <span className="messages-bubble-content">
                               {isStoryReply ? (
                                 <>
                                   <span className="messages-story-reply-label">رد على الستوري</span>
                                   <EmojiText text={content.slice('[story-reply]'.length).trim()} />
                                 </>
                               ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
-                            </div>
-                            {isMine && (
-                              <div className="messages-bubble-footer">
-                                <MessageDeliveryStatus message={message} />
-                              </div>
-                            )}
+                            </span>
+                            <span className="messages-bubble-footer">
+                              <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                              {isMine && <MessageDeliveryStatus message={message} />}
+                            </span>
                           </div>
                         )}
                         {!isMine && (
@@ -1426,6 +1450,10 @@ export default function MessagesPage({
                     ref={messageInputRef}
                     value={text}
                     onChange={event => setText(event.target.value)}
+                    onFocus={() => {
+                      scrollThreadToBottom();
+                      window.requestAnimationFrame(scrollThreadToBottom);
+                    }}
                     onKeyDown={event => {
                       if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                         event.preventDefault();
