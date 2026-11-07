@@ -258,7 +258,7 @@ export default function MessageAttachmentSheet({
             <span className="aani-attachment-handle" aria-hidden="true" />
           </div>
           <button type="button" className="aani-attachment-close" aria-label="إغلاق المرفقات" onClick={onClose}>
-            <X size={18} />
+            <X size={16} />
           </button>
           <div className="aani-attachment-options">
             <button type="button" className="aani-attachment-option" onClick={() => {
@@ -266,11 +266,11 @@ export default function MessageAttachmentSheet({
               setCoordinates(null);
               setLocationNote('');
             }}>
-              <span className="aani-attachment-option-icon"><MapPin size={42} strokeWidth={1.8} /></span>
+              <span className="aani-attachment-option-icon"><MapPin size={24} strokeWidth={1.8} /></span>
               <span>الموقع</span>
             </button>
             <button type="button" className="aani-attachment-option" disabled={sending} onClick={() => documentInputRef.current?.click()}>
-              <span className="aani-attachment-option-icon"><FileText size={42} strokeWidth={1.8} /></span>
+              <span className="aani-attachment-option-icon"><FileText size={24} strokeWidth={1.8} /></span>
               <span>مستند</span>
             </button>
           </div>
