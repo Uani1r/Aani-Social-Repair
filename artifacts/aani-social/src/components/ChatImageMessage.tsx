@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { CheckCheck, Eye, X } from 'lucide-react';
+import { Eye, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 type ChatMediaPayload = {
@@ -72,7 +72,10 @@ export default function ChatImageMessage({
   const [viewed, setViewed] = useState(() => payload.viewOnce && (payload.opened === true || hasViewedOnce(currentUserId, messageId)));
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerOpening, setViewerOpening] = useState(false);
+  const [viewerLoading, setViewerLoading] = useState(false);
   const [viewerUrls, setViewerUrls] = useState<string[]>([]);
+  const viewerOpenRequestRef = useRef(0);
+  const viewerFetchAbortRef = useRef<AbortController | null>(null);
   const blobUrlsRef = useRef<string[]>([]);
   const viewerImagesRef = useRef<Array<HTMLImageElement | null>>([]);
 
@@ -88,7 +91,12 @@ export default function ChatImageMessage({
   }, [currentUserId, messageId, onViewOnceOpened, payload.urls, payload.viewOnce]);
 
   const closeViewer = useCallback(() => {
+    viewerOpenRequestRef.current += 1;
+    viewerFetchAbortRef.current?.abort();
+    viewerFetchAbortRef.current = null;
     setViewerOpen(false);
+    setViewerOpening(false);
+    setViewerLoading(false);
     setViewerUrls([]);
     viewerImagesRef.current.forEach(image => image?.removeAttribute('src'));
     viewerImagesRef.current = [];
@@ -98,30 +106,55 @@ export default function ChatImageMessage({
 
   const openViewer = useCallback(async () => {
     if (viewed || viewerOpening || payload.opened) return;
+    const requestId = ++viewerOpenRequestRef.current;
+    viewerFetchAbortRef.current?.abort();
     setViewerOpening(true);
     let nextUrls = payload.urls;
 
     if (payload.viewOnce) {
+      const abortController = new AbortController();
+      viewerFetchAbortRef.current = abortController;
+      setViewerLoading(true);
+      setViewerOpen(true);
       const temporaryUrls: string[] = [];
       try {
         for (const url of payload.urls) {
-          const response = await fetch(url, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+          const response = await fetch(url, { cache: 'no-store', referrerPolicy: 'no-referrer', signal: abortController.signal });
           if (!response.ok) throw new Error('تعذر تحميل الصورة المؤقتة');
-          temporaryUrls.push(URL.createObjectURL(await response.blob()));
+          const blob = await response.blob();
+          if (requestId !== viewerOpenRequestRef.current) {
+            temporaryUrls.forEach(url => URL.revokeObjectURL(url));
+            return;
+          }
+          temporaryUrls.push(URL.createObjectURL(blob));
+        }
+        if (viewerFetchAbortRef.current === abortController) viewerFetchAbortRef.current = null;
+        if (requestId !== viewerOpenRequestRef.current) {
+          temporaryUrls.forEach(url => URL.revokeObjectURL(url));
+          return;
         }
         nextUrls = temporaryUrls;
         blobUrlsRef.current = temporaryUrls;
       } catch {
         temporaryUrls.forEach(url => URL.revokeObjectURL(url));
+        if (viewerFetchAbortRef.current === abortController) viewerFetchAbortRef.current = null;
+        if (requestId !== viewerOpenRequestRef.current) return;
+        setViewerOpen(false);
+        setViewerLoading(false);
         setViewerOpening(false);
         toast.error('تعذر تحميل الصورة المؤقتة بأمان. حاول مرة أخرى.');
         return;
       }
     }
 
+    if (requestId !== viewerOpenRequestRef.current) {
+      if (payload.viewOnce) nextUrls.forEach(url => URL.revokeObjectURL(url));
+      return;
+    }
     setViewerUrls(nextUrls);
     setViewerOpen(true);
     registerViewed();
+    setViewerLoading(false);
     setViewerOpening(false);
   }, [payload.opened, payload.urls, payload.viewOnce, registerViewed, viewed, viewerOpening]);
 
@@ -177,14 +210,12 @@ export default function ChatImageMessage({
           <div className="messages-image-once-viewed" dir="rtl">
             <span>تم الفتح</span>
             {messageTime && <time>{messageTime}</time>}
-            {isMine && <CheckCheck size={16} className="messages-image-once-checks" aria-label="تم التسليم" />}
           </div>
         ) : (
-          <button type="button" className="messages-image-once-button" onClick={() => void openViewer()} disabled={viewerOpening || isMine} dir="rtl">
+          <button type="button" className="messages-image-once-button" onClick={() => void openViewer()} disabled={viewerOpening || isMine} aria-label="عرض الصورة المؤقتة" aria-busy={viewerOpening} dir="rtl">
             <span className="messages-image-once-icon"><Eye size={18} /><b>1</b></span>
             <span>صورة مؤقتة</span>
             {messageTime && <time>{messageTime}</time>}
-            {isMine && <CheckCheck size={16} className="messages-image-once-checks" aria-label="تم التسليم" />}
           </button>
         )
       ) : (
@@ -204,10 +235,16 @@ export default function ChatImageMessage({
           role="dialog"
           aria-modal="true"
           aria-label="عرض الصورة"
+          aria-busy={viewerLoading}
           onContextMenu={event => event.preventDefault()}
           onDragStart={event => event.preventDefault()}
         >
           <button type="button" className="messages-media-viewer-close" aria-label="إغلاق الصورة" onClick={closeViewer}><X size={18} /></button>
+          {viewerLoading && (
+            <div className="messages-media-viewer-loading" role="status" aria-label="جارٍ تحميل الصورة">
+              <span className="messages-media-pending-spinner" />
+            </div>
+          )}
           <div className="messages-media-viewer-content" dir="ltr">
             {viewerUrls.map((url, index) => (
               <img

@@ -11,6 +11,23 @@ import { uploadMedia } from '@/lib/storyUpload';
 type GalleryPhoto = { id: string; file: File; url: string };
 type PickerTab = 'photos' | 'albums';
 
+export type PendingChatMediaMessage = {
+  id: string;
+  recipientId: string;
+  urls: string[];
+  caption: string;
+  viewOnce: boolean;
+  createdAt: string;
+};
+
+type ChatMediaPickerProps = {
+  currentUserId: string;
+  recipientId: string | null | undefined;
+  onSendStart?: (message: PendingChatMediaMessage) => void;
+  onSent?: (pendingId: string, recipientId: string) => void | Promise<void>;
+  onSendFailed?: (pendingId: string) => void;
+};
+
 const MAX_SELECTED_PHOTOS = 10;
 
 async function preparePhotoForUpload(file: File, hd: boolean): Promise<File> {
@@ -45,7 +62,7 @@ function notifyCaptionChange(caption: string): void {
   window.dispatchEvent(new CustomEvent('aani-chat-media-caption-update', { detail: { caption } }));
 }
 
-export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: { currentUserId: string; recipientId: string | null | undefined; onSent?: () => void }) {
+export default function ChatMediaPicker({ currentUserId, recipientId, onSendStart, onSent, onSendFailed }: ChatMediaPickerProps) {
   const [open, setOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<PickerTab>('photos');
   const [photos, setPhotos] = useState<GalleryPhoto[]>([]);
@@ -71,6 +88,10 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
 
   useEffect(() => {
     const handleOpen = (event: Event) => {
+      if (sending) {
+        toast.info('جارٍ إرسال الصور...');
+        return;
+      }
       const detail = (event as CustomEvent<{ caption?: string; recipientId?: string }>).detail;
       setCaption(detail?.caption || '');
       setActiveRecipientId(detail?.recipientId || recipientIdRef.current || null);
@@ -79,7 +100,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
     };
     window.addEventListener('aani-open-chat-media-picker', handleOpen);
     return () => window.removeEventListener('aani-open-chat-media-picker', handleOpen);
-  }, []);
+  }, [sending]);
 
   const openDevicePicker = () => imageInputRef.current?.click();
 
@@ -120,7 +141,6 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
   };
 
   const closePicker = () => {
-    if (sending) return;
     setOpen(false);
     setEditingPhotoId(null);
     notifyCaptionChange(caption);
@@ -145,11 +165,31 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
       return;
     }
 
+    const recipientIdSnapshot = activeRecipientId;
+    const selectedPhotosSnapshot = selectedPhotos;
+    const photosSnapshot = photos;
+    const captionSnapshot = caption.trim();
+    const viewOnceSnapshot = viewOnce;
+    const hdSnapshot = hd;
+    const pendingMessage: PendingChatMediaMessage = {
+      id: `pending-media-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      recipientId: recipientIdSnapshot,
+      urls: selectedPhotosSnapshot.map(photo => photo.url),
+      caption: captionSnapshot,
+      viewOnce: viewOnceSnapshot,
+      createdAt: new Date().toISOString(),
+    };
+
     setSending(true);
+    setOpen(false);
+    setEditingPhotoId(null);
+    notifyCaptionChange('');
+    onSendStart?.(pendingMessage);
     const uploadedPaths: string[] = [];
+    let messageInserted = false;
     try {
-      const uploadResults = await Promise.allSettled(selectedPhotos.map(async (photo, index) => {
-        const uploadFile = await preparePhotoForUpload(photo.file, hd);
+      const uploadResults = await Promise.allSettled(selectedPhotosSnapshot.map(async (photo, index) => {
+        const uploadFile = await preparePhotoForUpload(photo.file, hdSnapshot);
         const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'photo.jpg';
         const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
         await uploadMedia({ file: uploadFile, path });
@@ -159,20 +199,19 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
       const failedUpload = uploadResults.find(result => result.status === 'rejected');
       if (failedUpload?.status === 'rejected') throw failedUpload.reason;
       const urls = uploadResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-      const content = `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls, caption: caption.trim(), viewOnce })}`;
+      const content = `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls, caption: captionSnapshot, viewOnce: viewOnceSnapshot })}`;
       if (content.length > 4000) throw new Error('حجم بيانات الصور كبير جداً. قلل عدد الصور وحاول مرة أخرى.');
 
       const { error } = await supabase.from('messages').insert({
         sender_id: currentUserId,
-        recipient_id: activeRecipientId,
+        recipient_id: recipientIdSnapshot,
         content,
       });
       if (error) throw error;
+      messageInserted = true;
+      await onSent?.(pendingMessage.id, recipientIdSnapshot);
 
-      setSending(false);
-      setOpen(false);
-      setEditingPhotoId(null);
-      photos.forEach(photo => {
+      photosSnapshot.forEach(photo => {
         URL.revokeObjectURL(photo.url);
         objectUrlsRef.current.delete(photo.url);
       });
@@ -181,13 +220,33 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
       setCaption('');
       setViewOnce(false);
       notifyCaptionChange('');
-      onSent?.();
       toast.success('تم إرسال الصور');
     } catch (error) {
-      if (uploadedPaths.length) {
-        const { error: cleanupError } = await supabase.storage.from(storageBucket).remove(uploadedPaths);
-        if (cleanupError) console.warn('[messages] تعذر تنظيف الصور غير المرسلة:', cleanupError);
+      if (messageInserted) {
+        photosSnapshot.forEach(photo => {
+          URL.revokeObjectURL(photo.url);
+          objectUrlsRef.current.delete(photo.url);
+        });
+        setPhotos([]);
+        setSelectedIds([]);
+        setCaption('');
+        setViewOnce(false);
+        notifyCaptionChange('');
+        onSendFailed?.(pendingMessage.id);
+        console.warn('[messages] تعذر تحديث المحادثة بعد إرسال الصور:', error);
+        toast.success('تم إرسال الصور');
+        return;
       }
+      if (uploadedPaths.length) {
+        try {
+          const { error: cleanupError } = await supabase.storage.from(storageBucket).remove(uploadedPaths);
+          if (cleanupError) console.warn('[messages] تعذر تنظيف الصور غير المرسلة:', cleanupError);
+        } catch (cleanupError) {
+          console.warn('[messages] تعذر تنظيف الصور غير المرسلة:', cleanupError);
+        }
+      }
+      onSendFailed?.(pendingMessage.id);
+      notifyCaptionChange(captionSnapshot);
       console.error('[messages] تعذر إرسال الصور:', error);
       toast.error(error instanceof Error ? error.message : 'تعذر إرسال الصور. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {

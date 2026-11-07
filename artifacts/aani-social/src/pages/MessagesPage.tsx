@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import ChatImageMessage, { hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
-import ChatMediaPicker from '@/components/ChatMediaPicker';
+import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
@@ -199,6 +199,7 @@ export default function MessagesPage({
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
+  const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -221,11 +222,14 @@ export default function MessagesPage({
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
+  const selectedIdRef = useRef(selectedId);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressNextConversationClickRef = useRef(false);
+
+  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
@@ -525,8 +529,8 @@ export default function MessagesPage({
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: thread.length ? 'smooth' : 'auto' });
-  }, [thread, selectedId]);
+    threadEndRef.current?.scrollIntoView({ behavior: thread.length || pendingMediaMessage ? 'smooth' : 'auto' });
+  }, [pendingMediaMessage, thread, selectedId]);
 
   useEffect(() => {
     if (!newMessageOpen || !supabaseConfigured) return;
@@ -638,6 +642,7 @@ export default function MessagesPage({
   const archivedCount = conversations.filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id)).length;
   const selectedConversation = conversations.find(conversation => conversation.profile.id === selectedId) || null;
   const target = selectedConversation?.profile || null;
+  const selectedPendingMediaMessage = pendingMediaMessage?.recipientId === selectedId ? pendingMediaMessage : null;
 
   const setConversationPreference = (key: ConversationPreferenceKey, contactId: string, enabled: boolean) => {
     setConversationPreferences(current => {
@@ -1034,7 +1039,7 @@ export default function MessagesPage({
               </header>
               <div className="messages-thread-list" aria-live="polite">
                 {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
-                {!threadLoading && thread.length === 0 && (
+                {!threadLoading && thread.length === 0 && !selectedPendingMediaMessage && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
                 {thread.map((message, index) => {
@@ -1093,6 +1098,23 @@ export default function MessagesPage({
                     </div>
                   );
                 })}
+                {selectedPendingMediaMessage && (
+                  <div key={selectedPendingMediaMessage.id} className="messages-message-row is-mine">
+                    <div className="messages-image-message messages-media-pending" aria-label="جارٍ إرسال الصور">
+                      <div className={`messages-image-grid messages-media-pending-grid${selectedPendingMediaMessage.urls.length > 1 ? ' has-multiple' : ''}`}>
+                        {selectedPendingMediaMessage.urls.map((url, index) => (
+                          <img key={`${selectedPendingMediaMessage.id}-${index}`} src={url} alt={`صورة قيد الإرسال ${index + 1}`} />
+                        ))}
+                        <span className="messages-media-pending-indicator" role="status" aria-label="جارٍ إرسال الصور">
+                          <span className="messages-media-pending-spinner" />
+                        </span>
+                      </div>
+                      {selectedPendingMediaMessage.caption && (
+                        <div className="messages-image-caption messages-bubble is-mine">{selectedPendingMediaMessage.caption}</div>
+                      )}
+                    </div>
+                  </div>
+                )}
                 <div ref={threadEndRef} />
               </div>
               <form className="messages-composer" onSubmit={sendMessage}>
@@ -1172,7 +1194,14 @@ export default function MessagesPage({
       <ChatMediaPicker
         currentUserId={currentUserId}
         recipientId={selectedId}
-        onSent={() => { void Promise.all([loadThread(), loadConversationList()]); }}
+        onSendStart={message => setPendingMediaMessage(message)}
+        onSent={async (pendingId, recipientId) => {
+          const refreshes: Promise<void>[] = [loadConversationList()];
+          if (recipientId === selectedIdRef.current) refreshes.push(loadThread());
+          await Promise.all(refreshes);
+          setPendingMediaMessage(current => current?.id === pendingId ? null : current);
+        }}
+        onSendFailed={pendingId => setPendingMediaMessage(current => current?.id === pendingId ? null : current)}
       />
 
       {conversationContext && createPortal(
