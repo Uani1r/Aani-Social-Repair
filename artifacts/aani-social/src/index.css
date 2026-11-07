@@ -3111,6 +3111,18 @@ body.aani-immersive .unified-top-bar {
   white-space: pre-wrap;
 }
 
+.messages-bubble-content {
+  display: block;
+}
+
+.messages-bubble-footer {
+  display: flex;
+  min-height: 12px;
+  align-items: center;
+  justify-content: flex-start;
+  margin-top: 4px;
+}
+
 .messages-bubble .twemoji-image {
   width: auto;
   height: auto;
@@ -3119,20 +3131,25 @@ body.aani-immersive .unified-top-bar {
 
 .messages-delivery-status {
   display: inline-flex;
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  margin-inline-start: 5px;
   color: rgb(255 255 255 / 62%);
-  vertical-align: -2px;
 }
 
 .messages-delivery-status svg {
   display: block;
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   stroke-width: 2.4;
+}
+
+.messages-delivery-status.is-pending,
+.messages-delivery-status.is-pending svg {
+  width: 10px;
+  height: 10px;
 }
 
 .messages-delivery-status.is-read {

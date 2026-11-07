@@ -196,7 +196,7 @@ function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): Messag
 
 function MessageDeliveryStatus({ message }: { message: MessageRow }) {
   if (message.sendState === 'pending') {
-    return <span className="messages-delivery-status" role="img" aria-label="قيد الإرسال" title="قيد الإرسال"><Clock /></span>;
+    return <span className="messages-delivery-status is-pending" role="img" aria-label="قيد الإرسال" title="قيد الإرسال"><Clock /></span>;
   }
   if (message.sendState === 'failed') {
     return <span className="messages-delivery-status is-failed" role="img" aria-label="تعذر الإرسال" title="تعذر الإرسال"><X /></span>;
@@ -324,6 +324,7 @@ export default function MessagesPage({
   const selectedIdRef = useRef(selectedId);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
@@ -1004,7 +1005,16 @@ export default function MessagesPage({
   };
 
   return (
-    <section className="messages-view" dir="rtl">
+    <section
+      className="messages-view"
+      dir="rtl"
+      onPointerDown={event => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (target.closest('.messages-composer, .messages-bubble, .messages-rich-message, .messages-image-message, .messages-sticker-message, .messages-sender-avatar, button, a, input, textarea, [role="button"], [role="menuitem"]')) return;
+        messageInputRef.current?.blur();
+      }}
+    >
       <div className={`messages-layout${selectedId ? ' is-thread-open' : ''}`}>
         <aside className="messages-sidebar">
           <header className="messages-side-header">
@@ -1233,7 +1243,28 @@ export default function MessagesPage({
                   )}
                 </div>
               </header>
-              <div className="messages-thread-list" aria-live="polite">
+              <div
+                className="messages-thread-list"
+                aria-live="polite"
+                onWheel={() => messageInputRef.current?.blur()}
+                onTouchStart={event => {
+                  const touch = event.touches[0];
+                  threadScrollTouchOriginRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+                }}
+                onTouchMove={event => {
+                  const origin = threadScrollTouchOriginRef.current;
+                  const touch = event.touches[0];
+                  if (!origin || !touch) return;
+                  const deltaX = Math.abs(touch.clientX - origin.x);
+                  const deltaY = Math.abs(touch.clientY - origin.y);
+                  if (deltaY > 8 && deltaY > deltaX) {
+                    messageInputRef.current?.blur();
+                    threadScrollTouchOriginRef.current = null;
+                  }
+                }}
+                onTouchEnd={() => { threadScrollTouchOriginRef.current = null; }}
+                onTouchCancel={() => { threadScrollTouchOriginRef.current = null; }}
+              >
                 {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
                 {!threadLoading && thread.length === 0 && !selectedPendingMediaMessage && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
@@ -1289,13 +1320,19 @@ export default function MessagesPage({
                           />
                         ) : (
                           <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
-                            {isStoryReply ? (
-                              <>
-                                <span className="messages-story-reply-label">رد على الستوري</span>
-                                <EmojiText text={content.slice('[story-reply]'.length).trim()} />
-                              </>
-                            ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
-                            {isMine && <MessageDeliveryStatus message={message} />}
+                            <div className="messages-bubble-content">
+                              {isStoryReply ? (
+                                <>
+                                  <span className="messages-story-reply-label">رد على الستوري</span>
+                                  <EmojiText text={content.slice('[story-reply]'.length).trim()} />
+                                </>
+                              ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
+                            </div>
+                            {isMine && (
+                              <div className="messages-bubble-footer">
+                                <MessageDeliveryStatus message={message} />
+                              </div>
+                            )}
                           </div>
                         )}
                         {!isMine && (
@@ -1385,7 +1422,15 @@ export default function MessagesPage({
                       </button>
                     </>
                   ) : (
-                    <button type="submit" className="messages-composer-control messages-composer-send" aria-label="إرسال الرسالة" disabled={!text.trim() || sending}>
+                    <button
+                      type="submit"
+                      className="messages-composer-control messages-composer-send"
+                      aria-label="إرسال الرسالة"
+                      disabled={!text.trim() || sending}
+                      onPointerDown={event => {
+                        if (document.activeElement === messageInputRef.current) event.preventDefault();
+                      }}
+                    >
                       <Send size={20} />
                     </button>
                   )}
