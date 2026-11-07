@@ -5,6 +5,7 @@ import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
+import CallManager, { openCallPicker } from '@/components/CallManager';
 import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
 import MessageAttachmentSheet, { CHAT_DOCUMENT_MESSAGE_PREFIX, CHAT_LOCATION_MESSAGE_PREFIX, parseChatDocumentMessage, parseChatLocationMessage } from '@/components/MessageAttachmentSheet';
@@ -2536,7 +2537,7 @@ export default function MessagesPage({
                   </div>
                 )}
                 <div className="messages-thread-actions">
-                  <button type="button" aria-label="اتصال صوتي" onClick={() => toast.info('المكالمات الصوتية غير متاحة حالياً.')}>
+                  <button type="button" aria-label="اتصال صوتي أو فيديو" onClick={openCallPicker}>
                     <Phone size={20} />
                   </button>
                   <button
@@ -3520,6 +3521,7 @@ export default function MessagesPage({
           </section>
         </div>
       )}
+      <CallManager currentUserId={currentUserId} currentProfile={currentProfile} contact={target} />
     </section>
   );
 }
