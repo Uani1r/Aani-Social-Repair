@@ -3117,6 +3117,32 @@ body.aani-immersive .unified-top-bar {
   font-size: 1em;
 }
 
+.messages-delivery-status {
+  display: inline-flex;
+  width: 13px;
+  height: 13px;
+  align-items: center;
+  justify-content: center;
+  margin-inline-start: 5px;
+  color: rgb(255 255 255 / 62%);
+  vertical-align: -2px;
+}
+
+.messages-delivery-status svg {
+  display: block;
+  width: 13px;
+  height: 13px;
+  stroke-width: 2.4;
+}
+
+.messages-delivery-status.is-read {
+  color: #53a7ff;
+}
+
+.messages-delivery-status.is-failed {
+  color: #ff8a8a;
+}
+
 .messages-bubble.is-mine {
   border: 1px solid rgb(186 140 238 / 28%);
   border-bottom-right-radius: 6px;
@@ -3424,6 +3450,10 @@ body.aani-immersive .unified-top-bar {
   background: transparent;
 }
 
+.messages-sticker-picker-backdrop.is-closing {
+  pointer-events: none;
+}
+
 .messages-sticker-picker {
   position: fixed;
   right: 0;
@@ -3447,7 +3477,11 @@ body.aani-immersive .unified-top-bar {
   box-shadow: 0 -12px 38px rgb(0 0 0 / 35%);
   direction: rtl;
   transform: translateY(0);
-  transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1), opacity 180ms ease;
+}
+
+.messages-sticker-picker.is-closing {
+  pointer-events: none;
 }
 
 .messages-sticker-picker.is-dragging {

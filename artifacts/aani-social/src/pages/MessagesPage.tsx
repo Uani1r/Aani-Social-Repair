@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, Camera, ChevronDown, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -17,6 +17,8 @@ import UserIdentity from '@/components/UserIdentity';
 import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
+type MessageSendState = 'pending' | 'sent' | 'failed';
+
 interface MessageRow {
   id: string;
   sender_id: string;
@@ -25,6 +27,9 @@ interface MessageRow {
   post_id: string | null;
   story_id: string | null;
   created_at: string;
+  delivered_at: string | null;
+  read_at: string | null;
+  sendState?: MessageSendState;
 }
 
 interface ConversationSummary {
@@ -129,8 +134,80 @@ function normalizeMessageRows(value: unknown): MessageRow[] {
       post_id: typeof item.post_id === 'string' ? item.post_id : null,
       story_id: typeof item.story_id === 'string' ? item.story_id : null,
       created_at: typeof item.created_at === 'string' ? item.created_at : '',
+      delivered_at: typeof item.delivered_at === 'string' ? item.delivered_at : null,
+      read_at: typeof item.read_at === 'string' ? item.read_at : null,
     }];
   });
+}
+
+function messageDeliveryErrorText(error: unknown): string {
+  return isRecord(error) && typeof error.message === 'string' ? error.message : '';
+}
+
+async function queryMessageRows(
+  filter: string,
+  ascending: boolean,
+  includeMetadata = false,
+): Promise<{ data: unknown; error: unknown | null }> {
+  let includeDeliveryColumns = true;
+  let includeMessageMetadata = includeMetadata;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
+    const result = await supabase
+      .from('messages')
+      .select(fields)
+      .or(filter)
+      .order('created_at', { ascending });
+    if (!result.error) return { data: result.data, error: null };
+
+    const errorText = messageDeliveryErrorText(result.error);
+    if (includeDeliveryColumns && /delivered_at|read_at/i.test(errorText)) {
+      includeDeliveryColumns = false;
+      continue;
+    }
+    if (includeMessageMetadata && /post_id|story_id/i.test(errorText)) {
+      includeMessageMetadata = false;
+      continue;
+    }
+    return { data: null, error: result.error };
+  }
+
+  return { data: null, error: new Error('تعذر تحميل الرسائل.') };
+}
+
+function createMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
+}
+
+function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): MessageRow[] {
+  const messages = new Map(incoming.map(message => [message.id, message]));
+  existing.forEach(message => {
+    if (message.sendState && !messages.has(message.id)) messages.set(message.id, message);
+  });
+  return [...messages.values()].sort((left, right) => (
+    (Date.parse(left.created_at) || 0) - (Date.parse(right.created_at) || 0)
+  ));
+}
+
+function MessageDeliveryStatus({ message }: { message: MessageRow }) {
+  if (message.sendState === 'pending') {
+    return <span className="messages-delivery-status" role="img" aria-label="قيد الإرسال" title="قيد الإرسال"><Clock /></span>;
+  }
+  if (message.sendState === 'failed') {
+    return <span className="messages-delivery-status is-failed" role="img" aria-label="تعذر الإرسال" title="تعذر الإرسال"><X /></span>;
+  }
+  if (message.read_at) {
+    return <span className="messages-delivery-status is-read" role="img" aria-label="تمت القراءة" title="تمت القراءة"><CheckCheck /></span>;
+  }
+  if (message.delivered_at) {
+    return <span className="messages-delivery-status" role="img" aria-label="تم التوصيل" title="تم التوصيل"><CheckCheck /></span>;
+  }
+  return <span className="messages-delivery-status" role="img" aria-label="تم الإرسال" title="تم الإرسال"><Check /></span>;
 }
 
 function readConversationReadTimes(userId: string): Record<string, string> {
@@ -225,6 +302,7 @@ export default function MessagesPage({
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [emojiPickerClosing, setEmojiPickerClosing] = useState(false);
   const [threadOptionsOpen, setThreadOptionsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<InboxTab>('messages');
   const [searchTerm, setSearchTerm] = useState('');
@@ -246,11 +324,16 @@ export default function MessagesPage({
   const selectedIdRef = useRef(selectedId);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const emojiPickerCloseTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressNextConversationClickRef = useRef(false);
 
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+
+  useEffect(() => () => {
+    if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
+  }, []);
 
   useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
@@ -276,7 +359,31 @@ export default function MessagesPage({
       }
       return next;
     });
+    if (supabaseConfigured) {
+      void (async () => {
+        try {
+          const { error } = await supabase.rpc('aani_mark_conversation_read', { p_sender_id: contactId });
+          if (error) console.warn('[messages] تعذر تحديث حالة القراءة:', error);
+        } catch (error) {
+          console.warn('[messages] تعذر تحديث حالة القراءة:', error);
+        }
+      })();
+    }
   }, [currentUserId]);
+
+  const markMessagesDelivered = useCallback(async (messageIds: string[]) => {
+    if (!supabaseConfigured || messageIds.length === 0) return;
+    for (let offset = 0; offset < messageIds.length; offset += 200) {
+      try {
+        const { error } = await supabase.rpc('aani_mark_messages_delivered', {
+          p_message_ids: messageIds.slice(offset, offset + 200),
+        });
+        if (error) console.warn('[messages] تعذر تحديث حالة التوصيل:', error);
+      } catch (error) {
+        console.warn('[messages] تعذر تحديث حالة التوصيل:', error);
+      }
+    }
+  }, []);
 
   useLayoutEffect(() => {
     const input = messageInputRef.current;
@@ -300,11 +407,7 @@ export default function MessagesPage({
     try {
       const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
         supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle(),
-        supabase
-          .from('messages')
-          .select('id, sender_id, recipient_id, content, created_at')
-          .or(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`)
-          .order('created_at', { ascending: false }),
+        queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
         supabase
           .from('follows')
           .select('follower_id, following_id')
@@ -319,7 +422,12 @@ export default function MessagesPage({
       setCurrentProfile((profileResult.data || null) as Profile | null);
 
       const latestByContact = new Map<string, MessageRow>();
-      normalizeMessageRows(messagesResult.data).filter(message => !hiddenMessageIds.has(message.id)).forEach(message => {
+      const conversationMessages = normalizeMessageRows(messagesResult.data)
+        .filter(message => !hiddenMessageIds.has(message.id));
+      void markMessagesDelivered(conversationMessages
+        .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
+        .map(message => message.id));
+      conversationMessages.forEach(message => {
         const contactId = message.sender_id === currentUserId ? message.recipient_id : message.sender_id;
         const mediaMessage = parseChatMediaMessage(message.content);
         const safeMessage = mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
@@ -367,7 +475,7 @@ export default function MessagesPage({
     } finally {
       if (requestId === contactsRequestRef.current) setContactsLoading(false);
     }
-  }, [currentUserId, selectedId]);
+  }, [currentUserId, markMessagesDelivered, selectedId]);
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
@@ -376,13 +484,9 @@ export default function MessagesPage({
     setThreadLoading(true);
 
     try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('id, sender_id, recipient_id, content, post_id, story_id, created_at')
-        .or(threadFilter)
-        .order('created_at', { ascending: true });
+      const { data, error } = await queryMessageRows(threadFilter, true, true);
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
-      const visibleMessages = (rows: unknown) => normalizeMessageRows(rows)
+      const visibleMessages = normalizeMessageRows(data)
         .filter(message => !hiddenMessageIds.has(message.id))
         .map(message => {
           const mediaMessage = parseChatMediaMessage(message.content);
@@ -391,21 +495,12 @@ export default function MessagesPage({
             : message;
         });
 
-      if (error) {
-        const code = (error as { code?: string }).code;
-        if (code === '42703' || /post_id|story_id/i.test(error.message || '')) {
-          const { data: fallback, error: fallbackError } = await supabase
-            .from('messages')
-            .select('id, sender_id, recipient_id, content, created_at')
-            .or(threadFilter)
-            .order('created_at', { ascending: true });
-          if (fallbackError) throw fallbackError;
-          if (requestId === threadRequestRef.current) setThread(visibleMessages(fallback));
-        } else {
-          throw error;
-        }
-      } else if (requestId === threadRequestRef.current) {
-        setThread(visibleMessages(data));
+      if (error) throw error;
+      if (requestId === threadRequestRef.current) {
+        setThread(current => mergeThreadRows(current, visibleMessages));
+        void markMessagesDelivered(visibleMessages
+          .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
+          .map(message => message.id));
       }
     } catch (error) {
       if (requestId !== threadRequestRef.current) return;
@@ -414,7 +509,7 @@ export default function MessagesPage({
     } finally {
       if (requestId === threadRequestRef.current) setThreadLoading(false);
     }
-  }, [currentUserId, selectedId]);
+  }, [currentUserId, markMessagesDelivered, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -485,7 +580,11 @@ export default function MessagesPage({
         schema: 'public',
         table: 'messages',
         filter: `recipient_id=eq.${currentUserId}`,
-      }, () => scheduleMessageRefresh(false))
+      }, payload => {
+        const messageId = (payload.new as { id?: unknown } | null)?.id;
+        if (typeof messageId === 'string') void markMessagesDelivered([messageId]);
+        scheduleMessageRefresh(false);
+      })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
       .on('postgres_changes', {
@@ -500,7 +599,7 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, loadConversationList, scheduleMessageRefresh, clearScheduledMessageRefresh]);
+  }, [currentUserId, loadConversationList, markMessagesDelivered, scheduleMessageRefresh, clearScheduledMessageRefresh]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -615,6 +714,24 @@ export default function MessagesPage({
     };
   }, [currentUserId, newMessageOpen, newMessageSearch]);
 
+  const closeEmojiPicker = () => {
+    if (!emojiPickerOpen) return;
+    if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
+    setEmojiPickerClosing(true);
+    emojiPickerCloseTimerRef.current = window.setTimeout(() => {
+      setEmojiPickerOpen(false);
+      setEmojiPickerClosing(false);
+      emojiPickerCloseTimerRef.current = null;
+    }, 220);
+  };
+
+  const openEmojiPicker = () => {
+    if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
+    emojiPickerCloseTimerRef.current = null;
+    setEmojiPickerClosing(false);
+    setEmojiPickerOpen(true);
+  };
+
   const insertComposerSymbol = (symbol: string) => {
     messageInputRef.current?.blur();
     setText(value => `${value}${symbol}`);
@@ -627,23 +744,46 @@ export default function MessagesPage({
 
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    closeEmojiPicker();
     const content = text.trim();
     if (!supabaseConfigured || !selectedId || !content || sending) return;
 
+    const recipientId = selectedId;
+    const optimisticMessage: MessageRow = {
+      id: createMessageId(),
+      sender_id: currentUserId,
+      recipient_id: recipientId,
+      content,
+      post_id: null,
+      story_id: null,
+      created_at: new Date().toISOString(),
+      delivered_at: null,
+      read_at: null,
+      sendState: 'pending',
+    };
+    setThread(current => mergeThreadRows(current, [optimisticMessage]));
+    setText('');
+    setReplyMessage(null);
     setSending(true);
+
     try {
       const { error } = await supabase.from('messages').insert({
+        id: optimisticMessage.id,
         sender_id: currentUserId,
-        recipient_id: selectedId,
+        recipient_id: recipientId,
         content,
       });
       if (error) throw error;
-      setText('');
-      setReplyMessage(null);
-      await Promise.all([loadThread(), loadConversationList()]);
+      setThread(current => current.map(message => message.id === optimisticMessage.id
+        ? { ...message, sendState: 'sent' }
+        : message));
+      void loadConversationList();
     } catch (error) {
       console.error('[messages] تعذر إرسال الرسالة:', error);
-      alert('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
+      setThread(current => current.map(message => message.id === optimisticMessage.id && message.sendState === 'pending'
+        ? { ...message, sendState: 'failed' }
+        : message));
+      toast.error('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setSending(false);
     }
@@ -1155,6 +1295,7 @@ export default function MessagesPage({
                                 <EmojiText text={content.slice('[story-reply]'.length).trim()} />
                               </>
                             ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
+                            {isMine && <MessageDeliveryStatus message={message} />}
                           </div>
                         )}
                         {!isMine && (
@@ -1230,7 +1371,7 @@ export default function MessagesPage({
                     aria-label="إيموجي وملصقات"
                     aria-haspopup="dialog"
                     aria-expanded={emojiPickerOpen}
-                    onClick={() => setEmojiPickerOpen(true)}
+                    onClick={openEmojiPicker}
                   >
                     <Smile size={19} />
                   </button>
@@ -1252,7 +1393,8 @@ export default function MessagesPage({
                 {emojiPickerOpen && (
                   <ChatStickerPanel
                     currentUserId={currentUserId}
-                    onClose={() => setEmojiPickerOpen(false)}
+                    closing={emojiPickerClosing}
+                    onClose={closeEmojiPicker}
                     onInsertEmoji={insertComposerSymbol}
                     onSendSticker={sticker => { void sendSticker(sticker); }}
                   />

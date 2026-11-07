@@ -125,11 +125,13 @@ export default function ChatStickerPanel({
   onClose,
   onInsertEmoji,
   onSendSticker,
+  closing = false,
 }: {
   currentUserId: string;
   onClose: () => void;
   onInsertEmoji: (emoji: string) => void;
   onSendSticker: (sticker: ChatStickerPayload) => void;
+  closing?: boolean;
 }) {
   const [mode, setMode] = useState<PanelMode>('emoji');
   const [recentlyUsed, setRecentlyUsed] = useState<string[]>(() => readRecentlyUsedEmojis(currentUserId));
@@ -273,14 +275,14 @@ export default function ChatStickerPanel({
     <>
       {typeof document !== 'undefined' && createPortal(
       <>
-        <div className="messages-sticker-picker-backdrop" aria-hidden="true" onClick={onClose} />
+        <div className={`messages-sticker-picker-backdrop${closing ? ' is-closing' : ''}`} aria-hidden="true" onClick={onClose} />
         <section
-          className={`messages-sticker-picker${isDragging ? ' is-dragging' : ''}`}
+          className={`messages-sticker-picker${isDragging ? ' is-dragging' : ''}${closing ? ' is-closing' : ''}`}
           role="dialog"
           aria-modal="true"
           aria-label="الإيموجي والملصقات"
           dir="rtl"
-          style={{ transform: `translateY(${dragOffset}px)` }}
+          style={{ transform: closing ? 'translateY(42px)' : `translateY(${dragOffset}px)`, opacity: closing ? 0 : 1 }}
         >
         <header className="messages-sticker-panel-header">
           <div
