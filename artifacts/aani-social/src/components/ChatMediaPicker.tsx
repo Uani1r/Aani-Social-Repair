@@ -252,14 +252,10 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
           <input ref={imageInputRef} type="file" accept="image/*" multiple className="chat-media-picker-input" onChange={addFiles} />
 
           {selectedPhotos.length > 0 && (
-            <div className="chat-media-picker-selection" dir="ltr">
-              <button type="button" className="chat-media-picker-edit" aria-label="تعديل الصورة المحددة" onClick={() => setEditingPhotoId(selectedPhotos[0].id)} disabled={sending}>
-                <img src={selectedPhotos[0].url} alt="معاينة الصورة المحددة" />
-                <span><Pencil size={19} /></span>
-              </button>
-              <button type="button" className={`chat-media-picker-once${viewOnce ? ' is-active' : ''}`} aria-label="عرض الصورة مرة واحدة" aria-pressed={viewOnce} onClick={() => setViewOnce(value => !value)} disabled={sending}>
-                <span>1</span>
-                <Eye size={14} />
+            <div className="chat-media-picker-selection" dir="rtl">
+              <button type="button" className="chat-media-picker-send" aria-label={`إرسال ${selectedPhotos.length} صور`} onClick={() => void sendSelectedPhotos()} disabled={sending}>
+                {sending ? <LoaderCircle size={22} className="chat-media-picker-loading" /> : <Send size={22} fill="currentColor" />}
+                <span className="chat-media-picker-send-count">{selectedPhotos.length}</span>
               </button>
               <input
                 className="chat-media-picker-caption"
@@ -272,9 +268,12 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSent }: 
                 dir="rtl"
                 disabled={sending}
               />
-              <button type="button" className="chat-media-picker-send" aria-label={`إرسال ${selectedPhotos.length} صور`} onClick={() => void sendSelectedPhotos()} disabled={sending}>
-                {sending ? <LoaderCircle size={27} className="chat-media-picker-loading" /> : <Send size={28} fill="currentColor" />}
-                <span className="chat-media-picker-send-count">{selectedPhotos.length}</span>
+              <button type="button" className={`chat-media-picker-once${viewOnce ? ' is-active' : ''}`} aria-label="عرض الصورة مرة واحدة" aria-pressed={viewOnce} onClick={() => setViewOnce(value => !value)} disabled={sending}>
+                <Eye size={20} />
+                <span>1</span>
+              </button>
+              <button type="button" className="chat-media-picker-edit" aria-label="تعديل الصورة المحددة" onClick={() => setEditingPhotoId(selectedPhotos[0].id)} disabled={sending}>
+                <Pencil size={19} />
               </button>
             </div>
           )}
