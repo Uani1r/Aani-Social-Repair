@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Pause, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -90,6 +90,137 @@ function formatVoiceDuration(durationMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function normalizeVoiceMimeType(value: string): { mimeType: 'audio/mp4' | 'audio/webm'; extension: 'm4a' | 'webm' } | null {
+  const mimeType = value.split(';', 1)[0]?.trim().toLowerCase();
+  if (mimeType === 'audio/mp4') return { mimeType, extension: 'm4a' };
+  if (mimeType === 'audio/webm') return { mimeType, extension: 'webm' };
+  return null;
+}
+
+function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasError, setHasError] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [mediaDurationMs, setMediaDurationMs] = useState(0);
+  const loadingTimeoutRef = useRef<number | null>(null);
+  const totalDurationMs = mediaDurationMs || durationMs;
+
+  const clearLoadingTimeout = () => {
+    if (loadingTimeoutRef.current !== null) window.clearTimeout(loadingTimeoutRef.current);
+    loadingTimeoutRef.current = null;
+  };
+
+  const startLoadingTimeout = () => {
+    clearLoadingTimeout();
+    loadingTimeoutRef.current = window.setTimeout(() => {
+      audioRef.current?.pause();
+      setIsLoading(false);
+      setHasError(true);
+      loadingTimeoutRef.current = null;
+    }, 15_000);
+  };
+
+  useEffect(() => () => {
+    if (loadingTimeoutRef.current !== null) window.clearTimeout(loadingTimeoutRef.current);
+  }, []);
+
+  const togglePlayback = async () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setHasError(false);
+    if (audio.paused) {
+      if (hasError) {
+        audio.load();
+        setCurrentTimeMs(0);
+      }
+      setIsLoading(true);
+      startLoadingTimeout();
+      try {
+        await audio.play();
+      } catch (error) {
+        clearLoadingTimeout();
+        console.warn('[messages] تعذر تشغيل الرسالة الصوتية:', error);
+        setIsLoading(false);
+        setIsPlaying(false);
+        setHasError(true);
+      }
+    } else {
+      audio.pause();
+      clearLoadingTimeout();
+      setIsLoading(false);
+    }
+  };
+
+  const seekPlayback = (value: string) => {
+    const nextTimeMs = Number(value);
+    if (!Number.isFinite(nextTimeMs)) return;
+    const audio = audioRef.current;
+    if (audio && Number.isFinite(audio.duration)) {
+      try {
+        audio.currentTime = nextTimeMs / 1000;
+      } catch {
+        /* metadata may not be ready yet */
+      }
+    }
+    setCurrentTimeMs(nextTimeMs);
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        className={`messages-voice-play${hasError ? ' is-error' : ''}`}
+        aria-label={hasError ? 'تعذر تشغيل الرسالة الصوتية، حاول مرة أخرى' : isPlaying ? 'إيقاف الرسالة الصوتية' : 'تشغيل الرسالة الصوتية'}
+        onClick={() => { void togglePlayback(); }}
+      >
+        {isLoading ? <span className="messages-voice-spinner" aria-hidden="true" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+      </button>
+      <div className="messages-voice-timeline" data-message-gesture-ignore>
+        <time className="messages-voice-elapsed" dir="ltr">{formatVoiceDuration(currentTimeMs)}</time>
+        <input
+          className="messages-voice-progress"
+          type="range"
+          min={0}
+          max={Math.max(1, totalDurationMs)}
+          step={100}
+          value={Math.min(currentTimeMs, totalDurationMs)}
+          disabled={!mediaDurationMs || hasError}
+          aria-label="موضع الرسالة الصوتية"
+          aria-valuetext={`${formatVoiceDuration(currentTimeMs)} من ${formatVoiceDuration(totalDurationMs)}`}
+          onChange={event => seekPlayback(event.target.value)}
+        />
+        <time className="messages-voice-duration" dir="ltr">{formatVoiceDuration(totalDurationMs)}</time>
+      </div>
+      <audio
+        ref={audioRef}
+        className="messages-voice-hidden-audio"
+        preload="none"
+        src={url}
+        aria-hidden="true"
+        tabIndex={-1}
+        onPlay={() => { setIsPlaying(true); setHasError(false); }}
+        onPlaying={() => { clearLoadingTimeout(); setIsLoading(false); }}
+        onWaiting={() => { setIsLoading(true); startLoadingTimeout(); }}
+        onCanPlay={() => { clearLoadingTimeout(); setIsLoading(false); }}
+        onPause={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); }}
+        onTimeUpdate={event => setCurrentTimeMs(event.currentTarget.currentTime * 1000)}
+        onLoadedMetadata={event => {
+          const duration = event.currentTarget.duration;
+          if (Number.isFinite(duration) && duration > 0) setMediaDurationMs(duration * 1000);
+        }}
+        onDurationChange={event => {
+          const duration = event.currentTarget.duration;
+          if (Number.isFinite(duration) && duration > 0) setMediaDurationMs(duration * 1000);
+        }}
+        onEnded={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); setCurrentTimeMs(0); }}
+        onError={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); setHasError(true); }}
+      />
+    </>
+  );
 }
 
 interface MessageActionState {
@@ -500,7 +631,6 @@ export default function MessagesPage({
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
   const [voiceRecordingStatus, setVoiceRecordingStatus] = useState<VoiceRecordingStatus>('idle');
   const [voiceRecordingElapsedMs, setVoiceRecordingElapsedMs] = useState(0);
-  const [voiceDragOffset, setVoiceDragOffset] = useState(0);
   const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, MessageReaction[]>>(() => initialThreadCache?.reactionsByMessage || {});
   const [messageAction, setMessageAction] = useState<MessageActionState | null>(null);
   const [emojiTargetMessage, setEmojiTargetMessage] = useState<MessageRow | null>(null);
@@ -531,7 +661,6 @@ export default function MessagesPage({
   const selectedIdRef = useRef(selectedId);
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
-  const threadEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const messageComposerRef = useRef<HTMLFormElement>(null);
   const voiceCancelButtonRef = useRef<HTMLButtonElement>(null);
@@ -971,9 +1100,7 @@ export default function MessagesPage({
 
   const scrollThreadToBottom = useCallback(() => {
     const threadList = threadListRef.current;
-    const threadEnd = threadEndRef.current;
-    if (!threadList || !threadEnd) return;
-    threadEnd.scrollIntoView({ behavior: 'instant', block: 'end' });
+    if (!threadList) return;
     threadList.scrollTop = threadList.scrollHeight;
   }, []);
 
@@ -1092,7 +1219,6 @@ export default function MessagesPage({
       voiceRecordingTimerRef.current = null;
       setVoiceRecordingStatus('idle');
       setVoiceRecordingElapsedMs(0);
-      setVoiceDragOffset(0);
     }
     try {
       if (session.recorder && session.recorder.state !== 'inactive') session.recorder.stop();
@@ -1104,6 +1230,11 @@ export default function MessagesPage({
   }, []);
 
   const uploadRecordedVoice = async (session: VoiceRecordingSession, blob: Blob, durationMs: number) => {
+    const format = normalizeVoiceMimeType(blob.type);
+    if (!format) {
+      toast.error('صيغة التسجيل الصوتي غير مدعومة على هذا الجهاز.');
+      return;
+    }
     const messageId = createMessageId();
     const localUrl = URL.createObjectURL(blob);
     voiceObjectUrlsRef.current.add(localUrl);
@@ -1126,15 +1257,18 @@ export default function MessagesPage({
     if (isConversationOpen) {
       setThread(current => mergeThreadRows(current, [optimisticMessage]));
       setThreadCacheReady(true);
+      window.requestAnimationFrame(() => {
+        scrollThreadToBottom();
+        window.requestAnimationFrame(scrollThreadToBottom);
+      });
     }
 
-    const mimeType = blob.type || 'audio/webm';
-    const extension = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm';
-    const path = `${session.userId}/messages/${messageId}.${extension}`;
+    const path = `${session.userId}/messages/${messageId}.${format.extension}`;
     let uploadedPath = '';
     let preserveUploadedFile = false;
     try {
-      const file = new File([blob], `voice-${messageId}.${extension}`, { type: mimeType });
+      const uploadBlob = new Blob([blob], { type: format.mimeType });
+      const file = new File([uploadBlob], `voice-${messageId}.${format.extension}`, { type: format.mimeType });
       await uploadMedia({ file, path });
       uploadedPath = path;
       const audioUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
@@ -1190,26 +1324,30 @@ export default function MessagesPage({
         return;
       }
       session.stream = stream;
-      const supportedMimeType = typeof MediaRecorder.isTypeSupported === 'function'
-        ? [
-          'audio/webm;codecs=opus',
-          'audio/mp4',
-          'audio/webm',
-          'audio/ogg;codecs=opus',
-          'audio/ogg',
-        ].find(type => MediaRecorder.isTypeSupported(type))
-        : undefined;
-      const recorder = new MediaRecorder(stream, supportedMimeType ? { mimeType: supportedMimeType } : undefined);
-      session.recorder = recorder;
-      recorder.ondataavailable = event => {
+      const preferredMimeTypes = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+      let recorder: MediaRecorder | null = null;
+      let requestedMimeType = '';
+      for (const mimeType of preferredMimeTypes) {
+        try {
+          if (typeof MediaRecorder.isTypeSupported === 'function' && !MediaRecorder.isTypeSupported(mimeType)) continue;
+          recorder = new MediaRecorder(stream, { mimeType });
+          requestedMimeType = mimeType;
+          break;
+        } catch {
+          /* try the next browser-supported recording format */
+        }
+      }
+      const activeRecorder = recorder || new MediaRecorder(stream);
+      session.recorder = activeRecorder;
+      activeRecorder.ondataavailable = event => {
         if (event.data.size > 0) session.chunks.push(event.data);
       };
-      recorder.onerror = () => {
+      activeRecorder.onerror = () => {
         if (voiceRecordingSessionRef.current !== session) return;
         cancelVoiceRecording(session);
         toast.error('تعذر تسجيل الصوت. تحقق من إذن الميكروفون.');
       };
-      recorder.onstop = () => {
+      activeRecorder.onstop = () => {
         session.stream?.getTracks().forEach(track => track.stop());
         session.stream = null;
         if (session.cancelled || voiceRecordingSessionRef.current !== session) return;
@@ -1219,17 +1357,21 @@ export default function MessagesPage({
         const durationMs = session.startedAt === null ? 0 : Date.now() - session.startedAt;
         setVoiceRecordingElapsedMs(durationMs);
         setVoiceRecordingStatus('idle');
-        setVoiceDragOffset(0);
         setReplyMessage(null);
-        const mimeType = recorder.mimeType || session.chunks.find(chunk => chunk.type)?.type || 'audio/webm';
-        const blob = new Blob(session.chunks, { type: mimeType });
+        const mimeType = activeRecorder.mimeType || session.chunks.find(chunk => chunk.type)?.type || requestedMimeType;
+        const recordingFormat = normalizeVoiceMimeType(mimeType);
+        if (!recordingFormat) {
+          toast.error('صيغة التسجيل الصوتي غير مدعومة على هذا الجهاز.');
+          return;
+        }
+        const blob = new Blob(session.chunks, { type: recordingFormat.mimeType });
         if (!blob.size) {
           toast.info('لم يتم تسجيل صوت. اضغط مطولاً على الميكروفون ثم حاول مرة أخرى.');
           return;
         }
         void uploadRecordedVoice(session, blob, durationMs);
       };
-      recorder.start(180);
+      activeRecorder.start(180);
       session.startedAt = Date.now();
       setVoiceRecordingStatus('recording');
       voiceRecordingTimerRef.current = window.setInterval(() => {
@@ -1276,8 +1418,8 @@ export default function MessagesPage({
     setEmojiPickerOpen(false);
     setEmojiPickerClosing(false);
     setEmojiTargetMessage(null);
+    setReplyMessage(null);
     setVoiceRecordingElapsedMs(0);
-    setVoiceDragOffset(0);
     setVoiceRecordingStatus('requesting');
     void beginVoiceRecording(session);
   };
@@ -1286,7 +1428,6 @@ export default function MessagesPage({
     const session = voiceRecordingSessionRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
     const offset = event.clientX - session.startX;
-    setVoiceDragOffset(Math.max(-96, Math.min(0, offset)));
     if (offset <= -96) cancelVoiceRecording(session);
   };
 
@@ -2101,20 +2242,16 @@ export default function MessagesPage({
                           ) : voiceMessage ? (
                             <div className={`messages-bubble messages-voice-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}
-                              <div className="messages-voice-player" data-message-gesture-ignore>
-                                <Mic size={17} aria-hidden="true" />
-                                <audio
-                                  className="messages-voice-audio"
-                                  controls
-                                  preload="metadata"
-                                  src={voiceMessage.url}
-                                  aria-label={`تشغيل الرسالة الصوتية، ${formatVoiceDuration(voiceMessage.durationMs)}`}
-                                />
+                              <div className="messages-voice-line">
+                                <div className="messages-voice-player" data-message-gesture-ignore>
+                                  <Mic size={17} aria-hidden="true" />
+                                  <VoiceMessagePlayer url={voiceMessage.url} durationMs={voiceMessage.durationMs} />
+                                </div>
+                                <span className="messages-bubble-footer">
+                                  <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                  {isMine && <MessageDeliveryStatus message={message} />}
+                                </span>
                               </div>
-                              <span className="messages-bubble-footer">
-                                <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
-                                {isMine && <MessageDeliveryStatus message={message} />}
-                              </span>
                             </div>
                           ) : stickerMessage ? (
                             <>
@@ -2196,7 +2333,6 @@ export default function MessagesPage({
                     </div>
                   </div>
                 )}
-                <div ref={threadEndRef} aria-hidden="true" />
               </div>
               <form
                 ref={messageComposerRef}
@@ -2235,7 +2371,7 @@ export default function MessagesPage({
                     <div className="messages-voice-recording-copy">
                       <div className="messages-voice-recording-status">
                         <span className={`messages-voice-recording-dot${voiceRecordingStatus === 'recording' ? ' is-active' : ''}`} />
-                        <span role="status">{voiceRecordingStatus === 'requesting' ? 'بانتظار إذن الميكروفون' : 'جارٍ التسجيل'}</span>
+                        <span role="status">{voiceRecordingStatus === 'requesting' ? 'الميكروفون' : 'جارٍ التسجيل'}</span>
                         <time dir="ltr">{formatVoiceDuration(voiceRecordingElapsedMs)}</time>
                       </div>
                       <div className={`messages-voice-waveform${voiceRecordingStatus === 'recording' ? ' is-active' : ''}`} aria-hidden="true">
@@ -2243,7 +2379,6 @@ export default function MessagesPage({
                           <span key={index} style={{ height: `${height}px`, animationDelay: `${index * 35}ms` }} />
                         ))}
                       </div>
-                      <span className="messages-voice-recording-hint">{voiceDragOffset <= -48 ? 'أفلت للإلغاء' : 'حرّر للإرسال · اسحب يساراً للإلغاء'}</span>
                     </div>
                     <span className="messages-voice-mic-indicator" aria-label="التسجيل نشط"><Mic size={20} /></span>
                   </div>

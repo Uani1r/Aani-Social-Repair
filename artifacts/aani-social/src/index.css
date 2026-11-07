@@ -5755,8 +5755,12 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-composer.is-recording {
-  min-height: 68px;
-  align-items: stretch;
+  height: 56px;
+  min-height: 56px;
+  max-height: 56px;
+  box-sizing: border-box;
+  align-items: center;
+  border-radius: 28px;
   border-color: rgb(237 73 86 / 48%);
   background: #1b1718;
   touch-action: none;
@@ -5767,16 +5771,16 @@ body.aani-immersive .unified-top-bar {
   width: 100%;
   min-width: 0;
   align-items: center;
-  gap: 9px;
+  gap: 7px;
   direction: ltr;
 }
 
 .messages-voice-cancel,
 .messages-voice-mic-indicator {
   display: grid;
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   place-items: center;
   border: 0;
   border-radius: 50%;
@@ -5798,21 +5802,22 @@ body.aani-immersive .unified-top-bar {
   display: flex;
   min-width: 0;
   flex: 1 1 auto;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
+  align-items: center;
+  gap: 8px;
   direction: rtl;
 }
 
 .messages-voice-recording-status {
   display: flex;
   min-width: 0;
+  flex: 0 1 auto;
   align-items: center;
   gap: 6px;
   direction: rtl;
   color: #f4f4f5;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 .messages-voice-recording-status time {
@@ -5838,10 +5843,13 @@ body.aani-immersive .unified-top-bar {
 
 .messages-voice-waveform {
   display: flex;
-  height: 18px;
+  min-width: 22px;
+  height: 22px;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: space-between;
-  gap: 3px;
+  gap: 2px;
+  overflow: hidden;
   direction: ltr;
 }
 
@@ -5860,16 +5868,6 @@ body.aani-immersive .unified-top-bar {
   animation: messages-voice-wave 520ms ease-in-out infinite alternate;
 }
 
-.messages-voice-recording-hint {
-  overflow: hidden;
-  color: #a8a8a8;
-  font-size: 10px;
-  line-height: 1.2;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .messages-voice-mic-indicator {
   color: #fff;
   background: #ed4956;
@@ -5877,37 +5875,121 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-voice-bubble {
-  max-width: min(75vw, 340px);
+  max-width: min(86vw, 360px);
   white-space: normal;
+}
+
+.messages-voice-line {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  direction: ltr;
 }
 
 .messages-voice-player {
   display: flex;
   min-width: 0;
+  flex: 1 1 auto;
   align-items: center;
   gap: 6px;
   direction: ltr;
   color: rgb(255 255 255 / 78%);
 }
 
-.messages-voice-audio {
-  display: block;
-  width: min(240px, calc(100vw - 140px));
-  max-width: 100%;
-  height: 40px;
-  touch-action: auto;
+.messages-voice-player > svg {
+  flex: 0 0 auto;
+}
+
+.messages-voice-play {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  color: #fff;
+  background: rgb(255 255 255 / 12%);
+  cursor: pointer;
+}
+
+.messages-voice-play:hover,
+.messages-voice-play:focus-visible {
+  outline: none;
+  background: rgb(255 255 255 / 22%);
+}
+
+.messages-voice-play.is-error {
+  color: #ffb4ba;
+  background: rgb(237 73 86 / 20%);
+}
+
+.messages-voice-play:disabled {
+  cursor: wait;
+  opacity: .72;
+}
+
+.messages-voice-timeline {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.messages-voice-progress {
+  width: 100%;
+  min-width: 28px;
+  height: 3px;
+  flex: 1 1 auto;
+  margin: 0;
+  accent-color: #fff;
+  cursor: pointer;
+  touch-action: pan-x;
+}
+
+.messages-voice-elapsed,
+.messages-voice-duration {
+  flex: 0 0 auto;
+  color: rgb(255 255 255 / 70%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.messages-voice-hidden-audio {
+  display: none;
+}
+
+.messages-voice-spinner {
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgb(255 255 255 / 35%);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: messages-voice-spin .8s linear infinite;
 }
 
 .messages-voice-bubble .messages-bubble-footer {
   display: flex;
+  flex: 0 0 auto;
+  align-items: center;
   justify-content: flex-end;
-  margin-top: 3px;
-  margin-inline-start: 0;
+  gap: 3px;
+  margin: 0;
+  direction: rtl;
 }
 
 @keyframes messages-voice-wave {
   from { transform: scaleY(.48); }
   to { transform: scaleY(1); }
+}
+
+@keyframes messages-voice-spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes messages-voice-recording-pulse {
