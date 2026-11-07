@@ -59,6 +59,7 @@ const releasePageInteraction = () => {
 export default function Shell({
   children,
   profile,
+  onProfileUpdate,
   userId,
   onSignOut,
   onOpenComments,
@@ -820,6 +821,8 @@ export default function Shell({
           hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
           unreadCount={unreadCount}
           stories={isFeedPath ? headerStories : undefined}
+          showSettingsButton={path === '/profile'}
+          onOpenSettings={() => setShowSettingsModal(true)}
           onOpenNotifications={() => setShowNotifsModal(true)}
           onOpenCreatePost={() => setShowPublishOptionsSheet(true)}
           onRefresh={requestContentRefresh}
@@ -885,6 +888,8 @@ export default function Shell({
         showSettingsModal={showSettingsModal}
         onCloseSettings={() => setShowSettingsModal(false)}
         profile={profile}
+        onProfileUpdate={onProfileUpdate}
+        onOpenNotifications={() => setShowNotifsModal(true)}
         onSignOut={handleSignOut}
         showNotifsModal={showNotifsModal}
         onCloseNotifications={() => setShowNotifsModal(false)}

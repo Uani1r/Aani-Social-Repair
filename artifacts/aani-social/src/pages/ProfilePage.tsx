@@ -43,6 +43,11 @@ export default function ProfilePage({
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
 
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
+
+  useEffect(() => {
+    if (own && profile) setPerson(profile);
+  }, [own, profile]);
+
   const searchBackButton = !own && fromSearch ? (
     <div className="flex justify-start">
       <button

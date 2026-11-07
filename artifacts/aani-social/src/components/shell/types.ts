@@ -13,6 +13,7 @@ export type NotificationsModalProps = {
 export type ShellProps = {
   children: ReactNode;
   profile: Profile | null;
+  onProfileUpdate: (next: Profile) => void;
   userId: string;
   onSignOut: () => void;
   onOpenComments: (postId: string, commentId?: string) => void;

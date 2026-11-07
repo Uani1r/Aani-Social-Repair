@@ -47,6 +47,8 @@ type ShellOverlayControlsProps = {
   showSettingsModal: boolean;
   onCloseSettings: () => void;
   profile: Profile | null;
+  onProfileUpdate: (next: Profile) => void;
+  onOpenNotifications: () => void;
   onSignOut: () => void;
   showNotifsModal: boolean;
   onCloseNotifications: () => void;
@@ -95,6 +97,8 @@ export default function ShellOverlayControls({
   showSettingsModal,
   onCloseSettings,
   profile,
+  onProfileUpdate,
+  onOpenNotifications,
   onSignOut,
   showNotifsModal,
   onCloseNotifications,
@@ -157,7 +161,17 @@ export default function ShellOverlayControls({
         />
       )}
 
-      <SettingsModal isOpen={showSettingsModal} onClose={onCloseSettings} currentProfile={profile} onSignOut={onSignOut} />
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={onCloseSettings}
+        currentProfile={profile}
+        onProfileUpdate={onProfileUpdate}
+        onOpenNotifications={() => {
+          onCloseSettings();
+          onOpenNotifications();
+        }}
+        onSignOut={onSignOut}
+      />
       <NotificationsModalComponent
         isOpen={showNotifsModal}
         onClose={onCloseNotifications}

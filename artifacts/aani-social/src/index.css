@@ -2146,6 +2146,32 @@ a:active > .aani-notifications-card {
   color: #fff;
 }
 
+.unified-settings-button {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  display: flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.09);
+  color: #f4f4f5;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 120ms ease;
+}
+
+.unified-settings-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.unified-settings-button:active {
+  transform: translateY(-50%) scale(0.94);
+}
+
 .unified-add-button {
   width: 36px;
   height: 36px;

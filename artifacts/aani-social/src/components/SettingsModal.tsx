@@ -1,114 +1,331 @@
-import { useState, type FormEvent } from 'react';
-import { SendHorizontal, Settings, Sparkles, X } from 'lucide-react';
+import { useEffect, useState, type FormEvent } from 'react';
+import {
+  ArrowRight,
+  Bell,
+  Bot,
+  Check,
+  ChevronLeft,
+  LogOut,
+  Palette,
+  SendHorizontal,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  UserRound,
+  X,
+} from 'lucide-react';
+import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import type { SettingsModalProps } from '@/lib/appShared';
-import { displayName } from '@/lib/types';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { cleanUsername, displayName } from '@/lib/types';
 
-export default function SettingsModal({ isOpen, onClose, currentProfile, onSignOut }: SettingsModalProps) {
-  const [activeTab, setActiveTab] = useState<'main' | 'mulhim'>('main');
+type SettingsView = 'home' | 'edit' | 'privacy' | 'appearance' | 'mulhim';
+
+const viewTitles: Record<SettingsView, string> = {
+  home: 'الإعدادات',
+  edit: 'تعديل الملف الشخصي',
+  privacy: 'الخصوصية والأمان',
+  appearance: 'المظهر',
+  mulhim: 'مُلهِم آني',
+};
+
+export default function SettingsModal({
+  isOpen,
+  onClose,
+  currentProfile,
+  onProfileUpdate,
+  onOpenNotifications,
+  onSignOut,
+}: SettingsModalProps) {
+  const [view, setView] = useState<SettingsView>('home');
+  const [fullName, setFullName] = useState('');
+  const [username, setUsername] = useState('');
+  const [bio, setBio] = useState('');
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [privacySaving, setPrivacySaving] = useState(false);
   const [mode, setMode] = useState<'gemini' | 'chatgpt' | 'coanalysis'>('coanalysis');
   const [messages, setMessages] = useState<Array<{ id: string; sender: 'user' | 'mulhim'; text: string }>>([
-    { id: 'init', sender: 'mulhim', text: 'أهلاً بك في مركز "مُلهِم آني"! أنا جاهز لتلقي أوامرك وتعديل كود المشروع المباشر فوراً.' }
+    { id: 'init', sender: 'mulhim', text: 'أهلاً بك في مركز "مُلهِم آني"! أنا جاهز لتلقي أوامرك وتعديل كود المشروع المباشر فوراً.' },
   ]);
   const [inputMsg, setInputMsg] = useState('');
   const [aiThinking, setAiThinking] = useState(false);
+  const profileName = currentProfile?.full_name || currentProfile?.display_name || '';
+  const profileUsername = currentProfile?.username || '';
+  const profileBio = currentProfile?.bio || '';
+
+  useEffect(() => {
+    if (isOpen) setView('home');
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setFullName(profileName);
+    setUsername(profileUsername);
+    setBio(profileBio);
+  }, [isOpen, profileName, profileUsername, profileBio]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
-  const handleSendAi = (e: FormEvent) => {
-    e.preventDefault();
+  const handleSaveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!currentProfile || profileSaving) return;
+
+    const name = fullName.trim();
+    const normalizedUsername = cleanUsername(username).toLowerCase();
+    const normalizedBio = bio.trim();
+    if (!name || name.length > 120) {
+      toast.error('أدخل اسماً لا يتجاوز 120 حرفاً.');
+      return;
+    }
+    if (!/^[a-z0-9_.]{3,32}$/.test(normalizedUsername)) {
+      toast.error('اسم المستخدم يجب أن يتكون من 3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية.');
+      return;
+    }
+    if (normalizedBio.length > 300) {
+      toast.error('النبذة الشخصية يجب ألا تتجاوز 300 حرف.');
+      return;
+    }
+    if (!supabaseConfigured) {
+      toast.error('إعدادات الاتصال بقاعدة البيانات غير مكتملة.');
+      return;
+    }
+
+    setProfileSaving(true);
+    const { error } = await supabase
+      .from('profiles')
+      .update({ full_name: name, display_name: name, username: normalizedUsername, bio: normalizedBio })
+      .eq('id', currentProfile.id);
+    if (error) {
+      toast.error(error.code === '23505' ? 'اسم المستخدم مستخدم بالفعل.' : 'تعذر حفظ تعديلات الملف الشخصي.');
+      setProfileSaving(false);
+      return;
+    }
+
+    onProfileUpdate({
+      ...currentProfile,
+      full_name: name,
+      display_name: name,
+      username: normalizedUsername,
+      bio: normalizedBio,
+    });
+    setProfileSaving(false);
+    setView('home');
+    toast.success('تم تحديث الملف الشخصي.');
+  };
+
+  const toggleAccountPrivacy = async () => {
+    if (!currentProfile || privacySaving || !supabaseConfigured) return;
+    const isPrivate = !Boolean(currentProfile.is_private);
+    setPrivacySaving(true);
+    const { error } = await supabase.from('profiles').update({ is_private: isPrivate }).eq('id', currentProfile.id);
+    if (error) {
+      toast.error('تعذر تحديث خصوصية الحساب.');
+      setPrivacySaving(false);
+      return;
+    }
+    onProfileUpdate({ ...currentProfile, is_private: isPrivate });
+    setPrivacySaving(false);
+    toast.success(isPrivate ? 'أصبح الحساب خاصاً.' : 'أصبح الحساب عاماً.');
+  };
+
+  const handleSendAi = (event: FormEvent) => {
+    event.preventDefault();
     if (!inputMsg.trim() || aiThinking) return;
 
     const userText = inputMsg.trim();
-    const userMsgObj = { id: Math.random().toString(), sender: 'user' as const, text: userText };
-    setMessages(prev => [...prev, userMsgObj]);
+    setMessages(previous => [...previous, { id: Math.random().toString(), sender: 'user', text: userText }]);
     setInputMsg('');
     setAiThinking(true);
 
-    setTimeout(() => {
-      let replyText = `[وضع ${mode.toUpperCase()}]: أهلاً بك! إجابة سريعة على "${userText}": التطبيق جاهز ومربوط مع خادم التعديل المباشر.`;
-      setMessages(prev => [...prev, { id: Math.random().toString(), sender: 'mulhim', text: replyText }]);
+    window.setTimeout(() => {
+      const replyText = `[وضع ${mode.toUpperCase()}]: أهلاً بك! إجابة سريعة على "${userText}": التطبيق جاهز ومربوط مع خادم التعديل المباشر.`;
+      setMessages(previous => [...previous, { id: Math.random().toString(), sender: 'mulhim', text: replyText }]);
       setAiThinking(false);
     }, 800);
   };
 
+  const openNotifications = () => {
+    onClose();
+    onOpenNotifications();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onClick={onClose}>
       <section
-        className="w-full max-w-sm rounded-3xl border border-zinc-800 bg-zinc-900 p-4 text-white shadow-2xl flex flex-col h-[80vh]"
+        className="flex h-[min(84dvh,680px)] w-full max-w-md flex-col overflow-hidden rounded-[28px] border border-white/10 bg-[#111113] text-white shadow-2xl"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="settings-modal-title"
+        dir="rtl"
         onClick={event => event.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-          <div className="flex items-center gap-2">
-            <Settings size={18} />
-            <h2 className="text-sm font-bold">إعدادات الحساب</h2>
+        <div className="flex shrink-0 items-center justify-between border-b border-white/[0.07] px-5 py-4">
+          <div className="flex min-w-0 items-center gap-3">
+            {view !== 'home' && (
+              <button
+                type="button"
+                aria-label="العودة إلى الإعدادات"
+                onClick={() => setView('home')}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/[0.06] text-zinc-300 transition hover:bg-white/10 hover:text-white"
+              >
+                <ArrowRight size={18} />
+              </button>
+            )}
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/[0.07] text-zinc-100">
+              {view === 'edit' ? <UserRound size={18} /> : view === 'privacy' ? <ShieldCheck size={18} /> : view === 'appearance' ? <Palette size={18} /> : view === 'mulhim' ? <Sparkles size={18} /> : <Settings size={18} />}
+            </span>
+            <h2 id="settings-modal-title" className="truncate text-base font-bold">{viewTitles[view]}</h2>
           </div>
-          <button type="button" onClick={onClose} className="rounded-lg p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white">
-            <X size={18} />
+          <button
+            type="button"
+            aria-label="إغلاق الإعدادات"
+            onClick={onClose}
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/[0.07] hover:text-white"
+          >
+            <X size={19} />
           </button>
         </div>
 
-        <div className="flex gap-2 border-b border-zinc-800 py-2 text-xs font-semibold">
-          <button onClick={() => setActiveTab('main')} className={`px-3 py-1.5 rounded-xl transition ${activeTab === 'main' ? 'bg-pink-600 text-white' : 'text-zinc-400 hover:bg-zinc-800'}`}>
-            الحساب
-          </button>
-          <button onClick={() => setActiveTab('mulhim')} className={`px-3 py-1.5 rounded-xl flex items-center gap-1.5 transition ${activeTab === 'mulhim' ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white font-bold' : 'text-zinc-400 hover:bg-zinc-800'}`}>
-            <Sparkles size={14} className="text-pink-300" /> مُلهِم الذكي
-          </button>
-        </div>
+        {view === 'home' && (
+          <>
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-5">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/[0.07] bg-white/[0.035] p-3.5">
+                <Avatar profile={currentProfile} large />
+                <UserIdentity
+                  name={displayName(currentProfile)}
+                  username={currentProfile?.username}
+                  className="min-w-0 flex-1"
+                  nameClassName="text-sm font-semibold text-white"
+                  usernameClassName="text-xs text-zinc-500"
+                />
+              </div>
 
-        {activeTab === 'main' ? (
-          <div className="space-y-4 pt-3 flex-1">
-            <div className="flex items-center gap-4 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-              <Avatar profile={currentProfile} large />
-              <UserIdentity
-                name={displayName(currentProfile)}
-                username={currentProfile?.username}
-                className="min-w-0 flex-1"
-                nameClassName="text-sm text-white"
-                usernameClassName="text-xs text-zinc-400"
-              />
+              <div className="overflow-hidden rounded-2xl border border-white/[0.07] bg-white/[0.025]">
+                <button type="button" onClick={() => setView('edit')} className="flex w-full items-center gap-3 border-b border-white/[0.06] px-4 py-3.5 text-right transition hover:bg-white/[0.045]">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-400/10 text-sky-300"><UserRound size={18} /></span>
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">تعديل الملف الشخصي</span><span className="mt-0.5 block text-[11px] text-zinc-500">الاسم واسم المستخدم والنبذة</span></span>
+                  <ChevronLeft size={17} className="shrink-0 text-zinc-600" />
+                </button>
+                <button type="button" onClick={() => setView('privacy')} className="flex w-full items-center gap-3 border-b border-white/[0.06] px-4 py-3.5 text-right transition hover:bg-white/[0.045]">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300"><ShieldCheck size={18} /></span>
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">الخصوصية والأمان</span><span className="mt-0.5 block text-[11px] text-zinc-500">إدارة خصوصية حسابك</span></span>
+                  <ChevronLeft size={17} className="shrink-0 text-zinc-600" />
+                </button>
+                <button type="button" onClick={openNotifications} className="flex w-full items-center gap-3 border-b border-white/[0.06] px-4 py-3.5 text-right transition hover:bg-white/[0.045]">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-400/10 text-amber-300"><Bell size={18} /></span>
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">الإشعارات</span><span className="mt-0.5 block text-[11px] text-zinc-500">عرض التنبيهات والنشاط</span></span>
+                  <ChevronLeft size={17} className="shrink-0 text-zinc-600" />
+                </button>
+                <button type="button" onClick={() => setView('appearance')} className="flex w-full items-center gap-3 px-4 py-3.5 text-right transition hover:bg-white/[0.045]">
+                  <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300"><Palette size={18} /></span>
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">المظهر</span><span className="mt-0.5 block text-[11px] text-zinc-500">المظهر الداكن</span></span>
+                  <ChevronLeft size={17} className="shrink-0 text-zinc-600" />
+                </button>
+              </div>
+
+              <button type="button" onClick={() => setView('mulhim')} className="flex w-full items-center gap-3 rounded-2xl border border-pink-400/10 bg-gradient-to-l from-purple-500/[0.09] to-pink-500/[0.08] px-4 py-3 text-right transition hover:border-pink-400/20">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-pink-400/10 text-pink-300"><Bot size={18} /></span>
+                <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">مُلهِم آني</span><span className="mt-0.5 block text-[11px] text-zinc-500">المساعد الذكي</span></span>
+                <ChevronLeft size={17} className="shrink-0 text-zinc-600" />
+              </button>
             </div>
-            <p className="text-xs leading-6 text-zinc-400">إدارة جلسة تسجيل الدخول وإعدادات حسابك في آني.</p>
-            <button type="button" onClick={onSignOut} className="w-full rounded-xl bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-300 hover:bg-red-500/20">
-              تسجيل الخروج
-            </button>
+            <div className="shrink-0 border-t border-white/[0.07] bg-[#111113] p-4">
+              <button type="button" onClick={onSignOut} className="flex w-full items-center justify-center gap-2.5 rounded-2xl border border-red-400/15 bg-red-500/[0.12] px-4 py-3.5 text-sm font-bold text-red-300 transition hover:border-red-400/30 hover:bg-red-500/20">
+                <LogOut size={18} />
+                تسجيل الخروج
+              </button>
+            </div>
+          </>
+        )}
+
+        {view === 'edit' && (
+          <form onSubmit={event => void handleSaveProfile(event)} className="flex min-h-0 flex-1 flex-col">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
+                الاسم الظاهر
+                <input value={fullName} onChange={event => setFullName(event.target.value)} maxLength={120} required className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+              </label>
+              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
+                اسم المستخدم
+                <div className="flex items-center rounded-xl border border-white/10 bg-white/[0.04] px-3.5 focus-within:border-white/25">
+                  <span className="text-sm text-zinc-500">@</span>
+                  <input value={username} onChange={event => setUsername(event.target.value)} maxLength={32} autoCapitalize="none" autoCorrect="off" required className="w-full bg-transparent px-2 py-3 text-sm text-white outline-none placeholder:text-zinc-600" />
+                </div>
+              </label>
+              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
+                النبذة الشخصية
+                <textarea value={bio} onChange={event => setBio(event.target.value)} maxLength={300} rows={4} className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+                <span className="block text-left text-[10px] font-normal text-zinc-600">{bio.length}/300</span>
+              </label>
+            </div>
+            <div className="shrink-0 border-t border-white/[0.07] p-4">
+              <button type="submit" disabled={profileSaving} className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-bold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60">
+                {profileSaving ? 'جارٍ الحفظ…' : 'حفظ التغييرات'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {view === 'privacy' && (
+          <div className="flex min-h-0 flex-1 flex-col px-5 py-5">
+            <p className="mb-5 text-sm leading-6 text-zinc-400">تحكم بمن يمكنه متابعة حسابك ورؤية محتواك. عند جعل الحساب خاصاً، تحتاج طلبات المتابعة إلى موافقتك.</p>
+            <div className="flex items-center gap-4 rounded-2xl border border-white/[0.08] bg-white/[0.035] p-4">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-400/10 text-emerald-300"><ShieldCheck size={19} /></span>
+              <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">حساب خاص</span><span className="mt-1 block text-xs text-zinc-500">{currentProfile?.is_private ? 'الحساب خاص حالياً' : 'الحساب عام حالياً'}</span></span>
+              <button type="button" role="switch" aria-label="حساب خاص" aria-checked={Boolean(currentProfile?.is_private)} onClick={() => void toggleAccountPrivacy()} disabled={privacySaving || !currentProfile} className={`relative h-7 w-12 shrink-0 rounded-full transition disabled:opacity-50 ${currentProfile?.is_private ? 'bg-pink-500' : 'bg-zinc-700'}`}>
+                <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow transition-all ${currentProfile?.is_private ? 'right-1' : 'right-6'}`} />
+              </button>
+            </div>
+            <p className="mt-4 text-[11px] leading-5 text-zinc-600">يمكنك تغيير خصوصية الحساب في أي وقت. يظل محتوى الحساب العام متاحاً للجميع.</p>
           </div>
-        ) : (
-          <div className="flex-1 flex flex-col overflow-hidden pt-2">
-            <div className="flex justify-between items-center bg-zinc-950 p-1.5 rounded-xl border border-zinc-800 mb-2 text-[10px]">
-              <span className="text-zinc-400 font-semibold px-1">الوضع:</span>
+        )}
+
+        {view === 'appearance' && (
+          <div className="flex min-h-0 flex-1 flex-col px-5 py-5">
+            <p className="mb-5 text-sm leading-6 text-zinc-400">اختر شكل التطبيق المفضل لديك.</p>
+            <div className="flex items-center gap-3 rounded-2xl border border-white/15 bg-white/[0.045] p-4">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-400/10 text-violet-300"><Palette size={19} /></span>
+              <span className="min-w-0 flex-1"><span className="block text-sm font-semibold">داكن</span><span className="mt-1 block text-xs text-zinc-500">المظهر الحالي للتطبيق</span></span>
+              <Check size={18} className="text-emerald-300" />
+            </div>
+            <p className="mt-4 text-[11px] leading-5 text-zinc-600">المظهر الداكن هو المظهر المتاح حالياً.</p>
+          </div>
+        )}
+
+        {view === 'mulhim' && (
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-4 py-3">
+            <div className="mb-3 flex items-center justify-between rounded-xl border border-white/[0.07] bg-white/[0.025] p-2 text-[10px]">
+              <span className="px-1 font-semibold text-zinc-400">الوضع:</span>
               <div className="flex gap-1">
-                <button onClick={() => setMode('gemini')} className={`px-2 py-0.5 rounded-md ${mode === 'gemini' ? 'bg-purple-600 text-white font-bold' : 'text-zinc-400'}`}>Gemini</button>
-                <button onClick={() => setMode('chatgpt')} className={`px-2 py-0.5 rounded-md ${mode === 'chatgpt' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400'}`}>ChatGPT</button>
-                <button onClick={() => setMode('coanalysis')} className={`px-2 py-0.5 rounded-md ${mode === 'coanalysis' ? 'bg-pink-600 text-white font-bold' : 'text-zinc-400'}`}>مشترك</button>
+                <button type="button" onClick={() => setMode('gemini')} className={`rounded-md px-2 py-1 ${mode === 'gemini' ? 'bg-purple-600 text-white font-bold' : 'text-zinc-400'}`}>Gemini</button>
+                <button type="button" onClick={() => setMode('chatgpt')} className={`rounded-md px-2 py-1 ${mode === 'chatgpt' ? 'bg-emerald-600 text-white font-bold' : 'text-zinc-400'}`}>ChatGPT</button>
+                <button type="button" onClick={() => setMode('coanalysis')} className={`rounded-md px-2 py-1 ${mode === 'coanalysis' ? 'bg-pink-600 text-white font-bold' : 'text-zinc-400'}`}>مشترك</button>
               </div>
             </div>
-
-            <div className="flex-1 overflow-y-auto space-y-2.5 p-1 text-xs no-scrollbar">
-              {messages.map(m => (
-                <div key={m.id} className={`p-3 rounded-2xl max-w-[85%] whitespace-pre-wrap leading-relaxed ${m.sender === 'user' ? 'bg-pink-600 text-white mr-auto rounded-bl-none' : 'bg-zinc-800 text-zinc-200 ml-auto rounded-br-none border border-zinc-700/60'}`}>
-                  {m.sender === 'mulhim' && <span className="font-bold text-[10px] text-pink-400 block mb-1">✨ مُلهِم آني</span>}
-                  {m.text}
+            <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-1 text-xs">
+              {messages.map(message => (
+                <div key={message.id} className={`max-w-[85%] whitespace-pre-wrap rounded-2xl p-3 leading-relaxed ${message.sender === 'user' ? 'mr-auto rounded-bl-none bg-pink-600 text-white' : 'ml-auto rounded-br-none border border-zinc-700/60 bg-zinc-800 text-zinc-200'}`}>
+                  {message.sender === 'mulhim' && <span className="mb-1 block text-[10px] font-bold text-pink-400">مُلهِم آني</span>}
+                  {message.text}
                 </div>
               ))}
-              {aiThinking && <p className="text-[10px] text-zinc-500 animate-pulse px-2">مُلهِم يكتب الآن...</p>}
+              {aiThinking && <p className="animate-pulse px-2 text-[10px] text-zinc-500">مُلهِم يكتب الآن...</p>}
             </div>
-
-            <form onSubmit={handleSendAi} className="flex gap-1.5 pt-2 border-t border-zinc-800 mt-1">
-              <input 
-                value={inputMsg} 
-                onChange={e => setInputMsg(e.target.value)} 
-                placeholder="اسأل مُلهِم شيئاً..." 
-                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white outline-none"
-              />
-              <button type="submit" disabled={aiThinking || !inputMsg.trim()} className="bg-pink-600 hover:bg-pink-700 disabled:opacity-50 text-white p-2 rounded-xl">
-                <SendHorizontal size={15} />
-              </button>
+            <form onSubmit={handleSendAi} className="mt-2 flex gap-2 border-t border-white/[0.07] pt-3">
+              <input value={inputMsg} onChange={event => setInputMsg(event.target.value)} placeholder="اسأل مُلهِم شيئاً..." className="min-w-0 flex-1 rounded-xl border border-white/[0.08] bg-black/40 px-3 py-2.5 text-xs text-white outline-none focus:border-white/20" />
+              <button type="submit" disabled={aiThinking || !inputMsg.trim()} aria-label="إرسال" className="rounded-xl bg-pink-600 p-2.5 text-white transition hover:bg-pink-700 disabled:opacity-50"><SendHorizontal size={16} /></button>
             </form>
           </div>
         )}

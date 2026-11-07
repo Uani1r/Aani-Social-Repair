@@ -162,6 +162,8 @@ export type SettingsModalProps = {
   isOpen: boolean;
   onClose: () => void;
   currentProfile: Profile | null;
+  onProfileUpdate: (next: Profile) => void;
+  onOpenNotifications: () => void;
   onSignOut: () => void;
 };
 

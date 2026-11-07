@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties, type TouchEvent as ReactTouchEvent, type ReactNode } from 'react';
 import { Link } from 'wouter';
-import { Bell, Plus } from 'lucide-react';
+import { Bell, Plus, Settings } from 'lucide-react';
 
 type UnifiedTopBarProps = {
   hidden: boolean;
   unreadCount: number;
   stories?: ReactNode;
+  showSettingsButton: boolean;
+  onOpenSettings: () => void;
   onOpenNotifications: () => void;
   onOpenCreatePost: () => void;
   onRefresh: () => Promise<void>;
@@ -41,6 +43,8 @@ export default function UnifiedTopBar({
   hidden,
   unreadCount,
   stories,
+  showSettingsButton,
+  onOpenSettings,
   onOpenNotifications,
   onOpenCreatePost,
   onRefresh,
@@ -167,6 +171,17 @@ export default function UnifiedTopBar({
           </Link>
 
           <div className="unified-actions-section">
+            {showSettingsButton && (
+              <button
+                type="button"
+                aria-label="الإعدادات"
+                aria-haspopup="dialog"
+                className="unified-settings-button"
+                onClick={onOpenSettings}
+              >
+                <Settings size={19} strokeWidth={1.8} />
+              </button>
+            )}
             <button
               type="button"
               aria-label="الإشعارات"

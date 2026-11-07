@@ -88,6 +88,7 @@ function App() {
           <Shell
             userId={user.id}
             profile={profile}
+            onProfileUpdate={setProfile}
             onSignOut={() => void signOut()}
             onOpenComments={openComments}
             onOpenStory={openNotificationStory}
