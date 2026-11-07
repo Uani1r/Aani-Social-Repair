@@ -616,8 +616,8 @@ export default function MessagesPage({
   }, [currentUserId, newMessageOpen, newMessageSearch]);
 
   const insertComposerSymbol = (symbol: string) => {
+    messageInputRef.current?.blur();
     setText(value => `${value}${symbol}`);
-    messageInputRef.current?.focus();
   };
 
   const openChatMediaPicker = () => {

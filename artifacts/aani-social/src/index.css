@@ -3111,6 +3111,12 @@ body.aani-immersive .unified-top-bar {
   white-space: pre-wrap;
 }
 
+.messages-bubble .twemoji-image {
+  width: auto;
+  height: auto;
+  font-size: 1em;
+}
+
 .messages-bubble.is-mine {
   border: 1px solid rgb(186 140 238 / 28%);
   border-bottom-right-radius: 6px;
@@ -3834,11 +3840,6 @@ body.aani-immersive .unified-top-bar {
   height: 116px;
 }
 
-.messages-sticker-message .twemoji-fallback {
-  font-size: 88px;
-  line-height: 1;
-}
-
 .twemoji-text {
   display: inline;
 }
@@ -3846,13 +3847,10 @@ body.aani-immersive .unified-top-bar {
 .twemoji-image {
   display: inline-block;
   flex: 0 0 auto;
-  object-fit: contain;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-variant-emoji: emoji;
+  line-height: 1;
   vertical-align: -0.18em;
-}
-
-.twemoji-fallback {
-  display: inline-block;
-  vertical-align: -0.08em;
 }
 
 .messages-sticker-studio-backdrop {

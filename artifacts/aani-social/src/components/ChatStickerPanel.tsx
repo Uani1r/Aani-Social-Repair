@@ -4,6 +4,7 @@ import { ArrowRight, Clock, ImagePlus, Plus, Store } from 'lucide-react';
 import { toast } from 'sonner';
 
 import StickerStudio from '@/components/StickerStudio';
+import emojiCatalog from '@/data/emoji-catalog.json';
 import { EMOJI_CATEGORY_LABELS, normalizeEmojiCatalog, TwemojiEmoji, type EmojiChoice } from '@/components/TwemojiText';
 import type { ChatStickerPayload } from '@/components/ChatStickerMessage';
 import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
@@ -133,9 +134,7 @@ export default function ChatStickerPanel({
   const [mode, setMode] = useState<PanelMode>('emoji');
   const [recentlyUsed, setRecentlyUsed] = useState<string[]>(() => readRecentlyUsedEmojis(currentUserId));
   const [selectedCategory, setSelectedCategory] = useState(() => recentlyUsed.length ? 'recent' : 'Smileys & Emotion');
-  const [emojiChoices, setEmojiChoices] = useState<EmojiChoice[]>([]);
-  const [emojiLoading, setEmojiLoading] = useState(true);
-  const [emojiError, setEmojiError] = useState(false);
+  const [emojiChoices] = useState<EmojiChoice[]>(() => normalizeEmojiCatalog(emojiCatalog));
   const [installedPacks, setInstalledPacks] = useState<string[]>(() => readInstalledPacks(currentUserId));
   const [customStickers, setCustomStickers] = useState<CustomSticker[]>(() => readCustomStickers(currentUserId));
   const [activeCollection, setActiveCollection] = useState<string>('reactions');
@@ -161,30 +160,6 @@ export default function ChatStickerPanel({
 
   useEffect(() => () => {
     if (dismissTimeoutRef.current !== null) window.clearTimeout(dismissTimeoutRef.current);
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setEmojiLoading(true);
-    fetch('/emoji-catalog.json', { signal: controller.signal })
-      .then(response => {
-        if (!response.ok) throw new Error('emoji catalog unavailable');
-        return response.json() as Promise<unknown>;
-      })
-      .then(value => {
-        setEmojiChoices(normalizeEmojiCatalog(value));
-        setEmojiError(false);
-      })
-      .catch(error => {
-        if (controller.signal.aborted) return;
-        console.error('[messages] تعذر تحميل قائمة الإيموجي:', error);
-        setEmojiChoices([]);
-        setEmojiError(true);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setEmojiLoading(false);
-      });
-    return () => controller.abort();
   }, []);
 
   const categories = CATEGORY_ORDER.filter(category => EMOJI_CATEGORY_LABELS[category]);
@@ -366,9 +341,7 @@ export default function ChatStickerPanel({
           <div className="messages-sticker-panel-content">
             {mode === 'emoji' && (
               <>
-                {emojiLoading ? <div className="messages-sticker-empty">جارٍ تحميل الإيموجي...</div> : emojiError ? (
-                  <div className="messages-sticker-empty" role="alert">تعذر تحميل الإيموجي. تحقق من الاتصال.</div>
-                ) : visibleEmojis.length ? (
+                {visibleEmojis.length ? (
                   <div className="messages-emoji-catalog">
                     {visibleEmojis.map((choice, index) => (
                       <button key={`${choice.emoji}-${index}`} type="button" aria-label={choice.name} title={choice.name} onClick={() => { rememberEmoji(choice.emoji); onInsertEmoji(choice.emoji); }}>
@@ -376,8 +349,10 @@ export default function ChatStickerPanel({
                       </button>
                     ))}
                   </div>
-                ) : (
+                ) : selectedCategory === 'recent' ? (
                   <div className="messages-sticker-empty">لم تُستخدم إيموجيات مؤخراً بعد.</div>
+                ) : (
+                  <div className="messages-sticker-empty">لا توجد إيموجيات في هذه الفئة.</div>
                 )}
               </>
             )}
