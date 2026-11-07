@@ -502,10 +502,10 @@ function createMessageId(): string {
   });
 }
 
-function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): MessageRow[] {
+function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[], preserveExisting = false): MessageRow[] {
   const messages = new Map(incoming.map(message => [message.id, message]));
   existing.forEach(message => {
-    if (message.sendState && !messages.has(message.id)) messages.set(message.id, message);
+    if ((preserveExisting || message.sendState) && !messages.has(message.id)) messages.set(message.id, message);
   });
   return [...messages.values()].sort((left, right) => (
     (Date.parse(left.created_at) || 0) - (Date.parse(right.created_at) || 0)
@@ -668,6 +668,7 @@ export default function MessagesPage({
   const voiceRecordingTimerRef = useRef<number | null>(null);
   const voiceObjectUrlsRef = useRef(new Set<string>());
   const voiceScrollLockRef = useRef(new Set<string>());
+  const voiceScrollConfirmedRef = useRef(new Set<string>());
   const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
@@ -881,6 +882,7 @@ export default function MessagesPage({
     if (!supabaseConfigured || !selectedId) return;
     const requestId = ++threadRequestRef.current;
     const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
+    const preserveExistingRowsAtRequestStart = voiceScrollLockRef.current.size > 0;
     const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
 
     try {
@@ -931,7 +933,11 @@ export default function MessagesPage({
       });
 
       if (requestId === threadRequestRef.current) {
-        setThread(current => mergeThreadRows(current, visibleMessages));
+        visibleMessages.forEach(message => {
+          if (voiceScrollLockRef.current.has(message.id)) voiceScrollConfirmedRef.current.add(message.id);
+        });
+        const preserveExistingRows = preserveExistingRowsAtRequestStart || voiceScrollLockRef.current.size > 0;
+        setThread(current => mergeThreadRows(current, visibleMessages, preserveExistingRows));
         setThreadCacheReady(true);
         commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
@@ -1116,6 +1122,7 @@ export default function MessagesPage({
       window.requestAnimationFrame(() => {
         keepBottom();
         voiceScrollLockRef.current.delete(messageId);
+        voiceScrollConfirmedRef.current.delete(messageId);
       });
     });
   }, [scrollThreadToBottom]);
@@ -1133,6 +1140,10 @@ export default function MessagesPage({
       if (hasPendingVoiceMessage()) scrollThreadToBottom();
       secondFrame = window.requestAnimationFrame(() => {
         if (hasPendingVoiceMessage()) scrollThreadToBottom();
+        voiceScrollConfirmedRef.current.forEach(messageId => {
+          voiceScrollConfirmedRef.current.delete(messageId);
+          voiceScrollLockRef.current.delete(messageId);
+        });
       });
     });
     return () => {
@@ -1327,7 +1338,7 @@ export default function MessagesPage({
       }
       URL.revokeObjectURL(localUrl);
       voiceObjectUrlsRef.current.delete(localUrl);
-      if (isConversationOpen) scheduleVoiceThreadBottom(session.recipientId, messageId);
+      if (selectedIdRef.current === session.recipientId) void loadThread();
       void loadConversationList();
     } catch (error) {
       if (uploadedPath && isTransientNetworkError(error)) preserveUploadedFile = true;
