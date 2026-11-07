@@ -5505,11 +5505,16 @@ body.aani-immersive .unified-top-bar {
   max-width: min(240px, calc(100vw - 48px));
   align-items: center;
   gap: 3px;
-  border: 1px solid rgb(255 255 255 / 13%);
-  border-radius: 999px;
-  padding: 2px 5px;
-  background: #202020;
-  box-shadow: 0 2px 8px rgb(0 0 0 / 30%);
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.messages-message-row.is-theirs .messages-reaction-badges {
+  right: 4px;
+  left: auto;
 }
 
 .messages-reaction-badges button {
@@ -5519,9 +5524,9 @@ body.aani-immersive .unified-top-bar {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  border: 0;
-  border-radius: 999px;
-  padding: 0 3px;
+  border: none;
+  border-radius: 0;
+  padding: 0;
   color: #fff;
   background: transparent;
   font-size: 13px;
@@ -5529,7 +5534,7 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-reaction-badges button.is-mine {
-  background: rgb(147 91 196 / 42%);
+  background: transparent;
 }
 
 .messages-reaction-badges button span:last-child:not(:first-child) {

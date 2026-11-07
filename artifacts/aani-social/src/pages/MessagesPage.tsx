@@ -158,6 +158,93 @@ function normalizeMessageRows(value: unknown): MessageRow[] {
   });
 }
 
+interface CachedMessageThread {
+  messages: MessageRow[];
+  reactionsByMessage: Record<string, MessageReaction[]>;
+}
+
+const conversationCacheKey = (userId: string) => `aani_messages_conversations_v1_${userId}`;
+const threadCacheKey = (userId: string, contactId: string) => `aani_messages_thread_v1_${userId}_${contactId}`;
+const MESSAGE_THREAD_CACHE_LIMIT = 300;
+
+function readConversationCache(userId: string): ConversationSummary[] | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(conversationCacheKey(userId));
+    if (!raw) return null;
+    const stored: unknown = JSON.parse(raw);
+    if (!Array.isArray(stored)) return null;
+    return stored.flatMap((item): ConversationSummary[] => {
+      if (!isRecord(item) || !isRecord(item.profile) || typeof item.profile.id !== 'string') return [];
+      const lastMessage = item.lastMessage === null ? null : normalizeMessageRows([item.lastMessage])[0] || null;
+      return [{
+        profile: item.profile as unknown as Profile,
+        lastMessage,
+        hasStory: item.hasStory === true,
+        isRequest: item.isRequest === true,
+      }];
+    });
+  } catch {
+    return null;
+  }
+}
+
+function readThreadCache(userId: string, contactId: string): CachedMessageThread | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(threadCacheKey(userId, contactId));
+    if (!raw) return null;
+    const stored: unknown = JSON.parse(raw);
+    if (!isRecord(stored) || !Array.isArray(stored.messages)) return null;
+    const messages = normalizeMessageRows(stored.messages).slice(-MESSAGE_THREAD_CACHE_LIMIT);
+    const messageIds = new Set(messages.map(message => message.id));
+    const reactionsByMessage: Record<string, MessageReaction[]> = {};
+    if (Array.isArray(stored.reactions)) {
+      stored.reactions.forEach((item: unknown) => {
+        if (!isRecord(item)
+          || typeof item.message_id !== 'string'
+          || typeof item.user_id !== 'string'
+          || typeof item.emoji !== 'string'
+          || !messageIds.has(item.message_id)) return;
+        (reactionsByMessage[item.message_id] ||= []).push({ user_id: item.user_id, emoji: item.emoji });
+      });
+    }
+    return { messages, reactionsByMessage };
+  } catch {
+    return null;
+  }
+}
+
+function writeConversationCache(userId: string, conversations: ConversationSummary[]): void {
+  try {
+    localStorage.setItem(conversationCacheKey(userId), JSON.stringify(conversations));
+  } catch {
+    /* التخزين المحلي غير متاح أو ممتلئ */
+  }
+}
+
+function writeThreadCache(
+  userId: string,
+  contactId: string,
+  messages: MessageRow[],
+  reactionsByMessage: Record<string, MessageReaction[]>,
+): void {
+  const cachedMessages = messages
+    .filter(message => message.sendState !== 'pending' && message.sendState !== 'failed')
+    .slice(-MESSAGE_THREAD_CACHE_LIMIT);
+  const messageIds = new Set(cachedMessages.map(message => message.id));
+  const reactions = Object.entries(reactionsByMessage).flatMap(([messageId, rows]) => (
+    messageIds.has(messageId)
+      ? rows.map(reaction => ({ message_id: messageId, user_id: reaction.user_id, emoji: reaction.emoji }))
+      : []
+  ));
+  try {
+    localStorage.setItem(threadCacheKey(userId, contactId), JSON.stringify({ messages: cachedMessages, reactions }));
+  } catch {
+    /* التخزين المحلي غير متاح أو ممتلئ */
+  }
+}
+
 function messageDeliveryErrorText(error: unknown): string {
   return isRecord(error) && typeof error.message === 'string' ? error.message : '';
 }
@@ -320,15 +407,19 @@ export default function MessagesPage({
   onReshareStory: (story: StoryDmCardStory) => void;
 }) {
   const [, setLocation] = useLocation();
+  const [initialConversationCache] = useState(() => readConversationCache(currentUserId));
+  const [initialThreadCache] = useState(() => selectedId ? readThreadCache(currentUserId, selectedId) : null);
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
-  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
-  const [contactsLoading, setContactsLoading] = useState(true);
+  const [conversations, setConversations] = useState<ConversationSummary[]>(() => initialConversationCache || []);
+  const [contactsLoading, setContactsLoading] = useState(initialConversationCache === null);
+  const [conversationCacheReady, setConversationCacheReady] = useState(initialConversationCache !== null);
   const [contactsError, setContactsError] = useState<string | null>(null);
-  const [thread, setThread] = useState<MessageRow[]>([]);
-  const [threadLoading, setThreadLoading] = useState(false);
+  const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
+  const [threadLoading, setThreadLoading] = useState(Boolean(selectedId && !initialThreadCache && supabaseConfigured));
+  const [threadCacheReady, setThreadCacheReady] = useState(Boolean(initialThreadCache));
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
-  const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, MessageReaction[]>>({});
+  const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, MessageReaction[]>>(() => initialThreadCache?.reactionsByMessage || {});
   const [messageAction, setMessageAction] = useState<MessageActionState | null>(null);
   const [emojiTargetMessage, setEmojiTargetMessage] = useState<MessageRow | null>(null);
   const [messageDeleteBusy, setMessageDeleteBusy] = useState(false);
@@ -365,10 +456,16 @@ export default function MessagesPage({
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressNextConversationClickRef = useRef(false);
-  const messageReactionBusyRef = useRef(new Set<string>());
+  const reactionsByMessageRef = useRef(reactionsByMessage);
+  const reactionMutationVersionRef = useRef(new Map<string, number>());
+  const reactionWriteQueueRef = useRef(new Map<string, Promise<void>>());
   const messageActionOpenedAtRef = useRef(0);
+  const commitReactionsByMessage = useCallback((next: Record<string, MessageReaction[]>) => {
+    reactionsByMessageRef.current = next;
+    setReactionsByMessage(next);
+  }, []);
 
-  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+  useLayoutEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   useEffect(() => () => {
     if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
@@ -386,6 +483,11 @@ export default function MessagesPage({
   useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
   }, [currentUserId]);
+
+  useEffect(() => {
+    if (!conversationCacheReady) return;
+    writeConversationCache(currentUserId, conversations);
+  }, [conversationCacheReady, conversations, currentUserId]);
 
   useEffect(() => {
     const handleMediaCaptionUpdate = (event: Event) => {
@@ -471,7 +573,6 @@ export default function MessagesPage({
       return;
     }
 
-    setContactsLoading(true);
     setContactsError(null);
     try {
       const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
@@ -525,7 +626,7 @@ export default function MessagesPage({
       });
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
 
-      setConversations(contactIds.flatMap(contactId => {
+      const nextConversations = contactIds.flatMap(contactId => {
         const profile = profileById.get(contactId);
         if (!profile) return [];
         const lastMessage = latestByContact.get(contactId) || null;
@@ -535,12 +636,13 @@ export default function MessagesPage({
           hasStory: storyUserIds.has(contactId),
           isRequest: Boolean(lastMessage && lastMessage.sender_id !== currentUserId && !connectedIds.has(contactId)),
         }];
-      }));
+      });
+      setConversations(nextConversations);
+      setConversationCacheReady(true);
     } catch (error) {
       if (requestId !== contactsRequestRef.current) return;
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
-      setConversations([]);
     } finally {
       if (requestId === contactsRequestRef.current) setContactsLoading(false);
     }
@@ -549,8 +651,8 @@ export default function MessagesPage({
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
     const requestId = ++threadRequestRef.current;
+    const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
     const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
-    setThreadLoading(true);
 
     try {
       const { data, error } = await queryMessageRows(threadFilter, true, true);
@@ -570,6 +672,10 @@ export default function MessagesPage({
       const nextReactions: Record<string, MessageReaction[]> = {};
       if (reactionResult.error) {
         console.warn('[messages] تعذر جلب تفاعلات الرسائل:', reactionResult.error);
+        const visibleMessageIds = new Set(visibleMessages.map(message => message.id));
+        Object.entries(reactionsByMessageRef.current).forEach(([messageId, rows]) => {
+          if (visibleMessageIds.has(messageId)) nextReactions[messageId] = rows;
+        });
       } else {
         (reactionResult.data || []).forEach(row => {
           if (typeof row.message_id !== 'string' || typeof row.user_id !== 'string' || typeof row.emoji !== 'string') return;
@@ -577,9 +683,19 @@ export default function MessagesPage({
         });
       }
 
+      reactionMutationVersionRef.current.forEach((version, messageId) => {
+        if (version <= (reactionVersionsAtRequestStart.get(messageId) || 0)) return;
+        const localReaction = reactionsByMessageRef.current[messageId]?.find(reaction => reaction.user_id === currentUserId);
+        const rows = (nextReactions[messageId] || []).filter(reaction => reaction.user_id !== currentUserId);
+        if (localReaction) rows.push(localReaction);
+        if (rows.length) nextReactions[messageId] = rows;
+        else delete nextReactions[messageId];
+      });
+
       if (requestId === threadRequestRef.current) {
         setThread(current => mergeThreadRows(current, visibleMessages));
-        setReactionsByMessage(nextReactions);
+        setThreadCacheReady(true);
+        commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
           .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
           .map(message => message.id));
@@ -587,11 +703,10 @@ export default function MessagesPage({
     } catch (error) {
       if (requestId !== threadRequestRef.current) return;
       console.error('[messages] تعذر جلب المحادثة:', error);
-      setThread([]);
     } finally {
       if (requestId === threadRequestRef.current) setThreadLoading(false);
     }
-  }, [currentUserId, markMessagesDelivered, selectedId]);
+  }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -702,12 +817,16 @@ export default function MessagesPage({
     return () => { void supabase.removeChannel(channel); };
   }, [currentUserId]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setReplyMessage(null);
     setMessageAction(null);
     setEmojiTargetMessage(null);
-    setReactionsByMessage({});
-  }, [selectedId]);
+    const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
+    setThread(cachedThread?.messages || []);
+    setThreadLoading(Boolean(selectedId && !cachedThread && supabaseConfigured));
+    setThreadCacheReady(Boolean(cachedThread));
+    commitReactionsByMessage(cachedThread?.reactionsByMessage || {});
+  }, [commitReactionsByMessage, currentUserId, selectedId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -717,7 +836,6 @@ export default function MessagesPage({
       return;
     }
 
-    setThread([]);
     void loadThread();
     if (!supabaseConfigured) return;
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}`)
@@ -736,6 +854,11 @@ export default function MessagesPage({
       void supabase.removeChannel(channel);
     };
   }, [currentUserId, selectedId, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh]);
+
+  useEffect(() => {
+    if (!selectedId || !threadCacheReady) return;
+    writeThreadCache(currentUserId, selectedId, thread, reactionsByMessage);
+  }, [currentUserId, reactionsByMessage, selectedId, thread, threadCacheReady]);
 
   const lastThreadMessageId = thread[thread.length - 1]?.id;
   useEffect(() => {
@@ -894,6 +1017,7 @@ export default function MessagesPage({
         ...(replyMessage ? { reply_to_message_id: replyMessage.id } : {}),
       });
       if (error) throw error;
+      setThreadCacheReady(true);
       setThread(current => current.map(message => message.id === optimisticMessage.id
         ? { ...message, sendState: 'sent' }
         : message));
@@ -1147,17 +1271,26 @@ export default function MessagesPage({
     });
   };
 
-  const toggleMessageReaction = async (message: MessageRow, emoji: string) => {
+  const toggleMessageReaction = (message: MessageRow, emoji: string) => {
     if (!supabaseConfigured || message.sendState === 'pending' || message.sendState === 'failed' || !emoji || emoji.length > 32) {
       if (!supabaseConfigured) toast.error('قاعدة البيانات غير مهيأة.');
       return;
     }
-    const busyKey = `${message.id}:${currentUserId}`;
-    if (messageReactionBusyRef.current.has(busyKey)) return;
-    messageReactionBusyRef.current.add(busyKey);
-    const existing = (reactionsByMessage[message.id] || []).find(reaction => reaction.user_id === currentUserId);
+
+    const previousRows = [...(reactionsByMessageRef.current[message.id] || [])];
+    const existing = previousRows.find(reaction => reaction.user_id === currentUserId);
     const nextEmoji = existing?.emoji === emoji ? null : emoji;
-    try {
+    const nextRows = previousRows.filter(reaction => reaction.user_id !== currentUserId);
+    if (nextEmoji) nextRows.push({ user_id: currentUserId, emoji: nextEmoji });
+    const optimisticReactions = { ...reactionsByMessageRef.current };
+    if (nextRows.length) optimisticReactions[message.id] = nextRows;
+    else delete optimisticReactions[message.id];
+    commitReactionsByMessage(optimisticReactions);
+
+    const version = (reactionMutationVersionRef.current.get(message.id) || 0) + 1;
+    reactionMutationVersionRef.current.set(message.id, version);
+    const previousWrite = reactionWriteQueueRef.current.get(message.id) || Promise.resolve();
+    const write = previousWrite.catch(() => undefined).then(async () => {
       if (nextEmoji === null) {
         const { error } = await supabase.from('message_reactions').delete().eq('message_id', message.id).eq('user_id', currentUserId);
         if (error) throw error;
@@ -1169,20 +1302,20 @@ export default function MessagesPage({
         }, { onConflict: 'message_id,user_id' });
         if (error) throw error;
       }
-      setReactionsByMessage(current => {
-        const next = { ...current };
-        const rows = (next[message.id] || []).filter(reaction => reaction.user_id !== currentUserId);
-        if (nextEmoji) rows.push({ user_id: currentUserId, emoji: nextEmoji });
-        if (rows.length) next[message.id] = rows;
-        else delete next[message.id];
-        return next;
-      });
-    } catch (error) {
+    });
+    reactionWriteQueueRef.current.set(message.id, write);
+    void write.catch(error => {
       console.error('[messages] تعذر تحديث تفاعل الرسالة:', error);
+      const messageContactId = message.sender_id === currentUserId ? message.recipient_id : message.sender_id;
+      if (reactionMutationVersionRef.current.get(message.id) !== version || selectedIdRef.current !== messageContactId) return;
+      const rollback = { ...reactionsByMessageRef.current };
+      if (previousRows.length) rollback[message.id] = previousRows;
+      else delete rollback[message.id];
+      commitReactionsByMessage(rollback);
       toast.error('تعذر حفظ التفاعل. تأكد من تطبيق تحديث تفاعلات الرسائل في Supabase.');
-    } finally {
-      messageReactionBusyRef.current.delete(busyKey);
-    }
+    }).finally(() => {
+      if (reactionWriteQueueRef.current.get(message.id) === write) reactionWriteQueueRef.current.delete(message.id);
+    });
   };
 
   const copyMessage = async (message: MessageRow) => {
@@ -1266,11 +1399,9 @@ export default function MessagesPage({
       );
       if (error) throw error;
       setThread(current => current.filter(item => item.id !== message.id));
-      setReactionsByMessage(current => {
-        const next = { ...current };
-        delete next[message.id];
-        return next;
-      });
+      const nextReactions = { ...reactionsByMessageRef.current };
+      delete nextReactions[message.id];
+      commitReactionsByMessage(nextReactions);
       setMessageAction(null);
       await Promise.all([loadThread(), loadConversationList()]);
       toast.success(forEveryone ? 'تم حذف الرسالة لدى الجميع' : 'تم حذف الرسالة من محادثتك');
@@ -1362,14 +1493,13 @@ export default function MessagesPage({
           </div>
 
           <div className="messages-list-wrap">
-            {contactsLoading && <div className="messages-list-status">جارٍ تحميل المحادثات...</div>}
-            {!contactsLoading && contactsError && (
+            {!contactsLoading && contactsError && conversations.length === 0 && (
               <div className="messages-list-status" role="alert">
                 <span>{contactsError}</span>
                 <button type="button" onClick={() => void loadConversationList()}>إعادة المحاولة</button>
               </div>
             )}
-            {!contactsLoading && !contactsError && orderedTabConversations.map(conversation => {
+            {!contactsLoading && orderedTabConversations.map(conversation => {
               const isUnread = Boolean(conversation.lastMessage
                 && conversation.lastMessage.sender_id !== currentUserId
                 && Date.parse(conversation.lastMessage.created_at) > (Date.parse(readAtByContact[conversation.profile.id] || '') || 0));
@@ -1443,10 +1573,10 @@ export default function MessagesPage({
                 </Link>
               );
             })}
-            {!contactsLoading && !contactsError && tabConversations.length > 0 && matchingConversationCount === 0 && (
+            {!contactsLoading && (!contactsError || conversations.length > 0) && tabConversations.length > 0 && matchingConversationCount === 0 && (
               <div className="messages-list-status">لا توجد محادثات مطابقة.</div>
             )}
-            {!contactsLoading && !contactsError && tabConversations.length === 0 && (
+            {!contactsLoading && (!contactsError || conversations.length > 0) && tabConversations.length === 0 && (
               <div className="messages-list-empty">
                 <MessageCircle size={26} />
                 <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : activeTab === 'archived' ? 'لا توجد محادثات مؤرشفة' : 'لا توجد محادثات بعد'}</span>
@@ -1485,7 +1615,7 @@ export default function MessagesPage({
                 ) : (
                   <div className="messages-thread-person">
                     <Avatar />
-                    <span className="messages-thread-placeholder">جارٍ تحميل الحساب...</span>
+                    <span className="messages-thread-placeholder">المحادثة</span>
                   </div>
                 )}
                 <div className="messages-thread-actions">
@@ -1553,7 +1683,6 @@ export default function MessagesPage({
                 onTouchEnd={() => { threadScrollTouchOriginRef.current = null; }}
                 onTouchCancel={() => { threadScrollTouchOriginRef.current = null; }}
               >
-                {threadLoading && thread.length === 0 && <div className="messages-thread-status">جارٍ تحميل الرسائل...</div>}
                 {!threadLoading && thread.length === 0 && !selectedPendingMediaMessage && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
