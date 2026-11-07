@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Pause, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -179,7 +179,7 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
       >
         {isLoading ? <span className="messages-voice-spinner" aria-hidden="true" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
-      <div className="messages-voice-timeline" data-message-gesture-ignore>
+      <div className="messages-voice-timeline">
         <time className="messages-voice-elapsed" dir="ltr">{formatVoiceDuration(currentTimeMs)}</time>
         <input
           className="messages-voice-progress"
@@ -510,6 +510,21 @@ function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): Messag
   ));
 }
 
+function isEditableTextMessage(message: MessageRow): boolean {
+  const content = message.content.trim();
+  return Boolean(content)
+    && !message.post_id
+    && !message.story_id
+    && !parseVoiceMessage(content)
+    && !parseChatMediaMessage(content)
+    && !parseChatStickerMessage(content)
+    && !content.startsWith(CHAT_VOICE_MESSAGE_PREFIX)
+    && !content.startsWith(CHAT_STICKER_MESSAGE_PREFIX)
+    && !content.startsWith('[story:')
+    && !content.startsWith('[story-reply]')
+    && !content.startsWith('[post:');
+}
+
 function MessageDeliveryStatus({ message }: { message: MessageRow }) {
   if (message.sendState === 'pending') {
     return <span className="messages-delivery-status is-pending" role="img" aria-label="قيد الإرسال" title="قيد الإرسال"><Clock /></span>;
@@ -626,6 +641,7 @@ export default function MessagesPage({
   const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
   const [threadCacheReady, setThreadCacheReady] = useState(Boolean(initialThreadCache));
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
+  const [editingMessage, setEditingMessage] = useState<MessageRow | null>(null);
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
   const [voiceRecordingStatus, setVoiceRecordingStatus] = useState<VoiceRecordingStatus>('idle');
   const [voiceRecordingElapsedMs, setVoiceRecordingElapsedMs] = useState(0);
@@ -660,6 +676,8 @@ export default function MessagesPage({
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const editingMessageRef = useRef(editingMessage);
+  editingMessageRef.current = editingMessage;
   const messageComposerRef = useRef<HTMLFormElement>(null);
   const voiceCancelButtonRef = useRef<HTMLButtonElement>(null);
   const voiceRecordingSessionRef = useRef<VoiceRecordingSession | null>(null);
@@ -1061,6 +1079,9 @@ export default function MessagesPage({
 
   useLayoutEffect(() => {
     setReplyMessage(null);
+    if (editingMessageRef.current) setText('');
+    editingMessageRef.current = null;
+    setEditingMessage(null);
     setMessageAction(null);
     setEmojiTargetMessage(null);
     const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
@@ -1527,6 +1548,43 @@ export default function MessagesPage({
     }
 
     const recipientId = selectedId;
+    if (editingMessage) {
+      const messageToEdit = editingMessage;
+      if (messageToEdit.sender_id !== currentUserId || !isEditableTextMessage(messageToEdit)) {
+        setEditingMessage(null);
+        toast.error('لا يمكن تعديل هذا النوع من الرسائل.');
+        return;
+      }
+      setSending(true);
+      closeEmojiPicker();
+      try {
+        const { data, error } = await supabase
+          .from('messages')
+          .update({ content })
+          .eq('id', messageToEdit.id)
+          .eq('sender_id', currentUserId)
+          .select('id')
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) throw new Error('Message edit was not authorized or the message no longer exists.');
+        if (selectedIdRef.current === recipientId) {
+          setThread(current => current.map(message => message.id === messageToEdit.id
+            ? { ...message, content }
+            : message));
+          setEditingMessage(null);
+          setText('');
+        }
+        void loadConversationList();
+        toast.success('تم تعديل الرسالة');
+      } catch (error) {
+        console.error('[messages] تعذر تعديل الرسالة:', error);
+        toast.error('تعذر تعديل الرسالة. تأكد من تطبيق صلاحيات تعديل الرسائل في Supabase.');
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
     const optimisticMessage: MessageRow = {
       id: createMessageId(),
       sender_id: currentUserId,
@@ -1789,14 +1847,22 @@ export default function MessagesPage({
     const content = row.querySelector('.messages-bubble, .messages-rich-message, .messages-image-message, .messages-sticker-message') || row;
     const rect = content.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
+    const canEditMessage = message.sender_id === currentUserId && isEditableTextMessage(message);
     const menuWidth = Math.min(260, window.innerWidth - 24);
-    const actionMenuHeight = 4 * 46 + 20;
-    const menuTop = rect.bottom + actionMenuHeight + 12 <= window.innerHeight - 12
-      ? rect.bottom + 12
-      : Math.max(12, rect.top - actionMenuHeight - 12);
+    const actionMenuHeight = (canEditMessage ? 5 : 4) * 46 + 20;
+    const reactionHeight = 46;
+    const reactionGap = 8;
+    const minMenuTop = 12 + reactionHeight + reactionGap;
+    const maxMenuTop = Math.max(minMenuTop, window.innerHeight - actionMenuHeight - 12);
+    const belowMenuTop = rect.bottom + 12 + reactionHeight + reactionGap;
+    const aboveMenuTop = rect.top - actionMenuHeight - 12;
+    const preferredMenuTop = belowMenuTop + actionMenuHeight <= window.innerHeight - 12
+      ? belowMenuTop
+      : aboveMenuTop >= minMenuTop ? aboveMenuTop : minMenuTop;
+    const menuTop = Math.max(minMenuTop, Math.min(maxMenuTop, preferredMenuTop));
     const menuLeft = Math.max(12, Math.min(window.innerWidth - menuWidth - 12, rect.left + rect.width / 2 - menuWidth / 2));
     const reactionsWidth = Math.min(300, window.innerWidth - 24);
-    const reactionsTop = rect.top >= 64 ? rect.top - 56 : Math.min(window.innerHeight - 54, rect.bottom + 8);
+    const reactionsTop = menuTop - reactionHeight - reactionGap;
     const reactionsLeft = Math.max(12, Math.min(window.innerWidth - reactionsWidth - 12, rect.left + rect.width / 2 - reactionsWidth / 2));
     messageActionOpenedAtRef.current = Date.now();
     setMessageAction({
@@ -2281,6 +2347,10 @@ export default function MessagesPage({
                       }}
                       onReply={() => {
                         setMessageAction(null);
+                        if (editingMessage) {
+                          setEditingMessage(null);
+                          setText('');
+                        }
                         setReplyMessage(message);
                         window.requestAnimationFrame(() => messageInputRef.current?.focus());
                       }}
@@ -2311,7 +2381,7 @@ export default function MessagesPage({
                             <div className={`messages-bubble messages-voice-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}
                               <div className="messages-voice-line">
-                                <div className="messages-voice-player" data-message-gesture-ignore>
+                                <div className="messages-voice-player">
                                   <Mic size={17} aria-hidden="true" />
                                   <VoiceMessagePlayer url={voiceMessage.url} durationMs={voiceMessage.durationMs} />
                                 </div>
@@ -2404,7 +2474,7 @@ export default function MessagesPage({
               </div>
               <form
                 ref={messageComposerRef}
-                className={`messages-composer${replyMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}${voiceRecordingStatus !== 'idle' ? ' is-recording' : ''}`}
+                className={`messages-composer${replyMessage || editingMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}${voiceRecordingStatus !== 'idle' ? ' is-recording' : ''}`}
                 onSubmit={sendMessage}
                 onPointerMove={handleVoicePointerMove}
                 onPointerUp={finishVoiceRecording}
@@ -2413,6 +2483,24 @@ export default function MessagesPage({
                   if (session?.pointerId === event.pointerId) cancelVoiceRecording(session);
                 }}
               >
+                {editingMessage && (
+                  <div className="messages-reply-preview messages-edit-preview">
+                    <div className="messages-reply-preview-copy">
+                      <strong>تعديل الرسالة</strong>
+                      <span>سيتم حفظ التغييرات على رسالتك</span>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label="إلغاء التعديل"
+                      onClick={() => {
+                        setEditingMessage(null);
+                        setText('');
+                      }}
+                    >
+                      <X size={17} />
+                    </button>
+                  </div>
+                )}
                 {replyMessage && (
                   <div className="messages-reply-preview">
                     <div className="messages-reply-preview-copy">
@@ -2475,8 +2563,8 @@ export default function MessagesPage({
                             event.currentTarget.form?.requestSubmit();
                           }
                         }}
-                        placeholder="اكتب رسالة..."
-                        aria-label="اكتب رسالة"
+                        placeholder={editingMessage ? 'عدّل رسالتك...' : 'اكتب رسالة...'}
+                        aria-label={editingMessage ? 'تعديل الرسالة' : 'اكتب رسالة'}
                         autoComplete="off"
                         enterKeyHint="send"
                         rows={1}
@@ -2493,7 +2581,7 @@ export default function MessagesPage({
                       >
                         <Smile size={19} />
                       </button>
-                      {text.length === 0 ? (
+                      {text.length === 0 && !editingMessage ? (
                         <>
                           <button
                             type="button"
@@ -2513,7 +2601,8 @@ export default function MessagesPage({
                         <button
                           type="submit"
                           className="messages-composer-control messages-composer-send"
-                          aria-label="إرسال الرسالة"
+                          aria-label={editingMessage ? 'حفظ التعديل' : 'إرسال الرسالة'}
+                          title={editingMessage ? 'حفظ التعديل' : undefined}
                           disabled={!text.trim() || sending}
                           onMouseDown={event => {
                             if (document.activeElement === messageInputRef.current) event.preventDefault();
@@ -2522,7 +2611,7 @@ export default function MessagesPage({
                             if (document.activeElement === messageInputRef.current) event.preventDefault();
                           }}
                         >
-                          <Send size={20} />
+                          {editingMessage ? <Check size={20} /> : <Send size={20} />}
                         </button>
                       )}
                     </div>
@@ -2632,9 +2721,27 @@ export default function MessagesPage({
           >
             {messageAction.mode === 'actions' ? (
               <>
+                {messageAction.message.sender_id === currentUserId && isEditableTextMessage(messageAction.message) && (
+                  <button type="button" role="menuitem" onClick={() => {
+                    const selectedMessage = messageAction.message;
+                    setMessageAction(null);
+                    setReplyMessage(null);
+                    setEditingMessage(selectedMessage);
+                    setText(selectedMessage.content);
+                    closeEmojiPicker();
+                    window.requestAnimationFrame(() => messageInputRef.current?.focus());
+                  }}>
+                    <Pencil size={18} />
+                    <span>تعديل</span>
+                  </button>
+                )}
                 <button type="button" role="menuitem" onClick={() => {
                   const selectedMessage = messageAction.message;
                   setMessageAction(null);
+                  if (editingMessage) {
+                    setEditingMessage(null);
+                    setText('');
+                  }
                   setReplyMessage(selectedMessage);
                   window.requestAnimationFrame(() => messageInputRef.current?.focus());
                 }}>

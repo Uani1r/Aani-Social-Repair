@@ -3350,6 +3350,10 @@ body.aani-immersive .unified-top-bar {
   white-space: nowrap;
 }
 
+.messages-edit-preview .messages-reply-preview-copy strong {
+  color: #efc27f;
+}
+
 .messages-reply-preview-copy span {
   overflow: hidden;
   color: var(--messages-secondary);
@@ -6052,4 +6056,26 @@ body.aani-immersive .unified-top-bar {
   .messages-voice-recording-dot.is-active {
     animation: none;
   }
+}
+
+
+
+/* Disable native text selection/callouts app-wide while keeping text fields editable. */
+body,
+body *,
+body *::before,
+body *::after {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+select,
+[contenteditable='true'],
+[contenteditable='plaintext-only'] {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }

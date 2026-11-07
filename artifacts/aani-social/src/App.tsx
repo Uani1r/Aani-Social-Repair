@@ -54,6 +54,16 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const preventNativeTextSelection = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"]')) return;
+      event.preventDefault();
+    };
+    document.addEventListener('selectstart', preventNativeTextSelection, true);
+    return () => document.removeEventListener('selectstart', preventNativeTextSelection, true);
+  }, []);
+
+  useEffect(() => {
     const handleWindowError = (event: ErrorEvent) => {
       if (event.error) {
         handleAppError('خطأ غير معالج في التطبيق', event.error, 'حدث خطأ غير متوقع. أعد المحاولة.');
