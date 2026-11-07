@@ -3233,6 +3233,16 @@ body.aani-immersive .unified-top-bar {
   background: #171717;
 }
 
+.messages-composer.is-emoji-panel-open {
+  position: fixed;
+  right: 0;
+  bottom: 350px;
+  left: 0;
+  z-index: 1201;
+  box-sizing: border-box;
+  margin: 0 12px;
+}
+
 .messages-composer:focus-within {
   border-color: #565656;
 }
@@ -3430,19 +3440,55 @@ body.aani-immersive .unified-top-bar {
   backdrop-filter: blur(20px);
   box-shadow: 0 -12px 38px rgb(0 0 0 / 35%);
   direction: rtl;
+  transform: translateY(0);
+  transition: transform 220ms cubic-bezier(.2, .8, .2, 1);
+}
+
+.messages-sticker-picker.is-dragging {
+  transition: none;
+  user-select: none;
 }
 
 .messages-sticker-panel-header {
   position: relative;
   z-index: 2;
   display: grid;
-  min-height: 78px;
-  flex: 0 0 78px;
+  min-height: 100px;
+  flex: 0 0 100px;
   grid-template-columns: minmax(0, 2fr) minmax(56px, 1fr);
   align-items: center;
   border-bottom: 1px solid rgb(255 255 255 / 9%);
-  padding: 0 12px;
+  padding: 24px 12px 0;
   direction: rtl;
+}
+
+.messages-sticker-drag-handle {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 3;
+  display: grid;
+  width: 76px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+  transform: translateX(-50%);
+}
+
+.messages-sticker-drag-handle:active {
+  cursor: grabbing;
+}
+
+.messages-sticker-drag-handle::before {
+  width: 40px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 38%);
+  content: '';
 }
 
 .messages-sticker-panel-tabs {
@@ -4062,7 +4108,7 @@ body.aani-immersive .unified-top-bar {
 @media (max-width: 420px) {
   .messages-sticker-panel-header {
     grid-template-columns: minmax(0, 2fr) 56px;
-    padding: 0 6px;
+    padding: 24px 6px 0;
   }
 
   .messages-sticker-panel-tabs {

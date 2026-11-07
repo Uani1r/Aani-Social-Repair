@@ -617,13 +617,11 @@ export default function MessagesPage({
 
   const insertComposerSymbol = (symbol: string) => {
     setText(value => `${value}${symbol}`);
-    setEmojiPickerOpen(false);
     messageInputRef.current?.focus();
   };
 
   const openChatMediaPicker = () => {
     if (!selectedId) return;
-    setEmojiPickerOpen(false);
     window.dispatchEvent(new CustomEvent('aani-open-chat-media-picker', { detail: { caption: text, recipientId: selectedId } }));
   };
 
@@ -632,7 +630,6 @@ export default function MessagesPage({
     const content = text.trim();
     if (!supabaseConfigured || !selectedId || !content || sending) return;
 
-    setEmojiPickerOpen(false);
     setSending(true);
     try {
       const { error } = await supabase.from('messages').insert({
@@ -663,7 +660,6 @@ export default function MessagesPage({
       return;
     }
 
-    setEmojiPickerOpen(false);
     setSending(true);
     try {
       const { error } = await supabase.from('messages').insert({
@@ -1122,7 +1118,6 @@ export default function MessagesPage({
                       isMine={isMine}
                       onReply={() => {
                         setReplyMessage(message);
-                        setEmojiPickerOpen(false);
                         window.requestAnimationFrame(() => messageInputRef.current?.focus());
                       }}
                     >
@@ -1190,7 +1185,7 @@ export default function MessagesPage({
                 )}
                 <div ref={threadEndRef} />
               </div>
-              <form className={`messages-composer${replyMessage ? ' has-reply' : ''}`} onSubmit={sendMessage}>
+              <form className={`messages-composer${replyMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}`} onSubmit={sendMessage}>
                 {replyMessage && (
                   <div className="messages-reply-preview">
                     <div className="messages-reply-preview-copy">
@@ -1235,7 +1230,7 @@ export default function MessagesPage({
                     aria-label="إيموجي وملصقات"
                     aria-haspopup="dialog"
                     aria-expanded={emojiPickerOpen}
-                    onClick={() => setEmojiPickerOpen(value => !value)}
+                    onClick={() => setEmojiPickerOpen(true)}
                   >
                     <Smile size={19} />
                   </button>

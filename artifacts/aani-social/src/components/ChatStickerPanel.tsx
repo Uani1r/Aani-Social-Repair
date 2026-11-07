@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, ImagePlus, Plus, Store } from 'lucide-react';
+import { ArrowRight, Clock, ImagePlus, Plus, Store } from 'lucide-react';
 import { toast } from 'sonner';
 
 import StickerStudio from '@/components/StickerStudio';
@@ -67,8 +67,22 @@ const EMOJI_CATEGORY_ICONS: Record<string, string> = {
 const CATEGORY_ORDER = ['Smileys & Emotion', 'Animals & Nature', 'Food & Drink', 'Activities', 'Travel & Places', 'Symbols', 'People & Body', 'Objects', 'Flags'];
 
 const DEFAULT_PACKS = ['reactions'];
+const RECENT_EMOJI_LIMIT = 48;
 const installedPacksKey = (userId: string) => `aani_sticker_packs_${userId}`;
 const customStickersKey = (userId: string) => `aani_custom_stickers_${userId}`;
+const recentEmojisKey = (userId: string) => `aani_recent_emojis_${userId}`;
+
+function readRecentlyUsedEmojis(userId: string): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(recentEmojisKey(userId)) || '[]');
+    if (!Array.isArray(stored)) return [];
+    return [...new Set(stored.filter((emoji): emoji is string => typeof emoji === 'string' && emoji.length > 0 && emoji.length <= 32))]
+      .slice(0, RECENT_EMOJI_LIMIT);
+  } catch {
+    return [];
+  }
+}
 
 function readInstalledPacks(userId: string): string[] {
   if (typeof window === 'undefined') return DEFAULT_PACKS;
@@ -117,7 +131,8 @@ export default function ChatStickerPanel({
   onSendSticker: (sticker: ChatStickerPayload) => void;
 }) {
   const [mode, setMode] = useState<PanelMode>('emoji');
-  const [selectedCategory, setSelectedCategory] = useState('Smileys & Emotion');
+  const [recentlyUsed, setRecentlyUsed] = useState<string[]>(() => readRecentlyUsedEmojis(currentUserId));
+  const [selectedCategory, setSelectedCategory] = useState(() => recentlyUsed.length ? 'recent' : 'Smileys & Emotion');
   const [emojiChoices, setEmojiChoices] = useState<EmojiChoice[]>([]);
   const [emojiLoading, setEmojiLoading] = useState(true);
   const [emojiError, setEmojiError] = useState(false);
@@ -126,22 +141,27 @@ export default function ChatStickerPanel({
   const [activeCollection, setActiveCollection] = useState<string>('reactions');
   const [plusMenuOpen, setPlusMenuOpen] = useState(false);
   const [studioFile, setStudioFile] = useState<File | null>(null);
+  const [dragOffset, setDragOffset] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const recentEmojisRef = useRef(recentlyUsed);
+  const dragStartYRef = useRef<number | null>(null);
+  const dismissTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => {
     const packs = readInstalledPacks(currentUserId);
+    const recentEmojis = readRecentlyUsedEmojis(currentUserId);
+    recentEmojisRef.current = recentEmojis;
     setInstalledPacks(packs);
     setCustomStickers(readCustomStickers(currentUserId));
+    setRecentlyUsed(recentEmojis);
+    setSelectedCategory(recentEmojis.length ? 'recent' : 'Smileys & Emotion');
     setActiveCollection(packs.includes('reactions') ? 'reactions' : packs[0] || 'mine');
   }, [currentUserId]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  useEffect(() => () => {
+    if (dismissTimeoutRef.current !== null) window.clearTimeout(dismissTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -168,8 +188,53 @@ export default function ChatStickerPanel({
   }, []);
 
   const categories = CATEGORY_ORDER.filter(category => EMOJI_CATEGORY_LABELS[category]);
-  const visibleEmojis = useMemo(() => emojiChoices.filter(choice => choice.category === selectedCategory), [emojiChoices, selectedCategory]);
+  const visibleEmojis = useMemo<EmojiChoice[]>(() => selectedCategory === 'recent'
+    ? recentlyUsed.map(emoji => ({ emoji, name: emoji, category: 'recent', sortOrder: 0 }))
+    : emojiChoices.filter(choice => choice.category === selectedCategory), [emojiChoices, recentlyUsed, selectedCategory]);
   const visiblePack = STICKER_PACKS.find(pack => pack.id === activeCollection && installedPacks.includes(pack.id));
+
+  const rememberEmoji = (emoji: string) => {
+    const next = [emoji, ...recentEmojisRef.current.filter(item => item !== emoji)].slice(0, RECENT_EMOJI_LIMIT);
+    recentEmojisRef.current = next;
+    setRecentlyUsed(next);
+    try {
+      localStorage.setItem(recentEmojisKey(currentUserId), JSON.stringify(next));
+    } catch {
+      /* لا يمنع تعذر التخزين إضافة الإيموجي إلى الرسالة */
+    }
+  };
+
+  const startPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    dragStartYRef.current = event.clientY;
+    setIsDragging(true);
+    setDragOffset(0);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const movePanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartYRef.current === null) return;
+    setDragOffset(Math.max(0, event.clientY - dragStartYRef.current));
+  };
+
+  const finishPanelDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartYRef.current === null) return;
+    const shouldDismiss = event.clientY - dragStartYRef.current >= 90;
+    dragStartYRef.current = null;
+    setIsDragging(false);
+    if (shouldDismiss) {
+      setDragOffset(window.innerHeight);
+      dismissTimeoutRef.current = window.setTimeout(onClose, 220);
+    } else {
+      setDragOffset(0);
+    }
+  };
+
+  const cancelPanelDrag = () => {
+    dragStartYRef.current = null;
+    setIsDragging(false);
+    setDragOffset(0);
+  };
 
   const updateInstalledPacks = (next: string[]) => {
     setInstalledPacks(next);
@@ -223,12 +288,10 @@ export default function ChatStickerPanel({
 
   const selectSticker = (sticker: StickerItem) => {
     onSendSticker(sticker);
-    onClose();
   };
 
   const selectCustomSticker = (sticker: CustomSticker) => {
     onSendSticker({ url: sticker.url, label: sticker.label });
-    onClose();
   };
 
   return (
@@ -236,8 +299,23 @@ export default function ChatStickerPanel({
       {typeof document !== 'undefined' && createPortal(
       <>
         <div className="messages-sticker-picker-backdrop" aria-hidden="true" onClick={onClose} />
-        <section className="messages-sticker-picker" role="dialog" aria-modal="true" aria-label="الإيموجي والملصقات" dir="rtl">
+        <section
+          className={`messages-sticker-picker${isDragging ? ' is-dragging' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-label="الإيموجي والملصقات"
+          dir="rtl"
+          style={{ transform: `translateY(${dragOffset}px)` }}
+        >
         <header className="messages-sticker-panel-header">
+          <div
+            className="messages-sticker-drag-handle"
+            aria-hidden="true"
+            onPointerDown={startPanelDrag}
+            onPointerMove={movePanelDrag}
+            onPointerUp={finishPanelDrag}
+            onPointerCancel={cancelPanelDrag}
+          />
           <div className="messages-sticker-panel-tabs" role="tablist" aria-label="نوع التعبير">
             <button type="button" role="tab" aria-selected={mode === 'emoji'} className={mode === 'emoji' ? 'is-active' : ''} onClick={() => { setMode('emoji'); setPlusMenuOpen(false); }}>
               <TwemojiEmoji emoji="😊" size={25} /><span>إيموجي</span>
@@ -260,11 +338,18 @@ export default function ChatStickerPanel({
 
         <div className={`messages-sticker-panel-layout${mode === 'store' ? ' is-store' : ''}`}>
           <nav className="messages-sticker-categories" aria-label={mode === 'emoji' ? 'فئات الإيموجي' : 'مجموعات الملصقات'}>
-            {mode === 'emoji' ? categories.map(category => (
-              <button key={category} type="button" className={selectedCategory === category ? 'is-active' : ''} aria-label={EMOJI_CATEGORY_LABELS[category]} title={EMOJI_CATEGORY_LABELS[category]} onClick={() => setSelectedCategory(category)}>
-                <TwemojiEmoji emoji={EMOJI_CATEGORY_ICONS[category]} size={24} />
-              </button>
-            )) : mode === 'store' ? (
+            {mode === 'emoji' ? (
+              <>
+                <button type="button" className={selectedCategory === 'recent' ? 'is-active' : ''} aria-label="المستعملة مؤخراً" title="المستعملة مؤخراً" onClick={() => setSelectedCategory('recent')}>
+                  <Clock size={21} />
+                </button>
+                {categories.map(category => (
+                  <button key={category} type="button" className={selectedCategory === category ? 'is-active' : ''} aria-label={EMOJI_CATEGORY_LABELS[category]} title={EMOJI_CATEGORY_LABELS[category]} onClick={() => setSelectedCategory(category)}>
+                    <TwemojiEmoji emoji={EMOJI_CATEGORY_ICONS[category]} size={24} />
+                  </button>
+                ))}
+              </>
+            ) : mode === 'store' ? (
               <button type="button" aria-label="العودة إلى الملصقات" title="العودة" onClick={() => setMode('stickers')}><ArrowRight size={18} /></button>
             ) : (
               <>
@@ -283,14 +368,16 @@ export default function ChatStickerPanel({
               <>
                 {emojiLoading ? <div className="messages-sticker-empty">جارٍ تحميل الإيموجي...</div> : emojiError ? (
                   <div className="messages-sticker-empty" role="alert">تعذر تحميل الإيموجي. تحقق من الاتصال.</div>
-                ) : (
+                ) : visibleEmojis.length ? (
                   <div className="messages-emoji-catalog">
                     {visibleEmojis.map((choice, index) => (
-                      <button key={`${choice.emoji}-${index}`} type="button" aria-label={choice.name} title={choice.name} onClick={() => { onInsertEmoji(choice.emoji); onClose(); }}>
+                      <button key={`${choice.emoji}-${index}`} type="button" aria-label={choice.name} title={choice.name} onClick={() => { rememberEmoji(choice.emoji); onInsertEmoji(choice.emoji); }}>
                         <TwemojiEmoji emoji={choice.emoji} size={42} />
                       </button>
                     ))}
                   </div>
+                ) : (
+                  <div className="messages-sticker-empty">لم تُستخدم إيموجيات مؤخراً بعد.</div>
                 )}
               </>
             )}

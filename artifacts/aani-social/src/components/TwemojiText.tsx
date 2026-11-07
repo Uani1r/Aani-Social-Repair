@@ -56,11 +56,13 @@ export function normalizeEmojiCatalog(value: unknown): EmojiChoice[] {
   return choices.sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
 }
 
-export function emojiImageUrl(emoji: string): string {
+export function emojiImageUrl(emoji: string, omitVariationSelector = false): string {
   const codePoints = Array.from(emoji, character => character.codePointAt(0))
-    .filter((codePoint): codePoint is number => codePoint !== undefined && codePoint !== 0xfe0e && codePoint !== 0xfe0f)
-    .map(codePoint => codePoint.toString(16));
-  return `https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets/svg/${codePoints.join('-')}.svg`;
+    .filter((codePoint): codePoint is number => codePoint !== undefined
+      && codePoint !== 0xfe0e
+      && (!omitVariationSelector || codePoint !== 0xfe0f))
+    .map(codePoint => codePoint.toString(16).padStart(4, '0'));
+  return `https://cdn.jsdelivr.net/npm/emoji-datasource-apple@16.0.0/img/apple/64/${codePoints.join('-')}.png`;
 }
 
 const SEGMENTER = typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
@@ -77,18 +79,23 @@ export function TwemojiEmoji({
   size?: number;
   className?: string;
 }) {
-  const [failed, setFailed] = useState(false);
+  const [failedEmoji, setFailedEmoji] = useState<string | null>(null);
+  const [variationFallbackEmoji, setVariationFallbackEmoji] = useState<string | null>(null);
+  const omitVariationSelector = variationFallbackEmoji === emoji;
   const style: CSSProperties | undefined = size ? { width: size, height: size } : undefined;
-  if (failed) return <span className={`twemoji-fallback ${className}`}>{emoji}</span>;
+  if (failedEmoji === emoji) return <span className={`twemoji-fallback ${className}`}>{emoji}</span>;
   return (
     <img
       className={`twemoji-image${className ? ` ${className}` : ''}`}
-      src={emojiImageUrl(emoji)}
+      src={emojiImageUrl(emoji, omitVariationSelector)}
       alt={emoji}
       draggable={false}
       loading="lazy"
       style={style}
-      onError={() => setFailed(true)}
+      onError={() => {
+        if (emoji.includes('\uFE0F') && !omitVariationSelector) setVariationFallbackEmoji(emoji);
+        else setFailedEmoji(emoji);
+      }}
     />
   );
 }
