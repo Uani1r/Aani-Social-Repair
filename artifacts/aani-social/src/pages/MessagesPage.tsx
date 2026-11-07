@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MapPin, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
+import MessageAttachmentSheet, { CHAT_DOCUMENT_MESSAGE_PREFIX, CHAT_LOCATION_MESSAGE_PREFIX, parseChatDocumentMessage, parseChatLocationMessage } from '@/components/MessageAttachmentSheet';
 import ChatStickerMessage, { CHAT_STICKER_MESSAGE_PREFIX, parseChatStickerMessage, type ChatStickerPayload } from '@/components/ChatStickerMessage';
 import ChatStickerPanel from '@/components/ChatStickerPanel';
 import EmojiText from '@/components/TwemojiText';
@@ -533,8 +534,12 @@ function isEditableTextMessage(message: MessageRow): boolean {
     && !parseVoiceMessage(content)
     && !parseChatMediaMessage(content)
     && !parseChatStickerMessage(content)
+    && !parseChatDocumentMessage(content)
+    && !parseChatLocationMessage(content)
     && !content.startsWith(CHAT_VOICE_MESSAGE_PREFIX)
     && !content.startsWith(CHAT_STICKER_MESSAGE_PREFIX)
+    && !content.startsWith(CHAT_DOCUMENT_MESSAGE_PREFIX)
+    && !content.startsWith(CHAT_LOCATION_MESSAGE_PREFIX)
     && !content.startsWith('[story:')
     && !content.startsWith('[story-reply]')
     && !content.startsWith('[post:');
@@ -573,9 +578,13 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
   const voiceMessage = parseVoiceMessage(content);
+  const documentMessage = parseChatDocumentMessage(content);
+  const locationMessage = parseChatLocationMessage(content);
   let preview = content;
   if (stickerMessage) preview = 'ملصق';
   else if (voiceMessage) preview = 'رسالة صوتية';
+  else if (documentMessage) preview = `مستند: ${documentMessage.name}`;
+  else if (locationMessage) preview = locationMessage.note ? `موقع: ${locationMessage.note}` : 'موقع';
   else if (mediaMessage) {
     const hasOpened = mediaMessage.opened || hasViewedOnce(currentUserId, message.id);
     preview = mediaMessage.viewOnce
@@ -593,9 +602,13 @@ function replyMessagePreview(message: MessageRow): string {
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
   const voiceMessage = parseVoiceMessage(content);
+  const documentMessage = parseChatDocumentMessage(content);
+  const locationMessage = parseChatLocationMessage(content);
   let preview = content;
   if (stickerMessage) preview = 'ملصق';
   else if (voiceMessage) preview = 'رسالة صوتية';
+  else if (documentMessage) preview = `مستند: ${documentMessage.name}`;
+  else if (locationMessage) preview = locationMessage.note ? `موقع: ${locationMessage.note}` : 'موقع';
   else if (mediaMessage) {
     preview = mediaMessage.viewOnce
       ? 'صورة مؤقتة'
@@ -645,6 +658,12 @@ function formatMessageTime(value: string): string {
   return new Intl.DateTimeFormat('ar', { hour: 'numeric', minute: '2-digit' }).format(date);
 }
 
+function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} بايت`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} كيلوبايت`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} ميغابايت`;
+}
+
 export default function MessagesPage({
   currentUserId,
   selectedId,
@@ -677,6 +696,7 @@ export default function MessagesPage({
   const [sending, setSending] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [emojiPickerClosing, setEmojiPickerClosing] = useState(false);
+  const [attachmentOpen, setAttachmentOpen] = useState(false);
   const [threadOptionsOpen, setThreadOptionsOpen] = useState(false);
   const [threadOptionsView, setThreadOptionsView] = useState<ConversationSheetView>('menu');
   const [galleryView, setGalleryView] = useState<ConversationGalleryView | null>(null);
@@ -738,6 +758,7 @@ export default function MessagesPage({
   }, []);
 
   useLayoutEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+  useEffect(() => { setAttachmentOpen(false); }, [selectedId]);
 
   useEffect(() => () => {
     if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
@@ -2175,6 +2196,8 @@ export default function MessagesPage({
     const mediaMessage = parseChatMediaMessage(message.content);
     const stickerMessage = parseChatStickerMessage(message.content);
     const voiceMessage = parseVoiceMessage(message.content);
+    const documentMessage = parseChatDocumentMessage(message.content);
+    const locationMessage = parseChatLocationMessage(message.content);
     const content = message.content.trim();
     const textToCopy = voiceMessage
       ? 'رسالة صوتية'
@@ -2182,6 +2205,10 @@ export default function MessagesPage({
         ? mediaMessage.caption || 'صورة'
       : stickerMessage
         ? 'ملصق'
+      : documentMessage
+        ? `مستند: ${documentMessage.name}`
+      : locationMessage
+        ? `موقع: ${locationMessage.latitude}, ${locationMessage.longitude}${locationMessage.note ? ` · ${locationMessage.note}` : ''}`
         : content.startsWith('[story-reply]')
           ? content.slice('[story-reply]'.length).trim()
           : message.post_id || content.startsWith('[post:')
@@ -2565,6 +2592,8 @@ export default function MessagesPage({
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
                   const voiceMessage = parseVoiceMessage(content);
+                  const documentMessage = parseChatDocumentMessage(content);
+                  const locationMessage = parseChatLocationMessage(content);
                   const messageReactions = reactionsByMessage[message.id] || [];
                   const reactionCounts = Object.entries(messageReactions.reduce<Record<string, MessageReaction[]>>((grouped, reaction) => {
                     (grouped[reaction.emoji] ||= []).push(reaction);
@@ -2651,6 +2680,30 @@ export default function MessagesPage({
                                 onViewOnceOpened={(messageId, urls) => { void markViewOnceMessageOpened(messageId, urls); }}
                               />
                             </>
+                          ) : documentMessage ? (
+                            <div className={`messages-bubble messages-special-attachment${isMine ? ' is-mine' : ' is-theirs'}`}>
+                              {replyPreview}
+                              <a className="messages-document-card" href={documentMessage.url} target="_blank" rel="noreferrer" download={documentMessage.name}>
+                                <FileText size={25} aria-hidden="true" />
+                                <span><strong>{documentMessage.name}</strong><small>{formatAttachmentSize(documentMessage.size)}</small></span>
+                              </a>
+                              <span className="messages-bubble-footer">
+                                <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                {isMine && <MessageDeliveryStatus message={message} />}
+                              </span>
+                            </div>
+                          ) : locationMessage ? (
+                            <div className={`messages-bubble messages-special-attachment${isMine ? ' is-mine' : ' is-theirs'}`}>
+                              {replyPreview}
+                              <a className="messages-location-card" href={`https://www.openstreetmap.org/?mlat=${locationMessage.latitude}&mlon=${locationMessage.longitude}#map=16/${locationMessage.latitude}/${locationMessage.longitude}`} target="_blank" rel="noreferrer">
+                                <MapPin size={25} aria-hidden="true" />
+                                <span><strong>الموقع</strong>{locationMessage.note && <small>{locationMessage.note}</small>}</span>
+                              </a>
+                              <span className="messages-bubble-footer">
+                                <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                {isMine && <MessageDeliveryStatus message={message} />}
+                              </span>
+                            </div>
                           ) : (
                             <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}
@@ -2786,8 +2839,9 @@ export default function MessagesPage({
                     <button
                       type="button"
                       className="messages-composer-control messages-composer-attach"
-                      aria-label="إضافة صور"
-                      onClick={openChatMediaPicker}
+                      aria-label="المرفقات"
+                      aria-haspopup="dialog"
+                      onClick={() => setAttachmentOpen(true)}
                     >
                       <Plus size={24} />
                     </button>
@@ -2899,6 +2953,21 @@ export default function MessagesPage({
         }}
         onSendFailed={pendingId => setPendingMediaMessage(current => current?.id === pendingId ? null : current)}
       />
+
+      {selectedConversation && (
+        <MessageAttachmentSheet
+          key={selectedConversation.profile.id}
+          open={attachmentOpen}
+          currentUserId={currentUserId}
+          recipientId={selectedConversation.profile.id}
+          replyToMessageId={replyMessage?.id}
+          onClose={() => setAttachmentOpen(false)}
+          onSent={async () => {
+            setReplyMessage(null);
+            await Promise.all([loadThread(), loadConversationList()]);
+          }}
+        />
+      )}
 
       {selectedConversation && createPortal(
         <div
