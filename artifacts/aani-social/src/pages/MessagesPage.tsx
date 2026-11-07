@@ -5,12 +5,12 @@ import { Archive, ArrowLeft, Ban, BellOff, Camera, ChevronDown, Flag, MessageCir
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
-import ChatImageMessage, { parseChatMediaMessage } from '@/components/ChatImageMessage';
+import ChatImageMessage, { hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker from '@/components/ChatMediaPicker';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
-import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
 interface MessageRow {
@@ -48,7 +48,7 @@ type ConversationContextState = {
 };
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
-const MESSAGE_EMOJIS = ['😀', '😂', '🥰', '😍', '😊', '😭', '👍', '❤️', '🔥', '✨', '🙏', '😎'];
+const MESSAGE_EMOJIS = ['😀', '😂', '🥰', '😍', '😊', '😭', '👍', '❤️', '✨', '🙏', '😎'];
 const MESSAGE_STICKERS = ['🥹', '🫶', '🎉', '🤍', '🌙', '💜'];
 const EMPTY_CONVERSATION_PREFERENCES: ConversationPreferences = {
   pinnedIds: [],
@@ -148,12 +148,26 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   const mediaMessage = parseChatMediaMessage(content);
   let preview = content;
   if (mediaMessage) {
-    preview = mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
+    const hasOpened = mediaMessage.opened || hasViewedOnce(currentUserId, message.id);
+    preview = mediaMessage.viewOnce
+      ? (hasOpened ? 'صورة مؤقتة · تم الفتح' : 'صورة مؤقتة')
+      : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
   } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
   else if (content.startsWith('[story-reply]')) preview = 'رد على قصة';
   else if (content.startsWith('[story:')) preview = 'أرسل قصة';
   else if (!preview) preview = 'رسالة';
   return message.sender_id === currentUserId ? `أنت: ${preview}` : preview;
+}
+
+function chatMediaStoragePath(url: string): string | null {
+  try {
+    const objectUrl = new URL(url);
+    const pathPrefix = `/storage/v1/object/public/${storageBucket}/`;
+    if (!objectUrl.pathname.startsWith(pathPrefix)) return null;
+    return decodeURIComponent(objectUrl.pathname.slice(pathPrefix.length));
+  } catch {
+    return null;
+  }
 }
 
 function formatConversationTime(value: string): string {
@@ -282,7 +296,11 @@ export default function MessagesPage({
       const latestByContact = new Map<string, MessageRow>();
       normalizeMessageRows(messagesResult.data).filter(message => !hiddenMessageIds.has(message.id)).forEach(message => {
         const contactId = message.sender_id === currentUserId ? message.recipient_id : message.sender_id;
-        if (!latestByContact.has(contactId)) latestByContact.set(contactId, message);
+        const mediaMessage = parseChatMediaMessage(message.content);
+        const safeMessage = mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
+          ? { ...message, content: openedChatMediaContent(message.content) }
+          : message;
+        if (!latestByContact.has(contactId)) latestByContact.set(contactId, safeMessage);
       });
       const contactIds = [...latestByContact.keys()];
       if (selectedId && !contactIds.includes(selectedId)) contactIds.push(selectedId);
@@ -339,7 +357,14 @@ export default function MessagesPage({
         .or(threadFilter)
         .order('created_at', { ascending: true });
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
-      const visibleMessages = (rows: unknown) => normalizeMessageRows(rows).filter(message => !hiddenMessageIds.has(message.id));
+      const visibleMessages = (rows: unknown) => normalizeMessageRows(rows)
+        .filter(message => !hiddenMessageIds.has(message.id))
+        .map(message => {
+          const mediaMessage = parseChatMediaMessage(message.content);
+          return mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
+            ? { ...message, content: openedChatMediaContent(message.content) }
+            : message;
+        });
 
       if (error) {
         const code = (error as { code?: string }).code;
@@ -365,6 +390,43 @@ export default function MessagesPage({
       if (requestId === threadRequestRef.current) setThreadLoading(false);
     }
   }, [currentUserId, selectedId]);
+
+  const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
+    setThread(current => current.map(message => message.id === messageId
+      ? { ...message, content: openedChatMediaContent(message.content) }
+      : message));
+    setConversations(current => current.map(conversation => {
+      const lastMessage = conversation.lastMessage;
+      if (!lastMessage || lastMessage.id !== messageId) return conversation;
+      return {
+        ...conversation,
+        lastMessage: {
+          ...lastMessage,
+          content: openedChatMediaContent(lastMessage.content),
+        },
+      };
+    }));
+
+    const objectPaths = [...new Set(urls.flatMap(url => {
+      const path = chatMediaStoragePath(url);
+      return path ? [path] : [];
+    }))];
+    if (objectPaths.length) {
+      try {
+        const { error: storageError } = await supabase.storage.from(storageBucket).remove(objectPaths);
+        if (storageError) console.warn('[messages] تعذر حذف ملفات الصورة المؤقتة:', storageError);
+      } catch (error) {
+        console.warn('[messages] تعذر حذف ملفات الصورة المؤقتة:', error);
+      }
+    }
+
+    try {
+      const { error } = await supabase.rpc('aani_consume_view_once_message', { p_message_id: messageId });
+      if (error) throw error;
+    } catch (error) {
+      console.warn('[messages] تعذر تحديث حالة الصورة المؤقتة على الخادم:', error);
+    }
+  }, []);
 
   const realtimeRefreshTimerRef = useRef<number | null>(null);
   const realtimeRefreshThreadRef = useRef(false);
@@ -395,6 +457,7 @@ export default function MessagesPage({
         table: 'messages',
         filter: `recipient_id=eq.${currentUserId}`,
       }, () => scheduleMessageRefresh(false))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
       .on('postgres_changes', {
         event: 'INSERT',
@@ -1004,7 +1067,14 @@ export default function MessagesPage({
                           />
                         </div>
                       ) : mediaMessage ? (
-                        <ChatImageMessage messageId={message.id} currentUserId={currentUserId} payload={mediaMessage} isMine={isMine} />
+                        <ChatImageMessage
+                          messageId={message.id}
+                          currentUserId={currentUserId}
+                          payload={mediaMessage}
+                          isMine={isMine}
+                          createdAt={message.created_at}
+                          onViewOnceOpened={(messageId, urls) => { void markViewOnceMessageOpened(messageId, urls); }}
+                        />
                       ) : (
                         <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                           {isStoryReply ? (

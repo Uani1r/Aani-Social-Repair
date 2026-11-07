@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Eye, X } from 'lucide-react';
+import { CheckCheck, Eye, X } from 'lucide-react';
+import { toast } from 'sonner';
 
 type ChatMediaPayload = {
   urls: string[];
   caption: string;
   viewOnce: boolean;
+  opened?: boolean;
 };
 
 export const CHAT_MEDIA_MESSAGE_PREFIX = '[aani-image:v1]';
@@ -17,18 +19,21 @@ export function parseChatMediaMessage(content: string): ChatMediaPayload | null 
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
     const value = parsed as Record<string, unknown>;
     const urls = Array.isArray(value.urls) ? value.urls.filter((url): url is string => typeof url === 'string' && /^https?:\/\//i.test(url)) : [];
-    if (!urls.length) return null;
+    const viewOnce = value.viewOnce === true;
+    const opened = value.opened === true;
+    if (!urls.length && !(viewOnce && opened)) return null;
     return {
       urls,
       caption: typeof value.caption === 'string' ? value.caption : '',
-      viewOnce: value.viewOnce === true,
+      viewOnce,
+      opened,
     };
   } catch {
     return null;
   }
 }
 
-function hasViewedOnce(userId: string, messageId: string): boolean {
+export function hasViewedOnce(userId: string, messageId: string): boolean {
   if (typeof window === 'undefined') return false;
   try {
     return window.localStorage.getItem(`aani_view_once_${userId}_${messageId}`) === '1';
@@ -37,22 +42,41 @@ function hasViewedOnce(userId: string, messageId: string): boolean {
   }
 }
 
+export function openedChatMediaContent(content: string): string {
+  const payload = parseChatMediaMessage(content);
+  if (!payload?.viewOnce) return content;
+  return `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls: [], caption: '', viewOnce: true, opened: true })}`;
+}
+
+function formatMessageTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+}
+
 export default function ChatImageMessage({
   messageId,
   currentUserId,
   payload,
   isMine,
+  createdAt,
+  onViewOnceOpened,
 }: {
   messageId: string;
   currentUserId: string;
   payload: ChatMediaPayload;
   isMine: boolean;
+  createdAt: string;
+  onViewOnceOpened: (messageId: string, urls: string[]) => void;
 }) {
-  const [viewed, setViewed] = useState(() => payload.viewOnce && hasViewedOnce(currentUserId, messageId));
+  const [viewed, setViewed] = useState(() => payload.viewOnce && (payload.opened === true || hasViewedOnce(currentUserId, messageId)));
   const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerOpening, setViewerOpening] = useState(false);
+  const [viewerUrls, setViewerUrls] = useState<string[]>([]);
+  const blobUrlsRef = useRef<string[]>([]);
+  const viewerImagesRef = useRef<Array<HTMLImageElement | null>>([]);
 
-  const closeViewer = () => {
-    setViewerOpen(false);
+  const registerViewed = useCallback(() => {
     if (!payload.viewOnce) return;
     try {
       window.localStorage.setItem(`aani_view_once_${currentUserId}_${messageId}`, '1');
@@ -60,27 +84,113 @@ export default function ChatImageMessage({
       /* قد يكون التخزين المحلي غير متاح */
     }
     setViewed(true);
-  };
+    onViewOnceOpened(messageId, payload.urls);
+  }, [currentUserId, messageId, onViewOnceOpened, payload.urls, payload.viewOnce]);
 
-  const openViewer = () => {
-    if (!viewed) setViewerOpen(true);
-  };
+  const closeViewer = useCallback(() => {
+    setViewerOpen(false);
+    setViewerUrls([]);
+    viewerImagesRef.current.forEach(image => image?.removeAttribute('src'));
+    viewerImagesRef.current = [];
+    blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    blobUrlsRef.current = [];
+  }, []);
+
+  const openViewer = useCallback(async () => {
+    if (viewed || viewerOpening || payload.opened) return;
+    setViewerOpening(true);
+    let nextUrls = payload.urls;
+
+    if (payload.viewOnce) {
+      const temporaryUrls: string[] = [];
+      try {
+        for (const url of payload.urls) {
+          const response = await fetch(url, { cache: 'no-store', referrerPolicy: 'no-referrer' });
+          if (!response.ok) throw new Error('تعذر تحميل الصورة المؤقتة');
+          temporaryUrls.push(URL.createObjectURL(await response.blob()));
+        }
+        nextUrls = temporaryUrls;
+        blobUrlsRef.current = temporaryUrls;
+      } catch {
+        temporaryUrls.forEach(url => URL.revokeObjectURL(url));
+        setViewerOpening(false);
+        toast.error('تعذر تحميل الصورة المؤقتة بأمان. حاول مرة أخرى.');
+        return;
+      }
+    }
+
+    setViewerUrls(nextUrls);
+    setViewerOpen(true);
+    registerViewed();
+    setViewerOpening(false);
+  }, [payload.opened, payload.urls, payload.viewOnce, registerViewed, viewed, viewerOpening]);
+
+  const closeViewerRef = useRef(closeViewer);
+  useEffect(() => { closeViewerRef.current = closeViewer; }, [closeViewer]);
+
+  useEffect(() => {
+    if (!viewerOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const previousState = window.history.state && typeof window.history.state === 'object'
+      ? window.history.state as Record<string, unknown>
+      : {};
+    window.history.pushState({ ...previousState, aaniChatImageViewer: messageId }, '');
+    let historyEntryActive = true;
+
+    const handleBack = () => {
+      historyEntryActive = false;
+      closeViewerRef.current();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeViewerRef.current();
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) closeViewerRef.current();
+    };
+
+    window.addEventListener('popstate', handleBack);
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('popstate', handleBack);
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      document.body.style.overflow = previousOverflow;
+      if (historyEntryActive) window.history.back();
+    };
+  }, [messageId, viewerOpen]);
+
+  useEffect(() => () => {
+    blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    blobUrlsRef.current = [];
+  }, []);
+
+  const messageTime = formatMessageTime(createdAt);
 
   return (
     <div className={`messages-image-message${isMine ? ' is-mine' : ' is-theirs'}`}>
       {payload.viewOnce ? (
-        viewed ? (
-          <div className="messages-image-once-viewed"><Eye size={17} /><span>تم عرض الصورة مرة واحدة</span></div>
+        viewed || payload.opened ? (
+          <div className="messages-image-once-viewed" dir="rtl">
+            <span>تم الفتح</span>
+            {messageTime && <time>{messageTime}</time>}
+            {isMine && <CheckCheck size={16} className="messages-image-once-checks" aria-label="تم التسليم" />}
+          </div>
         ) : (
-          <button type="button" className="messages-image-once-button" onClick={openViewer}>
-            <span className="messages-image-once-icon"><Eye size={20} /><b>1</b></span>
-            <span>{payload.urls.length > 1 ? `عرض ${payload.urls.length} صور مرة واحدة` : 'عرض الصورة مرة واحدة'}</span>
+          <button type="button" className="messages-image-once-button" onClick={() => void openViewer()} disabled={viewerOpening || isMine} dir="rtl">
+            <span className="messages-image-once-icon"><Eye size={18} /><b>1</b></span>
+            <span>صورة مؤقتة</span>
+            {messageTime && <time>{messageTime}</time>}
+            {isMine && <CheckCheck size={16} className="messages-image-once-checks" aria-label="تم التسليم" />}
           </button>
         )
       ) : (
         <div className={`messages-image-grid${payload.urls.length > 1 ? ' has-multiple' : ''}`}>
           {payload.urls.map((url, index) => (
-            <button key={`${messageId}-${index}`} type="button" onClick={openViewer} aria-label={`عرض الصورة ${index + 1}`}>
+            <button key={`${messageId}-${index}`} type="button" onClick={() => void openViewer()} aria-label={`عرض الصورة ${index + 1}`}>
               <img src={url} alt={`صورة مرسلة ${index + 1}`} loading="lazy" />
             </button>
           ))}
@@ -89,11 +199,27 @@ export default function ChatImageMessage({
       {payload.caption && <div className={`messages-image-caption messages-bubble ${isMine ? 'is-mine' : 'is-theirs'}`}>{payload.caption}</div>}
 
       {viewerOpen && createPortal(
-        <div className="messages-media-viewer" role="dialog" aria-modal="true" aria-label="عرض الصورة" onClick={closeViewer}>
-          <button type="button" className="messages-media-viewer-close" aria-label="إغلاق الصورة" onClick={closeViewer}><X size={26} /></button>
-          <div className="messages-media-viewer-content" onClick={event => event.stopPropagation()}>
-            {payload.urls.map((url, index) => <img key={`${messageId}-full-${index}`} src={url} alt={`صورة ${index + 1}`} draggable={false} />)}
-            {payload.viewOnce && <span className="messages-media-viewer-once"><Eye size={15} /> تُعرض مرة واحدة</span>}
+        <div
+          className="messages-media-viewer"
+          role="dialog"
+          aria-modal="true"
+          aria-label="عرض الصورة"
+          onContextMenu={event => event.preventDefault()}
+          onDragStart={event => event.preventDefault()}
+        >
+          <button type="button" className="messages-media-viewer-close" aria-label="إغلاق الصورة" onClick={closeViewer}><X size={18} /></button>
+          <div className="messages-media-viewer-content" dir="ltr">
+            {viewerUrls.map((url, index) => (
+              <img
+                key={`${messageId}-full-${index}`}
+                ref={element => { viewerImagesRef.current[index] = element; }}
+                src={url}
+                alt="صورة مؤقتة"
+                draggable={false}
+                onContextMenu={event => event.preventDefault()}
+                onDragStart={event => event.preventDefault()}
+              />
+            ))}
           </div>
         </div>,
         document.body,
