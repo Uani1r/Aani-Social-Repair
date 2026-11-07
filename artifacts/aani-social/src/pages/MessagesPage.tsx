@@ -502,11 +502,9 @@ function createMessageId(): string {
   });
 }
 
-function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[], preserveExisting = false): MessageRow[] {
-  const messages = new Map(incoming.map(message => [message.id, message]));
-  existing.forEach(message => {
-    if ((preserveExisting || message.sendState) && !messages.has(message.id)) messages.set(message.id, message);
-  });
+function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): MessageRow[] {
+  const messages = new Map(existing.map(message => [message.id, message]));
+  incoming.forEach(message => messages.set(message.id, message));
   return [...messages.values()].sort((left, right) => (
     (Date.parse(left.created_at) || 0) - (Date.parse(right.created_at) || 0)
   ));
@@ -669,6 +667,7 @@ export default function MessagesPage({
   const voiceObjectUrlsRef = useRef(new Set<string>());
   const voiceScrollLockRef = useRef(new Set<string>());
   const voiceScrollConfirmedRef = useRef(new Set<string>());
+  const deletedMessageIdsRef = useRef(new Set<string>());
   const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
@@ -882,7 +881,6 @@ export default function MessagesPage({
     if (!supabaseConfigured || !selectedId) return;
     const requestId = ++threadRequestRef.current;
     const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
-    const preserveExistingRowsAtRequestStart = voiceScrollLockRef.current.size > 0;
     const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
 
     try {
@@ -890,7 +888,7 @@ export default function MessagesPage({
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
       if (error) throw error;
       const visibleMessages = normalizeMessageRows(data)
-        .filter(message => !hiddenMessageIds.has(message.id))
+        .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id))
         .map(message => {
           const mediaMessage = parseChatMediaMessage(message.content);
           return mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
@@ -936,8 +934,10 @@ export default function MessagesPage({
         visibleMessages.forEach(message => {
           if (voiceScrollLockRef.current.has(message.id)) voiceScrollConfirmedRef.current.add(message.id);
         });
-        const preserveExistingRows = preserveExistingRowsAtRequestStart || voiceScrollLockRef.current.size > 0;
-        setThread(current => mergeThreadRows(current, visibleMessages, preserveExistingRows));
+        setThread(current => mergeThreadRows(
+          current.filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id)),
+          visibleMessages,
+        ));
         setThreadCacheReady(true);
         commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
@@ -1079,7 +1079,16 @@ export default function MessagesPage({
     void loadThread();
     if (!supabaseConfigured) return;
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(true))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
+        if (payload.eventType === 'DELETE') {
+          const messageId = (payload.old as { id?: unknown } | null)?.id;
+          if (typeof messageId === 'string') {
+            deletedMessageIdsRef.current.add(messageId);
+            setThread(current => current.filter(message => message.id !== messageId));
+          }
+        }
+        scheduleMessageRefresh(true);
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
       .on('postgres_changes', {
         event: 'INSERT',
@@ -1300,7 +1309,9 @@ export default function MessagesPage({
     const isConversationOpen = selectedIdRef.current === session.recipientId;
     if (isConversationOpen) {
       voiceScrollLockRef.current.add(messageId);
-      setThread(current => mergeThreadRows(current, [optimisticMessage]));
+      setThread(current => current.some(message => message.id === messageId)
+        ? current
+        : [...current, optimisticMessage]);
       setThreadCacheReady(true);
       scrollThreadToBottom();
       window.requestAnimationFrame(() => {
@@ -1933,6 +1944,7 @@ export default function MessagesPage({
         { p_message_id: message.id },
       );
       if (error) throw error;
+      deletedMessageIdsRef.current.add(message.id);
       setThread(current => current.filter(item => item.id !== message.id));
       const nextReactions = { ...reactionsByMessageRef.current };
       delete nextReactions[message.id];
