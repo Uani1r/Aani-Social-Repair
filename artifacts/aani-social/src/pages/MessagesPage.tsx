@@ -1125,7 +1125,20 @@ export default function MessagesPage({
   }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
 
   useLayoutEffect(() => {
-    if (thread.some(message => voiceScrollLockRef.current.has(message.id))) scrollThreadToBottom();
+    const hasPendingVoiceMessage = () => thread.some(message => voiceScrollLockRef.current.has(message.id));
+    if (!hasPendingVoiceMessage()) return;
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      if (hasPendingVoiceMessage()) scrollThreadToBottom();
+      secondFrame = window.requestAnimationFrame(() => {
+        if (hasPendingVoiceMessage()) scrollThreadToBottom();
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
   }, [thread, scrollThreadToBottom]);
 
   useEffect(() => {
@@ -2175,6 +2188,14 @@ export default function MessagesPage({
                 ref={threadListRef}
                 className="messages-thread-list"
                 aria-live="polite"
+                onScroll={event => {
+                  const threadList = event.currentTarget;
+                  const voiceMessageIsUploading = thread.some(message => voiceScrollLockRef.current.has(message.id));
+                  if (voiceMessageIsUploading
+                    && threadList.scrollHeight - threadList.clientHeight - threadList.scrollTop > 1) {
+                    scrollThreadToBottom();
+                  }
+                }}
                 onWheel={() => messageInputRef.current?.blur()}
                 onTouchStart={event => {
                   const touch = event.touches[0];

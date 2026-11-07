@@ -3069,6 +3069,7 @@ body.aani-immersive .unified-top-bar {
   overflow-y: auto;
   overflow-anchor: none;
   overscroll-behavior: contain;
+  scroll-behavior: auto;
   padding: 16px;
   scrollbar-width: thin;
   scrollbar-color: #383838 transparent;
@@ -5948,12 +5949,53 @@ body.aani-immersive .unified-top-bar {
 .messages-voice-progress {
   width: 100%;
   min-width: 28px;
-  height: 3px;
+  height: 10px;
   flex: 1 1 auto;
   margin: 0;
+  appearance: none;
+  -webkit-appearance: none;
   accent-color: #fff;
+  background: transparent;
   cursor: pointer;
   touch-action: pan-x;
+}
+
+.messages-voice-progress::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 48%);
+}
+
+.messages-voice-progress::-webkit-slider-thumb {
+  width: 9px;
+  height: 9px;
+  margin-top: -3px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+}
+
+.messages-voice-progress::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 48%);
+}
+
+.messages-voice-progress::-moz-range-progress {
+  height: 3px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 38%);
+}
+
+.messages-voice-progress::-moz-range-thumb {
+  width: 9px;
+  height: 9px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
 }
 
 .messages-voice-elapsed,
