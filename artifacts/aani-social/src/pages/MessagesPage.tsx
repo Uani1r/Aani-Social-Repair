@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import Avatar from '@/components/Avatar';
 import ChatImageMessage, { hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
+import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
@@ -159,6 +160,21 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   return message.sender_id === currentUserId ? `أنت: ${preview}` : preview;
 }
 
+function replyMessagePreview(message: MessageRow): string {
+  const content = message.content.trim();
+  const mediaMessage = parseChatMediaMessage(content);
+  let preview = content;
+  if (mediaMessage) {
+    preview = mediaMessage.viewOnce
+      ? 'صورة مؤقتة'
+      : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
+  } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
+  else if (content.startsWith('[story-reply]')) preview = content.slice('[story-reply]'.length).trim() || 'رد على قصة';
+  else if (content.startsWith('[story:')) preview = 'أرسل قصة';
+  else if (!preview) preview = 'رسالة';
+  return preview.length > 140 ? `${preview.slice(0, 140)}…` : preview;
+}
+
 function chatMediaStoragePath(url: string): string | null {
   try {
     const objectUrl = new URL(url);
@@ -199,6 +215,7 @@ export default function MessagesPage({
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
+  const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -501,6 +518,10 @@ export default function MessagesPage({
   }, [currentUserId]);
 
   useEffect(() => {
+    setReplyMessage(null);
+  }, [selectedId]);
+
+  useEffect(() => {
     if (!selectedId) {
       threadRequestRef.current += 1;
       setThread([]);
@@ -617,6 +638,7 @@ export default function MessagesPage({
       });
       if (error) throw error;
       setText('');
+      setReplyMessage(null);
       await Promise.all([loadThread(), loadConversationList()]);
     } catch (error) {
       console.error('[messages] تعذر إرسال الرسالة:', error);
@@ -1060,46 +1082,56 @@ export default function MessagesPage({
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
                   const mediaMessage = parseChatMediaMessage(content);
                   return (
-                    <div key={message.id} className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
-                      {isSharedPost ? (
-                        <div className="messages-rich-message"><SharedPostPreview postId={message.post_id} content={message.content} /></div>
-                      ) : isSharedStory ? (
-                        <div className="messages-rich-message">
-                          <StoryDmCard
-                            storyId={String(sharedStoryId)}
+                    <MessageSwipeReply
+                      key={message.id}
+                      isMine={isMine}
+                      onReply={() => {
+                        setReplyMessage(message);
+                        setEmojiPickerOpen(false);
+                        window.requestAnimationFrame(() => messageInputRef.current?.focus());
+                      }}
+                    >
+                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
+                        {isSharedPost ? (
+                          <div className="messages-rich-message"><SharedPostPreview postId={message.post_id} content={message.content} /></div>
+                        ) : isSharedStory ? (
+                          <div className="messages-rich-message">
+                            <StoryDmCard
+                              storyId={String(sharedStoryId)}
+                              currentUserId={currentUserId}
+                              senderName={target ? displayName(target) : undefined}
+                              onAddToStory={story => {
+                                onReshareStory(story);
+                                setLocation('/feed');
+                              }}
+                            />
+                          </div>
+                        ) : mediaMessage ? (
+                          <ChatImageMessage
+                            messageId={message.id}
                             currentUserId={currentUserId}
-                            senderName={target ? displayName(target) : undefined}
-                            onAddToStory={story => {
-                              onReshareStory(story);
-                              setLocation('/feed');
-                            }}
+                            payload={mediaMessage}
+                            isMine={isMine}
+                            createdAt={message.created_at}
+                            onViewOnceOpened={(messageId, urls) => { void markViewOnceMessageOpened(messageId, urls); }}
                           />
-                        </div>
-                      ) : mediaMessage ? (
-                        <ChatImageMessage
-                          messageId={message.id}
-                          currentUserId={currentUserId}
-                          payload={mediaMessage}
-                          isMine={isMine}
-                          createdAt={message.created_at}
-                          onViewOnceOpened={(messageId, urls) => { void markViewOnceMessageOpened(messageId, urls); }}
-                        />
-                      ) : (
-                        <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
-                          {isStoryReply ? (
-                            <>
-                              <span className="messages-story-reply-label">رد على الستوري</span>
-                              <span>{content.slice('[story-reply]'.length).trim()}</span>
-                            </>
-                          ) : content.startsWith('[story:') ? 'أرسل لك قصة' : message.content}
-                        </div>
-                      )}
-                      {!isMine && (
-                        <span className="messages-sender-avatar" aria-hidden="true">
-                          {showSenderAvatar && <Avatar profile={target} />}
-                        </span>
-                      )}
-                    </div>
+                        ) : (
+                          <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
+                            {isStoryReply ? (
+                              <>
+                                <span className="messages-story-reply-label">رد على الستوري</span>
+                                <span>{content.slice('[story-reply]'.length).trim()}</span>
+                              </>
+                            ) : content.startsWith('[story:') ? 'أرسل لك قصة' : message.content}
+                          </div>
+                        )}
+                        {!isMine && (
+                          <span className="messages-sender-avatar" aria-hidden="true">
+                            {showSenderAvatar && <Avatar profile={target} />}
+                          </span>
+                        )}
+                      </div>
+                    </MessageSwipeReply>
                   );
                 })}
                 {selectedPendingMediaMessage && (
@@ -1121,7 +1153,18 @@ export default function MessagesPage({
                 )}
                 <div ref={threadEndRef} />
               </div>
-              <form className="messages-composer" onSubmit={sendMessage}>
+              <form className={`messages-composer${replyMessage ? ' has-reply' : ''}`} onSubmit={sendMessage}>
+                {replyMessage && (
+                  <div className="messages-reply-preview">
+                    <div className="messages-reply-preview-copy">
+                      <strong>الرد على {replyMessage.sender_id === currentUserId ? displayName(currentProfile) : displayName(target)}</strong>
+                      <span>{replyMessagePreview(replyMessage)}</span>
+                    </div>
+                    <button type="button" aria-label="إلغاء الرد" onClick={() => setReplyMessage(null)}>
+                      <X size={17} />
+                    </button>
+                  </div>
+                )}
                 <button
                   type="button"
                   className="messages-composer-control messages-composer-attach"

@@ -3161,6 +3161,63 @@ body.aani-immersive .unified-top-bar {
   max-width: min(85%, 420px);
 }
 
+.messages-swipe-reply {
+  position: relative;
+  width: 100%;
+  flex: 0 0 auto;
+  overflow: hidden;
+  touch-action: pan-y;
+  --messages-reply-progress: 0;
+  --messages-reply-scale: .62;
+}
+
+.messages-swipe-reply-icon {
+  position: absolute;
+  top: 50%;
+  z-index: 0;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 50%;
+  color: #d7b5ff;
+  background: rgb(111 63 151 / 20%);
+  opacity: var(--messages-reply-progress);
+  pointer-events: none;
+  transform: translateY(-50%) scale(var(--messages-reply-scale));
+  transition: opacity 160ms ease, color 160ms ease, background-color 160ms ease, transform 180ms ease;
+}
+
+.messages-swipe-reply.is-mine .messages-swipe-reply-icon {
+  right: 12px;
+}
+
+.messages-swipe-reply.is-theirs .messages-swipe-reply-icon {
+  left: 12px;
+}
+
+.messages-swipe-reply.is-armed .messages-swipe-reply-icon {
+  color: #fff;
+  background: #7e4eaa;
+  transform: translateY(-50%) scale(1.12);
+}
+
+.messages-swipe-reply-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  transition: transform 360ms cubic-bezier(.2, .8, .2, 1);
+  will-change: transform;
+}
+
+.messages-swipe-reply-content.is-dragging {
+  transition: none;
+}
+
+.messages-swipe-reply-body {
+  width: 100%;
+}
+
 .messages-composer {
   position: relative;
   display: flex;
@@ -3178,6 +3235,69 @@ body.aani-immersive .unified-top-bar {
 
 .messages-composer:focus-within {
   border-color: #565656;
+}
+
+.messages-composer.has-reply {
+  flex-wrap: wrap;
+  border-radius: 20px;
+}
+
+.messages-reply-preview {
+  display: flex;
+  width: 100%;
+  flex: 0 0 100%;
+  align-items: center;
+  gap: 10px;
+  order: -1;
+  box-sizing: border-box;
+  border-bottom: 1px solid #303030;
+  padding: 2px 4px 8px;
+  direction: rtl;
+}
+
+.messages-reply-preview-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.messages-reply-preview-copy strong {
+  overflow: hidden;
+  color: #d7b5ff;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-reply-preview-copy span {
+  overflow: hidden;
+  color: var(--messages-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-reply-preview > button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--messages-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+
+.messages-reply-preview > button:hover,
+.messages-reply-preview > button:focus-visible {
+  outline: none;
+  color: var(--messages-primary);
+  background: #292929;
 }
 
 .messages-composer-field {
