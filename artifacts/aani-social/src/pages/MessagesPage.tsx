@@ -747,9 +747,11 @@ export default function MessagesPage({
 
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    closeEmojiPicker();
     const content = text.trim();
-    if (!supabaseConfigured || !selectedId || !content || sending) return;
+    if (!supabaseConfigured || !selectedId || !content || sending) {
+      closeEmojiPicker();
+      return;
+    }
 
     const recipientId = selectedId;
     const optimisticMessage: MessageRow = {
@@ -768,6 +770,7 @@ export default function MessagesPage({
     setText('');
     setReplyMessage(null);
     setSending(true);
+    closeEmojiPicker();
 
     try {
       const { error } = await supabase.from('messages').insert({

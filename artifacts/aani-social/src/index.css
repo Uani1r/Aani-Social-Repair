@@ -3462,7 +3462,7 @@ body.aani-immersive .unified-top-bar {
 
 .messages-sticker-picker-backdrop {
   position: fixed;
-  inset: 0;
+  inset: 0 0 406px;
   z-index: 1199;
   background: transparent;
 }
