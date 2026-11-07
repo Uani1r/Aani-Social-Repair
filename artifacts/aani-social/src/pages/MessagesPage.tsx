@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
 import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
@@ -14,7 +14,8 @@ import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
-import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
+import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
+import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -36,6 +37,59 @@ interface MessageRow {
 interface MessageReaction {
   user_id: string;
   emoji: string;
+}
+
+type VoiceRecordingStatus = 'idle' | 'requesting' | 'recording';
+
+interface VoiceMessagePayload {
+  url: string;
+  durationMs: number;
+}
+
+interface VoiceRecordingSession {
+  pointerId: number;
+  startX: number;
+  userId: string;
+  recipientId: string;
+  replyToMessageId: string | null;
+  cancelled: boolean;
+  stream: MediaStream | null;
+  recorder: MediaRecorder | null;
+  chunks: Blob[];
+  startedAt: number | null;
+}
+
+const CHAT_VOICE_MESSAGE_PREFIX = '[aani-audio:v1]';
+
+function parseVoiceMessage(content: string): VoiceMessagePayload | null {
+  if (!content.startsWith(CHAT_VOICE_MESSAGE_PREFIX)) return null;
+  try {
+    const parsed: unknown = JSON.parse(content.slice(CHAT_VOICE_MESSAGE_PREFIX.length));
+    if (!isRecord(parsed) || typeof parsed.url !== 'string' || typeof parsed.durationMs !== 'number' || !Number.isFinite(parsed.durationMs)) return null;
+    const url = new URL(parsed.url);
+    if (url.protocol === 'blob:') {
+      return { url: url.toString(), durationMs: Math.max(0, parsed.durationMs) };
+    }
+    const storageUrl = new URL(supabaseUrl);
+    const storagePath = `/storage/v1/object/public/${storageBucket}/`;
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:')
+      || url.origin !== storageUrl.origin
+      || !url.pathname.startsWith(storagePath)) return null;
+    return { url: url.toString(), durationMs: Math.max(0, parsed.durationMs) };
+  } catch {
+    return null;
+  }
+}
+
+function voiceMessageContent(url: string, durationMs: number): string {
+  return `${CHAT_VOICE_MESSAGE_PREFIX}${JSON.stringify({ url, durationMs: Math.max(0, Math.round(durationMs)) })}`;
+}
+
+function formatVoiceDuration(durationMs: number): string {
+  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 interface MessageActionState {
@@ -359,8 +413,10 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   const content = message.content.trim();
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
+  const voiceMessage = parseVoiceMessage(content);
   let preview = content;
   if (stickerMessage) preview = 'ملصق';
+  else if (voiceMessage) preview = 'رسالة صوتية';
   else if (mediaMessage) {
     const hasOpened = mediaMessage.opened || hasViewedOnce(currentUserId, message.id);
     preview = mediaMessage.viewOnce
@@ -377,8 +433,10 @@ function replyMessagePreview(message: MessageRow): string {
   const content = message.content.trim();
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
+  const voiceMessage = parseVoiceMessage(content);
   let preview = content;
   if (stickerMessage) preview = 'ملصق';
+  else if (voiceMessage) preview = 'رسالة صوتية';
   else if (mediaMessage) {
     preview = mediaMessage.viewOnce
       ? 'صورة مؤقتة'
@@ -440,6 +498,9 @@ export default function MessagesPage({
   const [threadCacheReady, setThreadCacheReady] = useState(Boolean(initialThreadCache));
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
+  const [voiceRecordingStatus, setVoiceRecordingStatus] = useState<VoiceRecordingStatus>('idle');
+  const [voiceRecordingElapsedMs, setVoiceRecordingElapsedMs] = useState(0);
+  const [voiceDragOffset, setVoiceDragOffset] = useState(0);
   const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, MessageReaction[]>>(() => initialThreadCache?.reactionsByMessage || {});
   const [messageAction, setMessageAction] = useState<MessageActionState | null>(null);
   const [emojiTargetMessage, setEmojiTargetMessage] = useState<MessageRow | null>(null);
@@ -472,6 +533,11 @@ export default function MessagesPage({
   const threadListRef = useRef<HTMLDivElement>(null);
   const threadEndRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const messageComposerRef = useRef<HTMLFormElement>(null);
+  const voiceCancelButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceRecordingSessionRef = useRef<VoiceRecordingSession | null>(null);
+  const voiceRecordingTimerRef = useRef<number | null>(null);
+  const voiceObjectUrlsRef = useRef(new Set<string>());
   const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
@@ -491,6 +557,20 @@ export default function MessagesPage({
 
   useEffect(() => () => {
     if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
+    if (voiceRecordingTimerRef.current !== null) window.clearInterval(voiceRecordingTimerRef.current);
+    const session = voiceRecordingSessionRef.current;
+    if (session) {
+      session.cancelled = true;
+      try {
+        if (session.recorder && session.recorder.state !== 'inactive') session.recorder.stop();
+      } catch {
+        /* recorder already stopped */
+      }
+      session.stream?.getTracks().forEach(track => track.stop());
+      voiceRecordingSessionRef.current = null;
+    }
+    voiceObjectUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    voiceObjectUrlsRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -1002,6 +1082,242 @@ export default function MessagesPage({
     window.dispatchEvent(new CustomEvent('aani-open-chat-media-picker', { detail: { caption: text, recipientId: selectedId } }));
   };
 
+  const cancelVoiceRecording = useCallback((session = voiceRecordingSessionRef.current) => {
+    if (!session) return;
+    session.cancelled = true;
+    const isCurrentSession = voiceRecordingSessionRef.current === session;
+    if (isCurrentSession) {
+      voiceRecordingSessionRef.current = null;
+      if (voiceRecordingTimerRef.current !== null) window.clearInterval(voiceRecordingTimerRef.current);
+      voiceRecordingTimerRef.current = null;
+      setVoiceRecordingStatus('idle');
+      setVoiceRecordingElapsedMs(0);
+      setVoiceDragOffset(0);
+    }
+    try {
+      if (session.recorder && session.recorder.state !== 'inactive') session.recorder.stop();
+    } catch {
+      /* recorder already stopped */
+    }
+    session.stream?.getTracks().forEach(track => track.stop());
+    session.stream = null;
+  }, []);
+
+  const uploadRecordedVoice = async (session: VoiceRecordingSession, blob: Blob, durationMs: number) => {
+    const messageId = createMessageId();
+    const localUrl = URL.createObjectURL(blob);
+    voiceObjectUrlsRef.current.add(localUrl);
+    const localContent = voiceMessageContent(localUrl, durationMs);
+    const createdAt = new Date().toISOString();
+    const optimisticMessage: MessageRow = {
+      id: messageId,
+      sender_id: session.userId,
+      recipient_id: session.recipientId,
+      content: localContent,
+      post_id: null,
+      story_id: null,
+      created_at: createdAt,
+      delivered_at: null,
+      read_at: null,
+      reply_to_message_id: session.replyToMessageId,
+      sendState: 'pending',
+    };
+    const isConversationOpen = selectedIdRef.current === session.recipientId;
+    if (isConversationOpen) {
+      setThread(current => mergeThreadRows(current, [optimisticMessage]));
+      setThreadCacheReady(true);
+    }
+
+    const mimeType = blob.type || 'audio/webm';
+    const extension = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+    const path = `${session.userId}/messages/${messageId}.${extension}`;
+    let uploadedPath = '';
+    let preserveUploadedFile = false;
+    try {
+      const file = new File([blob], `voice-${messageId}.${extension}`, { type: mimeType });
+      await uploadMedia({ file, path });
+      uploadedPath = path;
+      const audioUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+      const content = voiceMessageContent(audioUrl, durationMs);
+      if (content.length > 4000) throw new Error('بيانات الرسالة الصوتية كبيرة جداً.');
+      const { error } = await supabase.from('messages').insert({
+        id: messageId,
+        sender_id: session.userId,
+        recipient_id: session.recipientId,
+        content,
+        ...(session.replyToMessageId ? { reply_to_message_id: session.replyToMessageId } : {}),
+      });
+      if (error) {
+        preserveUploadedFile = isTransientNetworkError(error);
+        throw error;
+      }
+      if (selectedIdRef.current === session.recipientId) {
+        setThread(current => current.map(message => message.id === messageId
+          ? { ...message, content, sendState: 'sent' }
+          : message));
+      }
+      URL.revokeObjectURL(localUrl);
+      voiceObjectUrlsRef.current.delete(localUrl);
+      void loadConversationList();
+    } catch (error) {
+      if (uploadedPath && isTransientNetworkError(error)) preserveUploadedFile = true;
+      if (uploadedPath && !preserveUploadedFile) {
+        try {
+          const { error: cleanupError } = await supabase.storage.from(storageBucket).remove([uploadedPath]);
+          if (cleanupError) console.warn('[messages] تعذر تنظيف التسجيل الصوتي غير المرسل:', cleanupError);
+        } catch (cleanupError) {
+          console.warn('[messages] تعذر تنظيف التسجيل الصوتي غير المرسل:', cleanupError);
+        }
+      }
+      if (selectedIdRef.current === session.recipientId) {
+        setThread(current => current.map(message => message.id === messageId && message.sendState === 'pending'
+          ? { ...message, sendState: 'failed' }
+          : message));
+      }
+      console.error('[messages] تعذر إرسال الرسالة الصوتية:', error);
+      toast.error('تعذر إرسال الرسالة الصوتية. تحقق من الاتصال وحاول مرة أخرى.');
+    }
+  };
+
+  const beginVoiceRecording = async (session: VoiceRecordingSession) => {
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        throw new Error('تسجيل الصوت غير مدعوم في هذا المتصفح.');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (session.cancelled || voiceRecordingSessionRef.current !== session) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      session.stream = stream;
+      const supportedMimeType = typeof MediaRecorder.isTypeSupported === 'function'
+        ? [
+          'audio/webm;codecs=opus',
+          'audio/mp4',
+          'audio/webm',
+          'audio/ogg;codecs=opus',
+          'audio/ogg',
+        ].find(type => MediaRecorder.isTypeSupported(type))
+        : undefined;
+      const recorder = new MediaRecorder(stream, supportedMimeType ? { mimeType: supportedMimeType } : undefined);
+      session.recorder = recorder;
+      recorder.ondataavailable = event => {
+        if (event.data.size > 0) session.chunks.push(event.data);
+      };
+      recorder.onerror = () => {
+        if (voiceRecordingSessionRef.current !== session) return;
+        cancelVoiceRecording(session);
+        toast.error('تعذر تسجيل الصوت. تحقق من إذن الميكروفون.');
+      };
+      recorder.onstop = () => {
+        session.stream?.getTracks().forEach(track => track.stop());
+        session.stream = null;
+        if (session.cancelled || voiceRecordingSessionRef.current !== session) return;
+        voiceRecordingSessionRef.current = null;
+        if (voiceRecordingTimerRef.current !== null) window.clearInterval(voiceRecordingTimerRef.current);
+        voiceRecordingTimerRef.current = null;
+        const durationMs = session.startedAt === null ? 0 : Date.now() - session.startedAt;
+        setVoiceRecordingElapsedMs(durationMs);
+        setVoiceRecordingStatus('idle');
+        setVoiceDragOffset(0);
+        setReplyMessage(null);
+        const mimeType = recorder.mimeType || session.chunks.find(chunk => chunk.type)?.type || 'audio/webm';
+        const blob = new Blob(session.chunks, { type: mimeType });
+        if (!blob.size) {
+          toast.info('لم يتم تسجيل صوت. اضغط مطولاً على الميكروفون ثم حاول مرة أخرى.');
+          return;
+        }
+        void uploadRecordedVoice(session, blob, durationMs);
+      };
+      recorder.start(180);
+      session.startedAt = Date.now();
+      setVoiceRecordingStatus('recording');
+      voiceRecordingTimerRef.current = window.setInterval(() => {
+        if (session.startedAt !== null) setVoiceRecordingElapsedMs(Date.now() - session.startedAt);
+      }, 120);
+    } catch (error) {
+      const isCurrentSession = voiceRecordingSessionRef.current === session;
+      cancelVoiceRecording(session);
+      if (isCurrentSession) {
+        console.warn('[messages] تعذر بدء التسجيل الصوتي:', error);
+        toast.error(error instanceof Error ? error.message : 'تعذر بدء التسجيل الصوتي. اسمح بالوصول إلى الميكروفون.');
+      }
+    }
+  };
+
+  const startVoiceRecording = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0) || voiceRecordingSessionRef.current) return;
+    if (!supabaseConfigured || !selectedId) {
+      toast.error('افتح محادثة واتصل بالإنترنت لتسجيل رسالة صوتية.');
+      return;
+    }
+    event.preventDefault();
+    messageInputRef.current?.blur();
+    const session: VoiceRecordingSession = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      userId: currentUserId,
+      recipientId: selectedId,
+      replyToMessageId: replyMessage?.id || null,
+      cancelled: false,
+      stream: null,
+      recorder: null,
+      chunks: [],
+      startedAt: null,
+    };
+    voiceRecordingSessionRef.current = session;
+    try {
+      messageComposerRef.current?.setPointerCapture(event.pointerId);
+    } catch {
+      /* pointer capture is not available in every browser */
+    }
+    if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
+    emojiPickerCloseTimerRef.current = null;
+    setEmojiPickerOpen(false);
+    setEmojiPickerClosing(false);
+    setEmojiTargetMessage(null);
+    setVoiceRecordingElapsedMs(0);
+    setVoiceDragOffset(0);
+    setVoiceRecordingStatus('requesting');
+    void beginVoiceRecording(session);
+  };
+
+  const handleVoicePointerMove = (event: ReactPointerEvent<HTMLFormElement>) => {
+    const session = voiceRecordingSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const offset = event.clientX - session.startX;
+    setVoiceDragOffset(Math.max(-96, Math.min(0, offset)));
+    if (offset <= -96) cancelVoiceRecording(session);
+  };
+
+  const finishVoiceRecording = (event: ReactPointerEvent<HTMLFormElement>) => {
+    const session = voiceRecordingSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    const cancelRect = voiceCancelButtonRef.current?.getBoundingClientRect();
+    if (cancelRect
+      && event.clientX >= cancelRect.left
+      && event.clientX <= cancelRect.right
+      && event.clientY >= cancelRect.top
+      && event.clientY <= cancelRect.bottom) {
+      cancelVoiceRecording(session);
+      return;
+    }
+    if (!session.recorder || session.recorder.state !== 'recording') {
+      cancelVoiceRecording(session);
+      return;
+    }
+    try {
+      session.recorder.stop();
+    } catch {
+      cancelVoiceRecording(session);
+    }
+  };
+
+  useEffect(() => {
+    const session = voiceRecordingSessionRef.current;
+    if (session && session.recipientId !== selectedId) cancelVoiceRecording(session);
+  }, [cancelVoiceRecording, selectedId]);
+
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = text.trim();
@@ -1348,9 +1664,12 @@ export default function MessagesPage({
   const copyMessage = async (message: MessageRow) => {
     const mediaMessage = parseChatMediaMessage(message.content);
     const stickerMessage = parseChatStickerMessage(message.content);
+    const voiceMessage = parseVoiceMessage(message.content);
     const content = message.content.trim();
-    const textToCopy = mediaMessage
-      ? mediaMessage.caption || 'صورة'
+    const textToCopy = voiceMessage
+      ? 'رسالة صوتية'
+      : mediaMessage
+        ? mediaMessage.caption || 'صورة'
       : stickerMessage
         ? 'ملصق'
         : content.startsWith('[story-reply]')
@@ -1727,6 +2046,7 @@ export default function MessagesPage({
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
+                  const voiceMessage = parseVoiceMessage(content);
                   const messageReactions = reactionsByMessage[message.id] || [];
                   const reactionCounts = Object.entries(messageReactions.reduce<Record<string, MessageReaction[]>>((grouped, reaction) => {
                     (grouped[reaction.emoji] ||= []).push(reaction);
@@ -1778,6 +2098,24 @@ export default function MessagesPage({
                                 />
                               </div>
                             </>
+                          ) : voiceMessage ? (
+                            <div className={`messages-bubble messages-voice-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
+                              {replyPreview}
+                              <div className="messages-voice-player" data-message-gesture-ignore>
+                                <Mic size={17} aria-hidden="true" />
+                                <audio
+                                  className="messages-voice-audio"
+                                  controls
+                                  preload="metadata"
+                                  src={voiceMessage.url}
+                                  aria-label={`تشغيل الرسالة الصوتية، ${formatVoiceDuration(voiceMessage.durationMs)}`}
+                                />
+                              </div>
+                              <span className="messages-bubble-footer">
+                                <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                {isMine && <MessageDeliveryStatus message={message} />}
+                              </span>
+                            </div>
                           ) : stickerMessage ? (
                             <>
                               {replyPreview}
@@ -1860,7 +2198,17 @@ export default function MessagesPage({
                 )}
                 <div ref={threadEndRef} aria-hidden="true" />
               </div>
-              <form className={`messages-composer${replyMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}`} onSubmit={sendMessage}>
+              <form
+                ref={messageComposerRef}
+                className={`messages-composer${replyMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}${voiceRecordingStatus !== 'idle' ? ' is-recording' : ''}`}
+                onSubmit={sendMessage}
+                onPointerMove={handleVoicePointerMove}
+                onPointerUp={finishVoiceRecording}
+                onPointerCancel={event => {
+                  const session = voiceRecordingSessionRef.current;
+                  if (session?.pointerId === event.pointerId) cancelVoiceRecording(session);
+                }}
+              >
                 {replyMessage && (
                   <div className="messages-reply-preview">
                     <div className="messages-reply-preview-copy">
@@ -1872,74 +2220,112 @@ export default function MessagesPage({
                     </button>
                   </div>
                 )}
-                <button
-                  type="button"
-                  className="messages-composer-control messages-composer-attach"
-                  aria-label="إضافة صور"
-                  onClick={openChatMediaPicker}
-                >
-                  <Plus size={24} />
-                </button>
-                <div className="messages-composer-field">
-                  <textarea
-                    ref={messageInputRef}
-                    value={text}
-                    onChange={event => setText(event.target.value)}
-                    onFocus={() => {
-                      scrollThreadToBottom();
-                      window.requestAnimationFrame(scrollThreadToBottom);
-                    }}
-                    onKeyDown={event => {
-                      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                        event.preventDefault();
-                        event.currentTarget.form?.requestSubmit();
-                      }
-                    }}
-                    placeholder="اكتب رسالة..."
-                    aria-label="اكتب رسالة"
-                    autoComplete="off"
-                    enterKeyHint="send"
-                    rows={1}
-                  />
-                </div>
-                <div className="messages-composer-actions">
-                  <button
-                    type="button"
-                    className="messages-composer-control messages-composer-emoji"
-                    aria-label="إيموجي وملصقات"
-                    aria-haspopup="dialog"
-                    aria-expanded={emojiPickerOpen}
-                    onClick={openEmojiPicker}
-                  >
-                    <Smile size={19} />
-                  </button>
-                  {text.length === 0 ? (
-                    <>
-                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="تسجيل رسالة صوتية" onClick={() => toast.info('الرسائل الصوتية غير متاحة حالياً.')}>
-                        <Mic size={22} />
-                      </button>
-                      <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="اختيار صورة أو التقاط صورة" onClick={openChatMediaPicker}>
-                        <Camera size={22} />
-                      </button>
-                    </>
-                  ) : (
+                {voiceRecordingStatus !== 'idle' ? (
+                  <div className="messages-voice-recording" role="group" aria-label="تسجيل رسالة صوتية">
                     <button
-                      type="submit"
-                      className="messages-composer-control messages-composer-send"
-                      aria-label="إرسال الرسالة"
-                      disabled={!text.trim() || sending}
-                      onMouseDown={event => {
-                        if (document.activeElement === messageInputRef.current) event.preventDefault();
-                      }}
-                      onPointerDown={event => {
-                        if (document.activeElement === messageInputRef.current) event.preventDefault();
-                      }}
+                      ref={voiceCancelButtonRef}
+                      type="button"
+                      className="messages-voice-cancel"
+                      aria-label="إلغاء التسجيل الصوتي"
+                      title="إلغاء التسجيل"
+                      onClick={() => cancelVoiceRecording()}
                     >
-                      <Send size={20} />
+                      <Trash2 size={19} />
                     </button>
-                  )}
-                </div>
-                {emojiPickerOpen && (
+                    <div className="messages-voice-recording-copy">
+                      <div className="messages-voice-recording-status">
+                        <span className={`messages-voice-recording-dot${voiceRecordingStatus === 'recording' ? ' is-active' : ''}`} />
+                        <span role="status">{voiceRecordingStatus === 'requesting' ? 'بانتظار إذن الميكروفون' : 'جارٍ التسجيل'}</span>
+                        <time dir="ltr">{formatVoiceDuration(voiceRecordingElapsedMs)}</time>
+                      </div>
+                      <div className={`messages-voice-waveform${voiceRecordingStatus === 'recording' ? ' is-active' : ''}`} aria-hidden="true">
+                        {[7, 13, 19, 10, 23, 15, 8, 18, 25, 12, 20, 9, 16, 24, 11, 18, 7, 14].map((height, index) => (
+                          <span key={index} style={{ height: `${height}px`, animationDelay: `${index * 35}ms` }} />
+                        ))}
+                      </div>
+                      <span className="messages-voice-recording-hint">{voiceDragOffset <= -48 ? 'أفلت للإلغاء' : 'حرّر للإرسال · اسحب يساراً للإلغاء'}</span>
+                    </div>
+                    <span className="messages-voice-mic-indicator" aria-label="التسجيل نشط"><Mic size={20} /></span>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      className="messages-composer-control messages-composer-attach"
+                      aria-label="إضافة صور"
+                      onClick={openChatMediaPicker}
+                    >
+                      <Plus size={24} />
+                    </button>
+                    <div className="messages-composer-field">
+                      <textarea
+                        ref={messageInputRef}
+                        value={text}
+                        onChange={event => setText(event.target.value)}
+                        onFocus={() => {
+                          scrollThreadToBottom();
+                          window.requestAnimationFrame(scrollThreadToBottom);
+                        }}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                            event.preventDefault();
+                            event.currentTarget.form?.requestSubmit();
+                          }
+                        }}
+                        placeholder="اكتب رسالة..."
+                        aria-label="اكتب رسالة"
+                        autoComplete="off"
+                        enterKeyHint="send"
+                        rows={1}
+                      />
+                    </div>
+                    <div className="messages-composer-actions">
+                      <button
+                        type="button"
+                        className="messages-composer-control messages-composer-emoji"
+                        aria-label="إيموجي وملصقات"
+                        aria-haspopup="dialog"
+                        aria-expanded={emojiPickerOpen}
+                        onClick={openEmojiPicker}
+                      >
+                        <Smile size={19} />
+                      </button>
+                      {text.length === 0 ? (
+                        <>
+                          <button
+                            type="button"
+                            className="messages-composer-control messages-composer-empty-action messages-composer-mic"
+                            aria-label="اضغط مطولاً لتسجيل رسالة صوتية"
+                            title="اضغط مطولاً لتسجيل رسالة صوتية"
+                            onPointerDown={startVoiceRecording}
+                            onContextMenu={event => event.preventDefault()}
+                          >
+                            <Mic size={22} />
+                          </button>
+                          <button type="button" className="messages-composer-control messages-composer-empty-action" aria-label="اختيار صورة أو التقاط صورة" onClick={openChatMediaPicker}>
+                            <Camera size={22} />
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="submit"
+                          className="messages-composer-control messages-composer-send"
+                          aria-label="إرسال الرسالة"
+                          disabled={!text.trim() || sending}
+                          onMouseDown={event => {
+                            if (document.activeElement === messageInputRef.current) event.preventDefault();
+                          }}
+                          onPointerDown={event => {
+                            if (document.activeElement === messageInputRef.current) event.preventDefault();
+                          }}
+                        >
+                          <Send size={20} />
+                        </button>
+                      )}
+                    </div>
+                  </>
+                )}
+                {emojiPickerOpen && voiceRecordingStatus === 'idle' && (
                   <ChatStickerPanel
                     currentUserId={currentUserId}
                     closing={emojiPickerClosing}

@@ -5,6 +5,10 @@ const REPLY_THRESHOLD = 56;
 const MAX_SWIPE_DISTANCE = 96;
 const LONG_PRESS_DURATION = 480;
 
+function isGestureIgnoredTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('button, a, input, textarea, select, audio, video, [role="button"], [data-message-gesture-ignore]'));
+}
+
 type SwipeAxis = 'undecided' | 'horizontal' | 'vertical' | 'rejected';
 
 type PointerStart = {
@@ -51,6 +55,15 @@ export default function MessageSwipeReply({
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    if (isGestureIgnoredTarget(event.target)) {
+      clearLongPressTimer();
+      pointerStartRef.current = null;
+      offsetRef.current = 0;
+      setOffsetX(0);
+      setIsDragging(false);
+      setIsArmed(false);
+      return;
+    }
     suppressClickRef.current = false;
     if (suppressClickTimerRef.current !== null) {
       window.clearTimeout(suppressClickTimerRef.current);
@@ -141,6 +154,11 @@ export default function MessageSwipeReply({
     if (shouldReply) onReply();
   };
 
+  const handleContextMenu = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (isGestureIgnoredTarget(event.target)) return;
+    onContextMenu?.(event);
+  };
+
   const handleClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (!suppressClickRef.current) return;
     suppressClickRef.current = false;
@@ -166,7 +184,7 @@ export default function MessageSwipeReply({
       onPointerMove={handlePointerMove}
       onPointerUp={event => finishGesture(event)}
       onPointerCancel={event => finishGesture(event, true)}
-      onContextMenu={onContextMenu}
+      onContextMenu={handleContextMenu}
       onClickCapture={handleClickCapture}
       style={{ '--messages-reply-progress': progress, '--messages-reply-scale': 0.62 + progress * 0.38 } as CSSProperties}
     >

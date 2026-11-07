@@ -5743,3 +5743,180 @@ body.aani-immersive .unified-top-bar {
 .messages-message-row.has-reactions .messages-message-body > .messages-rich-message {
   max-width: 100%;
 }
+
+
+
+/* Voice-message recording and playback */
+.messages-composer-mic {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.messages-composer.is-recording {
+  min-height: 68px;
+  align-items: stretch;
+  border-color: rgb(237 73 86 / 48%);
+  background: #1b1718;
+  touch-action: none;
+}
+
+.messages-voice-recording {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+  direction: ltr;
+}
+
+.messages-voice-cancel,
+.messages-voice-mic-indicator {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+}
+
+.messages-voice-cancel {
+  color: #ff9ca4;
+  background: rgb(237 73 86 / 14%);
+  cursor: pointer;
+}
+
+.messages-voice-cancel:hover,
+.messages-voice-cancel:focus-visible {
+  outline: none;
+  background: rgb(237 73 86 / 24%);
+}
+
+.messages-voice-recording-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  direction: rtl;
+}
+
+.messages-voice-recording-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  direction: rtl;
+  color: #f4f4f5;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.messages-voice-recording-status time {
+  margin-inline-start: auto;
+  color: #d4d4d8;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.messages-voice-recording-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: #a1a1aa;
+}
+
+.messages-voice-recording-dot.is-active {
+  background: #ed4956;
+  box-shadow: 0 0 0 3px rgb(237 73 86 / 15%);
+  animation: messages-voice-recording-pulse 1.2s ease-in-out infinite;
+}
+
+.messages-voice-waveform {
+  display: flex;
+  height: 18px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 3px;
+  direction: ltr;
+}
+
+.messages-voice-waveform span {
+  width: 3px;
+  flex: 0 1 3px;
+  min-height: 4px;
+  border-radius: 999px;
+  background: #ed7180;
+  opacity: .58;
+}
+
+.messages-voice-waveform.is-active span {
+  opacity: .95;
+  transform-origin: center;
+  animation: messages-voice-wave 520ms ease-in-out infinite alternate;
+}
+
+.messages-voice-recording-hint {
+  overflow: hidden;
+  color: #a8a8a8;
+  font-size: 10px;
+  line-height: 1.2;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-voice-mic-indicator {
+  color: #fff;
+  background: #ed4956;
+  box-shadow: 0 0 0 4px rgb(237 73 86 / 12%);
+}
+
+.messages-voice-bubble {
+  max-width: min(75vw, 340px);
+  white-space: normal;
+}
+
+.messages-voice-player {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  direction: ltr;
+  color: rgb(255 255 255 / 78%);
+}
+
+.messages-voice-audio {
+  display: block;
+  width: min(240px, calc(100vw - 140px));
+  max-width: 100%;
+  height: 40px;
+  touch-action: auto;
+}
+
+.messages-voice-bubble .messages-bubble-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 3px;
+  margin-inline-start: 0;
+}
+
+@keyframes messages-voice-wave {
+  from { transform: scaleY(.48); }
+  to { transform: scaleY(1); }
+}
+
+@keyframes messages-voice-recording-pulse {
+  50% { opacity: .55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .messages-voice-waveform.is-active span,
+  .messages-voice-recording-dot.is-active {
+    animation: none;
+  }
+}
