@@ -3401,72 +3401,682 @@ body.aani-immersive .unified-top-bar {
   background: #19c875;
 }
 
-.messages-emoji-picker {
+.messages-sticker-picker {
   position: absolute;
   right: 0;
   bottom: calc(100% + 10px);
   z-index: 40;
-  width: min(320px, calc(100vw - 32px));
-  direction: rtl;
-  border: 1px solid #333;
-  border-radius: 16px;
-  padding: 10px;
-  background: #171717;
-  box-shadow: 0 16px 44px rgb(0 0 0 / 50%);
-}
-
-.messages-emoji-tabs {
   display: flex;
-  gap: 6px;
-  border-bottom: 1px solid #303030;
-  padding-bottom: 8px;
+  width: min(350px, calc(100vw - 32px));
+  height: 350px;
+  max-height: min(350px, calc(100dvh - 150px));
+  flex-direction: column;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 18px;
+  color: #f5f7f8;
+  background: rgba(31, 44, 52, 0.7);
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 42%);
+  direction: rtl;
 }
 
-.messages-emoji-tabs button {
-  min-height: 32px;
-  flex: 1 1 0;
+.messages-sticker-panel-header {
+  display: flex;
+  min-height: 48px;
+  flex: 0 0 48px;
+  align-items: center;
+  gap: 9px;
+  border-bottom: 1px solid rgb(255 255 255 / 9%);
+  padding: 0 9px;
+}
+
+.messages-sticker-panel-header > strong {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: #f4f5f6;
+  font-size: 12px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-sticker-panel-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  border-radius: 10px;
+  padding: 3px;
+  background: rgb(0 0 0 / 17%);
+}
+
+.messages-sticker-panel-tabs button {
+  min-height: 28px;
   border: 0;
-  border-radius: 8px;
-  color: #a8a8a8;
+  border-radius: 7px;
+  padding: 0 8px;
+  color: rgb(237 242 245 / 68%);
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
-.messages-emoji-tabs button.active {
+.messages-sticker-panel-tabs button.is-active {
   color: #fff;
-  background: #303030;
+  background: rgb(255 255 255 / 14%);
 }
 
-.messages-emoji-grid {
+.messages-sticker-close {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #e9edef;
+  background: transparent;
+  cursor: pointer;
+}
+
+.messages-sticker-close:hover,
+.messages-sticker-close:focus-visible {
+  outline: none;
+  background: rgb(255 255 255 / 12%);
+}
+
+.messages-sticker-panel-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: 43px minmax(0, 1fr) 42px;
+  direction: rtl;
+}
+
+.messages-sticker-categories {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  overflow-y: auto;
+  border-left: 1px solid rgb(255 255 255 / 8%);
+  padding: 7px 3px;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 18%) transparent;
+}
+
+.messages-sticker-categories button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  color: rgb(237 242 245 / 70%);
+  background: transparent;
+  cursor: pointer;
+  font-family: Arial, sans-serif;
+  font-size: 20px;
+}
+
+.messages-sticker-categories button.is-active,
+.messages-sticker-categories button:hover,
+.messages-sticker-categories button:focus-visible {
+  outline: none;
+  color: #fff;
+  background: rgb(255 255 255 / 15%);
+}
+
+.messages-sticker-categories button > img {
+  width: 23px;
+  height: 23px;
+}
+
+.messages-sticker-panel-content {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 7px;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 20%) transparent;
+}
+
+.messages-sticker-content-title {
+  overflow: hidden;
+  margin: 0 1px 6px;
+  color: rgb(237 242 245 / 68%);
+  font-size: 10px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-emoji-catalog,
+.messages-sticker-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 4px;
-  padding-top: 8px;
+  gap: 3px;
 }
 
-.messages-emoji-option {
+.messages-emoji-catalog button,
+.messages-sticker-grid button {
   display: grid;
   min-width: 0;
   aspect-ratio: 1;
   place-items: center;
+  overflow: hidden;
   border: 0;
   border-radius: 9px;
+  padding: 2px;
   color: inherit;
   background: transparent;
   cursor: pointer;
-  font-size: 23px;
 }
 
-.messages-emoji-grid.is-stickers .messages-emoji-option {
-  font-size: 30px;
-}
-
-.messages-emoji-option:hover,
-.messages-emoji-option:focus-visible {
+.messages-emoji-catalog button:hover,
+.messages-emoji-catalog button:focus-visible,
+.messages-sticker-grid button:hover,
+.messages-sticker-grid button:focus-visible {
   outline: none;
-  background: #2a2a2a;
+  background: rgb(255 255 255 / 13%);
+}
+
+.messages-emoji-catalog .twemoji-image {
+  width: 27px;
+  height: 27px;
+}
+
+.messages-sticker-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.messages-sticker-grid .twemoji-image {
+  width: 48px;
+  height: 48px;
+}
+
+.messages-sticker-grid button > img:not(.twemoji-image) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.messages-sticker-empty {
+  display: grid;
+  min-height: 150px;
+  place-items: center;
+  padding: 10px;
+  color: rgb(237 242 245 / 65%);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.messages-sticker-plus-area {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  border-right: 1px solid rgb(255 255 255 / 8%);
+  padding-top: 8px;
+}
+
+.messages-sticker-plus-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 11px;
+  color: #fff;
+  background: rgb(255 255 255 / 8%);
+  cursor: pointer;
+}
+
+.messages-sticker-plus-button.is-active,
+.messages-sticker-plus-button:hover,
+.messages-sticker-plus-button:focus-visible {
+  outline: none;
+  background: rgb(255 255 255 / 17%);
+}
+
+.messages-sticker-plus-menu {
+  position: absolute;
+  top: 7px;
+  right: calc(100% + 6px);
+  z-index: 3;
+  display: grid;
+  width: max-content;
+  gap: 3px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 11px;
+  padding: 5px;
+  background: rgba(22, 34, 41, 0.96);
+  box-shadow: 0 10px 25px rgb(0 0 0 / 28%);
+}
+
+.messages-sticker-plus-menu button {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 9px;
+  color: #f4f6f7;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.messages-sticker-plus-menu button:hover,
+.messages-sticker-plus-menu button:focus-visible {
+  outline: none;
+  background: rgb(255 255 255 / 12%);
+}
+
+.messages-sticker-file-input {
+  display: none;
+}
+
+.messages-sticker-store-list {
+  display: grid;
+  gap: 7px;
+}
+
+.messages-sticker-store-card {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px 8px;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 11px;
+  padding: 7px;
+  background: rgb(255 255 255 / 5%);
+}
+
+.messages-sticker-store-cover {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  grid-row: 1 / span 2;
+  place-items: center;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 8%);
+}
+
+.messages-sticker-store-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.messages-sticker-store-copy strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-sticker-store-copy small {
+  color: rgb(237 242 245 / 65%);
+  font-size: 9px;
+}
+
+.messages-sticker-store-card > button {
+  min-height: 26px;
+  grid-column: 2;
+  justify-self: start;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 8px;
+  padding: 0 9px;
+  color: #fff;
+  background: rgb(255 255 255 / 11%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.messages-sticker-store-card > button:disabled {
+  color: rgb(237 242 245 / 65%);
+  background: rgb(255 255 255 / 5%);
+  cursor: default;
+}
+
+.messages-sticker-store-note {
+  margin: 2px 1px;
+  color: rgb(237 242 245 / 60%);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.messages-sticker-message {
+  display: grid;
+  width: 132px;
+  height: 132px;
+  max-width: min(58vw, 132px);
+  place-items: center;
+  overflow: hidden;
+  border-radius: 14px;
+  padding: 5px;
+  background: transparent;
+}
+
+.messages-sticker-message > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.messages-sticker-message .twemoji-image {
+  width: 116px;
+  height: 116px;
+}
+
+.messages-sticker-message .twemoji-fallback {
+  font-size: 88px;
+  line-height: 1;
+}
+
+.twemoji-text {
+  display: inline;
+}
+
+.twemoji-image {
+  display: inline-block;
+  flex: 0 0 auto;
+  object-fit: contain;
+  vertical-align: -0.18em;
+}
+
+.twemoji-fallback {
+  display: inline-block;
+  vertical-align: -0.08em;
+}
+
+.messages-sticker-studio-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: max(14px, env(safe-area-inset-top)) 14px max(14px, env(safe-area-inset-bottom));
+  background: rgb(0 0 0 / 76%);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.messages-sticker-studio {
+  display: flex;
+  width: min(100%, 540px);
+  max-height: min(90dvh, 760px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 20px;
+  color: #f4f4f5;
+  background: #172027;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+}
+
+.messages-sticker-studio-header {
+  display: flex;
+  min-height: 58px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgb(255 255 255 / 9%);
+  padding: 0 12px;
+}
+
+.messages-sticker-studio-header > button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #f4f4f5;
+  background: rgb(255 255 255 / 8%);
+  cursor: pointer;
+}
+
+.messages-sticker-studio-header > div {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.messages-sticker-studio-header strong {
+  font-size: 14px;
+}
+
+.messages-sticker-studio-header span,
+.messages-sticker-studio-tip,
+.messages-sticker-studio-note {
+  color: #aeb9be;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.messages-sticker-studio-content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+  padding: 12px;
+}
+
+.messages-sticker-studio-tip,
+.messages-sticker-studio-note {
+  margin: 0;
+}
+
+.messages-sticker-canvas-wrap {
+  position: relative;
+  display: grid;
+  min-height: 190px;
+  flex: 1 1 260px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 9%);
+  border-radius: 13px;
+  background-color: #222d33;
+  background-image: linear-gradient(45deg, rgb(255 255 255 / 5%) 25%, transparent 25%), linear-gradient(-45deg, rgb(255 255 255 / 5%) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgb(255 255 255 / 5%) 75%), linear-gradient(-45deg, transparent 75%, rgb(255 255 255 / 5%) 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+}
+
+.messages-sticker-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 40dvh;
+  object-fit: contain;
+  touch-action: none;
+}
+
+.messages-sticker-studio-loading {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #d4dadd;
+  font-size: 12px;
+}
+
+.messages-sticker-result-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: #d8ffe9;
+  background: rgb(16 39 29 / 85%);
+  font-size: 10px;
+}
+
+.messages-sticker-studio-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.messages-sticker-studio-tools button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 9px;
+  padding: 0 9px;
+  color: #eef2f4;
+  background: rgb(255 255 255 / 7%);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.messages-sticker-studio-tools button:disabled {
+  cursor: default;
+  opacity: .45;
+}
+
+.messages-sticker-lasso-icon {
+  width: 14px;
+  height: 14px;
+  border: 1.5px dashed currentColor;
+  border-radius: 50%;
+}
+
+.messages-sticker-threshold {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 9px;
+  color: #d9dfe2;
+  font-size: 11px;
+}
+
+.messages-sticker-threshold input {
+  width: 100%;
+  accent-color: #8ad6ad;
+}
+
+.messages-sticker-threshold output {
+  color: #aeb9be;
+  text-align: center;
+}
+
+.messages-sticker-studio-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid rgb(255 255 255 / 9%);
+  padding: 10px 12px;
+}
+
+.messages-sticker-format-picker {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 3px;
+  margin-inline-end: auto;
+  border-radius: 9px;
+  padding: 3px;
+  background: rgb(255 255 255 / 7%);
+}
+
+.messages-sticker-format-picker button,
+.messages-sticker-studio-cancel,
+.messages-sticker-studio-save {
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 10px;
+  color: #e5e7eb;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.messages-sticker-format-picker button.is-active {
+  color: #fff;
+  background: rgb(255 255 255 / 15%);
+}
+
+.messages-sticker-format-picker button:disabled,
+.messages-sticker-studio-cancel:disabled,
+.messages-sticker-studio-save:disabled {
+  cursor: default;
+  opacity: .5;
+}
+
+.messages-sticker-studio-cancel {
+  border: 1px solid rgb(255 255 255 / 12%);
+}
+
+.messages-sticker-studio-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #062013;
+  background: #7fe0a9;
+}
+
+.messages-sticker-spinner {
+  animation: messages-media-pending-spin .8s linear infinite;
+}
+
+@media (max-width: 420px) {
+  .messages-sticker-picker {
+    width: min(350px, calc(100vw - 28px));
+  }
+
+  .messages-sticker-panel-header {
+    gap: 5px;
+    padding: 0 6px;
+  }
+
+  .messages-sticker-panel-tabs button {
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  .messages-sticker-studio-footer {
+    flex-wrap: wrap;
+  }
 }
 
 .messages-modal-backdrop {

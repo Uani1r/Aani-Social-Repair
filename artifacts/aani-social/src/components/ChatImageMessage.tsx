@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { Eye, X } from 'lucide-react';
 import { toast } from 'sonner';
 
+import EmojiText from '@/components/TwemojiText';
+
 type ChatMediaPayload = {
   urls: string[];
   caption: string;
@@ -236,7 +238,7 @@ export default function ChatImageMessage({
           ))}
         </div>
       )}
-      {payload.caption && <div className={`messages-image-caption messages-bubble ${isMine ? 'is-mine' : 'is-theirs'}`}>{payload.caption}</div>}
+      {payload.caption && <div className={`messages-image-caption messages-bubble ${isMine ? 'is-mine' : 'is-theirs'}`}><EmojiText text={payload.caption} /></div>}
 
       {viewerOpen && createPortal(
         <div

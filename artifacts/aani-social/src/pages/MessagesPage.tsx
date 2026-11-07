@@ -7,6 +7,9 @@ import { toast } from 'sonner';
 import Avatar from '@/components/Avatar';
 import ChatImageMessage, { hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
+import ChatStickerMessage, { CHAT_STICKER_MESSAGE_PREFIX, parseChatStickerMessage, type ChatStickerPayload } from '@/components/ChatStickerMessage';
+import ChatStickerPanel from '@/components/ChatStickerPanel';
+import EmojiText from '@/components/TwemojiText';
 import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -49,8 +52,6 @@ type ConversationContextState = {
 };
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
-const MESSAGE_EMOJIS = ['😀', '😂', '🥰', '😍', '😊', '😭', '👍', '❤️', '✨', '🙏', '😎'];
-const MESSAGE_STICKERS = ['🥹', '🫶', '🎉', '🤍', '🌙', '💜'];
 const EMPTY_CONVERSATION_PREFERENCES: ConversationPreferences = {
   pinnedIds: [],
   archivedIds: [],
@@ -147,8 +148,10 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
   const mediaMessage = parseChatMediaMessage(content);
+  const stickerMessage = parseChatStickerMessage(content);
   let preview = content;
-  if (mediaMessage) {
+  if (stickerMessage) preview = 'ملصق';
+  else if (mediaMessage) {
     const hasOpened = mediaMessage.opened || hasViewedOnce(currentUserId, message.id);
     preview = mediaMessage.viewOnce
       ? (hasOpened ? 'صورة مؤقتة · تم الفتح' : 'صورة مؤقتة')
@@ -163,8 +166,10 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
 function replyMessagePreview(message: MessageRow): string {
   const content = message.content.trim();
   const mediaMessage = parseChatMediaMessage(content);
+  const stickerMessage = parseChatStickerMessage(content);
   let preview = content;
-  if (mediaMessage) {
+  if (stickerMessage) preview = 'ملصق';
+  else if (mediaMessage) {
     preview = mediaMessage.viewOnce
       ? 'صورة مؤقتة'
       : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
@@ -220,7 +225,6 @@ export default function MessagesPage({
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  const [emojiPickerTab, setEmojiPickerTab] = useState<'emoji' | 'stickers'>('emoji');
   const [threadOptionsOpen, setThreadOptionsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<InboxTab>('messages');
   const [searchTerm, setSearchTerm] = useState('');
@@ -643,6 +647,36 @@ export default function MessagesPage({
     } catch (error) {
       console.error('[messages] تعذر إرسال الرسالة:', error);
       alert('تعذر إرسال الرسالة. تحقق من الاتصال وحاول مرة أخرى.');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const sendSticker = async (sticker: ChatStickerPayload) => {
+    if (!supabaseConfigured || !selectedId || sending) {
+      toast.error('تعذر إرسال الملصق. تحقق من المحادثة والاتصال.');
+      return;
+    }
+    const content = `${CHAT_STICKER_MESSAGE_PREFIX}${JSON.stringify(sticker)}`;
+    if (content.length > 4000) {
+      toast.error('بيانات الملصق كبيرة جداً.');
+      return;
+    }
+
+    setEmojiPickerOpen(false);
+    setSending(true);
+    try {
+      const { error } = await supabase.from('messages').insert({
+        sender_id: currentUserId,
+        recipient_id: selectedId,
+        content,
+      });
+      if (error) throw error;
+      setReplyMessage(null);
+      await Promise.all([loadThread(), loadConversationList()]);
+    } catch (error) {
+      console.error('[messages] تعذر إرسال الملصق:', error);
+      toast.error('تعذر إرسال الملصق. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setSending(false);
     }
@@ -1081,6 +1115,7 @@ export default function MessagesPage({
                   const isStoryReply = Boolean(message.story_id) && content.startsWith('[story-reply]');
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
                   const mediaMessage = parseChatMediaMessage(content);
+                  const stickerMessage = parseChatStickerMessage(content);
                   return (
                     <MessageSwipeReply
                       key={message.id}
@@ -1106,6 +1141,8 @@ export default function MessagesPage({
                               }}
                             />
                           </div>
+                        ) : stickerMessage ? (
+                          <ChatStickerMessage payload={stickerMessage} />
                         ) : mediaMessage ? (
                           <ChatImageMessage
                             messageId={message.id}
@@ -1120,9 +1157,9 @@ export default function MessagesPage({
                             {isStoryReply ? (
                               <>
                                 <span className="messages-story-reply-label">رد على الستوري</span>
-                                <span>{content.slice('[story-reply]'.length).trim()}</span>
+                                <EmojiText text={content.slice('[story-reply]'.length).trim()} />
                               </>
-                            ) : content.startsWith('[story:') ? 'أرسل لك قصة' : message.content}
+                            ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
                           </div>
                         )}
                         {!isMine && (
@@ -1146,7 +1183,7 @@ export default function MessagesPage({
                         </span>
                       </div>
                       {selectedPendingMediaMessage.caption && (
-                        <div className="messages-image-caption messages-bubble is-mine">{selectedPendingMediaMessage.caption}</div>
+                        <div className="messages-image-caption messages-bubble is-mine"><EmojiText text={selectedPendingMediaMessage.caption} /></div>
                       )}
                     </div>
                   </div>
@@ -1218,19 +1255,12 @@ export default function MessagesPage({
                   )}
                 </div>
                 {emojiPickerOpen && (
-                  <div className="messages-emoji-picker" role="dialog" aria-label="الإيموجي والملصقات">
-                    <div className="messages-emoji-tabs" role="tablist" aria-label="نوع التعبير">
-                      <button type="button" role="tab" aria-selected={emojiPickerTab === 'emoji'} className={emojiPickerTab === 'emoji' ? 'active' : ''} onClick={() => setEmojiPickerTab('emoji')}>إيموجي</button>
-                      <button type="button" role="tab" aria-selected={emojiPickerTab === 'stickers'} className={emojiPickerTab === 'stickers' ? 'active' : ''} onClick={() => setEmojiPickerTab('stickers')}>ملصقات</button>
-                    </div>
-                    <div className={`messages-emoji-grid${emojiPickerTab === 'stickers' ? ' is-stickers' : ''}`}>
-                      {(emojiPickerTab === 'emoji' ? MESSAGE_EMOJIS : MESSAGE_STICKERS).map(symbol => (
-                        <button key={symbol} type="button" className="messages-emoji-option" aria-label={`إضافة ${symbol}`} onClick={() => insertComposerSymbol(symbol)}>
-                          {symbol}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                  <ChatStickerPanel
+                    currentUserId={currentUserId}
+                    onClose={() => setEmojiPickerOpen(false)}
+                    onInsertEmoji={insertComposerSymbol}
+                    onSendSticker={sticker => { void sendSticker(sticker); }}
+                  />
                 )}
               </form>
             </>
