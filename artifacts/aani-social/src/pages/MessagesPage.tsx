@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, FileText, Flag, Image as ImageIcon, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -257,6 +257,17 @@ type ConversationContextState = {
   menuTop: number;
   menuRight: number;
 };
+
+type ConversationSheetView = 'menu' | 'timer' | 'media' | 'shares';
+
+const MESSAGE_EXPIRATION_OPTIONS: Array<{ seconds: number | null; label: string }> = [
+  { seconds: 3600, label: '1 ساعة' },
+  { seconds: 5 * 3600, label: '5 ساعات' },
+  { seconds: 10 * 3600, label: '10 ساعات' },
+  { seconds: 24 * 3600, label: '24 ساعة' },
+  { seconds: 7 * 24 * 3600, label: '7 أيام' },
+  { seconds: null, label: 'إيقاف المؤقت' },
+];
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
 const EMPTY_CONVERSATION_PREFERENCES: ConversationPreferences = {
@@ -592,6 +603,14 @@ function replyMessagePreview(message: MessageRow): string {
   return preview.length > 140 ? `${preview.slice(0, 140)}…` : preview;
 }
 
+function isVideoMediaUrl(url: string): boolean {
+  try {
+    return /\.(?:mp4|mov|webm|m4v)$/i.test(new URL(url).pathname);
+  } catch {
+    return false;
+  }
+}
+
 function chatMediaStoragePath(url: string): string | null {
   try {
     const objectUrl = new URL(url);
@@ -655,6 +674,12 @@ export default function MessagesPage({
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [emojiPickerClosing, setEmojiPickerClosing] = useState(false);
   const [threadOptionsOpen, setThreadOptionsOpen] = useState(false);
+  const [threadOptionsView, setThreadOptionsView] = useState<ConversationSheetView>('menu');
+  const [messageExpirationSeconds, setMessageExpirationSeconds] = useState<number | null>(null);
+  const [expirationSaving, setExpirationSaving] = useState(false);
+  const [threadSearchOpen, setThreadSearchOpen] = useState(false);
+  const [threadSearch, setThreadSearch] = useState('');
+  const [threadSearchIndex, setThreadSearchIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<InboxTab>('messages');
   const [searchTerm, setSearchTerm] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -676,6 +701,8 @@ export default function MessagesPage({
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const threadSearchInputRef = useRef<HTMLInputElement>(null);
+  const sheetDragStartYRef = useRef<number | null>(null);
   const editingMessageRef = useRef(editingMessage);
   editingMessageRef.current = editingMessage;
   const messageComposerRef = useRef<HTMLFormElement>(null);
@@ -731,6 +758,20 @@ export default function MessagesPage({
   }, [messageAction]);
 
   useEffect(() => {
+    if (!threadOptionsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setThreadOptionsOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [threadOptionsOpen]);
+
+  useEffect(() => {
+    if (!threadSearchOpen) return;
+    window.requestAnimationFrame(() => threadSearchInputRef.current?.focus());
+  }, [threadSearchOpen]);
+
+  useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
   }, [currentUserId]);
 
@@ -770,6 +811,25 @@ export default function MessagesPage({
       })();
     }
   }, [currentUserId]);
+
+  const purgeExpiredMessages = useCallback(async () => {
+    if (!supabaseConfigured) return;
+    try {
+      const { data, error } = await supabase.rpc('aani_purge_expired_messages');
+      if (error) {
+        console.warn('[messages] تعذر تنظيف الرسائل المؤقتة المنتهية:', error);
+        return;
+      }
+      const expiredIds = Array.isArray(data) ? data.filter((id): id is string => typeof id === 'string') : [];
+      if (expiredIds.length) {
+        expiredIds.forEach(id => deletedMessageIdsRef.current.add(id));
+        const expiredIdSet = new Set(expiredIds);
+        setThread(current => current.filter(message => !expiredIdSet.has(message.id)));
+      }
+    } catch (error) {
+      console.warn('[messages] تعذر تنظيف الرسائل المؤقتة المنتهية:', error);
+    }
+  }, []);
 
   const markMessagesDelivered = useCallback(async (messageIds: string[]) => {
     if (!supabaseConfigured || messageIds.length === 0) return;
@@ -824,6 +884,7 @@ export default function MessagesPage({
 
     setContactsError(null);
     try {
+      await purgeExpiredMessages();
       const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
         retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle()),
         queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
@@ -893,7 +954,7 @@ export default function MessagesPage({
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
     }
-  }, [currentUserId, markMessagesDelivered, selectedId]);
+  }, [currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
@@ -902,6 +963,7 @@ export default function MessagesPage({
     const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
 
     try {
+      await purgeExpiredMessages();
       const { data, error } = await queryMessageRows(threadFilter, true, true);
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
       if (error) throw error;
@@ -966,7 +1028,7 @@ export default function MessagesPage({
       if (requestId !== threadRequestRef.current) return;
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
-  }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, selectedId]);
+  }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -1084,6 +1146,12 @@ export default function MessagesPage({
     setEditingMessage(null);
     setMessageAction(null);
     setEmojiTargetMessage(null);
+    setThreadOptionsOpen(false);
+    setThreadOptionsView('menu');
+    setThreadSearchOpen(false);
+    setThreadSearch('');
+    setThreadSearchIndex(0);
+    setMessageExpirationSeconds(null);
     const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
     setThread(cachedThread?.messages || []);
     setThreadCacheReady(Boolean(cachedThread));
@@ -1682,6 +1750,51 @@ export default function MessagesPage({
   const selectedConversation = conversations.find(conversation => conversation.profile.id === selectedId) || null;
   const target = selectedConversation?.profile || null;
   const selectedPendingMediaMessage = pendingMediaMessage?.recipientId === selectedId ? pendingMediaMessage : null;
+  const threadSearchMatches = useMemo(() => {
+    const needle = threadSearch.trim().toLocaleLowerCase();
+    return needle ? thread.filter(message => message.content.toLocaleLowerCase().includes(needle)) : [];
+  }, [thread, threadSearch]);
+  const sharedMessages = thread.filter(message => Boolean(message.post_id) || message.content.trim().startsWith('[post:'));
+  const mediaMessages = thread.flatMap(message => {
+    const media = parseChatMediaMessage(message.content);
+    const voice = parseVoiceMessage(message.content);
+    return media?.urls.length || voice ? [{ message, media, voice }] : [];
+  });
+
+  useEffect(() => {
+    const rows = threadListRef.current?.querySelectorAll<HTMLElement>('[data-message-id]');
+    if (!rows) return;
+    if (!threadSearchOpen || threadSearchMatches.length === 0) {
+      rows.forEach(row => row.classList.remove('is-search-match'));
+      return;
+    }
+    const targetMessage = threadSearchMatches[Math.min(threadSearchIndex, threadSearchMatches.length - 1)];
+    if (!targetMessage) return;
+    rows.forEach(row => row.classList.toggle('is-search-match', row.dataset.messageId === targetMessage.id));
+    const targetRow = Array.from(rows).find(row => row.dataset.messageId === targetMessage.id);
+    targetRow?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [threadSearchIndex, threadSearchMatches, threadSearchOpen]);
+
+  useEffect(() => {
+    if (!selectedId || !supabaseConfigured) return;
+    let active = true;
+    void (async () => {
+      try {
+        const { data, error } = await supabase.rpc('aani_get_message_expiration', { p_other_user_id: selectedId });
+        if (error) throw error;
+        if (active) setMessageExpirationSeconds(typeof data === 'number' ? data : null);
+      } catch (error) {
+        if (active) console.warn('[messages] تعذر تحميل مدة المحادثة المؤقتة:', error);
+      }
+    })();
+    return () => { active = false; };
+  }, [selectedId]);
+
+  useEffect(() => {
+    if (!selectedId || messageExpirationSeconds === null || !supabaseConfigured) return;
+    const timer = window.setInterval(() => { void purgeExpiredMessages(); }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [messageExpirationSeconds, purgeExpiredMessages, selectedId]);
 
   const setConversationPreference = (key: ConversationPreferenceKey, contactId: string, enabled: boolean) => {
     setConversationPreferences(current => {
@@ -1689,6 +1802,34 @@ export default function MessagesPage({
       writeConversationPreferences(currentUserId, next);
       return next;
     });
+  };
+
+  const openConversationSheet = () => {
+    setThreadOptionsView('menu');
+    setThreadOptionsOpen(true);
+  };
+
+  const updateMessageExpiration = async (seconds: number | null) => {
+    if (!selectedId || expirationSaving) return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    setExpirationSaving(true);
+    try {
+      const { error } = await supabase.rpc('aani_set_message_expiration', {
+        p_other_user_id: selectedId,
+        p_duration_seconds: seconds,
+      });
+      if (error) throw error;
+      setMessageExpirationSeconds(seconds);
+      toast.success(seconds === null ? 'تم إيقاف مؤقت الرسائل' : 'تم تحديث مؤقت المحادثة للرسائل الجديدة');
+    } catch (error) {
+      console.error('[messages] تعذر تحديث مؤقت المحادثة:', error);
+      toast.error('تعذر تحديث المؤقت. تأكد من تطبيق تحديث الرسائل المؤقتة في Supabase.');
+    } finally {
+      setExpirationSaving(false);
+    }
   };
 
   const openConversationContextMenu = (conversation: ConversationSummary, targetRect: DOMRect) => {
@@ -2239,40 +2380,39 @@ export default function MessagesPage({
                     type="button"
                     aria-label="خيارات المحادثة"
                     aria-expanded={threadOptionsOpen}
-                    onClick={() => setThreadOptionsOpen(value => !value)}
+                    onClick={openConversationSheet}
                   >
                     <MoreVertical size={21} />
                   </button>
-                  {threadOptionsOpen && selectedConversation && (
-                    <div className="messages-thread-options-menu" role="menu" aria-label="خيارات المحادثة">
-                      <button type="button" role="menuitem" onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('pin', selectedConversation); }}>
-                        <Pin size={17} />
-                        <span>{conversationPreferences.pinnedIds.includes(selectedConversation.profile.id) ? 'إلغاء التثبيت' : 'تثبيت'}</span>
-                      </button>
-                      <button type="button" role="menuitem" onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('archive', selectedConversation); }}>
-                        <Archive size={17} />
-                        <span>{conversationPreferences.archivedIds.includes(selectedConversation.profile.id) ? 'إلغاء الأرشفة' : 'أرشفة'}</span>
-                      </button>
-                      <button type="button" role="menuitem" onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('mute', selectedConversation); }}>
-                        <BellOff size={17} />
-                        <span>{conversationPreferences.mutedIds.includes(selectedConversation.profile.id) ? 'إلغاء الكتم' : 'كتم'}</span>
-                      </button>
-                      <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('block', selectedConversation); }}>
-                        <Ban size={17} />
-                        <span>حظر</span>
-                      </button>
-                      <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('report', selectedConversation); }}>
-                        <Flag size={17} />
-                        <span>إبلاغ</span>
-                      </button>
-                      <button type="button" role="menuitem" className="is-destructive" disabled={deleteBusy} onClick={() => { setThreadOptionsOpen(false); void handleConversationAction('delete', selectedConversation); }}>
-                        <Trash2 size={17} />
-                        <span>حذف</span>
-                      </button>
-                    </div>
-                  )}
                 </div>
               </header>
+              {threadSearchOpen && (
+                <div className="messages-thread-searchbar" role="search" dir="rtl">
+                  <Search size={19} aria-hidden="true" />
+                  <input
+                    ref={threadSearchInputRef}
+                    type="search"
+                    value={threadSearch}
+                    placeholder="ابحث في المحادثة"
+                    aria-label="ابحث في رسائل المحادثة"
+                    onChange={event => { setThreadSearch(event.target.value); setThreadSearchIndex(0); }}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter' && threadSearchMatches.length) {
+                        event.preventDefault();
+                        setThreadSearchIndex(index => (index + (event.shiftKey ? threadSearchMatches.length - 1 : 1)) % threadSearchMatches.length);
+                      }
+                      if (event.key === 'Escape') {
+                        setThreadSearchOpen(false);
+                        setThreadSearch('');
+                      }
+                    }}
+                  />
+                  <span className="messages-thread-search-count">{threadSearchMatches.length ? `${Math.min(threadSearchIndex + 1, threadSearchMatches.length)} / ${threadSearchMatches.length}` : '0 / 0'}</span>
+                  <button type="button" aria-label="النتيجة السابقة" disabled={!threadSearchMatches.length} onClick={() => setThreadSearchIndex(index => (index + threadSearchMatches.length - 1) % threadSearchMatches.length)}><ChevronUp size={18} /></button>
+                  <button type="button" aria-label="النتيجة التالية" disabled={!threadSearchMatches.length} onClick={() => setThreadSearchIndex(index => (index + 1) % threadSearchMatches.length)}><ChevronDown size={18} /></button>
+                  <button type="button" aria-label="إغلاق البحث" onClick={() => { setThreadSearchOpen(false); setThreadSearch(''); setThreadSearchIndex(0); }}><X size={18} /></button>
+                </div>
+              )}
               <div
                 ref={threadListRef}
                 className="messages-thread-list"
@@ -2355,7 +2495,7 @@ export default function MessagesPage({
                         window.requestAnimationFrame(() => messageInputRef.current?.focus());
                       }}
                     >
-                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}`}>
+                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}`} data-message-id={message.id}>
                         <div className="messages-message-body">
                           {isSharedPost ? (
                             <>
@@ -2656,6 +2796,166 @@ export default function MessagesPage({
         }}
         onSendFailed={pendingId => setPendingMediaMessage(current => current?.id === pendingId ? null : current)}
       />
+
+      {selectedConversation && createPortal(
+        <div
+          className={`messages-bottom-sheet-backdrop${threadOptionsOpen ? ' is-open' : ''}`}
+          role="presentation"
+          aria-hidden={!threadOptionsOpen}
+          onClick={() => setThreadOptionsOpen(false)}
+        >
+          <section
+            className={`messages-bottom-sheet${threadOptionsOpen ? ' is-open' : ''}`}
+            role="dialog"
+            aria-modal={threadOptionsOpen}
+            aria-label="خيارات المحادثة"
+            dir="rtl"
+            onClick={event => event.stopPropagation()}
+          >
+            <div
+              className="messages-bottom-sheet-handle-area"
+              onPointerDown={event => {
+                sheetDragStartYRef.current = event.clientY;
+                try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer capture is optional */ }
+              }}
+              onPointerUp={event => {
+                const startY = sheetDragStartYRef.current;
+                sheetDragStartYRef.current = null;
+                if (startY !== null && event.clientY - startY > 55) setThreadOptionsOpen(false);
+              }}
+              onPointerCancel={() => { sheetDragStartYRef.current = null; }}
+            >
+              <span className="messages-bottom-sheet-handle" />
+            </div>
+
+            {threadOptionsView === 'menu' ? (
+              <div className="messages-bottom-sheet-content messages-bottom-sheet-menu" role="menu" aria-label="إجراءات المحادثة">
+                <button type="button" role="menuitem" onClick={() => {
+                  setThreadOptionsOpen(false);
+                  setThreadSearch('');
+                  setThreadSearchIndex(0);
+                  setThreadSearchOpen(true);
+                }}>
+                  <Search size={21} /><span>البحث</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => setThreadOptionsView('timer')}>
+                  <Clock size={21} /><span>مؤقت (محادثة مؤقتة)</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => setThreadOptionsView('media')}>
+                  <ImageIcon size={21} /><span>عرض الوسائط</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => setThreadOptionsView('shares')}>
+                  <FileText size={21} /><span>عرض المشاركات</span>
+                </button>
+                <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => {
+                  setThreadOptionsOpen(false);
+                  void handleConversationAction('block', selectedConversation);
+                }}>
+                  <Ban size={21} /><span>الحظر</span>
+                </button>
+                <button type="button" role="menuitem" disabled={moderationBusy} className="is-destructive" onClick={() => {
+                  setThreadOptionsOpen(false);
+                  void handleConversationAction('report', selectedConversation);
+                }}>
+                  <Flag size={21} /><span>الإبلاغ</span>
+                </button>
+                <button type="button" role="menuitem" className="is-destructive" disabled={deleteBusy} onClick={() => {
+                  setThreadOptionsOpen(false);
+                  void handleConversationAction('delete', selectedConversation);
+                }}>
+                  <Trash2 size={21} /><span>الحذف</span>
+                </button>
+                <div className="messages-bottom-sheet-divider" />
+                <button type="button" role="menuitem" onClick={() => {
+                  setThreadOptionsOpen(false);
+                  void handleConversationAction('pin', selectedConversation);
+                }}>
+                  <Pin size={19} /><span>{conversationPreferences.pinnedIds.includes(selectedConversation.profile.id) ? 'إلغاء التثبيت' : 'تثبيت المحادثة'}</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => {
+                  setThreadOptionsOpen(false);
+                  void handleConversationAction('archive', selectedConversation);
+                }}>
+                  <Archive size={19} /><span>{conversationPreferences.archivedIds.includes(selectedConversation.profile.id) ? 'إلغاء الأرشفة' : 'أرشفة المحادثة'}</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => {
+                  setThreadOptionsOpen(false);
+                  void handleConversationAction('mute', selectedConversation);
+                }}>
+                  <BellOff size={19} /><span>{conversationPreferences.mutedIds.includes(selectedConversation.profile.id) ? 'إلغاء الكتم' : 'كتم المحادثة'}</span>
+                </button>
+              </div>
+            ) : (
+              <>
+                <header className="messages-bottom-sheet-subheader" dir="rtl">
+                  <button type="button" aria-label="العودة إلى خيارات المحادثة" onClick={() => setThreadOptionsView('menu')}><ArrowLeft size={20} /></button>
+                  <h2>{threadOptionsView === 'timer' ? 'محادثة مؤقتة' : threadOptionsView === 'media' ? 'الوسائط والصوتيات' : 'المشاركات المتبادلة'}</h2>
+                  <span aria-hidden="true" />
+                </header>
+                {threadOptionsView === 'timer' ? (
+                  <div className="messages-bottom-sheet-content messages-expiration-options" dir="rtl">
+                    <p>اختر مدة اختفاء الرسائل الجديدة في هذه المحادثة.</p>
+                    {MESSAGE_EXPIRATION_OPTIONS.map(option => (
+                      <button
+                        key={option.seconds ?? 'off'}
+                        type="button"
+                        className={messageExpirationSeconds === option.seconds ? 'is-selected' : ''}
+                        disabled={expirationSaving}
+                        onClick={() => { void updateMessageExpiration(option.seconds); }}
+                      >
+                        <span>{option.label}</span>
+                        {messageExpirationSeconds === option.seconds && <Check size={19} />}
+                      </button>
+                    ))}
+                    <small>يسري المؤقت على الرسائل التي تُرسل بعد تفعيل المدة.</small>
+                  </div>
+                ) : threadOptionsView === 'media' ? (
+                  <div className="messages-bottom-sheet-content messages-media-gallery" dir="rtl">
+                    {mediaMessages.length === 0 ? (
+                      <div className="messages-sheet-empty">لا توجد وسائط أو رسائل صوتية في هذه المحادثة.</div>
+                    ) : mediaMessages.map(({ message, media, voice }) => (
+                      <div className="messages-sheet-media-entry" key={message.id}>
+                        {media?.urls.map((url, index) => (
+                          isVideoMediaUrl(url) ? (
+                            <video className="messages-sheet-media-tile" key={`${message.id}-${index}`} src={url} controls preload="metadata" aria-label="فيديو مشترك في المحادثة" />
+                          ) : (
+                            <a className="messages-sheet-media-tile" key={`${message.id}-${index}`} href={url} target="_blank" rel="noreferrer" aria-label="فتح صورة مشتركة">
+                              <img src={url} alt="وسائط مشتركة في المحادثة" loading="lazy" />
+                            </a>
+                          )
+                        ))}
+                        {voice && (
+                          <div className="messages-sheet-voice-entry">
+                            <div className="messages-voice-player">
+                              <Mic size={18} aria-hidden="true" />
+                              <VoiceMessagePlayer url={voice.url} durationMs={voice.durationMs} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="messages-bottom-sheet-content messages-shared-posts" dir="rtl">
+                    {sharedMessages.length === 0 ? (
+                      <div className="messages-sheet-empty">لا توجد منشورات أو ريلز متبادلة في هذه المحادثة.</div>
+                    ) : sharedMessages.map(message => (
+                      <article className="messages-shared-post-entry" key={message.id}>
+                        <div className="messages-shared-post-meta">
+                          <span>{message.sender_id === currentUserId ? 'أنت' : displayName(selectedConversation.profile)}</span>
+                          <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                        </div>
+                        <SharedPostPreview postId={message.post_id} content={message.content} />
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>,
+        document.body,
+      )}
 
       {messageAction && createPortal(
         <div
