@@ -4259,64 +4259,6 @@ body.aani-immersive .unified-top-bar {
   user-select: none;
 }
 
-.chat-photo-editor-filter-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-
-.chat-photo-editor-text {
-  position: absolute;
-  top: 48%;
-  left: 50%;
-  z-index: 2;
-  width: 84%;
-  transform: translate(-50%, -50%);
-  overflow-wrap: anywhere;
-  color: #fff;
-  font-size: clamp(24px, 8vw, 42px);
-  font-weight: 800;
-  line-height: 1.35;
-  text-align: center;
-  text-shadow: 0 2px 14px rgb(0 0 0 / 75%);
-  white-space: pre-wrap;
-  pointer-events: auto;
-  touch-action: none;
-  user-select: none;
-  cursor: grab;
-}
-
-.chat-photo-editor-text-animation {
-  display: inline-block;
-  max-width: 100%;
-  overflow-wrap: inherit;
-  white-space: inherit;
-}
-
-.chat-photo-editor-text.is-selected,
-.chat-photo-editor-sticker.is-selected {
-  outline: 1px dashed rgb(255 255 255 / 72%);
-  outline-offset: 6px;
-}
-
-.chat-photo-editor-text.has-background {
-  border-radius: 9px;
-  padding: 5px 12px;
-  background: rgb(0 0 0 / 58%);
-}
-
-.chat-photo-editor-sticker {
-  position: absolute;
-  z-index: 3;
-  transform: translate(-50%, -50%);
-  font-family: 'Apple Color Emoji', 'Segoe UI Emoji', sans-serif;
-  font-size: clamp(42px, 16vw, 74px);
-  pointer-events: auto;
-  touch-action: none;
-  user-select: none;
-  cursor: grab;
-}
-
 .chat-photo-editor-drawing {
   position: absolute;
   inset: 0;
@@ -4389,148 +4331,29 @@ body.aani-immersive .unified-top-bar {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(4px, 2vw, 13px);
+  gap: clamp(28px, 12vw, 72px);
   padding: 0 8px;
   pointer-events: none;
 }
 
 .chat-photo-editor-tools button {
   display: flex;
-  min-width: 44px;
-  min-height: 52px;
+  min-width: 64px;
+  min-height: 60px;
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 4px;
-  border: 0;
-  border-radius: 12px;
-  padding: 3px 5px;
+  gap: 5px;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 15px;
+  padding: 5px 9px;
   color: #fff;
-  background: rgb(0 0 0 / 48%);
+  background: rgb(0 0 0 / 55%);
   cursor: pointer;
   font-family: inherit;
-  font-size: 9px;
+  font-size: 10px;
   pointer-events: auto;
   backdrop-filter: blur(10px);
-}
-
-.chat-photo-editor-pencil {
-  height: 19px;
-  font-size: 24px;
-  line-height: 18px;
-}
-
-.chat-photo-editor-filter-panel {
-  position: fixed;
-  right: 0;
-  bottom: calc(70px + env(safe-area-inset-bottom));
-  left: 0;
-  z-index: 13;
-  padding: 0 8px;
-}
-
-.chat-photo-editor-panel {
-  position: fixed;
-  right: 10px;
-  bottom: calc(76px + env(safe-area-inset-bottom));
-  left: 10px;
-  z-index: 14;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 16px;
-  padding: 12px;
-  background: rgb(16 16 18 / 92%);
-  box-shadow: 0 14px 38px rgb(0 0 0 / 45%);
-  backdrop-filter: blur(16px);
-}
-
-.chat-photo-editor-text-panel textarea {
-  width: 100%;
-  min-height: 54px;
-  resize: vertical;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 10px;
-  outline: 0;
-  padding: 9px;
-  color: #fff;
-  background: #252527;
-  font-family: inherit;
-  font-size: 16px;
-}
-
-.chat-photo-editor-panel-tools {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.chat-photo-editor-panel-tools select,
-.chat-photo-editor-panel-tools button {
-  min-height: 34px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 9px;
-  padding: 0 10px;
-  color: #fff;
-  background: #29292b;
-  font-family: inherit;
-  font-size: 11px;
-}
-
-.chat-photo-editor-panel-tools select {
-  flex: 1;
-}
-
-.chat-photo-editor-panel-tools button:last-child {
-  color: #071f12;
-  background: #25cf78;
-  font-weight: 800;
-}
-
-.chat-photo-editor-colors {
-  display: flex;
-  gap: 9px;
-}
-
-.chat-photo-editor-colors button {
-  width: 25px;
-  height: 25px;
-  border: 2px solid rgb(255 255 255 / 34%);
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.chat-photo-editor-colors button[aria-pressed='true'] {
-  outline: 2px solid #fff;
-  outline-offset: 2px;
-}
-
-.chat-photo-editor-sticker-panel {
-  max-height: min(42vh, 360px);
-  overflow-y: auto;
-}
-
-.chat-photo-editor-sticker-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 5px;
-}
-
-.chat-photo-editor-sticker-panel button {
-  display: grid;
-  aspect-ratio: 1;
-  place-items: center;
-  border: 0;
-  border-radius: 10px;
-  color: #fff;
-  background: rgb(255 255 255 / 8%);
-  cursor: pointer;
-  font-size: 25px;
-}
-
-.chat-photo-editor-sticker-panel .chat-photo-editor-sticker-delete {
-  aspect-ratio: auto;
 }
 
 .messages-image-message {
@@ -4740,72 +4563,7 @@ body.aani-immersive .unified-top-bar {
   }
 
   .chat-photo-editor-tools {
-    justify-content: space-around;
-    gap: 2px;
+    gap: 32px;
   }
-}
-
-.chat-photo-editor-text-size {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: rgb(255 255 255 / 75%);
-  font-size: 11px;
-}
-
-.chat-photo-editor-text-size input {
-  min-width: 0;
-  flex: 1;
-  accent-color: #fff;
-}
-
-.chat-photo-editor-text-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 7px;
-}
-
-.chat-photo-editor-text-actions button,
-.chat-photo-editor-sticker-delete {
-  min-height: 32px;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 9px;
-  padding: 0 10px;
-  color: #fff;
-  background: rgb(255 255 255 / 9%);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 11px;
-}
-
-.chat-photo-editor-text-actions button:disabled {
-  cursor: not-allowed;
-  opacity: .45;
-}
-
-.chat-photo-editor-text-actions button.is-done {
-  color: #071f12;
-  background: #25cf78;
-  font-weight: 800;
-}
-
-.chat-photo-editor-sticker-delete {
-  justify-self: start;
-  margin-top: 5px;
-  color: #ffb4b4;
-}
-
-.chat-photo-editor-sticker-panel .chat-photo-editor-sticker-delete {
-  display: flex;
-  min-height: 32px;
-  align-items: center;
-  justify-content: center;
-  aspect-ratio: auto;
-  border: 1px solid rgb(255 255 255 / 12%);
-  padding: 0 10px;
-  color: #ffb4b4;
-  background: rgb(255 255 255 / 7%);
-  font-size: 11px;
 }
 
