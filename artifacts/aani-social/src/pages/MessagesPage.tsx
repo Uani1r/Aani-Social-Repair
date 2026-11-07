@@ -322,7 +322,7 @@ export default function MessagesPage({
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
   const selectedIdRef = useRef(selectedId);
-  const threadEndRef = useRef<HTMLDivElement>(null);
+  const threadListRef = useRef<HTMLDivElement>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
@@ -657,9 +657,11 @@ export default function MessagesPage({
     if (selectedId) markConversationRead(selectedId);
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
-  useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ behavior: thread.length || pendingMediaMessage ? 'smooth' : 'auto' });
-  }, [pendingMediaMessage, thread, selectedId]);
+  useLayoutEffect(() => {
+    const threadList = threadListRef.current;
+    if (!threadList) return;
+    threadList.scrollTop = threadList.scrollHeight;
+  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id]);
 
   useEffect(() => {
     if (!newMessageOpen || !supabaseConfigured) return;
@@ -1244,6 +1246,7 @@ export default function MessagesPage({
                 </div>
               </header>
               <div
+                ref={threadListRef}
                 className="messages-thread-list"
                 aria-live="polite"
                 onWheel={() => messageInputRef.current?.blur()}
@@ -1361,7 +1364,6 @@ export default function MessagesPage({
                     </div>
                   </div>
                 )}
-                <div ref={threadEndRef} />
               </div>
               <form className={`messages-composer${replyMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}`} onSubmit={sendMessage}>
                 {replyMessage && (
