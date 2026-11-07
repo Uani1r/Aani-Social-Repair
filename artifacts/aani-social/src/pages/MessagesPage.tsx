@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, Clock, Copy, Flag, MessageCircle, Mic, MoreVertical, Phone, Pin, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -29,7 +29,24 @@ interface MessageRow {
   created_at: string;
   delivered_at: string | null;
   read_at: string | null;
+  reply_to_message_id?: string | null;
   sendState?: MessageSendState;
+}
+
+interface MessageReaction {
+  user_id: string;
+  emoji: string;
+}
+
+interface MessageActionState {
+  message: MessageRow;
+  mode: 'actions' | 'delete';
+  rect: { top: number; left: number; width: number; height: number };
+  rowMarkup: string;
+  menuTop: number;
+  menuLeft: number;
+  reactionsTop: number;
+  reactionsLeft: number;
 }
 
 interface ConversationSummary {
@@ -136,6 +153,7 @@ function normalizeMessageRows(value: unknown): MessageRow[] {
       created_at: typeof item.created_at === 'string' ? item.created_at : '',
       delivered_at: typeof item.delivered_at === 'string' ? item.delivered_at : null,
       read_at: typeof item.read_at === 'string' ? item.read_at : null,
+      reply_to_message_id: typeof item.reply_to_message_id === 'string' ? item.reply_to_message_id : null,
     }];
   });
 }
@@ -151,9 +169,10 @@ async function queryMessageRows(
 ): Promise<{ data: unknown; error: unknown | null }> {
   let includeDeliveryColumns = true;
   let includeMessageMetadata = includeMetadata;
+  let includeReplyMetadata = includeMetadata;
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
     const result = await supabase
       .from('messages')
       .select(fields)
@@ -164,6 +183,10 @@ async function queryMessageRows(
     const errorText = messageDeliveryErrorText(result.error);
     if (includeDeliveryColumns && /delivered_at|read_at/i.test(errorText)) {
       includeDeliveryColumns = false;
+      continue;
+    }
+    if (includeReplyMetadata && /reply_to_message_id/i.test(errorText)) {
+      includeReplyMetadata = false;
       continue;
     }
     if (includeMessageMetadata && /post_id|story_id/i.test(errorText)) {
@@ -305,6 +328,11 @@ export default function MessagesPage({
   const [threadLoading, setThreadLoading] = useState(false);
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
+  const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, MessageReaction[]>>({});
+  const [messageAction, setMessageAction] = useState<MessageActionState | null>(null);
+  const [emojiTargetMessage, setEmojiTargetMessage] = useState<MessageRow | null>(null);
+  const [messageDeleteBusy, setMessageDeleteBusy] = useState(false);
+  const [messageModerationBusy, setMessageModerationBusy] = useState(false);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
@@ -337,12 +365,23 @@ export default function MessagesPage({
   const longPressTimerRef = useRef<number | null>(null);
   const longPressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const suppressNextConversationClickRef = useRef(false);
+  const messageReactionBusyRef = useRef(new Set<string>());
+  const messageActionOpenedAtRef = useRef(0);
 
   useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
 
   useEffect(() => () => {
     if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!messageAction) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMessageAction(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [messageAction]);
 
   useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
@@ -516,6 +555,7 @@ export default function MessagesPage({
     try {
       const { data, error } = await queryMessageRows(threadFilter, true, true);
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
+      if (error) throw error;
       const visibleMessages = normalizeMessageRows(data)
         .filter(message => !hiddenMessageIds.has(message.id))
         .map(message => {
@@ -524,10 +564,22 @@ export default function MessagesPage({
             ? { ...message, content: openedChatMediaContent(message.content) }
             : message;
         });
+      const reactionResult = visibleMessages.length
+        ? await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id))
+        : { data: [], error: null };
+      const nextReactions: Record<string, MessageReaction[]> = {};
+      if (reactionResult.error) {
+        console.warn('[messages] تعذر جلب تفاعلات الرسائل:', reactionResult.error);
+      } else {
+        (reactionResult.data || []).forEach(row => {
+          if (typeof row.message_id !== 'string' || typeof row.user_id !== 'string' || typeof row.emoji !== 'string') return;
+          (nextReactions[row.message_id] ||= []).push({ user_id: row.user_id, emoji: row.emoji });
+        });
+      }
 
-      if (error) throw error;
       if (requestId === threadRequestRef.current) {
         setThread(current => mergeThreadRows(current, visibleMessages));
+        setReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
           .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
           .map(message => message.id));
@@ -652,6 +704,9 @@ export default function MessagesPage({
 
   useEffect(() => {
     setReplyMessage(null);
+    setMessageAction(null);
+    setEmojiTargetMessage(null);
+    setReactionsByMessage({});
   }, [selectedId]);
 
   useEffect(() => {
@@ -667,6 +722,7 @@ export default function MessagesPage({
     if (!supabaseConfigured) return;
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(true))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -818,6 +874,7 @@ export default function MessagesPage({
       created_at: new Date().toISOString(),
       delivered_at: null,
       read_at: null,
+      reply_to_message_id: replyMessage?.id || null,
       sendState: 'pending',
     };
     setThread(current => current.some(message => message.id === optimisticMessage.id)
@@ -834,6 +891,7 @@ export default function MessagesPage({
         sender_id: currentUserId,
         recipient_id: recipientId,
         content,
+        ...(replyMessage ? { reply_to_message_id: replyMessage.id } : {}),
       });
       if (error) throw error;
       setThread(current => current.map(message => message.id === optimisticMessage.id
@@ -868,6 +926,7 @@ export default function MessagesPage({
         sender_id: currentUserId,
         recipient_id: selectedId,
         content,
+        ...(replyMessage ? { reply_to_message_id: replyMessage.id } : {}),
       });
       if (error) throw error;
       setReplyMessage(null);
@@ -1054,6 +1113,172 @@ export default function MessagesPage({
       toast.error('تعذر حذف المحادثة. تأكد من تطبيق تحديث أدوات المحادثات في Supabase.');
     } finally {
       setDeleteBusy(false);
+    }
+  };
+
+  const openMessageActionMenu = (message: MessageRow, sourceElement: HTMLElement) => {
+    if (message.sendState === 'pending' || message.sendState === 'failed') return;
+    const row = sourceElement.matches('.messages-message-row')
+      ? sourceElement
+      : sourceElement.querySelector('.messages-message-row');
+    if (!(row instanceof HTMLElement)) return;
+    const content = row.querySelector('.messages-bubble, .messages-rich-message, .messages-image-message, .messages-sticker-message') || row;
+    const rect = content.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const menuWidth = Math.min(260, window.innerWidth - 24);
+    const actionMenuHeight = 4 * 46 + 20;
+    const menuTop = rect.bottom + actionMenuHeight + 12 <= window.innerHeight - 12
+      ? rect.bottom + 12
+      : Math.max(12, rect.top - actionMenuHeight - 12);
+    const menuLeft = Math.max(12, Math.min(window.innerWidth - menuWidth - 12, rect.left + rect.width / 2 - menuWidth / 2));
+    const reactionsWidth = Math.min(300, window.innerWidth - 24);
+    const reactionsTop = rect.top >= 64 ? rect.top - 56 : Math.min(window.innerHeight - 54, rect.bottom + 8);
+    const reactionsLeft = Math.max(12, Math.min(window.innerWidth - reactionsWidth - 12, rect.left + rect.width / 2 - reactionsWidth / 2));
+    messageActionOpenedAtRef.current = Date.now();
+    setMessageAction({
+      message,
+      mode: 'actions',
+      rect: { top: rowRect.top, left: rowRect.left, width: rowRect.width, height: rowRect.height },
+      rowMarkup: row.outerHTML,
+      menuTop,
+      menuLeft,
+      reactionsTop,
+      reactionsLeft,
+    });
+  };
+
+  const toggleMessageReaction = async (message: MessageRow, emoji: string) => {
+    if (!supabaseConfigured || message.sendState === 'pending' || message.sendState === 'failed' || !emoji || emoji.length > 32) {
+      if (!supabaseConfigured) toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    const busyKey = `${message.id}:${currentUserId}`;
+    if (messageReactionBusyRef.current.has(busyKey)) return;
+    messageReactionBusyRef.current.add(busyKey);
+    const existing = (reactionsByMessage[message.id] || []).find(reaction => reaction.user_id === currentUserId);
+    const nextEmoji = existing?.emoji === emoji ? null : emoji;
+    try {
+      if (nextEmoji === null) {
+        const { error } = await supabase.from('message_reactions').delete().eq('message_id', message.id).eq('user_id', currentUserId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('message_reactions').upsert({
+          message_id: message.id,
+          user_id: currentUserId,
+          emoji: nextEmoji,
+        }, { onConflict: 'message_id,user_id' });
+        if (error) throw error;
+      }
+      setReactionsByMessage(current => {
+        const next = { ...current };
+        const rows = (next[message.id] || []).filter(reaction => reaction.user_id !== currentUserId);
+        if (nextEmoji) rows.push({ user_id: currentUserId, emoji: nextEmoji });
+        if (rows.length) next[message.id] = rows;
+        else delete next[message.id];
+        return next;
+      });
+    } catch (error) {
+      console.error('[messages] تعذر تحديث تفاعل الرسالة:', error);
+      toast.error('تعذر حفظ التفاعل. تأكد من تطبيق تحديث تفاعلات الرسائل في Supabase.');
+    } finally {
+      messageReactionBusyRef.current.delete(busyKey);
+    }
+  };
+
+  const copyMessage = async (message: MessageRow) => {
+    const mediaMessage = parseChatMediaMessage(message.content);
+    const stickerMessage = parseChatStickerMessage(message.content);
+    const content = message.content.trim();
+    const textToCopy = mediaMessage
+      ? mediaMessage.caption || 'صورة'
+      : stickerMessage
+        ? 'ملصق'
+        : content.startsWith('[story-reply]')
+          ? content.slice('[story-reply]'.length).trim()
+          : message.post_id || content.startsWith('[post:')
+            ? 'مشاركة منشور'
+            : content.startsWith('[story:') ? 'أرسل قصة' : content;
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable');
+      await navigator.clipboard.writeText(textToCopy);
+      setMessageAction(null);
+      toast.success('تم نسخ الرسالة');
+    } catch (error) {
+      console.warn('[messages] تعذر نسخ الرسالة:', error);
+      toast.error('تعذر النسخ. اسمح بالوصول إلى الحافظة وحاول مرة أخرى.');
+    }
+  };
+
+  const reportMessage = async (message: MessageRow) => {
+    setMessageAction(null);
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    const details = window.prompt('ما سبب الإبلاغ عن هذه الرسالة؟');
+    if (details === null) return;
+    const normalizedDetails = details.trim();
+    if (!normalizedDetails) {
+      toast.error('اكتب سبباً للإبلاغ عن الرسالة.');
+      return;
+    }
+    if (normalizedDetails.length > 1000) {
+      toast.error('يجب ألا يتجاوز سبب البلاغ 1000 حرف.');
+      return;
+    }
+    setMessageModerationBusy(true);
+    try {
+      const { error } = await supabase.rpc('aani_report_message', {
+        p_message_id: message.id,
+        p_details: normalizedDetails,
+      });
+      if (error?.code === '23505') {
+        toast.info('سبق أن أبلغت عن هذه الرسالة.');
+        return;
+      }
+      if (error) throw error;
+      toast.success('تم إرسال بلاغ الرسالة للمراجعة.');
+    } catch (error) {
+      console.error('[messages] تعذر الإبلاغ عن الرسالة:', error);
+      toast.error('تعذر إرسال البلاغ. تأكد من تطبيق تحديث تفاعلات الرسائل في Supabase.');
+    } finally {
+      setMessageModerationBusy(false);
+    }
+  };
+
+  const deleteMessage = async (forEveryone: boolean) => {
+    const message = messageAction?.message;
+    if (!message || messageDeleteBusy) return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    if (forEveryone && message.sender_id !== currentUserId) {
+      toast.error('يمكن لمرسل الرسالة فقط حذفها لدى الجميع.');
+      return;
+    }
+
+    setMessageDeleteBusy(true);
+    try {
+      const { error } = await supabase.rpc(
+        forEveryone ? 'aani_delete_message_for_everyone' : 'aani_hide_message',
+        { p_message_id: message.id },
+      );
+      if (error) throw error;
+      setThread(current => current.filter(item => item.id !== message.id));
+      setReactionsByMessage(current => {
+        const next = { ...current };
+        delete next[message.id];
+        return next;
+      });
+      setMessageAction(null);
+      await Promise.all([loadThread(), loadConversationList()]);
+      toast.success(forEveryone ? 'تم حذف الرسالة لدى الجميع' : 'تم حذف الرسالة من محادثتك');
+    } catch (error) {
+      console.error('[messages] تعذر حذف الرسالة:', error);
+      toast.error('تعذر حذف الرسالة. تأكد من تطبيق تحديث تفاعلات الرسائل في Supabase.');
+    } finally {
+      setMessageDeleteBusy(false);
     }
   };
 
@@ -1346,57 +1571,111 @@ export default function MessagesPage({
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
+                  const messageReactions = reactionsByMessage[message.id] || [];
+                  const reactionCounts = Object.entries(messageReactions.reduce<Record<string, MessageReaction[]>>((grouped, reaction) => {
+                    (grouped[reaction.emoji] ||= []).push(reaction);
+                    return grouped;
+                  }, {}));
+                  const repliedMessage = message.reply_to_message_id
+                    ? thread.find(item => item.id === message.reply_to_message_id) || null
+                    : null;
+                  const replyPreview = message.reply_to_message_id ? (
+                    <div className="messages-reply-inline">
+                      <strong>{repliedMessage ? (repliedMessage.sender_id === currentUserId ? displayName(currentProfile) : displayName(target)) : 'رسالة محذوفة'}</strong>
+                      <span>{repliedMessage ? replyMessagePreview(repliedMessage) : 'لم تعد هذه الرسالة متاحة'}</span>
+                    </div>
+                  ) : null;
                   return (
                     <MessageSwipeReply
                       key={message.id}
                       isMine={isMine}
+                      onLongPress={element => openMessageActionMenu(message, element)}
+                      onContextMenu={event => {
+                        event.preventDefault();
+                        openMessageActionMenu(message, event.currentTarget);
+                      }}
                       onReply={() => {
+                        setMessageAction(null);
                         setReplyMessage(message);
                         window.requestAnimationFrame(() => messageInputRef.current?.focus());
                       }}
                     >
-                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}`}>
-                        {isSharedPost ? (
-                          <div className="messages-rich-message"><SharedPostPreview postId={message.post_id} content={message.content} /></div>
-                        ) : isSharedStory ? (
-                          <div className="messages-rich-message">
-                            <StoryDmCard
-                              storyId={String(sharedStoryId)}
-                              currentUserId={currentUserId}
-                              senderName={target ? displayName(target) : undefined}
-                              onAddToStory={story => {
-                                onReshareStory(story);
-                                setLocation('/feed');
-                              }}
-                            />
-                          </div>
-                        ) : stickerMessage ? (
-                          <ChatStickerMessage payload={stickerMessage} />
-                        ) : mediaMessage ? (
-                          <ChatImageMessage
-                            messageId={message.id}
-                            currentUserId={currentUserId}
-                            payload={mediaMessage}
-                            isMine={isMine}
-                            createdAt={message.created_at}
-                            onViewOnceOpened={(messageId, urls) => { void markViewOnceMessageOpened(messageId, urls); }}
-                          />
-                        ) : (
-                          <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
-                            <span className="messages-bubble-content">
-                              {isStoryReply ? (
-                                <>
-                                  <span className="messages-story-reply-label">رد على الستوري</span>
-                                  <EmojiText text={content.slice('[story-reply]'.length).trim()} />
-                                </>
-                              ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
-                            </span>
-                            <span className="messages-bubble-footer">
-                              <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
-                              {isMine && <MessageDeliveryStatus message={message} />}
-                            </span>
-                          </div>
-                        )}
+                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}`}>
+                        <div className="messages-message-body">
+                          {isSharedPost ? (
+                            <>
+                              {replyPreview}
+                              <div className="messages-rich-message"><SharedPostPreview postId={message.post_id} content={message.content} /></div>
+                            </>
+                          ) : isSharedStory ? (
+                            <>
+                              {replyPreview}
+                              <div className="messages-rich-message">
+                                <StoryDmCard
+                                  storyId={String(sharedStoryId)}
+                                  currentUserId={currentUserId}
+                                  senderName={target ? displayName(target) : undefined}
+                                  onAddToStory={story => {
+                                    onReshareStory(story);
+                                    setLocation('/feed');
+                                  }}
+                                />
+                              </div>
+                            </>
+                          ) : stickerMessage ? (
+                            <>
+                              {replyPreview}
+                              <ChatStickerMessage payload={stickerMessage} />
+                            </>
+                          ) : mediaMessage ? (
+                            <>
+                              {replyPreview}
+                              <ChatImageMessage
+                                messageId={message.id}
+                                currentUserId={currentUserId}
+                                payload={mediaMessage}
+                                isMine={isMine}
+                                createdAt={message.created_at}
+                                onViewOnceOpened={(messageId, urls) => { void markViewOnceMessageOpened(messageId, urls); }}
+                              />
+                            </>
+                          ) : (
+                            <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
+                              {replyPreview}
+                              <span className="messages-bubble-content">
+                                {isStoryReply ? (
+                                  <>
+                                    <span className="messages-story-reply-label">رد على الستوري</span>
+                                    <EmojiText text={content.slice('[story-reply]'.length).trim()} />
+                                  </>
+                                ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
+                              </span>
+                              <span className="messages-bubble-footer">
+                                <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                {isMine && <MessageDeliveryStatus message={message} />}
+                              </span>
+                            </div>
+                          )}
+                          {reactionCounts.length > 0 && (
+                            <div className="messages-reaction-badges" role="group" aria-label="تفاعلات الرسالة">
+                              {reactionCounts.map(([emoji, reactions]) => (
+                                <button
+                                  key={emoji}
+                                  type="button"
+                                  className={reactions.some(reaction => reaction.user_id === currentUserId) ? 'is-mine' : ''}
+                                  aria-label={`${emoji}، ${reactions.length} تفاعل`}
+                                  onClick={event => {
+                                    event.stopPropagation();
+                                    void toggleMessageReaction(message, emoji);
+                                  }}
+                                >
+                                  <EmojiText text={emoji} />
+                                  {reactions.length > 1 && <span>{reactions.length}</span>}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                         {!isMine && (
                           <span className="messages-sender-avatar" aria-hidden="true">
                             {showSenderAvatar && <Avatar profile={target} />}
@@ -1508,8 +1787,20 @@ export default function MessagesPage({
                   <ChatStickerPanel
                     currentUserId={currentUserId}
                     closing={emojiPickerClosing}
-                    onClose={closeEmojiPicker}
-                    onInsertEmoji={insertComposerSymbol}
+                    onClose={() => {
+                      setEmojiTargetMessage(null);
+                      closeEmojiPicker();
+                    }}
+                    onInsertEmoji={emoji => {
+                      const targetMessage = emojiTargetMessage;
+                      if (targetMessage) {
+                        setEmojiTargetMessage(null);
+                        closeEmojiPicker();
+                        void toggleMessageReaction(targetMessage, emoji);
+                      } else {
+                        insertComposerSymbol(emoji);
+                      }
+                    }}
                     onSendSticker={sticker => { void sendSticker(sticker); }}
                   />
                 )}
@@ -1531,6 +1822,120 @@ export default function MessagesPage({
         }}
         onSendFailed={pendingId => setPendingMediaMessage(current => current?.id === pendingId ? null : current)}
       />
+
+      {messageAction && createPortal(
+        <div
+          className="messages-message-action-backdrop"
+          role="presentation"
+          onClick={event => {
+            if (Date.now() - messageActionOpenedAtRef.current < 500) {
+              event.preventDefault();
+              return;
+            }
+            setMessageAction(null);
+          }}
+        >
+          <div
+            className="messages-message-action-focus"
+            aria-hidden="true"
+            style={{
+              top: messageAction.rect.top,
+              left: messageAction.rect.left,
+              width: messageAction.rect.width,
+              height: messageAction.rect.height,
+            }}
+            dangerouslySetInnerHTML={{ __html: messageAction.rowMarkup }}
+          />
+          <div
+            className="messages-message-action-reactions"
+            role="toolbar"
+            aria-label="تفاعلات سريعة"
+            style={{ top: messageAction.reactionsTop, left: messageAction.reactionsLeft }}
+            onClick={event => event.stopPropagation()}
+          >
+            {['❤️', '😂', '😮', '😢', '😡', '👍'].map(emoji => (
+              <button
+                key={emoji}
+                type="button"
+                aria-label={`تفاعل ${emoji}`}
+                onClick={() => {
+                  setMessageAction(null);
+                  void toggleMessageReaction(messageAction.message, emoji);
+                }}
+              >
+                <EmojiText text={emoji} />
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-label="فتح منتقي الإيموجي الكامل"
+              onClick={() => {
+                setEmojiTargetMessage(messageAction.message);
+                setMessageAction(null);
+                openEmojiPicker();
+              }}
+            >
+              <Plus size={20} />
+            </button>
+          </div>
+          <section
+            className="messages-message-action-menu"
+            role="menu"
+            aria-label={messageAction.mode === 'delete' ? 'خيارات حذف الرسالة' : 'إجراءات الرسالة'}
+            style={{ top: messageAction.menuTop, left: messageAction.menuLeft }}
+            onClick={event => event.stopPropagation()}
+          >
+            {messageAction.mode === 'actions' ? (
+              <>
+                <button type="button" role="menuitem" onClick={() => {
+                  const selectedMessage = messageAction.message;
+                  setMessageAction(null);
+                  setReplyMessage(selectedMessage);
+                  window.requestAnimationFrame(() => messageInputRef.current?.focus());
+                }}>
+                  <Reply size={18} />
+                  <span>رد</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => void copyMessage(messageAction.message)}>
+                  <Copy size={18} />
+                  <span>نسخ</span>
+                </button>
+                <button type="button" role="menuitem" disabled={messageModerationBusy || messageAction.message.sender_id === currentUserId} title={messageAction.message.sender_id === currentUserId ? 'يمكن الإبلاغ عن رسائل الطرف الآخر فقط' : undefined} onClick={() => void reportMessage(messageAction.message)}>
+                  <Flag size={18} />
+                  <span>إبلاغ</span>
+                </button>
+                <button type="button" role="menuitem" className="is-destructive" onClick={() => setMessageAction(current => current ? { ...current, mode: 'delete' } : current)}>
+                  <Trash2 size={18} />
+                  <span>حذف</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="messages-message-action-title">حذف الرسالة</div>
+                <button type="button" role="menuitem" disabled={messageDeleteBusy} onClick={() => void deleteMessage(false)}>
+                  <Trash2 size={17} />
+                  <span>الحذف لدي</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="is-destructive"
+                  disabled={messageDeleteBusy || messageAction.message.sender_id !== currentUserId}
+                  title={messageAction.message.sender_id !== currentUserId ? 'يمكن لمرسل الرسالة فقط حذفها لدى الجميع' : undefined}
+                  onClick={() => void deleteMessage(true)}
+                >
+                  <Trash2 size={17} />
+                  <span>الحذف لدى الجميع</span>
+                </button>
+                <button type="button" role="menuitem" className="messages-message-action-cancel" disabled={messageDeleteBusy} onClick={() => setMessageAction(current => current ? { ...current, mode: 'actions' } : current)}>
+                  <span>رجوع</span>
+                </button>
+              </>
+            )}
+          </section>
+        </div>,
+        document.body,
+      )}
 
       {conversationContext && createPortal(
         <div className="messages-context-backdrop" role="presentation" onClick={() => setConversationContext(null)}>

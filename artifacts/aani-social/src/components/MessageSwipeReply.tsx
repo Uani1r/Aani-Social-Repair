@@ -3,6 +3,7 @@ import { Reply } from 'lucide-react';
 
 const REPLY_THRESHOLD = 56;
 const MAX_SWIPE_DISTANCE = 96;
+const LONG_PRESS_DURATION = 480;
 
 type SwipeAxis = 'undecided' | 'horizontal' | 'vertical' | 'rejected';
 
@@ -16,10 +17,14 @@ type PointerStart = {
 export default function MessageSwipeReply({
   isMine,
   onReply,
+  onLongPress,
+  onContextMenu,
   children,
 }: {
   isMine: boolean;
   onReply: () => void;
+  onLongPress?: (element: HTMLDivElement) => void;
+  onContextMenu?: (event: ReactMouseEvent<HTMLDivElement>) => void;
   children: ReactNode;
 }) {
   const [offsetX, setOffsetX] = useState(0);
@@ -30,10 +35,19 @@ export default function MessageSwipeReply({
   const hapticPlayedRef = useRef(false);
   const suppressClickRef = useRef(false);
   const suppressClickTimerRef = useRef<number | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
 
   useEffect(() => () => {
     if (suppressClickTimerRef.current !== null) window.clearTimeout(suppressClickTimerRef.current);
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
   }, []);
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
@@ -42,16 +56,28 @@ export default function MessageSwipeReply({
       window.clearTimeout(suppressClickTimerRef.current);
       suppressClickTimerRef.current = null;
     }
-    pointerStartRef.current = {
+    clearLongPressTimer();
+    const start: PointerStart = {
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
       axis: 'undecided',
     };
+    pointerStartRef.current = start;
     offsetRef.current = 0;
     hapticPlayedRef.current = false;
     setOffsetX(0);
     setIsArmed(false);
+    if (onLongPress) {
+      const target = event.currentTarget;
+      longPressTimerRef.current = window.setTimeout(() => {
+        longPressTimerRef.current = null;
+        if (pointerStartRef.current !== start) return;
+        start.axis = 'rejected';
+        suppressClickRef.current = true;
+        onLongPress(target);
+      }, LONG_PRESS_DURATION);
+    }
   };
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -60,6 +86,7 @@ export default function MessageSwipeReply({
 
     const deltaX = event.clientX - start.x;
     const deltaY = event.clientY - start.y;
+    if (Math.hypot(deltaX, deltaY) > 10) clearLongPressTimer();
     if (start.axis === 'undecided') {
       if (Math.max(Math.abs(deltaX), Math.abs(deltaY)) < 8) return;
       if (Math.abs(deltaX) < Math.abs(deltaY) * 1.15) {
@@ -104,6 +131,7 @@ export default function MessageSwipeReply({
   const finishGesture = (event: ReactPointerEvent<HTMLDivElement>, canceled = false) => {
     const start = pointerStartRef.current;
     if (!start || start.pointerId !== event.pointerId) return;
+    clearLongPressTimer();
     const shouldReply = !canceled && start.axis === 'horizontal' && Math.abs(offsetRef.current) >= REPLY_THRESHOLD;
     pointerStartRef.current = null;
     offsetRef.current = 0;
@@ -138,6 +166,7 @@ export default function MessageSwipeReply({
       onPointerMove={handlePointerMove}
       onPointerUp={event => finishGesture(event)}
       onPointerCancel={event => finishGesture(event, true)}
+      onContextMenu={onContextMenu}
       onClickCapture={handleClickCapture}
       style={{ '--messages-reply-progress': progress, '--messages-reply-scale': 0.62 + progress * 0.38 } as CSSProperties}
     >
