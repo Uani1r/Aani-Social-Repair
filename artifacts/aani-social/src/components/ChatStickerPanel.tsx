@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
-import { ArrowRight, ImagePlus, Plus, Store, X } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowRight, ImagePlus, Plus, Store } from 'lucide-react';
 import { toast } from 'sonner';
 
 import StickerStudio from '@/components/StickerStudio';
@@ -51,6 +52,19 @@ const STICKER_PACKS: StickerPack[] = [
     ],
   },
 ];
+
+const EMOJI_CATEGORY_ICONS: Record<string, string> = {
+  'Smileys & Emotion': '😃',
+  'Animals & Nature': '🐶',
+  'Food & Drink': '🍕',
+  Activities: '⚽',
+  'Travel & Places': '🚗',
+  Symbols: '⚠️',
+  'People & Body': '👋',
+  Objects: '💡',
+  Flags: '🏳️',
+};
+const CATEGORY_ORDER = ['Smileys & Emotion', 'Animals & Nature', 'Food & Drink', 'Activities', 'Travel & Places', 'Symbols', 'People & Body', 'Objects', 'Flags'];
 
 const DEFAULT_PACKS = ['reactions'];
 const installedPacksKey = (userId: string) => `aani_sticker_packs_${userId}`;
@@ -122,6 +136,14 @@ export default function ChatStickerPanel({
   }, [currentUserId]);
 
   useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
     const controller = new AbortController();
     setEmojiLoading(true);
     fetch('/emoji-catalog.json', { signal: controller.signal })
@@ -145,7 +167,7 @@ export default function ChatStickerPanel({
     return () => controller.abort();
   }, []);
 
-  const categories = Object.keys(EMOJI_CATEGORY_LABELS);
+  const categories = CATEGORY_ORDER.filter(category => EMOJI_CATEGORY_LABELS[category]);
   const visibleEmojis = useMemo(() => emojiChoices.filter(choice => choice.category === selectedCategory), [emojiChoices, selectedCategory]);
   const visiblePack = STICKER_PACKS.find(pack => pack.id === activeCollection && installedPacks.includes(pack.id));
 
@@ -211,21 +233,36 @@ export default function ChatStickerPanel({
 
   return (
     <>
-      <section className="messages-sticker-picker" role="dialog" aria-label="الإيموجي والملصقات" dir="rtl">
+      {typeof document !== 'undefined' && createPortal(
+      <>
+        <div className="messages-sticker-picker-backdrop" aria-hidden="true" onClick={onClose} />
+        <section className="messages-sticker-picker" role="dialog" aria-modal="true" aria-label="الإيموجي والملصقات" dir="rtl">
         <header className="messages-sticker-panel-header">
           <div className="messages-sticker-panel-tabs" role="tablist" aria-label="نوع التعبير">
-            <button type="button" role="tab" aria-selected={mode === 'emoji'} className={mode === 'emoji' ? 'is-active' : ''} onClick={() => { setMode('emoji'); setPlusMenuOpen(false); }}>إيموجي</button>
-            <button type="button" role="tab" aria-selected={mode !== 'emoji'} className={mode !== 'emoji' ? 'is-active' : ''} onClick={() => { setMode('stickers'); setPlusMenuOpen(false); }}>ملصقات</button>
+            <button type="button" role="tab" aria-selected={mode === 'emoji'} className={mode === 'emoji' ? 'is-active' : ''} onClick={() => { setMode('emoji'); setPlusMenuOpen(false); }}>
+              <TwemojiEmoji emoji="😊" size={25} /><span>إيموجي</span>
+            </button>
+            <button type="button" role="tab" aria-selected={mode !== 'emoji'} className={mode !== 'emoji' ? 'is-active' : ''} onClick={() => { setMode('stickers'); setPlusMenuOpen(false); }}>
+              <ImagePlus size={22} /><span>ملصقات</span>
+            </button>
           </div>
-          <strong>{mode === 'emoji' ? 'اختر تعبيراً' : mode === 'store' ? 'متجر الملصقات' : 'ملصقاتك'}</strong>
-          <button type="button" className="messages-sticker-close" aria-label="إغلاق الإيموجي والملصقات" onClick={onClose}><X size={17} /></button>
+          <aside className="messages-sticker-plus-area">
+            <button type="button" className={`messages-sticker-plus-button${plusMenuOpen ? ' is-active' : ''}`} aria-label="إضافة ملصق أو حزمة" aria-expanded={plusMenuOpen} onClick={() => setPlusMenuOpen(value => !value)}><Plus size={25} /></button>
+            {plusMenuOpen && (
+              <div className="messages-sticker-plus-menu" role="menu" aria-label="إضافة إلى الملصقات">
+                <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}><ImagePlus size={16} /><span>إنشاء ملصق</span></button>
+                <button type="button" role="menuitem" onClick={() => { setMode('store'); setPlusMenuOpen(false); }}><Store size={16} /><span>متجر الملصقات</span></button>
+              </div>
+            )}
+            <input ref={imageInputRef} type="file" accept="image/*" className="messages-sticker-file-input" onChange={addImageFile} />
+          </aside>
         </header>
 
         <div className={`messages-sticker-panel-layout${mode === 'store' ? ' is-store' : ''}`}>
           <nav className="messages-sticker-categories" aria-label={mode === 'emoji' ? 'فئات الإيموجي' : 'مجموعات الملصقات'}>
             {mode === 'emoji' ? categories.map(category => (
               <button key={category} type="button" className={selectedCategory === category ? 'is-active' : ''} aria-label={EMOJI_CATEGORY_LABELS[category]} title={EMOJI_CATEGORY_LABELS[category]} onClick={() => setSelectedCategory(category)}>
-                <span aria-hidden="true">{category === 'Smileys & Emotion' ? '☺' : category === 'People & Body' ? '♙' : category === 'Animals & Nature' ? '♧' : category === 'Food & Drink' ? '♨' : category === 'Travel & Places' ? '⌖' : category === 'Activities' ? '⚽' : category === 'Objects' ? '▣' : category === 'Symbols' ? '♥' : '⚑'}</span>
+                <TwemojiEmoji emoji={EMOJI_CATEGORY_ICONS[category]} size={24} />
               </button>
             )) : mode === 'store' ? (
               <button type="button" aria-label="العودة إلى الملصقات" title="العودة" onClick={() => setMode('stickers')}><ArrowRight size={18} /></button>
@@ -244,14 +281,13 @@ export default function ChatStickerPanel({
           <div className="messages-sticker-panel-content">
             {mode === 'emoji' && (
               <>
-                <div className="messages-sticker-content-title">{EMOJI_CATEGORY_LABELS[selectedCategory]}</div>
                 {emojiLoading ? <div className="messages-sticker-empty">جارٍ تحميل الإيموجي...</div> : emojiError ? (
                   <div className="messages-sticker-empty" role="alert">تعذر تحميل الإيموجي. تحقق من الاتصال.</div>
                 ) : (
                   <div className="messages-emoji-catalog">
                     {visibleEmojis.map((choice, index) => (
                       <button key={`${choice.emoji}-${index}`} type="button" aria-label={choice.name} title={choice.name} onClick={() => { onInsertEmoji(choice.emoji); onClose(); }}>
-                        <TwemojiEmoji emoji={choice.emoji} size={27} />
+                        <TwemojiEmoji emoji={choice.emoji} size={42} />
                       </button>
                     ))}
                   </div>
@@ -301,18 +337,9 @@ export default function ChatStickerPanel({
             )}
           </div>
 
-          <aside className="messages-sticker-plus-area">
-            <button type="button" className={`messages-sticker-plus-button${plusMenuOpen ? ' is-active' : ''}`} aria-label="إضافة ملصق أو حزمة" aria-expanded={plusMenuOpen} onClick={() => setPlusMenuOpen(value => !value)}><Plus size={20} /></button>
-            {plusMenuOpen && (
-              <div className="messages-sticker-plus-menu" role="menu" aria-label="إضافة إلى الملصقات">
-                <button type="button" role="menuitem" onClick={() => imageInputRef.current?.click()}><ImagePlus size={16} /><span>إنشاء ملصق</span></button>
-                <button type="button" role="menuitem" onClick={() => { setMode('store'); setPlusMenuOpen(false); }}><Store size={16} /><span>متجر الملصقات</span></button>
-              </div>
-            )}
-            <input ref={imageInputRef} type="file" accept="image/*" className="messages-sticker-file-input" onChange={addImageFile} />
-          </aside>
         </div>
-      </section>
+        </section>
+      </>, document.body)}
       {studioFile && <StickerStudio file={studioFile} onClose={() => setStudioFile(null)} onSave={saveCustomSticker} />}
     </>
   );

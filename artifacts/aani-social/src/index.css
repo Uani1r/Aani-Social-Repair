@@ -3401,63 +3401,69 @@ body.aani-immersive .unified-top-bar {
   background: #19c875;
 }
 
+.messages-sticker-picker-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: transparent;
+}
+
 .messages-sticker-picker {
-  position: absolute;
+  position: fixed;
   right: 0;
-  bottom: calc(100% + 10px);
-  z-index: 40;
+  bottom: 0;
+  left: 0;
+  z-index: 1200;
   display: flex;
-  width: min(350px, calc(100vw - 32px));
+  width: 100%;
   height: 350px;
-  max-height: min(350px, calc(100dvh - 150px));
+  max-height: 100dvh;
   flex-direction: column;
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 18px;
+  border-bottom: 0;
+  border-radius: 24px 24px 0 0;
   color: #f5f7f8;
-  background: rgba(31, 44, 52, 0.7);
+  background: rgba(31, 44, 52, 0.75);
   -webkit-backdrop-filter: blur(20px);
   backdrop-filter: blur(20px);
-  box-shadow: 0 18px 48px rgb(0 0 0 / 42%);
+  box-shadow: 0 -12px 38px rgb(0 0 0 / 35%);
   direction: rtl;
 }
 
 .messages-sticker-panel-header {
-  display: flex;
-  min-height: 48px;
-  flex: 0 0 48px;
+  position: relative;
+  z-index: 2;
+  display: grid;
+  min-height: 78px;
+  flex: 0 0 78px;
+  grid-template-columns: minmax(0, 2fr) minmax(56px, 1fr);
   align-items: center;
-  gap: 9px;
   border-bottom: 1px solid rgb(255 255 255 / 9%);
-  padding: 0 9px;
-}
-
-.messages-sticker-panel-header > strong {
-  min-width: 0;
-  flex: 1 1 auto;
-  overflow: hidden;
-  color: #f4f5f6;
-  font-size: 12px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  padding: 0 12px;
+  direction: rtl;
 }
 
 .messages-sticker-panel-tabs {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 3px;
-  border-radius: 10px;
-  padding: 3px;
-  background: rgb(0 0 0 / 17%);
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 5px;
 }
 
 .messages-sticker-panel-tabs button {
-  min-height: 28px;
+  display: flex;
+  min-width: 0;
+  min-height: 62px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   border: 0;
-  border-radius: 7px;
-  padding: 0 8px;
+  border-radius: 14px;
+  padding: 4px;
   color: rgb(237 242 245 / 68%);
   background: transparent;
   cursor: pointer;
@@ -3468,62 +3474,56 @@ body.aani-immersive .unified-top-bar {
 
 .messages-sticker-panel-tabs button.is-active {
   color: #fff;
-  background: rgb(255 255 255 / 14%);
+  background: rgb(25 200 117 / 14%);
 }
 
-.messages-sticker-close {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  color: #e9edef;
-  background: transparent;
-  cursor: pointer;
+.messages-sticker-panel-tabs button > img {
+  width: 25px;
+  height: 25px;
 }
 
-.messages-sticker-close:hover,
-.messages-sticker-close:focus-visible {
-  outline: none;
-  background: rgb(255 255 255 / 12%);
+.messages-sticker-panel-tabs button > svg {
+  color: #aab6bd;
+}
+
+.messages-sticker-panel-tabs button.is-active > svg {
+  color: #19c875;
 }
 
 .messages-sticker-panel-layout {
-  display: grid;
+  display: flex;
   min-height: 0;
   flex: 1 1 auto;
-  grid-template-columns: 43px minmax(0, 1fr) 42px;
+  flex-direction: column;
   direction: rtl;
 }
 
 .messages-sticker-categories {
   display: flex;
-  min-height: 0;
-  flex-direction: column;
+  min-width: 0;
+  min-height: 50px;
+  flex: 0 0 50px;
   align-items: center;
-  gap: 5px;
-  overflow-y: auto;
-  border-left: 1px solid rgb(255 255 255 / 8%);
-  padding: 7px 3px;
+  gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid rgb(255 255 255 / 8%);
+  padding: 4px 10px;
   scrollbar-width: thin;
   scrollbar-color: rgb(255 255 255 / 18%) transparent;
 }
 
 .messages-sticker-categories button {
   display: grid;
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
   place-items: center;
   border: 0;
-  border-radius: 10px;
+  border-radius: 12px;
   color: rgb(237 242 245 / 70%);
   background: transparent;
   cursor: pointer;
-  font-family: Arial, sans-serif;
-  font-size: 20px;
 }
 
 .messages-sticker-categories button.is-active,
@@ -3535,15 +3535,16 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-sticker-categories button > img {
-  width: 23px;
-  height: 23px;
+  width: 25px;
+  height: 25px;
 }
 
 .messages-sticker-panel-content {
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
   overflow: auto;
-  padding: 8px 7px;
+  padding: 5px 8px;
   scrollbar-width: thin;
   scrollbar-color: rgb(255 255 255 / 20%) transparent;
 }
@@ -3561,7 +3562,7 @@ body.aani-immersive .unified-top-bar {
 .messages-emoji-catalog,
 .messages-sticker-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 3px;
 }
 
@@ -3589,8 +3590,8 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-emoji-catalog .twemoji-image {
-  width: 27px;
-  height: 27px;
+  width: 42px;
+  height: 42px;
 }
 
 .messages-sticker-grid {
@@ -3623,21 +3624,19 @@ body.aani-immersive .unified-top-bar {
 .messages-sticker-plus-area {
   position: relative;
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  border-right: 1px solid rgb(255 255 255 / 8%);
-  padding-top: 8px;
 }
 
 .messages-sticker-plus-button {
   display: grid;
-  width: 32px;
-  height: 32px;
+  width: 50px;
+  height: 50px;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 11px;
-  color: #fff;
-  background: rgb(255 255 255 / 8%);
+  border: 0;
+  border-radius: 15px;
+  color: #aab6bd;
+  background: transparent;
   cursor: pointer;
 }
 
@@ -3645,14 +3644,15 @@ body.aani-immersive .unified-top-bar {
 .messages-sticker-plus-button:hover,
 .messages-sticker-plus-button:focus-visible {
   outline: none;
-  background: rgb(255 255 255 / 17%);
+  color: #fff;
+  background: rgb(255 255 255 / 11%);
 }
 
 .messages-sticker-plus-menu {
   position: absolute;
-  top: 7px;
-  right: calc(100% + 6px);
-  z-index: 3;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 4;
   display: grid;
   width: max-content;
   gap: 3px;
@@ -4060,18 +4060,24 @@ body.aani-immersive .unified-top-bar {
 }
 
 @media (max-width: 420px) {
-  .messages-sticker-picker {
-    width: min(350px, calc(100vw - 28px));
+  .messages-sticker-panel-header {
+    grid-template-columns: minmax(0, 2fr) 56px;
+    padding: 0 6px;
   }
 
-  .messages-sticker-panel-header {
-    gap: 5px;
-    padding: 0 6px;
+  .messages-sticker-panel-tabs {
+    gap: 4px;
+    padding: 3px;
   }
 
   .messages-sticker-panel-tabs button {
-    padding: 0 6px;
     font-size: 10px;
+  }
+
+  .messages-sticker-categories {
+    gap: 4px;
+    padding-right: 7px;
+    padding-left: 7px;
   }
 
   .messages-sticker-studio-footer {
