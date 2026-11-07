@@ -2865,25 +2865,6 @@ export default function MessagesPage({
                 }}>
                   <Trash2 size={21} /><span>الحذف</span>
                 </button>
-                <div className="messages-bottom-sheet-divider" />
-                <button type="button" role="menuitem" onClick={() => {
-                  setThreadOptionsOpen(false);
-                  void handleConversationAction('pin', selectedConversation);
-                }}>
-                  <Pin size={19} /><span>{conversationPreferences.pinnedIds.includes(selectedConversation.profile.id) ? 'إلغاء التثبيت' : 'تثبيت المحادثة'}</span>
-                </button>
-                <button type="button" role="menuitem" onClick={() => {
-                  setThreadOptionsOpen(false);
-                  void handleConversationAction('archive', selectedConversation);
-                }}>
-                  <Archive size={19} /><span>{conversationPreferences.archivedIds.includes(selectedConversation.profile.id) ? 'إلغاء الأرشفة' : 'أرشفة المحادثة'}</span>
-                </button>
-                <button type="button" role="menuitem" onClick={() => {
-                  setThreadOptionsOpen(false);
-                  void handleConversationAction('mute', selectedConversation);
-                }}>
-                  <BellOff size={19} /><span>{conversationPreferences.mutedIds.includes(selectedConversation.profile.id) ? 'إلغاء الكتم' : 'كتم المحادثة'}</span>
-                </button>
               </div>
             ) : (
               <>
