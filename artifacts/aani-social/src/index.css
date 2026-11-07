@@ -3067,6 +3067,7 @@ body.aani-immersive .unified-top-bar {
   flex-direction: column;
   gap: 4px;
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
   padding: 16px;
   scrollbar-width: thin;
@@ -3111,6 +3112,10 @@ body.aani-immersive .unified-top-bar {
   white-space: pre-wrap;
 }
 
+.messages-bubble:not(.messages-voice-bubble) {
+  padding: 5px 10px 4px;
+}
+
 .messages-bubble-content {
   display: inline;
 }
@@ -3120,8 +3125,8 @@ body.aani-immersive .unified-top-bar {
   min-height: 0;
   align-items: center;
   justify-content: flex-start;
-  gap: 4px;
-  margin-inline-start: 6px;
+  gap: 3px;
+  margin-inline-start: 4px;
   vertical-align: baseline;
   white-space: nowrap;
 }
@@ -5761,8 +5766,8 @@ body.aani-immersive .unified-top-bar {
   box-sizing: border-box;
   align-items: center;
   border-radius: 28px;
-  border-color: rgb(237 73 86 / 48%);
-  background: #1b1718;
+  border-color: rgb(56 189 248 / 52%);
+  background: #111a1d;
   touch-action: none;
 }
 
@@ -5787,15 +5792,15 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-voice-cancel {
-  color: #ff9ca4;
-  background: rgb(237 73 86 / 14%);
+  color: #7dd3fc;
+  background: rgb(56 189 248 / 14%);
   cursor: pointer;
 }
 
 .messages-voice-cancel:hover,
 .messages-voice-cancel:focus-visible {
   outline: none;
-  background: rgb(237 73 86 / 24%);
+  background: rgb(56 189 248 / 24%);
 }
 
 .messages-voice-recording-copy {
@@ -5836,8 +5841,8 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-voice-recording-dot.is-active {
-  background: #ed4956;
-  box-shadow: 0 0 0 3px rgb(237 73 86 / 15%);
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgb(56 189 248 / 18%);
   animation: messages-voice-recording-pulse 1.2s ease-in-out infinite;
 }
 
@@ -5858,8 +5863,8 @@ body.aani-immersive .unified-top-bar {
   flex: 0 1 3px;
   min-height: 4px;
   border-radius: 999px;
-  background: #ed7180;
-  opacity: .58;
+  background: #7dd3fc;
+  opacity: .68;
 }
 
 .messages-voice-waveform.is-active span {
@@ -5869,9 +5874,9 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-voice-mic-indicator {
-  color: #fff;
-  background: #ed4956;
-  box-shadow: 0 0 0 4px rgb(237 73 86 / 12%);
+  color: #082f49;
+  background: #38bdf8;
+  box-shadow: 0 0 0 4px rgb(56 189 248 / 16%);
 }
 
 .messages-voice-bubble {

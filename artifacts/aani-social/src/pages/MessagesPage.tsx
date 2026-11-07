@@ -667,6 +667,7 @@ export default function MessagesPage({
   const voiceRecordingSessionRef = useRef<VoiceRecordingSession | null>(null);
   const voiceRecordingTimerRef = useRef<number | null>(null);
   const voiceObjectUrlsRef = useRef(new Set<string>());
+  const voiceScrollLockRef = useRef(new Set<string>());
   const threadScrollTouchOriginRef = useRef<{ x: number; y: number } | null>(null);
   const emojiPickerCloseTimerRef = useRef<number | null>(null);
   const longPressTimerRef = useRef<number | null>(null);
@@ -1104,9 +1105,28 @@ export default function MessagesPage({
     threadList.scrollTop = threadList.scrollHeight;
   }, []);
 
+  const scheduleVoiceThreadBottom = useCallback((recipientId: string, messageId: string) => {
+    const keepBottom = () => {
+      if (selectedIdRef.current === recipientId && voiceScrollLockRef.current.has(messageId)) {
+        scrollThreadToBottom();
+      }
+    };
+    window.requestAnimationFrame(() => {
+      keepBottom();
+      window.requestAnimationFrame(() => {
+        keepBottom();
+        voiceScrollLockRef.current.delete(messageId);
+      });
+    });
+  }, [scrollThreadToBottom]);
+
   useLayoutEffect(() => {
     scrollThreadToBottom();
   }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
+
+  useLayoutEffect(() => {
+    if (thread.some(message => voiceScrollLockRef.current.has(message.id))) scrollThreadToBottom();
+  }, [thread, scrollThreadToBottom]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -1255,8 +1275,10 @@ export default function MessagesPage({
     };
     const isConversationOpen = selectedIdRef.current === session.recipientId;
     if (isConversationOpen) {
+      voiceScrollLockRef.current.add(messageId);
       setThread(current => mergeThreadRows(current, [optimisticMessage]));
       setThreadCacheReady(true);
+      scrollThreadToBottom();
       window.requestAnimationFrame(() => {
         scrollThreadToBottom();
         window.requestAnimationFrame(scrollThreadToBottom);
@@ -1292,6 +1314,7 @@ export default function MessagesPage({
       }
       URL.revokeObjectURL(localUrl);
       voiceObjectUrlsRef.current.delete(localUrl);
+      if (isConversationOpen) scheduleVoiceThreadBottom(session.recipientId, messageId);
       void loadConversationList();
     } catch (error) {
       if (uploadedPath && isTransientNetworkError(error)) preserveUploadedFile = true;
@@ -1308,6 +1331,7 @@ export default function MessagesPage({
           ? { ...message, sendState: 'failed' }
           : message));
       }
+      if (isConversationOpen) scheduleVoiceThreadBottom(session.recipientId, messageId);
       console.error('[messages] تعذر إرسال الرسالة الصوتية:', error);
       toast.error('تعذر إرسال الرسالة الصوتية. تحقق من الاتصال وحاول مرة أخرى.');
     }
