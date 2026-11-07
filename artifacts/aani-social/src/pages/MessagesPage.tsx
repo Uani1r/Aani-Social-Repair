@@ -434,11 +434,9 @@ export default function MessagesPage({
   const [initialThreadCache] = useState(() => selectedId ? readThreadCache(currentUserId, selectedId) : null);
   const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>(() => initialConversationCache || []);
-  const [contactsLoading, setContactsLoading] = useState(initialConversationCache === null);
   const [conversationCacheReady, setConversationCacheReady] = useState(initialConversationCache !== null);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
-  const [threadLoading, setThreadLoading] = useState(Boolean(selectedId && !initialThreadCache && supabaseConfigured));
   const [threadCacheReady, setThreadCacheReady] = useState(Boolean(initialThreadCache));
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
@@ -593,7 +591,6 @@ export default function MessagesPage({
     if (!supabaseConfigured) {
       setCurrentProfile(null);
       setConversations([]);
-      setContactsLoading(false);
       return;
     }
 
@@ -667,8 +664,6 @@ export default function MessagesPage({
       if (requestId !== contactsRequestRef.current) return;
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
-    } finally {
-      if (requestId === contactsRequestRef.current) setContactsLoading(false);
     }
   }, [currentUserId, markMessagesDelivered, selectedId]);
 
@@ -736,8 +731,6 @@ export default function MessagesPage({
     } catch (error) {
       if (requestId !== threadRequestRef.current) return;
       console.error('[messages] تعذر جلب المحادثة:', error);
-    } finally {
-      if (requestId === threadRequestRef.current) setThreadLoading(false);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, selectedId]);
 
@@ -856,7 +849,6 @@ export default function MessagesPage({
     setEmojiTargetMessage(null);
     const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
     setThread(cachedThread?.messages || []);
-    setThreadLoading(Boolean(selectedId && !cachedThread && supabaseConfigured));
     setThreadCacheReady(Boolean(cachedThread));
     commitReactionsByMessage(cachedThread?.reactionsByMessage || {});
   }, [commitReactionsByMessage, currentUserId, selectedId]);
@@ -865,7 +857,6 @@ export default function MessagesPage({
     if (!selectedId) {
       threadRequestRef.current += 1;
       setThread([]);
-      setThreadLoading(false);
       return;
     }
 
@@ -1529,13 +1520,13 @@ export default function MessagesPage({
           </div>
 
           <div className="messages-list-wrap">
-            {!contactsLoading && contactsError && conversations.length === 0 && (
+            {contactsError && conversations.length === 0 && (
               <div className="messages-list-status" role="alert">
                 <span>{contactsError}</span>
                 <button type="button" onClick={() => void loadConversationList()}>إعادة المحاولة</button>
               </div>
             )}
-            {!contactsLoading && orderedTabConversations.map(conversation => {
+            {orderedTabConversations.map(conversation => {
               const isUnread = Boolean(conversation.lastMessage
                 && conversation.lastMessage.sender_id !== currentUserId
                 && Date.parse(conversation.lastMessage.created_at) > (Date.parse(readAtByContact[conversation.profile.id] || '') || 0));
@@ -1609,10 +1600,10 @@ export default function MessagesPage({
                 </Link>
               );
             })}
-            {!contactsLoading && (!contactsError || conversations.length > 0) && tabConversations.length > 0 && matchingConversationCount === 0 && (
+            {(!contactsError || conversations.length > 0) && tabConversations.length > 0 && matchingConversationCount === 0 && (
               <div className="messages-list-status">لا توجد محادثات مطابقة.</div>
             )}
-            {!contactsLoading && (!contactsError || conversations.length > 0) && tabConversations.length === 0 && (
+            {(!contactsError || conversations.length > 0) && tabConversations.length === 0 && (
               <div className="messages-list-empty">
                 <MessageCircle size={26} />
                 <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : activeTab === 'archived' ? 'لا توجد محادثات مؤرشفة' : 'لا توجد محادثات بعد'}</span>
@@ -1719,7 +1710,7 @@ export default function MessagesPage({
                 onTouchEnd={() => { threadScrollTouchOriginRef.current = null; }}
                 onTouchCancel={() => { threadScrollTouchOriginRef.current = null; }}
               >
-                {!threadLoading && thread.length === 0 && !selectedPendingMediaMessage && (
+                {thread.length === 0 && !selectedPendingMediaMessage && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
                 {thread.map((message, index) => {
