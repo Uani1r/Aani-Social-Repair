@@ -3075,6 +3075,10 @@ body.aani-immersive .unified-top-bar {
   scrollbar-color: #383838 transparent;
 }
 
+.messages-thread-list > :first-child {
+  margin-top: auto;
+}
+
 .messages-thread-status,
 .messages-thread-start {
   margin: auto;
