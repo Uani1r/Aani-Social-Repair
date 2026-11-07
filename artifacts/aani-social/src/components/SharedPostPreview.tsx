@@ -11,11 +11,21 @@ import PostImagePreview from '@/components/PostImagePreview';
 import PostVideoPreview from '@/components/PostVideoPreview';
 import { getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 
-export default function SharedPostPreview({ content, postId }: { content?: string | null; postId?: string | null }) {
+export default function SharedPostPreview({
+  content,
+  postId,
+  variant = 'message',
+  onPreview,
+}: {
+  content?: string | null;
+  postId?: string | null;
+  variant?: 'message' | 'gallery' | 'preview';
+  onPreview?: () => void;
+}) {
   const match = (content || '').match(/^\[post:(\S+)\]([\s\S]*)$/);
   const resolvedId = postId || match?.[1] || '';
   const caption = (match?.[2] || '').trim();
-  const [info, setInfo] = useState<{ author: Profile | null; media: string; text: string; type: string; metadata: PostMetadataTag[] } | null>(null);
+  const [info, setInfo] = useState<{ author: Profile | null; media: string; mediaUrls: string[]; text: string; type: string; metadata: PostMetadataTag[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [muted, setMuted] = useState(true);
   const [, navigateToPost] = useLocation();
@@ -41,7 +51,7 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
         if (!active) return;
 
         if (!p) {
-          setInfo({ author: null, media: '', text: '', type: 'text', metadata: [] });
+          setInfo({ author: null, media: '', mediaUrls: [], text: '', type: 'text', metadata: [] });
           return;
         }
 
@@ -54,17 +64,19 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
         if (!active) return;
 
         const raw = p as { media_urls?: string[] | null; media_url?: string | null; content?: string; type?: string; post_metadata?: unknown };
-        const media = (raw.media_urls?.length ? raw.media_urls[0] : raw.media_url) || '';
+        const mediaUrls = (Array.isArray(raw.media_urls) ? raw.media_urls.filter((url): url is string => typeof url === 'string' && Boolean(url)) : []);
+        if (!mediaUrls.length && raw.media_url) mediaUrls.push(raw.media_url);
 
         setInfo({
           author: (a || null) as Profile | null,
-          media,
+          media: mediaUrls[0] || '',
+          mediaUrls,
           text: String(raw.content || ''),
           type: String(raw.type || 'text'),
           metadata: normalizePostMetadata(raw.post_metadata),
         });
       } catch {
-        if (active) setInfo({ author: null, media: '', text: '', type: 'text', metadata: [] });
+        if (active) setInfo({ author: null, media: '', mediaUrls: [], text: '', type: 'text', metadata: [] });
       } finally {
         if (active) setLoading(false);
       }
@@ -90,6 +102,73 @@ export default function SharedPostPreview({ content, postId }: { content?: strin
   };
 
   const isVideo = info?.type === 'reel';
+  const isGalleryVideo = isVideo || info?.type === 'video';
+
+  if (variant === 'gallery') {
+    const hasMedia = Boolean(info?.media);
+    return (
+      <button
+        type="button"
+        className={`messages-shared-post-tile${loading ? ' is-loading' : ''}`}
+        aria-label={isGalleryVideo ? 'معاينة ريل مشترك' : hasMedia ? 'معاينة منشور مصور' : 'معاينة منشور نصي'}
+        onClick={onPreview}
+      >
+        {loading ? (
+          <span className="messages-shared-post-tile-text">جارٍ تحميل المشاركة...</span>
+        ) : hasMedia && isGalleryVideo ? (
+          <video src={info?.media} muted playsInline preload="metadata" aria-hidden="true" />
+        ) : hasMedia ? (
+          <img src={info?.media} alt="معاينة منشور مشترك" loading="lazy" />
+        ) : (
+          <span className="messages-shared-post-tile-text">{info?.text || caption || 'منشور نصي على آني'}</span>
+        )}
+        {!loading && (
+          <span className="messages-shared-post-tile-badge">
+            {isGalleryVideo ? <Play size={13} fill="currentColor" /> : <Repeat size={13} />}
+            <span>{isGalleryVideo ? 'ريل' : hasMedia ? 'منشور' : 'نص'}</span>
+          </span>
+        )}
+      </button>
+    );
+  }
+
+  if (variant === 'preview') {
+    return (
+      <article className="messages-shared-post-preview" dir="rtl">
+        <header className="messages-shared-post-preview-header">
+          {info?.author?.avatar_url ? (
+            <img src={info.author.avatar_url} alt="" />
+          ) : (
+            <span className="messages-shared-post-preview-avatar">{info?.author ? displayName(info.author).replace('@', '').charAt(0) : 'آ'}</span>
+          )}
+          <strong>{info?.author ? displayName(info.author) : loading ? 'جارٍ تحميل المشاركة...' : 'منشور على آني'}</strong>
+        </header>
+        {loading ? (
+          <div className="messages-shared-post-preview-copy">جارٍ تحميل المشاركة...</div>
+        ) : !info ? (
+          <div className="messages-shared-post-preview-copy">هذا المنشور لم يعد متاحاً.</div>
+        ) : (
+          <>
+            {info.mediaUrls.length > 0 && (
+              <div className="messages-shared-post-preview-media">
+                {info.mediaUrls.map((url, index) => isGalleryVideo ? (
+                  <video key={`${url}-${index}`} src={url} controls playsInline preload="metadata" aria-label="فيديو من المشاركة" />
+                ) : (
+                  <img key={`${url}-${index}`} src={url} alt="صورة من المشاركة" />
+                ))}
+              </div>
+            )}
+            <div className="messages-shared-post-preview-copy">
+              {info.text && <p>{info.text}</p>}
+              {caption && <p>{caption}</p>}
+              <PostMetadataChips tags={info.metadata} />
+              {!info.text && !caption && info.mediaUrls.length === 0 && <p>منشور نصي على آني</p>}
+            </div>
+          </>
+        )}
+      </article>
+    );
+  }
 
   return (
     <div className="flex w-full items-center gap-2" dir="rtl">

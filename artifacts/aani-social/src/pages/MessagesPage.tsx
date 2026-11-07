@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, FileText, Flag, Image as ImageIcon, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
-import ChatImageMessage, { hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
+import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
 import ChatStickerMessage, { CHAT_STICKER_MESSAGE_PREFIX, parseChatStickerMessage, type ChatStickerPayload } from '@/components/ChatStickerMessage';
 import ChatStickerPanel from '@/components/ChatStickerPanel';
@@ -258,7 +258,11 @@ type ConversationContextState = {
   menuRight: number;
 };
 
-type ConversationSheetView = 'menu' | 'timer' | 'media' | 'shares';
+type ConversationSheetView = 'menu' | 'timer';
+type ConversationGalleryView = 'media' | 'shares';
+type ConversationGalleryPreview =
+  | { kind: 'media'; messageId: string; url: string; caption: string }
+  | { kind: 'post'; messageId: string; postId: string; content: string };
 
 const MESSAGE_EXPIRATION_OPTIONS: Array<{ seconds: number | null; label: string }> = [
   { seconds: 3600, label: '1 ساعة' },
@@ -675,6 +679,11 @@ export default function MessagesPage({
   const [emojiPickerClosing, setEmojiPickerClosing] = useState(false);
   const [threadOptionsOpen, setThreadOptionsOpen] = useState(false);
   const [threadOptionsView, setThreadOptionsView] = useState<ConversationSheetView>('menu');
+  const [galleryView, setGalleryView] = useState<ConversationGalleryView | null>(null);
+  const [galleryPreview, setGalleryPreview] = useState<ConversationGalleryPreview | null>(null);
+  const [galleryForwardOpen, setGalleryForwardOpen] = useState(false);
+  const [forwardRecipientId, setForwardRecipientId] = useState('');
+  const [forwardBusy, setForwardBusy] = useState(false);
   const [messageExpirationSeconds, setMessageExpirationSeconds] = useState<number | null>(null);
   const [expirationSaving, setExpirationSaving] = useState(false);
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
@@ -765,6 +774,27 @@ export default function MessagesPage({
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [threadOptionsOpen]);
+
+  useEffect(() => {
+    if (!galleryView) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, [galleryView]);
+
+  useEffect(() => {
+    if (!galleryView) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (galleryForwardOpen) {
+        setGalleryForwardOpen(false);
+        setForwardRecipientId('');
+      } else if (galleryPreview) setGalleryPreview(null);
+      else setGalleryView(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [galleryForwardOpen, galleryPreview, galleryView]);
 
   useEffect(() => {
     if (!threadSearchOpen) return;
@@ -1755,10 +1785,11 @@ export default function MessagesPage({
     return needle ? thread.filter(message => message.content.toLocaleLowerCase().includes(needle)) : [];
   }, [thread, threadSearch]);
   const sharedMessages = thread.filter(message => Boolean(message.post_id) || message.content.trim().startsWith('[post:'));
-  const mediaMessages = thread.flatMap(message => {
+  const forwardableConversations = conversations.filter(conversation => conversation.profile.id !== selectedId);
+  const mediaGalleryItems = thread.flatMap(message => {
     const media = parseChatMediaMessage(message.content);
-    const voice = parseVoiceMessage(message.content);
-    return media?.urls.length || voice ? [{ message, media, voice }] : [];
+    if (!media || media.viewOnce) return [];
+    return media.urls.map((url, index) => ({ message, url, index, caption: media.caption }));
   });
 
   useEffect(() => {
@@ -1807,6 +1838,78 @@ export default function MessagesPage({
   const openConversationSheet = () => {
     setThreadOptionsView('menu');
     setThreadOptionsOpen(true);
+  };
+
+  const openConversationGallery = (view: ConversationGalleryView) => {
+    setThreadOptionsView('menu');
+    setThreadOptionsOpen(false);
+    setGalleryForwardOpen(false);
+    setForwardRecipientId('');
+    setGalleryPreview(null);
+    setGalleryView(view);
+  };
+
+  const closeConversationGallery = () => {
+    setGalleryForwardOpen(false);
+    setForwardRecipientId('');
+    setGalleryPreview(null);
+    setGalleryView(null);
+  };
+
+  const forwardGalleryPreview = async () => {
+    if (!galleryPreview || !forwardRecipientId || forwardBusy) return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+
+    const content = galleryPreview.kind === 'media'
+      ? `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls: [galleryPreview.url], caption: galleryPreview.caption, viewOnce: false })}`
+      : galleryPreview.content;
+    const payload: { sender_id: string; recipient_id: string; content: string; post_id?: string } = {
+      sender_id: currentUserId,
+      recipient_id: forwardRecipientId,
+      content,
+      ...(galleryPreview.kind === 'post' ? { post_id: galleryPreview.postId } : {}),
+    };
+
+    setForwardBusy(true);
+    try {
+      let { error } = await supabase.from('messages').insert(payload);
+      if (error && payload.post_id && ((error as { code?: string }).code === '42703' || /post_id/i.test(error.message || ''))) {
+        const legacyPayload = { ...payload };
+        delete legacyPayload.post_id;
+        ({ error } = await supabase.from('messages').insert(legacyPayload));
+      }
+      if (error) throw error;
+      setGalleryForwardOpen(false);
+      setForwardRecipientId('');
+      toast.success('تمت إعادة إرسال العنصر');
+      void loadConversationList();
+    } catch (error) {
+      console.error('[messages] تعذرت إعادة إرسال العنصر:', error);
+      toast.error('تعذرت إعادة إرسال العنصر. تحقق من الاتصال وحاول مجدداً.');
+    } finally {
+      setForwardBusy(false);
+    }
+  };
+
+  const jumpToGalleryMessage = () => {
+    if (!galleryPreview) return;
+    const messageId = galleryPreview.messageId;
+    setGalleryForwardOpen(false);
+    setForwardRecipientId('');
+    setGalleryPreview(null);
+    setGalleryView(null);
+    setThreadOptionsOpen(false);
+    window.requestAnimationFrame(() => {
+      const rows = threadListRef.current?.querySelectorAll<HTMLElement>('[data-message-id]');
+      const targetRow = Array.from(rows || []).find(row => row.dataset.messageId === messageId);
+      if (!targetRow) return;
+      targetRow.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      targetRow.classList.add('is-gallery-target');
+      window.setTimeout(() => targetRow.classList.remove('is-gallery-target'), 2200);
+    });
   };
 
   const updateMessageExpiration = async (seconds: number | null) => {
@@ -2841,10 +2944,10 @@ export default function MessagesPage({
                 <button type="button" role="menuitem" onClick={() => setThreadOptionsView('timer')}>
                   <Clock size={21} /><span>مؤقت (محادثة مؤقتة)</span>
                 </button>
-                <button type="button" role="menuitem" onClick={() => setThreadOptionsView('media')}>
+                <button type="button" role="menuitem" onClick={() => openConversationGallery('media')}>
                   <ImageIcon size={21} /><span>عرض الوسائط</span>
                 </button>
-                <button type="button" role="menuitem" onClick={() => setThreadOptionsView('shares')}>
+                <button type="button" role="menuitem" onClick={() => openConversationGallery('shares')}>
                   <FileText size={21} /><span>عرض المشاركات</span>
                 </button>
                 <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => {
@@ -2870,71 +2973,182 @@ export default function MessagesPage({
               <>
                 <header className="messages-bottom-sheet-subheader" dir="rtl">
                   <button type="button" aria-label="العودة إلى خيارات المحادثة" onClick={() => setThreadOptionsView('menu')}><ArrowLeft size={20} /></button>
-                  <h2>{threadOptionsView === 'timer' ? 'محادثة مؤقتة' : threadOptionsView === 'media' ? 'الوسائط والصوتيات' : 'المشاركات المتبادلة'}</h2>
+                  <h2>محادثة مؤقتة</h2>
                   <span aria-hidden="true" />
                 </header>
-                {threadOptionsView === 'timer' ? (
-                  <div className="messages-bottom-sheet-content messages-expiration-options" dir="rtl">
-                    <p>اختر مدة اختفاء الرسائل الجديدة في هذه المحادثة.</p>
-                    {MESSAGE_EXPIRATION_OPTIONS.map(option => (
-                      <button
-                        key={option.seconds ?? 'off'}
-                        type="button"
-                        className={messageExpirationSeconds === option.seconds ? 'is-selected' : ''}
-                        disabled={expirationSaving}
-                        onClick={() => { void updateMessageExpiration(option.seconds); }}
-                      >
-                        <span>{option.label}</span>
-                        {messageExpirationSeconds === option.seconds && <Check size={19} />}
-                      </button>
-                    ))}
-                    <small>يسري المؤقت على الرسائل التي تُرسل بعد تفعيل المدة.</small>
-                  </div>
-                ) : threadOptionsView === 'media' ? (
-                  <div className="messages-bottom-sheet-content messages-media-gallery" dir="rtl">
-                    {mediaMessages.length === 0 ? (
-                      <div className="messages-sheet-empty">لا توجد وسائط أو رسائل صوتية في هذه المحادثة.</div>
-                    ) : mediaMessages.map(({ message, media, voice }) => (
-                      <div className="messages-sheet-media-entry" key={message.id}>
-                        {media?.urls.map((url, index) => (
-                          isVideoMediaUrl(url) ? (
-                            <video className="messages-sheet-media-tile" key={`${message.id}-${index}`} src={url} controls preload="metadata" aria-label="فيديو مشترك في المحادثة" />
-                          ) : (
-                            <a className="messages-sheet-media-tile" key={`${message.id}-${index}`} href={url} target="_blank" rel="noreferrer" aria-label="فتح صورة مشتركة">
-                              <img src={url} alt="وسائط مشتركة في المحادثة" loading="lazy" />
-                            </a>
-                          )
-                        ))}
-                        {voice && (
-                          <div className="messages-sheet-voice-entry">
-                            <div className="messages-voice-player">
-                              <Mic size={18} aria-hidden="true" />
-                              <VoiceMessagePlayer url={voice.url} durationMs={voice.durationMs} />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="messages-bottom-sheet-content messages-shared-posts" dir="rtl">
-                    {sharedMessages.length === 0 ? (
-                      <div className="messages-sheet-empty">لا توجد منشورات أو ريلز متبادلة في هذه المحادثة.</div>
-                    ) : sharedMessages.map(message => (
-                      <article className="messages-shared-post-entry" key={message.id}>
-                        <div className="messages-shared-post-meta">
-                          <span>{message.sender_id === currentUserId ? 'أنت' : displayName(selectedConversation.profile)}</span>
-                          <time dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
-                        </div>
-                        <SharedPostPreview postId={message.post_id} content={message.content} />
-                      </article>
-                    ))}
-                  </div>
-                )}
+                <div className="messages-bottom-sheet-content messages-expiration-options" dir="rtl">
+                  <p>اختر مدة اختفاء الرسائل الجديدة في هذه المحادثة.</p>
+                  {MESSAGE_EXPIRATION_OPTIONS.map(option => (
+                    <button
+                      key={option.seconds ?? 'off'}
+                      type="button"
+                      className={messageExpirationSeconds === option.seconds ? 'is-selected' : ''}
+                      disabled={expirationSaving}
+                      onClick={() => { void updateMessageExpiration(option.seconds); }}
+                    >
+                      <span>{option.label}</span>
+                      {messageExpirationSeconds === option.seconds && <Check size={19} />}
+                    </button>
+                  ))}
+                  <small>يسري المؤقت على الرسائل التي تُرسل بعد تفعيل المدة.</small>
+                </div>
               </>
             )}
           </section>
         </div>,
+        document.body,
+      )}
+
+      {galleryView && createPortal(
+        <section
+          className="messages-gallery-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={galleryPreview ? 'معاينة عنصر مشترك' : galleryView === 'media' ? 'عرض الوسائط' : 'عرض المشاركات'}
+          dir="rtl"
+        >
+          <header className="messages-gallery-header">
+            <div className="messages-gallery-header-actions">
+              <button
+                type="button"
+                aria-label={galleryPreview ? 'العودة إلى المعرض' : 'إغلاق المعرض'}
+                onClick={() => galleryPreview ? setGalleryPreview(null) : closeConversationGallery()}
+              >
+                <X size={23} />
+              </button>
+              {galleryPreview && (
+                <>
+                  <button type="button" aria-label="إعادة إرسال العنصر" onClick={() => {
+                    setForwardRecipientId('');
+                    setGalleryForwardOpen(true);
+                  }}>
+                    <Send size={19} />
+                  </button>
+                  <button type="button" aria-label="الانتقال إلى الرسالة الأصلية" onClick={jumpToGalleryMessage}>
+                    <span className="messages-gallery-jump-icon"><Eye /><ArrowRight /></span>
+                  </button>
+                </>
+              )}
+            </div>
+            <h1>{galleryPreview ? galleryPreview.kind === 'media' ? 'معاينة الوسائط' : 'معاينة المشاركة' : galleryView === 'media' ? 'عرض الوسائط' : 'عرض المشاركات'}</h1>
+          </header>
+          {galleryPreview ? (
+            <div className="messages-gallery-preview-scroll">
+              {galleryPreview.kind === 'media' ? (
+                <figure className="messages-gallery-preview-media">
+                  {isVideoMediaUrl(galleryPreview.url) ? (
+                    <video src={galleryPreview.url} controls playsInline preload="metadata" aria-label="معاينة فيديو مشترك" />
+                  ) : (
+                    <img src={galleryPreview.url} alt="معاينة صورة مشتركة" />
+                  )}
+                  {galleryPreview.caption && <figcaption>{galleryPreview.caption}</figcaption>}
+                </figure>
+              ) : (
+                <SharedPostPreview postId={galleryPreview.postId} content={galleryPreview.content} variant="preview" />
+              )}
+            </div>
+          ) : (
+            <div className="messages-gallery-scroll">
+              {galleryView === 'media' ? (
+                mediaGalleryItems.length === 0 ? (
+                  <div className="messages-gallery-empty">لا توجد صور أو فيديوهات في هذه المحادثة.</div>
+                ) : (
+                  <div className="messages-gallery-grid">
+                    {mediaGalleryItems.map(({ message, url, index, caption }) => (
+                      <button
+                        type="button"
+                        key={`${message.id}-${index}`}
+                        className="messages-gallery-media-tile"
+                        aria-label={isVideoMediaUrl(url) ? 'معاينة فيديو مشترك' : 'معاينة صورة مشتركة'}
+                        onClick={() => setGalleryPreview({ kind: 'media', messageId: message.id, url, caption })}
+                      >
+                        {isVideoMediaUrl(url) ? (
+                          <>
+                            <video src={url} muted playsInline preload="metadata" aria-hidden="true" />
+                            <span className="messages-gallery-video-badge"><Play size={13} fill="currentColor" /></span>
+                          </>
+                        ) : (
+                          <img src={url} alt="صورة مشتركة في المحادثة" loading="lazy" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )
+              ) : sharedMessages.length === 0 ? (
+                <div className="messages-gallery-empty">لا توجد منشورات أو ريلز متبادلة في هذه المحادثة.</div>
+              ) : (
+                <div className="messages-gallery-grid">
+                  {sharedMessages.map(message => {
+                    const postId = message.post_id || message.content.match(/^\[post:(\S+)\]/)?.[1] || '';
+                    return (
+                      <SharedPostPreview
+                        key={message.id}
+                        postId={postId}
+                        content={message.content}
+                        variant="gallery"
+                        onPreview={() => setGalleryPreview({ kind: 'post', messageId: message.id, postId, content: message.content })}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {galleryForwardOpen && galleryPreview && (
+            <div
+              className="messages-gallery-forward-backdrop"
+              role="presentation"
+              onClick={() => {
+                if (forwardBusy) return;
+                setGalleryForwardOpen(false);
+                setForwardRecipientId('');
+              }}
+            >
+              <section
+                className="messages-gallery-forward-dialog"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="messages-gallery-forward-title"
+                onClick={event => event.stopPropagation()}
+              >
+                <header>
+                  <h2 id="messages-gallery-forward-title">إعادة إرسال العنصر</h2>
+                  <button type="button" aria-label="إغلاق" disabled={forwardBusy} onClick={() => {
+                    setGalleryForwardOpen(false);
+                    setForwardRecipientId('');
+                  }}>
+                    <X size={20} />
+                  </button>
+                </header>
+                <div className="messages-gallery-forward-list">
+                  {forwardableConversations.length === 0 ? (
+                    <p>لا توجد محادثات أخرى لإعادة الإرسال إليها.</p>
+                  ) : forwardableConversations.map(conversation => (
+                    <button
+                      type="button"
+                      key={conversation.profile.id}
+                      className={forwardRecipientId === conversation.profile.id ? 'is-selected' : ''}
+                      aria-pressed={forwardRecipientId === conversation.profile.id}
+                      onClick={() => setForwardRecipientId(conversation.profile.id)}
+                    >
+                      <Avatar profile={conversation.profile} />
+                      <span>{displayName(conversation.profile)}</span>
+                      {forwardRecipientId === conversation.profile.id && <Check size={18} />}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  className="messages-gallery-forward-submit"
+                  disabled={!forwardRecipientId || forwardBusy}
+                  onClick={() => { void forwardGalleryPreview(); }}
+                >
+                  {forwardBusy ? 'جارٍ الإرسال...' : 'إرسال'}
+                </button>
+              </section>
+            </div>
+          )}
+        </section>,
         document.body,
       )}
 
