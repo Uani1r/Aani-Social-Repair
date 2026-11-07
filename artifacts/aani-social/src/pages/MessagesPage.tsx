@@ -120,11 +120,34 @@ function updatePreferenceList(
   return { ...preferences, [key]: [...ids] };
 }
 
+function isTransientNetworkError(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : isRecord(error) && typeof error.message === 'string'
+      ? error.message
+      : '';
+  return error instanceof TypeError || /load failed|failed to fetch|network error|network request failed|connection (?:reset|closed|refused)|timed? out|timeout/i.test(message);
+}
+
+async function retrySupabaseQuery<T>(query: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const result = await query();
+      const error = isRecord(result) && 'error' in result ? result.error : null;
+      if (!isTransientNetworkError(error) || attempt === maxAttempts - 1) return result;
+    } catch (error) {
+      if (!isTransientNetworkError(error) || attempt === maxAttempts - 1) throw error;
+    }
+    await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+  }
+  throw new Error('تعذر الاتصال بالخادم.');
+}
+
 async function loadHiddenMessageIds(userId: string): Promise<Set<string>> {
-  const { data, error } = await supabase
+  const { data, error } = await retrySupabaseQuery(async () => await supabase
     .from('message_hides')
     .select('message_id')
-    .eq('user_id', userId);
+    .eq('user_id', userId));
   if (error) {
     console.warn('[messages] تعذر جلب الرسائل المخفية:', error);
     return new Set();
@@ -260,11 +283,11 @@ async function queryMessageRows(
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
-    const result = await supabase
+    const result = await retrySupabaseQuery(async () => await supabase
       .from('messages')
       .select(fields)
       .or(filter)
-      .order('created_at', { ascending });
+      .order('created_at', { ascending }));
     if (!result.error) return { data: result.data, error: null };
 
     const errorText = messageDeliveryErrorText(result.error);
@@ -458,6 +481,7 @@ export default function MessagesPage({
   const suppressNextConversationClickRef = useRef(false);
   const reactionsByMessageRef = useRef(reactionsByMessage);
   const reactionMutationVersionRef = useRef(new Map<string, number>());
+  const pendingReactionByMessageRef = useRef(new Map<string, { version: number; emoji: string | null }>());
   const reactionWriteQueueRef = useRef(new Map<string, Promise<void>>());
   const messageActionOpenedAtRef = useRef(0);
   const commitReactionsByMessage = useCallback((next: Record<string, MessageReaction[]>) => {
@@ -576,12 +600,12 @@ export default function MessagesPage({
     setContactsError(null);
     try {
       const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
-        supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle(),
+        retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle()),
         queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
-        supabase
+        retrySupabaseQuery(async () => await supabase
           .from('follows')
           .select('follower_id, following_id')
-          .or(`follower_id.eq.${currentUserId},following_id.eq.${currentUserId}`),
+          .or(`follower_id.eq.${currentUserId},following_id.eq.${currentUserId}`)),
         loadHiddenMessageIds(currentUserId),
       ]);
 
@@ -609,13 +633,13 @@ export default function MessagesPage({
       if (selectedId && !contactIds.includes(selectedId)) contactIds.push(selectedId);
 
       const profilesResult = contactIds.length
-        ? await supabase.from('profiles').select(PROFILE_FIELDS).in('id', contactIds)
+        ? await retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', contactIds))
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       if (profilesResult.error) throw profilesResult.error;
 
       const storiesResult = contactIds.length
-        ? await supabase.from('stories').select('user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString())
+        ? await retrySupabaseQuery(async () => await supabase.from('stories').select('user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString()))
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       const storyUserIds = new Set((storiesResult.data || []).map(story => story.user_id as string));
@@ -667,7 +691,7 @@ export default function MessagesPage({
             : message;
         });
       const reactionResult = visibleMessages.length
-        ? await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id))
+        ? await retrySupabaseQuery(async () => await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id)))
         : { data: [], error: null };
       const nextReactions: Record<string, MessageReaction[]> = {};
       if (reactionResult.error) {
@@ -688,6 +712,15 @@ export default function MessagesPage({
         const localReaction = reactionsByMessageRef.current[messageId]?.find(reaction => reaction.user_id === currentUserId);
         const rows = (nextReactions[messageId] || []).filter(reaction => reaction.user_id !== currentUserId);
         if (localReaction) rows.push(localReaction);
+        if (rows.length) nextReactions[messageId] = rows;
+        else delete nextReactions[messageId];
+      });
+
+      const visibleMessageIds = new Set(visibleMessages.map(message => message.id));
+      pendingReactionByMessageRef.current.forEach(({ emoji }, messageId) => {
+        if (!visibleMessageIds.has(messageId)) return;
+        const rows = (nextReactions[messageId] || []).filter(reaction => reaction.user_id !== currentUserId);
+        if (emoji) rows.push({ user_id: currentUserId, emoji });
         if (rows.length) nextReactions[messageId] = rows;
         else delete nextReactions[messageId];
       });
@@ -909,9 +942,9 @@ export default function MessagesPage({
           if (query) {
             const pattern = `%${query}%`;
             const [usernameResult, fullNameResult, displayNameResult] = await Promise.all([
-              supabase.from('profiles').select(PROFILE_FIELDS).neq('id', currentUserId).ilike('username', pattern).limit(12),
-              supabase.from('profiles').select(PROFILE_FIELDS).neq('id', currentUserId).ilike('full_name', pattern).limit(12),
-              supabase.from('profiles').select(PROFILE_FIELDS).neq('id', currentUserId).ilike('display_name', pattern).limit(12),
+              retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).neq('id', currentUserId).ilike('username', pattern).limit(12)),
+              retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).neq('id', currentUserId).ilike('full_name', pattern).limit(12)),
+              retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).neq('id', currentUserId).ilike('display_name', pattern).limit(12)),
             ]);
             const error = usernameResult.error || fullNameResult.error || displayNameResult.error;
             if (error) throw error;
@@ -921,12 +954,12 @@ export default function MessagesPage({
               ...((displayNameResult.data || []) as Profile[]),
             ];
           } else {
-            const { data, error } = await supabase
+            const { data, error } = await retrySupabaseQuery(async () => await supabase
               .from('profiles')
               .select(PROFILE_FIELDS)
               .neq('id', currentUserId)
               .order('username', { ascending: true })
-              .limit(20);
+              .limit(20));
             if (error) throw error;
             rows = (data || []) as Profile[];
           }
@@ -1289,30 +1322,33 @@ export default function MessagesPage({
 
     const version = (reactionMutationVersionRef.current.get(message.id) || 0) + 1;
     reactionMutationVersionRef.current.set(message.id, version);
+    pendingReactionByMessageRef.current.set(message.id, { version, emoji: nextEmoji });
     const previousWrite = reactionWriteQueueRef.current.get(message.id) || Promise.resolve();
     const write = previousWrite.catch(() => undefined).then(async () => {
       if (nextEmoji === null) {
-        const { error } = await supabase.from('message_reactions').delete().eq('message_id', message.id).eq('user_id', currentUserId);
-        if (error) throw error;
+        await retrySupabaseQuery(async () => {
+          const result = await supabase.from('message_reactions').delete().eq('message_id', message.id).eq('user_id', currentUserId);
+          if (result.error) throw result.error;
+          return result;
+        });
       } else {
-        const { error } = await supabase.from('message_reactions').upsert({
-          message_id: message.id,
-          user_id: currentUserId,
-          emoji: nextEmoji,
-        }, { onConflict: 'message_id,user_id' });
-        if (error) throw error;
+        await retrySupabaseQuery(async () => {
+          const result = await supabase.from('message_reactions').upsert({
+            message_id: message.id,
+            user_id: currentUserId,
+            emoji: nextEmoji,
+          }, { onConflict: 'message_id,user_id' });
+          if (result.error) throw result.error;
+          return result;
+        });
+      }
+      if (pendingReactionByMessageRef.current.get(message.id)?.version === version) {
+        pendingReactionByMessageRef.current.delete(message.id);
       }
     });
     reactionWriteQueueRef.current.set(message.id, write);
     void write.catch(error => {
-      console.error('[messages] تعذر تحديث تفاعل الرسالة:', error);
-      const messageContactId = message.sender_id === currentUserId ? message.recipient_id : message.sender_id;
-      if (reactionMutationVersionRef.current.get(message.id) !== version || selectedIdRef.current !== messageContactId) return;
-      const rollback = { ...reactionsByMessageRef.current };
-      if (previousRows.length) rollback[message.id] = previousRows;
-      else delete rollback[message.id];
-      commitReactionsByMessage(rollback);
-      toast.error('تعذر حفظ التفاعل. تأكد من تطبيق تحديث تفاعلات الرسائل في Supabase.');
+      console.warn('[messages] تعذر تحديث تفاعل الرسالة بعد إعادة المحاولة:', error);
     }).finally(() => {
       if (reactionWriteQueueRef.current.get(message.id) === write) reactionWriteQueueRef.current.delete(message.id);
     });
