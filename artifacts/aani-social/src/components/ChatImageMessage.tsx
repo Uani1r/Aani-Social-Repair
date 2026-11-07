@@ -89,8 +89,14 @@ export default function ChatImageMessage({
     setViewed(true);
     onViewOnceOpened(messageId, payload.urls);
   }, [currentUserId, messageId, onViewOnceOpened, payload.urls, payload.viewOnce]);
+  const registerViewedRef = useRef(registerViewed);
+  const shouldConsumeOnCloseRef = useRef(false);
+
+  useEffect(() => { registerViewedRef.current = registerViewed; }, [registerViewed]);
 
   const closeViewer = useCallback(() => {
+    const shouldConsumeOnClose = shouldConsumeOnCloseRef.current;
+    shouldConsumeOnCloseRef.current = false;
     viewerOpenRequestRef.current += 1;
     viewerFetchAbortRef.current?.abort();
     viewerFetchAbortRef.current = null;
@@ -102,10 +108,11 @@ export default function ChatImageMessage({
     viewerImagesRef.current = [];
     blobUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     blobUrlsRef.current = [];
+    if (shouldConsumeOnClose) registerViewedRef.current();
   }, []);
 
   const openViewer = useCallback(async () => {
-    if (viewed || viewerOpening || payload.opened) return;
+    if ((!isMine && (viewed || payload.opened)) || viewerOpening || !payload.urls.length) return;
     const requestId = ++viewerOpenRequestRef.current;
     viewerFetchAbortRef.current?.abort();
     setViewerOpening(true);
@@ -115,6 +122,7 @@ export default function ChatImageMessage({
       const abortController = new AbortController();
       viewerFetchAbortRef.current = abortController;
       setViewerLoading(true);
+      shouldConsumeOnCloseRef.current = !isMine;
       setViewerOpen(true);
       const temporaryUrls: string[] = [];
       try {
@@ -139,6 +147,7 @@ export default function ChatImageMessage({
         temporaryUrls.forEach(url => URL.revokeObjectURL(url));
         if (viewerFetchAbortRef.current === abortController) viewerFetchAbortRef.current = null;
         if (requestId !== viewerOpenRequestRef.current) return;
+        shouldConsumeOnCloseRef.current = false;
         setViewerOpen(false);
         setViewerLoading(false);
         setViewerOpening(false);
@@ -152,11 +161,11 @@ export default function ChatImageMessage({
       return;
     }
     setViewerUrls(nextUrls);
+    if (payload.viewOnce) shouldConsumeOnCloseRef.current = !isMine;
     setViewerOpen(true);
-    registerViewed();
     setViewerLoading(false);
     setViewerOpening(false);
-  }, [payload.opened, payload.urls, payload.viewOnce, registerViewed, viewed, viewerOpening]);
+  }, [isMine, payload.opened, payload.urls, payload.viewOnce, viewed, viewerOpening]);
 
   const closeViewerRef = useRef(closeViewer);
   useEffect(() => { closeViewerRef.current = closeViewer; }, [closeViewer]);
@@ -212,7 +221,7 @@ export default function ChatImageMessage({
             {messageTime && <time>{messageTime}</time>}
           </div>
         ) : (
-          <button type="button" className="messages-image-once-button" onClick={() => void openViewer()} disabled={viewerOpening || isMine} aria-label="عرض الصورة المؤقتة" aria-busy={viewerOpening} dir="rtl">
+          <button type="button" className="messages-image-once-button" onClick={() => void openViewer()} disabled={viewerOpening} aria-label="عرض الصورة المؤقتة" aria-busy={viewerOpening} dir="rtl">
             <span className="messages-image-once-icon"><Eye size={18} /><b>1</b></span>
             <span>صورة مؤقتة</span>
             {messageTime && <time>{messageTime}</time>}

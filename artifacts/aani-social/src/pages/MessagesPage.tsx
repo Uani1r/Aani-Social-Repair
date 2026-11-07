@@ -396,6 +396,10 @@ export default function MessagesPage({
   }, [currentUserId, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
+    const targetMessage = thread.find(message => message.id === messageId);
+    const targetMedia = targetMessage ? parseChatMediaMessage(targetMessage.content) : null;
+    if (targetMessage?.recipient_id !== currentUserId || !targetMedia?.viewOnce || targetMedia.opened) return;
+
     setThread(current => current.map(message => message.id === messageId
       ? { ...message, content: openedChatMediaContent(message.content) }
       : message));
@@ -430,7 +434,7 @@ export default function MessagesPage({
     } catch (error) {
       console.warn('[messages] تعذر تحديث حالة الصورة المؤقتة على الخادم:', error);
     }
-  }, []);
+  }, [currentUserId, thread]);
 
   const realtimeRefreshTimerRef = useRef<number | null>(null);
   const realtimeRefreshThreadRef = useRef(false);
