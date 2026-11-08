@@ -36,6 +36,7 @@ export default function ProfilePage({
   const [followRequestSent, setFollowRequestSent] = useState(false);
   const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
   const [hasActiveStories, setHasActiveStories] = useState(false);
+  const [hasUnseenActiveStories, setHasUnseenActiveStories] = useState(false);
   const [hasCloseFriendsStory, setHasCloseFriendsStory] = useState(false);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
@@ -95,7 +96,17 @@ export default function ProfilePage({
       setPostCount(pCount || 0);
       setIsFollowing(Boolean(checkFollow));
       setFollowRequestSent(Boolean(checkRequest));
-      setHasActiveStories(Boolean(activeStories?.length));
+      const activeStoryIds = ((activeStories || []) as Array<{ id: string }>).map(story => story.id);
+      let seenStoryIds = new Set<string>();
+      try {
+        const rawSeenStoryIds = localStorage.getItem(`aani:seen-story-ids:${currentUserId}`);
+        const parsedSeenStoryIds: unknown = rawSeenStoryIds ? JSON.parse(rawSeenStoryIds) : [];
+        if (Array.isArray(parsedSeenStoryIds)) seenStoryIds = new Set(parsedSeenStoryIds.filter((id): id is string => typeof id === 'string'));
+      } catch {
+        /* التخزين المحلي غير متاح */
+      }
+      setHasActiveStories(activeStoryIds.length > 0);
+      setHasUnseenActiveStories(activeStoryIds.some(storyId => !seenStoryIds.has(storyId)));
       setHasCloseFriendsStory(Boolean(activeStories?.some(story => story.is_close_friends)));
       const profileById = new Map<string, Profile>(((requesterProfiles || []) as Profile[]).map(requester => [requester.id, requester] as [string, Profile]));
       setFollowRequests(requestRows.flatMap(row => {
@@ -225,9 +236,11 @@ export default function ProfilePage({
             className="flex h-[72px] w-[72px] items-center justify-center rounded-full p-[3px]"
             style={{
               background: hasActiveStories
-                ? hasCloseFriendsStory
-                  ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
-                  : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)'
+                ? hasUnseenActiveStories
+                  ? hasCloseFriendsStory
+                    ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
+                    : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)'
+                  : 'conic-gradient(from 0deg, #8e8e93, #d1d1d6, #6e6e73, #8e8e93)'
                 : 'transparent',
             }}
           >

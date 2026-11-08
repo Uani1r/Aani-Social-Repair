@@ -1504,6 +1504,11 @@ export default function StoriesBar({
   }, [currentStory?.id, isStoryOwner, userId]);
 
   useEffect(() => {
+    if (!currentStory || isStoryOwner || archiveViewerOpen) return;
+    markStorySeen(String(currentStory.id));
+  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, markStorySeen]);
+
+  useEffect(() => {
     if (!currentStory || isStoryOwner || !userId || !supabaseConfigured) return;
 
     let active = true;

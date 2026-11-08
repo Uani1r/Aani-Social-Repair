@@ -2269,6 +2269,10 @@ a:active > .aani-notifications-card {
   box-shadow: none;
 }
 
+.unified-story-ring.is-seen {
+  border-color: #8e8e93;
+}
+
 .unified-story-avatar {
   width: 100%;
   height: 100%;
@@ -2750,6 +2754,20 @@ body.aani-immersive .unified-top-bar {
 
 .messages-avatar-wrap.has-story {
   background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
+}
+
+.messages-avatar-wrap.has-story.is-story-seen {
+  background: #8e8e93;
+}
+
+.messages-avatar-wrap[role='button'] {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.messages-avatar-wrap[role='button']:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
 }
 
 .messages-avatar-inner {
@@ -3284,6 +3302,70 @@ body.aani-immersive .unified-top-bar {
 
 .messages-swipe-reply-body {
   width: 100%;
+}
+
+.messages-request-banner {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 16px max(16px, env(safe-area-inset-bottom));
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 20px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(34, 34, 36, .98), rgba(22, 22, 24, .98));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .22);
+}
+
+.messages-request-banner p {
+  margin: 0;
+  color: var(--messages-primary);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.messages-request-actions {
+  display: flex;
+  direction: rtl;
+  gap: 9px;
+}
+
+.messages-request-actions button {
+  min-height: 44px;
+  flex: 1 1 0;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  transition: filter .15s ease, opacity .15s ease;
+}
+
+.messages-request-actions button:hover,
+.messages-request-actions button:focus-visible {
+  filter: brightness(1.12);
+}
+
+.messages-request-actions button:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.messages-request-accept {
+  background: #0a84ff;
+}
+
+.messages-request-decline {
+  background: #303034;
+}
+
+.messages-request-actions .messages-request-delete {
+  flex-basis: 100%;
+  color: #ff6961;
+  background: rgba(255, 69, 58, .12);
 }
 
 .messages-composer {

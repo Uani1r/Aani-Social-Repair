@@ -312,11 +312,23 @@ interface MessageActionState {
   reactionsLeft: number;
 }
 
+type MessageRequestStatus = 'pending' | 'accepted' | 'declined';
+
 interface ConversationSummary {
   profile: Profile;
   lastMessage: MessageRow | null;
   hasStory: boolean;
+  hasUnseenStory: boolean;
   isRequest: boolean;
+  requestRecipientId: string | null;
+  requestStatus: MessageRequestStatus | null;
+}
+
+function isConversationRequestLocked(conversation: ConversationSummary | null | undefined): boolean {
+  return Boolean(conversation && (
+    conversation.isRequest
+    || (conversation.requestStatus !== null && conversation.requestStatus !== 'accepted')
+  ));
 }
 
 type InboxTab = 'messages' | 'requests';
@@ -488,7 +500,12 @@ function readConversationCache(userId: string): ConversationSummary[] | null {
         profile: item.profile as unknown as Profile,
         lastMessage,
         hasStory: item.hasStory === true,
+        hasUnseenStory: item.hasUnseenStory === true,
         isRequest: item.isRequest === true,
+        requestRecipientId: typeof item.requestRecipientId === 'string' ? item.requestRecipientId : null,
+        requestStatus: item.requestStatus === 'pending' || item.requestStatus === 'accepted' || item.requestStatus === 'declined'
+          ? item.requestStatus
+          : null,
       }];
     });
   } catch {
@@ -656,6 +673,25 @@ function readConversationReadTimes(userId: string): Record<string, string> {
   }
 }
 
+function readRequestTabReadAt(userId: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    return localStorage.getItem(`aani_message_requests_read_at_${userId}`);
+  } catch {
+    return null;
+  }
+}
+
+function readSeenStoryIds(userId: string): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(`aani:seen-story-ids:${userId}`) || '[]');
+    return Array.isArray(stored) ? new Set(stored.filter((id): id is string => typeof id === 'string')) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
 function messagePreview(message: MessageRow | null, currentUserId: string): string {
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
@@ -762,10 +798,12 @@ export default function MessagesPage({
   currentUserId,
   selectedId,
   onReshareStory,
+  onOpenStories,
 }: {
   currentUserId: string;
   selectedId?: string;
   onReshareStory: (story: StoryDmCardStory) => void;
+  onOpenStories: (profileId: string) => void;
 }) {
   const [, setLocation] = useLocation();
   const [initialConversationCache] = useState(() => readConversationCache(currentUserId));
@@ -820,6 +858,8 @@ export default function MessagesPage({
   const [globalTimerOpen, setGlobalTimerOpen] = useState(false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(() => new Set());
   const [readAtByContact, setReadAtByContact] = useState<Record<string, string>>(() => readConversationReadTimes(currentUserId));
+  const [requestUnreadByContact, setRequestUnreadByContact] = useState<Record<string, number>>({});
+  const [requestActionBusy, setRequestActionBusy] = useState(false);
   const [newMessageOpen, setNewMessageOpen] = useState(false);
   const [newMessageSearch, setNewMessageSearch] = useState('');
   const [newMessageProfiles, setNewMessageProfiles] = useState<Profile[]>([]);
@@ -832,6 +872,9 @@ export default function MessagesPage({
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
+  const requestTabReadAtRef = useRef(readRequestTabReadAt(currentUserId));
+  const readAtByContactRef = useRef(readAtByContact);
+  readAtByContactRef.current = readAtByContact;
   const callLogHandledRef = useRef(new Set<string>());
   const selectedIdRef = useRef(selectedId);
   const messagesViewRef = useRef<HTMLElement>(null);
@@ -962,13 +1005,18 @@ export default function MessagesPage({
 
   const markConversationRead = useCallback((contactId: string) => {
     const readAt = new Date().toISOString();
-    setReadAtByContact(current => {
-      const next = { ...current, [contactId]: readAt };
-      try {
-        localStorage.setItem(`aani_message_read_at_${currentUserId}`, JSON.stringify(next));
-      } catch {
-        /* التخزين المحلي غير متاح */
-      }
+    const nextReadTimes = { ...readAtByContactRef.current, [contactId]: readAt };
+    readAtByContactRef.current = nextReadTimes;
+    setReadAtByContact(nextReadTimes);
+    try {
+      localStorage.setItem(`aani_message_read_at_${currentUserId}`, JSON.stringify(nextReadTimes));
+    } catch {
+      /* التخزين المحلي غير متاح */
+    }
+    setRequestUnreadByContact(current => {
+      if (!(contactId in current)) return current;
+      const next = { ...current };
+      delete next[contactId];
       return next;
     });
     if (supabaseConfigured) {
@@ -982,6 +1030,17 @@ export default function MessagesPage({
       })();
     }
   }, [currentUserId]);
+
+  const markRequestsTabSeen = () => {
+    const readAt = new Date().toISOString();
+    requestTabReadAtRef.current = readAt;
+    setRequestUnreadByContact({});
+    try {
+      localStorage.setItem(`aani_message_requests_read_at_${currentUserId}`, readAt);
+    } catch {
+      /* التخزين المحلي غير متاح */
+    }
+  };
 
   const purgeExpiredMessages = useCallback(async () => {
     if (!supabaseConfigured) return;
@@ -1059,7 +1118,7 @@ export default function MessagesPage({
     setMutualFollowersLoading(true);
     try {
       await purgeExpiredMessages();
-      const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
+      const [profileResult, messagesResult, followsResult, hiddenMessageIds, requestStatesResult] = await Promise.all([
         retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle()),
         queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
         retrySupabaseQuery(async () => await supabase
@@ -1067,6 +1126,10 @@ export default function MessagesPage({
           .select('follower_id, following_id')
           .or(`follower_id.eq.${currentUserId},following_id.eq.${currentUserId}`)),
         loadHiddenMessageIds(currentUserId),
+        retrySupabaseQuery(async () => await supabase
+          .from('message_conversation_requests')
+          .select('participant_one_id, participant_two_id, recipient_id, status')
+          .or(`participant_one_id.eq.${currentUserId},participant_two_id.eq.${currentUserId}`)),
       ]);
 
       if (requestId !== contactsRequestRef.current) return;
@@ -1107,11 +1170,32 @@ export default function MessagesPage({
       if (profilesResult.error) throw profilesResult.error;
 
       const storiesResult = contactIds.length
-        ? await retrySupabaseQuery(async () => await supabase.from('stories').select('user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString()))
+        ? await retrySupabaseQuery(async () => await supabase.from('stories').select('id, user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString()))
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
-      const storyUserIds = new Set((storiesResult.data || []).map(story => story.user_id as string));
-      const connectedIds = new Set([...followingIds, ...followerIds]);
+      if (requestStatesResult.error) {
+        console.warn('[messages] تعذر تحميل حالات طلبات المراسلة:', requestStatesResult.error);
+      }
+      const requestStateByContact = new Map<string, { recipientId: string; status: MessageRequestStatus }>();
+      (requestStatesResult.data || []).forEach(row => {
+        const participantOneId = typeof row.participant_one_id === 'string' ? row.participant_one_id : '';
+        const participantTwoId = typeof row.participant_two_id === 'string' ? row.participant_two_id : '';
+        const recipientId = typeof row.recipient_id === 'string' ? row.recipient_id : '';
+        const status = row.status;
+        if (!participantOneId || !participantTwoId || !recipientId
+          || (status !== 'pending' && status !== 'accepted' && status !== 'declined')) return;
+        const otherId = participantOneId === currentUserId ? participantTwoId : participantOneId;
+        if (otherId !== currentUserId) requestStateByContact.set(otherId, { recipientId, status });
+      });
+      const storyRows = (storiesResult.data || []) as Array<{ id: string; user_id: string }>;
+      const storyRowsByUser = new Map<string, Array<{ id: string; user_id: string }>>();
+      storyRows.forEach(story => {
+        const userStories = storyRowsByUser.get(story.user_id) || [];
+        userStories.push(story);
+        storyRowsByUser.set(story.user_id, userStories);
+      });
+      const seenStoryIds = readSeenStoryIds(currentUserId);
+      const mutualIdSet = new Set(mutualIds);
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
       setMutualFollowers(mutualIds.flatMap(id => {
         const profile = profileById.get(id);
@@ -1123,13 +1207,32 @@ export default function MessagesPage({
         const profile = profileById.get(contactId);
         if (!profile) return [];
         const lastMessage = latestByContact.get(contactId) || null;
+        const requestState = requestStateByContact.get(contactId);
+        const storedIncomingRequest = Boolean(requestState?.recipientId === currentUserId && requestState.status !== 'accepted');
+        const inferredIncomingRequest = Boolean(!requestState && lastMessage?.recipient_id === currentUserId && !mutualIdSet.has(contactId));
+        const isRequest = storedIncomingRequest || inferredIncomingRequest;
+        const contactStories = storyRowsByUser.get(contactId) || [];
         return [{
           profile,
           lastMessage,
-          hasStory: storyUserIds.has(contactId),
-          isRequest: Boolean(lastMessage && lastMessage.sender_id !== currentUserId && !connectedIds.has(contactId)),
+          hasStory: contactStories.length > 0,
+          hasUnseenStory: contactStories.some(story => !seenStoryIds.has(story.id)),
+          isRequest,
+          requestRecipientId: requestState?.recipientId || (inferredIncomingRequest ? currentUserId : null),
+          requestStatus: requestState?.status || null,
         }];
       });
+      const requestContactIds = new Set(nextConversations.filter(conversation => conversation.isRequest).map(conversation => conversation.profile.id));
+      const requestUnreadCounts: Record<string, number> = {};
+      const requestTabReadAt = Date.parse(requestTabReadAtRef.current || '') || 0;
+      conversationMessages.forEach(message => {
+        if (message.recipient_id !== currentUserId || message.read_at || !requestContactIds.has(message.sender_id)) return;
+        const messageTime = Date.parse(message.created_at) || 0;
+        const conversationReadAt = Date.parse(readAtByContactRef.current[message.sender_id] || '') || 0;
+        if (messageTime <= Math.max(requestTabReadAt, conversationReadAt)) return;
+        requestUnreadCounts[message.sender_id] = (requestUnreadCounts[message.sender_id] || 0) + 1;
+      });
+      setRequestUnreadByContact(requestUnreadCounts);
       setConversations(nextConversations);
       setConversationCacheReady(true);
     } catch (error) {
@@ -1355,6 +1458,11 @@ export default function MessagesPage({
         schema: 'public',
         table: 'message_hides',
         filter: `user_id=eq.${currentUserId}`,
+      }, () => scheduleMessageRefresh(false))
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'message_conversation_requests',
       }, () => scheduleMessageRefresh(false))
       .subscribe();
     return () => {
@@ -1605,7 +1713,7 @@ export default function MessagesPage({
   };
 
   const openChatMediaPicker = () => {
-    if (!selectedId) return;
+    if (!selectedId || conversations.some(conversation => conversation.profile.id === selectedId && isConversationRequestLocked(conversation))) return;
     window.dispatchEvent(new CustomEvent('aani-open-chat-media-picker', { detail: { caption: text, recipientId: selectedId } }));
   };
 
@@ -1630,6 +1738,7 @@ export default function MessagesPage({
   }, []);
 
   const uploadRecordedVoice = async (session: VoiceRecordingSession, blob: Blob, durationMs: number) => {
+    if (conversations.some(conversation => conversation.profile.id === session.recipientId && isConversationRequestLocked(conversation))) return;
     const format = normalizeVoiceMimeType(blob.type);
     if (!format) {
       toast.error('صيغة التسجيل الصوتي غير مدعومة على هذا الجهاز.');
@@ -1799,8 +1908,8 @@ export default function MessagesPage({
 
   const startVoiceRecording = (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0) || voiceRecordingSessionRef.current) return;
-    if (!supabaseConfigured || !selectedId) {
-      toast.error('افتح محادثة واتصل بالإنترنت لتسجيل رسالة صوتية.');
+    if (!supabaseConfigured || !selectedId || conversations.some(conversation => conversation.profile.id === selectedId && isConversationRequestLocked(conversation))) {
+      toast.error('افتح محادثة مقبولة واتصل بالإنترنت لتسجيل رسالة صوتية.');
       return;
     }
     event.preventDefault();
@@ -1872,7 +1981,8 @@ export default function MessagesPage({
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const content = text.trim();
-    if (!supabaseConfigured || !selectedId || !content || sending) {
+    if (!supabaseConfigured || !selectedId || !content || sending
+      || conversations.some(conversation => conversation.profile.id === selectedId && isConversationRequestLocked(conversation))) {
       closeEmojiPicker();
       return;
     }
@@ -1962,8 +2072,9 @@ export default function MessagesPage({
   };
 
   const sendSticker = async (sticker: ChatStickerPayload) => {
-    if (!supabaseConfigured || !selectedId || sending) {
-      toast.error('تعذر إرسال الملصق. تحقق من المحادثة والاتصال.');
+    if (!supabaseConfigured || !selectedId || sending
+      || conversations.some(conversation => conversation.profile.id === selectedId && isConversationRequestLocked(conversation))) {
+      toast.error('تعذر إرسال الملصق. تحقق من قبول طلب المراسلة والاتصال.');
       return;
     }
     const content = `${CHAT_STICKER_MESSAGE_PREFIX}${JSON.stringify(sticker)}`;
@@ -2007,9 +2118,9 @@ export default function MessagesPage({
   const matchingConversationCount = tabConversations.filter(conversation => (
     `${displayName(conversation.profile)} ${conversation.profile.username || ''}`.toLocaleLowerCase().includes(searchNeedle)
   )).length;
-  const requestCount = conversations.filter(conversation => (
-    conversation.isRequest && !conversationPreferences.archivedIds.includes(conversation.profile.id)
-  )).length;
+  const requestCount = Object.entries(requestUnreadByContact).reduce((total, [contactId, count]) => (
+    total + (conversationPreferences.archivedIds.includes(contactId) ? 0 : count)
+  ), 0);
   const archivedCount = conversations.filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id)).length;
   const selectedConversation = conversations.find(conversation => conversation.profile.id === selectedId) || null;
   const target = selectedConversation?.profile || null;
@@ -2025,6 +2136,76 @@ export default function MessagesPage({
     if (!media || media.viewOnce) return [];
     return media.urls.map((url, index) => ({ message, url, index, caption: media.caption }));
   });
+
+  const decideMessageRequest = async (status: 'accepted' | 'declined') => {
+    const conversation = selectedConversation;
+    if (!conversation?.isRequest || !selectedId || requestActionBusy) return;
+    if (status === 'accepted' && conversation.requestStatus === 'declined') return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+
+    setRequestActionBusy(true);
+    try {
+      const { error } = await supabase.rpc('aani_set_message_conversation_request', {
+        p_other_user_id: selectedId,
+        p_status: status,
+      });
+      if (error) throw error;
+      setConversations(current => current.map(item => item.profile.id === selectedId
+        ? { ...item, isRequest: status === 'declined', requestStatus: status }
+        : item));
+      setRequestUnreadByContact(current => {
+        if (!(selectedId in current)) return current;
+        const next = { ...current };
+        delete next[selectedId];
+        return next;
+      });
+      if (status === 'accepted') {
+        setActiveTab('messages');
+        toast.success('تم قبول طلب المراسلة ونقل المحادثة إلى الرسائل');
+      } else {
+        toast.success('تم رفض طلب المراسلة');
+      }
+      await loadConversationList();
+    } catch (error) {
+      console.error('[messages] تعذر تحديث طلب المراسلة:', error);
+      toast.error('تعذر تحديث الطلب. تأكد من تطبيق ترحيل طلبات المراسلة في Supabase.');
+    } finally {
+      setRequestActionBusy(false);
+    }
+  };
+
+  const deleteDeclinedMessageRequest = async () => {
+    const conversation = selectedConversation;
+    if (!conversation || conversation.requestStatus !== 'declined' || !selectedId || requestActionBusy) return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+
+    setRequestActionBusy(true);
+    try {
+      const { error } = await supabase.rpc('aani_delete_declined_message_request', { p_other_user_id: selectedId });
+      if (error) throw error;
+      setConversations(current => current.filter(item => item.profile.id !== selectedId));
+      setRequestUnreadByContact(current => {
+        if (!(selectedId in current)) return current;
+        const next = { ...current };
+        delete next[selectedId];
+        return next;
+      });
+      setThread([]);
+      setLocation('/messages');
+      toast.success('تم حذف المحادثة نهائياً');
+    } catch (error) {
+      console.error('[messages] تعذر حذف طلب المراسلة المرفوض:', error);
+      toast.error('تعذر حذف المحادثة. تأكد من تطبيق ترحيل طلبات المراسلة في Supabase.');
+    } finally {
+      setRequestActionBusy(false);
+    }
+  };
 
   useEffect(() => {
     const rows = threadListRef.current?.querySelectorAll<HTMLElement>('[data-message-id]');
@@ -2693,7 +2874,10 @@ export default function MessagesPage({
 
           <div className="messages-tabs" role="tablist" aria-label="أقسام الرسائل">
             <button type="button" role="tab" aria-selected={activeTab === 'messages'} className={`messages-tab${activeTab === 'messages' ? ' active' : ''}`} onClick={() => setActiveTab('messages')}>الرسائل</button>
-            <button type="button" role="tab" aria-selected={activeTab === 'requests'} className={`messages-tab${activeTab === 'requests' ? ' active' : ''}`} onClick={() => setActiveTab('requests')}>
+            <button type="button" role="tab" aria-selected={activeTab === 'requests'} className={`messages-tab${activeTab === 'requests' ? ' active' : ''}`} onClick={() => {
+              setActiveTab('requests');
+              markRequestsTabSeen();
+            }}>
               <span>الطلبات</span>
               {requestCount > 0 && <span className="messages-tab-badge">{requestCount > 99 ? '99+' : requestCount}</span>}
             </button>
@@ -2757,7 +2941,26 @@ export default function MessagesPage({
                   }}
                   className={`messages-chat-item${selectedId === conversation.profile.id ? ' active' : ''}${isUnread ? ' unread' : ''}${isPinned ? ' is-pinned' : ''}`}
                 >
-                  <span className={`messages-avatar-wrap${conversation.hasStory ? ' has-story' : ''}${isOnline ? ' is-online' : ''}`}>
+                  <span
+                    className={`messages-avatar-wrap${conversation.hasStory ? ' has-story' : ''}${conversation.hasStory && !conversation.hasUnseenStory ? ' is-story-seen' : ''}${isOnline ? ' is-online' : ''}`}
+                    role={conversation.hasStory ? 'button' : undefined}
+                    tabIndex={conversation.hasStory ? 0 : undefined}
+                    aria-label={conversation.hasStory ? `عرض قصة ${displayName(conversation.profile)}` : undefined}
+                    onClick={event => {
+                      if (!conversation.hasStory) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenStories(conversation.profile.id);
+                      setLocation('/feed');
+                    }}
+                    onKeyDown={event => {
+                      if (!conversation.hasStory || (event.key !== 'Enter' && event.key !== ' ')) return;
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onOpenStories(conversation.profile.id);
+                      setLocation('/feed');
+                    }}
+                  >
                     <span className="messages-avatar-inner"><Avatar profile={conversation.profile} large /></span>
                     {isOnline && <span className="messages-online-dot" aria-label="متصل الآن" />}
                   </span>
@@ -2826,7 +3029,7 @@ export default function MessagesPage({
                   </div>
                 )}
                 <div className="messages-thread-actions">
-                  <button type="button" aria-label="اتصال صوتي أو فيديو" onClick={openCallPicker}>
+                  <button type="button" aria-label="اتصال صوتي أو فيديو" onClick={openCallPicker} disabled={isConversationRequestLocked(selectedConversation)}>
                     <Phone size={20} />
                   </button>
                   <button
@@ -3031,6 +3234,7 @@ export default function MessagesPage({
                                   <button
                                     type="button"
                                     aria-label={`إعادة الاتصال، مكالمة ${callLogModeLabel(callLogMessage.mode)}`}
+                                    disabled={isConversationRequestLocked(selectedConversation)}
                                     onClick={event => {
                                       event.stopPropagation();
                                       startCallNow(callLogMessage.mode);
@@ -3169,7 +3373,38 @@ export default function MessagesPage({
                   </div>
                 )}
               </div>
-              <form
+              {selectedConversation?.isRequest ? (
+                <div className="messages-request-banner" role="group" aria-label="إجراء طلب المراسلة" dir="rtl">
+                  <p>
+                    {selectedConversation.requestStatus === 'declined'
+                      ? 'تم رفض طلب المراسلة'
+                      : `${displayName(selectedConversation.profile)} يرغب في مراسلتك`}
+                  </p>
+                  <div className="messages-request-actions">
+                    {selectedConversation.requestStatus === 'declined' ? (
+                      <button type="button" className="messages-request-delete" onClick={() => void deleteDeclinedMessageRequest()} disabled={requestActionBusy}>
+                        حذف المحادثة
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="messages-request-accept" onClick={() => void decideMessageRequest('accepted')} disabled={requestActionBusy}>
+                          قبول
+                        </button>
+                        <button type="button" className="messages-request-decline" onClick={() => void decideMessageRequest('declined')} disabled={requestActionBusy}>
+                          رفض
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ) : selectedConversation?.requestStatus && selectedConversation.requestRecipientId !== currentUserId && selectedConversation.requestStatus !== 'accepted' ? (
+                <div className="messages-request-banner" role="status" dir="rtl">
+                  <p>{selectedConversation.requestStatus === 'pending'
+                    ? 'طلب المراسلة بانتظار القبول. لا يمكنك إرسال رسائل أخرى الآن.'
+                    : 'تم رفض طلب المراسلة؛ لا يمكنك إرسال رسائل في هذه المحادثة.'}</p>
+                </div>
+              ) : selectedConversation ? (
+                <form
                 ref={messageComposerRef}
                 className={`messages-composer${replyMessage || editingMessage ? ' has-reply' : ''}${emojiPickerOpen ? ' is-emoji-panel-open' : ''}${voiceRecordingStatus !== 'idle' ? ' is-recording' : ''}`}
                 onSubmit={sendMessage}
@@ -3336,31 +3571,34 @@ export default function MessagesPage({
                     onSendSticker={sticker => { void sendSticker(sticker); }}
                   />
                 )}
-              </form>
+                </form>
+              ) : null}
             </>
           )}
         </main>
       </div>
 
-      <ChatMediaPicker
-        currentUserId={currentUserId}
-        recipientId={selectedId}
-        onSendStart={message => setPendingMediaMessage(message)}
-        onUploaded={(pendingId, recipientId, urls) => {
-          setPendingMediaMessage(current => current?.id === pendingId && current.recipientId === recipientId
-            ? { ...current, urls, isUploading: false }
-            : current);
-        }}
-        onSent={async (pendingId, recipientId) => {
-          const refreshes: Promise<void>[] = [loadConversationList()];
-          if (recipientId === selectedIdRef.current) refreshes.push(loadThread());
-          await Promise.all(refreshes);
-          setPendingMediaMessage(current => current?.id === pendingId ? null : current);
-        }}
-        onSendFailed={pendingId => setPendingMediaMessage(current => current?.id === pendingId ? null : current)}
-      />
+      {selectedConversation && !isConversationRequestLocked(selectedConversation) && (
+        <ChatMediaPicker
+          currentUserId={currentUserId}
+          recipientId={selectedId}
+          onSendStart={message => setPendingMediaMessage(message)}
+          onUploaded={(pendingId, recipientId, urls) => {
+            setPendingMediaMessage(current => current?.id === pendingId && current.recipientId === recipientId
+              ? { ...current, urls, isUploading: false }
+              : current);
+          }}
+          onSent={async (pendingId, recipientId) => {
+            const refreshes: Promise<void>[] = [loadConversationList()];
+            if (recipientId === selectedIdRef.current) refreshes.push(loadThread());
+            await Promise.all(refreshes);
+            setPendingMediaMessage(current => current?.id === pendingId ? null : current);
+          }}
+          onSendFailed={pendingId => setPendingMediaMessage(current => current?.id === pendingId ? null : current)}
+        />
+      )}
 
-      {selectedConversation && (
+      {selectedConversation && !isConversationRequestLocked(selectedConversation) && (
         <MessageAttachmentSheet
           key={selectedConversation.profile.id}
           open={attachmentOpen}
