@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { Check, ChevronLeft, ChevronRight, ImagePlus, Plus, Upload, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Heart, ImagePlus, Plus, Upload, X } from 'lucide-react';
 
+import Avatar from '@/components/Avatar';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
+import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 
@@ -60,6 +62,8 @@ export default function ProfileHighlightsManager({
   open,
   onClose,
   userId,
+  ownerName,
+  ownerAvatarUrl,
   collections,
   existingSourceStoryIds,
   onHighlightAdded,
@@ -67,12 +71,17 @@ export default function ProfileHighlightsManager({
   open: boolean;
   onClose: () => void;
   userId: string;
+  ownerName: string;
+  ownerAvatarUrl: string | null;
   collections: ProfileHighlightCollection[];
   existingSourceStoryIds: Set<string>;
   onHighlightAdded: (collection: ProfileHighlightCollectionSummary, highlight: ProfileHighlight) => void;
 }) {
   useModalBodyScrollLock();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const storyProgressRef = useRef<HTMLDivElement>(null);
+  const storyVideoRef = useRef<HTMLVideoElement>(null);
+  const storyTimerRef = useRef<number | null>(null);
   const [isRendered, setIsRendered] = useState(open);
   const [isActive, setIsActive] = useState(false);
   const [tab, setTab] = useState<'archive' | 'studio'>('archive');
@@ -81,11 +90,46 @@ export default function ProfileHighlightsManager({
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveError, setArchiveError] = useState('');
   const [selectedArchiveStory, setSelectedArchiveStory] = useState<ArchiveStory | null>(null);
+  const [previewingArchiveStory, setPreviewingArchiveStory] = useState<ArchiveStory | null>(null);
+  const [storyDurationMs, setStoryDurationMs] = useState<number | null>(null);
   const [studioFile, setStudioFile] = useState<File | null>(null);
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
   const [captionDraft, setCaptionDraft] = useState('');
   const [collectionTitleDraft, setCollectionTitleDraft] = useState('');
   const [saving, setSaving] = useState(false);
+
+  const closeStoryPreview = useCallback(() => {
+    if (storyTimerRef.current !== null) {
+      window.clearTimeout(storyTimerRef.current);
+      storyTimerRef.current = null;
+    }
+    const progress = storyProgressRef.current;
+    if (progress) {
+      progress.style.animation = 'none';
+      progress.style.width = '0%';
+    }
+    const video = storyVideoRef.current;
+    if (video) {
+      video.pause();
+      if (video.readyState > 0) video.currentTime = 0;
+    }
+    setPreviewingArchiveStory(null);
+    setStoryDurationMs(null);
+  }, []);
+
+  const openArchiveStoryPreview = (story: ArchiveStory) => {
+    if (storyTimerRef.current !== null) {
+      window.clearTimeout(storyTimerRef.current);
+      storyTimerRef.current = null;
+    }
+    setPreviewingArchiveStory(story);
+    setStoryDurationMs(story.media_url && story.media_type === 'video' ? null : 5000);
+  };
+
+  const handleStoryVideoMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const duration = event.currentTarget.duration;
+    setStoryDurationMs(Number.isFinite(duration) && duration > 0 ? duration * 1000 : 5000);
+  };
 
   useEffect(() => {
     if (open) {
@@ -99,6 +143,31 @@ export default function ProfileHighlightsManager({
     const timeout = window.setTimeout(() => setIsRendered(false), 300);
     return () => window.clearTimeout(timeout);
   }, [open, isRendered]);
+
+  useEffect(() => {
+    if (!previewingArchiveStory || storyDurationMs === null) return;
+    const progress = storyProgressRef.current;
+    if (!progress) return;
+
+    progress.style.animation = 'none';
+    progress.style.width = '0%';
+    void progress.offsetWidth;
+    progress.style.animation = `fillProgress ${storyDurationMs}ms linear forwards`;
+
+    const timer = window.setTimeout(closeStoryPreview, storyDurationMs);
+    storyTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (storyTimerRef.current === timer) storyTimerRef.current = null;
+      progress.style.animation = 'none';
+      progress.style.width = '0%';
+      const video = storyVideoRef.current;
+      if (video) {
+        video.pause();
+        if (video.readyState > 0) video.currentTime = 0;
+      }
+    };
+  }, [previewingArchiveStory, storyDurationMs, closeStoryPreview]);
 
   useEffect(() => {
     if (!open) return;
@@ -158,15 +227,20 @@ export default function ProfileHighlightsManager({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || saving) return;
+      if (previewingArchiveStory) {
+        closeStoryPreview();
+        return;
+      }
       if (step === 'collection') setStep('media');
       else onClose();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose, saving, step]);
+  }, [open, onClose, saving, step, previewingArchiveStory, closeStoryPreview]);
 
   const close = () => {
     if (saving) return;
+    closeStoryPreview();
     setStudioFile(null);
     setSelectedArchiveStory(null);
     setCaptionDraft('');
@@ -194,6 +268,15 @@ export default function ProfileHighlightsManager({
     setSelectedArchiveStory(story);
     setStudioFile(null);
     setCaptionDraft(story.caption || '');
+  };
+
+  const addPreviewedArchiveStory = () => {
+    const story = previewingArchiveStory;
+    if (!story || existingSourceStoryIds.has(story.id)) return;
+    selectArchiveStory(story);
+    setCollectionTitleDraft(story.caption?.trim() || '');
+    setStep('collection');
+    closeStoryPreview();
   };
 
   const continueToCollections = () => {
@@ -321,9 +404,8 @@ export default function ProfileHighlightsManager({
               <div className="grid grid-cols-3 gap-1">
                 {archiveStories.map(story => {
                   const alreadyAdded = existingSourceStoryIds.has(story.id);
-                  const selected = selectedArchiveStory?.id === story.id;
                   return (
-                    <button key={story.id} type="button" onClick={() => selectArchiveStory(story)} disabled={alreadyAdded} aria-pressed={selected} className={`group relative aspect-[9/16] overflow-hidden rounded-md border bg-zinc-900 text-left transition ${selected ? 'border-[#1D9BF0] ring-2 ring-[#1D9BF0]/50' : 'border-white/10'} disabled:cursor-not-allowed disabled:opacity-45`}>
+                    <button key={story.id} type="button" onClick={() => openArchiveStoryPreview(story)} aria-label={`معاينة القصة ${story.caption?.trim() || 'المحفوظة'}`} className="group relative aspect-[9/16] overflow-hidden rounded-md border border-white/10 bg-zinc-900 text-left transition hover:border-white/40">
                       {mediaPreview(story.media_url, story.media_type, story.caption, 'h-full w-full object-cover', false)}
                       <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-2 pb-2 pt-7 text-right text-[10px] text-white">{alreadyAdded ? 'مضافة' : story.caption?.trim() || 'قصة محفوظة'}</span>
                     </button>
@@ -424,6 +506,71 @@ export default function ProfileHighlightsManager({
           </section>
         </div>
       )}
+
+      <div id="storyViewer" className={`archive-story-viewer fixed inset-0 z-[10005] flex flex-col bg-black text-white opacity-0 pointer-events-none transition-opacity duration-200 ${previewingArchiveStory ? 'active' : ''}`} dir="rtl" role="dialog" aria-modal="true" aria-hidden={!previewingArchiveStory} aria-label="معاينة القصة">
+        {previewingArchiveStory && (
+          <>
+            <div className="pointer-events-none absolute inset-x-3 top-[calc(env(safe-area-inset-top,44px)+8px)] z-30 h-[2.5px] overflow-hidden rounded-full bg-white/35">
+              <div id="storyProgress" ref={storyProgressRef} className="h-full w-0 bg-white" />
+            </div>
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40 bg-gradient-to-b from-black/75 via-black/30 to-transparent" />
+            {previewingArchiveStory.media_url && previewingArchiveStory.media_type === 'video' ? (
+              <video
+                id="storyImage"
+                key={previewingArchiveStory.id}
+                ref={storyVideoRef}
+                src={previewingArchiveStory.media_url}
+                className="absolute inset-0 z-0 h-full w-full object-cover"
+                autoPlay
+                muted
+                playsInline
+                preload="auto"
+                onLoadedMetadata={handleStoryVideoMetadata}
+                onEnded={closeStoryPreview}
+              />
+            ) : previewingArchiveStory.media_url ? (
+              <img
+                id="storyImage"
+                key={previewingArchiveStory.id}
+                src={previewingArchiveStory.media_url}
+                className="absolute inset-0 z-0 h-full w-full object-cover"
+                alt={previewingArchiveStory.caption || 'قصة محفوظة'}
+                loading="eager"
+                decoding="async"
+              />
+            ) : (
+              <div id="storyImage" className="absolute inset-0 z-0 flex h-full w-full items-center justify-center bg-gradient-to-br from-[#30303a] to-[#111116] px-8 text-center">
+                <p className="whitespace-pre-wrap text-2xl font-bold">{previewingArchiveStory.caption || 'قصة نصية'}</p>
+              </div>
+            )}
+            <header className="absolute inset-x-0 z-20 flex items-center justify-between px-4" style={{ top: 'calc(env(safe-area-inset-top, 44px) + 18px)' }}>
+              <div className="flex min-w-0 items-center gap-2">
+                <Avatar profile={{ avatar_url: ownerAvatarUrl, full_name: ownerName, username: ownerName }} />
+                <div className="min-w-0">
+                  <p className="max-w-[58vw] truncate text-sm font-bold text-white">{ownerName || 'محمد'}</p>
+                  <time dateTime={previewingArchiveStory.created_at} className="mt-0.5 block text-[10px] text-white/75">
+                    {formatDate(previewingArchiveStory.created_at) || 'قصة محفوظة'}
+                  </time>
+                </div>
+              </div>
+              <button id="closeStoryBtn" type="button" onClick={closeStoryPreview} aria-label="إغلاق الستوري" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/30 text-white backdrop-blur-sm transition hover:bg-black/50">
+                <X size={22} />
+              </button>
+            </header>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-32 bg-gradient-to-t from-black/45 to-transparent" />
+            <button
+              type="button"
+              onClick={addPreviewedArchiveStory}
+              disabled={existingSourceStoryIds.has(previewingArchiveStory.id)}
+              aria-label={existingSourceStoryIds.has(previewingArchiveStory.id) ? 'مضافة بالفعل إلى أبرز القصص' : 'إضافة إلى أبرز القصص'}
+              className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/30 bg-white/20 px-3 py-1 text-xs font-semibold text-white shadow-lg backdrop-blur-md transition hover:bg-white/30 disabled:cursor-default disabled:opacity-75"
+            >
+              <Heart size={13} className="shrink-0" />
+              <span>أبرز القصص</span>
+            </button>
+          </>
+        )}
+      </div>
     </div>,
     document.body,
   );

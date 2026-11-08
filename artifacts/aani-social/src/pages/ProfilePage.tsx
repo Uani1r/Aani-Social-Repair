@@ -661,6 +661,8 @@ export default function ProfilePage({
         open={showHighlightsManager}
         onClose={() => setShowHighlightsManager(false)}
         userId={currentUserId}
+        ownerName={person ? displayName(person) : 'محمد'}
+        ownerAvatarUrl={person?.avatar_url || null}
         collections={profileHighlights}
         existingSourceStoryIds={new Set(profileHighlights.flatMap(collection => collection.stories.flatMap(story => story.source_story_id ? [story.source_story_id] : [])))}
         onHighlightAdded={(collection, highlight) => setProfileHighlights(current => {

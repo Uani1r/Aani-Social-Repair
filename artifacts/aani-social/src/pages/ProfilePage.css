@@ -111,3 +111,20 @@
     transition-duration: 0.01ms;
   }
 }
+
+
+@keyframes fillProgress {
+  from {
+    width: 0;
+  }
+
+  to {
+    width: 100%;
+  }
+}
+
+
+.archive-story-viewer.active {
+  opacity: 1;
+  pointer-events: auto;
+}
