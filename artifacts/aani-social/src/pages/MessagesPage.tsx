@@ -5,7 +5,7 @@ import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
-import CallManager, { openCallPicker } from '@/components/CallManager';
+import CallManager, { CALL_LOG_EVENT, openCallPicker, startCallNow, type CallLogEventDetail, type CallLogOutcome, type CallMode } from '@/components/CallManager';
 import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
 import MessageAttachmentSheet, { CHAT_DOCUMENT_MESSAGE_PREFIX, CHAT_LOCATION_MESSAGE_PREFIX, parseChatDocumentMessage, parseChatLocationMessage } from '@/components/MessageAttachmentSheet';
@@ -62,6 +62,67 @@ interface VoiceRecordingSession {
 }
 
 const CHAT_VOICE_MESSAGE_PREFIX = '[aani-audio:v1]';
+const CHAT_CALL_MESSAGE_PREFIX = '[aani-call:v1]';
+
+type CallLogMessagePayload = Pick<CallLogEventDetail, 'callId' | 'mode' | 'outcome' | 'durationSeconds'>;
+
+function isCallLogOutcome(value: unknown): value is CallLogOutcome {
+  return value === 'completed' || value === 'declined' || value === 'missed' || value === 'busy';
+}
+
+function parseCallLogMessage(content: string): CallLogMessagePayload | null {
+  if (!content.startsWith(CHAT_CALL_MESSAGE_PREFIX)) return null;
+  try {
+    const parsed: unknown = JSON.parse(content.slice(CHAT_CALL_MESSAGE_PREFIX.length));
+    if (!isRecord(parsed)
+      || typeof parsed.callId !== 'string'
+      || !parsed.callId.trim()
+      || parsed.callId.length > 160
+      || (parsed.mode !== 'audio' && parsed.mode !== 'video')
+      || !isCallLogOutcome(parsed.outcome)
+      || typeof parsed.durationSeconds !== 'number'
+      || !Number.isSafeInteger(parsed.durationSeconds)
+      || parsed.durationSeconds < 0) return null;
+    return {
+      callId: parsed.callId,
+      mode: parsed.mode,
+      outcome: parsed.outcome,
+      durationSeconds: parsed.durationSeconds,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isCallLogEventDetail(value: unknown): value is CallLogEventDetail {
+  return isRecord(value)
+    && typeof value.callId === 'string'
+    && Boolean(value.callId.trim())
+    && value.callId.length <= 160
+    && typeof value.recipientId === 'string'
+    && Boolean(value.recipientId.trim())
+    && value.recipientId.length <= 160
+    && (value.mode === 'audio' || value.mode === 'video')
+    && isCallLogOutcome(value.outcome)
+    && typeof value.durationSeconds === 'number'
+    && Number.isSafeInteger(value.durationSeconds)
+    && value.durationSeconds >= 0;
+}
+
+function callLogMessageContent(payload: CallLogMessagePayload): string {
+  return `${CHAT_CALL_MESSAGE_PREFIX}${JSON.stringify(payload)}`;
+}
+
+function callLogModeLabel(mode: CallMode): string {
+  return mode === 'video' ? 'فيديو' : 'صوتية';
+}
+
+function callLogOutcomeLabel(outcome: CallLogOutcome): string {
+  if (outcome === 'completed') return 'مكالمة مكتملة';
+  if (outcome === 'declined') return 'تم رفض المكالمة';
+  if (outcome === 'busy') return 'خط مشغول';
+  return 'مكالمة فائتة';
+}
 
 function parseVoiceMessage(content: string): VoiceMessagePayload | null {
   if (!content.startsWith(CHAT_VOICE_MESSAGE_PREFIX)) return null;
@@ -556,6 +617,7 @@ function isEditableTextMessage(message: MessageRow): boolean {
     && !content.startsWith(CHAT_STICKER_MESSAGE_PREFIX)
     && !content.startsWith(CHAT_DOCUMENT_MESSAGE_PREFIX)
     && !content.startsWith(CHAT_LOCATION_MESSAGE_PREFIX)
+    && !content.startsWith(CHAT_CALL_MESSAGE_PREFIX)
     && !content.startsWith('[story:')
     && !content.startsWith('[story-reply]')
     && !content.startsWith('[post:');
@@ -594,11 +656,16 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
   const voiceMessage = parseVoiceMessage(content);
+  const callLog = parseCallLogMessage(content);
   const documentMessage = parseChatDocumentMessage(content);
   const locationMessage = parseChatLocationMessage(content);
   let preview = content;
   if (stickerMessage) preview = 'ملصق';
   else if (voiceMessage) preview = 'رسالة صوتية';
+  else if (callLog) preview = callLog.outcome === 'completed'
+    ? `مكالمة ${callLogModeLabel(callLog.mode)} · ${formatVoiceDuration(callLog.durationSeconds * 1000)}`
+    : `${callLogOutcomeLabel(callLog.outcome)} · ${callLogModeLabel(callLog.mode)}`;
+  else if (content.startsWith(CHAT_CALL_MESSAGE_PREFIX)) preview = 'سجل مكالمة';
   else if (documentMessage) preview = `مستند: ${documentMessage.name}`;
   else if (locationMessage) preview = locationMessage.note ? `موقع: ${locationMessage.note}` : 'موقع';
   else if (mediaMessage) {
@@ -618,11 +685,16 @@ function replyMessagePreview(message: MessageRow): string {
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
   const voiceMessage = parseVoiceMessage(content);
+  const callLog = parseCallLogMessage(content);
   const documentMessage = parseChatDocumentMessage(content);
   const locationMessage = parseChatLocationMessage(content);
   let preview = content;
   if (stickerMessage) preview = 'ملصق';
   else if (voiceMessage) preview = 'رسالة صوتية';
+  else if (callLog) preview = callLog.outcome === 'completed'
+    ? `مكالمة ${callLogModeLabel(callLog.mode)} · ${formatVoiceDuration(callLog.durationSeconds * 1000)}`
+    : `${callLogOutcomeLabel(callLog.outcome)} · ${callLogModeLabel(callLog.mode)}`;
+  else if (content.startsWith(CHAT_CALL_MESSAGE_PREFIX)) preview = 'سجل مكالمة';
   else if (documentMessage) preview = `مستند: ${documentMessage.name}`;
   else if (locationMessage) preview = locationMessage.note ? `موقع: ${locationMessage.note}` : 'موقع';
   else if (mediaMessage) {
@@ -742,6 +814,7 @@ export default function MessagesPage({
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
+  const callLogHandledRef = useRef(new Set<string>());
   const selectedIdRef = useRef(selectedId);
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
@@ -1096,6 +1169,66 @@ export default function MessagesPage({
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
+
+  useEffect(() => {
+    const handleCallLog = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (!supabaseConfigured || !isCallLogEventDetail(detail) || callLogHandledRef.current.has(detail.callId)) return;
+      callLogHandledRef.current.add(detail.callId);
+      const payload: CallLogMessagePayload = {
+        callId: detail.callId,
+        mode: detail.mode,
+        outcome: detail.outcome,
+        durationSeconds: detail.durationSeconds,
+      };
+      const messageId = createMessageId();
+      const content = callLogMessageContent(payload);
+      const recipientId = detail.recipientId;
+      const optimisticMessage: MessageRow = {
+        id: messageId,
+        sender_id: currentUserId,
+        recipient_id: recipientId,
+        content,
+        post_id: null,
+        story_id: null,
+        created_at: new Date().toISOString(),
+        delivered_at: null,
+        read_at: null,
+        reply_to_message_id: null,
+        sendState: 'pending',
+      };
+      if (selectedIdRef.current === recipientId) {
+        setThread(current => current.some(message => message.id === messageId) ? current : [...current, optimisticMessage]);
+        setThreadCacheReady(true);
+      }
+
+      void (async () => {
+        try {
+          const { error } = await supabase.from('messages').insert({
+            id: messageId,
+            sender_id: currentUserId,
+            recipient_id: recipientId,
+            content,
+          });
+          if (error) throw error;
+          if (selectedIdRef.current === recipientId) {
+            setThread(current => current.map(message => message.id === messageId ? { ...message, sendState: 'sent' } : message));
+            void loadThread();
+          }
+          void loadConversationList();
+        } catch (error) {
+          console.error('[messages] تعذر حفظ سجل المكالمة:', error);
+          if (selectedIdRef.current === recipientId) {
+            setThread(current => current.map(message => message.id === messageId ? { ...message, sendState: 'failed' } : message));
+          }
+          toast.error('تعذر حفظ سجل المكالمة في المحادثة.');
+        }
+      })();
+    };
+
+    window.addEventListener(CALL_LOG_EVENT, handleCallLog);
+    return () => window.removeEventListener(CALL_LOG_EVENT, handleCallLog);
+  }, [currentUserId, loadConversationList, loadThread]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -2230,13 +2363,18 @@ export default function MessagesPage({
     const mediaMessage = parseChatMediaMessage(message.content);
     const stickerMessage = parseChatStickerMessage(message.content);
     const voiceMessage = parseVoiceMessage(message.content);
+    const callLog = parseCallLogMessage(message.content);
     const documentMessage = parseChatDocumentMessage(message.content);
     const locationMessage = parseChatLocationMessage(message.content);
     const content = message.content.trim();
-    const textToCopy = voiceMessage
-      ? 'رسالة صوتية'
-      : mediaMessage
-        ? mediaMessage.caption || 'صورة'
+    const textToCopy = callLog
+      ? `${callLogOutcomeLabel(callLog.outcome)} · مكالمة ${callLogModeLabel(callLog.mode)}`
+      : content.startsWith(CHAT_CALL_MESSAGE_PREFIX)
+        ? 'سجل مكالمة'
+      : voiceMessage
+        ? 'رسالة صوتية'
+        : mediaMessage
+          ? mediaMessage.caption || 'صورة'
       : stickerMessage
         ? 'ملصق'
       : documentMessage
@@ -2626,6 +2764,7 @@ export default function MessagesPage({
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
                   const voiceMessage = parseVoiceMessage(content);
+                  const callLogMessage = parseCallLogMessage(content);
                   const documentMessage = parseChatDocumentMessage(content);
                   const locationMessage = parseChatLocationMessage(content);
                   const messageReactions = reactionsByMessage[message.id] || [];
@@ -2696,6 +2835,78 @@ export default function MessagesPage({
                                   {isMine && <MessageDeliveryStatus message={message} />}
                                 </span>
                               </div>
+                            </div>
+                          ) : callLogMessage || content.startsWith(CHAT_CALL_MESSAGE_PREFIX) ? (
+                            <div
+                              className={`messages-bubble messages-call-log${isMine ? ' is-mine' : ' is-theirs'}${callLogMessage?.outcome === 'completed' ? ' is-completed' : ' is-missed'}`}
+                              style={{
+                                minWidth: 'min(225px, 100%)',
+                                maxWidth: 'min(320px, 82vw)',
+                                padding: 12,
+                                border: `1px solid ${callLogMessage?.outcome === 'completed' ? 'rgba(52, 199, 89, .42)' : 'rgba(255, 59, 48, .38)'}`,
+                                background: callLogMessage?.outcome === 'completed' ? 'rgba(36, 168, 106, .2)' : 'rgba(229, 72, 77, .16)',
+                                color: callLogMessage?.outcome === 'completed' ? '#e2ffed' : '#ffe5e4',
+                                whiteSpace: 'normal',
+                              }}
+                            >
+                              {replyPreview}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                <span
+                                  aria-hidden="true"
+                                  style={{
+                                    width: 38,
+                                    height: 38,
+                                    flex: '0 0 38px',
+                                    display: 'grid',
+                                    placeItems: 'center',
+                                    borderRadius: '50%',
+                                    background: callLogMessage?.outcome === 'completed' ? 'rgba(52, 199, 89, .22)' : 'rgba(255, 59, 48, .2)',
+                                  }}
+                                >
+                                  {callLogMessage?.mode === 'video' ? <Video size={19} /> : <Phone size={19} />}
+                                </span>
+                                <span style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                  <strong>{callLogMessage ? `مكالمة ${callLogModeLabel(callLogMessage.mode)}` : 'سجل مكالمة'}</strong>
+                                  <span style={{ fontSize: 12, opacity: .88 }}>
+                                    {callLogMessage ? callLogOutcomeLabel(callLogMessage.outcome) : 'بيانات المكالمة غير متاحة'}
+                                  </span>
+                                  {callLogMessage?.outcome === 'completed' && (
+                                    <span style={{ fontSize: 12, opacity: .88 }} dir="rtl">
+                                      المدة {formatVoiceDuration(callLogMessage.durationSeconds * 1000)}
+                                    </span>
+                                  )}
+                                </span>
+                                {callLogMessage && (
+                                  <button
+                                    type="button"
+                                    aria-label={`إعادة الاتصال، مكالمة ${callLogModeLabel(callLogMessage.mode)}`}
+                                    onClick={event => {
+                                      event.stopPropagation();
+                                      startCallNow(callLogMessage.mode);
+                                    }}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      gap: 5,
+                                      padding: '8px 10px',
+                                      border: '1px solid rgba(255,255,255,.18)',
+                                      borderRadius: 18,
+                                      background: callLogMessage.outcome === 'completed' ? 'rgba(52,199,89,.22)' : 'rgba(255,255,255,.1)',
+                                      color: 'inherit',
+                                      font: 'inherit',
+                                      fontSize: 12,
+                                      whiteSpace: 'nowrap',
+                                    }}
+                                  >
+                                    <Phone size={15} /> إعادة الاتصال
+                                  </button>
+                                )}
+                              </div>
+                              <span className="messages-bubble-footer" style={{ display: 'flex', marginTop: 8 }}>
+                                <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                {isMine && <MessageDeliveryStatus message={message} />}
+                              </span>
                             </div>
                           ) : stickerMessage ? (
                             <>

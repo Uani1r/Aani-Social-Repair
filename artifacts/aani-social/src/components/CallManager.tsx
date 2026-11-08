@@ -8,14 +8,29 @@ import { supabase } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
 export const OPEN_CALL_PICKER_EVENT = 'aani:open-call-picker';
+export const CALL_LOG_EVENT = 'aani:call-log';
+const START_CALL_EVENT = 'aani:start-call';
+
+export type CallMode = 'audio' | 'video';
+export type CallLogOutcome = 'completed' | 'declined' | 'missed' | 'busy';
+export type CallLogEventDetail = {
+  callId: string;
+  recipientId: string;
+  mode: CallMode;
+  outcome: CallLogOutcome;
+  durationSeconds: number;
+};
 
 export function openCallPicker(): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new Event(OPEN_CALL_PICKER_EVENT));
 }
 
-type CallMode = 'audio' | 'video';
+export function startCallNow(mode: CallMode): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(START_CALL_EVENT, { detail: { mode } }));
+}
+
 type CallPhase = 'outgoing' | 'incoming' | 'active';
-type CallTerminalStatus = 'declined' | 'no-answer' | 'busy';
+type CallTerminalStatus = 'declined' | 'no-answer' | 'busy' | 'ended';
 type CallSignalType = 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'decline-call' | 'ringing-ack' | 'busy-call';
 
 type CallPeer = {
@@ -41,6 +56,8 @@ type CallUiState = {
   dismissing: boolean;
   terminalStatus: CallTerminalStatus | null;
   accepted: boolean;
+  isInitiator: boolean;
+  finalDurationSeconds: number | null;
   startedAt: number | null;
 };
 
@@ -85,6 +102,7 @@ const CALL_STYLES = `
 .aani-call-overlay-incoming{justify-content:center;padding:0;background:rgba(5,5,8,.85);backdrop-filter:blur(30px) saturate(150%);-webkit-backdrop-filter:blur(30px) saturate(150%)}
 .aani-call-overlay-dismissing{animation:aani-call-dismiss .25s ease forwards}
 .aani-call-overlay-terminal-dismissing{animation:aani-call-terminal-dismiss .6s ease forwards}
+.aani-call-overlay-ended-dismissing{animation:aani-call-ended-dismiss .65s ease forwards}
 .aani-call-outgoing-content,.aani-call-incoming-content{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:25px;text-align:center}
 .aani-call-outgoing-avatar-wrap{position:relative;z-index:1;width:110px;height:110px;display:grid;place-items:center;border-radius:50%;animation:aani-call-intense-glow 3s ease-in-out infinite}
 .aani-call-outgoing-avatar-wrap.is-red-glow{animation:aani-call-red-glow 1.8s ease-in-out infinite}
@@ -106,6 +124,9 @@ const CALL_STYLES = `
 .aani-call-status-terminal{font-weight:500}
 .aani-call-status-terminal-declined{color:#ff3b30}
 .aani-call-status-terminal-no-answer,.aani-call-status-terminal-busy{color:#bbb}
+.aani-call-status-ended{color:#fff}
+.aani-call-duration{color:#bbb;font-size:16px;font-variant-numeric:tabular-nums;opacity:0;transform:translateY(5px)}
+.aani-call-duration.visible{animation:aani-call-duration-in .32s ease both}
 .aani-call-dots span{animation:aani-call-dot-blink 1.4s infinite both}
 .aani-call-dots span:nth-child(2){animation-delay:.2s}
 .aani-call-dots span:nth-child(3){animation-delay:.4s}
@@ -147,6 +168,8 @@ const CALL_STYLES = `
 @keyframes aani-call-dot-blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes aani-call-dismiss{to{opacity:0;transform:scale(.96)}}
 @keyframes aani-call-terminal-dismiss{to{opacity:0;transform:scale(.96)}}
+@keyframes aani-call-ended-dismiss{to{opacity:0;transform:scale(.96)}}
+@keyframes aani-call-duration-in{to{opacity:1;transform:translateY(0)}}
 @keyframes aani-call-red-glow{0%,100%{box-shadow:0 0 18px 3px rgba(255,59,48,.18),0 0 42px 8px rgba(255,59,48,.08)}50%{box-shadow:0 0 27px 5px rgba(255,59,48,.42),0 0 70px 16px rgba(255,59,48,.18)}}
 @media(min-width:700px){.aani-call-sheet-wrap{align-items:center}.aani-call-overlay{padding-left:40px;padding-right:40px}.aani-call-controls{gap:24px}.aani-call-overlay-outgoing,.aani-call-overlay-incoming{padding:0}.aani-call-controls-outgoing,.aani-call-controls-incoming{gap:20px}}
 .aani-call-overlay-active-audio{background:rgba(5,5,8,.90);backdrop-filter:blur(35px) saturate(150%);-webkit-backdrop-filter:blur(35px) saturate(150%)}
@@ -402,24 +425,64 @@ export default function CallManager({
     }
   }, [closeOutboundChannels, sendSignal, setActiveCall, stopRingtone]);
 
-  const showTerminalStatus = useCallback((callId: string, status: CallTerminalStatus) => {
+  const showTerminalStatus = useCallback((callId: string, status: CallTerminalStatus, notifyPeer = true) => {
     const activeCall = callRef.current;
     if (!activeCall || activeCall.callId !== callId || activeCall.terminalStatus || activeCall.dismissing) return;
     stopRingtone();
     if (dismissTimerRef.current !== null) window.clearTimeout(dismissTimerRef.current);
-    if (status === 'no-answer') {
-      void sendSignal({ type: 'hangup', callId, to: activeCall.peer.id, reason: 'no-answer' })
-        .catch(error => console.warn('[calls] تعذر إنهاء الرنين بعد انتهاء المهلة:', error));
+    if (status === 'no-answer' || (status === 'ended' && notifyPeer)) {
+      void sendSignal({ type: 'hangup', callId, to: activeCall.peer.id, reason: status === 'no-answer' ? 'no-answer' : 'ended' })
+        .catch(error => console.warn('[calls] تعذر إرسال إنهاء المكالمة:', error));
     }
-    setActiveCall({ ...activeCall, terminalStatus: status, ringing: false, accepting: false });
+    const finalDurationSeconds = status === 'ended' && activeCall.startedAt
+      ? Math.max(0, Math.floor((Date.now() - activeCall.startedAt) / 1000))
+      : null;
+    setActiveCall({ ...activeCall, terminalStatus: status, ringing: false, accepting: false, finalDurationSeconds });
+    if (finalDurationSeconds !== null) setElapsedSeconds(finalDurationSeconds);
+    remoteVideoRef.current?.pause();
+    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+    remoteAudioRef.current?.pause();
+    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
+    localVideoRef.current?.pause();
+    if (localVideoRef.current) localVideoRef.current.srcObject = null;
+    const connection = peerConnectionRef.current;
+    peerConnectionRef.current = null;
+    if (connection) {
+      connection.ontrack = null;
+      connection.onicecandidate = null;
+      connection.onconnectionstatechange = null;
+      connection.close();
+    }
+    const stream = localStreamRef.current;
+    localStreamRef.current = null;
+    stream?.getTracks().forEach(track => track.stop());
     dismissTimerRef.current = window.setTimeout(() => {
       const currentCall = callRef.current;
       if (currentCall?.callId !== callId || currentCall.dismissing) return;
       setActiveCall({ ...currentCall, dismissing: true });
       dismissTimerRef.current = window.setTimeout(() => {
-        if (callRef.current?.callId === callId) finishCall(status, false);
-      }, 600);
-    }, 2000);
+        const finishedCall = callRef.current;
+        if (finishedCall?.callId !== callId) return;
+        finishCall(status, false);
+        if (!finishedCall.isInitiator || !finishedCall.terminalStatus || typeof window === 'undefined') return;
+        const outcome: CallLogOutcome = finishedCall.terminalStatus === 'ended'
+          ? 'completed'
+          : finishedCall.terminalStatus === 'declined'
+            ? 'declined'
+            : finishedCall.terminalStatus === 'busy'
+              ? 'busy'
+              : 'missed';
+        window.dispatchEvent(new CustomEvent<CallLogEventDetail>(CALL_LOG_EVENT, {
+          detail: {
+            callId: finishedCall.callId,
+            recipientId: finishedCall.peer.id,
+            mode: finishedCall.mode,
+            outcome,
+            durationSeconds: finishedCall.finalDurationSeconds || 0,
+          },
+        }));
+      }, status === 'ended' ? 650 : 600);
+    }, status === 'ended' ? 1500 : 2000);
   }, [finishCall, sendSignal, setActiveCall, stopRingtone]);
 
   const flushEarlyCandidates = useCallback(async (callId: string, connection: RTCPeerConnection) => {
@@ -538,6 +601,8 @@ export default function CallManager({
         dismissing: false,
         terminalStatus: null,
         accepted: false,
+        isInitiator: false,
+        finalDurationSeconds: null,
         startedAt: null,
       };
       setActiveCall(incomingCall);
@@ -590,6 +655,8 @@ export default function CallManager({
       } else if (payload.reason === 'permission-denied') {
         toast.info('تعذر على الطرف الآخر السماح باستخدام الميكروفون أو الكاميرا.');
         finishCall(payload.reason, false);
+      } else if (activeCall.phase === 'active' || activeCall.accepted) {
+        showTerminalStatus(payload.callId, 'ended', false);
       } else {
         finishCall(payload.reason || 'remote-ended', false);
       }
@@ -685,6 +752,8 @@ export default function CallManager({
       dismissing: false,
       terminalStatus: null,
       accepted: false,
+      isInitiator: true,
+      finalDurationSeconds: null,
       startedAt: null,
     });
 
@@ -798,7 +867,11 @@ export default function CallManager({
 
   const rejectOrEndCall = useCallback((reason = 'declined') => {
     const activeCall = callRef.current;
-    if (!activeCall || activeCall.dismissing) return;
+    if (!activeCall || activeCall.dismissing || activeCall.terminalStatus) return;
+    if (reason === 'ended' && activeCall.phase === 'active') {
+      showTerminalStatus(activeCall.callId, 'ended');
+      return;
+    }
     if (reason === 'declined' && activeCall.phase === 'incoming' && !activeCall.accepting) {
       stopRingtone();
       setActiveCall({ ...activeCall, dismissing: true });
@@ -814,7 +887,7 @@ export default function CallManager({
     dismissTimerRef.current = window.setTimeout(() => {
       if (callRef.current?.callId === activeCall.callId) finishCall(reason);
     }, 250);
-  }, [finishCall, sendSignal, setActiveCall, stopRingtone]);
+  }, [finishCall, sendSignal, setActiveCall, showTerminalStatus, stopRingtone]);
 
   const toggleMute = useCallback(() => {
     const activeCall = callRef.current;
@@ -894,7 +967,7 @@ export default function CallManager({
   }, [setActiveCall]);
 
   useEffect(() => {
-    if (!callState || callState.phase !== 'active' || !callState.startedAt) {
+    if (!callState || callState.phase !== 'active' || !callState.startedAt || callState.terminalStatus) {
       setElapsedSeconds(0);
       return;
     }
@@ -946,9 +1019,17 @@ export default function CallManager({
       }
       setPickerOpen(true);
     };
+    const handleStartCall = (event: Event) => {
+      const mode = (event as CustomEvent<{ mode?: unknown }>).detail?.mode;
+      if (mode === 'audio' || mode === 'video') void startCall(mode);
+    };
     window.addEventListener(OPEN_CALL_PICKER_EVENT, handleOpenPicker);
-    return () => window.removeEventListener(OPEN_CALL_PICKER_EVENT, handleOpenPicker);
-  }, []);
+    window.addEventListener(START_CALL_EVENT, handleStartCall);
+    return () => {
+      window.removeEventListener(OPEN_CALL_PICKER_EVENT, handleOpenPicker);
+      window.removeEventListener(START_CALL_EVENT, handleStartCall);
+    };
+  }, [startCall]);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -975,8 +1056,10 @@ export default function CallManager({
 
   const closePicker = () => setPickerOpen(false);
   const sheetDragStartYRef = useRef<number | null>(null);
-  const activeDuration = formatCallDuration(elapsedSeconds);
-  const showActiveVideo = Boolean(callState?.phase === 'active' && (
+  const activeDuration = formatCallDuration(callState?.terminalStatus === 'ended'
+    ? callState.finalDurationSeconds || 0
+    : elapsedSeconds);
+  const showActiveVideo = Boolean(callState?.phase === 'active' && !callState.terminalStatus && (
     callState.mode === 'video' || callState.remoteStream?.getVideoTracks().some(track => track.readyState === 'live')
   ));
   const showUi = pickerOpen || Boolean(callState);
@@ -1029,7 +1112,7 @@ export default function CallManager({
       )}
       {callState && (
         <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-layer-incoming' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} dir="rtl">
-          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.dismissing && callState.terminalStatus ? ' aani-call-overlay-terminal-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
+          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.dismissing && callState.terminalStatus ? ' aani-call-overlay-terminal-dismissing' : ''}${callState.dismissing && callState.terminalStatus === 'ended' ? ' aani-call-overlay-ended-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
             {showActiveVideo && (
               <>
                 <video ref={remoteVideoRef} className="aani-call-remote-video" muted={!callState.speakerOn} autoPlay playsInline aria-label="فيديو الطرف الآخر" />
@@ -1048,16 +1131,18 @@ export default function CallManager({
                     <div className={`aani-call-person${callState.phase === 'outgoing' ? ' aani-call-person-outgoing' : ' aani-call-person-incoming'}`}>
                       <h2 className={`aani-call-name${callState.phase === 'outgoing' ? ' aani-call-name-outgoing' : ' aani-call-name-incoming'}`}>{callState.peer.name}</h2>
                       <p className={`aani-call-status ${callState.phase === 'outgoing' ? 'aani-call-status-outgoing' : 'aani-call-status-incoming'}${callState.terminalStatus ? ` aani-call-status-terminal aani-call-status-terminal-${callState.terminalStatus}` : ''}${!callState.terminalStatus && (callState.accepting || (callState.phase === 'outgoing' && !callState.ringing)) ? ' aani-call-status-connecting' : ''}`}>
-                        {callState.terminalStatus === 'declined' ? 'تم رفض المكالمة'
-                          : callState.terminalStatus === 'no-answer' ? 'لا يوجد رد...'
-                            : callState.terminalStatus === 'busy' ? 'خط مشغول...'
-                              : callState.phase === 'outgoing'
-                                ? callState.ringing ? 'يرن...' : 'جاري الاتصال...'
-                                : callState.accepting
-                                  ? 'جاري التوصيل'
-                                  : `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة`}
+                        {callState.terminalStatus === 'ended' ? 'تم إنهاء المكالمة'
+                          : callState.terminalStatus === 'declined' ? 'تم رفض المكالمة'
+                            : callState.terminalStatus === 'no-answer' ? 'لا يوجد رد...'
+                              : callState.terminalStatus === 'busy' ? 'خط مشغول...'
+                                : callState.phase === 'outgoing'
+                                  ? callState.ringing ? 'يرن...' : 'جاري الاتصال...'
+                                  : callState.accepting
+                                    ? 'جاري التوصيل'
+                                    : `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة`}
                         {!callState.terminalStatus && callState.phase === 'incoming' && <span className="aani-call-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>}
                       </p>
+                      {callState.terminalStatus === 'ended' && <span className="aani-call-duration visible" aria-label={`مدة المكالمة ${activeDuration}`}>مدة المكالمة {activeDuration}</span>}
                     </div>
                   </div>
                 ) : (
@@ -1065,10 +1150,14 @@ export default function CallManager({
                     <CallAvatar peer={callState.peer} className="aani-call-avatar-active" />
                     <div className="aani-call-person">
                       <h2 className="aani-call-name">{callState.peer.name}</h2>
-                      <p className="aani-call-status">المكالمة متصلة</p>
-                      <span className="aani-call-timer aani-call-timer-active" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>
+                      <p className={`aani-call-status${callState.terminalStatus === 'ended' ? ' aani-call-status-ended' : ''}`}>
+                        {callState.terminalStatus === 'ended' ? 'تم إنهاء المكالمة' : 'المكالمة متصلة'}
+                      </p>
+                      {callState.terminalStatus === 'ended'
+                        ? <span className="aani-call-duration visible" aria-label={`مدة المكالمة ${activeDuration}`}>مدة المكالمة {activeDuration}</span>
+                        : <span className="aani-call-timer aani-call-timer-active" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>}
                     </div>
-                    {callState.mode === 'audio' && callState.localStream && !callState.cameraOff && (
+                    {callState.terminalStatus !== 'ended' && callState.mode === 'audio' && callState.localStream && !callState.cameraOff && (
                       <video ref={localVideoRef} className="aani-call-local-video aani-call-local-video-audio" muted autoPlay playsInline aria-label="الفيديو المحلي" />
                     )}
                   </>
