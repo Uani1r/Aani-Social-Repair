@@ -480,11 +480,10 @@ export default function ProfilePage({
         </div>
       </div>
 
-      <div ref={usernameWrapperRef} className="sticky-username-wrapper" id="usernameWrapper">
-        {username && <div className="username-text" data-username={username}>{username}</div>}
-      </div>
-
       <div className="relative h-[135px] w-full bg-[#18181b]">
+        <div ref={usernameWrapperRef} className="username-state-wrapper pointer-events-none" id="usernameWrapper">
+          {username && <div className="username-text absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none" data-username={username}>{username}</div>}
+        </div>
         <button
           type="button"
           disabled={!own || imageSaving !== null}
