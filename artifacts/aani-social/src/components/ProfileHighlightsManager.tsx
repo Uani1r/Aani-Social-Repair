@@ -17,6 +17,7 @@ type ArchiveStory = {
   media_type: string;
   caption: string | null;
   is_close_friends: boolean;
+  duration_seconds?: number | null;
   created_at: string;
 };
 
@@ -50,11 +51,23 @@ function normalizeMediaType(value: string): HighlightMediaType {
   return 'image';
 }
 
-function mediaPreview(mediaUrl: string | null, mediaType: string, caption: string | null, className: string, controls = true) {
+const DEFAULT_ARCHIVE_STORY_DURATION_SECONDS = 5;
+
+function getArchiveStoryDurationSeconds(story: Pick<ArchiveStory, 'duration_seconds'>) {
+  const duration = Number(story.duration_seconds);
+  return Number.isFinite(duration) && duration > 0
+    ? Math.min(duration, 120)
+    : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
+}
+
+function mediaPreview(mediaUrl: string | null, mediaType: string, caption: string | null, className: string, controls = true, durationSeconds = DEFAULT_ARCHIVE_STORY_DURATION_SECONDS) {
+  const safeDuration = Number.isFinite(durationSeconds) && durationSeconds > 0
+    ? Math.min(durationSeconds, 120)
+    : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
   if (mediaUrl && mediaType === 'video') {
-    return <video src={mediaUrl} className={className} controls={controls} muted={!controls} playsInline preload="metadata" />;
+    return <video src={mediaUrl} className={className} controls={controls} muted={!controls} playsInline preload="metadata" data-duration={safeDuration} />;
   }
-  if (mediaUrl) return <img src={mediaUrl} className={className} alt="معاينة القصة" />;
+  if (mediaUrl) return <img src={mediaUrl} className={className} alt="معاينة القصة" data-duration={safeDuration} />;
   return <div className={`${className} flex items-center justify-center whitespace-pre-wrap break-words bg-gradient-to-br from-[#30303a] to-[#111116] p-6 text-center text-lg font-bold text-white`}>{caption || 'قصة نصية'}</div>;
 }
 
@@ -91,7 +104,7 @@ export default function ProfileHighlightsManager({
   const [archiveError, setArchiveError] = useState('');
   const [selectedArchiveStory, setSelectedArchiveStory] = useState<ArchiveStory | null>(null);
   const [previewingArchiveStory, setPreviewingArchiveStory] = useState<ArchiveStory | null>(null);
-  const [storyDurationMs, setStoryDurationMs] = useState<number | null>(null);
+  const [storyDurationSeconds, setStoryDurationSeconds] = useState<number | null>(null);
   const [studioFile, setStudioFile] = useState<File | null>(null);
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
   const [captionDraft, setCaptionDraft] = useState('');
@@ -106,6 +119,7 @@ export default function ProfileHighlightsManager({
     const progress = storyProgressRef.current;
     if (progress) {
       progress.style.animation = 'none';
+      progress.style.animationDuration = '';
       progress.style.width = '0%';
     }
     const video = storyVideoRef.current;
@@ -114,21 +128,64 @@ export default function ProfileHighlightsManager({
       if (video.readyState > 0) video.currentTime = 0;
     }
     setPreviewingArchiveStory(null);
-    setStoryDurationMs(null);
+    setStoryDurationSeconds(null);
   }, []);
 
-  const openArchiveStoryPreview = (story: ArchiveStory) => {
+  const startStoryProgress = useCallback((durationSeconds: number) => {
     if (storyTimerRef.current !== null) {
       window.clearTimeout(storyTimerRef.current);
       storyTimerRef.current = null;
     }
+    const storyDuration = Number.isFinite(durationSeconds) && durationSeconds > 0
+      ? Math.min(durationSeconds, 120)
+      : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
+    const progress = storyProgressRef.current;
+    if (progress) {
+      progress.style.animation = 'none';
+      progress.style.animationDuration = '';
+      progress.style.width = '0%';
+      void progress.offsetWidth;
+      progress.style.animation = 'fillProgress linear forwards';
+      progress.style.animationDuration = `${storyDuration}s`;
+    }
+    const timer = window.setTimeout(closeStoryPreview, storyDuration * 1000);
+    storyTimerRef.current = timer;
+    return timer;
+  }, [closeStoryPreview]);
+
+  const openArchiveStoryPreview = (story: ArchiveStory, durationSeconds: number) => {
+    if (storyTimerRef.current !== null) {
+      window.clearTimeout(storyTimerRef.current);
+      storyTimerRef.current = null;
+    }
+    const progress = storyProgressRef.current;
+    if (progress) {
+      progress.style.animation = 'none';
+      progress.style.animationDuration = '';
+      progress.style.width = '0%';
+    }
+    const previousVideo = storyVideoRef.current;
+    if (previousVideo) {
+      previousVideo.pause();
+      if (previousVideo.readyState > 0) previousVideo.currentTime = 0;
+    }
     setPreviewingArchiveStory(story);
-    setStoryDurationMs(story.media_url && story.media_type === 'video' ? null : 5000);
+    setStoryDurationSeconds(story.media_url && story.media_type === 'video' ? null : durationSeconds);
   };
 
   const handleStoryVideoMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
-    const duration = event.currentTarget.duration;
-    setStoryDurationMs(Number.isFinite(duration) && duration > 0 ? duration * 1000 : 5000);
+    const video = event.currentTarget;
+    const storedDuration = Number(video.dataset.duration);
+    const storyDuration = Number.isFinite(video.duration) && video.duration > 0
+      ? video.duration
+      : storedDuration;
+    startStoryProgress(storyDuration);
+    void video.play().catch(() => {});
+  };
+
+  const handleStoryVideoError = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const storedDuration = Number(event.currentTarget.dataset.duration);
+    startStoryProgress(storedDuration);
   };
 
   useEffect(() => {
@@ -145,29 +202,15 @@ export default function ProfileHighlightsManager({
   }, [open, isRendered]);
 
   useEffect(() => {
-    if (!previewingArchiveStory || storyDurationMs === null) return;
-    const progress = storyProgressRef.current;
-    if (!progress) return;
+    const isVideo = Boolean(previewingArchiveStory?.media_url && previewingArchiveStory.media_type === 'video');
+    if (!previewingArchiveStory || isVideo || storyDurationSeconds === null) return;
 
-    progress.style.animation = 'none';
-    progress.style.width = '0%';
-    void progress.offsetWidth;
-    progress.style.animation = `fillProgress ${storyDurationMs}ms linear forwards`;
-
-    const timer = window.setTimeout(closeStoryPreview, storyDurationMs);
-    storyTimerRef.current = timer;
+    const timer = startStoryProgress(storyDurationSeconds);
     return () => {
       window.clearTimeout(timer);
       if (storyTimerRef.current === timer) storyTimerRef.current = null;
-      progress.style.animation = 'none';
-      progress.style.width = '0%';
-      const video = storyVideoRef.current;
-      if (video) {
-        video.pause();
-        if (video.readyState > 0) video.currentTime = 0;
-      }
     };
-  }, [previewingArchiveStory, storyDurationMs, closeStoryPreview]);
+  }, [previewingArchiveStory, storyDurationSeconds, startStoryProgress]);
 
   useEffect(() => {
     if (!open) return;
@@ -404,9 +447,14 @@ export default function ProfileHighlightsManager({
               <div className="grid grid-cols-3 gap-1">
                 {archiveStories.map(story => {
                   const alreadyAdded = existingSourceStoryIds.has(story.id);
+                  const archiveDurationSeconds = getArchiveStoryDurationSeconds(story);
                   return (
-                    <button key={story.id} type="button" onClick={() => openArchiveStoryPreview(story)} aria-label={`معاينة القصة ${story.caption?.trim() || 'المحفوظة'}`} className="group relative aspect-[9/16] overflow-hidden rounded-md border border-white/10 bg-zinc-900 text-left transition hover:border-white/40">
-                      {mediaPreview(story.media_url, story.media_type, story.caption, 'h-full w-full object-cover', false)}
+                    <button key={story.id} type="button" data-duration={archiveDurationSeconds} onClick={event => {
+                      const mediaDuration = event.currentTarget.querySelector<HTMLElement>('[data-duration]')?.dataset.duration;
+                      const durationFromTile = Number(mediaDuration ?? event.currentTarget.dataset.duration);
+                      openArchiveStoryPreview(story, Number.isFinite(durationFromTile) && durationFromTile > 0 ? durationFromTile : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS);
+                    }} aria-label={`معاينة القصة ${story.caption?.trim() || 'المحفوظة'}`} className="group relative aspect-[9/16] overflow-hidden rounded-md border border-white/10 bg-zinc-900 text-left transition hover:border-white/40">
+                      {mediaPreview(story.media_url, story.media_type, story.caption, 'h-full w-full object-cover', false, archiveDurationSeconds)}
                       <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-2 pb-2 pt-7 text-right text-[10px] text-white">{alreadyAdded ? 'مضافة' : story.caption?.trim() || 'قصة محفوظة'}</span>
                     </button>
                   );
@@ -521,11 +569,12 @@ export default function ProfileHighlightsManager({
                 ref={storyVideoRef}
                 src={previewingArchiveStory.media_url}
                 className="absolute inset-0 z-0 h-full w-full object-cover"
-                autoPlay
+                data-duration={getArchiveStoryDurationSeconds(previewingArchiveStory)}
                 muted
                 playsInline
                 preload="auto"
                 onLoadedMetadata={handleStoryVideoMetadata}
+                onError={handleStoryVideoError}
                 onEnded={closeStoryPreview}
               />
             ) : previewingArchiveStory.media_url ? (
@@ -534,6 +583,7 @@ export default function ProfileHighlightsManager({
                 key={previewingArchiveStory.id}
                 src={previewingArchiveStory.media_url}
                 className="absolute inset-0 z-0 h-full w-full object-cover"
+                data-duration={getArchiveStoryDurationSeconds(previewingArchiveStory)}
                 alt={previewingArchiveStory.caption || 'قصة محفوظة'}
                 loading="eager"
                 decoding="async"
