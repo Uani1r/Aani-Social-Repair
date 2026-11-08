@@ -32,6 +32,8 @@ export interface ProfileHighlight {
   source_story_id: string | null;
   is_close_friends: boolean;
   created_at: string;
+  duration?: number | null;
+  duration_seconds?: number | null;
 }
 
 export type ProfileHighlightCollectionSummary = {
@@ -52,6 +54,16 @@ function normalizeMediaType(value: string): HighlightMediaType {
 }
 
 const DEFAULT_ARCHIVE_STORY_DURATION_SECONDS = 5;
+
+function getStoryDuration(story: ProfileHighlight | undefined, durations: Record<string, number> = {}) {
+  const storedDuration = story
+    ? durations[story.id] ?? story.duration ?? story.duration_seconds ?? (story.source_story_id ? durations[story.source_story_id] : undefined)
+    : undefined;
+  const duration = Number(storedDuration);
+  return Number.isFinite(duration) && duration > 0
+    ? duration
+    : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
+}
 
 function getArchiveStoryDurationSeconds(story: Pick<ArchiveStory, 'duration_seconds'>) {
   const duration = Number(story.duration_seconds);
@@ -823,8 +835,6 @@ export function ProfileHighlightViewer({
   const [storyDurations, setStoryDurations] = useState<Record<string, number>>({});
   const [durationsLoaded, setDurationsLoaded] = useState(false);
   const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
-  const [videoFailedStoryId, setVideoFailedStoryId] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [titleToastVisible, setTitleToastVisible] = useState(false);
   const [replyText, setReplyText] = useState('');
@@ -833,9 +843,12 @@ export function ProfileHighlightViewer({
   const [isLikeLoading, setIsLikeLoading] = useState(false);
   const [isLikeSaving, setIsLikeSaving] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const progressContainerRef = useRef<HTMLDivElement>(null);
   const progressFillRef = useRef<HTMLDivElement>(null);
   const activeStoryIdRef = useRef<string | null>(null);
-  const storyElapsedMsRef = useRef(0);
+  const storyTimerRef = useRef<number | null>(null);
+  const storyTimerStartedAtRef = useRef(0);
+  const storyTimerRemainingMsRef = useRef(0);
   const titleToastShownRef = useRef(false);
   const foundCollectionIndex = collections.findIndex(item => item.id === activeCollectionId);
   const collectionIndex = foundCollectionIndex >= 0 ? foundCollectionIndex : collections.findIndex(item => item.id === collection.id);
@@ -843,36 +856,80 @@ export function ProfileHighlightViewer({
   const story = activeCollection.stories[activeIndex];
   const isStoryOwner = currentUserId === activeCollection.user_id;
   const isVideo = Boolean(story?.media_url && story.media_type === 'video');
-  const storyDuration = story
-    ? storyDurations[story.id] || (story.source_story_id ? storyDurations[story.source_story_id] : 0) || DEFAULT_ARCHIVE_STORY_DURATION_SECONDS
-    : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
+  const storyDuration = getStoryDuration(story, storyDurations);
+
+  const clearStoryTimer = useCallback(() => {
+    if (storyTimerRef.current !== null) {
+      window.clearTimeout(storyTimerRef.current);
+      storyTimerRef.current = null;
+    }
+    storyTimerStartedAtRef.current = 0;
+  }, []);
+
+  const closeViewer = useCallback(() => {
+    clearStoryTimer();
+    storyTimerRemainingMsRef.current = 0;
+    videoRef.current?.pause();
+    onClose();
+  }, [clearStoryTimer, onClose]);
 
   const goToStory = useCallback((nextIndex: number) => {
     if (nextIndex < 0) return;
+    clearStoryTimer();
+    storyTimerRemainingMsRef.current = 0;
     if (nextIndex >= activeCollection.stories.length) {
       const nextCollection = collectionIndex >= 0 ? collections[collectionIndex + 1] : undefined;
       if (!nextCollection) {
-        onClose();
+        closeViewer();
         return;
       }
       videoRef.current?.pause();
-      storyElapsedMsRef.current = 0;
       titleToastShownRef.current = false;
       setTitleToastVisible(false);
-      setProgress(0);
       setStoryDurations({});
       setDurationsLoaded(false);
       setMediaReadyStoryId(null);
-      setVideoFailedStoryId(null);
       setActiveCollectionId(nextCollection.id);
       setActiveIndex(0);
       return;
     }
     videoRef.current?.pause();
-    setProgress(0);
     setMediaReadyStoryId(null);
     setActiveIndex(nextIndex);
-  }, [activeCollection.stories.length, collectionIndex, collections, onClose]);
+  }, [activeCollection.stories.length, clearStoryTimer, closeViewer, collectionIndex, collections]);
+  const activeIndexRef = useRef(activeIndex);
+  const goToStoryRef = useRef<(nextIndex: number) => void>(() => {});
+  activeIndexRef.current = activeIndex;
+  goToStoryRef.current = goToStory;
+
+  const pauseStoryProgress = useCallback(() => {
+    if (storyTimerRef.current !== null) {
+      const elapsedMs = storyTimerStartedAtRef.current > 0 ? Date.now() - storyTimerStartedAtRef.current : 0;
+      storyTimerRemainingMsRef.current = Math.max(0, storyTimerRemainingMsRef.current - elapsedMs);
+      window.clearTimeout(storyTimerRef.current);
+      storyTimerRef.current = null;
+    }
+    storyTimerStartedAtRef.current = 0;
+    if (progressFillRef.current) progressFillRef.current.style.animationPlayState = 'paused';
+  }, []);
+
+  const resumeStoryProgress = useCallback(() => {
+    if (!story?.id || !durationsLoaded || mediaReadyStoryId !== story.id || storyTimerRef.current !== null) return;
+    const remainingMs = storyTimerRemainingMsRef.current;
+    if (remainingMs <= 0) {
+      goToStoryRef.current(activeIndexRef.current + 1);
+      return;
+    }
+    const timerStoryId = story.id;
+    storyTimerStartedAtRef.current = Date.now();
+    if (progressFillRef.current) progressFillRef.current.style.animationPlayState = 'running';
+    storyTimerRef.current = window.setTimeout(() => {
+      storyTimerRef.current = null;
+      storyTimerStartedAtRef.current = 0;
+      storyTimerRemainingMsRef.current = 0;
+      if (activeStoryIdRef.current === timerStoryId) goToStoryRef.current(activeIndexRef.current + 1);
+    }, remainingMs);
+  }, [durationsLoaded, mediaReadyStoryId, story?.id]);
 
   useEffect(() => {
     let active = true;
@@ -926,49 +983,63 @@ export function ProfileHighlightViewer({
 
   useLayoutEffect(() => {
     activeStoryIdRef.current = story?.id ?? null;
-    storyElapsedMsRef.current = 0;
-    setProgress(0);
+    clearStoryTimer();
+    storyTimerRemainingMsRef.current = 0;
     setIsPaused(false);
+    progressContainerRef.current?.querySelectorAll<HTMLDivElement>('[data-story-progress-fill]').forEach(progressFill => {
+      progressFill.style.animation = 'none';
+      progressFill.style.animationDuration = '';
+      progressFill.style.animationPlayState = '';
+    });
     const progressFill = progressFillRef.current;
     if (progressFill) {
-      progressFill.style.transition = 'none';
       progressFill.style.width = '0%';
       void progressFill.offsetWidth;
-      progressFill.style.transition = '';
     }
     if (story && !story.media_url) setMediaReadyStoryId(story.id);
-  }, [story?.id, story?.media_url]);
+  }, [clearStoryTimer, story?.id, story?.media_url]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key === 'Escape') closeViewer();
       if (event.key === 'ArrowRight') goToStory(activeIndex - 1);
       if (event.key === 'ArrowLeft') goToStory(activeIndex + 1);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeIndex, goToStory, onClose]);
+  }, [activeIndex, closeViewer, goToStory]);
 
   useEffect(() => {
-    if (!story || (isVideo && videoFailedStoryId !== story.id) || !durationsLoaded || mediaReadyStoryId !== story.id || isPaused) return;
-    const startedAt = Date.now();
-    let frame = 0;
-    const updateProgress = () => {
-      const elapsedMs = storyElapsedMsRef.current + Date.now() - startedAt;
-      const nextProgress = Math.min(100, (elapsedMs / (storyDuration * 1000)) * 100);
-      setProgress(nextProgress);
-      if (nextProgress >= 100) goToStory(activeIndex + 1);
-      else frame = window.requestAnimationFrame(updateProgress);
-    };
-    frame = window.requestAnimationFrame(updateProgress);
-    const timerStoryId = story.id;
-    return () => {
-      window.cancelAnimationFrame(frame);
-      if (activeStoryIdRef.current === timerStoryId) {
-        storyElapsedMsRef.current += Date.now() - startedAt;
-      }
-    };
-  }, [activeIndex, durationsLoaded, goToStory, isPaused, isVideo, mediaReadyStoryId, story, storyDuration, videoFailedStoryId]);
+    clearStoryTimer();
+    storyTimerRemainingMsRef.current = 0;
+    if (!story || !durationsLoaded || mediaReadyStoryId !== story.id) return;
+
+    const duration = storyDuration;
+    const durationMs = duration * 1000;
+    const progressFill = progressFillRef.current;
+    storyTimerRemainingMsRef.current = durationMs;
+    if (progressFill) {
+      progressFill.style.animation = 'none';
+      progressFill.style.animationDuration = '';
+      progressFill.style.animationPlayState = 'running';
+      progressFill.style.width = '0%';
+      void progressFill.offsetWidth;
+      progressFill.style.animation = `fillProgress ${duration}s linear forwards`;
+    }
+    resumeStoryProgress();
+    return () => clearStoryTimer();
+  }, [clearStoryTimer, durationsLoaded, mediaReadyStoryId, resumeStoryProgress, story?.id, storyDuration]);
+
+  useEffect(() => {
+    if (!story || !durationsLoaded || mediaReadyStoryId !== story.id) return;
+    if (isPaused) {
+      pauseStoryProgress();
+      videoRef.current?.pause();
+    } else {
+      resumeStoryProgress();
+      if (isVideo && videoRef.current) void videoRef.current.play().catch(() => {});
+    }
+  }, [durationsLoaded, isPaused, isVideo, mediaReadyStoryId, pauseStoryProgress, resumeStoryProgress, story?.id, storyDuration]);
 
   useEffect(() => {
     setReplyText('');
@@ -1061,13 +1132,14 @@ export function ProfileHighlightViewer({
 
   return createPortal(
     <div className="fixed inset-0 z-[2100] h-[100dvh] w-screen overflow-hidden bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={`أبرز القصص: ${activeCollection.title}`}>
-      <div className="pointer-events-none absolute inset-x-2 z-30 flex gap-1 px-1" style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
+      <div ref={progressContainerRef} className="pointer-events-none absolute inset-x-2 z-30 flex gap-1 px-1" style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
         {activeCollection.stories.map((item, index) => (
           <div key={item.id} className="h-[2px] flex-1 overflow-hidden rounded-full bg-white/35">
             <div
               ref={index === activeIndex ? progressFillRef : null}
-              className="h-full bg-white transition-[width] duration-75 ease-linear"
-              style={{ width: index < activeIndex ? '100%' : index === activeIndex ? `${progress}%` : '0%' }}
+              data-story-progress-fill
+              className="h-full bg-white"
+              style={{ width: index < activeIndex ? '100%' : '0%' }}
             />
           </div>
         ))}
@@ -1080,7 +1152,6 @@ export function ProfileHighlightViewer({
           ref={videoRef}
           src={story.media_url}
           className="absolute inset-0 z-0 h-full w-full object-contain"
-          autoPlay
           playsInline
           preload="metadata"
           data-duration={storyDuration}
@@ -1093,17 +1164,8 @@ export function ProfileHighlightViewer({
             if (Number.isFinite(duration) && duration > 0) {
               setStoryDurations(current => ({ ...current, [story.id]: duration }));
             }
-            void video.play().catch(() => {});
           }}
-          onTimeUpdate={event => {
-            const video = event.currentTarget;
-            if (Number.isFinite(video.duration) && video.duration > 0) setProgress(Math.min(100, (video.currentTime / video.duration) * 100));
-          }}
-          onEnded={() => goToStory(activeIndex + 1)}
-          onError={() => {
-            setVideoFailedStoryId(story.id);
-            setMediaReadyStoryId(story.id);
-          }}
+          onError={() => setMediaReadyStoryId(story.id)}
         />
       ) : story.media_url ? (
         <img
@@ -1136,7 +1198,7 @@ export function ProfileHighlightViewer({
             <time dateTime={story.created_at} className="mt-0.5 block text-[10px] text-white/75">{formatDate(story.created_at) || 'قصة محفوظة'}</time>
           </div>
         </div>
-        <button type="button" onClick={onClose} aria-label="إغلاق أبرز القصص" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/30 text-white backdrop-blur-sm"><X size={22} /></button>
+        <button type="button" onClick={closeViewer} aria-label="إغلاق أبرز القصص" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/30 text-white backdrop-blur-sm"><X size={22} /></button>
       </header>
 
       <div className={`pointer-events-none absolute inset-x-5 z-40 text-center text-lg font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] transition-all duration-500 ${activeIndex === 0 && titleToastVisible ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 74px)' }} aria-live="polite">
@@ -1160,7 +1222,7 @@ export function ProfileHighlightViewer({
               value={replyText}
               disabled={!currentUserId || isSendingReply}
               onFocus={() => { setIsPaused(true); videoRef.current?.pause(); }}
-              onBlur={() => { setIsPaused(false); if (isVideo && videoRef.current) void videoRef.current.play().catch(() => {}); }}
+              onBlur={() => setIsPaused(false)}
               onChange={event => setReplyText(event.currentTarget.value)}
               onKeyDown={event => {
                 if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
