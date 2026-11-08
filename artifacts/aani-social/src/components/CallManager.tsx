@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, ChevronDown, Mic, MicOff, Phone, PhoneOff, Video, VideoOff, Volume2, VolumeX, X } from 'lucide-react';
+import { Camera, ChevronDown, Mic, MicOff, Phone, PhoneOff, RefreshCw, Video, VideoOff, Volume2, VolumeX, X } from 'lucide-react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { toast } from 'sonner';
 
@@ -109,7 +109,7 @@ const CALL_STYLES = `
 .aani-call-outgoing-avatar-wrap.is-red-glow .aani-call-avatar-outgoing{border-color:rgba(255,59,48,.5);box-shadow:inset 0 0 20px rgba(255,59,48,.08),0 0 18px rgba(255,59,48,.2)}
 .aani-call-avatar-outgoing{position:relative;width:110px;height:110px;border:2px solid rgba(255,255,255,.4);box-shadow:inset 0 0 20px rgba(255,255,255,.15),0 15px 35px rgba(0,0,0,.8),0 5px 15px rgba(0,0,0,.6),0 0 10px rgba(255,255,255,.2)}
 .aani-call-avatar-outgoing::after{content:'';position:absolute;inset:0;border-radius:50%;background:linear-gradient(135deg,rgba(255,255,255,.4) 0%,rgba(255,255,255,0) 50%);pointer-events:none}
-.aani-call-person{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;margin-top:-22px}
+.aani-call-person{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:16px;margin-top:0}
 .aani-call-person-outgoing,.aani-call-person-incoming{gap:25px;margin:0}
 .aani-call-avatar{width:132px;height:132px;display:grid;place-items:center;overflow:hidden;border:1px solid rgba(255,255,255,.22);border-radius:50%;background:linear-gradient(145deg,#394654,#171c24);box-shadow:0 12px 50px rgba(0,0,0,.3);font-size:44px;font-weight:700}
 .aani-call-avatar-outgoing{width:110px;height:110px;border:2px solid rgba(255,255,255,.4);font-size:36px;box-shadow:inset 0 0 20px rgba(255,255,255,.15),0 15px 35px rgba(0,0,0,.8),0 5px 15px rgba(0,0,0,.6),0 0 10px rgba(255,255,255,.2)}
@@ -134,7 +134,8 @@ const CALL_STYLES = `
 .aani-call-close{position:absolute;top:calc(16px + env(safe-area-inset-top));right:18px;z-index:4;width:40px;height:40px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.14);border-radius:50%;background:rgba(255,255,255,.1);color:#fff}
 .aani-call-remote-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#111}
 .aani-call-video-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.38),transparent 28%,transparent 65%,rgba(0,0,0,.62));pointer-events:none}
-.aani-call-local-video{position:absolute;z-index:3;top:calc(18px + env(safe-area-inset-top));left:18px;width:min(30vw,126px);aspect-ratio:3/4;object-fit:cover;border:1px solid rgba(255,255,255,.45);border-radius:18px;background:#20242a;box-shadow:0 8px 28px rgba(0,0,0,.35)}
+.aani-call-local-video{position:absolute;z-index:3;top:calc(18px + env(safe-area-inset-top));left:18px;width:min(30vw,126px);aspect-ratio:3/4;object-fit:cover;border:1px solid rgba(255,255,255,.45);border-radius:18px;background:#20242a;box-shadow:0 8px 28px rgba(0,0,0,.35);touch-action:none;user-select:none;-webkit-user-select:none;cursor:grab}
+.aani-call-local-video.is-dragging{cursor:grabbing}
 .aani-call-controls{position:absolute;z-index:3;bottom:calc(34px + env(safe-area-inset-bottom));left:0;right:0;display:flex;align-items:center;justify-content:center;gap:18px}
 .aani-call-controls.aani-call-controls-fading{opacity:0;transform:translate(-50%,20px);transition:opacity .35s ease,transform .35s ease;pointer-events:none}
 .aani-call-controls-outgoing{left:50%;right:auto;bottom:40px;display:inline-flex;width:max-content;gap:20px;padding:10px 24px;transform:translateX(-50%);border:1px solid rgba(255,255,255,.12);border-radius:100px;background:rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.45);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%)}
@@ -172,7 +173,9 @@ const CALL_STYLES = `
 @keyframes aani-call-duration-in{to{opacity:1;transform:translateY(0)}}
 @keyframes aani-call-red-glow{0%,100%{box-shadow:0 0 18px 3px rgba(255,59,48,.18),0 0 42px 8px rgba(255,59,48,.08)}50%{box-shadow:0 0 27px 5px rgba(255,59,48,.42),0 0 70px 16px rgba(255,59,48,.18)}}
 @media(min-width:700px){.aani-call-sheet-wrap{align-items:center}.aani-call-overlay{padding-left:40px;padding-right:40px}.aani-call-controls{gap:24px}.aani-call-overlay-outgoing,.aani-call-overlay-incoming{padding:0}.aani-call-controls-outgoing,.aani-call-controls-incoming{gap:20px}}
-.aani-call-overlay-active-audio{background:rgba(5,5,8,.90);backdrop-filter:blur(35px) saturate(150%);-webkit-backdrop-filter:blur(35px) saturate(150%)}
+.aani-call-overlay-active-audio{gap:16px;background:rgba(5,5,8,.90);backdrop-filter:blur(35px) saturate(150%);-webkit-backdrop-filter:blur(35px) saturate(150%)}
+.aani-call-overlay-active-audio .aani-call-person{gap:8px;margin:0}
+.aani-call-overlay-active-audio .aani-call-name{margin:0}
 .aani-call-avatar-active{width:110px;height:110px;border:2px solid rgba(255,255,255,.4);font-size:36px;box-shadow:0 0 18px rgba(255,255,255,.14);animation:aani-call-calm-glow 4s ease-in-out infinite}
 .aani-call-overlay-active-audio .aani-call-name{font-size:20px}
 .aani-call-timer-active{color:#34c759;font-size:17px;font-weight:600;animation:aani-call-timer-pulse 1.8s ease-in-out infinite}
@@ -191,7 +194,10 @@ const CALL_STYLES = `
 .aani-call-layer-minimized{pointer-events:none}
 .aani-call-minimize{position:absolute;top:calc(20px + env(safe-area-inset-top));right:20px;z-index:5;width:42px;height:42px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.22);border-radius:50%;background:rgba(255,255,255,.16);color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.24);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);transition:transform .18s ease,background .18s ease}
 .aani-call-minimize:active{transform:scale(.92);background:rgba(255,255,255,.28)}
-.aani-call-overlay-minimized{top:calc(20px + env(safe-area-inset-top));right:16px;bottom:auto;left:calc(100% - 146px);width:130px;height:190px;min-height:0;padding:0;overflow:hidden;transform:scale(.98);opacity:.98;border:1px solid rgba(255,255,255,.22);border-radius:20px;background:rgba(30,33,36,.98);box-shadow:0 18px 48px rgba(0,0,0,.48),0 4px 12px rgba(255,255,255,.08) inset;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);pointer-events:auto;cursor:pointer}
+.aani-call-ui-hidden .aani-call-controls{opacity:0;transform:translate(-50%,16px);pointer-events:none;transition:opacity .3s ease,transform .3s ease}
+.aani-call-ui-hidden .aani-call-minimize{opacity:0;transform:translateY(-8px);pointer-events:none;transition:opacity .3s ease,transform .3s ease}
+.aani-call-overlay-minimized.is-dragging{transition:none;cursor:grabbing}
+.aani-call-overlay-minimized{top:calc(20px + env(safe-area-inset-top));right:16px;bottom:auto;left:calc(100% - 146px);width:130px;height:190px;min-height:0;padding:0;overflow:hidden;transform:scale(.98);opacity:.98;border:1px solid rgba(255,255,255,.22);border-radius:20px;background:rgba(30,33,36,.98);box-shadow:0 18px 48px rgba(0,0,0,.48),0 4px 12px rgba(255,255,255,.08) inset;backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);pointer-events:auto;cursor:pointer;touch-action:none}
 .aani-call-layer-minimized.aani-call-overlay-video{background:transparent}
 .aani-call-overlay-minimized.aani-call-overlay-video{background:#202223}
 .aani-call-overlay-minimized .aani-call-controls,.aani-call-overlay-minimized .aani-call-minimize{display:none!important}
@@ -294,6 +300,12 @@ export default function CallManager({
   const [callState, setCallState] = useState<CallUiState | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [videoControlsVisible, setVideoControlsVisible] = useState(true);
+  const [localPipExpanded, setLocalPipExpanded] = useState(false);
+  const [isLocalPipDragging, setIsLocalPipDragging] = useState(false);
+  const [isMinimizedDragging, setIsMinimizedDragging] = useState(false);
+  const [localPipPosition, setLocalPipPosition] = useState<{ left: number; top: number } | null>(null);
+  const [minimizedPosition, setMinimizedPosition] = useState<{ left: number; top: number } | null>(null);
   const callRef = useRef<CallUiState | null>(null);
   const contactRef = useRef<Profile | null>(contact);
   const currentProfileRef = useRef<Profile | null>(currentProfile);
@@ -314,6 +326,13 @@ export default function CallManager({
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const cameraFacingModeRef = useRef<'user' | 'environment'>('user');
+  const videoUiTimeoutRef = useRef<number | null>(null);
+  const videoControlsVisibleRef = useRef(true);
+  const localPipDragRef = useRef<{ pointerId: number; startX: number; startY: number; startLeft: number; startTop: number; moved: boolean } | null>(null);
+  const minimizedDragRef = useRef<{ pointerId: number; startX: number; startY: number; startLeft: number; startTop: number; moved: boolean } | null>(null);
+  const previousPipTapRef = useRef<{ at: number; x: number; y: number } | null>(null);
+  const skipMinimizedClickRef = useRef(false);
   const receiveSignalRef = useRef<(payload: unknown) => void>(() => undefined);
 
   contactRef.current = contact;
@@ -322,6 +341,39 @@ export default function CallManager({
   const setActiveCall = useCallback((next: CallUiState | null) => {
     callRef.current = next;
     setCallState(next);
+  }, []);
+
+  const revealVideoControls = useCallback(() => {
+    videoControlsVisibleRef.current = true;
+    setVideoControlsVisible(true);
+    if (videoUiTimeoutRef.current !== null) window.clearTimeout(videoUiTimeoutRef.current);
+    videoUiTimeoutRef.current = window.setTimeout(() => {
+      videoControlsVisibleRef.current = false;
+      setVideoControlsVisible(false);
+      videoUiTimeoutRef.current = null;
+    }, 4000);
+  }, []);
+
+  const toggleVideoControls = useCallback(() => {
+    if (videoControlsVisibleRef.current) {
+      videoControlsVisibleRef.current = false;
+      setVideoControlsVisible(false);
+      if (videoUiTimeoutRef.current !== null) window.clearTimeout(videoUiTimeoutRef.current);
+      videoUiTimeoutRef.current = null;
+    } else {
+      revealVideoControls();
+    }
+  }, [revealVideoControls]);
+
+  const resetAudioOutput = useCallback(async () => {
+    const audioElement = remoteAudioRef.current as (HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> }) | null;
+    if (audioElement?.setSinkId) {
+      try {
+        await audioElement.setSinkId('');
+      } catch (error) {
+        console.warn('[calls] تعذر استعادة مخرج الصوت الافتراضي:', error);
+      }
+    }
   }, []);
 
   const stopRingtone = useCallback(() => {
@@ -638,7 +690,7 @@ export default function CallManager({
         remoteStream: null,
         muted: false,
         cameraOff: payload.mode === 'audio',
-        speakerOn: true,
+        speakerOn: false,
         ringing: false,
         accepting: false,
         dismissing: false,
@@ -649,6 +701,10 @@ export default function CallManager({
         startedAt: null,
       };
       setIsMinimized(false);
+      setMinimizedPosition(null);
+      setLocalPipPosition(null);
+      setLocalPipExpanded(false);
+      cameraFacingModeRef.current = 'user';
       setActiveCall(incomingCall);
       startRingtone();
       void sendSignal({ type: 'ringing-ack', callId: payload.callId, to: payload.from })
@@ -760,7 +816,7 @@ export default function CallManager({
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
     return navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: mode === 'video' ? { facingMode: 'user' } : false,
+      video: mode === 'video' ? { facingMode: { ideal: cameraFacingModeRef.current } } : false,
     });
   }, []);
 
@@ -780,6 +836,10 @@ export default function CallManager({
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setPickerOpen(false);
+    setMinimizedPosition(null);
+    setLocalPipPosition(null);
+    setLocalPipExpanded(false);
+    cameraFacingModeRef.current = 'user';
     setActiveCall({
       callId,
       phase: 'outgoing',
@@ -790,7 +850,7 @@ export default function CallManager({
       remoteStream: null,
       muted: false,
       cameraOff: mode === 'audio',
-      speakerOn: true,
+      speakerOn: false,
       ringing: false,
       accepting: false,
       dismissing: false,
@@ -808,6 +868,7 @@ export default function CallManager({
         acquiredStream.getTracks().forEach(track => track.stop());
         return;
       }
+      await resetAudioOutput();
       const callBeforeMediaReady = callRef.current;
       acquiredStream.getAudioTracks().forEach(track => {
         track.enabled = !(callBeforeMediaReady?.callId === callId && callBeforeMediaReady.muted);
@@ -860,7 +921,7 @@ export default function CallManager({
       }
       if (callRef.current?.callId === callId) finishCall('setup-failed', false);
     }
-  }, [createPeerConnection, finishCall, requestLocalMedia, sendSignal, setActiveCall, waitForInbox]);
+  }, [createPeerConnection, finishCall, requestLocalMedia, resetAudioOutput, sendSignal, setActiveCall, waitForInbox]);
 
   const acceptCall = useCallback(async () => {
     const incomingCall = callRef.current;
@@ -874,6 +935,7 @@ export default function CallManager({
         acquiredStream.getTracks().forEach(track => track.stop());
         return;
       }
+      await resetAudioOutput();
       localStreamRef.current = acquiredStream;
       const connection = createPeerConnection(incomingCall.callId, incomingCall.peer);
       acquiredStream.getTracks().forEach(track => {
@@ -913,7 +975,7 @@ export default function CallManager({
       }
       if (callRef.current?.callId === incomingCall.callId) finishCall('permission-denied');
     }
-  }, [createPeerConnection, finishCall, flushEarlyCandidates, requestLocalMedia, sendSignal, setActiveCall, stopRingtone]);
+  }, [createPeerConnection, finishCall, flushEarlyCandidates, requestLocalMedia, resetAudioOutput, sendSignal, setActiveCall, stopRingtone]);
 
   const rejectOrEndCall = useCallback((reason = 'declined') => {
     const activeCall = callRef.current;
@@ -983,7 +1045,7 @@ export default function CallManager({
       }
 
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
-      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: cameraFacingModeRef.current } }, audio: false });
       cameraTrack = cameraStream.getVideoTracks()[0] || null;
       const currentCall = callRef.current;
       const currentStream = localStreamRef.current;
@@ -1060,16 +1122,107 @@ export default function CallManager({
     }
   }, [sendSignal, setActiveCall]);
 
-  const toggleSpeaker = useCallback(() => {
+  const flipCamera = useCallback(async () => {
     const activeCall = callRef.current;
+    const currentStream = localStreamRef.current;
+    const connection = peerConnectionRef.current;
+    if (!activeCall || activeCall.phase !== 'active' || activeCall.cameraOff || activeCall.dismissing || !currentStream || !connection || cameraToggleRef.current) return;
+    cameraToggleRef.current = true;
+    let cameraStream: MediaStream | null = null;
+    let nextTrack: MediaStreamTrack | null = null;
+    try {
+      const nextFacingMode = cameraFacingModeRef.current === 'user' ? 'environment' : 'user';
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: nextFacingMode } }, audio: false });
+      nextTrack = cameraStream.getVideoTracks()[0] || null;
+      const latestCall = callRef.current;
+      if (!nextTrack || latestCall?.callId !== activeCall.callId || latestCall.phase !== 'active' || localStreamRef.current !== currentStream || peerConnectionRef.current !== connection) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      const sender = videoSenderRef.current?.connection === connection
+        ? videoSenderRef.current.sender
+        : connection.getSenders().find(candidate => candidate.track?.kind === 'video') || null;
+      if (!sender) throw new Error('تعذر العثور على مسار الفيديو الحالي.');
+      const previousTracks = currentStream.getVideoTracks();
+      currentStream.addTrack(nextTrack);
+      await sender.replaceTrack(nextTrack);
+      if (callRef.current?.callId !== activeCall.callId || peerConnectionRef.current !== connection || localStreamRef.current !== currentStream) {
+        currentStream.removeTrack(nextTrack);
+        nextTrack.stop();
+        return;
+      }
+      previousTracks.forEach(track => {
+        currentStream.removeTrack(track);
+        track.stop();
+      });
+      cameraFacingModeRef.current = nextFacingMode;
+      const currentCall = callRef.current;
+      if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, localStream: currentStream });
+    } catch (error) {
+      if (nextTrack) {
+        currentStream.removeTrack(nextTrack);
+        nextTrack.stop();
+      } else {
+        cameraStream?.getTracks().forEach(track => track.stop());
+      }
+      console.warn('[calls] تعذر قلب كاميرا المكالمة:', error);
+      toast.error(/NotAllowedError|PermissionDeniedError|SecurityError|Permission denied|MEDIA_ACCESS_UNAVAILABLE/i.test(error instanceof Error ? `${error.name} ${error.message}` : String(error))
+        ? 'يرجى السماح بالوصول إلى الكاميرا لقلب اتجاه الفيديو.'
+        : 'تعذر قلب الكاميرا. تحقق من دعم الكاميرا الخلفية ثم حاول مرة أخرى.');
+    } finally {
+      cameraToggleRef.current = false;
+    }
+  }, [setActiveCall]);
+
+  const toggleSpeaker = useCallback(async () => {
+    const activeCall = callRef.current;
+    const audioElement = remoteAudioRef.current as (HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> }) | null;
     if (!activeCall || activeCall.dismissing) return;
-    setActiveCall({ ...activeCall, speakerOn: !activeCall.speakerOn });
+    if (!audioElement?.setSinkId) {
+      toast.info('اختيار سماعة الأذن أو مكبر الصوت غير مدعوم في هذا المتصفح؛ سيستمر الصوت على المخرج الافتراضي.');
+      return;
+    }
+    try {
+      const nextSpeakerOn = !activeCall.speakerOn;
+      let sinkId = '';
+      if (nextSpeakerOn) {
+        const outputs = await navigator.mediaDevices.enumerateDevices();
+        const speaker = outputs.find(device => device.kind === 'audiooutput' && /(speaker|loudspeaker|مكبر|السماعة الخارجية)/i.test(device.label));
+        if (!speaker) {
+          toast.info('لا يتوفر مخرج مكبر صوت منفصل يمكن اختياره في هذا المتصفح.');
+          return;
+        }
+        sinkId = speaker.deviceId;
+      }
+      await audioElement.setSinkId(sinkId);
+      const currentCall = callRef.current;
+      if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, speakerOn: nextSpeakerOn });
+    } catch (error) {
+      console.warn('[calls] تعذر تغيير مخرج الصوت:', error);
+      toast.info('تعذر تغيير مخرج الصوت؛ تحقق من إعدادات الصوت في الجهاز.');
+    }
   }, [setActiveCall]);
 
   const showActiveVideo = Boolean(callState && callState.phase === 'active' && !callState.terminalStatus && (
     (!callState.cameraOff && callState.localStream?.getVideoTracks().some(track => track.readyState === 'live' && track.enabled))
     || callState.remoteStream?.getVideoTracks().some(track => track.readyState === 'live' && !track.muted)
   ));
+
+  useEffect(() => {
+    if (!showActiveVideo || isMinimized) {
+      videoControlsVisibleRef.current = true;
+      setVideoControlsVisible(true);
+      if (videoUiTimeoutRef.current !== null) window.clearTimeout(videoUiTimeoutRef.current);
+      videoUiTimeoutRef.current = null;
+      return;
+    }
+    revealVideoControls();
+    return () => {
+      if (videoUiTimeoutRef.current !== null) window.clearTimeout(videoUiTimeoutRef.current);
+      videoUiTimeoutRef.current = null;
+    };
+  }, [isMinimized, revealVideoControls, showActiveVideo]);
 
   useEffect(() => {
     if (!callState || callState.phase !== 'active' || !callState.startedAt || callState.terminalStatus) {
@@ -1147,6 +1300,8 @@ export default function CallManager({
 
   useEffect(() => () => {
     stopRingtone();
+    if (videoUiTimeoutRef.current !== null) window.clearTimeout(videoUiTimeoutRef.current);
+    videoUiTimeoutRef.current = null;
     if (dismissTimerRef.current !== null) window.clearTimeout(dismissTimerRef.current);
     const activeCall = callRef.current;
     if (activeCall && !activeCall.dismissing && !activeCall.terminalStatus) {
@@ -1163,6 +1318,129 @@ export default function CallManager({
     localStreamRef.current?.getTracks().forEach(track => track.stop());
     localStreamRef.current = null;
   }, [closeOutboundChannels, sendSignal, stopRingtone]);
+
+  const handleLocalPipPointerDown = useCallback((event: ReactPointerEvent<HTMLVideoElement>) => {
+    event.stopPropagation();
+    const video = event.currentTarget;
+    const parent = video.parentElement;
+    if (!parent) return;
+    const rect = video.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    video.setPointerCapture(event.pointerId);
+    localPipDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: localPipPosition?.left ?? rect.left - parentRect.left,
+      startTop: localPipPosition?.top ?? rect.top - parentRect.top,
+      moved: false,
+    };
+  }, [localPipPosition]);
+
+  const handleLocalPipPointerMove = useCallback((event: ReactPointerEvent<HTMLVideoElement>) => {
+    event.stopPropagation();
+    const drag = localPipDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const video = event.currentTarget;
+    const parent = video.parentElement;
+    if (!parent) return;
+    const parentRect = parent.getBoundingClientRect();
+    const rect = video.getBoundingClientRect();
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (!drag.moved && (Math.abs(deltaX) > 3 || Math.abs(deltaY) > 3)) {
+      drag.moved = true;
+      setIsLocalPipDragging(true);
+    }
+    if (!drag.moved) return;
+    setLocalPipPosition({
+      left: Math.max(0, Math.min(parentRect.width - rect.width, drag.startLeft + deltaX)),
+      top: Math.max(0, Math.min(parentRect.height - rect.height, drag.startTop + deltaY)),
+    });
+  }, []);
+
+  const handleLocalPipPointerUp = useCallback((event: ReactPointerEvent<HTMLVideoElement>) => {
+    event.stopPropagation();
+    const drag = localPipDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    localPipDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.moved) {
+      setIsLocalPipDragging(false);
+      previousPipTapRef.current = null;
+      return;
+    }
+    const previousTap = previousPipTapRef.current;
+    const isDoubleTap = previousTap && Date.now() - previousTap.at < 360
+      && Math.abs(previousTap.x - event.clientX) < 24
+      && Math.abs(previousTap.y - event.clientY) < 24;
+    if (isDoubleTap) {
+      const nextExpanded = !localPipExpanded;
+      const parentRect = event.currentTarget.parentElement?.getBoundingClientRect();
+      const nextWidth = nextExpanded ? Math.min(window.innerWidth * 0.48, 190) : Math.min(window.innerWidth * 0.3, 126);
+      const nextHeight = nextWidth * 4 / 3;
+      if (parentRect) {
+        setLocalPipPosition(position => position ? {
+          left: Math.max(0, Math.min(parentRect.width - nextWidth, position.left)),
+          top: Math.max(0, Math.min(parentRect.height - nextHeight, position.top)),
+        } : null);
+      }
+      setLocalPipExpanded(nextExpanded);
+      previousPipTapRef.current = null;
+    } else {
+      previousPipTapRef.current = { at: Date.now(), x: event.clientX, y: event.clientY };
+    }
+  }, [localPipExpanded]);
+
+  const handleMinimizedPointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (!isMinimized || (event.target as HTMLElement).closest('button,.aani-call-local-video')) return;
+    const overlay = event.currentTarget;
+    const parent = overlay.parentElement;
+    if (!parent) return;
+    const rect = overlay.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    overlay.setPointerCapture(event.pointerId);
+    minimizedDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startLeft: minimizedPosition?.left ?? rect.left - parentRect.left,
+      startTop: minimizedPosition?.top ?? rect.top - parentRect.top,
+      moved: false,
+    };
+  }, [isMinimized, minimizedPosition]);
+
+  const handleMinimizedPointerMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const drag = minimizedDragRef.current;
+    if (!isMinimized || !drag || drag.pointerId !== event.pointerId) return;
+    const parent = event.currentTarget.parentElement;
+    if (!parent) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    const deltaX = event.clientX - drag.startX;
+    const deltaY = event.clientY - drag.startY;
+    if (!drag.moved && (Math.abs(deltaX) > 4 || Math.abs(deltaY) > 4)) {
+      drag.moved = true;
+      setIsMinimizedDragging(true);
+    }
+    if (!drag.moved) return;
+    setMinimizedPosition({
+      left: Math.max(0, Math.min(parentRect.width - rect.width, drag.startLeft + deltaX)),
+      top: Math.max(0, Math.min(parentRect.height - rect.height, drag.startTop + deltaY)),
+    });
+  }, [isMinimized]);
+
+  const handleMinimizedPointerUp = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const drag = minimizedDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    minimizedDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (drag.moved) {
+      setIsMinimizedDragging(false);
+      skipMinimizedClickRef.current = true;
+      window.setTimeout(() => { skipMinimizedClickRef.current = false; }, 0);
+    }
+  }, []);
 
   const closePicker = () => setPickerOpen(false);
   const sheetDragStartYRef = useRef<number | null>(null);
@@ -1220,20 +1498,49 @@ export default function CallManager({
       {callState && (
         <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-layer-incoming' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}${isMinimized ? ' aani-call-layer-minimized' : ''}`} dir="rtl">
           <section
-            className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.dismissing && callState.terminalStatus ? ' aani-call-overlay-terminal-dismissing' : ''}${callState.dismissing && callState.terminalStatus === 'ended' ? ' aani-call-overlay-ended-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}${isMinimized ? ' aani-call-overlay-minimized' : ''}`}
+            className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.dismissing && callState.terminalStatus ? ' aani-call-overlay-terminal-dismissing' : ''}${callState.dismissing && callState.terminalStatus === 'ended' ? ' aani-call-overlay-ended-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}${isMinimized ? ' aani-call-overlay-minimized' : ''}${showActiveVideo && !videoControlsVisible && !isMinimized ? ' aani-call-ui-hidden' : ''}${isMinimizedDragging ? ' is-dragging' : ''}`}
+            style={isMinimized && minimizedPosition ? { left: minimizedPosition.left, top: minimizedPosition.top, right: 'auto', bottom: 'auto' } : undefined}
             role={isMinimized ? 'button' : 'dialog'}
             tabIndex={isMinimized ? 0 : undefined}
             aria-modal={isMinimized ? undefined : true}
             aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}
-            onClick={() => { if (isMinimized) setIsMinimized(false); }}
+            onClick={event => {
+              if (isMinimized) {
+                if (skipMinimizedClickRef.current) {
+                  skipMinimizedClickRef.current = false;
+                  return;
+                }
+                setLocalPipPosition(null);
+                setIsMinimized(false);
+                return;
+              }
+              if (showActiveVideo) {
+                if ((event.target as HTMLElement).closest('button')) revealVideoControls();
+                else toggleVideoControls();
+              }
+            }}
+            onPointerDown={event => {
+              if (isMinimized) {
+                handleMinimizedPointerDown(event);
+              } else if (showActiveVideo && (event.target as HTMLElement).closest('button')) {
+                revealVideoControls();
+              }
+            }}
+            onPointerMove={event => {
+              if (isMinimized) handleMinimizedPointerMove(event);
+              else if (showActiveVideo && event.pointerType === 'mouse') revealVideoControls();
+            }}
+            onPointerUp={event => { if (isMinimized) handleMinimizedPointerUp(event); }}
+            onPointerCancel={() => { minimizedDragRef.current = null; setIsMinimizedDragging(false); }}
             onKeyDown={event => {
               if (isMinimized && (event.key === 'Enter' || event.key === ' ')) {
                 event.preventDefault();
+                setLocalPipPosition(null);
                 setIsMinimized(false);
               }
             }}
           >
-            <audio ref={remoteAudioRef} muted={!callState.speakerOn} autoPlay playsInline style={{ display: 'none' }} />
+            <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
             {!isMinimized && callState.phase === 'active' && !callState.terminalStatus && !callState.dismissing && (
               <button
                 type="button"
@@ -1241,6 +1548,7 @@ export default function CallManager({
                 aria-label="تصغير المكالمة"
                 onClick={event => {
                   event.stopPropagation();
+                  setLocalPipPosition(null);
                   setIsMinimized(true);
                 }}
               >
@@ -1251,7 +1559,25 @@ export default function CallManager({
               <>
                 <video ref={remoteVideoRef} className="aani-call-remote-video" muted autoPlay playsInline aria-label="فيديو الطرف الآخر" />
                 <div className="aani-call-video-shade" />
-                {callState.localStream && !callState.cameraOff && <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />}
+                {callState.localStream && !callState.cameraOff && (
+                  <video
+                    ref={localVideoRef}
+                    className={`aani-call-local-video${isLocalPipDragging ? ' is-dragging' : ''}`}
+                    style={{
+                      ...(localPipPosition ? { left: localPipPosition.left, top: localPipPosition.top, right: 'auto', bottom: 'auto' } : {}),
+                      width: localPipExpanded && !isMinimized ? 'min(48vw,190px)' : undefined,
+                    }}
+                    muted
+                    autoPlay
+                    playsInline
+                    aria-label="الفيديو المحلي، اسحب لتحريكه واضغط مرتين لتغيير الحجم"
+                    onPointerDown={handleLocalPipPointerDown}
+                    onPointerMove={handleLocalPipPointerMove}
+                    onPointerUp={handleLocalPipPointerUp}
+                    onPointerCancel={event => { event.stopPropagation(); localPipDragRef.current = null; setIsLocalPipDragging(false); }}
+                    onClick={event => event.stopPropagation()}
+                  />
+                )}
 
               </>
             )}
@@ -1283,13 +1609,13 @@ export default function CallManager({
                   <>
                     <CallAvatar peer={callState.peer} className="aani-call-avatar-active" />
                     <div className="aani-call-person">
-                      <h2 className="aani-call-name">{callState.peer.name}</h2>
+                      {callState.mode === 'audio' && <h2 className="aani-call-name">{callState.peer.name}</h2>}
                       <p className={`aani-call-status${callState.terminalStatus === 'ended' ? ' aani-call-status-ended' : ''}`}>
                         {callState.terminalStatus === 'ended' ? 'تم إنهاء المكالمة' : 'المكالمة متصلة'}
                       </p>
-                      {callState.terminalStatus === 'ended'
+                      {callState.mode === 'audio' && (callState.terminalStatus === 'ended'
                         ? <span className="aani-call-duration visible" aria-label={`مدة المكالمة ${activeDuration}`}>مدة المكالمة {activeDuration}</span>
-                        : <span className="aani-call-timer aani-call-timer-active" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>}
+                        : <span className="aani-call-timer aani-call-timer-active" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>)}
                     </div>
                     {callState.terminalStatus !== 'ended' && callState.mode === 'audio' && callState.localStream && !callState.cameraOff && (
                       <video ref={localVideoRef} className="aani-call-local-video aani-call-local-video-audio" muted autoPlay playsInline aria-label="الفيديو المحلي" />
@@ -1298,12 +1624,6 @@ export default function CallManager({
                 )}
 
               </>
-            )}
-            {showActiveVideo && (
-              <div className="aani-call-person" style={{ position: 'absolute', top: 'calc(18px + env(safe-area-inset-top))', right: 76, alignItems: 'flex-start', gap: 5 }}>
-                <h2 className="aani-call-name" style={{ margin: 0, fontSize: 18, textShadow: '0 1px 8px #000' }}>{callState.peer.name}</h2>
-                <span className="aani-call-timer aani-call-timer-active" style={{ margin: 0, textShadow: '0 1px 8px #000' }}>{activeDuration}</span>
-              </div>
             )}
             {callState.phase !== 'incoming' && callState.mode === 'video' && callState.phase !== 'active' && callState.localStream && (
               <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />
@@ -1323,6 +1643,7 @@ export default function CallManager({
                 <>
                   <button type="button" className={`aani-call-control${callState.muted ? ' is-active is-muted' : ''}`} aria-label={callState.muted ? 'إلغاء كتم الصوت' : 'كتم الصوت'} aria-pressed={callState.muted} onClick={toggleMute} disabled={!callState.localStream || callState.dismissing}>{callState.muted ? <MicOff size={22} /> : <Mic size={22} />}</button>
                   <button type="button" className={`aani-call-control${callState.cameraOff ? ' is-active' : ''}`} aria-label={callState.cameraOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'} aria-pressed={!callState.cameraOff} onClick={() => void toggleCamera()} disabled={!callState.localStream || callState.dismissing}>{callState.cameraOff ? <VideoOff size={22} /> : <Camera size={22} />}</button>
+                  {!callState.cameraOff && <button type="button" className="aani-call-control" aria-label={cameraFacingModeRef.current === 'user' ? 'التبديل إلى الكاميرا الخلفية' : 'التبديل إلى الكاميرا الأمامية'} onClick={() => void flipCamera()} disabled={!callState.localStream || callState.dismissing}><RefreshCw size={22} /></button>}
                   <button type="button" className={`aani-call-control${!callState.speakerOn ? ' is-active' : ''}`} aria-label={callState.speakerOn ? 'إيقاف مكبر الصوت' : 'تشغيل مكبر الصوت'} aria-pressed={callState.speakerOn} onClick={toggleSpeaker} disabled={callState.dismissing}>{callState.speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}</button>
                   <button type="button" className="aani-call-control is-end" aria-label="إنهاء المكالمة" disabled={callState.dismissing} onClick={() => rejectOrEndCall('ended')}><PhoneOff size={24} /></button>
                 </>
