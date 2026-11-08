@@ -163,3 +163,38 @@
     animation-duration: 0.01ms;
   }
 }
+
+.highlight-options-backdrop {
+  animation: highlights-backdrop-in 180ms ease-out both;
+}
+
+.highlight-options-sheet {
+  animation: highlights-sheet-in 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.highlight-edit-modal {
+  animation: highlight-edit-in 240ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.highlight-delete-dialog {
+  animation: highlight-delete-in 180ms ease-out both;
+}
+
+@keyframes highlight-edit-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes highlight-delete-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .highlight-options-backdrop,
+  .highlight-options-sheet,
+  .highlight-edit-modal,
+  .highlight-delete-dialog {
+    animation-duration: 0.01ms;
+  }
+}

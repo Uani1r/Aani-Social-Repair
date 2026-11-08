@@ -161,7 +161,7 @@ export default function ProfilePage({
         supabase.from('posts').select('id', { count: 'exact', head: true }).eq('user_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
-        supabase.from('profile_highlight_collections').select('id, user_id, title, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
+        supabase.from('profile_highlight_collections').select('id, user_id, title, cover_url, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
         supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
         own
           ? supabase.from('follow_requests').select('requester_id, created_at').eq('recipient_id', currentUserId).order('created_at', { ascending: false }).limit(100)
@@ -620,7 +620,9 @@ export default function ProfilePage({
                 <button key={collection.id} type="button" onClick={() => setSelectedHighlightCollection(collection)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label={`عرض مجموعة ${collection.title}`}>
                   <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
                     <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                      {cover?.media_url && cover.media_type === 'video' ? (
+                      {collection.cover_url ? (
+                        <img src={collection.cover_url} className="h-full w-full object-cover" alt="" />
+                      ) : cover?.media_url && cover.media_type === 'video' ? (
                         <video src={cover.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
                       ) : cover?.media_url ? (
                         <img src={cover.media_url} className="h-full w-full object-cover" alt="" />
@@ -680,6 +682,14 @@ export default function ProfilePage({
           collection={selectedHighlightCollection}
           collections={profileHighlights}
           onClose={() => setSelectedHighlightCollection(null)}
+          onCollectionUpdated={(collectionId, updates) => {
+            setProfileHighlights(current => current.map(item => item.id === collectionId ? { ...item, ...updates } : item));
+            setSelectedHighlightCollection(current => current?.id === collectionId ? { ...current, ...updates } : current);
+          }}
+          onCollectionDeleted={collectionId => {
+            setProfileHighlights(current => current.filter(item => item.id !== collectionId));
+            setSelectedHighlightCollection(current => current?.id === collectionId ? null : current);
+          }}
           currentUserId={currentUserId}
           ownerName={person ? displayName(person) : 'محمد'}
           ownerAvatarUrl={person?.avatar_url || null}

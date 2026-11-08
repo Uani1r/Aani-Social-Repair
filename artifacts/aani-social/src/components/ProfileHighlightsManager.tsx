@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { Check, Heart, ImagePlus, Loader2, Plus, SendHorizontal, Upload, X } from 'lucide-react';
+import { Check, ChevronLeft, Heart, ImagePlus, Loader2, MoreVertical, Pencil, Plus, SendHorizontal, Trash2, Upload, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
@@ -40,6 +40,7 @@ export type ProfileHighlightCollectionSummary = {
   id: string;
   user_id: string;
   title: string;
+  cover_url?: string | null;
   created_at: string;
 };
 
@@ -81,6 +82,19 @@ function mediaPreview(mediaUrl: string | null, mediaType: string, caption: strin
   }
   if (mediaUrl) return <img src={mediaUrl} className={className} alt="معاينة القصة" data-duration={safeDuration} />;
   return <div className={`${className} flex items-center justify-center whitespace-pre-wrap break-words bg-gradient-to-br from-[#30303a] to-[#111116] p-6 text-center text-lg font-bold text-white`}>{caption || 'قصة نصية'}</div>;
+}
+
+function getHighlightStoragePath(mediaUrl: string | null | undefined, userId: string) {
+  if (!mediaUrl || typeof URL === 'undefined') return null;
+  try {
+    const pathPrefix = `/storage/v1/object/public/${storageBucket}/`;
+    const pathname = new URL(mediaUrl).pathname;
+    if (!pathname.startsWith(pathPrefix)) return null;
+    const path = decodeURIComponent(pathname.slice(pathPrefix.length));
+    return path.startsWith(`${userId}/`) ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 export default function ProfileHighlightsManager({
@@ -676,7 +690,7 @@ export default function ProfileHighlightsManager({
                   <button key={collection.id} type="button" onClick={() => void saveHighlight(collection)} disabled={saving} className="flex w-[92px] shrink-0 flex-col items-center gap-2 text-center disabled:opacity-50" aria-label={`إضافة إلى مجموعة ${collection.title}`}>
                     <span className="flex h-[68px] w-[68px] overflow-hidden rounded-full border border-[#4B4B50] p-[3px]">
                       <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                        {cover ? mediaPreview(cover.media_url, cover.media_type, cover.caption, 'h-full w-full object-cover', false) : <span className="px-1 text-center text-[9px] text-white">{collection.title}</span>}
+                        {collection.cover_url ? mediaPreview(collection.cover_url, 'image', null, 'h-full w-full object-cover', false) : cover ? mediaPreview(cover.media_url, cover.media_type, cover.caption, 'h-full w-full object-cover', false) : <span className="px-1 text-center text-[9px] text-white">{collection.title}</span>}
                       </span>
                     </span>
                     <span className="line-clamp-2 w-full text-[11px] text-zinc-300">{collection.title}</span>
@@ -781,7 +795,7 @@ export default function ProfileHighlightsManager({
                   <button key={collection.id} type="button" onClick={() => void savePreviewedArchiveStory(collection)} disabled={saving} aria-label={`إضافة القصة إلى مجموعة ${collection.title}`} className="flex w-[82px] shrink-0 flex-col items-center gap-2 text-center disabled:opacity-50">
                     <span className="flex h-[72px] w-[72px] overflow-hidden rounded-full border-2 border-white/50 p-[3px]">
                       <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                        {cover ? mediaPreview(cover.media_url, cover.media_type, cover.caption, 'h-full w-full object-cover', false) : <span className="px-1 text-center text-[9px] text-white">{collection.title}</span>}
+                        {collection.cover_url ? mediaPreview(collection.cover_url, 'image', null, 'h-full w-full object-cover', false) : cover ? mediaPreview(cover.media_url, cover.media_type, cover.caption, 'h-full w-full object-cover', false) : <span className="px-1 text-center text-[9px] text-white">{collection.title}</span>}
                       </span>
                     </span>
                     <span className="line-clamp-2 w-full text-[11px] leading-4 text-zinc-200">{collection.title}</span>
@@ -818,6 +832,8 @@ export function ProfileHighlightViewer({
   collection,
   collections,
   onClose,
+  onCollectionUpdated,
+  onCollectionDeleted,
   currentUserId,
   ownerName,
   ownerAvatarUrl,
@@ -825,6 +841,8 @@ export function ProfileHighlightViewer({
   collection: ProfileHighlightCollection;
   collections: ProfileHighlightCollection[];
   onClose: () => void;
+  onCollectionUpdated: (collectionId: string, updates: { title: string; cover_url: string | null }) => void;
+  onCollectionDeleted: (collectionId: string) => void;
   currentUserId: string;
   ownerName: string;
   ownerAvatarUrl: string | null;
@@ -838,6 +856,14 @@ export function ProfileHighlightViewer({
   const [videoFailedStoryId, setVideoFailedStoryId] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isCleanScreen, setIsCleanScreen] = useState(false);
+  const [optionsSheetOpen, setOptionsSheetOpen] = useState(false);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [editTitleDraft, setEditTitleDraft] = useState('');
+  const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
+  const [editCoverPreviewUrl, setEditCoverPreviewUrl] = useState<string | null>(null);
+  const [isSavingCollection, setIsSavingCollection] = useState(false);
+  const [isDeletingCollection, setIsDeletingCollection] = useState(false);
   const [titleToastVisible, setTitleToastVisible] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
@@ -859,6 +885,8 @@ export function ProfileHighlightViewer({
   const cleanScreenMouseStartRef = useRef<{ x: number; y: number } | null>(null);
   const cleanScreenIgnoreMouseUntilRef = useRef(0);
   const cleanScreenSuppressClickUntilRef = useRef(0);
+  const managementPauseBeforeRef = useRef(false);
+  const editCoverInputRef = useRef<HTMLInputElement>(null);
   const foundCollectionIndex = collections.findIndex(item => item.id === activeCollectionId);
   const collectionIndex = foundCollectionIndex >= 0 ? foundCollectionIndex : collections.findIndex(item => item.id === collection.id);
   const activeCollection = foundCollectionIndex >= 0 ? collections[foundCollectionIndex] : collection;
@@ -960,6 +988,170 @@ export function ProfileHighlightViewer({
       if (activeStoryIdRef.current === timerStoryId) goToStoryRef.current(activeIndexRef.current + 1);
     }, remainingMs);
   }, [durationsLoaded, isVideo, mediaReadyStoryId, story?.id, videoFailedStoryId]);
+
+  useEffect(() => {
+    if (!editCoverFile) {
+      setEditCoverPreviewUrl(null);
+      return;
+    }
+    const previewUrl = URL.createObjectURL(editCoverFile);
+    setEditCoverPreviewUrl(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [editCoverFile]);
+
+  const resumeManagementPause = () => {
+    const wasPaused = managementPauseBeforeRef.current;
+    setIsPaused(wasPaused);
+    if (!wasPaused) {
+      resumeStoryProgress();
+      if (videoRef.current) void videoRef.current.play().catch(() => {});
+    }
+  };
+
+  const openOptionsSheet = () => {
+    managementPauseBeforeRef.current = isPaused;
+    pauseStoryProgress();
+    setIsPaused(true);
+    videoRef.current?.pause();
+    setOptionsSheetOpen(true);
+  };
+
+  const closeOptionsSheet = () => {
+    setOptionsSheetOpen(false);
+    resumeManagementPause();
+  };
+
+  const openEditModal = () => {
+    setOptionsSheetOpen(false);
+    setEditTitleDraft(activeCollection.title);
+    setEditCoverFile(null);
+    setEditModalOpen(true);
+  };
+
+  const closeEditModal = () => {
+    if (isSavingCollection) return;
+    setEditModalOpen(false);
+    setEditCoverFile(null);
+    resumeManagementPause();
+  };
+
+  const openDeleteConfirmation = () => {
+    setOptionsSheetOpen(false);
+    setDeleteConfirmOpen(true);
+  };
+
+  const closeDeleteConfirmation = () => {
+    if (isDeletingCollection) return;
+    setDeleteConfirmOpen(false);
+    resumeManagementPause();
+  };
+
+  const handleEditCoverSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0] || null;
+    input.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('اختر ملف صورة صالحاً.');
+      return;
+    }
+    setEditCoverFile(file);
+  };
+
+  const saveCollectionSettings = async () => {
+    if (isSavingCollection || !isStoryOwner) return;
+    const title = editTitleDraft.trim();
+    if (!title) {
+      toast.error('اكتب عنواناً للمجموعة أولاً.');
+      return;
+    }
+    if (!supabaseConfigured || !currentUserId) {
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    setIsSavingCollection(true);
+    let uploadedPath: string | null = null;
+    const previousCoverPath = getHighlightStoragePath(activeCollection.cover_url, currentUserId);
+    try {
+      let coverUrl = activeCollection.cover_url || null;
+      if (editCoverFile) {
+        const safeName = editCoverFile.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'highlight-cover';
+        uploadedPath = `${currentUserId}/highlights/covers/${activeCollection.id}/${Date.now()}-${safeName}`;
+        await uploadMedia({ file: editCoverFile, path: uploadedPath });
+        coverUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
+      }
+
+      const { error } = await supabase.rpc('aani_update_profile_highlight_collection', {
+        p_collection_id: activeCollection.id,
+        p_title: title,
+        p_cover_url: coverUrl,
+      });
+      if (error) throw error;
+
+      const newCoverPath = uploadedPath;
+      uploadedPath = null;
+      onCollectionUpdated(activeCollection.id, { title, cover_url: coverUrl });
+      setEditModalOpen(false);
+      setEditCoverFile(null);
+      resumeManagementPause();
+      toast.success('تم تحديث المجموعة.');
+      if (editCoverFile && previousCoverPath && previousCoverPath !== newCoverPath) {
+        try {
+          const { error: cleanupError } = await supabase.storage.from(storageBucket).remove([previousCoverPath]);
+          if (cleanupError) console.warn('[profile highlights] تعذر حذف الغلاف القديم:', cleanupError);
+        } catch (cleanupError) {
+          console.warn('[profile highlights] تعذر حذف الغلاف القديم:', cleanupError);
+        }
+      }
+    } catch (error) {
+      if (uploadedPath) {
+        try {
+          const { error: cleanupError } = await supabase.storage.from(storageBucket).remove([uploadedPath]);
+          if (cleanupError) console.warn('[profile highlights] تعذر حذف الغلاف غير المحفوظ:', cleanupError);
+        } catch (cleanupError) {
+          console.warn('[profile highlights] تعذر حذف الغلاف غير المحفوظ:', cleanupError);
+        }
+      }
+      console.error('[profile highlights] تعذر تحديث المجموعة:', error);
+      toast.error('تعذر حفظ تغييرات المجموعة. حاول مرة أخرى.');
+    } finally {
+      setIsSavingCollection(false);
+    }
+  };
+
+  const deleteCollection = async () => {
+    if (isDeletingCollection || !isStoryOwner) return;
+    if (!supabaseConfigured || !currentUserId) {
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    setIsDeletingCollection(true);
+    try {
+      const { error } = await supabase.rpc('aani_delete_profile_highlight_collection', {
+        p_collection_id: activeCollection.id,
+      });
+      if (error) throw error;
+
+      const removedCoverPath = getHighlightStoragePath(activeCollection.cover_url, currentUserId);
+      setIsDeletingCollection(false);
+      setDeleteConfirmOpen(false);
+      onCollectionDeleted(activeCollection.id);
+      closeViewer();
+      toast.success('تم حذف مجموعة أبرز القصص.');
+      if (removedCoverPath) {
+        void supabase.storage.from(storageBucket).remove([removedCoverPath]).then(({ error: cleanupError }) => {
+          if (cleanupError) console.warn('[profile highlights] تعذر حذف غلاف المجموعة:', cleanupError);
+        }).catch(cleanupError => console.warn('[profile highlights] تعذر حذف غلاف المجموعة:', cleanupError));
+      }
+    } catch (error) {
+      console.error('[profile highlights] تعذر حذف المجموعة:', error);
+      toast.error('تعذر حذف المجموعة. حاول مرة أخرى.');
+    } finally {
+      setIsDeletingCollection(false);
+    }
+  };
 
   const clearCleanScreenPressTimer = useCallback(() => {
     if (cleanScreenPressTimerRef.current !== null) {
@@ -1075,13 +1267,20 @@ export function ProfileHighlightViewer({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeViewer();
+      if (event.key === 'Escape') {
+        if (deleteConfirmOpen) closeDeleteConfirmation();
+        else if (editModalOpen) closeEditModal();
+        else if (optionsSheetOpen) closeOptionsSheet();
+        else closeViewer();
+        return;
+      }
+      if (editModalOpen || deleteConfirmOpen || optionsSheetOpen) return;
       if (event.key === 'ArrowRight') goToStory(activeIndex - 1);
       if (event.key === 'ArrowLeft') goToStory(activeIndex + 1);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeIndex, closeViewer, goToStory]);
+  }, [activeIndex, closeDeleteConfirmation, closeEditModal, closeOptionsSheet, closeViewer, deleteConfirmOpen, editModalOpen, goToStory, optionsSheetOpen]);
 
   useEffect(() => {
     clearStoryTimer();
@@ -1345,7 +1544,14 @@ export function ProfileHighlightViewer({
             <time dateTime={story.created_at} className="mt-0.5 block text-[10px] text-white/75">{formatDate(story.created_at) || 'قصة محفوظة'}</time>
           </div>
         </div>
-        <button type="button" onClick={closeViewer} aria-label="إغلاق أبرز القصص" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/30 text-white backdrop-blur-sm"><X size={22} /></button>
+        <div className="mr-1 flex shrink-0 items-center gap-2">
+          {isStoryOwner && (
+            <button type="button" onClick={openOptionsSheet} aria-label="خيارات المجموعة" className="grid h-10 w-10 place-items-center rounded-full bg-black/35 text-white backdrop-blur-sm transition hover:bg-black/55">
+              <MoreVertical size={21} />
+            </button>
+          )}
+          <button type="button" onClick={closeViewer} aria-label="إغلاق أبرز القصص" className="grid h-10 w-10 place-items-center rounded-full bg-black/35 p-1 text-white backdrop-blur-sm transition hover:bg-black/55"><X size={22} /></button>
+        </div>
       </header>
 
       <div className={`pointer-events-none absolute inset-x-5 z-40 text-center text-lg font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] transition-all duration-500 ${titleToastVisible && !isCleanScreen ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 74px)' }} aria-live="polite">
@@ -1388,6 +1594,78 @@ export function ProfileHighlightViewer({
           <button type="button" onClick={() => void handleToggleLike()} disabled={!currentUserId || isLikeLoading || isLikeSaving} aria-label={isLiked ? 'إلغاء الإعجاب بأبرز القصص' : 'الإعجاب بأبرز القصص'} aria-pressed={isLiked} className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-700/70 bg-zinc-900/90 transition disabled:opacity-50 ${isLiked ? 'text-pink-500' : 'text-white'}`}>
             {isLikeLoading || isLikeSaving ? <Loader2 size={17} className="animate-spin" /> : <Heart size={19} fill={isLiked ? 'currentColor' : 'none'} />}
           </button>
+        </div>
+      )}
+
+      {optionsSheetOpen && (
+        <div
+          id="optionsBottomSheet"
+          className={`highlight-options-backdrop fixed inset-0 z-[2110] flex items-end justify-center bg-black/60 backdrop-blur-md ${optionsSheetOpen ? 'active' : ''}`}
+          role="presentation"
+          onClick={event => { if (event.target === event.currentTarget) closeOptionsSheet(); }}
+        >
+          <section className={`highlight-options-sheet w-full max-w-[600px] rounded-t-3xl bg-[#121212] px-5 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 text-white ${optionsSheetOpen ? 'active' : ''}`} role="dialog" aria-modal="true" aria-label="خيارات إدارة أبرز القصص">
+            <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-neutral-600" />
+            <div className="space-y-2">
+              <button type="button" onClick={openEditModal} className="flex w-full items-center gap-3 rounded-2xl px-2 py-3 text-right transition hover:bg-white/[0.06]">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-neutral-800 text-neutral-100"><Pencil size={18} /></span>
+                <span className="flex-1 text-sm font-semibold">تعديل</span>
+                <ChevronLeft size={19} className="text-neutral-500" />
+              </button>
+              <button type="button" onClick={openDeleteConfirmation} className="flex w-full items-center gap-3 rounded-2xl px-2 py-3 text-right transition hover:bg-[#FF3B30]/[0.08]">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FF3B30]/10 text-[#FF3B30]"><Trash2 size={18} /></span>
+                <span className="flex-1 text-sm font-semibold text-[#FF3B30]">حذف</span>
+              </button>
+            </div>
+            <button type="button" onClick={closeOptionsSheet} className="mt-4 min-h-12 w-full rounded-2xl bg-neutral-800/80 text-sm font-bold text-white transition hover:bg-neutral-700">إلغاء</button>
+          </section>
+        </div>
+      )}
+
+      {editModalOpen && (
+        <div id="editHighlightModal" className="highlight-edit-modal active fixed inset-0 z-[2120] flex h-[100dvh] w-screen flex-col bg-[#0B0B0B] text-white" dir="rtl" role="dialog" aria-modal="true" aria-labelledby="edit-highlight-heading">
+          <header className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 px-4 pb-3 pt-[env(safe-area-inset-top,44px)]">
+            <button type="button" onClick={closeEditModal} disabled={isSavingCollection} className="justify-self-start px-2 py-2 text-sm font-semibold text-neutral-400 disabled:opacity-50">إلغاء</button>
+            <h2 id="edit-highlight-heading" className="text-sm font-bold">تعديل المجموعة</h2>
+            <button type="button" onClick={() => void saveCollectionSettings()} disabled={isSavingCollection} className="justify-self-end px-2 py-2 text-sm font-black text-[#1D9BF0] disabled:opacity-50">{isSavingCollection ? 'جارٍ الحفظ...' : 'حفظ'}</button>
+          </header>
+          <main className="min-h-0 flex-1 overflow-y-auto px-5 pb-[calc(env(safe-area-inset-bottom)+2rem)] pt-10">
+            <div className="flex flex-col items-center gap-7">
+              <div className="flex flex-col items-center gap-3">
+                <button type="button" onClick={() => editCoverInputRef.current?.click()} disabled={isSavingCollection} aria-label="اختيار صورة غلاف للمجموعة" className="relative h-[100px] w-[100px] overflow-visible rounded-full border-2 border-dashed border-neutral-600 bg-[#1A1A1A] transition hover:border-[#1D9BF0] disabled:opacity-60">
+                  <span className="absolute inset-0 overflow-hidden rounded-full">
+                    {editCoverFile && editCoverPreviewUrl ? (
+                      <img src={editCoverPreviewUrl} alt="معاينة غلاف المجموعة" className="h-full w-full object-cover" />
+                    ) : activeCollection.cover_url ? (
+                      <img src={activeCollection.cover_url} alt="غلاف المجموعة الحالي" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="grid h-full w-full place-items-center text-neutral-400"><ImagePlus size={27} /></span>
+                    )}
+                  </span>
+                  <span className="absolute bottom-0 right-0 grid h-8 w-8 place-items-center rounded-full border-2 border-[#0B0B0B] bg-[#1D9BF0] text-white"><Plus size={17} /></span>
+                </button>
+                <span className="text-xs text-neutral-400">صورة غلاف المجموعة</span>
+                <input ref={editCoverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة غلاف للمجموعة" onChange={handleEditCoverSelection} disabled={isSavingCollection} />
+              </div>
+              <div className="w-full max-w-md">
+                <label htmlFor="edit-highlight-title" className="mb-2 block text-sm font-semibold text-neutral-300">عنوان المجموعة</label>
+                <input id="edit-highlight-title" type="text" value={editTitleDraft} onChange={event => setEditTitleDraft(event.currentTarget.value)} maxLength={100} disabled={isSavingCollection} className="w-full rounded-2xl border border-transparent bg-[#1A1A1A] px-4 py-3.5 text-sm text-white outline-none transition focus:border-[#1D9BF0] focus:ring-1 focus:ring-[#1D9BF0]" placeholder="اكتب عنوان المجموعة" />
+              </div>
+            </div>
+          </main>
+        </div>
+      )}
+
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-[2130] flex items-center justify-center bg-black/60 px-5 backdrop-blur-md" role="presentation" onClick={event => { if (event.target === event.currentTarget) closeDeleteConfirmation(); }}>
+          <section className="highlight-delete-dialog w-full max-w-sm rounded-3xl border border-white/10 bg-[#121212] p-5 text-white shadow-2xl" role="alertdialog" aria-modal="true" aria-labelledby="delete-highlight-heading" aria-describedby="delete-highlight-description">
+            <h2 id="delete-highlight-heading" className="text-base font-black">حذف المجموعة؟</h2>
+            <p id="delete-highlight-description" className="mt-2 text-sm leading-6 text-neutral-400">سيتم حذف مجموعة «{activeCollection.title}» وجميع قصصها نهائياً من ملفك الشخصي.</p>
+            <div className="mt-5 flex gap-3">
+              <button type="button" onClick={closeDeleteConfirmation} disabled={isDeletingCollection} className="min-h-11 flex-1 rounded-xl bg-neutral-800 text-sm font-bold text-white disabled:opacity-50">إلغاء</button>
+              <button type="button" onClick={() => void deleteCollection()} disabled={isDeletingCollection} className="min-h-11 flex-1 rounded-xl bg-[#FF3B30] text-sm font-bold text-white disabled:opacity-50">{isDeletingCollection ? 'جارٍ الحذف...' : 'حذف المجموعة'}</button>
+            </div>
+          </section>
         </div>
       )}
     </div>,
