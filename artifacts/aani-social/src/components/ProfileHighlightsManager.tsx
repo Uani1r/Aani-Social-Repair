@@ -5,7 +5,6 @@ import { Check, ChevronLeft, Heart, ImagePlus, Loader2, MoreVertical, Pencil, Pl
 
 import Avatar from '@/components/Avatar';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
-import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -117,7 +116,6 @@ export default function ProfileHighlightsManager({
   existingSourceStoryIds: Set<string>;
   onHighlightAdded: (collection: ProfileHighlightCollectionSummary, highlight: ProfileHighlight) => void;
 }) {
-  useModalBodyScrollLock();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const storyProgressRef = useRef<HTMLDivElement>(null);
   const storyVideoRef = useRef<HTMLVideoElement>(null);
@@ -850,7 +848,6 @@ export function ProfileHighlightViewer({
   ownerName: string;
   ownerAvatarUrl: string | null;
 }) {
-  useModalBodyScrollLock();
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeCollectionId, setActiveCollectionId] = useState(collection.id);
   const [storyDurations, setStoryDurations] = useState<Record<string, number>>({});
