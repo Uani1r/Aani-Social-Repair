@@ -675,7 +675,15 @@ export default function ProfilePage({
           return [...current, { ...collection, stories: [highlight] }].sort((a, b) => a.created_at.localeCompare(b.created_at));
         })}
       />
-      {selectedHighlightCollection && <ProfileHighlightViewer collection={selectedHighlightCollection} onClose={() => setSelectedHighlightCollection(null)} />}
+      {selectedHighlightCollection && (
+        <ProfileHighlightViewer
+          collection={selectedHighlightCollection}
+          onClose={() => setSelectedHighlightCollection(null)}
+          currentUserId={currentUserId}
+          ownerName={person ? displayName(person) : 'محمد'}
+          ownerAvatarUrl={person?.avatar_url || null}
+        />
+      )}
     </section>
   );
 }

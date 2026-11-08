@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { Check, ChevronLeft, ChevronRight, Heart, ImagePlus, Plus, Upload, X } from 'lucide-react';
+import { Check, Heart, ImagePlus, Loader2, Plus, SendHorizontal, Upload, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
@@ -802,44 +802,336 @@ export default function ProfileHighlightsManager({
   );
 }
 
-export function ProfileHighlightViewer({ collection, onClose }: { collection: ProfileHighlightCollection; onClose: () => void }) {
+export function ProfileHighlightViewer({
+  collection,
+  onClose,
+  currentUserId,
+  ownerName,
+  ownerAvatarUrl,
+}: {
+  collection: ProfileHighlightCollection;
+  onClose: () => void;
+  currentUserId: string;
+  ownerName: string;
+  ownerAvatarUrl: string | null;
+}) {
   useModalBodyScrollLock();
   const [activeIndex, setActiveIndex] = useState(0);
+  const [storyDurations, setStoryDurations] = useState<Record<string, number>>({});
+  const [durationsLoaded, setDurationsLoaded] = useState(false);
+  const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
+  const [videoFailedStoryId, setVideoFailedStoryId] = useState<string | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+  const [titleToastVisible, setTitleToastVisible] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const [isSendingReply, setIsSendingReply] = useState(false);
+  const [isLiked, setIsLiked] = useState(false);
+  const [isLikeLoading, setIsLikeLoading] = useState(false);
+  const [isLikeSaving, setIsLikeSaving] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const storyElapsedMsRef = useRef(0);
+  const titleToastShownRef = useRef(false);
   const story = collection.stories[activeIndex];
-  const hasPrevious = activeIndex > 0;
-  const hasNext = activeIndex < collection.stories.length - 1;
+  const isStoryOwner = currentUserId === collection.user_id;
+  const isVideo = Boolean(story?.media_url && story.media_type === 'video');
+  const storyDuration = story
+    ? Math.min(storyDurations[story.id] || (story.source_story_id ? storyDurations[story.source_story_id] : 0) || DEFAULT_ARCHIVE_STORY_DURATION_SECONDS, 120)
+    : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
+
+  const goToStory = useCallback((nextIndex: number) => {
+    if (nextIndex < 0) return;
+    if (nextIndex >= collection.stories.length) {
+      onClose();
+      return;
+    }
+    videoRef.current?.pause();
+    setProgress(0);
+    setMediaReadyStoryId(null);
+    setActiveIndex(nextIndex);
+  }, [collection.stories.length, onClose]);
+
+  useEffect(() => {
+    let active = true;
+    const sourceStoryIds = [...new Set(collection.stories.flatMap(item => item.source_story_id ? [item.source_story_id] : []))];
+    setStoryDurations({});
+    if (sourceStoryIds.length === 0) {
+      setDurationsLoaded(true);
+      return () => { active = false; };
+    }
+
+    setDurationsLoaded(false);
+    void (async () => {
+      try {
+        const { data, error } = await supabase.from('stories').select('id, duration_seconds').in('id', sourceStoryIds);
+        if (!active) return;
+        if (error) {
+          console.warn('[profile highlights] تعذر تحميل مدد القصص الأصلية:', error);
+          return;
+        }
+        const durations: Record<string, number> = {};
+        (data || []).forEach((item: { id: string; duration_seconds: number | null }) => {
+          const duration = Number(item.duration_seconds);
+          if (Number.isFinite(duration) && duration > 0) durations[item.id] = Math.min(duration, 120);
+        });
+        setStoryDurations(durations);
+      } catch (error) {
+        if (active) console.warn('[profile highlights] تعذر تحميل مدد القصص الأصلية:', error);
+      } finally {
+        if (active) setDurationsLoaded(true);
+      }
+    })();
+
+    return () => { active = false; };
+  }, [collection.id, collection.stories]);
+
+  useEffect(() => {
+    if (activeIndex !== 0 || titleToastShownRef.current) {
+      setTitleToastVisible(false);
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      titleToastShownRef.current = true;
+      setTitleToastVisible(true);
+    });
+    const timeout = window.setTimeout(() => setTitleToastVisible(false), 2000);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timeout);
+    };
+  }, [activeIndex, collection.id]);
+
+  useEffect(() => {
+    storyElapsedMsRef.current = 0;
+    setProgress(0);
+    setIsPaused(false);
+    if (story && !story.media_url) setMediaReadyStoryId(story.id);
+  }, [story?.id, story?.media_url]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
-      if (event.key === 'ArrowRight') setActiveIndex(index => Math.max(0, index - 1));
-      if (event.key === 'ArrowLeft') setActiveIndex(index => Math.min(collection.stories.length - 1, index + 1));
+      if (event.key === 'ArrowRight') goToStory(activeIndex - 1);
+      if (event.key === 'ArrowLeft') goToStory(activeIndex + 1);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [collection.stories.length, onClose]);
+  }, [activeIndex, goToStory, onClose]);
+
+  useEffect(() => {
+    if (!story || (isVideo && videoFailedStoryId !== story.id) || !durationsLoaded || mediaReadyStoryId !== story.id || isPaused) return;
+    const startedAt = Date.now();
+    let frame = 0;
+    const updateProgress = () => {
+      const elapsedMs = storyElapsedMsRef.current + Date.now() - startedAt;
+      const nextProgress = Math.min(100, (elapsedMs / (storyDuration * 1000)) * 100);
+      setProgress(nextProgress);
+      if (nextProgress >= 100) goToStory(activeIndex + 1);
+      else frame = window.requestAnimationFrame(updateProgress);
+    };
+    frame = window.requestAnimationFrame(updateProgress);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      storyElapsedMsRef.current += Date.now() - startedAt;
+    };
+  }, [activeIndex, durationsLoaded, goToStory, isPaused, isVideo, mediaReadyStoryId, story, storyDuration, videoFailedStoryId]);
+
+  useEffect(() => {
+    setReplyText('');
+    setIsLiked(false);
+    setIsLikeLoading(false);
+    if (!story || isStoryOwner || !currentUserId) return;
+    let active = true;
+    setIsLikeLoading(true);
+    void (async () => {
+      try {
+        const { data, error } = await supabase.from('profile_highlight_likes').select('user_id').eq('highlight_id', story.id).eq('user_id', currentUserId).maybeSingle();
+        if (!active) return;
+        if (error) {
+          console.warn('[profile highlights] تعذر تحميل حالة الإعجاب:', error);
+          return;
+        }
+        setIsLiked(Boolean(data));
+      } catch (error) {
+        if (active) console.warn('[profile highlights] تعذر تحميل حالة الإعجاب:', error);
+      } finally {
+        if (active) setIsLikeLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [currentUserId, isStoryOwner, story?.id, story?.source_story_id]);
+
+  const handleToggleLike = async () => {
+    if (!story || !currentUserId || isStoryOwner || isLikeSaving) return;
+    setIsLikeSaving(true);
+    try {
+      if (isLiked) {
+        const { error } = await supabase.from('profile_highlight_likes').delete().eq('highlight_id', story.id).eq('user_id', currentUserId);
+        if (error) throw error;
+        setIsLiked(false);
+      } else {
+        const { error } = await supabase.from('profile_highlight_likes').upsert(
+          { highlight_id: story.id, user_id: currentUserId },
+          { onConflict: 'highlight_id,user_id', ignoreDuplicates: true },
+        );
+        if (error) throw error;
+        setIsLiked(true);
+        const { error: notificationError } = await supabase.from('notifications').insert({
+          user_id: collection.user_id,
+          actor_id: currentUserId,
+          type: 'like',
+          content: 'أعجب بأبرز قصصك',
+          reference_id: story.id,
+        });
+        if (notificationError) console.warn('[profile highlights] تعذر إرسال إشعار الإعجاب:', notificationError);
+      }
+    } catch (error) {
+      console.error('[profile highlights] تعذر حفظ الإعجاب:', error);
+      toast.error('تعذر حفظ الإعجاب. حاول مرة أخرى.');
+    } finally {
+      setIsLikeSaving(false);
+    }
+  };
+
+  const handleSendReply = async () => {
+    const text = replyText.trim();
+    if (!story || !currentUserId || isStoryOwner || !text || isSendingReply) return;
+    setIsSendingReply(true);
+    try {
+      const { error } = await supabase.from('messages').insert({
+        sender_id: currentUserId,
+        recipient_id: collection.user_id,
+        content: story.source_story_id ? `[story-reply]${text}` : `رد على أبرز القصص «${collection.title}»: ${text}`,
+        ...(story.source_story_id ? { story_id: story.source_story_id } : {}),
+      });
+      if (error) throw error;
+      const { error: notificationError } = await supabase.from('notifications').insert({
+        user_id: collection.user_id,
+        actor_id: currentUserId,
+        type: 'reply',
+        content: `رد على أبرز قصصك: ${text}`,
+        reference_id: story.source_story_id || story.id,
+      });
+      if (notificationError) console.warn('[profile highlights] تعذر إرسال إشعار الرد:', notificationError);
+      setReplyText('');
+      toast.success('تم إرسال الرد إلى صاحب أبرز القصص');
+    } catch (error) {
+      console.error('[profile highlights] تعذر إرسال الرد:', error);
+      toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
+    } finally {
+      setIsSendingReply(false);
+    }
+  };
 
   if (!story) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[2100] flex h-[100dvh] flex-col items-center justify-center bg-black/95 p-4 text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={collection.title}>
-      <button type="button" onClick={onClose} aria-label="إغلاق العرض" className="absolute left-4 top-[calc(env(safe-area-inset-top)+1rem)] z-10 grid h-10 w-10 place-items-center rounded-full bg-white/10"><X size={20} /></button>
-      <div className="absolute top-[calc(env(safe-area-inset-top)+1.25rem)] text-center">
-        <h2 className="font-bold">{collection.title}</h2>
-        <p className="mt-1 text-xs text-zinc-400">{activeIndex + 1} / {collection.stories.length}</p>
+    <div className="fixed inset-0 z-[2100] h-[100dvh] w-screen overflow-hidden bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={`أبرز القصص: ${collection.title}`}>
+      <div className="pointer-events-none absolute inset-x-2 z-30 flex gap-1 px-1" style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
+        {collection.stories.map((item, index) => (
+          <div key={item.id} className="h-[2px] flex-1 overflow-hidden rounded-full bg-white/35">
+            <div className="h-full bg-white transition-[width] duration-75 ease-linear" style={{ width: index < activeIndex ? '100%' : index === activeIndex ? `${progress}%` : '0%' }} />
+          </div>
+        ))}
       </div>
-      <div className="relative flex h-full max-h-[85dvh] w-full max-w-lg items-center justify-center overflow-hidden rounded-2xl bg-zinc-950">
-        {story.media_url && story.media_type === 'video' ? (
-          <video key={story.id} src={story.media_url} className="h-full w-full object-contain" controls autoPlay playsInline />
-        ) : story.media_url ? (
-          <img src={story.media_url} className="h-full w-full object-contain" alt={story.caption || collection.title} />
-        ) : (
-          <p className="whitespace-pre-wrap px-8 text-center text-2xl font-bold">{story.caption || 'قصة نصية'}</p>
-        )}
-        {hasPrevious && <button type="button" onClick={() => setActiveIndex(index => index - 1)} aria-label="القصة السابقة" className="absolute right-3 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/60"><ChevronRight size={24} /></button>}
-        {hasNext && <button type="button" onClick={() => setActiveIndex(index => index + 1)} aria-label="القصة التالية" className="absolute left-3 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/60"><ChevronLeft size={24} /></button>}
-        {story.media_url && story.caption?.trim() && <p className="absolute inset-x-4 bottom-4 rounded-xl bg-black/65 p-3 text-center text-sm text-white">{story.caption}</p>}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40 bg-gradient-to-b from-black/70 via-black/25 to-transparent" />
+
+      {story.media_url && story.media_type === 'video' ? (
+        <video
+          key={story.id}
+          ref={videoRef}
+          src={story.media_url}
+          className="absolute inset-0 z-0 h-full w-full object-contain"
+          autoPlay
+          playsInline
+          preload="metadata"
+          onLoadedMetadata={event => {
+            const video = event.currentTarget;
+            const duration = video.duration;
+            setMediaReadyStoryId(story.id);
+            if (Number.isFinite(duration) && duration > 0) {
+              setStoryDurations(current => ({ ...current, [story.id]: Math.min(duration, 120) }));
+            }
+            void video.play().catch(() => {});
+          }}
+          onTimeUpdate={event => {
+            const video = event.currentTarget;
+            if (Number.isFinite(video.duration) && video.duration > 0) setProgress(Math.min(100, (video.currentTime / video.duration) * 100));
+          }}
+          onEnded={() => goToStory(activeIndex + 1)}
+          onError={() => {
+            setVideoFailedStoryId(story.id);
+            setMediaReadyStoryId(story.id);
+          }}
+        />
+      ) : story.media_url ? (
+        <img
+          key={story.id}
+          src={story.media_url}
+          className="absolute inset-0 z-0 h-full w-full object-contain"
+          alt={story.caption || collection.title}
+          onLoad={() => setMediaReadyStoryId(story.id)}
+          onError={() => setMediaReadyStoryId(story.id)}
+        />
+      ) : (
+        <div className="absolute inset-0 z-0 flex items-center justify-center bg-gradient-to-br from-[#30303a] to-[#111116] px-8 text-center">
+          <p className="whitespace-pre-wrap text-2xl font-bold">{story.caption || 'قصة نصية'}</p>
+        </div>
+      )}
+
+      <header className="absolute inset-x-0 z-40 flex items-center justify-between px-4" style={{ top: 'calc(env(safe-area-inset-top, 44px) + 22px)' }}>
+        <div className="flex min-w-0 items-center gap-2">
+          <Avatar profile={{ avatar_url: ownerAvatarUrl, full_name: ownerName, username: ownerName, id: collection.user_id }} />
+          <div className="min-w-0">
+            <p className="max-w-[58vw] truncate text-sm font-bold text-white">{ownerName || 'محمد'}</p>
+            <time dateTime={story.created_at} className="mt-0.5 block text-[10px] text-white/75">{formatDate(story.created_at) || 'قصة محفوظة'}</time>
+          </div>
+        </div>
+        <button type="button" onClick={onClose} aria-label="إغلاق أبرز القصص" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/30 text-white backdrop-blur-sm"><X size={22} /></button>
+      </header>
+
+      <div className={`pointer-events-none absolute inset-x-5 z-40 text-center text-lg font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] transition-all duration-500 ${activeIndex === 0 && titleToastVisible ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 74px)' }} aria-live="polite">
+        {collection.title || ownerName}
       </div>
+
+      <button type="button" aria-label="القصة التالية" onClick={() => goToStory(activeIndex + 1)} className="absolute inset-y-0 right-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
+      <button type="button" aria-label="القصة السابقة" onClick={() => goToStory(activeIndex - 1)} className="absolute inset-y-0 left-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
+
+      {story.caption?.trim() && story.media_url && <p className="pointer-events-none absolute inset-x-4 z-30 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] rounded-xl bg-black/55 p-3 text-center text-sm text-white">{story.caption}</p>}
+
+      {!isStoryOwner && (
+        <div className="absolute inset-x-0 bottom-0 z-50 flex items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pt-5" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }} onClick={event => event.stopPropagation()}>
+          <div className="flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-900/95 px-3 py-2 shadow-lg">
+            <input
+              key={story.id}
+              type="text"
+              placeholder={currentUserId ? 'رد على أبرز القصص...' : 'سجّل الدخول لإرسال رد'}
+              aria-label="اكتب رداً على أبرز القصص"
+              maxLength={3900}
+              value={replyText}
+              disabled={!currentUserId || isSendingReply}
+              onFocus={() => { setIsPaused(true); videoRef.current?.pause(); }}
+              onBlur={() => { setIsPaused(false); if (isVideo && videoRef.current) void videoRef.current.play().catch(() => {}); }}
+              onChange={event => setReplyText(event.currentTarget.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                  event.preventDefault();
+                  void handleSendReply();
+                }
+              }}
+              className="w-full min-w-0 bg-transparent text-xs text-white outline-none placeholder-zinc-400 disabled:opacity-60"
+            />
+            {replyText.trim() && (
+              <button type="button" onClick={() => void handleSendReply()} disabled={!currentUserId || isSendingReply} aria-label="إرسال الرد" className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-pink-400 transition hover:bg-white/10 disabled:opacity-50">
+                {isSendingReply ? <Loader2 size={16} className="animate-spin" /> : <SendHorizontal size={16} />}
+              </button>
+            )}
+          </div>
+          <button type="button" onClick={() => void handleToggleLike()} disabled={!currentUserId || isLikeLoading || isLikeSaving} aria-label={isLiked ? 'إلغاء الإعجاب بأبرز القصص' : 'الإعجاب بأبرز القصص'} aria-pressed={isLiked} className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-700/70 bg-zinc-900/90 transition disabled:opacity-50 ${isLiked ? 'text-pink-500' : 'text-white'}`}>
+            {isLikeLoading || isLikeSaving ? <Loader2 size={17} className="animate-spin" /> : <Heart size={19} fill={isLiked ? 'currentColor' : 'none'} />}
+          </button>
+        </div>
+      )}
     </div>,
     document.body,
   );
