@@ -72,28 +72,52 @@ const CALL_STYLES = `
 .aani-call-option-icon{width:38px;height:38px;display:grid;place-items:center;border-radius:50%;background:rgba(255,255,255,.1)}
 .aani-call-overlay{position:absolute;inset:0;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:calc(30px + env(safe-area-inset-top)) 22px calc(30px + env(safe-area-inset-bottom));background:rgba(7,10,16,.78);backdrop-filter:blur(30px);-webkit-backdrop-filter:blur(30px);animation:aani-call-fade-in .2s ease both}
 .aani-call-overlay-video{background:#080a0d}
+.aani-call-layer-outgoing{z-index:9999}
+.aani-call-overlay-outgoing{justify-content:center;padding:0;background:rgba(5,5,8,.88);backdrop-filter:blur(30px) saturate(150%);-webkit-backdrop-filter:blur(30px) saturate(150%)}
+.aani-call-outgoing-content{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:25px;text-align:center}
+.aani-call-outgoing-avatar-wrap{position:relative;z-index:1;width:110px;height:110px;display:grid;place-items:center;border-radius:50%;animation:aani-call-intense-glow 3s ease-in-out infinite}
+.aani-call-avatar-outgoing{position:relative;width:110px;height:110px;border:2px solid rgba(255,255,255,.4);box-shadow:inset 0 0 20px rgba(255,255,255,.15),0 15px 35px rgba(0,0,0,.8),0 5px 15px rgba(0,0,0,.6),0 0 10px rgba(255,255,255,.2)}
+.aani-call-avatar-outgoing::after{content:'';position:absolute;inset:0;border-radius:50%;background:linear-gradient(135deg,rgba(255,255,255,.4) 0%,rgba(255,255,255,0) 50%);pointer-events:none}
+.aani-call-person{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;margin-top:-22px}
+.aani-call-person-outgoing{gap:25px;margin:0}
+.aani-call-avatar{width:132px;height:132px;display:grid;place-items:center;overflow:hidden;border:1px solid rgba(255,255,255,.22);border-radius:50%;background:linear-gradient(145deg,#394654,#171c24);box-shadow:0 12px 50px rgba(0,0,0,.3);font-size:44px;font-weight:700}
+.aani-call-avatar-outgoing{width:110px;height:110px;border:2px solid rgba(255,255,255,.4);font-size:36px;box-shadow:inset 0 0 20px rgba(255,255,255,.15),0 15px 35px rgba(0,0,0,.8),0 5px 15px rgba(0,0,0,.6),0 0 10px rgba(255,255,255,.2)}
+.aani-call-avatar img{width:100%;height:100%;object-fit:cover}
+.aani-call-avatar-outgoing img{filter:grayscale(1)}
+.aani-call-name{margin:12px 0 0;font-size:25px;font-weight:700}
+.aani-call-name-outgoing{margin:0;color:#fff;font-size:22px;font-weight:700;letter-spacing:-.3px;text-shadow:0 2px 10px rgba(0,0,0,.8)}
+.aani-call-status{margin:0;color:rgba(255,255,255,.76);font-size:15px}
+.aani-call-status-outgoing{display:flex;align-items:center;gap:2px;color:#bbb;font-size:16px;font-weight:400}
+.aani-call-dots span{animation:aani-call-dot-blink 1.4s infinite both}
+.aani-call-dots span:nth-child(2){animation-delay:.2s}
+.aani-call-dots span:nth-child(3){animation-delay:.4s}
+.aani-call-timer{margin-top:4px;font-variant-numeric:tabular-nums;font-size:15px;color:rgba(255,255,255,.84)}
 .aani-call-close{position:absolute;top:calc(16px + env(safe-area-inset-top));right:18px;z-index:4;width:40px;height:40px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.14);border-radius:50%;background:rgba(255,255,255,.1);color:#fff}
 .aani-call-remote-video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#111}
 .aani-call-video-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.38),transparent 28%,transparent 65%,rgba(0,0,0,.62));pointer-events:none}
-.aani-call-person{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;margin-top:-22px}
-.aani-call-avatar{width:132px;height:132px;display:grid;place-items:center;overflow:hidden;border:1px solid rgba(255,255,255,.22);border-radius:50%;background:linear-gradient(145deg,#394654,#171c24);box-shadow:0 12px 50px rgba(0,0,0,.3);font-size:44px;font-weight:700}
-.aani-call-avatar img{width:100%;height:100%;object-fit:cover}
-.aani-call-name{margin:12px 0 0;font-size:25px;font-weight:700}
-.aani-call-status{margin:0;color:rgba(255,255,255,.76);font-size:15px}
-.aani-call-timer{margin-top:4px;font-variant-numeric:tabular-nums;font-size:15px;color:rgba(255,255,255,.84)}
 .aani-call-local-video{position:absolute;z-index:3;top:calc(18px + env(safe-area-inset-top));left:18px;width:min(30vw,126px);aspect-ratio:3/4;object-fit:cover;border:1px solid rgba(255,255,255,.45);border-radius:18px;background:#20242a;box-shadow:0 8px 28px rgba(0,0,0,.35)}
 .aani-call-controls{position:absolute;z-index:3;bottom:calc(34px + env(safe-area-inset-bottom));left:0;right:0;display:flex;align-items:center;justify-content:center;gap:18px}
-.aani-call-control{width:58px;height:58px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.16);border-radius:50%;background:rgba(255,255,255,.16);color:#fff;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.aani-call-controls-outgoing{left:50%;right:auto;bottom:40px;display:inline-flex;width:max-content;gap:20px;padding:10px 24px;transform:translateX(-50%);border:1px solid rgba(255,255,255,.12);border-radius:100px;background:rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.45);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%)}
+.aani-call-control{width:58px;height:58px;display:grid;place-items:center;border:1px solid rgba(255,255,255,.16);border-radius:50%;background:rgba(255,255,255,.16);color:#fff;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);transition:transform .2s ease,background .2s ease,filter .2s ease}
 .aani-call-control-label{position:absolute;top:64px;white-space:nowrap;font-size:12px;color:rgba(255,255,255,.82)}
 .aani-call-control-wrap{position:relative;display:flex;justify-content:center}
 .aani-call-control.is-active{background:rgba(255,255,255,.28)}
 .aani-call-control.is-end{width:66px;height:66px;border:0;background:#e5484d;transform:rotate(135deg)}
 .aani-call-control.is-accept{width:66px;height:66px;border:0;background:#24a86a;transform:rotate(0)}
 .aani-call-control.is-reject{width:66px;height:66px;border:0;background:#e5484d;transform:rotate(135deg)}
+.aani-call-control-outgoing{position:relative;width:56px;height:56px;min-width:56px;min-height:56px;border:0;background:rgba(255,255,255,.15);color:#fff;backdrop-filter:none;-webkit-backdrop-filter:none}
+.aani-call-control-outgoing:active{transform:scale(.92)}
+.aani-call-control-outgoing.is-muted{background:rgba(255,255,255,.25);color:#ff3b30}
+.aani-call-control-outgoing.is-muted::after{content:'';position:absolute;width:30px;height:2.5px;border-radius:2px;background:#ff3b30;transform:rotate(-45deg);box-shadow:0 0 4px rgba(0,0,0,.5)}
+.aani-call-control-outgoing.is-end{width:56px;height:56px;min-width:56px;min-height:56px;background:#ff3b30;color:#fff;box-shadow:0 4px 16px rgba(255,59,48,.4);transform:none}
+.aani-call-control-outgoing.is-end:active{filter:brightness(.85);transform:scale(.92)}
+.aani-call-control-outgoing.is-end svg{transform:rotate(135deg)}
 .aani-call-actions-note{position:absolute;bottom:calc(116px + env(safe-area-inset-bottom));z-index:2;color:rgba(255,255,255,.76);font-size:14px;text-align:center}
 @keyframes aani-call-fade-in{from{opacity:0}to{opacity:1}}
 @keyframes aani-call-sheet-in{from{opacity:.7;transform:translateY(26px)}to{opacity:1;transform:translateY(0)}}
-@media(min-width:700px){.aani-call-sheet-wrap{align-items:center}.aani-call-overlay{padding-left:40px;padding-right:40px}.aani-call-controls{gap:24px}}
+@keyframes aani-call-intense-glow{0%,100%{box-shadow:0 0 20px 2px rgba(255,255,255,.4),0 0 50px 10px rgba(255,255,255,.1);background:radial-gradient(circle,rgba(255,255,255,.08) 0%,rgba(255,255,255,0) 70%)}50%{box-shadow:0 0 30px 5px rgba(255,255,255,.8),0 0 80px 20px rgba(255,255,255,.4),0 0 150px 40px rgba(255,255,255,.15);background:radial-gradient(circle,rgba(255,255,255,.2) 0%,rgba(255,255,255,0) 70%)}}
+@keyframes aani-call-dot-blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+@media(min-width:700px){.aani-call-sheet-wrap{align-items:center}.aani-call-overlay{padding-left:40px;padding-right:40px}.aani-call-controls{gap:24px}.aani-call-overlay-outgoing{padding:0}.aani-call-controls-outgoing{gap:20px}}
 `;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -514,12 +538,17 @@ export default function CallManager({
         acquiredStream.getTracks().forEach(track => track.stop());
         return;
       }
+      const callBeforeMediaReady = callRef.current;
+      acquiredStream.getAudioTracks().forEach(track => {
+        track.enabled = !(callBeforeMediaReady?.callId === callId && callBeforeMediaReady.muted);
+      });
+      localStreamRef.current = acquiredStream;
       await waitForInbox();
       if (callRef.current?.callId !== callId) {
         acquiredStream.getTracks().forEach(track => track.stop());
+        if (localStreamRef.current === acquiredStream) localStreamRef.current = null;
         return;
       }
-      localStreamRef.current = acquiredStream;
       const connection = createPeerConnection(callId, peer);
       acquiredStream.getTracks().forEach(track => connection.addTrack(track, acquiredStream as MediaStream));
       const offer = await connection.createOffer();
@@ -611,9 +640,9 @@ export default function CallManager({
   const toggleMute = useCallback(() => {
     const activeCall = callRef.current;
     const stream = localStreamRef.current;
-    if (!activeCall || !stream) return;
+    if (!activeCall) return;
     const nextMuted = !activeCall.muted;
-    stream.getAudioTracks().forEach(track => { track.enabled = !nextMuted; });
+    stream?.getAudioTracks().forEach(track => { track.enabled = !nextMuted; });
     setActiveCall({ ...activeCall, muted: nextMuted });
   }, [setActiveCall]);
 
@@ -756,8 +785,8 @@ export default function CallManager({
         </div>
       )}
       {callState && (
-        <div className={`aani-call-layer${callState.mode === 'video' && callState.phase === 'active' ? ' aani-call-overlay-video' : ''}`} dir="rtl">
-          <section className={`aani-call-overlay${callState.mode === 'video' && callState.phase === 'active' ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
+        <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.mode === 'video' && callState.phase === 'active' ? ' aani-call-overlay-video' : ''}`} dir="rtl">
+          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.mode === 'video' && callState.phase === 'active' ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
             {callState.mode === 'video' && callState.phase === 'active' && (
               <>
                 <video ref={remoteVideoRef} className="aani-call-remote-video" autoPlay playsInline aria-label="فيديو الطرف الآخر" />
@@ -768,18 +797,29 @@ export default function CallManager({
             )}
             {!(callState.mode === 'video' && callState.phase === 'active') && (
               <>
-                <CallAvatar peer={callState.peer} />
-                <div className="aani-call-person">
-                  <h2 className="aani-call-name">{callState.peer.name}</h2>
-                  <p className="aani-call-status">
-                    {callState.phase === 'incoming'
-                      ? `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة`
-                      : callState.phase === 'active'
-                        ? 'المكالمة متصلة'
-                        : 'جاري الاتصال...'}
-                  </p>
-                  {callState.phase === 'active' && <span className="aani-call-timer" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>}
-                </div>
+                {callState.phase === 'outgoing' ? (
+                  <div className="aani-call-outgoing-content">
+                    <div className="aani-call-outgoing-avatar-wrap">
+                      <CallAvatar peer={callState.peer} className="aani-call-avatar-outgoing" />
+                    </div>
+                    <div className="aani-call-person aani-call-person-outgoing">
+                      <h2 className="aani-call-name aani-call-name-outgoing">{callState.peer.name}</h2>
+                      <p className="aani-call-status aani-call-status-outgoing">
+                        جاري الاتصال
+                        <span className="aani-call-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <CallAvatar peer={callState.peer} />
+                    <div className="aani-call-person">
+                      <h2 className="aani-call-name">{callState.peer.name}</h2>
+                      <p className="aani-call-status">{callState.phase === 'incoming' ? `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة` : 'المكالمة متصلة'}</p>
+                      {callState.phase === 'active' && <span className="aani-call-timer" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>}
+                    </div>
+                  </>
+                )}
                 {callState.mode === 'audio' && <audio ref={remoteAudioRef} autoPlay playsInline />}
               </>
             )}
@@ -793,11 +833,16 @@ export default function CallManager({
               <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />
             )}
             {callState.phase === 'incoming' && <p className="aani-call-actions-note">اضغط قبول للاتصال</p>}
-            <div className="aani-call-controls">
+            <div className={`aani-call-controls${callState.phase === 'outgoing' ? ' aani-call-controls-outgoing' : ''}`}>
               {callState.phase === 'incoming' ? (
                 <>
                   <button type="button" className="aani-call-control is-reject" aria-label="رفض المكالمة" onClick={() => rejectOrEndCall('declined')}><PhoneOff size={25} /></button>
                   <button type="button" className="aani-call-control is-accept" aria-label="قبول المكالمة" onClick={() => void acceptCall()}><Phone size={25} /></button>
+                </>
+              ) : callState.phase === 'outgoing' ? (
+                <>
+                  <button type="button" className={`aani-call-control aani-call-control-outgoing${callState.muted ? ' is-muted' : ''}`} aria-label={callState.muted ? 'إلغاء كتم الصوت' : 'كتم الصوت'} aria-pressed={callState.muted} onClick={toggleMute}><Mic size={25} /></button>
+                  <button type="button" className="aani-call-control aani-call-control-outgoing is-end" aria-label="إلغاء الاتصال" onClick={() => rejectOrEndCall('ended')}><Phone size={28} /></button>
                 </>
               ) : (
                 <>
