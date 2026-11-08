@@ -5,8 +5,12 @@ export type Profile = {
   full_name: string;
   display_name?: string | null;
   avatar_url: string | null;
+  cover_url?: string | null;
+  location?: string | null;
+  website?: string | null;
   bio: string;
   is_private?: boolean;
+  created_at?: string | null;
 };
 
 export type PostMetadataTag = {

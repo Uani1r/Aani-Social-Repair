@@ -7,6 +7,9 @@ create table if not exists public.profiles (
   username text,
   full_name text,
   avatar_url text,
+  cover_url text,
+  location text,
+  website text,
   bio text not null default '',
   display_name text not null default 'New member',
   created_at timestamptz not null default now(),
@@ -16,6 +19,9 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists username text;
 alter table public.profiles add column if not exists full_name text;
 alter table public.profiles add column if not exists avatar_url text;
+alter table public.profiles add column if not exists cover_url text;
+alter table public.profiles add column if not exists location text;
+alter table public.profiles add column if not exists website text;
 alter table public.profiles add column if not exists bio text not null default '';
 alter table public.profiles add column if not exists display_name text not null default 'New member';
 alter table public.profiles add column if not exists created_at timestamptz not null default now();

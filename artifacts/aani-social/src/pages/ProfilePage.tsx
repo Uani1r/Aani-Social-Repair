@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -6,19 +6,20 @@ import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
 import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
-import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { uploadMedia } from '@/lib/storyUpload';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
 import './ProfilePage.css';
 
-const COVER_IMAGE = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe';
-const FALLBACK_AVATAR = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb';
-const PROFILE_BIO = 'المحطة القادمة: كل مكان 🌍 | احصل على شريحة واحدة وابقَ متصلاً في أكثر من 200 وجهة.';
+type ProfileStory = {
+  id: string;
+  media_url: string | null;
+  media_type: string;
+  caption: string | null;
+  is_close_friends: boolean;
+};
 
-const HIGHLIGHTS = [
-  { label: 'صور', image: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d' },
-  { label: 'رحلات', image: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330' },
-  { label: 'عمل', image: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e' },
-];
+type ProfileImageKind = 'avatar' | 'cover';
 
 function VerifiedBadge() {
   return (
@@ -31,8 +32,8 @@ function VerifiedBadge() {
 
 function ProfileTabs() {
   return (
-    <div className="flex items-center justify-around border-b border-[#2F3336] mt-4" aria-label="تبويبات الملف الشخصي">
-      <button type="button" aria-label="المنشورات" aria-current="page" className="flex flex-1 flex-col items-center justify-center pb-3 pt-3 relative">
+    <div className="mt-4 flex items-center justify-around border-b border-[#2F3336]" aria-label="تبويبات الملف الشخصي">
+      <button type="button" aria-label="المنشورات" aria-current="page" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
         <svg className="h-[26px] w-[26px] text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7" rx="1" strokeWidth="1.5" />
           <rect x="14" y="3" width="7" height="7" rx="1" strokeWidth="1.5" />
@@ -41,18 +42,18 @@ function ProfileTabs() {
         </svg>
         <span className="absolute bottom-0 h-[3px] w-12 rounded-t-sm bg-[#1D9BF0]" />
       </button>
-      <button type="button" aria-label="الفيديو" className="flex flex-1 flex-col items-center justify-center pb-3 pt-3 relative">
+      <button type="button" aria-label="الفيديو" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
         <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M10 8l6 4-6 4V8z" />
         </svg>
       </button>
-      <button type="button" aria-label="إعادات النشر" className="flex flex-1 flex-col items-center justify-center pb-3 pt-3 relative">
+      <button type="button" aria-label="إعادات النشر" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
         <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
       </button>
-      <button type="button" aria-label="الوسائط" className="flex flex-1 flex-col items-center justify-center pb-3 pt-3 relative">
+      <button type="button" aria-label="الوسائط" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
         <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
           <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
@@ -60,6 +61,25 @@ function ProfileTabs() {
       </button>
     </div>
   );
+}
+
+function normalizeWebsiteUrl(value?: string | null): string | null {
+  const website = value?.trim();
+  if (!website) return null;
+
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(website) ? website : `https://${website}`);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function formatJoinedDate(value?: string | null): string {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ar-IQ', { month: 'long', year: 'numeric' }).format(date);
 }
 
 export default function ProfilePage({
@@ -87,22 +107,49 @@ export default function ProfilePage({
   const [isFollowing, setIsFollowing] = useState(false);
   const [followRequestSent, setFollowRequestSent] = useState(false);
   const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
+  const [profileStories, setProfileStories] = useState<ProfileStory[]>([]);
   const [hasActiveStories, setHasActiveStories] = useState(false);
   const [hasUnseenActiveStories, setHasUnseenActiveStories] = useState(false);
   const [hasCloseFriendsStory, setHasCloseFriendsStory] = useState(false);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(person?.avatar_url || null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(person?.cover_url || null);
+  const [imageSaving, setImageSaving] = useState<ProfileImageKind | null>(null);
+  const [bioDraft, setBioDraft] = useState(person?.bio || '');
+  const [bioEditorOpen, setBioEditorOpen] = useState(false);
+  const [bioSaving, setBioSaving] = useState(false);
   const usernameWrapperRef = useRef<HTMLDivElement>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  const temporaryPreviewUrlsRef = useRef(new Set<string>());
   const [, setLocation] = useLocation();
 
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
-  const username = cleanUsername(person?.username) || 'Sufi495';
+  const username = cleanUsername(person?.username);
+  const profileLocation = person?.location?.trim() || '';
+  const profileWebsiteUrl = normalizeWebsiteUrl(person?.website);
+  const joinedDate = formatJoinedDate(person?.created_at);
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
   }, [own, profile]);
+
+  useEffect(() => {
+    setAvatarPreview(person?.avatar_url || null);
+    setCoverPreview(person?.cover_url || null);
+  }, [person?.avatar_url, person?.cover_url]);
+
+  useEffect(() => {
+    setBioDraft(person?.bio || '');
+  }, [person?.id, person?.bio]);
+
+  useEffect(() => () => {
+    temporaryPreviewUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+    temporaryPreviewUrlsRef.current.clear();
+  }, []);
 
   useEffect(() => {
     const usernameWrapper = usernameWrapperRef.current;
@@ -132,7 +179,7 @@ export default function ProfilePage({
         supabase.from('posts').select('id', { count: 'exact', head: true }).eq('user_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
-        supabase.from('stories').select('id, is_close_friends').eq('user_id', activeUserId).limit(50),
+        supabase.from('stories').select('id, media_url, media_type, caption, is_close_friends').eq('user_id', activeUserId).limit(50),
         own
           ? supabase.from('follow_requests').select('requester_id, created_at').eq('recipient_id', currentUserId).order('created_at', { ascending: false }).limit(100)
           : Promise.resolve({ data: [] }),
@@ -155,7 +202,9 @@ export default function ProfilePage({
       setPostCount(pCount || 0);
       setIsFollowing(Boolean(checkFollow));
       setFollowRequestSent(Boolean(checkRequest));
-      const activeStoryIds = ((activeStories || []) as Array<{ id: string }>).map(story => story.id);
+      const storyRows = ((activeStories || []) as ProfileStory[]);
+      const activeStoryIds = storyRows.map(story => story.id);
+      setProfileStories(storyRows);
       let seenStoryIds = new Set<string>();
       try {
         const rawSeenStoryIds = localStorage.getItem(`aani:seen-story-ids:${currentUserId}`);
@@ -166,7 +215,7 @@ export default function ProfilePage({
       }
       setHasActiveStories(activeStoryIds.length > 0);
       setHasUnseenActiveStories(activeStoryIds.some(storyId => !seenStoryIds.has(storyId)));
-      setHasCloseFriendsStory(Boolean(activeStories?.some(story => story.is_close_friends)));
+      setHasCloseFriendsStory(Boolean(storyRows.some(story => story.is_close_friends)));
       const profileById = new Map<string, Profile>(((requesterProfiles || []) as Profile[]).map(requester => [requester.id, requester] as [string, Profile]));
       setFollowRequests(requestRows.flatMap(row => {
         const requester = profileById.get(row.requester_id);
@@ -269,6 +318,84 @@ export default function ProfilePage({
     setPrivacySaving(false);
   };
 
+  const setImagePreview = (kind: ProfileImageKind, url: string | null) => {
+    const previousUrl = kind === 'avatar' ? avatarPreview : coverPreview;
+    if (previousUrl?.startsWith('blob:')) {
+      URL.revokeObjectURL(previousUrl);
+      temporaryPreviewUrlsRef.current.delete(previousUrl);
+    }
+    if (url?.startsWith('blob:')) temporaryPreviewUrlsRef.current.add(url);
+    if (kind === 'avatar') setAvatarPreview(url);
+    else setCoverPreview(url);
+  };
+
+  const handleProfileImageSelection = async (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || !own || imageSaving) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('اختر ملف صورة صالحاً.');
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setImagePreview(kind, previewUrl);
+    setImageSaving(kind);
+    let uploadedPath: string | null = null;
+
+    try {
+      if (!supabaseConfigured) throw new Error('اتصال قاعدة البيانات غير متاح.');
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
+      uploadedPath = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
+      await uploadMedia({ file, path: uploadedPath });
+      const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
+      const patch = kind === 'avatar' ? { avatar_url: publicUrl } : { cover_url: publicUrl };
+      const { error: updateError } = await supabase.from('profiles').update(patch).eq('id', activeUserId);
+      if (updateError) throw updateError;
+
+      const updatedProfile = { ...person!, ...patch };
+      setPerson(current => current ? { ...current, ...patch } : current);
+      if (own) onProfileUpdate(updatedProfile);
+      setImagePreview(kind, publicUrl);
+      uploadedPath = null;
+      toast.success(kind === 'avatar' ? 'تم تحديث الصورة الشخصية.' : 'تم تحديث صورة الغلاف.');
+    } catch (error) {
+      if (uploadedPath) {
+        const { error: cleanupError } = await supabase.storage.from(storageBucket).remove([uploadedPath]);
+        if (cleanupError) console.warn('[profile] تعذر حذف الصورة غير المحفوظة:', cleanupError);
+      }
+      console.error('[profile] تعذر حفظ الصورة:', error);
+      toast.error('تم عرض الصورة مؤقتاً، لكن تعذر حفظها في الحساب. حاول مرة أخرى.');
+    } finally {
+      setImageSaving(null);
+    }
+  };
+
+  const saveBio = async () => {
+    if (!own || !person || bioSaving) return;
+    if (!supabaseConfigured) {
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    const bio = bioDraft.trim();
+    setBioSaving(true);
+    const { error } = await supabase.from('profiles').update({ bio }).eq('id', activeUserId);
+    if (error) {
+      toast.error('تعذر حفظ السيرة الذاتية. حاول مرة أخرى.');
+      setBioSaving(false);
+      return;
+    }
+
+    const updatedProfile = { ...person, bio };
+    setPerson(updatedProfile);
+    onProfileUpdate(updatedProfile);
+    setBioEditorOpen(false);
+    setBioSaving(false);
+    toast.success('تم حفظ السيرة الذاتية.');
+  };
+
   if (!person) {
     return (
       <section className="profile-screen mx-auto w-full max-w-[600px] bg-black text-white" dir="rtl">
@@ -289,9 +416,12 @@ export default function ProfilePage({
 
   return (
     <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none bg-black text-white" dir="rtl">
+      <input ref={coverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة الغلاف" onChange={event => void handleProfileImageSelection('cover', event)} />
+      <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار الصورة الشخصية" onChange={event => void handleProfileImageSelection('avatar', event)} />
+
       <div className="profile-header-container">
         <div className="notch-safe-area" />
-        <div className="relative z-30 flex items-center justify-end px-4 py-2 bg-black/40 backdrop-blur-md">
+        <div className="relative z-30 flex items-center justify-end bg-black/40 px-4 py-2 backdrop-blur-md">
           <button
             type="button"
             aria-label="المزيد من خيارات الملف الشخصي"
@@ -300,7 +430,7 @@ export default function ProfilePage({
             className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white transition hover:bg-black/70"
           >
             <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s-.9 2-2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
             </svg>
           </button>
           {showProfileMenu && (
@@ -355,28 +485,40 @@ export default function ProfilePage({
       </div>
 
       <div ref={usernameWrapperRef} className="sticky-username-wrapper" id="usernameWrapper">
-        <div className="username-text" data-username={username}>{username}</div>
+        {username && <div className="username-text" data-username={username}>{username}</div>}
       </div>
 
-      <div className="relative h-[135px] w-full bg-neutral-900">
-        <img src={COVER_IMAGE} className="h-full w-full object-cover" alt="غلاف الملف الشخصي" />
+      <div className="relative h-[135px] w-full bg-[#18181b]">
+        <button
+          type="button"
+          disabled={!own || imageSaving !== null}
+          aria-label={coverPreview ? 'تغيير صورة الغلاف' : 'إضافة صورة غلاف'}
+          onClick={() => coverInputRef.current?.click()}
+          className={`group flex h-full w-full items-center justify-center overflow-hidden bg-[#18181b] ${own ? 'cursor-pointer' : 'cursor-default'}`}
+        >
+          {coverPreview ? (
+            <img src={coverPreview} className="h-full w-full object-cover" alt="" />
+          ) : own ? (
+            <span className="flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-bold text-neutral-400 transition group-hover:bg-black/60">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              إضافة غلاف
+            </span>
+          ) : null}
+          {imageSaving === 'cover' && <span className="absolute bottom-2 left-2 rounded-full bg-black/70 px-3 py-1 text-xs text-white">جارٍ حفظ الغلاف...</span>}
+        </button>
       </div>
 
       <div className="relative z-20 flex items-end justify-between px-4 pb-2">
         <div className="relative flex items-end gap-3">
           <button
             type="button"
-            disabled={!hasActiveStories}
-            aria-label={hasActiveStories ? 'عرض قصص الحساب' : `صورة ${displayName(person)}`}
-            onClick={() => {
-              if (!hasActiveStories) return;
-              onOpenStories(activeUserId);
-              setLocation('/feed');
-            }}
-            className="relative -mt-11 shrink-0 rounded-full disabled:cursor-default"
+            disabled={!own || imageSaving !== null}
+            aria-label={avatarPreview ? 'تغيير الصورة الشخصية' : 'إضافة صورة شخصية'}
+            onClick={() => avatarInputRef.current?.click()}
+            className={`relative -mt-11 shrink-0 rounded-full ${own ? 'cursor-pointer' : 'cursor-default'}`}
           >
             <span
-              className="flex h-[82px] w-[82px] items-center justify-center rounded-full border-[3px] border-black bg-black ring-2 ring-black"
+              className="group flex h-[82px] w-[82px] items-center justify-center overflow-hidden rounded-full border-[3px] border-black bg-neutral-800 p-[3px] ring-2 ring-black"
               style={{
                 background: hasActiveStories
                   ? hasUnseenActiveStories
@@ -388,7 +530,13 @@ export default function ProfilePage({
               }}
             >
               <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                <img src={person.avatar_url || FALLBACK_AVATAR} className="h-full w-full rounded-full object-cover" alt="" />
+                {avatarPreview ? (
+                  <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
+                ) : (
+                  <svg className="h-8 w-8 text-neutral-400 transition group-hover:text-neutral-300" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
+                  </svg>
+                )}
               </span>
             </span>
           </button>
@@ -421,43 +569,96 @@ export default function ProfilePage({
           </div>
         </div>
 
-        <p className="text-[15px] leading-relaxed text-[#F7F9F9]">
-          {person.bio || PROFILE_BIO}{' '}
-          <span className="text-[#1D9BF0]">#اتصال_بلا_حدود</span>
-        </p>
-
-        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-[#71767B]">
-          <span className="flex items-center gap-1">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-            كركوك
-          </span>
-          <a href="https://esimio.onelink.me/13Ce/IG" target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[#1D9BF0] hover:underline">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
-            esimio.onelink.me/13Ce/IG
-          </a>
-          <span className="flex items-center gap-1">
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-            انضم في شباط 2018
-          </span>
+        <div id="bioSection" className="mb-3 mt-2">
+          {bioEditorOpen ? (
+            <div className="flex flex-col gap-2">
+              <textarea
+                rows={2}
+                value={bioDraft}
+                onChange={event => setBioDraft(event.currentTarget.value)}
+                autoFocus
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-900 p-2 text-sm text-white focus:border-[#1D9BF0] focus:outline-none"
+                placeholder="اكتب سيرتك الذاتية هنا..."
+                aria-label="السيرة الذاتية"
+              />
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => { setBioDraft(person.bio || ''); setBioEditorOpen(false); }} className="px-3 py-1 text-xs text-neutral-400">إلغاء</button>
+                <button type="button" onClick={() => void saveBio()} disabled={bioSaving} className="rounded-full bg-[#1D9BF0] px-3 py-1 text-xs font-bold text-white disabled:opacity-50">{bioSaving ? 'جارٍ الحفظ...' : 'حفظ'}</button>
+              </div>
+            </div>
+          ) : person.bio?.trim() ? (
+            own ? (
+              <button type="button" onClick={() => { setBioDraft(person.bio || ''); setBioEditorOpen(true); }} className="block text-right text-[15px] leading-relaxed text-[#F7F9F9] hover:opacity-80">{person.bio}</button>
+            ) : (
+              <p className="text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>
+            )
+          ) : own ? (
+            <button
+              type="button"
+              onClick={() => { setBioDraft(''); setBioEditorOpen(true); }}
+              className="flex items-center gap-1 rounded-full border border-[#1D9BF0]/30 bg-[#1D9BF0]/10 px-3 py-1.5 text-xs font-bold text-[#1D9BF0] transition hover:bg-[#1D9BF0]/20"
+            >
+              <span>+ إضافة سيرة ذاتية</span>
+            </button>
+          ) : null}
         </div>
+
+        {(profileLocation || profileWebsiteUrl || joinedDate) && (
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-[#71767B]">
+            {profileLocation && (
+              <span className="flex items-center gap-1">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                {profileLocation}
+              </span>
+            )}
+            {profileWebsiteUrl && (
+              <a href={profileWebsiteUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[#1D9BF0] hover:underline">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+                {person.website?.trim()}
+              </a>
+            )}
+            {joinedDate && (
+              <span className="flex items-center gap-1">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                انضم في {joinedDate}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="mb-2 mt-6 px-4">
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-[#F7F9F9]">أبرز القصص</h2>
         </div>
-        <div className="no-scrollbar flex items-center gap-4 overflow-x-auto pb-2">
-          {HIGHLIGHTS.map(story => (
-            <button key={story.label} type="button" className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5">
-              <span className="flex h-[68px] w-[68px] rounded-full bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600 p-[2px]">
-                <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 border-black bg-neutral-800">
-                  <img src={story.image} className="h-full w-full object-cover" alt="" />
+        {profileStories.length > 0 ? (
+          <div className="no-scrollbar flex items-center gap-4 overflow-x-auto pb-2">
+            {profileStories.map(story => (
+              <button
+                key={story.id}
+                type="button"
+                onClick={() => { onOpenStories(activeUserId); setLocation('/feed'); }}
+                className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5"
+                aria-label={story.caption?.trim() || 'عرض القصة'}
+              >
+                <span className="flex h-[68px] w-[68px] rounded-full bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600 p-[2px]">
+                  <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 border-black bg-neutral-800">
+                    {story.media_url && story.media_type === 'video' ? (
+                      <video src={story.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                    ) : story.media_url ? (
+                      <img src={story.media_url} className="h-full w-full object-cover" alt="" />
+                    ) : (
+                      <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{story.caption || 'قصة نصية'}</span>
+                    )}
+                  </span>
                 </span>
-              </span>
-              <span className="text-[11px] text-[#BBBBBB]">{story.label}</span>
-            </button>
-          ))}
-        </div>
+                <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">{story.caption?.trim() || 'قصة'}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="py-2 text-xs text-[#71767B]">لا توجد قصص مميزة بعد.</p>
+        )}
       </div>
 
       <ProfileTabs />
