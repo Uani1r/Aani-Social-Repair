@@ -367,12 +367,13 @@ export default function CallManager({
 
   const resetAudioOutput = useCallback(async () => {
     const audioElement = remoteAudioRef.current as (HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> }) | null;
-    if (audioElement?.setSinkId) {
-      try {
-        await audioElement.setSinkId('');
-      } catch (error) {
-        console.warn('[calls] تعذر استعادة مخرج الصوت الافتراضي:', error);
-      }
+    if (!audioElement) return;
+    audioElement.volume = 0.75;
+    if (typeof audioElement.setSinkId !== 'function') return;
+    try {
+      await audioElement.setSinkId('');
+    } catch {
+      // Keep the browser's default output when explicit routing is unavailable.
     }
   }, []);
 
@@ -815,7 +816,7 @@ export default function CallManager({
   const requestLocalMedia = useCallback(async (mode: CallMode): Promise<MediaStream> => {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
     return navigator.mediaDevices.getUserMedia({
-      audio: true,
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: mode === 'video' ? { facingMode: { ideal: cameraFacingModeRef.current } } : false,
     });
   }, []);
@@ -1179,29 +1180,27 @@ export default function CallManager({
     const activeCall = callRef.current;
     const audioElement = remoteAudioRef.current as (HTMLAudioElement & { setSinkId?: (sinkId: string) => Promise<void> }) | null;
     if (!activeCall || activeCall.dismissing) return;
-    if (!audioElement?.setSinkId) {
-      toast.info('اختيار سماعة الأذن أو مكبر الصوت غير مدعوم في هذا المتصفح؛ سيستمر الصوت على المخرج الافتراضي.');
-      return;
-    }
-    try {
-      const nextSpeakerOn = !activeCall.speakerOn;
-      let sinkId = '';
-      if (nextSpeakerOn) {
-        const outputs = await navigator.mediaDevices.enumerateDevices();
-        const speaker = outputs.find(device => device.kind === 'audiooutput' && /(speaker|loudspeaker|مكبر|السماعة الخارجية)/i.test(device.label));
-        if (!speaker) {
-          toast.info('لا يتوفر مخرج مكبر صوت منفصل يمكن اختياره في هذا المتصفح.');
-          return;
+    const nextSpeakerOn = !activeCall.speakerOn;
+
+    if (audioElement) {
+      audioElement.volume = nextSpeakerOn ? 1 : 0.75;
+      if (typeof audioElement.setSinkId === 'function') {
+        try {
+          let sinkId = '';
+          if (nextSpeakerOn && navigator.mediaDevices?.enumerateDevices) {
+            const outputs = await navigator.mediaDevices.enumerateDevices();
+            const speaker = outputs.find(device => device.kind === 'audiooutput' && /(speaker|loudspeaker|مكبر|السماعة الخارجية)/i.test(device.label));
+            if (speaker) sinkId = speaker.deviceId;
+          }
+          await audioElement.setSinkId(sinkId);
+        } catch {
+          // Fall back to the element's volume control and the browser's default route.
         }
-        sinkId = speaker.deviceId;
       }
-      await audioElement.setSinkId(sinkId);
-      const currentCall = callRef.current;
-      if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, speakerOn: nextSpeakerOn });
-    } catch (error) {
-      console.warn('[calls] تعذر تغيير مخرج الصوت:', error);
-      toast.info('تعذر تغيير مخرج الصوت؛ تحقق من إعدادات الصوت في الجهاز.');
     }
+
+    const currentCall = callRef.current;
+    if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, speakerOn: nextSpeakerOn });
   }, [setActiveCall]);
 
   const showActiveVideo = Boolean(callState && callState.phase === 'active' && !callState.terminalStatus && (
@@ -1540,7 +1539,7 @@ export default function CallManager({
               }
             }}
           >
-            <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+            <audio id="remoteAudio" ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
             {!isMinimized && callState.phase === 'active' && !callState.terminalStatus && !callState.dismissing && (
               <button
                 type="button"
