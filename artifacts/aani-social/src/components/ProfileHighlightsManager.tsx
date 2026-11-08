@@ -835,6 +835,7 @@ export function ProfileHighlightViewer({
   const [storyDurations, setStoryDurations] = useState<Record<string, number>>({});
   const [durationsLoaded, setDurationsLoaded] = useState(false);
   const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
+  const [videoFailedStoryId, setVideoFailedStoryId] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [titleToastVisible, setTitleToastVisible] = useState(false);
   const [replyText, setReplyText] = useState('');
@@ -914,7 +915,9 @@ export function ProfileHighlightViewer({
   }, []);
 
   const resumeStoryProgress = useCallback(() => {
-    if (!story?.id || !durationsLoaded || mediaReadyStoryId !== story.id || storyTimerRef.current !== null) return;
+    if (!story?.id || !durationsLoaded || mediaReadyStoryId !== story.id) return;
+    if (isVideo && videoFailedStoryId !== story.id) return;
+    if (storyTimerRef.current !== null) return;
     const remainingMs = storyTimerRemainingMsRef.current;
     if (remainingMs <= 0) {
       goToStoryRef.current(activeIndexRef.current + 1);
@@ -929,7 +932,7 @@ export function ProfileHighlightViewer({
       storyTimerRemainingMsRef.current = 0;
       if (activeStoryIdRef.current === timerStoryId) goToStoryRef.current(activeIndexRef.current + 1);
     }, remainingMs);
-  }, [durationsLoaded, mediaReadyStoryId, story?.id]);
+  }, [durationsLoaded, isVideo, mediaReadyStoryId, story?.id, videoFailedStoryId]);
 
   useEffect(() => {
     let active = true;
@@ -996,6 +999,7 @@ export function ProfileHighlightViewer({
       progressFill.style.width = '0%';
       void progressFill.offsetWidth;
     }
+    setVideoFailedStoryId(null);
     if (story && !story.media_url) setMediaReadyStoryId(story.id);
   }, [clearStoryTimer, story?.id, story?.media_url]);
 
@@ -1013,6 +1017,7 @@ export function ProfileHighlightViewer({
     clearStoryTimer();
     storyTimerRemainingMsRef.current = 0;
     if (!story || !durationsLoaded || mediaReadyStoryId !== story.id) return;
+    if (isVideo && videoFailedStoryId !== story.id) return;
 
     const duration = storyDuration;
     const durationMs = duration * 1000;
@@ -1028,7 +1033,7 @@ export function ProfileHighlightViewer({
     }
     resumeStoryProgress();
     return () => clearStoryTimer();
-  }, [clearStoryTimer, durationsLoaded, mediaReadyStoryId, resumeStoryProgress, story?.id, storyDuration]);
+  }, [clearStoryTimer, durationsLoaded, isVideo, mediaReadyStoryId, resumeStoryProgress, story?.id, storyDuration, videoFailedStoryId]);
 
   useEffect(() => {
     if (!story || !durationsLoaded || mediaReadyStoryId !== story.id) return;
@@ -1165,7 +1170,23 @@ export function ProfileHighlightViewer({
               setStoryDurations(current => ({ ...current, [story.id]: duration }));
             }
           }}
-          onError={() => setMediaReadyStoryId(story.id)}
+          onTimeUpdate={event => {
+            if (activeStoryIdRef.current !== story.id) return;
+            const video = event.currentTarget;
+            if (!Number.isFinite(video.duration) || video.duration <= 0 || !Number.isFinite(video.currentTime)) return;
+            const progress = Math.min(100, Math.max(0, (video.currentTime / video.duration) * 100));
+            if (progressFillRef.current) progressFillRef.current.style.width = `${progress}%`;
+          }}
+          onEnded={() => {
+            if (activeStoryIdRef.current !== story.id) return;
+            if (progressFillRef.current) progressFillRef.current.style.width = '100%';
+            goToStoryRef.current(activeIndexRef.current + 1);
+          }}
+          onError={() => {
+            if (activeStoryIdRef.current !== story.id) return;
+            setVideoFailedStoryId(story.id);
+            setMediaReadyStoryId(story.id);
+          }}
         />
       ) : story.media_url ? (
         <img
