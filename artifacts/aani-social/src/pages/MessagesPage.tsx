@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MapPin, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MapPin, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, Video, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
