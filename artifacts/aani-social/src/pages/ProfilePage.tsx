@@ -572,11 +572,11 @@ export default function ProfilePage({
                 type="button"
                 onClick={() => void toggleFollow()}
                 aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
-                className={`flex h-9 w-[160px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full px-5 text-sm font-bold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
+                className={`inline-flex h-9 min-w-[85px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
               >
                 <span>{isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}</span>
                 {isFollowing && (
-                  <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+                  <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
                     <svg className={`profile-follow-check${showFollowCheckmark ? ' is-visible' : ''}`} viewBox="0 0 20 20" aria-hidden="true">
                       <path d="M3 10.5 7.4 15 17 5.5" fill="none" stroke="#000" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} />
                     </svg>
