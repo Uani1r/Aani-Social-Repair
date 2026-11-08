@@ -73,6 +73,8 @@ export default function ProfileHighlightsManager({
 }) {
   useModalBodyScrollLock();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isRendered, setIsRendered] = useState(open);
+  const [isActive, setIsActive] = useState(false);
   const [tab, setTab] = useState<'archive' | 'studio'>('archive');
   const [step, setStep] = useState<'media' | 'collection'>('media');
   const [archiveStories, setArchiveStories] = useState<ArchiveStory[]>([]);
@@ -84,6 +86,19 @@ export default function ProfileHighlightsManager({
   const [captionDraft, setCaptionDraft] = useState('');
   const [collectionTitleDraft, setCollectionTitleDraft] = useState('');
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setIsRendered(true);
+      const frame = window.requestAnimationFrame(() => setIsActive(true));
+      return () => window.cancelAnimationFrame(frame);
+    }
+
+    setIsActive(false);
+    if (!isRendered) return;
+    const timeout = window.setTimeout(() => setIsRendered(false), 300);
+    return () => window.clearTimeout(timeout);
+  }, [open, isRendered]);
 
   useEffect(() => {
     if (!open) return;
@@ -255,7 +270,7 @@ export default function ProfileHighlightsManager({
     }
   };
 
-  if (!open) return null;
+  if (!isRendered) return null;
 
   const canContinue = step === 'media' && (tab === 'archive' ? Boolean(selectedArchiveStory) : Boolean(studioFile));
   const selectedMediaUrl = selectedArchiveStory ? selectedArchiveStory.media_url : studioPreviewUrl;
@@ -263,101 +278,101 @@ export default function ProfileHighlightsManager({
   const selectedMediaCaption = selectedArchiveStory ? captionDraft : studioFile?.name || captionDraft;
 
   return createPortal(
-    <div className="fixed inset-0 z-[2200] flex h-[100dvh] w-full flex-col bg-[#09090B] text-white" dir="rtl" role="dialog" aria-modal="true" aria-label="استوديو أبرز القصص">
-      <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 pb-4 pt-[calc(env(safe-area-inset-top)+1rem)]">
-        <div>
-          <h2 className="text-lg font-black">استوديو أبرز القصص</h2>
-          <p className="mt-1 text-xs text-zinc-400">احفظ من الأرشيف أو أضف وسيطاً جديداً دون نشر ستوري.</p>
+    <div id="highlightCreationModal" className={`highlight-creation-modal fixed inset-0 z-[10000] flex h-[100dvh] w-full flex-col overflow-hidden bg-black text-white ${isActive ? 'active' : ''}`} dir="rtl" role="dialog" aria-modal="true" aria-hidden={!isRendered} aria-label="إنشاء أبرز القصص">
+      <header className="grid shrink-0 grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 px-4 pb-3 pt-[env(safe-area-inset-top,44px)]">
+        <button id="closeModalBtn" type="button" onClick={close} className="justify-self-start px-2 py-2 text-base font-bold text-white transition-opacity hover:opacity-70 disabled:opacity-50" disabled={saving}>إلغاء</button>
+        <div className="flex items-center gap-1 rounded-full bg-neutral-900 p-1" role="tablist" aria-label="مصدر أبرز القصص">
+          <button id="tabArchive" type="button" role="tab" aria-selected={tab === 'archive'} aria-pressed={tab === 'archive'} onClick={() => { setTab('archive'); setStep('media'); }} className={`min-w-[112px] rounded-full px-5 py-2 text-sm font-bold transition-colors ${tab === 'archive' ? 'bg-white text-black' : 'text-neutral-400'}`}>
+            الأرشيف
+          </button>
+          <button id="tabStudio" type="button" role="tab" aria-selected={tab === 'studio'} aria-pressed={tab === 'studio'} onClick={() => { setTab('studio'); setStep('media'); }} className={`min-w-[112px] rounded-full px-5 py-2 text-sm font-bold transition-colors ${tab === 'studio' ? 'bg-white text-black' : 'text-neutral-400'}`}>
+            الاستوديو
+          </button>
         </div>
-        <button type="button" onClick={close} aria-label="إغلاق الاستوديو" className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white hover:bg-white/15" disabled={saving}>
-          <X size={20} />
-        </button>
+        <span aria-hidden="true" />
       </header>
 
-      <div className="flex shrink-0 gap-2 border-b border-white/10 px-4 py-3">
-        <button type="button" onClick={() => { setTab('archive'); setStep('media'); }} aria-pressed={tab === 'archive'} className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-bold transition ${tab === 'archive' ? 'bg-white text-black' : 'bg-white/5 text-zinc-300'}`}>
-          الأرشيف
-        </button>
-        <button type="button" onClick={() => { setTab('studio'); setStep('media'); }} aria-pressed={tab === 'studio'} className={`flex-1 rounded-xl px-3 py-2.5 text-sm font-bold transition ${tab === 'studio' ? 'bg-white text-black' : 'bg-white/5 text-zinc-300'}`}>
-          الاستوديو
-        </button>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {tab === 'archive' ? (
-          <div className="mx-auto w-full max-w-4xl">
-            {archiveLoading ? (
-              <div className="grid min-h-48 place-items-center text-sm text-zinc-400">جارٍ تحميل الأرشيف...</div>
-            ) : archiveError ? (
-              <div role="alert" className="rounded-2xl border border-red-900/70 bg-red-950/30 p-4 text-sm text-red-200">تعذر تحميل الأرشيف: {archiveError}</div>
-            ) : archiveStories.length === 0 ? (
-              <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-6 text-center">
-                <div><p className="font-bold">لا توجد قصص منتهية في الأرشيف بعد</p><p className="mt-2 text-sm text-zinc-400">يمكنك اختيار الاستوديو لإضافة صورة أو فيديو مباشرة إلى أبرز القصص.</p></div>
+      <main className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
+        <section id="contentArchive" aria-hidden={tab !== 'archive'} className={tab === 'archive' ? 'w-full' : 'hidden'}>
+          {selectedArchiveStory && (
+            <div className="mb-4 grid gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
+              <div className="mx-auto aspect-[9/14] max-h-[42dvh] w-full max-w-[250px] overflow-hidden rounded-xl bg-black">
+                {mediaPreview(selectedArchiveStory.media_url, selectedArchiveStory.media_type, captionDraft, 'h-full w-full object-contain')}
               </div>
-            ) : (
-              <>
-                {selectedArchiveStory && (
-                  <div className="mb-5 grid gap-4 rounded-2xl border border-white/10 bg-white/[0.03] p-3 md:grid-cols-[minmax(0,1fr)_minmax(220px,0.8fr)]">
-                    <div className="mx-auto aspect-[9/14] max-h-[42dvh] w-full max-w-[250px] overflow-hidden rounded-xl bg-black">
-                      {mediaPreview(selectedArchiveStory.media_url, selectedArchiveStory.media_type, captionDraft, 'h-full w-full object-contain')}
-                    </div>
-                    <div className="flex min-w-0 flex-col justify-center gap-3">
-                      <p className="text-sm font-bold">معاينة القصة المختارة</p>
-                      {selectedArchiveStory.is_close_friends && <p className="rounded-lg bg-emerald-950/60 px-3 py-2 text-xs text-emerald-200">ستظل هذه القصة مقتصرة على الأصدقاء المقرّبين.</p>}
-                      <label className="text-xs font-semibold text-zinc-300" htmlFor="archive-highlight-caption">وصف القصة</label>
-                      <textarea id="archive-highlight-caption" value={captionDraft} onChange={event => setCaptionDraft(event.currentTarget.value)} maxLength={500} rows={3} className="w-full resize-none rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-white outline-none focus:border-[#1D9BF0]" placeholder="أضف وصفاً اختيارياً..." />
-                    </div>
-                  </div>
-                )}
-                <p className="mb-3 text-xs text-zinc-400">اختر قصة منتهية لمعاينتها ثم أضفها إلى مجموعة.</p>
-                <div className="grid grid-cols-3 gap-3 sm:grid-cols-4 md:grid-cols-6">
-                  {archiveStories.map(story => {
-                    const alreadyAdded = existingSourceStoryIds.has(story.id);
-                    const selected = selectedArchiveStory?.id === story.id;
-                    return (
-                      <button key={story.id} type="button" onClick={() => selectArchiveStory(story)} disabled={alreadyAdded} aria-pressed={selected} className={`group relative aspect-[4/5] overflow-hidden rounded-xl border bg-zinc-900 text-left transition ${selected ? 'border-[#1D9BF0] ring-2 ring-[#1D9BF0]/50' : 'border-white/10'} disabled:cursor-not-allowed disabled:opacity-45`}>
-                        {mediaPreview(story.media_url, story.media_type, story.caption, 'h-full w-full object-cover', false)}
-                        <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-2 pb-2 pt-7 text-right text-[10px] text-white">{alreadyAdded ? 'مضافة' : story.caption?.trim() || 'قصة محفوظة'}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="mx-auto flex w-full max-w-xl flex-col items-center gap-4">
-            {!studioFile ? (
-              <button type="button" onClick={() => fileInputRef.current?.click()} className="flex min-h-60 w-full flex-col items-center justify-center gap-4 rounded-3xl border border-dashed border-white/20 bg-white/[0.03] px-6 text-center transition hover:border-[#1D9BF0] hover:bg-[#1D9BF0]/5">
-                <span className="grid h-16 w-16 place-items-center rounded-2xl bg-[#1D9BF0]/15 text-[#56B4F5]"><ImagePlus size={30} /></span>
-                <span><strong className="block text-base">اختر صورة أو فيديو</strong><span className="mt-2 block text-sm text-zinc-400">ستتم معاينة الوسيط قبل إضافته إلى مجموعة أبرز القصص.</span></span>
-                <span className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-bold text-black"><Upload size={16} /> اختيار ملف</span>
-              </button>
-            ) : (
-              <>
-                <div className="relative aspect-[9/14] max-h-[54dvh] w-full overflow-hidden rounded-2xl bg-black">
+              <div className="flex min-w-0 flex-col justify-center gap-3">
+                <p className="text-sm font-bold">معاينة القصة المختارة</p>
+                {selectedArchiveStory.is_close_friends && <p className="rounded-lg bg-emerald-950/60 px-3 py-2 text-xs text-emerald-200">ستظل هذه القصة مقتصرة على الأصدقاء المقرّبين.</p>}
+                <label className="text-xs font-semibold text-zinc-300" htmlFor="archive-highlight-caption">وصف القصة</label>
+                <textarea id="archive-highlight-caption" value={captionDraft} onChange={event => setCaptionDraft(event.currentTarget.value)} maxLength={500} rows={3} className="w-full resize-none rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-white outline-none focus:border-[#1D9BF0]" placeholder="أضف وصفاً اختيارياً..." />
+              </div>
+            </div>
+          )}
+          {archiveLoading ? (
+            <div className="grid min-h-48 place-items-center text-sm text-zinc-400">جارٍ تحميل الأرشيف...</div>
+          ) : archiveError ? (
+            <div role="alert" className="rounded-2xl border border-red-900/70 bg-red-950/30 p-4 text-sm text-red-200">تعذر تحميل الأرشيف: {archiveError}</div>
+          ) : archiveStories.length === 0 ? (
+            <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-6 text-center">
+              <div><p className="font-bold">لا توجد قصص منتهية في الأرشيف بعد</p><p className="mt-2 text-sm text-zinc-400">يمكنك اختيار الاستوديو لإضافة صورة أو فيديو مباشرة إلى أبرز القصص.</p></div>
+            </div>
+          ) : (
+            <>
+              <p className="mb-3 text-xs text-zinc-400">اختر قصة منتهية لمعاينتها ثم أضفها إلى مجموعة.</p>
+              <div className="grid grid-cols-3 gap-1">
+                {archiveStories.map(story => {
+                  const alreadyAdded = existingSourceStoryIds.has(story.id);
+                  const selected = selectedArchiveStory?.id === story.id;
+                  return (
+                    <button key={story.id} type="button" onClick={() => selectArchiveStory(story)} disabled={alreadyAdded} aria-pressed={selected} className={`group relative aspect-[9/16] overflow-hidden rounded-md border bg-zinc-900 text-left transition ${selected ? 'border-[#1D9BF0] ring-2 ring-[#1D9BF0]/50' : 'border-white/10'} disabled:cursor-not-allowed disabled:opacity-45`}>
+                      {mediaPreview(story.media_url, story.media_type, story.caption, 'h-full w-full object-cover', false)}
+                      <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 to-transparent px-2 pb-2 pt-7 text-right text-[10px] text-white">{alreadyAdded ? 'مضافة' : story.caption?.trim() || 'قصة محفوظة'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </section>
+
+        <section id="contentStudio" aria-hidden={tab !== 'studio'} className={tab === 'studio' ? 'w-full' : 'hidden'}>
+          <div className="w-full">
+            <div className="grid grid-cols-3 gap-1">
+              {!studioFile ? (
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="flex aspect-[9/16] flex-col items-center justify-center gap-3 overflow-hidden rounded-md border border-dashed border-white/20 bg-neutral-900 px-2 text-center transition hover:border-[#1D9BF0] hover:bg-[#1D9BF0]/5">
+                  <span className="grid h-12 w-12 place-items-center rounded-full bg-[#1D9BF0]/15 text-[#56B4F5]"><ImagePlus size={25} /></span>
+                  <span className="text-xs font-bold">اختيار صورة أو فيديو</span>
+                </button>
+              ) : (
+                <div className="relative aspect-[9/16] overflow-hidden rounded-md bg-neutral-900">
                   {studioFile.type.startsWith('video/') ? (
-                    <video src={studioPreviewUrl || undefined} className="h-full w-full object-contain" controls playsInline />
+                    <video src={studioPreviewUrl || undefined} className="h-full w-full object-cover" controls muted playsInline preload="metadata" />
                   ) : (
-                    <img src={studioPreviewUrl || ''} className="h-full w-full object-contain" alt="معاينة الوسيط المختار" />
+                    <img src={studioPreviewUrl || ''} className="h-full w-full object-cover" alt="معاينة الوسيط المختار" />
                   )}
-                  <button type="button" onClick={() => { setStudioFile(null); setCaptionDraft(''); }} aria-label="إزالة الوسيط المختار" className="absolute left-3 top-3 grid h-9 w-9 place-items-center rounded-full bg-black/70 text-white"><X size={18} /></button>
+                  <button type="button" onClick={() => { setStudioFile(null); setCaptionDraft(''); }} aria-label="إزالة الوسيط المختار" className="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-full bg-black/75 text-white"><X size={17} /></button>
                 </div>
-                <div className="w-full rounded-xl border border-white/10 bg-white/[0.03] p-3">
-                  <p className="truncate text-xs text-zinc-400">{studioFile.name}</p>
-                  <label className="mt-3 block text-xs font-semibold text-zinc-300" htmlFor="studio-highlight-caption">وصف القصة (اختياري)</label>
-                  <textarea id="studio-highlight-caption" value={captionDraft} onChange={event => setCaptionDraft(event.currentTarget.value)} maxLength={500} rows={2} className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-black/40 p-3 text-sm text-white outline-none focus:border-[#1D9BF0]" placeholder="اكتب وصفاً قصيراً..." />
-                </div>
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="text-sm font-semibold text-[#56B4F5]">اختيار ملف آخر</button>
-              </>
+              )}
+              {studioFile && (
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="flex aspect-[9/16] flex-col items-center justify-center gap-3 overflow-hidden rounded-md border border-dashed border-white/20 bg-neutral-900 px-2 text-center text-neutral-300 transition hover:border-[#1D9BF0]">
+                  <span className="grid h-12 w-12 place-items-center rounded-full bg-white/10"><Upload size={22} /></span>
+                  <span className="text-xs font-bold">اختيار ملف آخر</span>
+                </button>
+              )}
+            </div>
+            {studioFile && (
+              <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                <p className="truncate text-xs text-zinc-400">{studioFile.name}</p>
+                <label className="mt-3 block text-xs font-semibold text-zinc-300" htmlFor="studio-highlight-caption">وصف القصة (اختياري)</label>
+                <textarea id="studio-highlight-caption" value={captionDraft} onChange={event => setCaptionDraft(event.currentTarget.value)} maxLength={500} rows={2} className="mt-2 w-full resize-none rounded-lg border border-white/10 bg-black/40 p-3 text-sm text-white outline-none focus:border-[#1D9BF0]" placeholder="اكتب وصفاً قصيراً..." />
+              </div>
             )}
             <input ref={fileInputRef} type="file" accept="image/*,video/*" className="hidden" aria-label="اختيار صورة أو فيديو لإضافته إلى أبرز القصص" onChange={selectStudioFile} />
           </div>
-        )}
-      </div>
+        </section>
+      </main>
 
       {canContinue && (
-        <footer className="shrink-0 border-t border-white/10 bg-[#09090B] px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
+        <footer className="shrink-0 border-t border-white/10 bg-black px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
           <button type="button" onClick={continueToCollections} className="mx-auto flex min-h-12 w-full max-w-xl items-center justify-center gap-2 rounded-full bg-[#1D9BF0] px-5 text-sm font-black text-white transition hover:bg-[#1686d4]">
             <Check size={18} /> تم
           </button>
@@ -365,7 +380,7 @@ export default function ProfileHighlightsManager({
       )}
 
       {step === 'collection' && (
-        <div className="fixed inset-0 z-[2300] flex items-end justify-center bg-black/75" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setStep('media'); }}>
+        <div className="fixed inset-0 z-[10001] flex items-end justify-center bg-black/75" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !saving) setStep('media'); }}>
           <section className="max-h-[82dvh] w-full max-w-2xl overflow-y-auto rounded-t-3xl border border-white/10 bg-[#111114] px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-5 shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="highlight-collection-title">
             <div className="mb-5 flex items-start justify-between gap-4">
               <div>

@@ -95,3 +95,19 @@
   margin: 0;
   padding: 0;
 }
+
+
+.highlight-creation-modal {
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.highlight-creation-modal.active {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .highlight-creation-modal {
+    transition-duration: 0.01ms;
+  }
+}
