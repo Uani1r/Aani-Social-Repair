@@ -690,6 +690,13 @@ export default function ProfilePage({
             setProfileHighlights(current => current.filter(item => item.id !== collectionId));
             setSelectedHighlightCollection(current => current?.id === collectionId ? null : current);
           }}
+          onHighlightDeleted={(collectionId, highlightId) => {
+            const removeHighlight = (collection: ProfileHighlightCollection) => collection.id === collectionId
+              ? { ...collection, stories: collection.stories.filter(item => item.id !== highlightId) }
+              : collection;
+            setProfileHighlights(current => current.map(removeHighlight).filter(item => item.stories.length > 0));
+            setSelectedHighlightCollection(current => current?.id === collectionId ? removeHighlight(current) : current);
+          }}
           currentUserId={currentUserId}
           ownerName={person ? displayName(person) : 'محمد'}
           ownerAvatarUrl={person?.avatar_url || null}

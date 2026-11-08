@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Check, ChevronLeft, Heart, ImagePlus, Loader2, MoreVertical, Pencil, Plus, SendHorizontal, Trash2, Upload, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
@@ -834,6 +835,7 @@ export function ProfileHighlightViewer({
   onClose,
   onCollectionUpdated,
   onCollectionDeleted,
+  onHighlightDeleted,
   currentUserId,
   ownerName,
   ownerAvatarUrl,
@@ -843,6 +845,7 @@ export function ProfileHighlightViewer({
   onClose: () => void;
   onCollectionUpdated: (collectionId: string, updates: { title: string; cover_url: string | null }) => void;
   onCollectionDeleted: (collectionId: string) => void;
+  onHighlightDeleted: (collectionId: string, highlightId: string) => void;
   currentUserId: string;
   ownerName: string;
   ownerAvatarUrl: string | null;
@@ -858,12 +861,15 @@ export function ProfileHighlightViewer({
   const [isCleanScreen, setIsCleanScreen] = useState(false);
   const [optionsSheetOpen, setOptionsSheetOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [deleteChoiceOpen, setDeleteChoiceOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<'collection' | 'story' | null>(null);
   const [editTitleDraft, setEditTitleDraft] = useState('');
   const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
+  const [cropperFile, setCropperFile] = useState<File | null>(null);
   const [editCoverPreviewUrl, setEditCoverPreviewUrl] = useState<string | null>(null);
   const [isSavingCollection, setIsSavingCollection] = useState(false);
-  const [isDeletingCollection, setIsDeletingCollection] = useState(false);
+  const [isDeletingItem, setIsDeletingItem] = useState(false);
   const [titleToastVisible, setTitleToastVisible] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
@@ -886,6 +892,7 @@ export function ProfileHighlightViewer({
   const cleanScreenIgnoreMouseUntilRef = useRef(0);
   const cleanScreenSuppressClickUntilRef = useRef(0);
   const managementPauseBeforeRef = useRef(false);
+  const preservePauseOnStoryChangeRef = useRef(false);
   const editCoverInputRef = useRef<HTMLInputElement>(null);
   const foundCollectionIndex = collections.findIndex(item => item.id === activeCollectionId);
   const collectionIndex = foundCollectionIndex >= 0 ? foundCollectionIndex : collections.findIndex(item => item.id === collection.id);
@@ -1035,14 +1042,26 @@ export function ProfileHighlightViewer({
     resumeManagementPause();
   };
 
-  const openDeleteConfirmation = () => {
+  const openDeleteChoices = () => {
     setOptionsSheetOpen(false);
+    setDeleteChoiceOpen(true);
+  };
+
+  const chooseDeleteTarget = (target: 'collection' | 'story') => {
+    setDeleteChoiceOpen(false);
+    setDeleteTarget(target);
     setDeleteConfirmOpen(true);
   };
 
+  const closeDeleteChoices = () => {
+    setDeleteChoiceOpen(false);
+    resumeManagementPause();
+  };
+
   const closeDeleteConfirmation = () => {
-    if (isDeletingCollection) return;
+    if (isDeletingItem) return;
     setDeleteConfirmOpen(false);
+    setDeleteTarget(null);
     resumeManagementPause();
   };
 
@@ -1055,7 +1074,7 @@ export function ProfileHighlightViewer({
       toast.error('اختر ملف صورة صالحاً.');
       return;
     }
-    setEditCoverFile(file);
+    setCropperFile(file);
   };
 
   const saveCollectionSettings = async () => {
@@ -1121,13 +1140,13 @@ export function ProfileHighlightViewer({
   };
 
   const deleteCollection = async () => {
-    if (isDeletingCollection || !isStoryOwner) return;
+    if (isDeletingItem || !isStoryOwner) return;
     if (!supabaseConfigured || !currentUserId) {
       toast.error('اتصال قاعدة البيانات غير متاح.');
       return;
     }
 
-    setIsDeletingCollection(true);
+    setIsDeletingItem(true);
     try {
       const { error } = await supabase.rpc('aani_delete_profile_highlight_collection', {
         p_collection_id: activeCollection.id,
@@ -1135,8 +1154,8 @@ export function ProfileHighlightViewer({
       if (error) throw error;
 
       const removedCoverPath = getHighlightStoragePath(activeCollection.cover_url, currentUserId);
-      setIsDeletingCollection(false);
       setDeleteConfirmOpen(false);
+      setDeleteTarget(null);
       onCollectionDeleted(activeCollection.id);
       closeViewer();
       toast.success('تم حذف مجموعة أبرز القصص.');
@@ -1149,8 +1168,55 @@ export function ProfileHighlightViewer({
       console.error('[profile highlights] تعذر حذف المجموعة:', error);
       toast.error('تعذر حذف المجموعة. حاول مرة أخرى.');
     } finally {
-      setIsDeletingCollection(false);
+      setIsDeletingItem(false);
     }
+  };
+
+  const deleteStory = async () => {
+    if (isDeletingItem || !isStoryOwner || !story) return;
+    if (!supabaseConfigured || !currentUserId) {
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    setIsDeletingItem(true);
+    try {
+      const { data: collectionDeleted, error } = await supabase.rpc('aani_delete_profile_highlight', {
+        p_highlight_id: story.id,
+      });
+      if (error) throw error;
+
+      setDeleteConfirmOpen(false);
+      setDeleteTarget(null);
+      if (collectionDeleted) {
+        const removedCoverPath = getHighlightStoragePath(activeCollection.cover_url, currentUserId);
+        onCollectionDeleted(activeCollection.id);
+        closeViewer();
+        toast.success('تم حذف القصة والمجموعة لأنها كانت تحتوي على القصة فقط.');
+        if (removedCoverPath) {
+          void supabase.storage.from(storageBucket).remove([removedCoverPath]).then(({ error: cleanupError }) => {
+            if (cleanupError) console.warn('[profile highlights] تعذر حذف غلاف المجموعة:', cleanupError);
+          }).catch(cleanupError => console.warn('[profile highlights] تعذر حذف غلاف المجموعة:', cleanupError));
+        }
+        return;
+      }
+
+      onHighlightDeleted(activeCollection.id, story.id);
+      preservePauseOnStoryChangeRef.current = true;
+      setActiveIndex(Math.min(activeIndex, activeCollection.stories.length - 2));
+      setIsPaused(managementPauseBeforeRef.current);
+      toast.success('تم حذف القصة من المجموعة.');
+    } catch (error) {
+      console.error('[profile highlights] تعذر حذف القصة:', error);
+      toast.error('تعذر حذف القصة. حاول مرة أخرى.');
+    } finally {
+      setIsDeletingItem(false);
+    }
+  };
+
+  const confirmDelete = () => {
+    if (deleteTarget === 'story') void deleteStory();
+    else if (deleteTarget === 'collection') void deleteCollection();
   };
 
   const clearCleanScreenPressTimer = useCallback(() => {
@@ -1249,7 +1315,9 @@ export function ProfileHighlightViewer({
     clearCleanScreenPressTimer();
     cleanScreenPressActiveRef.current = false;
     storyTimerRemainingMsRef.current = 0;
-    setIsPaused(false);
+    const preservePause = preservePauseOnStoryChangeRef.current;
+    preservePauseOnStoryChangeRef.current = false;
+    setIsPaused(preservePause ? managementPauseBeforeRef.current : false);
     setIsCleanScreen(false);
     progressContainerRef.current?.querySelectorAll<HTMLDivElement>('[data-story-progress-fill]').forEach(progressFill => {
       progressFill.style.animation = 'none';
@@ -1268,19 +1336,24 @@ export function ProfileHighlightViewer({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        if (deleteConfirmOpen) closeDeleteConfirmation();
+        if (cropperFile) {
+          event.stopImmediatePropagation();
+          setCropperFile(null);
+        }
+        else if (deleteConfirmOpen) closeDeleteConfirmation();
+        else if (deleteChoiceOpen) closeDeleteChoices();
         else if (editModalOpen) closeEditModal();
         else if (optionsSheetOpen) closeOptionsSheet();
         else closeViewer();
         return;
       }
-      if (editModalOpen || deleteConfirmOpen || optionsSheetOpen) return;
+      if (editModalOpen || cropperFile || deleteConfirmOpen || deleteChoiceOpen || optionsSheetOpen) return;
       if (event.key === 'ArrowRight') goToStory(activeIndex - 1);
       if (event.key === 'ArrowLeft') goToStory(activeIndex + 1);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeIndex, closeDeleteConfirmation, closeEditModal, closeOptionsSheet, closeViewer, deleteConfirmOpen, editModalOpen, goToStory, optionsSheetOpen]);
+  }, [activeIndex, closeDeleteChoices, closeDeleteConfirmation, closeEditModal, closeOptionsSheet, closeViewer, cropperFile, deleteChoiceOpen, deleteConfirmOpen, editModalOpen, goToStory, optionsSheetOpen]);
 
   useEffect(() => {
     clearStoryTimer();
@@ -1612,7 +1685,7 @@ export function ProfileHighlightViewer({
                 <span className="flex-1 text-sm font-semibold">تعديل</span>
                 <ChevronLeft size={19} className="text-neutral-500" />
               </button>
-              <button type="button" onClick={openDeleteConfirmation} className="flex w-full items-center gap-3 rounded-2xl px-2 py-3 text-right transition hover:bg-[#FF3B30]/[0.08]">
+              <button type="button" onClick={openDeleteChoices} className="flex w-full items-center gap-3 rounded-2xl px-2 py-3 text-right transition hover:bg-[#FF3B30]/[0.08]">
                 <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FF3B30]/10 text-[#FF3B30]"><Trash2 size={18} /></span>
                 <span className="flex-1 text-sm font-semibold text-[#FF3B30]">حذف</span>
               </button>
@@ -1656,14 +1729,53 @@ export function ProfileHighlightViewer({
         </div>
       )}
 
+      {cropperFile && (
+        <HighlightCoverCropper
+          file={cropperFile}
+          onCancel={() => setCropperFile(null)}
+          onSave={croppedFile => {
+            setEditCoverFile(croppedFile);
+            setCropperFile(null);
+          }}
+        />
+      )}
+
+      {deleteChoiceOpen && (
+        <div className="highlight-options-backdrop fixed inset-0 z-[2125] flex items-end justify-center bg-black/60 backdrop-blur-md" role="presentation" onClick={event => { if (event.target === event.currentTarget) closeDeleteChoices(); }}>
+          <section className="highlight-options-sheet w-full max-w-[600px] rounded-t-3xl bg-[#121212] px-5 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 text-white" role="dialog" aria-modal="true" aria-label="اختيار ما تريد حذفه">
+            <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-neutral-600" />
+            <h2 className="mb-3 px-2 text-base font-black">ما الذي تريد حذفه؟</h2>
+            <div className="space-y-2">
+              <button type="button" onClick={() => chooseDeleteTarget('collection')} className="flex w-full items-center gap-3 rounded-2xl px-2 py-3 text-right transition hover:bg-[#FF3B30]/[0.08]">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FF3B30]/10 text-[#FF3B30]"><Trash2 size={18} /></span>
+                <span className="flex-1 text-sm font-semibold text-[#FF3B30]">حذف المجموعة كاملة</span>
+                <ChevronLeft size={19} className="text-neutral-500" />
+              </button>
+              <button type="button" onClick={() => chooseDeleteTarget('story')} className="flex w-full items-center gap-3 rounded-2xl px-2 py-3 text-right transition hover:bg-[#FF3B30]/[0.08]">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#FF3B30]/10 text-[#FF3B30]"><Trash2 size={18} /></span>
+                <span className="flex-1 text-sm font-semibold text-[#FF3B30]">حذف القصة الحالية فقط</span>
+                <ChevronLeft size={19} className="text-neutral-500" />
+              </button>
+            </div>
+            <button type="button" onClick={closeDeleteChoices} className="mt-4 min-h-12 w-full rounded-2xl bg-neutral-800/80 text-sm font-bold text-white transition hover:bg-neutral-700">إلغاء</button>
+          </section>
+        </div>
+      )}
+
       {deleteConfirmOpen && (
         <div className="fixed inset-0 z-[2130] flex items-center justify-center bg-black/60 px-5 backdrop-blur-md" role="presentation" onClick={event => { if (event.target === event.currentTarget) closeDeleteConfirmation(); }}>
           <section className="highlight-delete-dialog w-full max-w-sm rounded-3xl border border-white/10 bg-[#121212] p-5 text-white shadow-2xl" role="alertdialog" aria-modal="true" aria-labelledby="delete-highlight-heading" aria-describedby="delete-highlight-description">
-            <h2 id="delete-highlight-heading" className="text-base font-black">حذف المجموعة؟</h2>
-            <p id="delete-highlight-description" className="mt-2 text-sm leading-6 text-neutral-400">سيتم حذف مجموعة «{activeCollection.title}» وجميع قصصها نهائياً من ملفك الشخصي.</p>
+            <h2 id="delete-highlight-heading" className="text-base font-black">{deleteTarget === 'story' ? 'حذف القصة؟' : 'حذف المجموعة؟'}</h2>
+            <p id="delete-highlight-description" className="mt-2 text-sm leading-6 text-neutral-400">
+              {deleteTarget === 'story'
+                ? activeCollection.stories.length === 1
+                  ? `سيتم حذف القصة الحالية. لأنها آخر قصة، ستُحذف مجموعة «${activeCollection.title}» الفارغة أيضاً.`
+                  : `سيتم حذف القصة الحالية فقط من مجموعة «${activeCollection.title}»، وستبقى بقية القصص.`
+                : `سيتم حذف مجموعة «${activeCollection.title}» وجميع قصصها نهائياً من ملفك الشخصي.`}
+            </p>
             <div className="mt-5 flex gap-3">
-              <button type="button" onClick={closeDeleteConfirmation} disabled={isDeletingCollection} className="min-h-11 flex-1 rounded-xl bg-neutral-800 text-sm font-bold text-white disabled:opacity-50">إلغاء</button>
-              <button type="button" onClick={() => void deleteCollection()} disabled={isDeletingCollection} className="min-h-11 flex-1 rounded-xl bg-[#FF3B30] text-sm font-bold text-white disabled:opacity-50">{isDeletingCollection ? 'جارٍ الحذف...' : 'حذف المجموعة'}</button>
+              <button type="button" onClick={closeDeleteConfirmation} disabled={isDeletingItem} className="min-h-11 flex-1 rounded-xl bg-neutral-800 text-sm font-bold text-white disabled:opacity-50">إلغاء</button>
+              <button type="button" onClick={confirmDelete} disabled={isDeletingItem} className="min-h-11 flex-1 rounded-xl bg-[#FF3B30] text-sm font-bold text-white disabled:opacity-50">{isDeletingItem ? 'جارٍ الحذف...' : deleteTarget === 'story' ? 'حذف القصة' : 'حذف المجموعة'}</button>
             </div>
           </section>
         </div>
