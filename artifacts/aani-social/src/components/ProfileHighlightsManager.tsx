@@ -95,6 +95,9 @@ export default function ProfileHighlightsManager({
   const storyProgressRef = useRef<HTMLDivElement>(null);
   const storyVideoRef = useRef<HTMLVideoElement>(null);
   const storyTimerRef = useRef<number | null>(null);
+  const storyTimerStartedAtRef = useRef(0);
+  const storyTimerRemainingMsRef = useRef(0);
+  const storyTimerHasStartedRef = useRef(false);
   const [isRendered, setIsRendered] = useState(open);
   const [isActive, setIsActive] = useState(false);
   const [tab, setTab] = useState<'archive' | 'studio'>('archive');
@@ -109,6 +112,9 @@ export default function ProfileHighlightsManager({
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
   const [captionDraft, setCaptionDraft] = useState('');
   const [collectionTitleDraft, setCollectionTitleDraft] = useState('');
+  const [highlightsSelectionOpen, setHighlightsSelectionOpen] = useState(false);
+  const [createCollectionOpen, setCreateCollectionOpen] = useState(false);
+  const [newCollectionTitle, setNewCollectionTitle] = useState('');
   const [saving, setSaving] = useState(false);
 
   const closeStoryPreview = useCallback(() => {
@@ -117,9 +123,13 @@ export default function ProfileHighlightsManager({
       storyTimerRef.current = null;
     }
     const progress = storyProgressRef.current;
+    storyTimerStartedAtRef.current = 0;
+    storyTimerRemainingMsRef.current = 0;
+    storyTimerHasStartedRef.current = false;
     if (progress) {
       progress.style.animation = 'none';
       progress.style.animationDuration = '';
+      progress.style.animationPlayState = '';
       progress.style.width = '0%';
     }
     const video = storyVideoRef.current;
@@ -129,6 +139,9 @@ export default function ProfileHighlightsManager({
     }
     setPreviewingArchiveStory(null);
     setStoryDurationSeconds(null);
+    setHighlightsSelectionOpen(false);
+    setCreateCollectionOpen(false);
+    setNewCollectionTitle('');
   }, []);
 
   const startStoryProgress = useCallback((durationSeconds: number) => {
@@ -140,17 +153,47 @@ export default function ProfileHighlightsManager({
       ? Math.min(durationSeconds, 120)
       : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
     const progress = storyProgressRef.current;
+    const durationMs = storyDuration * 1000;
+    storyTimerRemainingMsRef.current = durationMs;
+    storyTimerStartedAtRef.current = Date.now();
+    storyTimerHasStartedRef.current = true;
     if (progress) {
       progress.style.animation = 'none';
       progress.style.animationDuration = '';
+      progress.style.animationPlayState = 'running';
       progress.style.width = '0%';
       void progress.offsetWidth;
       progress.style.animation = 'fillProgress linear forwards';
       progress.style.animationDuration = `${storyDuration}s`;
     }
-    const timer = window.setTimeout(closeStoryPreview, storyDuration * 1000);
+    const timer = window.setTimeout(closeStoryPreview, durationMs);
     storyTimerRef.current = timer;
     return timer;
+  }, [closeStoryPreview]);
+
+  const pauseStoryProgress = useCallback(() => {
+    if (storyTimerRef.current !== null) {
+      const elapsedMs = storyTimerStartedAtRef.current > 0 ? Date.now() - storyTimerStartedAtRef.current : 0;
+      storyTimerRemainingMsRef.current = Math.max(0, storyTimerRemainingMsRef.current - elapsedMs);
+      window.clearTimeout(storyTimerRef.current);
+      storyTimerRef.current = null;
+    }
+    storyTimerStartedAtRef.current = 0;
+    if (storyProgressRef.current) storyProgressRef.current.style.animationPlayState = 'paused';
+    storyVideoRef.current?.pause();
+  }, []);
+
+  const resumeStoryProgress = useCallback(() => {
+    const remainingMs = storyTimerRemainingMsRef.current;
+    if (remainingMs <= 0) {
+      if (storyTimerHasStartedRef.current) closeStoryPreview();
+      return;
+    }
+    if (storyTimerRef.current !== null) window.clearTimeout(storyTimerRef.current);
+    storyTimerStartedAtRef.current = Date.now();
+    if (storyProgressRef.current) storyProgressRef.current.style.animationPlayState = 'running';
+    storyTimerRef.current = window.setTimeout(closeStoryPreview, remainingMs);
+    if (storyVideoRef.current) void storyVideoRef.current.play().catch(() => {});
   }, [closeStoryPreview]);
 
   const openArchiveStoryPreview = (story: ArchiveStory, durationSeconds: number) => {
@@ -158,10 +201,14 @@ export default function ProfileHighlightsManager({
       window.clearTimeout(storyTimerRef.current);
       storyTimerRef.current = null;
     }
+    storyTimerStartedAtRef.current = 0;
+    storyTimerRemainingMsRef.current = 0;
+    storyTimerHasStartedRef.current = false;
     const progress = storyProgressRef.current;
     if (progress) {
       progress.style.animation = 'none';
       progress.style.animationDuration = '';
+      progress.style.animationPlayState = '';
       progress.style.width = '0%';
     }
     const previousVideo = storyVideoRef.current;
@@ -180,12 +227,14 @@ export default function ProfileHighlightsManager({
       ? video.duration
       : storedDuration;
     startStoryProgress(storyDuration);
-    void video.play().catch(() => {});
+    if (highlightsSelectionOpen || createCollectionOpen) pauseStoryProgress();
+    else void video.play().catch(() => {});
   };
 
   const handleStoryVideoError = (event: SyntheticEvent<HTMLVideoElement>) => {
     const storedDuration = Number(event.currentTarget.dataset.duration);
     startStoryProgress(storedDuration);
+    if (highlightsSelectionOpen || createCollectionOpen) pauseStoryProgress();
   };
 
   useEffect(() => {
@@ -270,6 +319,17 @@ export default function ProfileHighlightsManager({
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || saving) return;
+      if (createCollectionOpen) {
+        setCreateCollectionOpen(false);
+        setNewCollectionTitle('');
+        resumeStoryProgress();
+        return;
+      }
+      if (highlightsSelectionOpen) {
+        setHighlightsSelectionOpen(false);
+        resumeStoryProgress();
+        return;
+      }
       if (previewingArchiveStory) {
         closeStoryPreview();
         return;
@@ -279,7 +339,7 @@ export default function ProfileHighlightsManager({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open, onClose, saving, step, previewingArchiveStory, closeStoryPreview]);
+  }, [open, onClose, saving, step, previewingArchiveStory, closeStoryPreview, createCollectionOpen, highlightsSelectionOpen, resumeStoryProgress]);
 
   const close = () => {
     if (saving) return;
@@ -313,13 +373,28 @@ export default function ProfileHighlightsManager({
     setCaptionDraft(story.caption || '');
   };
 
-  const addPreviewedArchiveStory = () => {
+  const openHighlightsSelection = () => {
     const story = previewingArchiveStory;
     if (!story || existingSourceStoryIds.has(story.id)) return;
-    selectArchiveStory(story);
-    setCollectionTitleDraft(story.caption?.trim() || '');
-    setStep('collection');
-    closeStoryPreview();
+    pauseStoryProgress();
+    setHighlightsSelectionOpen(true);
+  };
+
+  const closeHighlightsSelection = () => {
+    setHighlightsSelectionOpen(false);
+    if (!createCollectionOpen) resumeStoryProgress();
+  };
+
+  const openCreateCollection = () => {
+    setHighlightsSelectionOpen(false);
+    setNewCollectionTitle('');
+    setCreateCollectionOpen(true);
+  };
+
+  const cancelCreateCollection = () => {
+    setCreateCollectionOpen(false);
+    setNewCollectionTitle('');
+    resumeStoryProgress();
   };
 
   const continueToCollections = () => {
@@ -387,6 +462,53 @@ export default function ProfileHighlightsManager({
         if (cleanupError) console.warn('[profile highlights] تعذر حذف الوسيط غير المحفوظ:', cleanupError);
       }
       console.error('[profile highlights] تعذر حفظ أبرز القصص:', error);
+      const message = error && typeof error === 'object' && 'code' in error && error.code === '23505'
+        ? 'هذه القصة موجودة بالفعل في أبرز القصص.'
+        : 'تعذر حفظ القصة في أبرز القصص. حاول مرة أخرى.';
+      toast.error(message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const savePreviewedArchiveStory = async (targetCollection: ProfileHighlightCollection | null, titleDraft = '') => {
+    const story = previewingArchiveStory;
+    if (saving || !story) return;
+    if (!supabaseConfigured || !userId) {
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+    if (existingSourceStoryIds.has(story.id)) {
+      toast.error('هذه القصة موجودة بالفعل في أبرز القصص.');
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const { data, error } = await supabase.rpc('aani_add_profile_highlight', {
+        p_collection_id: targetCollection?.id ?? null,
+        p_collection_title: targetCollection ? null : titleDraft.trim() || 'أبرز القصص',
+        p_media_url: story.media_url,
+        p_media_type: normalizeMediaType(story.media_type),
+        p_caption: story.caption,
+        p_source_story_id: story.id,
+      });
+      if (error) throw error;
+
+      const result = data as {
+        collection?: ProfileHighlightCollectionSummary;
+        highlight?: ProfileHighlight;
+      } | null;
+      if (!result?.collection?.id || !result.highlight?.id) throw new Error('لم تُرجع قاعدة البيانات القصة المحفوظة.');
+
+      onHighlightAdded(result.collection, result.highlight);
+      toast.success(targetCollection ? `أُضيفت القصة إلى ${targetCollection.title}.` : 'أُنشئت المجموعة وأُضيفت إليها القصة.');
+      setHighlightsSelectionOpen(false);
+      setCreateCollectionOpen(false);
+      setNewCollectionTitle('');
+      resumeStoryProgress();
+    } catch (error) {
+      console.error('[profile highlights] تعذر حفظ قصة الأرشيف:', error);
       const message = error && typeof error === 'object' && 'code' in error && error.code === '23505'
         ? 'هذه القصة موجودة بالفعل في أبرز القصص.'
         : 'تعذر حفظ القصة في أبرز القصص. حاول مرة أخرى.';
@@ -610,8 +732,8 @@ export default function ProfileHighlightsManager({
             <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-32 bg-gradient-to-t from-black/45 to-transparent" />
             <button
               type="button"
-              onClick={addPreviewedArchiveStory}
-              disabled={existingSourceStoryIds.has(previewingArchiveStory.id)}
+              onClick={openHighlightsSelection}
+              disabled={saving || existingSourceStoryIds.has(previewingArchiveStory.id)}
               aria-label={existingSourceStoryIds.has(previewingArchiveStory.id) ? 'مضافة بالفعل إلى أبرز القصص' : 'إضافة إلى أبرز القصص'}
               className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-white/30 bg-white/20 px-3 py-1 text-xs font-semibold text-white shadow-lg backdrop-blur-md transition hover:bg-white/30 disabled:cursor-default disabled:opacity-75"
             >
@@ -621,6 +743,60 @@ export default function ProfileHighlightsManager({
           </>
         )}
       </div>
+      {highlightsSelectionOpen && previewingArchiveStory && (
+        <div
+          className="highlights-selection-backdrop fixed inset-0 z-[10006] flex items-end justify-center bg-black/65 backdrop-blur-[2px]"
+          role="presentation"
+          onMouseDown={event => { if (event.target === event.currentTarget && !saving) closeHighlightsSelection(); }}
+        >
+          <section className="highlights-selection-sheet max-h-[52dvh] min-h-[230px] w-full max-w-[600px] rounded-t-3xl border border-white/10 bg-[#17171b] px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-3 text-white shadow-[0_-16px_60px_rgba(0,0,0,0.45)]" role="dialog" aria-modal="true" aria-label="اختيار مجموعة لأبرز القصص">
+            <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/25" />
+            <header className="mb-5 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-black">أبرز القصص</h2>
+                <p className="mt-1 text-xs text-zinc-400">أضف القصة إلى مجموعة أو أنشئ مجموعة جديدة</p>
+              </div>
+              <button type="button" onClick={closeHighlightsSelection} disabled={saving} aria-label="إغلاق اختيار المجموعة" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-50"><X size={19} /></button>
+            </header>
+            <div className="no-scrollbar -mx-5 flex gap-4 overflow-x-auto px-5 pb-2">
+              <button type="button" onClick={openCreateCollection} disabled={saving} className="flex w-[82px] shrink-0 flex-col items-center gap-2 text-center disabled:opacity-50">
+                <span className="grid h-[72px] w-[72px] place-items-center rounded-full border-2 border-dashed border-white/60 bg-white/[0.04] text-white"><Plus size={27} /></span>
+                <span className="line-clamp-2 w-full text-[11px] font-semibold leading-4">إنشاء مجموعة جديدة</span>
+              </button>
+              {collections.map(collection => {
+                const cover = collection.stories[0];
+                return (
+                  <button key={collection.id} type="button" onClick={() => void savePreviewedArchiveStory(collection)} disabled={saving} aria-label={`إضافة القصة إلى مجموعة ${collection.title}`} className="flex w-[82px] shrink-0 flex-col items-center gap-2 text-center disabled:opacity-50">
+                    <span className="flex h-[72px] w-[72px] overflow-hidden rounded-full border-2 border-white/50 p-[3px]">
+                      <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
+                        {cover ? mediaPreview(cover.media_url, cover.media_type, cover.caption, 'h-full w-full object-cover', false) : <span className="px-1 text-center text-[9px] text-white">{collection.title}</span>}
+                      </span>
+                    </span>
+                    <span className="line-clamp-2 w-full text-[11px] leading-4 text-zinc-200">{collection.title}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {saving && <p className="mt-3 text-center text-xs text-zinc-400">جارٍ إضافة القصة إلى المجموعة...</p>}
+          </section>
+        </div>
+      )}
+      {createCollectionOpen && previewingArchiveStory && (
+        <div className="highlights-create-modal fixed inset-0 z-[10007] flex h-[100dvh] justify-center bg-black text-white" dir="rtl">
+          <section className="flex h-full w-full max-w-[600px] flex-col bg-black" role="dialog" aria-modal="true" aria-labelledby="create-highlight-title">
+            <header className="grid grid-cols-[1fr_auto_1fr] items-center border-b border-white/10 px-4 pb-3 pt-[env(safe-area-inset-top,44px)]">
+              <button type="button" onClick={cancelCreateCollection} disabled={saving} className="justify-self-start px-2 py-2 text-sm font-bold text-zinc-200 disabled:opacity-50">إلغاء</button>
+              <h2 id="create-highlight-title" className="text-sm font-bold">مجموعة جديدة</h2>
+              <button type="button" onClick={() => void savePreviewedArchiveStory(null, newCollectionTitle)} disabled={saving} className="justify-self-end px-2 py-2 text-sm font-black text-[#56B4F5] disabled:opacity-50">حفظ</button>
+            </header>
+            <main className="px-5 pt-7">
+              <label className="sr-only" htmlFor="new-highlight-title">العنوان</label>
+              <input id="new-highlight-title" autoFocus value={newCollectionTitle} onChange={event => setNewCollectionTitle(event.currentTarget.value)} maxLength={500} placeholder="العنوان" className="w-full border-b border-white/20 bg-transparent px-1 py-3 text-lg text-white outline-none placeholder:text-zinc-500 focus:border-white/70" />
+              {saving && <p className="mt-5 text-center text-xs text-zinc-400">جارٍ حفظ المجموعة...</p>}
+            </main>
+          </section>
+        </div>
+      )}
     </div>,
     document.body,
   );

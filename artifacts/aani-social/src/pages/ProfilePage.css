@@ -128,3 +128,38 @@
   opacity: 1;
   pointer-events: auto;
 }
+
+.highlights-selection-backdrop {
+  animation: highlights-backdrop-in 180ms ease-out both;
+}
+
+.highlights-selection-sheet {
+  animation: highlights-sheet-in 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.highlights-create-modal {
+  animation: highlights-create-in 220ms ease-out both;
+}
+
+@keyframes highlights-backdrop-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes highlights-sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes highlights-create-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .highlights-selection-backdrop,
+  .highlights-selection-sheet,
+  .highlights-create-modal {
+    animation-duration: 0.01ms;
+  }
+}
