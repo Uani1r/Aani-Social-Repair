@@ -449,10 +449,23 @@ export default function ProfilePage({
       if (pendingAvatarFile) await uploadPendingImage('avatar', pendingAvatarFile);
       if (pendingCoverFile) await uploadPendingImage('cover', pendingCoverFile);
 
-      const { error } = await supabase.from('profiles').update(patch).eq('id', activeUserId);
+      let savedPatch = patch;
+      let { error } = await supabase.from('profiles').update(savedPatch).eq('id', activeUserId);
+      let coverPositionSaved = true;
+      if (error && (error.code === 'PGRST204' || error.code === '42703') && /cover_position_[xy]/i.test(error.message)) {
+        const fallbackPatch = { ...patch };
+        delete fallbackPatch.cover_position_x;
+        delete fallbackPatch.cover_position_y;
+        const retry = await supabase.from('profiles').update(fallbackPatch).eq('id', activeUserId);
+        error = retry.error;
+        if (!error) {
+          savedPatch = fallbackPatch;
+          coverPositionSaved = false;
+        }
+      }
       if (error) throw error;
 
-      const updatedProfile = { ...person, ...patch };
+      const updatedProfile = { ...person, ...savedPatch };
       setPerson(updatedProfile);
       onProfileUpdate(updatedProfile);
       setImagePreview('avatar', updatedProfile.avatar_url || null);
@@ -464,7 +477,11 @@ export default function ProfilePage({
       setIsEditingProfile(false);
       setShowProfileMenu(false);
       uploadedPaths.length = 0;
-      toast.success('تم حفظ تعديلات الملف الشخصي.');
+      if (coverPositionSaved) {
+        toast.success('تم حفظ تعديلات الملف الشخصي.');
+      } else {
+        toast.info('تم حفظ بقية التعديلات، لكن موضع الغلاف لم يُحفظ لعدم توفر أعمدته في قاعدة البيانات.');
+      }
     } catch (error) {
       if (uploadedPaths.length) {
         const { error: cleanupError } = await supabase.storage.from(storageBucket).remove(uploadedPaths);

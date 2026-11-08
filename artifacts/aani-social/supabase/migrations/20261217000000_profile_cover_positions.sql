@@ -7,4 +7,6 @@ alter table public.profiles
 comment on column public.profiles.cover_position_x is 'الموضع الأفقي لصورة غلاف الملف الشخصي كنسبة مئوية';
 comment on column public.profiles.cover_position_y is 'الموضع العمودي لصورة غلاف الملف الشخصي كنسبة مئوية';
 
+notify pgrst, 'reload schema';
+
 commit;
