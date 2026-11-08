@@ -281,6 +281,9 @@ export default function CallManager({
   const outboundChannelsRef = useRef(new Map<string, Promise<RealtimeChannel>>());
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const videoSenderRef = useRef<{ connection: RTCPeerConnection; sender: RTCRtpSender } | null>(null);
+  const cameraToggleRef = useRef(false);
   const earlyCandidatesRef = useRef(new Map<string, RTCIceCandidateInit[]>());
   const renegotiatingCallRef = useRef<string | null>(null);
   const remoteRenegotiationReadyRef = useRef<string | null>(null);
@@ -404,6 +407,8 @@ export default function CallManager({
     setElapsedSeconds(0);
     const connection = peerConnectionRef.current;
     peerConnectionRef.current = null;
+    videoSenderRef.current = null;
+    remoteStreamRef.current = null;
     if (connection) {
       connection.ontrack = null;
       connection.onicecandidate = null;
@@ -447,6 +452,8 @@ export default function CallManager({
     if (localVideoRef.current) localVideoRef.current.srcObject = null;
     const connection = peerConnectionRef.current;
     peerConnectionRef.current = null;
+    videoSenderRef.current = null;
+    remoteStreamRef.current = null;
     if (connection) {
       connection.ontrack = null;
       connection.onicecandidate = null;
@@ -499,6 +506,8 @@ export default function CallManager({
 
   const createPeerConnection = useCallback((callId: string, peer: CallPeer): RTCPeerConnection => {
     peerConnectionRef.current?.close();
+    videoSenderRef.current = null;
+    remoteStreamRef.current = null;
     const connection = new RTCPeerConnection({ iceServers: CALL_ICE_SERVERS });
     peerConnectionRef.current = connection;
     connection.onicecandidate = event => {
@@ -516,14 +525,25 @@ export default function CallManager({
       }).catch(error => console.warn('[calls] تعذر إرسال مرشح اتصال:', error));
     };
     connection.ontrack = event => {
-      if (callRef.current?.callId !== callId) return;
-      let remoteStream = event.streams[0];
-      if (!remoteStream) {
-        remoteStream = new MediaStream();
-        remoteStream.addTrack(event.track);
+      const currentCall = callRef.current;
+      if (currentCall?.callId !== callId || currentCall.terminalStatus) return;
+      const previousStream = remoteStreamRef.current;
+      const remoteStream = event.streams[0] || previousStream || new MediaStream();
+      if (previousStream && previousStream !== remoteStream) {
+        previousStream.getTracks().forEach(track => {
+          if (!remoteStream.getTracks().some(existingTrack => existingTrack.id === track.id)) remoteStream.addTrack(track);
+        });
       }
-      const activeCall = callRef.current;
-      if (activeCall?.callId === callId) setActiveCall({ ...activeCall, remoteStream });
+      if (!remoteStream.getTracks().some(track => track.id === event.track.id)) remoteStream.addTrack(event.track);
+      remoteStreamRef.current = remoteStream;
+      const refreshRemoteStream = () => {
+        const activeCall = callRef.current;
+        if (activeCall?.callId === callId && !activeCall.terminalStatus) setActiveCall({ ...activeCall, remoteStream });
+      };
+      event.track.addEventListener('mute', refreshRemoteStream);
+      event.track.addEventListener('unmute', refreshRemoteStream);
+      event.track.addEventListener('ended', refreshRemoteStream);
+      refreshRemoteStream();
     };
     connection.onconnectionstatechange = () => {
       if (connection.connectionState === 'connected') {
@@ -776,7 +796,10 @@ export default function CallManager({
         return;
       }
       const connection = createPeerConnection(callId, peer);
-      acquiredStream.getTracks().forEach(track => connection.addTrack(track, acquiredStream as MediaStream));
+      acquiredStream.getTracks().forEach(track => {
+        const sender = connection.addTrack(track, acquiredStream as MediaStream);
+        if (track.kind === 'video') videoSenderRef.current = { connection, sender };
+      });
       const offer = await connection.createOffer();
       await connection.setLocalDescription(offer);
       if (callRef.current?.callId !== callId) {
@@ -829,7 +852,10 @@ export default function CallManager({
       }
       localStreamRef.current = acquiredStream;
       const connection = createPeerConnection(incomingCall.callId, incomingCall.peer);
-      acquiredStream.getTracks().forEach(track => connection.addTrack(track, acquiredStream as MediaStream));
+      acquiredStream.getTracks().forEach(track => {
+        const sender = connection.addTrack(track, acquiredStream as MediaStream);
+        if (track.kind === 'video') videoSenderRef.current = { connection, sender };
+      });
       await connection.setRemoteDescription(incomingCall.offer);
       await flushEarlyCandidates(incomingCall.callId, connection);
       const answer = await connection.createAnswer();
@@ -901,62 +927,112 @@ export default function CallManager({
   const toggleCamera = useCallback(async () => {
     const activeCall = callRef.current;
     const stream = localStreamRef.current;
-    if (!activeCall || activeCall.phase !== 'active' || activeCall.dismissing || !stream) return;
-    const liveVideoTrack = stream.getVideoTracks().find(track => track.readyState === 'live');
-    if (!activeCall.cameraOff) {
-      stream.getVideoTracks().forEach(track => { track.enabled = false; });
-      setActiveCall({ ...activeCall, cameraOff: true });
-      return;
-    }
-    if (liveVideoTrack) {
-      liveVideoTrack.enabled = true;
-      setActiveCall({ ...activeCall, cameraOff: false });
-      return;
-    }
-
+    const connection = peerConnectionRef.current;
+    if (!activeCall || activeCall.phase !== 'active' || activeCall.dismissing || !stream || !connection || cameraToggleRef.current) return;
+    cameraToggleRef.current = true;
     let cameraStream: MediaStream | null = null;
     let cameraTrack: MediaStreamTrack | null = null;
     let cameraSender: RTCRtpSender | null = null;
-    const connection = peerConnectionRef.current;
+    let addedVideoSender = false;
+    let addedLocalTrack = false;
+
     try {
-      if (!navigator.mediaDevices?.getUserMedia || !connection) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
+      if (!activeCall.cameraOff) {
+        cameraSender = videoSenderRef.current?.connection === connection
+          ? videoSenderRef.current.sender
+          : connection.getSenders().find(sender => sender.track?.kind === 'video') || null;
+        if (cameraSender) {
+          try {
+            await cameraSender.replaceTrack(null);
+          } catch (error) {
+            console.warn('[calls] تعذر فصل مسار الفيديو قبل إيقاف الكاميرا:', error);
+          }
+        }
+        if (localStreamRef.current !== stream) return;
+        stream.getVideoTracks().forEach(track => {
+          stream.removeTrack(track);
+          track.stop();
+        });
+        const currentCall = callRef.current;
+        if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, cameraOff: true, localStream: stream });
+        return;
+      }
+
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
       cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
       cameraTrack = cameraStream.getVideoTracks()[0] || null;
       const currentCall = callRef.current;
       const currentStream = localStreamRef.current;
-      if (!cameraTrack || !currentCall || currentCall.callId !== activeCall.callId || !currentStream || peerConnectionRef.current !== connection) {
+      if (!cameraTrack || !currentCall || currentCall.callId !== activeCall.callId || currentCall.phase !== 'active' || !currentStream || peerConnectionRef.current !== connection) {
         cameraStream.getTracks().forEach(track => track.stop());
         return;
       }
-      renegotiatingCallRef.current = activeCall.callId;
+
+      cameraSender = videoSenderRef.current?.connection === connection
+        ? videoSenderRef.current.sender
+        : connection.getSenders().find(sender => sender.track?.kind === 'video') || null;
+      if (!cameraSender && connection.signalingState !== 'stable') throw new Error('لا يمكن تحديث اتصال الفيديو أثناء تفاوض آخر.');
+
       currentStream.addTrack(cameraTrack);
-      cameraSender = connection.addTrack(cameraTrack, currentStream);
-      setActiveCall({ ...currentCall, cameraOff: false, localStream: currentStream });
-      const offer = await connection.createOffer();
-      await connection.setLocalDescription(offer);
-      if (callRef.current?.callId !== activeCall.callId || peerConnectionRef.current !== connection) return;
-      const localDescription = connection.localDescription;
-      if (!localDescription) throw new Error('تعذر إنشاء عرض الفيديو.');
-      await sendSignal({
-        type: 'offer',
-        callId: activeCall.callId,
-        to: activeCall.peer.id,
-        renegotiate: true,
-        description: localDescription.toJSON(),
-      });
+      addedLocalTrack = true;
+      if (cameraSender) {
+        await cameraSender.replaceTrack(cameraTrack);
+      } else {
+        cameraSender = connection.addTrack(cameraTrack, currentStream);
+        addedVideoSender = true;
+      }
+      if (callRef.current?.callId !== activeCall.callId || peerConnectionRef.current !== connection || localStreamRef.current !== currentStream) {
+        currentStream.removeTrack(cameraTrack);
+        cameraTrack.stop();
+        return;
+      }
+      videoSenderRef.current = { connection, sender: cameraSender };
+      const latestCall = callRef.current;
+      if (latestCall?.callId === activeCall.callId) setActiveCall({ ...latestCall, cameraOff: false, localStream: currentStream });
+
+      if (addedVideoSender) {
+        renegotiatingCallRef.current = activeCall.callId;
+        const offer = await connection.createOffer();
+        await connection.setLocalDescription(offer);
+        if (callRef.current?.callId !== activeCall.callId || peerConnectionRef.current !== connection) return;
+        const localDescription = connection.localDescription;
+        if (!localDescription) throw new Error('تعذر إنشاء عرض الفيديو.');
+        await sendSignal({
+          type: 'offer',
+          callId: activeCall.callId,
+          to: activeCall.peer.id,
+          renegotiate: true,
+          description: localDescription.toJSON(),
+        });
+      }
     } catch (error) {
       if (renegotiatingCallRef.current === activeCall.callId) renegotiatingCallRef.current = null;
-      if (cameraSender && peerConnectionRef.current === connection) connection?.removeTrack(cameraSender);
-      if (cameraTrack) {
-        stream.removeTrack(cameraTrack);
-        cameraTrack.stop();
+      if (cameraSender && peerConnectionRef.current === connection) {
+        try {
+          await cameraSender.replaceTrack(null);
+          if (addedVideoSender && connection.signalingState === 'have-local-offer') {
+            await connection.setLocalDescription({ type: 'rollback' });
+          }
+          if (addedVideoSender) connection.removeTrack(cameraSender);
+        } catch (rollbackError) {
+          console.warn('[calls] تعذر التراجع عن تحديث الفيديو:', rollbackError);
+        }
       }
+      if (cameraTrack) {
+        if (addedLocalTrack) stream.removeTrack(cameraTrack);
+        cameraTrack.stop();
+      } else {
+        cameraStream?.getTracks().forEach(track => track.stop());
+      }
+      if (addedVideoSender && videoSenderRef.current?.sender === cameraSender) videoSenderRef.current = null;
       const currentCall = callRef.current;
-      if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, cameraOff: true });
+      if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, cameraOff: true, localStream: stream });
       console.warn('[calls] تعذر تشغيل كاميرا المكالمة:', error);
       toast.error(/NotAllowedError|PermissionDeniedError|SecurityError|Permission denied|MEDIA_ACCESS_UNAVAILABLE/i.test(error instanceof Error ? `${error.name} ${error.message}` : String(error))
         ? 'يرجى السماح بالوصول إلى الكاميرا من إعدادات المتصفح لتشغيل الفيديو.'
         : 'تعذر تشغيل الكاميرا. تحقق من الأذونات واتصال الإنترنت ثم حاول مرة أخرى.');
+    } finally {
+      cameraToggleRef.current = false;
     }
   }, [sendSignal, setActiveCall]);
 
@@ -965,6 +1041,11 @@ export default function CallManager({
     if (!activeCall || activeCall.dismissing) return;
     setActiveCall({ ...activeCall, speakerOn: !activeCall.speakerOn });
   }, [setActiveCall]);
+
+  const showActiveVideo = Boolean(callState && callState.phase === 'active' && !callState.terminalStatus && (
+    (!callState.cameraOff && callState.localStream?.getVideoTracks().some(track => track.readyState === 'live' && track.enabled))
+    || callState.remoteStream?.getVideoTracks().some(track => track.readyState === 'live' && !track.muted)
+  ));
 
   useEffect(() => {
     if (!callState || callState.phase !== 'active' || !callState.startedAt || callState.terminalStatus) {
@@ -997,15 +1078,16 @@ export default function CallManager({
   }, [callState?.localStream, callState?.remoteStream, callState?.phase, callState?.cameraOff]);
 
   useEffect(() => {
-    const stream = callState?.remoteStream || null;
-    const remoteElement = callState?.mode === 'video' || stream?.getVideoTracks().some(track => track.readyState === 'live')
-      ? remoteVideoRef.current
-      : remoteAudioRef.current;
-    if (remoteElement) {
-      remoteElement.srcObject = stream;
-      if (stream) void remoteElement.play().catch(() => undefined);
+    const stream = callState && !callState.terminalStatus ? callState.remoteStream : null;
+    if (remoteAudioRef.current && remoteAudioRef.current.srcObject !== stream) {
+      remoteAudioRef.current.srcObject = stream;
+      if (stream) void remoteAudioRef.current.play().catch(() => undefined);
     }
-  }, [callState?.mode, callState?.phase, callState?.remoteStream]);
+    if (showActiveVideo && remoteVideoRef.current && remoteVideoRef.current.srcObject !== stream) {
+      remoteVideoRef.current.srcObject = stream;
+      if (stream) void remoteVideoRef.current.play().catch(() => undefined);
+    }
+  }, [callState?.phase, callState?.remoteStream, showActiveVideo]);
 
   useEffect(() => {
     const handleOpenPicker = () => {
@@ -1051,7 +1133,11 @@ export default function CallManager({
       closeOutboundChannels();
     }
     peerConnectionRef.current?.close();
+    peerConnectionRef.current = null;
+    videoSenderRef.current = null;
+    remoteStreamRef.current = null;
     localStreamRef.current?.getTracks().forEach(track => track.stop());
+    localStreamRef.current = null;
   }, [closeOutboundChannels, sendSignal, stopRingtone]);
 
   const closePicker = () => setPickerOpen(false);
@@ -1059,9 +1145,6 @@ export default function CallManager({
   const activeDuration = formatCallDuration(callState?.terminalStatus === 'ended'
     ? callState.finalDurationSeconds || 0
     : elapsedSeconds);
-  const showActiveVideo = Boolean(callState?.phase === 'active' && !callState.terminalStatus && (
-    callState.mode === 'video' || callState.remoteStream?.getVideoTracks().some(track => track.readyState === 'live')
-  ));
   const showUi = pickerOpen || Boolean(callState);
 
   if (!showUi || typeof document === 'undefined') return null;
@@ -1113,12 +1196,13 @@ export default function CallManager({
       {callState && (
         <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-layer-incoming' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} dir="rtl">
           <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.dismissing && callState.terminalStatus ? ' aani-call-overlay-terminal-dismissing' : ''}${callState.dismissing && callState.terminalStatus === 'ended' ? ' aani-call-overlay-ended-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
+            <audio ref={remoteAudioRef} muted={!callState.speakerOn} autoPlay playsInline style={{ display: 'none' }} />
             {showActiveVideo && (
               <>
-                <video ref={remoteVideoRef} className="aani-call-remote-video" muted={!callState.speakerOn} autoPlay playsInline aria-label="فيديو الطرف الآخر" />
+                <video ref={remoteVideoRef} className="aani-call-remote-video" muted autoPlay playsInline aria-label="فيديو الطرف الآخر" />
                 <div className="aani-call-video-shade" />
                 {callState.localStream && !callState.cameraOff && <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />}
-                {callState.remoteStream?.getAudioTracks().length ? null : <audio ref={remoteAudioRef} muted={!callState.speakerOn} autoPlay playsInline />}
+
               </>
             )}
             {!(showActiveVideo) && (
@@ -1162,7 +1246,7 @@ export default function CallManager({
                     )}
                   </>
                 )}
-                {callState.mode === 'audio' && <audio ref={remoteAudioRef} muted={!callState.speakerOn} autoPlay playsInline />}
+
               </>
             )}
             {showActiveVideo && (
