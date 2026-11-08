@@ -837,6 +837,7 @@ export function ProfileHighlightViewer({
   const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
   const [videoFailedStoryId, setVideoFailedStoryId] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
+  const [isCleanScreen, setIsCleanScreen] = useState(false);
   const [titleToastVisible, setTitleToastVisible] = useState(false);
   const [replyText, setReplyText] = useState('');
   const [isSendingReply, setIsSendingReply] = useState(false);
@@ -851,6 +852,13 @@ export function ProfileHighlightViewer({
   const storyTimerStartedAtRef = useRef(0);
   const storyTimerRemainingMsRef = useRef(0);
   const titleToastShownRef = useRef(false);
+  const cleanScreenPressTimerRef = useRef<number | null>(null);
+  const cleanScreenPressActiveRef = useRef(false);
+  const cleanScreenPauseBeforeRef = useRef(false);
+  const cleanScreenTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cleanScreenMouseStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cleanScreenIgnoreMouseUntilRef = useRef(0);
+  const cleanScreenSuppressClickUntilRef = useRef(0);
   const foundCollectionIndex = collections.findIndex(item => item.id === activeCollectionId);
   const collectionIndex = foundCollectionIndex >= 0 ? foundCollectionIndex : collections.findIndex(item => item.id === collection.id);
   const activeCollection = foundCollectionIndex >= 0 ? collections[foundCollectionIndex] : collection;
@@ -875,7 +883,26 @@ export function ProfileHighlightViewer({
   }, [clearStoryTimer, onClose]);
 
   const goToStory = useCallback((nextIndex: number) => {
-    if (nextIndex < 0) return;
+    if (nextIndex < 0) {
+      clearStoryTimer();
+      storyTimerRemainingMsRef.current = 0;
+      const previousCollection = collectionIndex > 0
+        ? collections.slice(0, collectionIndex).reverse().find(item => item.stories.length > 0)
+        : undefined;
+      if (!previousCollection) {
+        closeViewer();
+        return;
+      }
+      videoRef.current?.pause();
+      titleToastShownRef.current = false;
+      setTitleToastVisible(false);
+      setStoryDurations({});
+      setDurationsLoaded(false);
+      setMediaReadyStoryId(null);
+      setActiveCollectionId(previousCollection.id);
+      setActiveIndex(previousCollection.stories.length - 1);
+      return;
+    }
     clearStoryTimer();
     storyTimerRemainingMsRef.current = 0;
     if (nextIndex >= activeCollection.stories.length) {
@@ -934,6 +961,46 @@ export function ProfileHighlightViewer({
     }, remainingMs);
   }, [durationsLoaded, isVideo, mediaReadyStoryId, story?.id, videoFailedStoryId]);
 
+  const clearCleanScreenPressTimer = useCallback(() => {
+    if (cleanScreenPressTimerRef.current !== null) {
+      window.clearTimeout(cleanScreenPressTimerRef.current);
+      cleanScreenPressTimerRef.current = null;
+    }
+  }, []);
+
+  const startCleanScreenPress = useCallback((target: Element | null) => {
+    if (target?.closest('input, textarea, select, button:not([data-story-nav]), a, [contenteditable="true"]')) return;
+
+    clearCleanScreenPressTimer();
+    cleanScreenPressActiveRef.current = false;
+    cleanScreenPauseBeforeRef.current = isPaused;
+    cleanScreenPressTimerRef.current = window.setTimeout(() => {
+      cleanScreenPressTimerRef.current = null;
+      cleanScreenPressActiveRef.current = true;
+      setIsCleanScreen(true);
+      setIsPaused(true);
+      pauseStoryProgress();
+      videoRef.current?.pause();
+    }, 350);
+  }, [clearCleanScreenPressTimer, isPaused, pauseStoryProgress]);
+
+  const finishCleanScreenPress = useCallback(() => {
+    clearCleanScreenPressTimer();
+    if (!cleanScreenPressActiveRef.current) return;
+
+    cleanScreenPressActiveRef.current = false;
+    cleanScreenSuppressClickUntilRef.current = Date.now() + 700;
+    setIsCleanScreen(false);
+    const wasPaused = cleanScreenPauseBeforeRef.current;
+    setIsPaused(wasPaused);
+    if (!wasPaused) {
+      resumeStoryProgress();
+      if (videoRef.current) void videoRef.current.play().catch(() => {});
+    }
+  }, [clearCleanScreenPressTimer, resumeStoryProgress]);
+
+  useEffect(() => () => clearCleanScreenPressTimer(), [clearCleanScreenPressTimer]);
+
   useEffect(() => {
     let active = true;
     const sourceStoryIds = [...new Set(activeCollection.stories.flatMap(item => item.source_story_id ? [item.source_story_id] : []))];
@@ -969,7 +1036,7 @@ export function ProfileHighlightViewer({
   }, [activeCollection.id, activeCollection.stories]);
 
   useEffect(() => {
-    if (activeIndex !== 0 || titleToastShownRef.current) {
+    if (titleToastShownRef.current) {
       setTitleToastVisible(false);
       return;
     }
@@ -987,8 +1054,11 @@ export function ProfileHighlightViewer({
   useLayoutEffect(() => {
     activeStoryIdRef.current = story?.id ?? null;
     clearStoryTimer();
+    clearCleanScreenPressTimer();
+    cleanScreenPressActiveRef.current = false;
     storyTimerRemainingMsRef.current = 0;
     setIsPaused(false);
+    setIsCleanScreen(false);
     progressContainerRef.current?.querySelectorAll<HTMLDivElement>('[data-story-progress-fill]').forEach(progressFill => {
       progressFill.style.animation = 'none';
       progressFill.style.animationDuration = '';
@@ -1001,7 +1071,7 @@ export function ProfileHighlightViewer({
     }
     setVideoFailedStoryId(null);
     if (story && !story.media_url) setMediaReadyStoryId(story.id);
-  }, [clearStoryTimer, story?.id, story?.media_url]);
+  }, [clearCleanScreenPressTimer, clearStoryTimer, story?.id, story?.media_url]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1136,8 +1206,64 @@ export function ProfileHighlightViewer({
   if (!story) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[2100] h-[100dvh] w-screen overflow-hidden bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={`أبرز القصص: ${activeCollection.title}`}>
-      <div ref={progressContainerRef} className="pointer-events-none absolute inset-x-2 z-30 flex gap-1 px-1" style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
+    <div className="fixed inset-0 z-[2100] h-[100dvh] w-screen overflow-hidden bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={`أبرز القصص: ${activeCollection.title}`}
+      onTouchStartCapture={event => {
+        cleanScreenIgnoreMouseUntilRef.current = Date.now() + 800;
+        const touch = event.touches[0];
+        if (event.touches.length !== 1 || !touch) {
+          finishCleanScreenPress();
+          cleanScreenTouchStartRef.current = null;
+          return;
+        }
+        cleanScreenTouchStartRef.current = { x: touch.clientX, y: touch.clientY };
+        const target = event.target instanceof Element ? event.target : null;
+        startCleanScreenPress(target);
+      }}
+      onTouchMoveCapture={event => {
+        const start = cleanScreenTouchStartRef.current;
+        const touch = event.touches[0];
+        if (event.touches.length !== 1 || !start || !touch) {
+          clearCleanScreenPressTimer();
+          return;
+        }
+        if (Math.hypot(touch.clientX - start.x, touch.clientY - start.y) > 12) clearCleanScreenPressTimer();
+      }}
+      onTouchEnd={() => {
+        cleanScreenTouchStartRef.current = null;
+        finishCleanScreenPress();
+      }}
+      onTouchCancel={() => {
+        cleanScreenTouchStartRef.current = null;
+        finishCleanScreenPress();
+      }}
+      onMouseDown={event => {
+        if (Date.now() < cleanScreenIgnoreMouseUntilRef.current || event.button !== 0) return;
+        cleanScreenMouseStartRef.current = { x: event.clientX, y: event.clientY };
+        const target = event.target instanceof Element ? event.target : null;
+        startCleanScreenPress(target);
+      }}
+      onMouseMove={event => {
+        const start = cleanScreenMouseStartRef.current;
+        if (start && cleanScreenPressTimerRef.current !== null && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 12) {
+          clearCleanScreenPressTimer();
+          cleanScreenMouseStartRef.current = null;
+        }
+      }}
+      onMouseUp={() => {
+        cleanScreenMouseStartRef.current = null;
+        finishCleanScreenPress();
+      }}
+      onMouseLeave={() => {
+        cleanScreenMouseStartRef.current = null;
+        finishCleanScreenPress();
+      }}
+      onClickCapture={event => {
+        if (Date.now() >= cleanScreenSuppressClickUntilRef.current) return;
+        cleanScreenSuppressClickUntilRef.current = 0;
+        event.preventDefault();
+        event.stopPropagation();
+      }}>
+      <div ref={progressContainerRef} className={`pointer-events-none absolute inset-x-2 z-30 flex gap-1 px-1 transition-opacity duration-150 ${isCleanScreen ? 'opacity-0' : 'opacity-100'}`} style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
         {activeCollection.stories.map((item, index) => (
           <div key={item.id} className="h-[2px] flex-1 overflow-hidden rounded-full bg-white/35">
             <div
@@ -1149,7 +1275,7 @@ export function ProfileHighlightViewer({
           </div>
         ))}
       </div>
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40 bg-gradient-to-b from-black/70 via-black/25 to-transparent" />
+      {!isCleanScreen && <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40 bg-gradient-to-b from-black/70 via-black/25 to-transparent" />}
 
       {story.media_url && story.media_type === 'video' ? (
         <video
@@ -1211,7 +1337,7 @@ export function ProfileHighlightViewer({
         </div>
       )}
 
-      <header className="absolute inset-x-0 z-40 flex items-center justify-between px-4" style={{ top: 'calc(env(safe-area-inset-top, 44px) + 22px)' }}>
+      <header className={`absolute inset-x-0 z-40 flex items-center justify-between px-4 transition-opacity duration-150 ${isCleanScreen ? 'pointer-events-none opacity-0' : 'opacity-100'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 22px)' }}>
         <div className="flex min-w-0 items-center gap-2">
           <Avatar profile={{ avatar_url: ownerAvatarUrl, full_name: ownerName, username: ownerName, id: activeCollection.user_id }} />
           <div className="min-w-0">
@@ -1222,17 +1348,17 @@ export function ProfileHighlightViewer({
         <button type="button" onClick={closeViewer} aria-label="إغلاق أبرز القصص" className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-black/30 text-white backdrop-blur-sm"><X size={22} /></button>
       </header>
 
-      <div className={`pointer-events-none absolute inset-x-5 z-40 text-center text-lg font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] transition-all duration-500 ${activeIndex === 0 && titleToastVisible ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 74px)' }} aria-live="polite">
+      <div className={`pointer-events-none absolute inset-x-5 z-40 text-center text-lg font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] transition-all duration-500 ${titleToastVisible && !isCleanScreen ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 74px)' }} aria-live="polite">
         {activeCollection.title || ownerName}
       </div>
 
-      <button type="button" aria-label="القصة التالية" onClick={() => goToStory(activeIndex + 1)} className="absolute inset-y-0 left-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
-      <button type="button" aria-label="القصة السابقة" onClick={() => goToStory(activeIndex - 1)} className="absolute inset-y-0 right-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
+      <button type="button" data-story-nav="true" aria-label="القصة التالية" onClick={() => goToStory(activeIndex + 1)} className="absolute inset-y-0 left-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
+      <button type="button" data-story-nav="true" aria-label="القصة السابقة" onClick={() => goToStory(activeIndex - 1)} className="absolute inset-y-0 right-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
 
-      {story.caption?.trim() && story.media_url && <p className="pointer-events-none absolute inset-x-4 z-30 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] rounded-xl bg-black/55 p-3 text-center text-sm text-white">{story.caption}</p>}
+      {!isCleanScreen && story.caption?.trim() && story.media_url && <p className="pointer-events-none absolute inset-x-4 z-30 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] rounded-xl bg-black/55 p-3 text-center text-sm text-white">{story.caption}</p>}
 
       {!isStoryOwner && (
-        <div className="absolute inset-x-0 bottom-0 z-50 flex items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pt-5" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }} onClick={event => event.stopPropagation()}>
+        <div className={`absolute inset-x-0 bottom-0 z-50 flex items-center gap-2 bg-gradient-to-t from-black/95 via-black/75 to-transparent px-3 pt-5 transition-opacity duration-150 ${isCleanScreen ? 'pointer-events-none opacity-0' : 'opacity-100'}`} style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }} onClick={event => event.stopPropagation()}>
           <div className="flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-900/95 px-3 py-2 shadow-lg">
             <input
               key={story.id}

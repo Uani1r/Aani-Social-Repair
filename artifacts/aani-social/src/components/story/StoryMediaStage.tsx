@@ -14,6 +14,7 @@ type StoryMediaStageProps = Pick<
   | 'currentTimeSec'
   | 'isStoryOwner'
   | 'isPaused'
+  | 'showUI'
   | 'replyKeyboardInset'
   | 'onNextStory'
   | 'onPreviousStory'
@@ -32,6 +33,7 @@ export default function StoryMediaStage({
   currentTimeSec,
   isStoryOwner,
   isPaused,
+  showUI,
   replyKeyboardInset,
   onNextStory,
   onPreviousStory,
@@ -175,7 +177,7 @@ export default function StoryMediaStage({
         );
       })}
 
-      {currentStory.caption && currentStory.media_url && (
+      {showUI && currentStory.caption && currentStory.media_url && (
         <div
           className="absolute inset-x-4 z-10 rounded-xl bg-black/60 p-3 text-center text-xs text-white backdrop-blur-md"
           style={{ bottom: isStoryOwner

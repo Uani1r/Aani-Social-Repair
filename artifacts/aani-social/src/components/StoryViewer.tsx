@@ -1,4 +1,4 @@
-import { useRef, type MouseEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { useEffect, useRef, type MouseEvent, type TouchEvent as ReactTouchEvent } from 'react';
 
 import StoryHeader from './story/StoryHeader';
 import StoryMediaStage from './story/StoryMediaStage';
@@ -80,6 +80,12 @@ export default function StoryViewer({
   const storyViewerTouchStartRef = useRef<StoryViewerTouchStart | null>(null);
   const storyViewerPausedBeforeTouchRef = useRef(false);
   const suppressStoryClickUntilRef = useRef(0);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressActiveRef = useRef(false);
+  const longPressPausedBeforeRef = useRef(false);
+  const longPressShowUIBeforeRef = useRef(true);
+  const longPressMouseStartRef = useRef<{ x: number; y: number } | null>(null);
+  const ignoreMouseUntilRef = useRef(0);
 
   const suppressStoryClick = () => {
     const suppressUntil = Date.now() + 700;
@@ -91,15 +97,64 @@ export default function StoryViewer({
     }, 700);
   };
 
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current !== null) {
+      window.clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const startLongPress = (target: Element | null) => {
+    if (
+      showMenu
+      || storyViewsOpen
+      || viewerReportTarget
+      || viewerRowMenuOpen
+      || target?.closest('button, a, input, textarea, select, [contenteditable="true"], [data-story-viewers-panel], [data-story-viewer-menu]')
+    ) return;
+
+    clearLongPressTimer();
+    longPressActiveRef.current = false;
+    longPressPausedBeforeRef.current = isPaused;
+    longPressShowUIBeforeRef.current = showUI;
+    longPressTimerRef.current = window.setTimeout(() => {
+      longPressTimerRef.current = null;
+      longPressActiveRef.current = true;
+      if (showUI) onToggleShowUI();
+      onPauseChange(true);
+      storyVideoRef.current?.pause();
+    }, 350);
+  };
+
+  const finishLongPress = () => {
+    clearLongPressTimer();
+    if (!longPressActiveRef.current) return;
+
+    longPressActiveRef.current = false;
+    suppressStoryClick();
+    onPauseChange(longPressPausedBeforeRef.current);
+    if (showUI !== longPressShowUIBeforeRef.current) onToggleShowUI();
+    if (!longPressPausedBeforeRef.current) {
+      void storyVideoRef.current?.play().catch(() => {});
+    }
+  };
+
+  useEffect(() => () => {
+    if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
+  }, []);
+
   const handleStoryViewerTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     suppressStoryClickUntilRef.current = 0;
+    ignoreMouseUntilRef.current = Date.now() + 800;
     storyViewerPausedBeforeTouchRef.current = isPaused;
     if (event.touches.length !== 1) {
+      finishLongPress();
       storyViewerTouchStartRef.current = null;
       return;
     }
 
     const target = event.target instanceof Element ? event.target : null;
+    startLongPress(target);
     if (target?.closest('input, textarea, select, [contenteditable="true"]')) {
       storyViewerTouchStartRef.current = null;
       return;
@@ -120,6 +175,7 @@ export default function StoryViewer({
     const start = storyViewerTouchStartRef.current;
     if (!start) return;
     if (event.touches.length !== 1) {
+      finishLongPress();
       storyViewerTouchStartRef.current = null;
       return;
     }
@@ -127,17 +183,22 @@ export default function StoryViewer({
     const touch = event.touches[0];
     const deltaX = touch.clientX - start.lastX;
     const deltaY = touch.clientY - start.lastY;
-    storyViewerTouchStartRef.current = {
+    const updatedStart = {
       ...start,
       lastX: touch.clientX,
       lastY: touch.clientY,
       pathLength: start.pathLength + Math.hypot(deltaX, deltaY),
     };
+    storyViewerTouchStartRef.current = updatedStart;
+    if (updatedStart.pathLength > 12) clearLongPressTimer();
   };
 
   const handleStoryViewerTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const wasLongPress = longPressActiveRef.current;
+    finishLongPress();
     const start = storyViewerTouchStartRef.current;
     storyViewerTouchStartRef.current = null;
+    if (wasLongPress) return;
     const touch = event.changedTouches[0];
     if (!start || !touch) return;
 
@@ -177,6 +238,7 @@ export default function StoryViewer({
   };
 
   const handleStoryViewerTouchCancel = () => {
+    finishLongPress();
     storyViewerTouchStartRef.current = null;
   };
 
@@ -190,6 +252,27 @@ export default function StoryViewer({
       onTouchMoveCapture={handleStoryViewerTouchMove}
       onTouchEnd={handleStoryViewerTouchEnd}
       onTouchCancel={handleStoryViewerTouchCancel}
+      onMouseDown={event => {
+        if (Date.now() < ignoreMouseUntilRef.current || event.button !== 0) return;
+        longPressMouseStartRef.current = { x: event.clientX, y: event.clientY };
+        const target = event.target instanceof Element ? event.target : null;
+        startLongPress(target);
+      }}
+      onMouseMove={event => {
+        const start = longPressMouseStartRef.current;
+        if (start && longPressTimerRef.current !== null && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 12) {
+          clearLongPressTimer();
+          longPressMouseStartRef.current = null;
+        }
+      }}
+      onMouseUp={() => {
+        longPressMouseStartRef.current = null;
+        finishLongPress();
+      }}
+      onMouseLeave={() => {
+        longPressMouseStartRef.current = null;
+        finishLongPress();
+      }}
       onClickCapture={(event: MouseEvent<HTMLDivElement>) => {
         const target = event.target instanceof Element ? event.target : null;
         const isMenuInteraction = target?.closest('[data-story-viewer-menu], [data-story-viewer-menu-toggle]');
@@ -241,6 +324,7 @@ export default function StoryViewer({
           onToggleShowUI={onToggleShowUI}
           onPauseChange={onPauseChange}
           isPaused={isPaused}
+          showUI={showUI}
           onVideoMetadata={onVideoMetadata}
           onVideoTimeUpdate={onVideoTimeUpdate}
           onVideoEnded={onVideoEnded}
