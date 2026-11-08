@@ -83,6 +83,10 @@ export default function Shell({
   const unifiedTopBarHiddenRef = useRef(unifiedTopBarHidden);
   const currentPathRef = useRef(path);
   currentPathRef.current = path;
+  const requestStoryComposer = useCallback(() => {
+    setPendingStoryComposerRequest(true);
+    if (currentPathRef.current !== '/' && currentPathRef.current !== '/feed') setLocation('/feed');
+  }, [setLocation]);
 
   const handleSignOut = () => {
     // Root is valid in both session states: feed before logout, login after it.
@@ -102,9 +106,14 @@ export default function Shell({
 
   useEffect(() => {
     const openProfileSettings = () => setShowSettingsModal(true);
+    const openStoryComposer = () => requestStoryComposer();
     window.addEventListener('aani:open-profile-settings', openProfileSettings);
-    return () => window.removeEventListener('aani:open-profile-settings', openProfileSettings);
-  }, []);
+    window.addEventListener('aani:request-story-composer', openStoryComposer);
+    return () => {
+      window.removeEventListener('aani:open-profile-settings', openProfileSettings);
+      window.removeEventListener('aani:request-story-composer', openStoryComposer);
+    };
+  }, [requestStoryComposer]);
 
   useEffect(() => {
     let modalOpen = hasBlockingFeedDialog();
@@ -845,10 +854,7 @@ export default function Shell({
         }}
         onSelectPublishImages={handleSelectPublishImages}
         onSelectPublishVideo={handleSelectPublishVideo}
-        onOpenMorePublishOptions={() => {
-          setPendingStoryComposerRequest(true);
-          if (path !== '/' && path !== '/feed') setLocation('/feed');
-        }}
+        onOpenMorePublishOptions={requestStoryComposer}
         showImagePreviewModal={showImagePreviewModal}
         imagePreviewImages={imagePreviewImages}
         onImagePreviewImagesChange={handleImagePreviewChange}

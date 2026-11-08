@@ -75,13 +75,6 @@ function normalizeWebsiteUrl(value?: string | null): string | null {
   }
 }
 
-function formatJoinedDate(value?: string | null): string {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('ar-IQ', { month: 'long', year: 'numeric' }).format(date);
-}
-
 export default function ProfilePage({
   targetUserId,
   currentUserId,
@@ -131,7 +124,6 @@ export default function ProfilePage({
   const username = cleanUsername(person?.username);
   const profileLocation = person?.location?.trim() || '';
   const profileWebsiteUrl = normalizeWebsiteUrl(person?.website);
-  const joinedDate = formatJoinedDate(person?.created_at);
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
@@ -430,7 +422,10 @@ export default function ProfilePage({
             className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white transition hover:bg-black/70"
           >
             <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s-.9 2-2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
+              <circle cx="12" cy="5" r="1.75" />
+              <circle cx="12" cy="12" r="1.75" />
+              <circle cx="12" cy="19" r="1.75" />
+              <path className="hidden" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s-.9 2-2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
             </svg>
           </button>
           {showProfileMenu && (
@@ -454,6 +449,16 @@ export default function ProfilePage({
                       <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${person.is_private ? 'right-1' : 'right-6'}`} />
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setBioDraft(person.bio || '');
+                      setBioEditorOpen(true);
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full border-b border-[#2F3336] py-3 text-right text-sm hover:text-[#1D9BF0]"
+                  >إضافة / تعديل السيرة الذاتية</button>
                   <button
                     type="button"
                     role="menuitem"
@@ -587,23 +592,11 @@ export default function ProfilePage({
               </div>
             </div>
           ) : person.bio?.trim() ? (
-            own ? (
-              <button type="button" onClick={() => { setBioDraft(person.bio || ''); setBioEditorOpen(true); }} className="block text-right text-[15px] leading-relaxed text-[#F7F9F9] hover:opacity-80">{person.bio}</button>
-            ) : (
-              <p className="text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>
-            )
-          ) : own ? (
-            <button
-              type="button"
-              onClick={() => { setBioDraft(''); setBioEditorOpen(true); }}
-              className="flex items-center gap-1 rounded-full border border-[#1D9BF0]/30 bg-[#1D9BF0]/10 px-3 py-1.5 text-xs font-bold text-[#1D9BF0] transition hover:bg-[#1D9BF0]/20"
-            >
-              <span>+ إضافة سيرة ذاتية</span>
-            </button>
+            <p className="text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>
           ) : null}
         </div>
 
-        {(profileLocation || profileWebsiteUrl || joinedDate) && (
+        {(profileLocation || profileWebsiteUrl) && (
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-[#71767B]">
             {profileLocation && (
               <span className="flex items-center gap-1">
@@ -617,12 +610,6 @@ export default function ProfilePage({
                 {person.website?.trim()}
               </a>
             )}
-            {joinedDate && (
-              <span className="flex items-center gap-1">
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                انضم في {joinedDate}
-              </span>
-            )}
           </div>
         )}
       </div>
@@ -631,8 +618,23 @@ export default function ProfilePage({
         <div className="mb-3 flex items-center justify-between">
           <h2 className="text-sm font-bold text-[#F7F9F9]">أبرز القصص</h2>
         </div>
-        {profileStories.length > 0 ? (
+        {(own || profileStories.length > 0) && (
           <div className="no-scrollbar flex items-center gap-4 overflow-x-auto pb-2">
+            {own && (
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event('aani:request-story-composer'))}
+                className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5"
+                aria-label="إضافة قصة"
+              >
+                <span className="flex h-[68px] w-[68px] items-center justify-center rounded-full border border-dashed border-[#71767B] bg-[#111] text-[#1D9BF0] transition hover:border-[#1D9BF0] hover:bg-[#1D9BF0]/10">
+                  <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path d="M12 5v14M5 12h14" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+                  </svg>
+                </span>
+                <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">إضافة</span>
+              </button>
+            )}
             {profileStories.map(story => (
               <button
                 key={story.id}
@@ -656,8 +658,6 @@ export default function ProfilePage({
               </button>
             ))}
           </div>
-        ) : (
-          <p className="py-2 text-xs text-[#71767B]">لا توجد قصص مميزة بعد.</p>
         )}
       </div>
 
