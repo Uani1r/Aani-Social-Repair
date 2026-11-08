@@ -57,6 +57,7 @@ type ShellOverlayControlsProps = {
   NotificationsModalComponent: ComponentType<NotificationsModalProps>;
   userId: string;
   showAssistantModal: boolean;
+  hideAssistantLauncher: boolean;
   onOpenAssistant: () => void;
   onCloseAssistant: () => void;
 };
@@ -107,6 +108,7 @@ export default function ShellOverlayControls({
   NotificationsModalComponent,
   userId,
   showAssistantModal,
+  hideAssistantLauncher,
   onOpenAssistant,
   onCloseAssistant,
 }: ShellOverlayControlsProps) {
@@ -180,13 +182,15 @@ export default function ShellOverlayControls({
         onOpenStory={onOpenStory}
       />
 
-      <button
-        onClick={onOpenAssistant}
-        className="fixed bottom-20 left-6 z-50 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white p-3.5 rounded-full shadow-2xl flex items-center justify-center transition-transform hover:scale-110 active:scale-95 border border-white/20"
-        title="فتح المساعد الذكي"
-      >
-        <Bot className="w-6 h-6" />
-      </button>
+      {!hideAssistantLauncher && (
+        <button
+          onClick={onOpenAssistant}
+          className="fixed bottom-20 left-6 z-50 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white p-3.5 rounded-full shadow-2xl flex items-center justify-center transition-transform hover:scale-110 active:scale-95 border border-white/20"
+          title="فتح المساعد الذكي"
+        >
+          <Bot className="w-6 h-6" />
+        </button>
+      )}
 
       <AIAssistantModal open={showAssistantModal} onClose={onCloseAssistant} />
     </>

@@ -101,6 +101,12 @@ export default function Shell({
   }, []);
 
   useEffect(() => {
+    const openProfileSettings = () => setShowSettingsModal(true);
+    window.addEventListener('aani:open-profile-settings', openProfileSettings);
+    return () => window.removeEventListener('aani:open-profile-settings', openProfileSettings);
+  }, []);
+
+  useEffect(() => {
     let modalOpen = hasBlockingFeedDialog();
     const pauseFeedVideos = () => window.dispatchEvent(new Event('aani:pause-feed-videos'));
     const resumeFeedVideos = () => window.dispatchEvent(new Event('aani:resume-feed-videos'));
@@ -813,10 +819,11 @@ export default function Shell({
   const isFeedPath = path === '/' || path === '/feed';
   const isMessageThread = path.startsWith('/messages/');
   const isMessagesPath = path === '/messages' || isMessageThread;
+  const isProfilePath = path === '/profile' || path.startsWith('/profile/');
 
   return (
-    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}`}>
-      {!isMessagesPath && (
+    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}${isProfilePath ? ' is-profile' : ''}`}>
+      {!isMessagesPath && !isProfilePath && (
         <UnifiedTopBar
           hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
           unreadCount={unreadCount}
@@ -898,11 +905,12 @@ export default function Shell({
         NotificationsModalComponent={NotificationsModalComponent}
         userId={userId}
         showAssistantModal={showAssistantModal}
+        hideAssistantLauncher={isProfilePath}
         onOpenAssistant={() => setShowAssistantModal(true)}
         onCloseAssistant={() => setShowAssistantModal(false)}
       />
 
-      <div className="content-shell" style={{ paddingBottom: isMessageThread ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
+      <div className="content-shell" style={{ paddingBottom: isMessageThread || isProfilePath ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main
           ref={mainRef}
           className={`main-content ${
@@ -923,7 +931,7 @@ export default function Shell({
         >
           {children}
         </main>
-        {!isMessageThread && (
+        {!isMessageThread && !isProfilePath && (
           <ShellBottomNav
             path={path}
             chromeHidden={chromeHidden}
