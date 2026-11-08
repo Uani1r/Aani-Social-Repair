@@ -68,6 +68,7 @@ export default function Shell({
   headerStories,
 }: ShellProps) {
   const [path, setLocation] = useLocation();
+  const isProfilePath = path === '/profile' || path.startsWith('/profile/');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPublishOptionsSheet, setShowPublishOptionsSheet] = useState(false);
   const [pendingStoryComposerRequest, setPendingStoryComposerRequest] = useState(false);
@@ -214,6 +215,13 @@ export default function Shell({
   const chromeHiddenRef = useRef(false);
 
   useEffect(() => {
+    if (!isProfilePath) return;
+    chromeHiddenRef.current = false;
+    setChromeHidden(false);
+    document.body.classList.remove('aani-chrome-hidden');
+  }, [isProfilePath]);
+
+  useEffect(() => {
     const setHidden = (hidden: boolean) => {
       if (chromeHiddenRef.current === hidden) return;
       chromeHiddenRef.current = hidden;
@@ -246,6 +254,8 @@ export default function Shell({
     };
 
     const onTouchMove = (event: TouchEvent) => {
+      // أبقِ شريط الملف الشخصي ثابتًا ومرئيًا أثناء التمرير.
+      if (currentPathRef.current === '/profile' || currentPathRef.current.startsWith('/profile/')) return;
       // لا تعمل حركة إخفاء/إظهار الأشرطة داخل شاشات القصص والواجهات المغطاة
       if (document.body.classList.contains('aani-immersive')) return;
 
@@ -289,6 +299,11 @@ export default function Shell({
         setUnifiedTopBarHidden(shouldHideUnifiedTopBar);
       }
 
+      if (currentPathRef.current === '/profile' || currentPathRef.current.startsWith('/profile/')) {
+        lastScrollY = y;
+        applyDirection(1);
+        return;
+      }
       if (document.body.classList.contains('aani-immersive') || hasOpenModal()) return;
       if (touching && now - lastTouchMoveAt < 120) return;
 
@@ -313,6 +328,10 @@ export default function Shell({
 
     // بديل لسطح المكتب: عجلة الفأرة
     const onWheel = (event: WheelEvent) => {
+      if (currentPathRef.current === '/profile' || currentPathRef.current.startsWith('/profile/')) {
+        applyDirection(1);
+        return;
+      }
       if (document.body.classList.contains('aani-immersive') || hasOpenModal()) return;
       if (!event.deltaY) return;
       applyDirection(event.deltaY > 0 ? -1 : 1);
@@ -828,7 +847,6 @@ export default function Shell({
   const isFeedPath = path === '/' || path === '/feed';
   const isMessageThread = path.startsWith('/messages/');
   const isMessagesPath = path === '/messages' || isMessageThread;
-  const isProfilePath = path === '/profile' || path.startsWith('/profile/');
 
   return (
     <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}${isProfilePath ? ' is-profile' : ''}`}>
@@ -916,7 +934,7 @@ export default function Shell({
         onCloseAssistant={() => setShowAssistantModal(false)}
       />
 
-      <div className="content-shell" style={{ paddingBottom: isMessageThread || isProfilePath ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
+      <div className="content-shell" style={{ paddingBottom: isMessageThread ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main
           ref={mainRef}
           className={`main-content ${
@@ -937,10 +955,10 @@ export default function Shell({
         >
           {children}
         </main>
-        {!isMessageThread && !isProfilePath && (
+        {!isMessageThread && (
           <ShellBottomNav
             path={path}
-            chromeHidden={chromeHidden}
+            chromeHidden={isProfilePath ? false : chromeHidden}
             onNavigationTap={handleHomeNavigationTap}
           />
         )}
