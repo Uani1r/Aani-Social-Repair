@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'wouter';
-import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MapPin, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, Video, X } from 'lucide-react';
+import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Clock, Copy, Eye, FileText, Flag, Image as ImageIcon, MapPin, Menu, MessageCircle, Mic, MoreVertical, Pause, Pencil, Phone, Pin, Play, Plus, Reply, Search, Send, Smile, Trash2, Video, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
@@ -319,7 +319,7 @@ interface ConversationSummary {
   isRequest: boolean;
 }
 
-type InboxTab = 'messages' | 'requests' | 'archived';
+type InboxTab = 'messages' | 'requests';
 
 type ConversationPreferences = {
   pinnedIds: string[];
@@ -349,6 +349,12 @@ const MESSAGE_EXPIRATION_OPTIONS: Array<{ seconds: number | null; label: string 
   { seconds: 24 * 3600, label: '24 ساعة' },
   { seconds: 7 * 24 * 3600, label: '7 أيام' },
   { seconds: null, label: 'إيقاف المؤقت' },
+];
+const GLOBAL_MESSAGE_EXPIRATION_OPTIONS: Array<{ seconds: number | null; label: string }> = [
+  { seconds: null, label: 'إيقاف التشغيل' },
+  { seconds: 24 * 3600, label: '24 ساعة' },
+  { seconds: 7 * 24 * 3600, label: '7 أيام' },
+  { seconds: 90 * 24 * 3600, label: '90 يوماً' },
 ];
 
 const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
@@ -794,12 +800,24 @@ export default function MessagesPage({
   const [forwardBusy, setForwardBusy] = useState(false);
   const [messageExpirationSeconds, setMessageExpirationSeconds] = useState<number | null>(null);
   const [expirationSaving, setExpirationSaving] = useState(false);
+  const [globalExpirationSeconds, setGlobalExpirationSeconds] = useState<number | null>(null);
+  const [globalExpirationLoading, setGlobalExpirationLoading] = useState(false);
+  const [globalExpirationSaving, setGlobalExpirationSaving] = useState(false);
   const [threadSearchOpen, setThreadSearchOpen] = useState(false);
   const [threadSearch, setThreadSearch] = useState('');
   const [threadSearchIndex, setThreadSearchIndex] = useState(0);
   const [activeTab, setActiveTab] = useState<InboxTab>('messages');
   const [searchTerm, setSearchTerm] = useState('');
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [globalMenuOpen, setGlobalMenuOpen] = useState(false);
+  const [broadcastOpen, setBroadcastOpen] = useState(false);
+  const [broadcastText, setBroadcastText] = useState('');
+  const [broadcastSelectedIds, setBroadcastSelectedIds] = useState<Set<string>>(() => new Set());
+  const [broadcastSending, setBroadcastSending] = useState(false);
+  const [mutualFollowers, setMutualFollowers] = useState<Profile[]>([]);
+  const [mutualFollowersLoading, setMutualFollowersLoading] = useState(true);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [globalTimerOpen, setGlobalTimerOpen] = useState(false);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(() => new Set());
   const [readAtByContact, setReadAtByContact] = useState<Record<string, string>>(() => readConversationReadTimes(currentUserId));
   const [newMessageOpen, setNewMessageOpen] = useState(false);
@@ -884,6 +902,19 @@ export default function MessagesPage({
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [threadOptionsOpen]);
+
+  useEffect(() => {
+    if (!globalMenuOpen && !broadcastOpen && !archivedOpen && !globalTimerOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setGlobalMenuOpen(false);
+      setBroadcastOpen(false);
+      setArchivedOpen(false);
+      setGlobalTimerOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [archivedOpen, broadcastOpen, globalMenuOpen, globalTimerOpen]);
 
   useEffect(() => {
     if (!galleryView) return;
@@ -1019,10 +1050,13 @@ export default function MessagesPage({
     if (!supabaseConfigured) {
       setCurrentProfile(null);
       setConversations([]);
+      setMutualFollowers([]);
+      setMutualFollowersLoading(false);
       return;
     }
 
     setContactsError(null);
+    setMutualFollowersLoading(true);
     try {
       await purgeExpiredMessages();
       const [profileResult, messagesResult, followsResult, hiddenMessageIds] = await Promise.all([
@@ -1058,8 +1092,16 @@ export default function MessagesPage({
       const contactIds = [...latestByContact.keys()];
       if (selectedId && !contactIds.includes(selectedId)) contactIds.push(selectedId);
 
-      const profilesResult = contactIds.length
-        ? await retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', contactIds))
+      const followingIds = new Set<string>();
+      const followerIds = new Set<string>();
+      (followsResult.data || []).forEach(follow => {
+        if (follow.follower_id === currentUserId) followingIds.add(follow.following_id);
+        if (follow.following_id === currentUserId) followerIds.add(follow.follower_id);
+      });
+      const mutualIds = [...followingIds].filter(id => followerIds.has(id) && id !== currentUserId);
+      const profileIds = [...new Set([...contactIds, ...mutualIds])];
+      const profilesResult = profileIds.length
+        ? await retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds))
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       if (profilesResult.error) throw profilesResult.error;
@@ -1069,12 +1111,13 @@ export default function MessagesPage({
         : { data: [], error: null };
       if (requestId !== contactsRequestRef.current) return;
       const storyUserIds = new Set((storiesResult.data || []).map(story => story.user_id as string));
-      const connectedIds = new Set<string>();
-      (followsResult.data || []).forEach(follow => {
-        if (follow.follower_id === currentUserId) connectedIds.add(follow.following_id);
-        if (follow.following_id === currentUserId) connectedIds.add(follow.follower_id);
-      });
+      const connectedIds = new Set([...followingIds, ...followerIds]);
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
+      setMutualFollowers(mutualIds.flatMap(id => {
+        const profile = profileById.get(id);
+        return profile ? [profile] : [];
+      }));
+      setMutualFollowersLoading(false);
 
       const nextConversations = contactIds.flatMap(contactId => {
         const profile = profileById.get(contactId);
@@ -1093,6 +1136,7 @@ export default function MessagesPage({
       if (requestId !== contactsRequestRef.current) return;
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
+      setMutualFollowersLoading(false);
     }
   }, [currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
 
@@ -1948,12 +1992,14 @@ export default function MessagesPage({
   };
 
   const tabConversations = useMemo(() => (
-    activeTab === 'archived'
-      ? conversations.filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id))
-      : activeTab === 'requests'
-        ? conversations.filter(conversation => !conversationPreferences.archivedIds.includes(conversation.profile.id) && conversation.isRequest)
-        : conversations.filter(conversation => !conversationPreferences.archivedIds.includes(conversation.profile.id) && !conversation.isRequest)
+    activeTab === 'requests'
+      ? conversations.filter(conversation => !conversationPreferences.archivedIds.includes(conversation.profile.id) && conversation.isRequest)
+      : conversations.filter(conversation => !conversationPreferences.archivedIds.includes(conversation.profile.id) && !conversation.isRequest)
   ), [activeTab, conversations, conversationPreferences.archivedIds]);
+  const archivedConversations = useMemo(() => conversations
+    .filter(conversation => conversationPreferences.archivedIds.includes(conversation.profile.id))
+    .sort((left, right) => Date.parse(right.lastMessage?.created_at || '') - Date.parse(left.lastMessage?.created_at || '')),
+  [conversations, conversationPreferences.archivedIds]);
   const orderedTabConversations = useMemo(() => [...tabConversations].sort((left, right) => (
     Number(conversationPreferences.pinnedIds.includes(right.profile.id)) - Number(conversationPreferences.pinnedIds.includes(left.profile.id))
   )), [conversationPreferences.pinnedIds, tabConversations]);
@@ -2010,10 +2056,32 @@ export default function MessagesPage({
   }, [selectedId]);
 
   useEffect(() => {
-    if (!selectedId || messageExpirationSeconds === null || !supabaseConfigured) return;
+    let active = true;
+    if (!supabaseConfigured) {
+      setGlobalExpirationSeconds(null);
+      return () => { active = false; };
+    }
+    setGlobalExpirationLoading(true);
+    void (async () => {
+      try {
+        const { data, error } = await supabase.rpc('aani_get_global_message_expiration');
+        if (error) throw error;
+        if (active) setGlobalExpirationSeconds(typeof data === 'number' ? data : null);
+      } catch (error) {
+        if (active) console.warn('[messages] تعذر تحميل مؤقت المحادثات العام:', error);
+      } finally {
+        if (active) setGlobalExpirationLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if ((!selectedId || messageExpirationSeconds === null) && globalExpirationSeconds === null) return;
+    if (!supabaseConfigured) return;
     const timer = window.setInterval(() => { void purgeExpiredMessages(); }, 30_000);
     return () => window.clearInterval(timer);
-  }, [messageExpirationSeconds, purgeExpiredMessages, selectedId]);
+  }, [globalExpirationSeconds, messageExpirationSeconds, purgeExpiredMessages, selectedId]);
 
   const setConversationPreference = (key: ConversationPreferenceKey, contactId: string, enabled: boolean) => {
     setConversationPreferences(current => {
@@ -2120,6 +2188,28 @@ export default function MessagesPage({
       toast.error('تعذر تحديث المؤقت. تأكد من تطبيق تحديث الرسائل المؤقتة في Supabase.');
     } finally {
       setExpirationSaving(false);
+    }
+  };
+
+  const updateGlobalMessageExpiration = async (seconds: number | null) => {
+    if (globalExpirationSaving || globalExpirationLoading) return;
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+    setGlobalExpirationSaving(true);
+    try {
+      const { error } = await supabase.rpc('aani_set_global_message_expiration', {
+        p_duration_seconds: seconds,
+      });
+      if (error) throw error;
+      setGlobalExpirationSeconds(seconds);
+      toast.success(seconds === null ? 'تم إيقاف المؤقت العام' : 'تم تطبيق المؤقت العام على الرسائل الجديدة في جميع المحادثات');
+    } catch (error) {
+      console.error('[messages] تعذر تحديث مؤقت المحادثات العام:', error);
+      toast.error('تعذر تحديث المؤقت العام. تحقق من تطبيق تحديث الرسائل في قاعدة البيانات.');
+    } finally {
+      setGlobalExpirationSaving(false);
     }
   };
 
@@ -2477,6 +2567,62 @@ export default function MessagesPage({
     setNewMessageOpen(true);
   };
 
+  const openBroadcastMessage = () => {
+    setGlobalMenuOpen(false);
+    setBroadcastText('');
+    setBroadcastSelectedIds(new Set());
+    setBroadcastOpen(true);
+  };
+
+  const sendBroadcastMessage = async () => {
+    const content = broadcastText.trim();
+    const recipientIds = mutualFollowers
+      .filter(person => broadcastSelectedIds.has(person.id))
+      .map(person => person.id);
+    if (!content || recipientIds.length === 0 || broadcastSending) return;
+    if (content.length > 4000) {
+      toast.error('لا يمكن أن تتجاوز الرسالة 4000 حرفاً.');
+      return;
+    }
+    if (!supabaseConfigured) {
+      toast.error('قاعدة البيانات غير مهيأة.');
+      return;
+    }
+
+    setBroadcastSending(true);
+    const failedIds: string[] = [];
+    let sentCount = 0;
+    try {
+      for (const recipientId of recipientIds) {
+        try {
+          const { error } = await supabase.from('messages').insert({
+            sender_id: currentUserId,
+            recipient_id: recipientId,
+            content,
+          });
+          if (error) throw error;
+          sentCount += 1;
+        } catch (error) {
+          console.warn('[messages] تعذر إرسال الرسالة الجماعية إلى حساب:', recipientId, error);
+          failedIds.push(recipientId);
+        }
+      }
+
+      if (sentCount > 0) void loadConversationList();
+      if (failedIds.length > 0) {
+        setBroadcastSelectedIds(new Set(failedIds));
+        toast.error(`أُرسلت الرسالة إلى ${sentCount} وتعذر إرسالها إلى ${failedIds.length}. يمكنك إعادة المحاولة للمحددين.`);
+      } else {
+        toast.success(`تم إرسال الرسالة إلى ${sentCount} من المتابعين المتبادلين.`);
+        setBroadcastOpen(false);
+        setBroadcastText('');
+        setBroadcastSelectedIds(new Set());
+      }
+    } finally {
+      setBroadcastSending(false);
+    }
+  };
+
   return (
     <section
       ref={messagesViewRef}
@@ -2517,7 +2663,16 @@ export default function MessagesPage({
                 </div>
               )}
             </div>
-            <button type="button" className="messages-new-text-button" onClick={openNewMessage}>رسالة جديدة</button>
+            <button
+              type="button"
+              className="messages-menu-button"
+              aria-label="خيارات الرسائل"
+              aria-haspopup="dialog"
+              aria-expanded={globalMenuOpen}
+              onClick={() => setGlobalMenuOpen(true)}
+            >
+              <Menu size={22} strokeWidth={2} />
+            </button>
           </header>
 
           <div className="messages-search-wrap">
@@ -2541,10 +2696,6 @@ export default function MessagesPage({
             <button type="button" role="tab" aria-selected={activeTab === 'requests'} className={`messages-tab${activeTab === 'requests' ? ' active' : ''}`} onClick={() => setActiveTab('requests')}>
               <span>الطلبات</span>
               {requestCount > 0 && <span className="messages-tab-badge">{requestCount > 99 ? '99+' : requestCount}</span>}
-            </button>
-            <button type="button" role="tab" aria-selected={activeTab === 'archived'} className={`messages-tab${activeTab === 'archived' ? ' active' : ''}`} onClick={() => setActiveTab('archived')}>
-              <span>المؤرشفة</span>
-              {archivedCount > 0 && <span className="messages-tab-badge">{archivedCount > 99 ? '99+' : archivedCount}</span>}
             </button>
           </div>
 
@@ -2635,8 +2786,8 @@ export default function MessagesPage({
             {(!contactsError || conversations.length > 0) && tabConversations.length === 0 && (
               <div className="messages-list-empty">
                 <MessageCircle size={26} />
-                <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : activeTab === 'archived' ? 'لا توجد محادثات مؤرشفة' : 'لا توجد محادثات بعد'}</span>
-                <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : activeTab === 'archived' ? 'ستظهر هنا المحادثات التي أرشفتها.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
+                <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : 'لا توجد محادثات بعد'}</span>
+                <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
                 {activeTab === 'messages' && <button type="button" onClick={openNewMessage}>إرسال رسالة</button>}
               </div>
             )}
@@ -3732,6 +3883,217 @@ export default function MessagesPage({
           </section>
         </div>
       )}
+      {globalMenuOpen && createPortal(
+        <div className="messages-global-menu-backdrop" role="presentation" onClick={() => setGlobalMenuOpen(false)}>
+          <section
+            className="messages-global-menu"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="messages-global-menu-title"
+            dir="rtl"
+            onClick={event => event.stopPropagation()}
+          >
+            <header>
+              <h2 id="messages-global-menu-title">خيارات الرسائل</h2>
+              <button type="button" aria-label="إغلاق" onClick={() => setGlobalMenuOpen(false)}><X size={20} /></button>
+            </header>
+            <div className="messages-global-menu-options">
+              <button type="button" onClick={openBroadcastMessage}>
+                <Send size={20} />
+                <span>رسالة جماعية</span>
+                <ArrowLeft size={17} />
+              </button>
+              <button type="button" onClick={() => { setGlobalMenuOpen(false); setGlobalTimerOpen(true); }}>
+                <Clock size={20} />
+                <span>مؤقت المحادثات</span>
+                <ArrowLeft size={17} />
+              </button>
+              <button type="button" onClick={() => { setGlobalMenuOpen(false); setArchivedOpen(true); }}>
+                <Archive size={20} />
+                <span>المحادثات المؤرشفة</span>
+                {archivedCount > 0 && <span className="messages-global-menu-count">{archivedCount}</span>}
+                <ArrowLeft size={17} />
+              </button>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+
+      {broadcastOpen && createPortal(
+        <div
+          className="messages-fullscreen-overlay messages-broadcast-overlay"
+          role="presentation"
+          onClick={() => { if (!broadcastSending) setBroadcastOpen(false); }}
+        >
+          <section
+            className="messages-fullscreen-panel messages-broadcast-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="messages-broadcast-title"
+            dir="rtl"
+            onClick={event => event.stopPropagation()}
+          >
+            <header className="messages-fullscreen-header">
+              <h1 id="messages-broadcast-title">رسالة جماعية</h1>
+              <button type="button" aria-label="إغلاق" disabled={broadcastSending} onClick={() => setBroadcastOpen(false)}><X size={22} /></button>
+            </header>
+            <div className="messages-broadcast-select-all">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={mutualFollowers.length > 0 && mutualFollowers.every(person => broadcastSelectedIds.has(person.id))}
+                  disabled={mutualFollowersLoading || mutualFollowers.length === 0 || broadcastSending}
+                  onChange={event => setBroadcastSelectedIds(event.currentTarget.checked
+                    ? new Set(mutualFollowers.map(person => person.id))
+                    : new Set())}
+                />
+                <span>تحديد الكل</span>
+              </label>
+              <span>{broadcastSelectedIds.size} محدد</span>
+            </div>
+            <div className="messages-broadcast-list">
+              {mutualFollowersLoading && <div className="messages-list-status">جارٍ تحميل المتابعين المتبادلين...</div>}
+              {!mutualFollowersLoading && mutualFollowers.length === 0 && (
+                <div className="messages-list-empty"><span>لا يوجد متابعون متبادلون</span><small>ستظهر هنا الحسابات التي تتابعها وتتابعك.</small></div>
+              )}
+              {!mutualFollowersLoading && mutualFollowers.map(person => (
+                <label key={person.id} className="messages-broadcast-person">
+                  <input
+                    type="checkbox"
+                    checked={broadcastSelectedIds.has(person.id)}
+                    disabled={broadcastSending}
+                    onChange={event => {
+                      const checked = event.currentTarget.checked;
+                      setBroadcastSelectedIds(current => {
+                        const next = new Set(current);
+                        if (checked) next.add(person.id);
+                        else next.delete(person.id);
+                        return next;
+                      });
+                    }}
+                  />
+                  <Avatar profile={person} large />
+                  <UserIdentity
+                    name={displayName(person)}
+                    username={person.username}
+                    className="min-w-0 flex-1"
+                    nameClassName="text-sm font-semibold text-white"
+                    usernameClassName="text-xs text-[#a8a8a8]"
+                  />
+                </label>
+              ))}
+            </div>
+            <form className="messages-broadcast-composer" onSubmit={event => { event.preventDefault(); void sendBroadcastMessage(); }}>
+              <textarea
+                value={broadcastText}
+                maxLength={4000}
+                placeholder="اكتب رسالتك..."
+                aria-label="نص الرسالة الجماعية"
+                disabled={broadcastSending}
+                onChange={event => setBroadcastText(event.target.value)}
+              />
+              <button
+                type="submit"
+                disabled={broadcastSending || mutualFollowersLoading || !broadcastText.trim() || broadcastSelectedIds.size === 0}
+                aria-label="إرسال الرسالة الجماعية"
+              >
+                <Send size={20} />
+                <span>{broadcastSending ? 'جارٍ الإرسال...' : 'إرسال'}</span>
+              </button>
+            </form>
+          </section>
+        </div>,
+        document.body,
+      )}
+
+      {globalTimerOpen && createPortal(
+        <div className="messages-fullscreen-overlay messages-timer-overlay" role="presentation" onClick={() => setGlobalTimerOpen(false)}>
+          <section
+            className="messages-fullscreen-panel messages-global-timer-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="messages-global-timer-title"
+            dir="rtl"
+            onClick={event => event.stopPropagation()}
+          >
+            <header className="messages-fullscreen-header">
+              <h1 id="messages-global-timer-title">مؤقت المحادثات</h1>
+              <button type="button" aria-label="إغلاق" onClick={() => setGlobalTimerOpen(false)}><X size={22} /></button>
+            </header>
+            <div className="messages-global-timer-content">
+              <p>اختر مدة حذف الرسائل الجديدة تلقائياً في جميع محادثاتك.</p>
+              {globalExpirationLoading ? <div className="messages-list-status">جارٍ تحميل الإعداد...</div> : GLOBAL_MESSAGE_EXPIRATION_OPTIONS.map(option => (
+                <button
+                  key={option.seconds ?? 'off'}
+                  type="button"
+                  className={globalExpirationSeconds === option.seconds ? 'is-selected' : ''}
+                  disabled={globalExpirationSaving}
+                  onClick={() => { void updateGlobalMessageExpiration(option.seconds); }}
+                >
+                  <span>{option.label}</span>
+                  {globalExpirationSeconds === option.seconds && <Check size={19} />}
+                </button>
+              ))}
+              <small>يسري الاختيار على الرسائل الجديدة في جميع المحادثات.</small>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+
+      {archivedOpen && createPortal(
+        <div className="messages-fullscreen-overlay messages-archive-overlay" role="presentation" onClick={() => setArchivedOpen(false)}>
+          <section
+            className="messages-fullscreen-panel messages-archive-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="messages-archive-title"
+            dir="rtl"
+            onClick={event => event.stopPropagation()}
+          >
+            <header className="messages-fullscreen-header">
+              <h1 id="messages-archive-title">المحادثات المؤرشفة</h1>
+              <button type="button" aria-label="إغلاق" onClick={() => setArchivedOpen(false)}><X size={22} /></button>
+            </header>
+            <p className="messages-archive-note">تبقى المحادثات هنا بهدوء حتى عند وصول رسائل جديدة.</p>
+            <div className="messages-archive-list">
+              {archivedConversations.length === 0 ? (
+                <div className="messages-list-empty"><Archive size={26} /><span>لا توجد محادثات مؤرشفة</span><small>ستظهر هنا المحادثات التي أرشفتها.</small></div>
+              ) : archivedConversations.map(conversation => (
+                <div className="messages-archive-item" key={conversation.profile.id}>
+                  <Link
+                    href={`/messages/${encodeURIComponent(conversation.profile.id)}`}
+                    className="messages-archive-person"
+                    onClick={() => { setArchivedOpen(false); markConversationRead(conversation.profile.id); }}
+                  >
+                    <Avatar profile={conversation.profile} large />
+                    <span className="messages-archive-copy">
+                      <span className="messages-archive-name">{displayName(conversation.profile)}</span>
+                      <span className="messages-archive-preview">{messagePreview(conversation.lastMessage, currentUserId)}</span>
+                    </span>
+                    <time>{conversation.lastMessage ? formatConversationTime(conversation.lastMessage.created_at) : ''}</time>
+                  </Link>
+                  <button
+                    type="button"
+                    className="messages-archive-restore"
+                    aria-label={`إلغاء أرشفة ${displayName(conversation.profile)}`}
+                    title="إلغاء الأرشفة"
+                    onClick={() => {
+                      setConversationPreference('archivedIds', conversation.profile.id, false);
+                      toast.success('تم إلغاء أرشفة المحادثة');
+                    }}
+                  >
+                    <Archive size={17} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+
       <CallManager currentUserId={currentUserId} currentProfile={currentProfile} contact={target} />
     </section>
   );

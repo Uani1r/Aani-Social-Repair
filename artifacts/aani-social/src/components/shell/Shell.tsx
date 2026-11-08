@@ -816,7 +816,7 @@ export default function Shell({
 
   return (
     <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}`}>
-      {!isMessageThread && (
+      {!isMessagesPath && (
         <UnifiedTopBar
           hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
           unreadCount={unreadCount}
