@@ -43,6 +43,10 @@ declare
   participant_low uuid := least(new.sender_id, new.recipient_id);
   participant_high uuid := greatest(new.sender_id, new.recipient_id);
 begin
+  if new.sender_id = new.recipient_id then
+    return new;
+  end if;
+
   if not exists (
     select 1 from public.follows
     where follower_id = new.sender_id and following_id = new.recipient_id
@@ -73,6 +77,9 @@ with latest_messages as (
     message.sender_id as requester_id,
     message.recipient_id as recipient_id
   from public.messages as message
+  where message.sender_id is not null
+    and message.recipient_id is not null
+    and message.sender_id <> message.recipient_id
   order by
     least(message.sender_id, message.recipient_id),
     greatest(message.sender_id, message.recipient_id),
