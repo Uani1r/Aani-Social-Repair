@@ -678,6 +678,7 @@ export default function ProfilePage({
       {selectedHighlightCollection && (
         <ProfileHighlightViewer
           collection={selectedHighlightCollection}
+          collections={profileHighlights}
           onClose={() => setSelectedHighlightCollection(null)}
           currentUserId={currentUserId}
           ownerName={person ? displayName(person) : 'محمد'}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { Check, Heart, ImagePlus, Loader2, Plus, SendHorizontal, Upload, X } from 'lucide-react';
@@ -804,12 +804,14 @@ export default function ProfileHighlightsManager({
 
 export function ProfileHighlightViewer({
   collection,
+  collections,
   onClose,
   currentUserId,
   ownerName,
   ownerAvatarUrl,
 }: {
   collection: ProfileHighlightCollection;
+  collections: ProfileHighlightCollection[];
   onClose: () => void;
   currentUserId: string;
   ownerName: string;
@@ -817,6 +819,7 @@ export function ProfileHighlightViewer({
 }) {
   useModalBodyScrollLock();
   const [activeIndex, setActiveIndex] = useState(0);
+  const [activeCollectionId, setActiveCollectionId] = useState(collection.id);
   const [storyDurations, setStoryDurations] = useState<Record<string, number>>({});
   const [durationsLoaded, setDurationsLoaded] = useState(false);
   const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
@@ -830,30 +833,50 @@ export function ProfileHighlightViewer({
   const [isLikeLoading, setIsLikeLoading] = useState(false);
   const [isLikeSaving, setIsLikeSaving] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const progressFillRef = useRef<HTMLDivElement>(null);
+  const activeStoryIdRef = useRef<string | null>(null);
   const storyElapsedMsRef = useRef(0);
   const titleToastShownRef = useRef(false);
-  const story = collection.stories[activeIndex];
-  const isStoryOwner = currentUserId === collection.user_id;
+  const foundCollectionIndex = collections.findIndex(item => item.id === activeCollectionId);
+  const collectionIndex = foundCollectionIndex >= 0 ? foundCollectionIndex : collections.findIndex(item => item.id === collection.id);
+  const activeCollection = foundCollectionIndex >= 0 ? collections[foundCollectionIndex] : collection;
+  const story = activeCollection.stories[activeIndex];
+  const isStoryOwner = currentUserId === activeCollection.user_id;
   const isVideo = Boolean(story?.media_url && story.media_type === 'video');
   const storyDuration = story
-    ? Math.min(storyDurations[story.id] || (story.source_story_id ? storyDurations[story.source_story_id] : 0) || DEFAULT_ARCHIVE_STORY_DURATION_SECONDS, 120)
+    ? storyDurations[story.id] || (story.source_story_id ? storyDurations[story.source_story_id] : 0) || DEFAULT_ARCHIVE_STORY_DURATION_SECONDS
     : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
 
   const goToStory = useCallback((nextIndex: number) => {
     if (nextIndex < 0) return;
-    if (nextIndex >= collection.stories.length) {
-      onClose();
+    if (nextIndex >= activeCollection.stories.length) {
+      const nextCollection = collectionIndex >= 0 ? collections[collectionIndex + 1] : undefined;
+      if (!nextCollection) {
+        onClose();
+        return;
+      }
+      videoRef.current?.pause();
+      storyElapsedMsRef.current = 0;
+      titleToastShownRef.current = false;
+      setTitleToastVisible(false);
+      setProgress(0);
+      setStoryDurations({});
+      setDurationsLoaded(false);
+      setMediaReadyStoryId(null);
+      setVideoFailedStoryId(null);
+      setActiveCollectionId(nextCollection.id);
+      setActiveIndex(0);
       return;
     }
     videoRef.current?.pause();
     setProgress(0);
     setMediaReadyStoryId(null);
     setActiveIndex(nextIndex);
-  }, [collection.stories.length, onClose]);
+  }, [activeCollection.stories.length, collectionIndex, collections, onClose]);
 
   useEffect(() => {
     let active = true;
-    const sourceStoryIds = [...new Set(collection.stories.flatMap(item => item.source_story_id ? [item.source_story_id] : []))];
+    const sourceStoryIds = [...new Set(activeCollection.stories.flatMap(item => item.source_story_id ? [item.source_story_id] : []))];
     setStoryDurations({});
     if (sourceStoryIds.length === 0) {
       setDurationsLoaded(true);
@@ -872,7 +895,7 @@ export function ProfileHighlightViewer({
         const durations: Record<string, number> = {};
         (data || []).forEach((item: { id: string; duration_seconds: number | null }) => {
           const duration = Number(item.duration_seconds);
-          if (Number.isFinite(duration) && duration > 0) durations[item.id] = Math.min(duration, 120);
+          if (Number.isFinite(duration) && duration > 0) durations[item.id] = duration;
         });
         setStoryDurations(durations);
       } catch (error) {
@@ -883,7 +906,7 @@ export function ProfileHighlightViewer({
     })();
 
     return () => { active = false; };
-  }, [collection.id, collection.stories]);
+  }, [activeCollection.id, activeCollection.stories]);
 
   useEffect(() => {
     if (activeIndex !== 0 || titleToastShownRef.current) {
@@ -899,12 +922,20 @@ export function ProfileHighlightViewer({
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [activeIndex, collection.id]);
+  }, [activeIndex, activeCollection.id]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    activeStoryIdRef.current = story?.id ?? null;
     storyElapsedMsRef.current = 0;
     setProgress(0);
     setIsPaused(false);
+    const progressFill = progressFillRef.current;
+    if (progressFill) {
+      progressFill.style.transition = 'none';
+      progressFill.style.width = '0%';
+      void progressFill.offsetWidth;
+      progressFill.style.transition = '';
+    }
     if (story && !story.media_url) setMediaReadyStoryId(story.id);
   }, [story?.id, story?.media_url]);
 
@@ -930,9 +961,12 @@ export function ProfileHighlightViewer({
       else frame = window.requestAnimationFrame(updateProgress);
     };
     frame = window.requestAnimationFrame(updateProgress);
+    const timerStoryId = story.id;
     return () => {
       window.cancelAnimationFrame(frame);
-      storyElapsedMsRef.current += Date.now() - startedAt;
+      if (activeStoryIdRef.current === timerStoryId) {
+        storyElapsedMsRef.current += Date.now() - startedAt;
+      }
     };
   }, [activeIndex, durationsLoaded, goToStory, isPaused, isVideo, mediaReadyStoryId, story, storyDuration, videoFailedStoryId]);
 
@@ -977,7 +1011,7 @@ export function ProfileHighlightViewer({
         if (error) throw error;
         setIsLiked(true);
         const { error: notificationError } = await supabase.from('notifications').insert({
-          user_id: collection.user_id,
+          user_id: activeCollection.user_id,
           actor_id: currentUserId,
           type: 'like',
           content: 'أعجب بأبرز قصصك',
@@ -1000,13 +1034,13 @@ export function ProfileHighlightViewer({
     try {
       const { error } = await supabase.from('messages').insert({
         sender_id: currentUserId,
-        recipient_id: collection.user_id,
-        content: story.source_story_id ? `[story-reply]${text}` : `رد على أبرز القصص «${collection.title}»: ${text}`,
+        recipient_id: activeCollection.user_id,
+        content: story.source_story_id ? `[story-reply]${text}` : `رد على أبرز القصص «${activeCollection.title}»: ${text}`,
         ...(story.source_story_id ? { story_id: story.source_story_id } : {}),
       });
       if (error) throw error;
       const { error: notificationError } = await supabase.from('notifications').insert({
-        user_id: collection.user_id,
+        user_id: activeCollection.user_id,
         actor_id: currentUserId,
         type: 'reply',
         content: `رد على أبرز قصصك: ${text}`,
@@ -1026,11 +1060,15 @@ export function ProfileHighlightViewer({
   if (!story) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[2100] h-[100dvh] w-screen overflow-hidden bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={`أبرز القصص: ${collection.title}`}>
+    <div className="fixed inset-0 z-[2100] h-[100dvh] w-screen overflow-hidden bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label={`أبرز القصص: ${activeCollection.title}`}>
       <div className="pointer-events-none absolute inset-x-2 z-30 flex gap-1 px-1" style={{ top: 'calc(0.5rem + env(safe-area-inset-top))' }}>
-        {collection.stories.map((item, index) => (
+        {activeCollection.stories.map((item, index) => (
           <div key={item.id} className="h-[2px] flex-1 overflow-hidden rounded-full bg-white/35">
-            <div className="h-full bg-white transition-[width] duration-75 ease-linear" style={{ width: index < activeIndex ? '100%' : index === activeIndex ? `${progress}%` : '0%' }} />
+            <div
+              ref={index === activeIndex ? progressFillRef : null}
+              className="h-full bg-white transition-[width] duration-75 ease-linear"
+              style={{ width: index < activeIndex ? '100%' : index === activeIndex ? `${progress}%` : '0%' }}
+            />
           </div>
         ))}
       </div>
@@ -1045,12 +1083,15 @@ export function ProfileHighlightViewer({
           autoPlay
           playsInline
           preload="metadata"
+          data-duration={storyDuration}
           onLoadedMetadata={event => {
             const video = event.currentTarget;
-            const duration = video.duration;
+            const metadataDuration = video.duration;
+            const storedDuration = Number(video.dataset.duration);
+            const duration = Number.isFinite(metadataDuration) && metadataDuration > 0 ? metadataDuration : storedDuration;
             setMediaReadyStoryId(story.id);
             if (Number.isFinite(duration) && duration > 0) {
-              setStoryDurations(current => ({ ...current, [story.id]: Math.min(duration, 120) }));
+              setStoryDurations(current => ({ ...current, [story.id]: duration }));
             }
             void video.play().catch(() => {});
           }}
@@ -1069,8 +1110,16 @@ export function ProfileHighlightViewer({
           key={story.id}
           src={story.media_url}
           className="absolute inset-0 z-0 h-full w-full object-contain"
-          alt={story.caption || collection.title}
-          onLoad={() => setMediaReadyStoryId(story.id)}
+          data-duration={storyDuration}
+          alt={story.caption || activeCollection.title}
+          onLoad={event => {
+            const duration = Number(event.currentTarget.dataset.duration);
+            if (Number.isFinite(duration) && duration > 0 && (!story.source_story_id || durationsLoaded)) {
+              const durationKey = story.source_story_id || story.id;
+              setStoryDurations(current => ({ ...current, [durationKey]: duration }));
+            }
+            setMediaReadyStoryId(story.id);
+          }}
           onError={() => setMediaReadyStoryId(story.id)}
         />
       ) : (
@@ -1081,7 +1130,7 @@ export function ProfileHighlightViewer({
 
       <header className="absolute inset-x-0 z-40 flex items-center justify-between px-4" style={{ top: 'calc(env(safe-area-inset-top, 44px) + 22px)' }}>
         <div className="flex min-w-0 items-center gap-2">
-          <Avatar profile={{ avatar_url: ownerAvatarUrl, full_name: ownerName, username: ownerName, id: collection.user_id }} />
+          <Avatar profile={{ avatar_url: ownerAvatarUrl, full_name: ownerName, username: ownerName, id: activeCollection.user_id }} />
           <div className="min-w-0">
             <p className="max-w-[58vw] truncate text-sm font-bold text-white">{ownerName || 'محمد'}</p>
             <time dateTime={story.created_at} className="mt-0.5 block text-[10px] text-white/75">{formatDate(story.created_at) || 'قصة محفوظة'}</time>
@@ -1091,11 +1140,11 @@ export function ProfileHighlightViewer({
       </header>
 
       <div className={`pointer-events-none absolute inset-x-5 z-40 text-center text-lg font-bold text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)] transition-all duration-500 ${activeIndex === 0 && titleToastVisible ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'}`} style={{ top: 'calc(env(safe-area-inset-top, 44px) + 74px)' }} aria-live="polite">
-        {collection.title || ownerName}
+        {activeCollection.title || ownerName}
       </div>
 
-      <button type="button" aria-label="القصة التالية" onClick={() => goToStory(activeIndex + 1)} className="absolute inset-y-0 right-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
-      <button type="button" aria-label="القصة السابقة" onClick={() => goToStory(activeIndex - 1)} className="absolute inset-y-0 left-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
+      <button type="button" aria-label="القصة التالية" onClick={() => goToStory(activeIndex + 1)} className="absolute inset-y-0 left-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
+      <button type="button" aria-label="القصة السابقة" onClick={() => goToStory(activeIndex - 1)} className="absolute inset-y-0 right-0 z-20 w-1/2 bg-transparent" style={{ bottom: isStoryOwner ? undefined : '5.5rem' }} />
 
       {story.caption?.trim() && story.media_url && <p className="pointer-events-none absolute inset-x-4 z-30 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] rounded-xl bg-black/55 p-3 text-center text-sm text-white">{story.caption}</p>}
 
