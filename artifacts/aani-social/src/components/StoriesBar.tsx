@@ -1288,8 +1288,8 @@ export default function StoriesBar({
   const storyDisplayDuration = Number.isFinite(storedStoryDuration) && storedStoryDuration > 0
     ? Math.min(120, Math.max(5, storedStoryDuration))
     : 5;
-  const currentVideoDuration = videoDurationForStory?.storyId === currentStory?.id
-    ? videoDurationForStory.durationSeconds
+  const currentVideoDuration = currentStory && videoDurationForStory?.storyId === currentStory.id
+    ? videoDurationForStory?.durationSeconds ?? 5
     : null;
   const currentStoryFilter = decodeStoryFilterKey(currentStory?.filter_key ?? undefined);
   useEffect(() => {
@@ -1663,8 +1663,14 @@ export default function StoriesBar({
 
   const handleStoryVideoTimeUpdate = (storyId: string, currentTimeSeconds: number, durationSeconds: number) => {
     if (currentStoryRef.current?.id !== storyId || !Number.isFinite(currentTimeSeconds)) return;
-    const duration = videoDurationForStory?.storyId === storyId ? videoDurationForStory.durationSeconds : durationSeconds;
-    if (!Number.isFinite(duration) || duration <= 0) return;
+    const storedDuration = videoDurationForStory?.storyId === storyId
+      ? videoDurationForStory?.durationSeconds
+      : undefined;
+    const duration = storedDuration !== undefined && Number.isFinite(storedDuration) && storedDuration > 0
+      ? storedDuration
+      : Number.isFinite(durationSeconds) && durationSeconds > 0
+        ? durationSeconds
+        : 5;
     const elapsed = Math.min(duration, Math.max(0, currentTimeSeconds));
     const nextProgress = Math.min(100, (elapsed / duration) * 100);
     progressRef.current = nextProgress;
