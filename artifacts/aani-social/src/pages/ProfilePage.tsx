@@ -89,7 +89,10 @@ export default function ProfilePage({
   const [following, setFollowing] = useState(0);
   const [postCount, setPostCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
+  const [showFollowCheckmark, setShowFollowCheckmark] = useState(false);
   const [followRequestSent, setFollowRequestSent] = useState(false);
+  const followCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const followActionPendingRef = useRef(false);
   const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
   const [profileHighlights, setProfileHighlights] = useState<ProfileHighlightCollection[]>([]);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
@@ -128,9 +131,16 @@ export default function ProfilePage({
     setBioDraft(person?.bio || '');
   }, [person?.id, person?.bio]);
 
+  useEffect(() => {
+    setShowFollowCheckmark(false);
+    if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
+    followCheckTimerRef.current = null;
+  }, [activeUserId]);
+
   useEffect(() => () => {
     temporaryPreviewUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     temporaryPreviewUrlsRef.current.clear();
+    if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
   }, []);
 
   useEffect(() => {
@@ -210,47 +220,67 @@ export default function ProfilePage({
   }, [activeUserId, currentUserId, own]);
 
   const toggleFollow = async () => {
-    if (!supabaseConfigured || own || !person) return;
-    if (isFollowing) {
-      const { error } = await supabase.from('follows').delete().eq('follower_id', currentUserId).eq('following_id', activeUserId);
-      if (error) {
-        toast.error('تعذرت إزالة المتابعة');
+    if (!supabaseConfigured || own || !person || followActionPendingRef.current) return;
+    followActionPendingRef.current = true;
+
+    try {
+      if (isFollowing) {
+        const { error } = await supabase.from('follows').delete().eq('follower_id', currentUserId).eq('following_id', activeUserId);
+        if (error) {
+          toast.error('تعذرت إزالة المتابعة');
+          return;
+        }
+        setFollowers(prev => Math.max(0, prev - 1));
+        setIsFollowing(false);
+        setShowFollowCheckmark(false);
+        if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
+        followCheckTimerRef.current = null;
         return;
       }
-      setFollowers(prev => Math.max(0, prev - 1));
-      setIsFollowing(false);
-      return;
-    }
 
-    if (followRequestSent) {
-      const { error } = await supabase.from('follow_requests').delete().eq('requester_id', currentUserId).eq('recipient_id', activeUserId);
-      if (error) {
-        toast.error('تعذر إلغاء طلب المتابعة');
+      if (followRequestSent) {
+        const { error } = await supabase.from('follow_requests').delete().eq('requester_id', currentUserId).eq('recipient_id', activeUserId);
+        if (error) {
+          toast.error('تعذر إلغاء طلب المتابعة');
+          return;
+        }
+        setFollowRequestSent(false);
+        toast.success('تم إلغاء طلب المتابعة');
         return;
       }
-      setFollowRequestSent(false);
-      toast.success('تم إلغاء طلب المتابعة');
-      return;
-    }
 
-    if (person.is_private) {
-      const { error } = await supabase.from('follow_requests').insert({ requester_id: currentUserId, recipient_id: activeUserId });
-      if (error) {
-        toast.error('تعذر إرسال طلب المتابعة');
+      if (person.is_private) {
+        const { error } = await supabase.from('follow_requests').insert({ requester_id: currentUserId, recipient_id: activeUserId });
+        if (error) {
+          toast.error('تعذر إرسال طلب المتابعة');
+          return;
+        }
+        setFollowRequestSent(true);
+        toast.success('تم إرسال طلب المتابعة');
         return;
       }
-      setFollowRequestSent(true);
-      toast.success('تم إرسال طلب المتابعة');
-      return;
-    }
 
-    const { error } = await supabase.from('follows').insert({ follower_id: currentUserId, following_id: activeUserId });
-    if (error && error.code !== '23505') {
-      toast.error('تعذرت متابعة هذا الحساب');
-      return;
+      setIsFollowing(true);
+      setShowFollowCheckmark(true);
+      if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
+      followCheckTimerRef.current = setTimeout(() => {
+        setShowFollowCheckmark(false);
+        followCheckTimerRef.current = null;
+      }, 1500);
+
+      const { error } = await supabase.from('follows').insert({ follower_id: currentUserId, following_id: activeUserId });
+      if (error && error.code !== '23505') {
+        setIsFollowing(false);
+        setShowFollowCheckmark(false);
+        if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
+        followCheckTimerRef.current = null;
+        toast.error('تعذرت متابعة هذا الحساب');
+        return;
+      }
+      setFollowers(prev => prev + (error ? 0 : 1));
+    } finally {
+      followActionPendingRef.current = false;
     }
-    setFollowers(prev => prev + (error ? 0 : 1));
-    setIsFollowing(true);
   };
 
   const respondToFollowRequest = async (requesterId: string, accept: boolean) => {
@@ -541,9 +571,17 @@ export default function ProfilePage({
               <button
                 type="button"
                 onClick={() => void toggleFollow()}
-                className={`h-9 rounded-full px-5 text-sm font-bold transition ${isFollowing || followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
+                aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
+                className={`flex h-9 w-[160px] shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-full px-5 text-sm font-bold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
               >
-                {isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
+                <span>{isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}</span>
+                {isFollowing && (
+                  <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
+                    <svg className={`profile-follow-check${showFollowCheckmark ? ' is-visible' : ''}`} viewBox="0 0 20 20" aria-hidden="true">
+                      <path d="M3 10.5 7.4 15 17 5.5" fill="none" stroke="#000" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} />
+                    </svg>
+                  </span>
+                )}
               </button>
               <Link href={`/messages/${activeUserId}`} aria-label="إرسال رسالة" className="flex h-9 w-9 items-center justify-center rounded-full border border-[#53575B] text-white transition hover:bg-white/10">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
