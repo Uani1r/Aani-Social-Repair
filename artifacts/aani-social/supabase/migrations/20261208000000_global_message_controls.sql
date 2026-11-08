@@ -59,7 +59,7 @@ declare
   configured_seconds integer;
 begin
   if actor_id is null then
-    raise exception 'Authentication is required' using errcode = '42501';
+    return null;
   end if;
 
   select setting.expiration_seconds into configured_seconds
@@ -105,9 +105,9 @@ end;
 $$;
 
 revoke all on function public.aani_set_global_message_expiration(integer) from public, anon;
-revoke all on function public.aani_get_global_message_expiration() from public, anon;
+revoke all on function public.aani_get_global_message_expiration() from public, anon, authenticated, service_role;
 revoke all on function public.aani_apply_message_expiration() from public, anon, authenticated;
 grant execute on function public.aani_set_global_message_expiration(integer) to authenticated;
-grant execute on function public.aani_get_global_message_expiration() to authenticated;
+grant execute on function public.aani_get_global_message_expiration() to anon, authenticated, service_role;
 
 commit;
