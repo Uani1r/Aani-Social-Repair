@@ -164,7 +164,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
   const isReply = depth > 0;
   const hasActiveStory = storyOwners.has(comment.user_id);
   const ringClasses = hasActiveStory
-    ? 'ring-[1.5px] ring-[#FF0000]'
+    ? 'ring-[1.5px] ring-white'
     : 'ring-1 ring-zinc-800';
   const isOwnComment = currentUserId === comment.user_id;
   const isPostOwner = Boolean(currentUserId && postOwnerId === currentUserId);

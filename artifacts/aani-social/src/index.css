@@ -2264,13 +2264,9 @@ a:active > .aani-notifications-card {
 .unified-story-ring.is-seen,
 .unified-story-ring.is-unseen {
   padding: 0;
-  border: 2px solid #ff2d55;
+  border: 2px solid #fff;
   background: transparent;
   box-shadow: none;
-}
-
-.unified-story-ring.is-seen {
-  border-color: #8e8e93;
 }
 
 .unified-story-avatar {
@@ -2753,11 +2749,7 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-avatar-wrap.has-story {
-  background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888);
-}
-
-.messages-avatar-wrap.has-story.is-story-seen {
-  background: #8e8e93;
+  background: #fff;
 }
 
 .messages-avatar-wrap[role='button'] {

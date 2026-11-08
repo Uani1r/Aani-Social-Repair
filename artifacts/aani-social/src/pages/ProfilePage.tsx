@@ -102,8 +102,6 @@ export default function ProfilePage({
   const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
   const [profileStories, setProfileStories] = useState<ProfileStory[]>([]);
   const [hasActiveStories, setHasActiveStories] = useState(false);
-  const [hasUnseenActiveStories, setHasUnseenActiveStories] = useState(false);
-  const [hasCloseFriendsStory, setHasCloseFriendsStory] = useState(false);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -195,19 +193,8 @@ export default function ProfilePage({
       setIsFollowing(Boolean(checkFollow));
       setFollowRequestSent(Boolean(checkRequest));
       const storyRows = ((activeStories || []) as ProfileStory[]);
-      const activeStoryIds = storyRows.map(story => story.id);
       setProfileStories(storyRows);
-      let seenStoryIds = new Set<string>();
-      try {
-        const rawSeenStoryIds = localStorage.getItem(`aani:seen-story-ids:${currentUserId}`);
-        const parsedSeenStoryIds: unknown = rawSeenStoryIds ? JSON.parse(rawSeenStoryIds) : [];
-        if (Array.isArray(parsedSeenStoryIds)) seenStoryIds = new Set(parsedSeenStoryIds.filter((id): id is string => typeof id === 'string'));
-      } catch {
-        /* التخزين المحلي غير متاح */
-      }
-      setHasActiveStories(activeStoryIds.length > 0);
-      setHasUnseenActiveStories(activeStoryIds.some(storyId => !seenStoryIds.has(storyId)));
-      setHasCloseFriendsStory(Boolean(storyRows.some(story => story.is_close_friends)));
+      setHasActiveStories(storyRows.length > 0);
       const profileById = new Map<string, Profile>(((requesterProfiles || []) as Profile[]).map(requester => [requester.id, requester] as [string, Profile]));
       setFollowRequests(requestRows.flatMap(row => {
         const requester = profileById.get(row.requester_id);
@@ -371,7 +358,7 @@ export default function ProfilePage({
       return;
     }
 
-    const bio = bioDraft.trim();
+    const bio = bioDraft;
     setBioSaving(true);
     const { error } = await supabase.from('profiles').update({ bio }).eq('id', activeUserId);
     if (error) {
@@ -524,15 +511,7 @@ export default function ProfilePage({
           >
             <span
               className="group flex h-[82px] w-[82px] items-center justify-center overflow-hidden rounded-full border-[3px] border-black bg-neutral-800 p-[3px] ring-2 ring-black"
-              style={{
-                background: hasActiveStories
-                  ? hasUnseenActiveStories
-                    ? hasCloseFriendsStory
-                      ? 'conic-gradient(from 0deg, #16a34a, #4ade80, #15803d, #16a34a)'
-                      : 'conic-gradient(from 0deg, #CE1126, #FFFFFF, #000000, #007A3D, #CE1126)'
-                    : 'conic-gradient(from 0deg, #8e8e93, #d1d1d6, #6e6e73, #8e8e93)'
-                  : undefined,
-              }}
+              style={{ background: hasActiveStories ? '#FFFFFF' : undefined }}
             >
               <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
                 {avatarPreview ? (
@@ -554,20 +533,22 @@ export default function ProfilePage({
 
       <div className="mt-3 px-4">
         <div className="mb-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => own ? setShowProfileMenu(true) : void toggleFollow()}
-              className={`h-9 rounded-full px-5 text-sm font-bold transition ${isFollowing || followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
-            >
-              {isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private && !own ? 'طلب متابعة' : 'متابعة'}
-            </button>
-            <Link href={`/messages/${activeUserId}`} aria-label="إرسال رسالة" className="flex h-9 w-9 items-center justify-center rounded-full border border-[#53575B] text-white transition hover:bg-white/10">
-              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-            </Link>
-          </div>
+          {!own && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void toggleFollow()}
+                className={`h-9 rounded-full px-5 text-sm font-bold transition ${isFollowing || followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
+              >
+                {isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
+              </button>
+              <Link href={`/messages/${activeUserId}`} aria-label="إرسال رسالة" className="flex h-9 w-9 items-center justify-center rounded-full border border-[#53575B] text-white transition hover:bg-white/10">
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+              </Link>
+            </div>
+          )}
           <div className="flex items-center gap-3 text-sm">
             <div><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابَع</span></div>
             <div><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></div>
@@ -592,7 +573,7 @@ export default function ProfilePage({
               </div>
             </div>
           ) : person.bio?.trim() ? (
-            <p className="text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>
+            <p id="bioText" className="whitespace-pre-line text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>
           ) : null}
         </div>
 
@@ -643,7 +624,7 @@ export default function ProfilePage({
                 className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5"
                 aria-label={story.caption?.trim() || 'عرض القصة'}
               >
-                <span className="flex h-[68px] w-[68px] rounded-full bg-gradient-to-tr from-yellow-400 via-pink-500 to-purple-600 p-[2px]">
+                <span className="flex h-[68px] w-[68px] rounded-full bg-white p-[2px]">
                   <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 border-black bg-neutral-800">
                     {story.media_url && story.media_type === 'video' ? (
                       <video src={story.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
