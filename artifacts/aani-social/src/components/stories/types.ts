@@ -256,7 +256,7 @@ export function normalizeStoryRow(value: unknown): StoryRow | null {
 
   const duration = typeof value.duration_seconds === 'number' && Number.isFinite(value.duration_seconds)
     ? value.duration_seconds
-    : 60;
+    : 5;
   const timedTexts = Array.isArray(value.timed_texts)
     ? (value.timed_texts as unknown[]).filter(isStoryTimedText)
     : [];

@@ -13,11 +13,15 @@ type StoryMediaStageProps = Pick<
   | 'storyVideoRef'
   | 'currentTimeSec'
   | 'isStoryOwner'
+  | 'isPaused'
   | 'replyKeyboardInset'
   | 'onNextStory'
   | 'onPreviousStory'
   | 'onToggleShowUI'
   | 'onPauseChange'
+  | 'onVideoMetadata'
+  | 'onVideoTimeUpdate'
+  | 'onVideoEnded'
 >;
 
 export default function StoryMediaStage({
@@ -27,11 +31,15 @@ export default function StoryMediaStage({
   storyVideoRef,
   currentTimeSec,
   isStoryOwner,
+  isPaused,
   replyKeyboardInset,
   onNextStory,
   onPreviousStory,
   onToggleShowUI,
   onPauseChange,
+  onVideoMetadata,
+  onVideoTimeUpdate,
+  onVideoEnded,
 }: StoryMediaStageProps) {
   const canvasStyle = currentStory.timed_texts.find(
     (item): item is StoryCanvasStyleOverlay => item.type === 'canvas-style'
@@ -52,6 +60,16 @@ export default function StoryMediaStage({
       && currentTimeSec <= item.endTime,
   );
 
+  useEffect(() => {
+    const video = storyVideoRef.current;
+    if (!video) return;
+    if (isPaused) {
+      video.pause();
+      return;
+    }
+    if (video.readyState >= 1) void video.play().catch(() => {});
+  }, [currentStory.id, isPaused, storyVideoRef]);
+
   return (
     <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-zinc-950">
       {currentStory.media_url ? (
@@ -60,11 +78,20 @@ export default function StoryMediaStage({
             ref={storyVideoRef}
             key={currentStory.id}
             src={currentStory.media_url}
-            autoPlay
             playsInline
             preload="metadata"
             className="h-full w-full object-contain"
             style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }}
+            onLoadedMetadata={event => {
+              const video = event.currentTarget;
+              onVideoMetadata(currentStory.id, video.duration);
+              if (!isPaused) void video.play().catch(() => {});
+            }}
+            onTimeUpdate={event => {
+              const video = event.currentTarget;
+              onVideoTimeUpdate(currentStory.id, video.currentTime, video.duration);
+            }}
+            onEnded={() => onVideoEnded(currentStory.id)}
           />
         ) : (
           <img src={currentStory.media_url} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }} />

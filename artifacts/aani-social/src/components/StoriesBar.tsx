@@ -117,6 +117,9 @@ export default function StoriesBar({
   const [showUI, setShowUI] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
   const [progress, setProgress] = useState(0);
+  const progressRef = useRef(progress);
+  progressRef.current = progress;
+  const [videoDurationForStory, setVideoDurationForStory] = useState<{ storyId: string; durationSeconds: number } | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [replyText, setReplyText] = useState('');
   const [replyFocused, setReplyFocused] = useState(false);
@@ -138,6 +141,10 @@ export default function StoriesBar({
   const [viewerRowMenuOpen, setViewerRowMenuOpen] = useState(false);
   const storyViewsWasPausedRef = useRef(false);
   const storyVideoRef = useRef<HTMLVideoElement | null>(null);
+  const currentStoryRef = useRef<StoryRow | null>(null);
+  const progressStoryIdRef = useRef<string | null>(null);
+  const autoAdvancedStoryIdRef = useRef<string | null>(null);
+  const autoAdvanceStoryRef = useRef<(storyId: string) => void>(() => {});
   const storyVideoWasPlayingRef = useRef(false);
   const storyViewsRequestRef = useRef(0);
   const storyViewsChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
@@ -1275,12 +1282,15 @@ export default function StoriesBar({
   }, [activeUserGroup, archiveStories, archiveViewerOpen, groupedStories, profileStoryOwnerId, profilePreviewStories]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
+  currentStoryRef.current = currentStory;
   const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
-  const fallbackStoryDuration = 60;
   const storedStoryDuration = Number(currentStory?.duration_seconds);
-  const storyDisplayDuration = currentStory
-    ? Math.min(120, Math.max(5, storedStoryDuration || fallbackStoryDuration))
-    : 60;
+  const storyDisplayDuration = Number.isFinite(storedStoryDuration) && storedStoryDuration > 0
+    ? Math.min(120, Math.max(5, storedStoryDuration))
+    : 5;
+  const currentVideoDuration = videoDurationForStory?.storyId === currentStory?.id
+    ? videoDurationForStory.durationSeconds
+    : null;
   const currentStoryFilter = decodeStoryFilterKey(currentStory?.filter_key ?? undefined);
   useEffect(() => {
     const originalStoryId = currentStory?.original_story_id;
@@ -1392,6 +1402,13 @@ export default function StoriesBar({
     setViewerReportTarget(null);
     setViewerRowMenuOpen(false);
     setIsPaused(false);
+    if (progressStoryIdRef.current !== currentStory?.id) {
+      progressStoryIdRef.current = currentStory?.id ?? null;
+      progressRef.current = 0;
+      setProgress(0);
+      setCurrentTimeSec(0);
+    }
+    autoAdvancedStoryIdRef.current = null;
     storyViewsWasPausedRef.current = false;
     storyViewsRequestRef.current += 1;
 
@@ -1554,24 +1571,48 @@ export default function StoriesBar({
 
   useEffect(() => {
     if (!currentStory || isPaused || storyViewsOpen) return;
-    const duration = storyDisplayDuration * 1000;
-    const interval = 50;
-    const step = (interval / duration) * 100;
 
-    const timer = setInterval(() => {
-      setProgress(prev => {
-        const nextProg = prev + step;
-        setCurrentTimeSec((nextProg / 100) * storyDisplayDuration);
-        if (nextProg >= 100) {
-          handleNextStory();
-          return 0;
+    const storyId = currentStory.id;
+    if (currentStory.media_type === 'video' && currentStory.media_url) {
+      if (!Number.isFinite(currentVideoDuration) || currentVideoDuration === null || currentVideoDuration <= 0) return;
+      const video = storyVideoRef.current;
+      if (!video || video.readyState < 1) return;
+      const remainingMs = Math.max(0, (currentVideoDuration - video.currentTime) * 1000);
+      const videoEndFallback = window.setTimeout(() => {
+        if (currentStoryRef.current?.id === storyId && storyVideoRef.current?.ended) {
+          autoAdvanceStoryRef.current(storyId);
         }
-        return nextProg;
-      });
-    }, interval);
+      }, remainingMs);
+      return () => window.clearTimeout(videoEndFallback);
+    }
 
-    return () => clearInterval(timer);
-  }, [currentStory, storyDisplayDuration, isPaused, storyViewsOpen, activeStoryIndex, activeUserGroup]);
+    const durationMs = storyDisplayDuration * 1000;
+    const elapsedMs = Math.min(durationMs, Math.max(0, (progressRef.current / 100) * durationMs));
+    const startedAt = Date.now() - elapsedMs;
+    const updateProgress = () => {
+      if (currentStoryRef.current?.id !== storyId) return;
+      const elapsed = Math.min(durationMs, Math.max(0, Date.now() - startedAt));
+      const nextProgress = Math.min(100, (elapsed / durationMs) * 100);
+      progressRef.current = nextProgress;
+      setProgress(nextProgress);
+      setCurrentTimeSec(elapsed / 1000);
+    };
+
+    updateProgress();
+    const progressInterval = window.setInterval(updateProgress, 50);
+    const storyTimeout = window.setTimeout(() => {
+      if (currentStoryRef.current?.id !== storyId) return;
+      progressRef.current = 100;
+      setProgress(100);
+      setCurrentTimeSec(storyDisplayDuration);
+      autoAdvanceStoryRef.current(storyId);
+    }, Math.max(0, durationMs - elapsedMs));
+
+    return () => {
+      window.clearInterval(progressInterval);
+      window.clearTimeout(storyTimeout);
+    };
+  }, [activeStoryIndex, activeUserGroup, archiveViewerOpen, currentStory?.id, currentStory?.media_type, currentStory?.media_url, currentVideoDuration, isPaused, storyDisplayDuration, storyViewsOpen]);
 
   const handleNextStory = () => {
     if (currentStory?.id) markStorySeen(String(currentStory.id));
@@ -1604,6 +1645,35 @@ export default function StoriesBar({
         setActiveUserGroup(null);
       }
     }
+  };
+
+  autoAdvanceStoryRef.current = (storyId: string) => {
+    if (currentStoryRef.current?.id !== storyId || autoAdvancedStoryIdRef.current === storyId) return;
+    autoAdvancedStoryIdRef.current = storyId;
+    handleNextStory();
+  };
+
+  const handleStoryVideoMetadata = (storyId: string, durationSeconds: number) => {
+    if (currentStoryRef.current?.id !== storyId || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return;
+    setVideoDurationForStory({ storyId, durationSeconds });
+    progressRef.current = 0;
+    setProgress(0);
+    setCurrentTimeSec(0);
+  };
+
+  const handleStoryVideoTimeUpdate = (storyId: string, currentTimeSeconds: number, durationSeconds: number) => {
+    if (currentStoryRef.current?.id !== storyId || !Number.isFinite(currentTimeSeconds)) return;
+    const duration = videoDurationForStory?.storyId === storyId ? videoDurationForStory.durationSeconds : durationSeconds;
+    if (!Number.isFinite(duration) || duration <= 0) return;
+    const elapsed = Math.min(duration, Math.max(0, currentTimeSeconds));
+    const nextProgress = Math.min(100, (elapsed / duration) * 100);
+    progressRef.current = nextProgress;
+    setProgress(nextProgress);
+    setCurrentTimeSec(elapsed);
+  };
+
+  const handleStoryVideoEnded = (storyId: string) => {
+    autoAdvanceStoryRef.current(storyId);
   };
 
   const handlePrevStory = () => {
@@ -1792,8 +1862,8 @@ export default function StoriesBar({
     activeStoryDrawStrokeRef.current = null;
     setReshareStory(null);
     setReshareScaledDown(false);
-    storyDurationManuallyChosenRef.current = true;
-    setUploadDuration(60);
+    storyDurationManuallyChosenRef.current = false;
+    setUploadDuration(5);
     setStoryDurationOpen(false);
     setShowStoryPicker(false);
     setShowUploadModal(true);
@@ -2064,6 +2134,9 @@ export default function StoriesBar({
           onPreviousStory={handlePrevStory}
           onToggleShowUI={() => setShowUI(!showUI)}
           onPauseChange={setIsPaused}
+          onVideoMetadata={handleStoryVideoMetadata}
+          onVideoTimeUpdate={handleStoryVideoTimeUpdate}
+          onVideoEnded={handleStoryVideoEnded}
           onOpenStoryViews={wasPaused => void handleOpenStoryViews(wasPaused)}
           onCloseStoryViews={handleCloseStoryViews}
           onSendReply={() => void handleSendReply()}

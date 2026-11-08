@@ -57,6 +57,9 @@ export default function StoryViewer({
   onPreviousStory,
   onToggleShowUI,
   onPauseChange,
+  onVideoMetadata,
+  onVideoTimeUpdate,
+  onVideoEnded,
   onOpenStoryViews,
   onCloseStoryViews,
   onSendReply,
@@ -237,6 +240,10 @@ export default function StoryViewer({
           onPreviousStory={onPreviousStory}
           onToggleShowUI={onToggleShowUI}
           onPauseChange={onPauseChange}
+          isPaused={isPaused}
+          onVideoMetadata={onVideoMetadata}
+          onVideoTimeUpdate={onVideoTimeUpdate}
+          onVideoEnded={onVideoEnded}
         />
 
         <StoryReplyControls
