@@ -15,7 +15,8 @@ export function openCallPicker(): void {
 
 type CallMode = 'audio' | 'video';
 type CallPhase = 'outgoing' | 'incoming' | 'active';
-type CallSignalType = 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'decline-call' | 'ringing-ack';
+type CallTerminalStatus = 'declined' | 'no-answer' | 'busy';
+type CallSignalType = 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'decline-call' | 'ringing-ack' | 'busy-call';
 
 type CallPeer = {
   id: string;
@@ -38,6 +39,8 @@ type CallUiState = {
   ringing: boolean;
   accepting: boolean;
   dismissing: boolean;
+  terminalStatus: CallTerminalStatus | null;
+  accepted: boolean;
   startedAt: number | null;
 };
 
@@ -81,8 +84,11 @@ const CALL_STYLES = `
 .aani-call-overlay-outgoing{justify-content:center;padding:0;background:rgba(5,5,8,.88);backdrop-filter:blur(30px) saturate(150%);-webkit-backdrop-filter:blur(30px) saturate(150%)}
 .aani-call-overlay-incoming{justify-content:center;padding:0;background:rgba(5,5,8,.85);backdrop-filter:blur(30px) saturate(150%);-webkit-backdrop-filter:blur(30px) saturate(150%)}
 .aani-call-overlay-dismissing{animation:aani-call-dismiss .25s ease forwards}
+.aani-call-overlay-terminal-dismissing{animation:aani-call-terminal-dismiss .6s ease forwards}
 .aani-call-outgoing-content,.aani-call-incoming-content{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;gap:25px;text-align:center}
 .aani-call-outgoing-avatar-wrap{position:relative;z-index:1;width:110px;height:110px;display:grid;place-items:center;border-radius:50%;animation:aani-call-intense-glow 3s ease-in-out infinite}
+.aani-call-outgoing-avatar-wrap.is-red-glow{animation:aani-call-red-glow 1.8s ease-in-out infinite}
+.aani-call-outgoing-avatar-wrap.is-red-glow .aani-call-avatar-outgoing{border-color:rgba(255,59,48,.5);box-shadow:inset 0 0 20px rgba(255,59,48,.08),0 0 18px rgba(255,59,48,.2)}
 .aani-call-avatar-outgoing{position:relative;width:110px;height:110px;border:2px solid rgba(255,255,255,.4);box-shadow:inset 0 0 20px rgba(255,255,255,.15),0 15px 35px rgba(0,0,0,.8),0 5px 15px rgba(0,0,0,.6),0 0 10px rgba(255,255,255,.2)}
 .aani-call-avatar-outgoing::after{content:'';position:absolute;inset:0;border-radius:50%;background:linear-gradient(135deg,rgba(255,255,255,.4) 0%,rgba(255,255,255,0) 50%);pointer-events:none}
 .aani-call-person{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;text-align:center;gap:10px;margin-top:-22px}
@@ -97,6 +103,9 @@ const CALL_STYLES = `
 .aani-call-status{margin:0;color:rgba(255,255,255,.76);font-size:15px}
 .aani-call-status-outgoing,.aani-call-status-incoming{display:flex;align-items:center;gap:2px;color:#bbb;font-size:16px;font-weight:400}
 .aani-call-status-connecting{color:#fff}
+.aani-call-status-terminal{font-weight:500}
+.aani-call-status-terminal-declined{color:#ff3b30}
+.aani-call-status-terminal-no-answer,.aani-call-status-terminal-busy{color:#bbb}
 .aani-call-dots span{animation:aani-call-dot-blink 1.4s infinite both}
 .aani-call-dots span:nth-child(2){animation-delay:.2s}
 .aani-call-dots span:nth-child(3){animation-delay:.4s}
@@ -106,6 +115,7 @@ const CALL_STYLES = `
 .aani-call-video-shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.38),transparent 28%,transparent 65%,rgba(0,0,0,.62));pointer-events:none}
 .aani-call-local-video{position:absolute;z-index:3;top:calc(18px + env(safe-area-inset-top));left:18px;width:min(30vw,126px);aspect-ratio:3/4;object-fit:cover;border:1px solid rgba(255,255,255,.45);border-radius:18px;background:#20242a;box-shadow:0 8px 28px rgba(0,0,0,.35)}
 .aani-call-controls{position:absolute;z-index:3;bottom:calc(34px + env(safe-area-inset-bottom));left:0;right:0;display:flex;align-items:center;justify-content:center;gap:18px}
+.aani-call-controls.aani-call-controls-fading{opacity:0;transform:translate(-50%,20px);transition:opacity .35s ease,transform .35s ease;pointer-events:none}
 .aani-call-controls-outgoing{left:50%;right:auto;bottom:40px;display:inline-flex;width:max-content;gap:20px;padding:10px 24px;transform:translateX(-50%);border:1px solid rgba(255,255,255,.12);border-radius:100px;background:rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.45);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%)}
 .aani-call-controls-incoming{left:50%;right:auto;bottom:40px;display:inline-flex;width:max-content;gap:20px;padding:10px 24px;transform:translateX(-50%);direction:ltr;border:1px solid rgba(255,255,255,.12);border-radius:100px;background:rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.45);backdrop-filter:blur(20px) saturate(180%);-webkit-backdrop-filter:blur(20px) saturate(180%)}
 .aani-call-controls-incoming.is-accepting,.aani-call-controls-incoming.is-dismissing{pointer-events:none;opacity:.6}
@@ -136,6 +146,8 @@ const CALL_STYLES = `
 @keyframes aani-call-intense-glow{0%,100%{box-shadow:0 0 20px 2px rgba(255,255,255,.4),0 0 50px 10px rgba(255,255,255,.1);background:radial-gradient(circle,rgba(255,255,255,.08) 0%,rgba(255,255,255,0) 70%)}50%{box-shadow:0 0 30px 5px rgba(255,255,255,.8),0 0 80px 20px rgba(255,255,255,.4),0 0 150px 40px rgba(255,255,255,.15);background:radial-gradient(circle,rgba(255,255,255,.2) 0%,rgba(255,255,255,0) 70%)}}
 @keyframes aani-call-dot-blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes aani-call-dismiss{to{opacity:0;transform:scale(.96)}}
+@keyframes aani-call-terminal-dismiss{to{opacity:0;transform:scale(.96)}}
+@keyframes aani-call-red-glow{0%,100%{box-shadow:0 0 18px 3px rgba(255,59,48,.18),0 0 42px 8px rgba(255,59,48,.08)}50%{box-shadow:0 0 27px 5px rgba(255,59,48,.42),0 0 70px 16px rgba(255,59,48,.18)}}
 @media(min-width:700px){.aani-call-sheet-wrap{align-items:center}.aani-call-overlay{padding-left:40px;padding-right:40px}.aani-call-controls{gap:24px}.aani-call-overlay-outgoing,.aani-call-overlay-incoming{padding:0}.aani-call-controls-outgoing,.aani-call-controls-incoming{gap:20px}}
 .aani-call-overlay-active-audio{background:rgba(5,5,8,.90);backdrop-filter:blur(35px) saturate(150%);-webkit-backdrop-filter:blur(35px) saturate(150%)}
 .aani-call-avatar-active{width:110px;height:110px;border:2px solid rgba(255,255,255,.4);font-size:36px;box-shadow:0 0 18px rgba(255,255,255,.14);animation:aani-call-calm-glow 4s ease-in-out infinite}
@@ -177,7 +189,7 @@ function isCallSignal(value: unknown): value is CallSignal {
       && typeof value.candidate.candidate === 'string'
       && (value.renegotiate === undefined || typeof value.renegotiate === 'boolean');
   }
-  if (value.type === 'ringing-ack') return true;
+  if (value.type === 'ringing-ack' || value.type === 'busy-call') return true;
   return (value.type === 'hangup' || value.type === 'decline-call')
     && (value.reason === undefined || typeof value.reason === 'string');
 }
@@ -390,6 +402,26 @@ export default function CallManager({
     }
   }, [closeOutboundChannels, sendSignal, setActiveCall, stopRingtone]);
 
+  const showTerminalStatus = useCallback((callId: string, status: CallTerminalStatus) => {
+    const activeCall = callRef.current;
+    if (!activeCall || activeCall.callId !== callId || activeCall.terminalStatus || activeCall.dismissing) return;
+    stopRingtone();
+    if (dismissTimerRef.current !== null) window.clearTimeout(dismissTimerRef.current);
+    if (status === 'no-answer') {
+      void sendSignal({ type: 'hangup', callId, to: activeCall.peer.id, reason: 'no-answer' })
+        .catch(error => console.warn('[calls] تعذر إنهاء الرنين بعد انتهاء المهلة:', error));
+    }
+    setActiveCall({ ...activeCall, terminalStatus: status, ringing: false, accepting: false });
+    dismissTimerRef.current = window.setTimeout(() => {
+      const currentCall = callRef.current;
+      if (currentCall?.callId !== callId || currentCall.dismissing) return;
+      setActiveCall({ ...currentCall, dismissing: true });
+      dismissTimerRef.current = window.setTimeout(() => {
+        if (callRef.current?.callId === callId) finishCall(status, false);
+      }, 600);
+    }, 2000);
+  }, [finishCall, sendSignal, setActiveCall, stopRingtone]);
+
   const flushEarlyCandidates = useCallback(async (callId: string, connection: RTCPeerConnection) => {
     const candidates = earlyCandidatesRef.current.get(callId) || [];
     earlyCandidatesRef.current.delete(callId);
@@ -433,7 +465,7 @@ export default function CallManager({
     connection.onconnectionstatechange = () => {
       if (connection.connectionState === 'connected') {
         const activeCall = callRef.current;
-        if (activeCall?.callId === callId && !activeCall.dismissing) {
+        if (activeCall?.callId === callId && !activeCall.dismissing && !activeCall.terminalStatus) {
           setActiveCall({ ...activeCall, phase: 'active', accepting: false, dismissing: false, startedAt: activeCall.startedAt || Date.now() });
         }
       } else if (connection.connectionState === 'failed') {
@@ -450,8 +482,8 @@ export default function CallManager({
 
     if (payload.type === 'offer') {
       if (activeCall && activeCall.callId !== payload.callId) {
-        void sendSignal({ type: 'hangup', callId: payload.callId, to: payload.from, reason: 'busy' })
-          .catch(error => console.warn('[calls] تعذر رفض مكالمة أثناء الانشغال:', error));
+        void sendSignal({ type: 'busy-call', callId: payload.callId, to: payload.from })
+          .catch(error => console.warn('[calls] تعذر إرسال إشارة انشغال المكالمة:', error));
         return;
       }
       if (!payload.description || payload.description.type !== 'offer') return;
@@ -504,6 +536,8 @@ export default function CallManager({
         ringing: false,
         accepting: false,
         dismissing: false,
+        terminalStatus: null,
+        accepted: false,
         startedAt: null,
       };
       setActiveCall(incomingCall);
@@ -538,21 +572,36 @@ export default function CallManager({
       return;
     }
 
-    if (payload.type === 'hangup' || payload.type === 'decline-call') {
+    if (payload.type === 'hangup' || payload.type === 'decline-call' || payload.type === 'busy-call') {
       earlyCandidatesRef.current.delete(payload.callId);
       if (activeCall?.callId !== payload.callId || activeCall.peer.id !== payload.from) return;
-      if (payload.type === 'decline-call' || payload.reason === 'declined') toast.info('لم يتم قبول المكالمة.');
-      else if (payload.reason === 'busy') toast.info('المستخدم مشغول بمكالمة أخرى.');
-      else if (payload.reason === 'permission-denied') toast.info('تعذر على الطرف الآخر السماح باستخدام الميكروفون أو الكاميرا.');
-      finishCall(payload.reason || 'remote-ended', false);
+      if (payload.type === 'decline-call' || payload.reason === 'declined') {
+        if (activeCall.phase === 'outgoing') showTerminalStatus(payload.callId, 'declined');
+        else {
+          toast.info('لم يتم قبول المكالمة.');
+          finishCall(payload.reason || 'declined', false);
+        }
+      } else if (payload.type === 'busy-call' || payload.reason === 'busy') {
+        if (activeCall.phase === 'outgoing') showTerminalStatus(payload.callId, 'busy');
+        else {
+          toast.info('المستخدم مشغول بمكالمة أخرى.');
+          finishCall('busy', false);
+        }
+      } else if (payload.reason === 'permission-denied') {
+        toast.info('تعذر على الطرف الآخر السماح باستخدام الميكروفون أو الكاميرا.');
+        finishCall(payload.reason, false);
+      } else {
+        finishCall(payload.reason || 'remote-ended', false);
+      }
       return;
     }
 
-    if (!activeCall || activeCall.callId !== payload.callId || activeCall.peer.id !== payload.from) return;
+    if (!activeCall || activeCall.callId !== payload.callId || activeCall.peer.id !== payload.from || activeCall.terminalStatus) return;
 
     if (payload.type === 'answer') {
       const connection = peerConnectionRef.current;
       if (!connection || !payload.description || payload.description.type !== 'answer') return;
+      if (!activeCall.accepted) setActiveCall({ ...activeCall, accepted: true, ringing: false });
       const isRenegotiationAnswer = activeCall.phase === 'active' && connection.signalingState === 'have-local-offer';
       if (isRenegotiationAnswer) remoteRenegotiationReadyRef.current = null;
       try {
@@ -567,7 +616,7 @@ export default function CallManager({
       return;
     }
 
-  }, [currentUserId, finishCall, flushEarlyCandidates, sendSignal, setActiveCall, startRingtone]);
+  }, [currentUserId, finishCall, flushEarlyCandidates, sendSignal, setActiveCall, showTerminalStatus, startRingtone]);
 
   receiveSignalRef.current = payload => { void receiveSignal(payload); };
 
@@ -634,6 +683,8 @@ export default function CallManager({
       ringing: false,
       accepting: false,
       dismissing: false,
+      terminalStatus: null,
+      accepted: false,
       startedAt: null,
     });
 
@@ -854,16 +905,15 @@ export default function CallManager({
   }, [callState?.phase, callState?.startedAt, callState]);
 
   useEffect(() => {
-    if (!callState || callState.phase !== 'outgoing' || !callState.offer || callState.startedAt) return;
+    if (!callState || callState.phase !== 'outgoing' || !callState.offer || callState.startedAt || callState.accepted || callState.terminalStatus) return;
     const callId = callState.callId;
     const timerId = window.setTimeout(() => {
       const activeCall = callRef.current;
-      if (activeCall?.callId !== callId || activeCall.phase !== 'outgoing' || activeCall.startedAt) return;
-      toast.info('لم يتم الرد على المكالمة.');
-      finishCall('no-answer');
-    }, 60_000);
+      if (activeCall?.callId !== callId || activeCall.phase !== 'outgoing' || activeCall.startedAt || activeCall.accepted || activeCall.terminalStatus) return;
+      showTerminalStatus(callId, 'no-answer');
+    }, 30_000);
     return () => window.clearTimeout(timerId);
-  }, [callState?.callId, callState?.phase, callState?.offer, callState?.startedAt, finishCall]);
+  }, [callState?.callId, callState?.phase, callState?.offer, callState?.startedAt, callState?.accepted, callState?.terminalStatus, showTerminalStatus]);
 
   useEffect(() => {
     const stream = callState?.localStream || null;
@@ -912,7 +962,7 @@ export default function CallManager({
     stopRingtone();
     if (dismissTimerRef.current !== null) window.clearTimeout(dismissTimerRef.current);
     const activeCall = callRef.current;
-    if (activeCall && !activeCall.dismissing) {
+    if (activeCall && !activeCall.dismissing && !activeCall.terminalStatus) {
       void sendSignal({ type: 'hangup', callId: activeCall.callId, to: activeCall.peer.id, reason: 'ended' })
         .catch(() => undefined)
         .finally(closeOutboundChannels);
@@ -979,7 +1029,7 @@ export default function CallManager({
       )}
       {callState && (
         <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-layer-incoming' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} dir="rtl">
-          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
+          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.dismissing && callState.terminalStatus ? ' aani-call-overlay-terminal-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
             {showActiveVideo && (
               <>
                 <video ref={remoteVideoRef} className="aani-call-remote-video" muted={!callState.speakerOn} autoPlay playsInline aria-label="فيديو الطرف الآخر" />
@@ -992,18 +1042,21 @@ export default function CallManager({
               <>
                 {callState.phase === 'outgoing' || callState.phase === 'incoming' ? (
                   <div className={callState.phase === 'outgoing' ? 'aani-call-outgoing-content' : 'aani-call-incoming-content'}>
-                    <div className="aani-call-outgoing-avatar-wrap">
-                      <CallAvatar peer={callState.peer} className={`aani-call-avatar-outgoing${callState.phase === 'incoming' ? ' aani-call-avatar-incoming' : ''}`} />
+                    <div className={`aani-call-outgoing-avatar-wrap${callState.terminalStatus === 'declined' ? ' is-red-glow' : ''}`}>
+                      <CallAvatar peer={callState.peer} className={`aani-call-avatar-outgoing${callState.phase === 'incoming' ? ' aani-call-avatar-incoming' : ''}${callState.terminalStatus === 'declined' ? ' is-declined' : ''}`} />
                     </div>
                     <div className={`aani-call-person${callState.phase === 'outgoing' ? ' aani-call-person-outgoing' : ' aani-call-person-incoming'}`}>
                       <h2 className={`aani-call-name${callState.phase === 'outgoing' ? ' aani-call-name-outgoing' : ' aani-call-name-incoming'}`}>{callState.peer.name}</h2>
-                      <p className={`aani-call-status ${callState.phase === 'outgoing' ? 'aani-call-status-outgoing' : 'aani-call-status-incoming'}${callState.accepting || (callState.phase === 'outgoing' && !callState.ringing) ? ' aani-call-status-connecting' : ''}`}>
-                        {callState.phase === 'outgoing'
-                          ? callState.ringing ? 'يرن...' : 'جاري الاتصال...'
-                          : callState.accepting
-                            ? 'جاري التوصيل'
-                            : `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة`}
-                        {callState.phase === 'incoming' && <span className="aani-call-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>}
+                      <p className={`aani-call-status ${callState.phase === 'outgoing' ? 'aani-call-status-outgoing' : 'aani-call-status-incoming'}${callState.terminalStatus ? ` aani-call-status-terminal aani-call-status-terminal-${callState.terminalStatus}` : ''}${!callState.terminalStatus && (callState.accepting || (callState.phase === 'outgoing' && !callState.ringing)) ? ' aani-call-status-connecting' : ''}`}>
+                        {callState.terminalStatus === 'declined' ? 'تم رفض المكالمة'
+                          : callState.terminalStatus === 'no-answer' ? 'لا يوجد رد...'
+                            : callState.terminalStatus === 'busy' ? 'خط مشغول...'
+                              : callState.phase === 'outgoing'
+                                ? callState.ringing ? 'يرن...' : 'جاري الاتصال...'
+                                : callState.accepting
+                                  ? 'جاري التوصيل'
+                                  : `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة`}
+                        {!callState.terminalStatus && callState.phase === 'incoming' && <span className="aani-call-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>}
                       </p>
                     </div>
                   </div>
@@ -1032,7 +1085,7 @@ export default function CallManager({
             {callState.phase !== 'incoming' && callState.mode === 'video' && callState.phase !== 'active' && callState.localStream && (
               <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />
             )}
-            <div className={`aani-call-controls${callState.phase === 'outgoing' ? ' aani-call-controls-outgoing' : ''}${callState.phase === 'active' ? ' aani-call-controls-active' : ''}${callState.phase === 'incoming' ? ` aani-call-controls-incoming${callState.accepting ? ' is-accepting' : ''}${callState.dismissing ? ' is-dismissing' : ''}` : ''}`}>
+            <div className={`aani-call-controls${callState.phase === 'outgoing' ? ' aani-call-controls-outgoing' : ''}${callState.phase === 'active' ? ' aani-call-controls-active' : ''}${callState.phase === 'incoming' ? ` aani-call-controls-incoming${callState.accepting ? ' is-accepting' : ''}${callState.dismissing ? ' is-dismissing' : ''}` : ''}${callState.terminalStatus ? ' aani-call-controls-fading' : ''}`}>
               {callState.phase === 'incoming' ? (
                 <>
                   <button type="button" className="aani-call-control aani-call-control-incoming is-reject" aria-label="رفض المكالمة" disabled={callState.accepting || callState.dismissing} onClick={() => rejectOrEndCall('declined')}><Phone size={28} /></button>
