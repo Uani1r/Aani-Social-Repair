@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, Mic, MicOff, Phone, PhoneOff, Video, VideoOff, X } from 'lucide-react';
+import { Camera, Mic, MicOff, Phone, PhoneOff, Video, VideoOff, Volume2, VolumeX, X } from 'lucide-react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { toast } from 'sonner';
 
@@ -15,7 +15,7 @@ export function openCallPicker(): void {
 
 type CallMode = 'audio' | 'video';
 type CallPhase = 'outgoing' | 'incoming' | 'active';
-type CallSignalType = 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'decline-call';
+type CallSignalType = 'offer' | 'answer' | 'ice-candidate' | 'hangup' | 'decline-call' | 'ringing-ack';
 
 type CallPeer = {
   id: string;
@@ -34,6 +34,8 @@ type CallUiState = {
   remoteStream: MediaStream | null;
   muted: boolean;
   cameraOff: boolean;
+  speakerOn: boolean;
+  ringing: boolean;
   accepting: boolean;
   dismissing: boolean;
   startedAt: number | null;
@@ -51,6 +53,7 @@ type CallSignal = {
   description?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
   reason?: string;
+  renegotiate?: boolean;
 };
 
 type OutgoingCallSignal = Omit<CallSignal, 'from' | 'to'> & { to: string };
@@ -134,6 +137,21 @@ const CALL_STYLES = `
 @keyframes aani-call-dot-blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
 @keyframes aani-call-dismiss{to{opacity:0;transform:scale(.96)}}
 @media(min-width:700px){.aani-call-sheet-wrap{align-items:center}.aani-call-overlay{padding-left:40px;padding-right:40px}.aani-call-controls{gap:24px}.aani-call-overlay-outgoing,.aani-call-overlay-incoming{padding:0}.aani-call-controls-outgoing,.aani-call-controls-incoming{gap:20px}}
+.aani-call-overlay-active-audio{background:rgba(5,5,8,.90);backdrop-filter:blur(35px) saturate(150%);-webkit-backdrop-filter:blur(35px) saturate(150%)}
+.aani-call-avatar-active{width:110px;height:110px;border:2px solid rgba(255,255,255,.4);font-size:36px;box-shadow:0 0 18px rgba(255,255,255,.14);animation:aani-call-calm-glow 4s ease-in-out infinite}
+.aani-call-overlay-active-audio .aani-call-name{font-size:20px}
+.aani-call-timer-active{color:#34c759;font-size:17px;font-weight:600;animation:aani-call-timer-pulse 1.8s ease-in-out infinite}
+.aani-call-controls-active{left:50%;right:auto;bottom:calc(40px + env(safe-area-inset-bottom));display:inline-flex;width:max-content;max-width:calc(100% - 24px);gap:10px;padding:10px 14px;transform:translateX(-50%);border:1px solid rgba(255,255,255,.12);border-radius:100px;background:rgba(255,255,255,.08);box-shadow:0 8px 32px rgba(0,0,0,.35);backdrop-filter:blur(20px) saturate(150%);-webkit-backdrop-filter:blur(20px) saturate(150%)}
+.aani-call-controls-active .aani-call-control{width:52px;height:52px;min-width:52px;min-height:52px}
+.aani-call-controls-active .aani-call-control.is-end{background:#ff3b30;color:#fff;border:0;transform:none}
+.aani-call-controls-active .aani-call-control.is-end svg{transform:none}
+.aani-call-controls-active .aani-call-control.is-end:active{transform:scale(.92)}
+.aani-call-controls-active .aani-call-control.is-muted{position:relative;color:#ff3b30}
+.aani-call-controls-active .aani-call-control.is-muted::after{content:'';position:absolute;width:28px;height:2px;border-radius:2px;background:#ff3b30;transform:rotate(-45deg);box-shadow:0 0 4px rgba(0,0,0,.55)}
+.aani-call-local-video-audio{top:auto;left:auto;right:18px;bottom:calc(112px + env(safe-area-inset-bottom));width:min(28vw,112px);aspect-ratio:3/4}
+@keyframes aani-call-calm-glow{0%,100%{box-shadow:0 0 14px 2px rgba(255,255,255,.12),0 0 34px 5px rgba(255,255,255,.05)}50%{box-shadow:0 0 25px 4px rgba(255,255,255,.28),0 0 60px 12px rgba(255,255,255,.1)}}
+@keyframes aani-call-timer-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.82;transform:scale(1.035)}}
+@media(max-width:360px){.aani-call-controls-active{gap:6px;padding:9px 10px}.aani-call-controls-active .aani-call-control{width:48px;height:48px;min-width:48px;min-height:48px}}
 `;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,11 +169,15 @@ function isCallSignal(value: unknown): value is CallSignal {
       && value.description.type === value.type
       && typeof value.description.sdp === 'string'
       && value.description.sdp.length <= 200_000
-      && (value.type !== 'offer' || value.mode === 'audio' || value.mode === 'video');
+      && (value.type !== 'offer' || value.renegotiate === true || value.mode === 'audio' || value.mode === 'video')
+      && (value.renegotiate === undefined || typeof value.renegotiate === 'boolean');
   }
   if (value.type === 'ice-candidate') {
-    return isRecord(value.candidate) && typeof value.candidate.candidate === 'string';
+    return isRecord(value.candidate)
+      && typeof value.candidate.candidate === 'string'
+      && (value.renegotiate === undefined || typeof value.renegotiate === 'boolean');
   }
+  if (value.type === 'ringing-ack') return true;
   return (value.type === 'hangup' || value.type === 'decline-call')
     && (value.reason === undefined || typeof value.reason === 'string');
 }
@@ -225,6 +247,8 @@ export default function CallManager({
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const earlyCandidatesRef = useRef(new Map<string, RTCIceCandidateInit[]>());
+  const renegotiatingCallRef = useRef<string | null>(null);
+  const remoteRenegotiationReadyRef = useRef<string | null>(null);
   const ringtoneTimerRef = useRef<number | null>(null);
   const dismissTimerRef = useRef<number | null>(null);
   const ringtoneContextRef = useRef<AudioContext | null>(null);
@@ -355,6 +379,8 @@ export default function CallManager({
     localStreamRef.current = null;
     stream?.getTracks().forEach(track => track.stop());
     earlyCandidatesRef.current.delete(activeCall.callId);
+    if (renegotiatingCallRef.current === activeCall.callId) renegotiatingCallRef.current = null;
+    if (remoteRenegotiationReadyRef.current === activeCall.callId) remoteRenegotiationReadyRef.current = null;
     if (notifyPeer) {
       void sendSignal({ type: 'hangup', callId: activeCall.callId, to: activeCall.peer.id, reason })
         .catch(error => console.warn('[calls] تعذر إرسال إنهاء المكالمة:', error))
@@ -381,12 +407,17 @@ export default function CallManager({
     const connection = new RTCPeerConnection({ iceServers: CALL_ICE_SERVERS });
     peerConnectionRef.current = connection;
     connection.onicecandidate = event => {
-      if (!event.candidate || callRef.current?.callId !== callId) return;
+      if (!event.candidate) {
+        if (renegotiatingCallRef.current === callId) renegotiatingCallRef.current = null;
+        return;
+      }
+      if (callRef.current?.callId !== callId) return;
       void sendSignal({
         type: 'ice-candidate',
         callId,
         to: peer.id,
         candidate: event.candidate.toJSON(),
+        renegotiate: renegotiatingCallRef.current === callId,
       }).catch(error => console.warn('[calls] تعذر إرسال مرشح اتصال:', error));
     };
     connection.ontrack = event => {
@@ -402,7 +433,7 @@ export default function CallManager({
     connection.onconnectionstatechange = () => {
       if (connection.connectionState === 'connected') {
         const activeCall = callRef.current;
-        if (activeCall?.callId === callId) {
+        if (activeCall?.callId === callId && !activeCall.dismissing) {
           setActiveCall({ ...activeCall, phase: 'active', accepting: false, dismissing: false, startedAt: activeCall.startedAt || Date.now() });
         }
       } else if (connection.connectionState === 'failed') {
@@ -423,7 +454,41 @@ export default function CallManager({
           .catch(error => console.warn('[calls] تعذر رفض مكالمة أثناء الانشغال:', error));
         return;
       }
-      if (!payload.description || payload.description.type !== 'offer' || (payload.mode !== 'audio' && payload.mode !== 'video')) return;
+      if (!payload.description || payload.description.type !== 'offer') return;
+      if (payload.renegotiate) {
+        if (!activeCall || activeCall.phase !== 'active' || activeCall.peer.id !== payload.from) return;
+        const connection = peerConnectionRef.current;
+        if (!connection) return;
+        remoteRenegotiationReadyRef.current = null;
+        renegotiatingCallRef.current = payload.callId;
+        try {
+          await connection.setRemoteDescription(payload.description);
+          remoteRenegotiationReadyRef.current = payload.callId;
+          await flushEarlyCandidates(payload.callId, connection);
+          const answer = await connection.createAnswer();
+          await connection.setLocalDescription(answer);
+          const localDescription = connection.localDescription;
+          if (!localDescription) throw new Error('تعذر إنشاء إجابة تحديث الفيديو.');
+          await sendSignal({
+            type: 'answer',
+            callId: payload.callId,
+            to: payload.from,
+            description: localDescription.toJSON(),
+          });
+        } catch (error) {
+          console.warn('[calls] تعذر التفاوض على مسار الفيديو:', error);
+          toast.error('تعذر تفعيل الفيديو لدى الطرف الآخر.');
+        }
+        return;
+      }
+      if (activeCall?.callId === payload.callId) {
+        if (activeCall.phase === 'incoming') {
+          void sendSignal({ type: 'ringing-ack', callId: payload.callId, to: payload.from })
+            .catch(error => console.warn('[calls] تعذر تأكيد رنين المكالمة:', error));
+        }
+        return;
+      }
+      if (payload.mode !== 'audio' && payload.mode !== 'video') return;
       setPickerOpen(false);
       const incomingCall: CallUiState = {
         callId: payload.callId,
@@ -434,13 +499,24 @@ export default function CallManager({
         localStream: null,
         remoteStream: null,
         muted: false,
-        cameraOff: false,
+        cameraOff: payload.mode === 'audio',
+        speakerOn: true,
+        ringing: false,
         accepting: false,
         dismissing: false,
         startedAt: null,
       };
       setActiveCall(incomingCall);
       startRingtone();
+      void sendSignal({ type: 'ringing-ack', callId: payload.callId, to: payload.from })
+        .catch(error => console.warn('[calls] تعذر تأكيد رنين المكالمة:', error));
+      return;
+    }
+
+    if (payload.type === 'ringing-ack') {
+      if (activeCall?.callId === payload.callId && activeCall.peer.id === payload.from && activeCall.phase === 'outgoing') {
+        setActiveCall({ ...activeCall, ringing: true });
+      }
       return;
     }
 
@@ -448,7 +524,8 @@ export default function CallManager({
       if (!payload.candidate) return;
       if (activeCall && (activeCall.callId !== payload.callId || activeCall.peer.id !== payload.from)) return;
       const connection = activeCall?.callId === payload.callId ? peerConnectionRef.current : null;
-      if (connection?.remoteDescription) {
+      const waitingForRenegotiation = payload.renegotiate === true && remoteRenegotiationReadyRef.current !== payload.callId;
+      if (connection?.remoteDescription && !waitingForRenegotiation) {
         try {
           await connection.addIceCandidate(payload.candidate);
         } catch (error) {
@@ -476,8 +553,11 @@ export default function CallManager({
     if (payload.type === 'answer') {
       const connection = peerConnectionRef.current;
       if (!connection || !payload.description || payload.description.type !== 'answer') return;
+      const isRenegotiationAnswer = activeCall.phase === 'active' && connection.signalingState === 'have-local-offer';
+      if (isRenegotiationAnswer) remoteRenegotiationReadyRef.current = null;
       try {
         await connection.setRemoteDescription(payload.description);
+        if (isRenegotiationAnswer) remoteRenegotiationReadyRef.current = payload.callId;
         await flushEarlyCandidates(payload.callId, connection);
       } catch (error) {
         console.error('[calls] تعذر تطبيق إجابة المكالمة:', error);
@@ -549,7 +629,9 @@ export default function CallManager({
       localStream: null,
       remoteStream: null,
       muted: false,
-      cameraOff: false,
+      cameraOff: mode === 'audio',
+      speakerOn: true,
+      ringing: false,
       accepting: false,
       dismissing: false,
       startedAt: null,
@@ -676,25 +758,88 @@ export default function CallManager({
       }, 250);
       return;
     }
-    finishCall(reason);
+    stopRingtone();
+    setActiveCall({ ...activeCall, dismissing: true, startedAt: null });
+    dismissTimerRef.current = window.setTimeout(() => {
+      if (callRef.current?.callId === activeCall.callId) finishCall(reason);
+    }, 250);
   }, [finishCall, sendSignal, setActiveCall, stopRingtone]);
 
   const toggleMute = useCallback(() => {
     const activeCall = callRef.current;
     const stream = localStreamRef.current;
-    if (!activeCall) return;
+    if (!activeCall || activeCall.dismissing) return;
     const nextMuted = !activeCall.muted;
     stream?.getAudioTracks().forEach(track => { track.enabled = !nextMuted; });
     setActiveCall({ ...activeCall, muted: nextMuted });
   }, [setActiveCall]);
 
-  const toggleCamera = useCallback(() => {
+  const toggleCamera = useCallback(async () => {
     const activeCall = callRef.current;
     const stream = localStreamRef.current;
-    if (!activeCall || !stream) return;
-    const nextCameraOff = !activeCall.cameraOff;
-    stream.getVideoTracks().forEach(track => { track.enabled = !nextCameraOff; });
-    setActiveCall({ ...activeCall, cameraOff: nextCameraOff });
+    if (!activeCall || activeCall.phase !== 'active' || activeCall.dismissing || !stream) return;
+    const liveVideoTrack = stream.getVideoTracks().find(track => track.readyState === 'live');
+    if (!activeCall.cameraOff) {
+      stream.getVideoTracks().forEach(track => { track.enabled = false; });
+      setActiveCall({ ...activeCall, cameraOff: true });
+      return;
+    }
+    if (liveVideoTrack) {
+      liveVideoTrack.enabled = true;
+      setActiveCall({ ...activeCall, cameraOff: false });
+      return;
+    }
+
+    let cameraStream: MediaStream | null = null;
+    let cameraTrack: MediaStreamTrack | null = null;
+    let cameraSender: RTCRtpSender | null = null;
+    const connection = peerConnectionRef.current;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia || !connection) throw new Error('MEDIA_ACCESS_UNAVAILABLE');
+      cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+      cameraTrack = cameraStream.getVideoTracks()[0] || null;
+      const currentCall = callRef.current;
+      const currentStream = localStreamRef.current;
+      if (!cameraTrack || !currentCall || currentCall.callId !== activeCall.callId || !currentStream || peerConnectionRef.current !== connection) {
+        cameraStream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      renegotiatingCallRef.current = activeCall.callId;
+      currentStream.addTrack(cameraTrack);
+      cameraSender = connection.addTrack(cameraTrack, currentStream);
+      setActiveCall({ ...currentCall, cameraOff: false, localStream: currentStream });
+      const offer = await connection.createOffer();
+      await connection.setLocalDescription(offer);
+      if (callRef.current?.callId !== activeCall.callId || peerConnectionRef.current !== connection) return;
+      const localDescription = connection.localDescription;
+      if (!localDescription) throw new Error('تعذر إنشاء عرض الفيديو.');
+      await sendSignal({
+        type: 'offer',
+        callId: activeCall.callId,
+        to: activeCall.peer.id,
+        renegotiate: true,
+        description: localDescription.toJSON(),
+      });
+    } catch (error) {
+      if (renegotiatingCallRef.current === activeCall.callId) renegotiatingCallRef.current = null;
+      if (cameraSender && peerConnectionRef.current === connection) connection?.removeTrack(cameraSender);
+      if (cameraTrack) {
+        stream.removeTrack(cameraTrack);
+        cameraTrack.stop();
+      }
+      const currentCall = callRef.current;
+      if (currentCall?.callId === activeCall.callId) setActiveCall({ ...currentCall, cameraOff: true });
+      console.warn('[calls] تعذر تشغيل كاميرا المكالمة:', error);
+      toast.error(/NotAllowedError|PermissionDeniedError|SecurityError|Permission denied|MEDIA_ACCESS_UNAVAILABLE/i.test(error instanceof Error ? `${error.name} ${error.message}` : String(error))
+        ? 'يرجى السماح بالوصول إلى الكاميرا من إعدادات المتصفح لتشغيل الفيديو.'
+        : 'تعذر تشغيل الكاميرا. تحقق من الأذونات واتصال الإنترنت ثم حاول مرة أخرى.');
+    }
+  }, [sendSignal, setActiveCall]);
+
+  const toggleSpeaker = useCallback(() => {
+    const activeCall = callRef.current;
+    if (!activeCall || activeCall.dismissing) return;
+    setActiveCall({ ...activeCall, speakerOn: !activeCall.speakerOn });
   }, [setActiveCall]);
 
   useEffect(() => {
@@ -726,11 +871,13 @@ export default function CallManager({
       localVideoRef.current.srcObject = stream;
       if (stream) void localVideoRef.current.play().catch(() => undefined);
     }
-  }, [callState?.localStream, callState?.phase, callState?.cameraOff]);
+  }, [callState?.localStream, callState?.remoteStream, callState?.phase, callState?.cameraOff]);
 
   useEffect(() => {
     const stream = callState?.remoteStream || null;
-    const remoteElement = callState?.mode === 'video' ? remoteVideoRef.current : remoteAudioRef.current;
+    const remoteElement = callState?.mode === 'video' || stream?.getVideoTracks().some(track => track.readyState === 'live')
+      ? remoteVideoRef.current
+      : remoteAudioRef.current;
     if (remoteElement) {
       remoteElement.srcObject = stream;
       if (stream) void remoteElement.play().catch(() => undefined);
@@ -779,6 +926,9 @@ export default function CallManager({
   const closePicker = () => setPickerOpen(false);
   const sheetDragStartYRef = useRef<number | null>(null);
   const activeDuration = formatCallDuration(elapsedSeconds);
+  const showActiveVideo = Boolean(callState?.phase === 'active' && (
+    callState.mode === 'video' || callState.remoteStream?.getVideoTracks().some(track => track.readyState === 'live')
+  ));
   const showUi = pickerOpen || Boolean(callState);
 
   if (!showUi || typeof document === 'undefined') return null;
@@ -828,17 +978,17 @@ export default function CallManager({
         </div>
       )}
       {callState && (
-        <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-layer-incoming' : ''}${callState.mode === 'video' && callState.phase === 'active' ? ' aani-call-overlay-video' : ''}`} dir="rtl">
-          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${callState.mode === 'video' && callState.phase === 'active' ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
-            {callState.mode === 'video' && callState.phase === 'active' && (
+        <div className={`aani-call-layer${callState.phase === 'outgoing' ? ' aani-call-layer-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-layer-incoming' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} dir="rtl">
+          <section className={`aani-call-overlay${callState.phase === 'outgoing' ? ' aani-call-overlay-outgoing' : ''}${callState.phase === 'incoming' ? ' aani-call-overlay-incoming' : ''}${callState.phase === 'active' && !showActiveVideo ? ' aani-call-overlay-active-audio' : ''}${callState.dismissing ? ' aani-call-overlay-dismissing' : ''}${showActiveVideo ? ' aani-call-overlay-video' : ''}`} role="dialog" aria-modal="true" aria-label={callState.mode === 'video' ? 'مكالمة فيديو' : 'مكالمة صوتية'}>
+            {showActiveVideo && (
               <>
-                <video ref={remoteVideoRef} className="aani-call-remote-video" autoPlay playsInline aria-label="فيديو الطرف الآخر" />
+                <video ref={remoteVideoRef} className="aani-call-remote-video" muted={!callState.speakerOn} autoPlay playsInline aria-label="فيديو الطرف الآخر" />
                 <div className="aani-call-video-shade" />
                 {callState.localStream && !callState.cameraOff && <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />}
-                {callState.remoteStream?.getAudioTracks().length ? null : <audio ref={remoteAudioRef} autoPlay playsInline />}
+                {callState.remoteStream?.getAudioTracks().length ? null : <audio ref={remoteAudioRef} muted={!callState.speakerOn} autoPlay playsInline />}
               </>
             )}
-            {!(callState.mode === 'video' && callState.phase === 'active') && (
+            {!(showActiveVideo) && (
               <>
                 {callState.phase === 'outgoing' || callState.phase === 'incoming' ? (
                   <div className={callState.phase === 'outgoing' ? 'aani-call-outgoing-content' : 'aani-call-incoming-content'}>
@@ -847,39 +997,42 @@ export default function CallManager({
                     </div>
                     <div className={`aani-call-person${callState.phase === 'outgoing' ? ' aani-call-person-outgoing' : ' aani-call-person-incoming'}`}>
                       <h2 className={`aani-call-name${callState.phase === 'outgoing' ? ' aani-call-name-outgoing' : ' aani-call-name-incoming'}`}>{callState.peer.name}</h2>
-                      <p className={`aani-call-status ${callState.phase === 'outgoing' ? 'aani-call-status-outgoing' : 'aani-call-status-incoming'}${callState.accepting ? ' aani-call-status-connecting' : ''}`}>
+                      <p className={`aani-call-status ${callState.phase === 'outgoing' ? 'aani-call-status-outgoing' : 'aani-call-status-incoming'}${callState.accepting || (callState.phase === 'outgoing' && !callState.ringing) ? ' aani-call-status-connecting' : ''}`}>
                         {callState.phase === 'outgoing'
-                          ? 'جاري الاتصال'
+                          ? callState.ringing ? 'يرن...' : 'جاري الاتصال...'
                           : callState.accepting
                             ? 'جاري التوصيل'
                             : `مكالمة ${callState.mode === 'video' ? 'فيديو' : 'صوتية'} واردة`}
-                        <span className="aani-call-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>
+                        {callState.phase === 'incoming' && <span className="aani-call-dots" aria-hidden="true"><span>.</span><span>.</span><span>.</span></span>}
                       </p>
                     </div>
                   </div>
                 ) : (
                   <>
-                    <CallAvatar peer={callState.peer} />
+                    <CallAvatar peer={callState.peer} className="aani-call-avatar-active" />
                     <div className="aani-call-person">
                       <h2 className="aani-call-name">{callState.peer.name}</h2>
                       <p className="aani-call-status">المكالمة متصلة</p>
-                      <span className="aani-call-timer" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>
+                      <span className="aani-call-timer aani-call-timer-active" aria-label={`مدة المكالمة ${activeDuration}`}>{activeDuration}</span>
                     </div>
+                    {callState.mode === 'audio' && callState.localStream && !callState.cameraOff && (
+                      <video ref={localVideoRef} className="aani-call-local-video aani-call-local-video-audio" muted autoPlay playsInline aria-label="الفيديو المحلي" />
+                    )}
                   </>
                 )}
-                {callState.mode === 'audio' && <audio ref={remoteAudioRef} autoPlay playsInline />}
+                {callState.mode === 'audio' && <audio ref={remoteAudioRef} muted={!callState.speakerOn} autoPlay playsInline />}
               </>
             )}
-            {callState.mode === 'video' && callState.phase === 'active' && (
+            {showActiveVideo && (
               <div className="aani-call-person" style={{ position: 'absolute', top: 'calc(18px + env(safe-area-inset-top))', right: 20, alignItems: 'flex-start', gap: 5 }}>
                 <h2 className="aani-call-name" style={{ margin: 0, fontSize: 18, textShadow: '0 1px 8px #000' }}>{callState.peer.name}</h2>
-                <span className="aani-call-timer" style={{ margin: 0, textShadow: '0 1px 8px #000' }}>{activeDuration}</span>
+                <span className="aani-call-timer aani-call-timer-active" style={{ margin: 0, textShadow: '0 1px 8px #000' }}>{activeDuration}</span>
               </div>
             )}
             {callState.phase !== 'incoming' && callState.mode === 'video' && callState.phase !== 'active' && callState.localStream && (
               <video ref={localVideoRef} className="aani-call-local-video" muted autoPlay playsInline aria-label="الفيديو المحلي" />
             )}
-            <div className={`aani-call-controls${callState.phase === 'outgoing' ? ' aani-call-controls-outgoing' : ''}${callState.phase === 'incoming' ? ` aani-call-controls-incoming${callState.accepting ? ' is-accepting' : ''}${callState.dismissing ? ' is-dismissing' : ''}` : ''}`}>
+            <div className={`aani-call-controls${callState.phase === 'outgoing' ? ' aani-call-controls-outgoing' : ''}${callState.phase === 'active' ? ' aani-call-controls-active' : ''}${callState.phase === 'incoming' ? ` aani-call-controls-incoming${callState.accepting ? ' is-accepting' : ''}${callState.dismissing ? ' is-dismissing' : ''}` : ''}`}>
               {callState.phase === 'incoming' ? (
                 <>
                   <button type="button" className="aani-call-control aani-call-control-incoming is-reject" aria-label="رفض المكالمة" disabled={callState.accepting || callState.dismissing} onClick={() => rejectOrEndCall('declined')}><Phone size={28} /></button>
@@ -892,17 +1045,10 @@ export default function CallManager({
                 </>
               ) : (
                 <>
-                  <div className="aani-call-control-wrap">
-                    <button type="button" className={`aani-call-control${callState.muted ? ' is-active' : ''}`} aria-label={callState.muted ? 'إلغاء كتم الصوت' : 'كتم الصوت'} onClick={toggleMute} disabled={!callState.localStream}><span>{callState.muted ? <MicOff size={22} /> : <Mic size={22} />}</span></button>
-                    <span className="aani-call-control-label">{callState.muted ? 'إلغاء الكتم' : 'كتم'}</span>
-                  </div>
-                  {callState.mode === 'video' && (
-                    <div className="aani-call-control-wrap">
-                      <button type="button" className={`aani-call-control${callState.cameraOff ? ' is-active' : ''}`} aria-label={callState.cameraOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'} onClick={toggleCamera} disabled={!callState.localStream}><span>{callState.cameraOff ? <VideoOff size={22} /> : <Camera size={22} />}</span></button>
-                      <span className="aani-call-control-label">{callState.cameraOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'}</span>
-                    </div>
-                  )}
-                  <button type="button" className="aani-call-control is-end" aria-label="إنهاء المكالمة" onClick={() => rejectOrEndCall('ended')}><PhoneOff size={25} /></button>
+                  <button type="button" className={`aani-call-control${callState.muted ? ' is-active is-muted' : ''}`} aria-label={callState.muted ? 'إلغاء كتم الصوت' : 'كتم الصوت'} aria-pressed={callState.muted} onClick={toggleMute} disabled={!callState.localStream || callState.dismissing}>{callState.muted ? <MicOff size={22} /> : <Mic size={22} />}</button>
+                  <button type="button" className={`aani-call-control${callState.cameraOff ? ' is-active' : ''}`} aria-label={callState.cameraOff ? 'تشغيل الكاميرا' : 'إيقاف الكاميرا'} aria-pressed={!callState.cameraOff} onClick={() => void toggleCamera()} disabled={!callState.localStream || callState.dismissing}>{callState.cameraOff ? <VideoOff size={22} /> : <Camera size={22} />}</button>
+                  <button type="button" className={`aani-call-control${!callState.speakerOn ? ' is-active' : ''}`} aria-label={callState.speakerOn ? 'إيقاف مكبر الصوت' : 'تشغيل مكبر الصوت'} aria-pressed={callState.speakerOn} onClick={toggleSpeaker} disabled={callState.dismissing}>{callState.speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}</button>
+                  <button type="button" className="aani-call-control is-end" aria-label="إنهاء المكالمة" disabled={callState.dismissing} onClick={() => rejectOrEndCall('ended')}><PhoneOff size={24} /></button>
                 </>
               )}
             </div>
