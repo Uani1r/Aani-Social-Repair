@@ -117,6 +117,7 @@ export default function ProfilePage({
   const username = cleanUsername(person?.username);
   const profileLocation = person?.location?.trim() || '';
   const profileWebsiteUrl = normalizeWebsiteUrl(person?.website);
+  const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
@@ -572,11 +573,15 @@ export default function ProfilePage({
                 type="button"
                 onClick={() => void toggleFollow()}
                 aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
-                className={`inline-flex h-9 min-w-[85px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
+                className={`relative inline-flex h-9 min-w-[85px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
               >
-                <span>{isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}</span>
+                <span className="invisible inline-flex items-center gap-1.5" aria-hidden="true">
+                  <span>{followButtonLabel}</span>
+                  {isFollowing && <span className="h-3.5 w-3.5 shrink-0" />}
+                </span>
+                <span className="absolute inset-0 flex items-center justify-center text-center">{followButtonLabel}</span>
                 {isFollowing && (
-                  <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center" aria-hidden="true">
+                  <span className="absolute left-2 top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center" aria-hidden="true">
                     <svg className={`profile-follow-check${showFollowCheckmark ? ' is-visible' : ''}`} viewBox="0 0 20 20" aria-hidden="true">
                       <path d="M3 10.5 7.4 15 17 5.5" fill="none" stroke="#000" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} />
                     </svg>
