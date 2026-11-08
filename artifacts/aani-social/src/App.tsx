@@ -161,7 +161,6 @@ function App() {
                     profile={profile}
                     onProfileUpdate={setProfile}
                     onOpenComments={openComments}
-                    onOpenStories={openProfileStories}
                   />
                 )}
               </Route>
@@ -174,7 +173,6 @@ function App() {
                     profile={profile}
                     onProfileUpdate={setProfile}
                     onOpenComments={openComments}
-                    onOpenStories={openProfileStories}
                   />
                 )}
               </Route>

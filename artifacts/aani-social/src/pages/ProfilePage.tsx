@@ -8,17 +8,9 @@ import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight } from '@/components/ProfileHighlightsManager';
+import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
 import './ProfilePage.css';
-
-type ProfileStory = {
-  id: string;
-  media_url: string | null;
-  media_type: string;
-  caption: string | null;
-  is_close_friends: boolean;
-};
 
 type ProfileImageKind = 'avatar' | 'cover';
 
@@ -82,14 +74,12 @@ export default function ProfilePage({
   profile,
   onProfileUpdate,
   onOpenComments,
-  onOpenStories,
 }: {
   targetUserId: string;
   currentUserId: string;
   profile: Profile | null;
   onProfileUpdate: (next: Profile) => void;
   onOpenComments: (postId: string) => void;
-  onOpenStories: (profileId: string) => void;
 }) {
   const activeUserId = targetUserId || currentUserId;
   const own = activeUserId === currentUserId;
@@ -101,11 +91,9 @@ export default function ProfilePage({
   const [isFollowing, setIsFollowing] = useState(false);
   const [followRequestSent, setFollowRequestSent] = useState(false);
   const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
-  const [profileStories, setProfileStories] = useState<ProfileStory[]>([]);
-  const [profileHighlights, setProfileHighlights] = useState<ProfileHighlight[]>([]);
-  const [hasActiveStories, setHasActiveStories] = useState(false);
+  const [profileHighlights, setProfileHighlights] = useState<ProfileHighlightCollection[]>([]);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
-  const [selectedHighlight, setSelectedHighlight] = useState<ProfileHighlight | null>(null);
+  const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -166,15 +154,15 @@ export default function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
-      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: activeStories, error: activeStoriesError }, { data: highlightRows, error: highlightsError }, { data: incomingRequests }] = await Promise.all([
+      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }, { data: incomingRequests }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         supabase.from('posts').select('id', { count: 'exact', head: true }).eq('user_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
-        supabase.from('stories').select('id, media_url, media_type, caption, is_close_friends').eq('user_id', activeUserId).gt('expires_at', new Date().toISOString()).order('created_at', { ascending: true }).limit(50),
-        supabase.from('profile_highlights').select('id, user_id, media_url, media_type, caption, source_story_id, is_close_friends, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
+        supabase.from('profile_highlight_collections').select('id, user_id, title, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
+        supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
         own
           ? supabase.from('follow_requests').select('requester_id, created_at').eq('recipient_id', currentUserId).order('created_at', { ascending: false }).limit(100)
           : Promise.resolve({ data: [] }),
@@ -186,13 +174,13 @@ export default function ProfilePage({
         ? await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url, bio, is_private').in('id', requesterIds)
         : { data: [] };
       if (!active) return;
-      if (activeStoriesError) {
-        console.error('[profile stories] تعذر التحقق من القصص النشطة:', activeStoriesError);
-        toast.error(`تعذر التحقق من قصص الحساب: ${activeStoriesError.message}`);
+      if (collectionsError) {
+        console.error('[profile highlights] تعذر تحميل المجموعات:', collectionsError);
+        toast.error(`تعذر تحميل مجموعات القصص: ${collectionsError.message}`);
       }
       if (highlightsError) {
-        console.error('[profile highlights] تعذر تحميل أبرز القصص:', highlightsError);
-        toast.error(`تعذر تحميل أبرز القصص: ${highlightsError.message}`);
+        console.error('[profile highlights] تعذر تحميل قصص أبرز القصص:', highlightsError);
+        toast.error(`تعذر تحميل قصص أبرز القصص: ${highlightsError.message}`);
       }
 
       if (prof) setPerson(prof as Profile);
@@ -201,10 +189,16 @@ export default function ProfilePage({
       setPostCount(pCount || 0);
       setIsFollowing(Boolean(checkFollow));
       setFollowRequestSent(Boolean(checkRequest));
-      const storyRows = ((activeStories || []) as ProfileStory[]);
-      setProfileStories(storyRows);
-      setHasActiveStories(storyRows.length > 0);
-      setProfileHighlights((highlightRows || []) as ProfileHighlight[]);
+      const storiesByCollection = new Map<string, ProfileHighlight[]>();
+      ((highlightRows || []) as ProfileHighlight[]).forEach(story => {
+        const stories = storiesByCollection.get(story.collection_id) || [];
+        stories.push(story);
+        storiesByCollection.set(story.collection_id, stories);
+      });
+      const collectionData = (collectionRows || []) as ProfileHighlightCollectionSummary[];
+      setProfileHighlights(collectionData
+        .map(collection => ({ ...collection, stories: storiesByCollection.get(collection.id) || [] }))
+        .filter(collection => collection.stories.length > 0));
       const profileById = new Map<string, Profile>(((requesterProfiles || []) as Profile[]).map(requester => [requester.id, requester] as [string, Profile]));
       setFollowRequests(requestRows.flatMap(row => {
         const requester = profileById.get(row.requester_id);
@@ -521,7 +515,6 @@ export default function ProfilePage({
           >
             <span
               className="group flex h-[82px] w-[82px] items-center justify-center overflow-hidden rounded-full border-[3px] border-black bg-neutral-800 p-[3px] ring-2 ring-black"
-              style={{ background: hasActiveStories ? '#FFFFFF' : undefined }}
             >
               <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
                 {avatarPreview ? (
@@ -605,43 +598,6 @@ export default function ProfilePage({
         )}
       </div>
 
-      {profileStories.length > 0 && (
-        <div className="mb-2 mt-6 px-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-[#F7F9F9]">القصص النشطة</h2>
-            {own && (
-              <button type="button" onClick={() => window.dispatchEvent(new Event('aani:request-story-composer'))} className="text-xs font-semibold text-[#1D9BF0]">
-                قصة جديدة
-              </button>
-            )}
-          </div>
-          <div className="no-scrollbar flex items-center gap-4 overflow-x-auto pb-2">
-            {profileStories.map(story => (
-              <button
-                key={story.id}
-                type="button"
-                onClick={() => { onOpenStories(activeUserId); setLocation('/feed'); }}
-                className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5"
-                aria-label={story.caption?.trim() || 'عرض القصة النشطة'}
-              >
-                <span className="flex h-[68px] w-[68px] rounded-full bg-white p-[2px]">
-                  <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 border-black bg-neutral-800">
-                    {story.media_url && story.media_type === 'video' ? (
-                      <video src={story.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
-                    ) : story.media_url ? (
-                      <img src={story.media_url} className="h-full w-full object-cover" alt="" />
-                    ) : (
-                      <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{story.caption || 'قصة نصية'}</span>
-                    )}
-                  </span>
-                </span>
-                <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">{story.caption?.trim() || 'قصة'}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {(own || profileHighlights.length > 0) && (
         <div className="mb-2 mt-6 px-4">
           <div className="mb-3 flex items-center justify-between">
@@ -658,22 +614,25 @@ export default function ProfilePage({
                 <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">إضافة</span>
               </button>
             )}
-            {profileHighlights.map(highlight => (
-              <button key={highlight.id} type="button" onClick={() => setSelectedHighlight(highlight)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label={highlight.caption?.trim() || 'عرض أبرز قصة'}>
-                <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
-                  <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                    {highlight.media_url && highlight.media_type === 'video' ? (
-                      <video src={highlight.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
-                    ) : highlight.media_url ? (
-                      <img src={highlight.media_url} className="h-full w-full object-cover" alt="" />
-                    ) : (
-                      <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{highlight.caption || 'قصة نصية'}</span>
-                    )}
+            {profileHighlights.map(collection => {
+              const cover = collection.stories[0];
+              return (
+                <button key={collection.id} type="button" onClick={() => setSelectedHighlightCollection(collection)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label={`عرض مجموعة ${collection.title}`}>
+                  <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
+                    <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
+                      {cover?.media_url && cover.media_type === 'video' ? (
+                        <video src={cover.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                      ) : cover?.media_url ? (
+                        <img src={cover.media_url} className="h-full w-full object-cover" alt="" />
+                      ) : (
+                        <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{cover?.caption || collection.title}</span>
+                      )}
+                    </span>
                   </span>
-                </span>
-                <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">{highlight.caption?.trim() || 'قصة'}</span>
-              </button>
-            ))}
+                  <span className="max-w-[88px] truncate text-[11px] text-[#BBBBBB]">{collection.title}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -702,10 +661,19 @@ export default function ProfilePage({
         open={showHighlightsManager}
         onClose={() => setShowHighlightsManager(false)}
         userId={currentUserId}
-        existingSourceStoryIds={new Set(profileHighlights.flatMap(highlight => highlight.source_story_id ? [highlight.source_story_id] : []))}
-        onHighlightAdded={highlight => setProfileHighlights(current => [highlight, ...current])}
+        collections={profileHighlights}
+        existingSourceStoryIds={new Set(profileHighlights.flatMap(collection => collection.stories.flatMap(story => story.source_story_id ? [story.source_story_id] : [])))}
+        onHighlightAdded={(collection, highlight) => setProfileHighlights(current => {
+          const existing = current.some(item => item.id === collection.id);
+          if (existing) {
+            return current.map(item => item.id === collection.id
+              ? { ...item, ...collection, stories: [...item.stories, highlight].sort((a, b) => a.position - b.position) }
+              : item);
+          }
+          return [...current, { ...collection, stories: [highlight] }].sort((a, b) => a.created_at.localeCompare(b.created_at));
+        })}
       />
-      {selectedHighlight && <ProfileHighlightViewer highlight={selectedHighlight} onClose={() => setSelectedHighlight(null)} />}
+      {selectedHighlightCollection && <ProfileHighlightViewer collection={selectedHighlightCollection} onClose={() => setSelectedHighlightCollection(null)} />}
     </section>
   );
 }
