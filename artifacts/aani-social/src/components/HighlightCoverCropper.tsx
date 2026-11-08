@@ -17,6 +17,8 @@ type HighlightCoverCropperProps = {
   file: File;
   onCancel: () => void;
   onSave: (file: File) => void;
+  title?: string;
+  outputSuffix?: string;
 };
 
 const CROP_DIAMETER = 208;
@@ -37,7 +39,7 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export default function HighlightCoverCropper({ file, onCancel, onSave }: HighlightCoverCropperProps) {
+export default function HighlightCoverCropper({ file, onCancel, onSave, title = 'تعديل غلاف أبرز القصص', outputSuffix = '-cover' }: HighlightCoverCropperProps) {
   const previewUrl = useMemo(() => URL.createObjectURL(file), [file]);
   const imageRef = useRef<HTMLImageElement>(null);
   const pointersRef = useRef(new Map<number, Point>());
@@ -175,7 +177,7 @@ export default function HighlightCoverCropper({ file, onCancel, onSave }: Highli
       canvas.width = OUTPUT_SIZE;
       canvas.height = OUTPUT_SIZE;
       const context = canvas.getContext('2d');
-      if (!context) throw new Error('تعذر تجهيز صورة الغلاف.');
+      if (!context) throw new Error('تعذر تجهيز الصورة.');
 
       const imageScale = baseScale * boundedTransform.scale;
       const sourceSize = CROP_DIAMETER / imageScale;
@@ -184,20 +186,20 @@ export default function HighlightCoverCropper({ file, onCancel, onSave }: Highli
       context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
 
       const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(value => value ? resolve(value) : reject(new Error('تعذر تصدير صورة الغلاف.')), 'image/png');
+        canvas.toBlob(value => value ? resolve(value) : reject(new Error('تعذر تصدير الصورة.')), 'image/png');
       });
-      const baseName = file.name.replace(/\.[^.]+$/, '') || 'highlight-cover';
-      onSave(new File([blob], `${baseName}-cover.png`, { type: 'image/png', lastModified: Date.now() }));
+      const baseName = file.name.replace(/\.[^.]+$/, '') || (outputSuffix === '-avatar' ? 'profile-avatar' : 'highlight-cover');
+      onSave(new File([blob], `${baseName}${outputSuffix}.png`, { type: 'image/png', lastModified: Date.now() }));
     } catch (error) {
-      console.error('[profile highlights] تعذر اقتصاص صورة الغلاف:', error);
-      toast.error(error instanceof Error ? error.message : 'تعذر حفظ صورة الغلاف.');
+      console.error('[image cropper] تعذر اقتصاص الصورة:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر حفظ الصورة.');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 z-[2140] flex h-[100dvh] w-screen flex-col overflow-hidden bg-black/80 text-white backdrop-blur-md" dir="rtl" role="dialog" aria-modal="true" aria-label="اقتصاص غلاف أبرز القصص">
+    <div className="fixed inset-0 z-[2140] flex h-[100dvh] w-screen flex-col overflow-hidden bg-black/80 text-white backdrop-blur-md" dir="rtl" role="dialog" aria-modal="true" aria-label={title}>
       <div
         className="absolute inset-0 touch-none"
         onPointerDown={beginGesture}
@@ -225,7 +227,7 @@ export default function HighlightCoverCropper({ file, onCancel, onSave }: Highli
 
       <header className="pointer-events-none relative z-10 flex items-center justify-between px-4" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
         <button type="button" onClick={onCancel} disabled={saving} aria-label="إلغاء الاقتصاص" className="pointer-events-auto grid h-10 w-10 place-items-center rounded-full bg-black/45 text-white backdrop-blur-md disabled:opacity-50"><X size={21} /></button>
-        <h2 className="rounded-full bg-black/40 px-4 py-2 text-sm font-bold backdrop-blur-md">تعديل غلاف أبرز القصص</h2>
+        <h2 className="rounded-full bg-black/40 px-4 py-2 text-sm font-bold backdrop-blur-md">{title}</h2>
         <span className="h-10 w-10" aria-hidden="true" />
       </header>
 
@@ -234,7 +236,7 @@ export default function HighlightCoverCropper({ file, onCancel, onSave }: Highli
         <div className="pointer-events-auto flex w-full max-w-sm gap-3">
           <button type="button" onClick={onCancel} disabled={saving} className="min-h-12 flex-1 rounded-full border border-white/25 bg-black/50 text-sm font-bold text-white backdrop-blur-md disabled:opacity-50">إلغاء</button>
           <button type="button" onClick={() => void saveCrop()} disabled={saving || !imageSize.width} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[#1D9BF0] text-sm font-black text-white transition hover:bg-[#1686d4] disabled:opacity-50">
-            <Check size={18} />{saving ? 'جارٍ تجهيز الغلاف...' : 'تم'}
+            <Check size={18} />{saving ? 'جارٍ تجهيز الصورة...' : 'تم'}
           </button>
         </div>
       </div>

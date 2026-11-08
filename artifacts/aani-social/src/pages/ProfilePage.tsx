@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
+import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
@@ -13,6 +14,14 @@ import { cleanUsername, displayName, type Profile } from '@/lib/types';
 import './ProfilePage.css';
 
 type ProfileImageKind = 'avatar' | 'cover';
+type CoverPosition = { x: number; y: number };
+type CoverPanGesture = {
+  pointerId: number;
+  startPoint: CoverPosition;
+  startPosition: CoverPosition;
+  overflowX: number;
+  overflowY: number;
+};
 
 function VerifiedBadge() {
   return (
@@ -100,15 +109,21 @@ export default function ProfilePage({
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(person?.avatar_url || null);
   const [coverPreview, setCoverPreview] = useState<string | null>(person?.cover_url || null);
-  const [imageSaving, setImageSaving] = useState<ProfileImageKind | null>(null);
+  const [avatarCropFile, setAvatarCropFile] = useState<File | null>(null);
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
+  const [coverPosition, setCoverPosition] = useState<CoverPosition>({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
   const [bioDraft, setBioDraft] = useState(person?.bio || '');
   const [bioEditorOpen, setBioEditorOpen] = useState(false);
-  const [bioSaving, setBioSaving] = useState(false);
   const usernameWrapperRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
+  const coverImageRef = useRef<HTMLImageElement>(null);
+  const coverPanGestureRef = useRef<CoverPanGesture | null>(null);
   const temporaryPreviewUrlsRef = useRef(new Set<string>());
   const [, setLocation] = useLocation();
 
@@ -127,6 +142,10 @@ export default function ProfilePage({
     setAvatarPreview(person?.avatar_url || null);
     setCoverPreview(person?.cover_url || null);
   }, [person?.avatar_url, person?.cover_url]);
+
+  useEffect(() => {
+    setCoverPosition({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
+  }, [person?.id, person?.cover_position_x, person?.cover_position_y]);
 
   useEffect(() => {
     setBioDraft(person?.bio || '');
@@ -343,71 +362,119 @@ export default function ProfilePage({
     else setCoverPreview(url);
   };
 
-  const handleProfileImageSelection = async (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
+  const handleProfileImageSelection = (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
     input.value = '';
-    if (!file || !own || imageSaving) return;
+    if (!file || !own || !isEditingProfile || profileSaving) return;
     if (!file.type.startsWith('image/')) {
       toast.error('اختر ملف صورة صالحاً.');
       return;
     }
 
-    const previewUrl = URL.createObjectURL(file);
-    setImagePreview(kind, previewUrl);
-    setImageSaving(kind);
-    let uploadedPath: string | null = null;
-
-    try {
-      if (!supabaseConfigured) throw new Error('اتصال قاعدة البيانات غير متاح.');
-      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
-      uploadedPath = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
-      await uploadMedia({ file, path: uploadedPath });
-      const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
-      const patch = kind === 'avatar' ? { avatar_url: publicUrl } : { cover_url: publicUrl };
-      const { error: updateError } = await supabase.from('profiles').update(patch).eq('id', activeUserId);
-      if (updateError) throw updateError;
-
-      const updatedProfile = { ...person!, ...patch };
-      setPerson(current => current ? { ...current, ...patch } : current);
-      if (own) onProfileUpdate(updatedProfile);
-      setImagePreview(kind, publicUrl);
-      uploadedPath = null;
-      toast.success(kind === 'avatar' ? 'تم تحديث الصورة الشخصية.' : 'تم تحديث صورة الغلاف.');
-    } catch (error) {
-      if (uploadedPath) {
-        const { error: cleanupError } = await supabase.storage.from(storageBucket).remove([uploadedPath]);
-        if (cleanupError) console.warn('[profile] تعذر حذف الصورة غير المحفوظة:', cleanupError);
-      }
-      console.error('[profile] تعذر حفظ الصورة:', error);
-      toast.error('تم عرض الصورة مؤقتاً، لكن تعذر حفظها في الحساب. حاول مرة أخرى.');
-    } finally {
-      setImageSaving(null);
+    if (kind === 'avatar') {
+      setAvatarCropFile(file);
+      return;
     }
+
+    setPendingCoverFile(file);
+    setImagePreview('cover', URL.createObjectURL(file));
+    setCoverPosition({ x: 50, y: 50 });
   };
 
-  const saveBio = async () => {
-    if (!own || !person || bioSaving) return;
+  const handleCoverPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isEditingProfile || !coverPreview || (event.target instanceof Element && event.target.closest('button'))) return;
+    const image = coverImageRef.current;
+    if (!image?.naturalWidth || !image.naturalHeight) return;
+
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const scale = Math.max(bounds.width / image.naturalWidth, bounds.height / image.naturalHeight);
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    coverPanGestureRef.current = {
+      pointerId: event.pointerId,
+      startPoint: { x: event.clientX, y: event.clientY },
+      startPosition: coverPosition,
+      overflowX: Math.max(0, image.naturalWidth * scale - bounds.width),
+      overflowY: Math.max(0, image.naturalHeight * scale - bounds.height),
+    };
+  };
+
+  const handleCoverPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = coverPanGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    setCoverPosition({
+      x: gesture.overflowX > 0
+        ? Math.max(0, Math.min(100, gesture.startPosition.x - ((event.clientX - gesture.startPoint.x) / gesture.overflowX) * 100))
+        : gesture.startPosition.x,
+      y: gesture.overflowY > 0
+        ? Math.max(0, Math.min(100, gesture.startPosition.y - ((event.clientY - gesture.startPoint.y) / gesture.overflowY) * 100))
+        : gesture.startPosition.y,
+    });
+  };
+
+  const handleCoverPointerEnd = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (coverPanGestureRef.current?.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    coverPanGestureRef.current = null;
+  };
+
+  const saveProfileEdits = async () => {
+    if (!own || !person || !isEditingProfile || profileSaving) return;
     if (!supabaseConfigured) {
       toast.error('اتصال قاعدة البيانات غير متاح.');
       return;
     }
 
-    const bio = bioDraft;
-    setBioSaving(true);
-    const { error } = await supabase.from('profiles').update({ bio }).eq('id', activeUserId);
-    if (error) {
-      toast.error('تعذر حفظ السيرة الذاتية. حاول مرة أخرى.');
-      setBioSaving(false);
-      return;
-    }
+    setProfileSaving(true);
+    const uploadedPaths: string[] = [];
+    const patch: Partial<Profile> = {
+      bio: bioDraft,
+      cover_position_x: coverPosition.x,
+      cover_position_y: coverPosition.y,
+    };
 
-    const updatedProfile = { ...person, bio };
-    setPerson(updatedProfile);
-    onProfileUpdate(updatedProfile);
-    setBioEditorOpen(false);
-    setBioSaving(false);
-    toast.success('تم حفظ السيرة الذاتية.');
+    try {
+      const uploadPendingImage = async (kind: ProfileImageKind, file: File) => {
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
+        const path = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
+        await uploadMedia({ file, path });
+        uploadedPaths.push(path);
+        const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+        if (kind === 'avatar') patch.avatar_url = publicUrl;
+        else patch.cover_url = publicUrl;
+      };
+
+      if (pendingAvatarFile) await uploadPendingImage('avatar', pendingAvatarFile);
+      if (pendingCoverFile) await uploadPendingImage('cover', pendingCoverFile);
+
+      const { error } = await supabase.from('profiles').update(patch).eq('id', activeUserId);
+      if (error) throw error;
+
+      const updatedProfile = { ...person, ...patch };
+      setPerson(updatedProfile);
+      onProfileUpdate(updatedProfile);
+      setImagePreview('avatar', updatedProfile.avatar_url || null);
+      setImagePreview('cover', updatedProfile.cover_url || null);
+      setPendingAvatarFile(null);
+      setPendingCoverFile(null);
+      setAvatarCropFile(null);
+      setBioEditorOpen(false);
+      setIsEditingProfile(false);
+      setShowProfileMenu(false);
+      uploadedPaths.length = 0;
+      toast.success('تم حفظ تعديلات الملف الشخصي.');
+    } catch (error) {
+      if (uploadedPaths.length) {
+        const { error: cleanupError } = await supabase.storage.from(storageBucket).remove(uploadedPaths);
+        if (cleanupError) console.warn('[profile] تعذر حذف الصور غير المحفوظة:', cleanupError);
+      }
+      console.error('[profile] تعذر حفظ تعديلات الملف الشخصي:', error);
+      toast.error('تعذر حفظ تعديلات الملف الشخصي. حاول مرة أخرى.');
+    } finally {
+      setProfileSaving(false);
+    }
   };
 
   if (!person) {
@@ -430,30 +497,44 @@ export default function ProfilePage({
 
   return (
     <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none bg-black text-white" dir="rtl">
-      <input ref={coverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة الغلاف" onChange={event => void handleProfileImageSelection('cover', event)} />
-      <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار الصورة الشخصية" onChange={event => void handleProfileImageSelection('avatar', event)} />
+      <input ref={coverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة الغلاف" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('cover', event)} />
+      <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار الصورة الشخصية" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('avatar', event)} />
 
       <div className="profile-header-container">
         <div className="notch-safe-area" />
         <div className="relative z-30 flex items-center justify-end bg-black/40 px-4 py-2 backdrop-blur-md">
           <button
             type="button"
-            aria-label="المزيد من خيارات الملف الشخصي"
-            aria-expanded={showProfileMenu}
-            onClick={() => setShowProfileMenu(open => !open)}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white transition hover:bg-black/70"
+            aria-label={isEditingProfile ? 'حفظ تعديلات الملف الشخصي' : 'المزيد من خيارات الملف الشخصي'}
+            aria-expanded={!isEditingProfile && showProfileMenu}
+            onClick={() => isEditingProfile ? void saveProfileEdits() : setShowProfileMenu(open => !open)}
+            disabled={profileSaving}
+            className={`flex h-9 items-center justify-center rounded-full text-white transition disabled:opacity-60 ${isEditingProfile ? 'min-w-12 bg-[#1D9BF0] px-3 text-sm font-bold hover:bg-[#1686d4]' : 'w-9 bg-black/50 hover:bg-black/70'}`}
           >
-            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-              <circle cx="12" cy="5" r="1.75" />
-              <circle cx="12" cy="12" r="1.75" />
-              <circle cx="12" cy="19" r="1.75" />
-              <path className="hidden" d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s-.9 2-2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z" />
-            </svg>
+            {isEditingProfile ? profileSaving ? 'جارٍ الحفظ...' : 'تم' : (
+              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="5" r="1.75" />
+                <circle cx="12" cy="12" r="1.75" />
+                <circle cx="12" cy="19" r="1.75" />
+              </svg>
+            )}
           </button>
-          {showProfileMenu && (
+          {!isEditingProfile && showProfileMenu && (
             <div role="menu" className="absolute left-4 top-full z-[60] max-h-[70dvh] w-[min(340px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-[#2F3336] bg-[#111] p-3 text-white shadow-xl">
               {own ? (
                 <>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setBioDraft(person.bio || '');
+                      setBioEditorOpen(false);
+                      setCoverPosition({ x: person.cover_position_x ?? 50, y: person.cover_position_y ?? 50 });
+                      setIsEditingProfile(true);
+                      setShowProfileMenu(false);
+                    }}
+                    className="w-full border-b border-[#2F3336] py-3 text-right text-sm font-bold hover:text-[#1D9BF0]"
+                  >تعديل الملف الشخصي</button>
                   <div className="flex items-center justify-between gap-3 border-b border-[#2F3336] pb-3">
                     <div>
                       <span className="block text-sm font-bold">خصوصية الحساب</span>
@@ -471,16 +552,6 @@ export default function ProfilePage({
                       <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${person.is_private ? 'right-1' : 'right-6'}`} />
                     </button>
                   </div>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setBioDraft(person.bio || '');
-                      setBioEditorOpen(true);
-                      setShowProfileMenu(false);
-                    }}
-                    className="w-full border-b border-[#2F3336] py-3 text-right text-sm hover:text-[#1D9BF0]"
-                  >إضافة / تعديل السيرة الذاتية</button>
                   <button
                     type="button"
                     role="menuitem"
@@ -515,49 +586,66 @@ export default function ProfilePage({
         {username && <div className="username-text absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none" data-username={username}>{username}</div>}
       </div>
 
-      <div className="relative h-[135px] w-full bg-[#18181b]">
-        <button
-          type="button"
-          disabled={!own || imageSaving !== null}
-          aria-label={coverPreview ? 'تغيير صورة الغلاف' : 'إضافة صورة غلاف'}
-          onClick={() => coverInputRef.current?.click()}
-          className={`group flex h-full w-full items-center justify-center overflow-hidden bg-[#18181b] ${own ? 'cursor-pointer' : 'cursor-default'}`}
-        >
-          {coverPreview ? (
-            <img src={coverPreview} className="h-full w-full object-cover" alt="" />
-          ) : own ? (
-            <span className="flex items-center gap-2 rounded-full border border-white/10 bg-black/40 px-3 py-1.5 text-xs font-bold text-neutral-400 transition group-hover:bg-black/60">
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              إضافة غلاف
-            </span>
-          ) : null}
-          {imageSaving === 'cover' && <span className="absolute bottom-2 left-2 rounded-full bg-black/70 px-3 py-1 text-xs text-white">جارٍ حفظ الغلاف...</span>}
-        </button>
+      <div
+        className={`relative h-[135px] w-full overflow-hidden bg-[#18181b] ${isEditingProfile && coverPreview ? 'cursor-grab touch-none active:cursor-grabbing' : ''}`}
+        onPointerDown={handleCoverPointerDown}
+        onPointerMove={handleCoverPointerMove}
+        onPointerUp={handleCoverPointerEnd}
+        onPointerCancel={handleCoverPointerEnd}
+        style={{ touchAction: isEditingProfile ? 'none' : 'auto' }}
+      >
+        {coverPreview && (
+          <img
+            ref={coverImageRef}
+            src={coverPreview}
+            className="h-full w-full select-none object-cover"
+            style={{ objectPosition: `${coverPosition.x}% ${coverPosition.y}%` }}
+            alt=""
+            draggable={false}
+          />
+        )}
+        {isEditingProfile && (
+          <>
+            <button
+              type="button"
+              disabled={profileSaving}
+              aria-label={coverPreview ? 'اختيار صورة غلاف جديدة' : 'إضافة صورة غلاف'}
+              onClick={() => coverInputRef.current?.click()}
+              className="absolute left-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/40 p-2 text-white backdrop-blur-md transition hover:bg-black/60 disabled:opacity-50"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            </button>
+            {coverPreview && <span className="pointer-events-none absolute bottom-2 right-3 rounded-full bg-black/40 px-3 py-1 text-xs text-white/90 backdrop-blur-sm">اسحب لضبط موضع الغلاف</span>}
+          </>
+        )}
       </div>
 
       <div className="relative z-20 flex items-end justify-between px-4 pb-2">
         <div className="relative flex items-end gap-3">
-          <button
-            type="button"
-            disabled={!own || imageSaving !== null}
-            aria-label={avatarPreview ? 'تغيير الصورة الشخصية' : 'إضافة صورة شخصية'}
-            onClick={() => avatarInputRef.current?.click()}
-            className={`relative -mt-11 shrink-0 rounded-full ${own ? 'cursor-pointer' : 'cursor-default'}`}
-          >
-            <span
-              className="group flex h-[82px] w-[82px] items-center justify-center overflow-hidden rounded-full border-[3px] border-black bg-neutral-800 p-[3px] ring-2 ring-black"
-            >
+          <div className="relative -mt-11 h-[82px] w-[82px] shrink-0 rounded-full">
+            <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-black bg-neutral-800 p-[3px] ring-2 ring-black">
               <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
                 {avatarPreview ? (
                   <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
                 ) : (
-                  <svg className="h-8 w-8 text-neutral-400 transition group-hover:text-neutral-300" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <svg className="h-8 w-8 text-neutral-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
                   </svg>
                 )}
               </span>
             </span>
-          </button>
+            {isEditingProfile && (
+              <button
+                type="button"
+                disabled={profileSaving}
+                aria-label={avatarPreview ? 'تغيير الصورة الشخصية' : 'إضافة صورة شخصية'}
+                onClick={() => avatarInputRef.current?.click()}
+                className="absolute inset-0 flex cursor-pointer items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm disabled:cursor-default disabled:opacity-50"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0118.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+              </button>
+            )}
+          </div>
           <div className="flex items-center gap-1 pb-2">
             <h1 className="text-xl font-black text-white">{displayName(person)}</h1>
             <VerifiedBadge />
@@ -602,7 +690,7 @@ export default function ProfilePage({
         </div>
 
         <div id="bioSection" className="mb-3 mt-2">
-          {bioEditorOpen ? (
+          {bioEditorOpen && isEditingProfile ? (
             <div className="flex flex-col gap-2">
               <textarea
                 rows={2}
@@ -613,14 +701,23 @@ export default function ProfilePage({
                 placeholder="اكتب سيرتك الذاتية هنا..."
                 aria-label="السيرة الذاتية"
               />
-              <div className="flex justify-end gap-2">
+              <div className="flex items-center justify-between gap-2">
                 <button type="button" onClick={() => { setBioDraft(person.bio || ''); setBioEditorOpen(false); }} className="px-3 py-1 text-xs text-neutral-400">إلغاء</button>
-                <button type="button" onClick={() => void saveBio()} disabled={bioSaving} className="rounded-full bg-[#1D9BF0] px-3 py-1 text-xs font-bold text-white disabled:opacity-50">{bioSaving ? 'جارٍ الحفظ...' : 'حفظ'}</button>
+                <span className="text-[10px] text-white/45">اضغط «تم» لحفظ التعديلات</span>
               </div>
             </div>
-          ) : person.bio?.trim() ? (
-            <p id="bioText" className="whitespace-pre-line text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>
-          ) : null}
+          ) : (
+            <>
+              {isEditingProfile && (
+                <button
+                  type="button"
+                  onClick={() => setBioEditorOpen(true)}
+                  className="mb-2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/90 backdrop-blur-sm transition hover:bg-white/15"
+                >تعديل السيرة</button>
+              )}
+              {person.bio?.trim() && <p id="bioText" className="whitespace-pre-line text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>}
+            </>
+          )}
         </div>
 
         {(profileLocation || profileWebsiteUrl) && (
@@ -720,6 +817,19 @@ export default function ProfilePage({
           return [...current, { ...collection, stories: [highlight] }].sort((a, b) => a.created_at.localeCompare(b.created_at));
         })}
       />
+      {avatarCropFile && (
+        <HighlightCoverCropper
+          file={avatarCropFile}
+          title="اقتصاص الصورة الشخصية"
+          outputSuffix="-avatar"
+          onCancel={() => setAvatarCropFile(null)}
+          onSave={file => {
+            setPendingAvatarFile(file);
+            setImagePreview('avatar', URL.createObjectURL(file));
+            setAvatarCropFile(null);
+          }}
+        />
+      )}
       {selectedHighlightCollection && (
         <ProfileHighlightViewer
           collection={selectedHighlightCollection}

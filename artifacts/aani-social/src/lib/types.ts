@@ -6,6 +6,8 @@ export type Profile = {
   display_name?: string | null;
   avatar_url: string | null;
   cover_url?: string | null;
+  cover_position_x?: number | null;
+  cover_position_y?: number | null;
   location?: string | null;
   website?: string | null;
   bio: string;

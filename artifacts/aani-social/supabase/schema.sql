@@ -8,6 +8,8 @@ create table if not exists public.profiles (
   full_name text,
   avatar_url text,
   cover_url text,
+  cover_position_x real not null default 50,
+  cover_position_y real not null default 50,
   location text,
   website text,
   bio text not null default '',
@@ -20,6 +22,8 @@ alter table public.profiles add column if not exists username text;
 alter table public.profiles add column if not exists full_name text;
 alter table public.profiles add column if not exists avatar_url text;
 alter table public.profiles add column if not exists cover_url text;
+alter table public.profiles add column if not exists cover_position_x real not null default 50;
+alter table public.profiles add column if not exists cover_position_y real not null default 50;
 alter table public.profiles add column if not exists location text;
 alter table public.profiles add column if not exists website text;
 alter table public.profiles add column if not exists bio text not null default '';
