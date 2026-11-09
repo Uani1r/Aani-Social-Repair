@@ -20,7 +20,7 @@ import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } f
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 
-type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | 'support' | 'report' | 'faq' | 'legal' | 'about' | ProfileSettingsPreferenceScreen;
+type SettingsScreen = 'home' | 'account' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | 'support' | 'report' | 'faq' | 'legal' | 'about' | ProfileSettingsPreferenceScreen;
 type ProfileImageKind = 'avatar' | 'cover';
 type CoverPosition = { x: number; y: number };
 type CoverPanGesture = {
@@ -171,13 +171,15 @@ export default function ProfilePage({
   const [navStack, setNavStack] = useState<string[]>(['main']);
   const settingsScreen = (navStack[navStack.length - 1] === 'main' ? 'home' : navStack[navStack.length - 1]) as SettingsScreen;
   const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false);
+  const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [showDeleteAccountConfirmation, setShowDeleteAccountConfirmation] = useState(false);
+  const [deleteAccountConfirmation, setDeleteAccountConfirmation] = useState('');
   const [supportReport, setSupportReport] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPhone, setAuthPhone] = useState('');
-  const [emailDraft, setEmailDraft] = useState('');
+  const [authProvider, setAuthProvider] = useState('');
+  const [hasPassword, setHasPassword] = useState(false);
   const [phoneDraft, setPhoneDraft] = useState('');
-  const [phoneVerificationCode, setPhoneVerificationCode] = useState('');
-  const [pendingPhone, setPendingPhone] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
   const [accountSettingsBusy, setAccountSettingsBusy] = useState(false);
   const [blockedProfiles, setBlockedProfiles] = useState<Profile[]>([]);
@@ -228,6 +230,7 @@ export default function ProfilePage({
   const formattedBirthDate = formatProfileBirthDate(profileBirthDate);
   const showPublicBirthDate = Boolean(person?.show_birth_date && formattedBirthDate);
   const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
+  const authProviderLabel = authProvider === 'google' ? 'Google' : authProvider === 'apple' ? 'Apple' : authProvider === 'phone' ? 'الهاتف' : 'البريد الإلكتروني';
   const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
 
   useEffect(() => {
@@ -278,16 +281,26 @@ export default function ProfilePage({
         setShowLogoutConfirmation(false);
         return;
       }
+      if (showPhoneModal) {
+        event.preventDefault();
+        setShowPhoneModal(false);
+        return;
+      }
+      if (showDeleteAccountConfirmation) {
+        event.preventDefault();
+        setShowDeleteAccountConfirmation(false);
+        return;
+      }
       if (navStack.length > 1) {
         setNavStack(previous => previous.length > 1 ? previous.slice(0, -1) : previous);
       }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [showSettingsOverlay, showLogoutConfirmation, navStack.length]);
+  }, [showSettingsOverlay, showLogoutConfirmation, showPhoneModal, showDeleteAccountConfirmation, navStack.length]);
 
   useEffect(() => {
-    if (!showSettingsOverlay || !['account', 'email', 'phone', 'password', 'security'].includes(settingsScreen)) return;
+    if (!showSettingsOverlay || !['account', 'password', 'security'].includes(settingsScreen)) return;
     let active = true;
     const loadAuthSettings = async () => {
       if (settingsScreen === 'security') {
@@ -308,16 +321,22 @@ export default function ProfilePage({
         toast.error('تعذر تحميل بيانات الحساب.');
         return;
       }
-      const nextEmail = data.user?.email || '';
-      const nextPhone = data.user?.phone || '';
-      setAuthEmail(nextEmail);
-      setAuthPhone(nextPhone);
-      if (settingsScreen === 'email') setEmailDraft(nextEmail);
-      if (settingsScreen === 'phone' && !pendingPhone) setPhoneDraft(nextPhone);
+      const user = data.user;
+      const providers = Array.isArray(user?.app_metadata?.providers)
+        ? user.app_metadata.providers.filter((provider): provider is string => typeof provider === 'string')
+        : [];
+      const identities = user?.identities || [];
+      const primaryProvider = user?.app_metadata?.provider;
+      const linkedProvider = identities.find(identity => identity.provider === 'google' || identity.provider === 'apple')?.provider;
+      setAuthEmail(user?.email || '');
+      setAuthPhone(user?.phone || '');
+      setAuthProvider(typeof primaryProvider === 'string' ? primaryProvider : linkedProvider || providers[0] || 'email');
+      setHasPassword(providers.includes('email'));
+      if (settingsScreen === 'account') setPhoneDraft(user?.phone || '');
     };
     void loadAuthSettings();
     return () => { active = false; };
-  }, [showSettingsOverlay, settingsScreen, pendingPhone]);
+  }, [showSettingsOverlay, settingsScreen]);
 
   useEffect(() => {
     if (!showSettingsOverlay || (settingsScreen !== 'blocked' && settingsScreen !== 'muted')) return;
@@ -538,12 +557,17 @@ export default function ProfilePage({
     setShowSettingsOverlay(false);
     setSettingsOverlayEntered(false);
     setShowLogoutConfirmation(false);
+    setShowPhoneModal(false);
+    setShowDeleteAccountConfirmation(false);
+    setDeleteAccountConfirmation('');
     setNavStack(['main']);
   };
 
   const openSettingsOverlay = () => {
     setShowProfileMenu(false);
     setShowLogoutConfirmation(false);
+    setShowPhoneModal(false);
+    setShowDeleteAccountConfirmation(false);
     setNavStack(['main']);
     setSettingsOverlayEntered(false);
     setShowSettingsOverlay(true);
@@ -560,6 +584,15 @@ export default function ProfilePage({
   const goBackInSettings = () => {
     if (showLogoutConfirmation) {
       setShowLogoutConfirmation(false);
+      return;
+    }
+    if (showPhoneModal) {
+      setShowPhoneModal(false);
+      return;
+    }
+    if (showDeleteAccountConfirmation) {
+      setShowDeleteAccountConfirmation(false);
+      setDeleteAccountConfirmation('');
       return;
     }
     if (navStack.length === 1) {
@@ -615,25 +648,9 @@ export default function ProfilePage({
     setIsEditingProfile(false);
   };
 
-  const saveEmailChange = async (event: FormEvent<HTMLFormElement>) => {
+  const savePhoneChange = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const nextEmail = emailDraft.trim();
-    if (!nextEmail || nextEmail === authEmail || accountSettingsBusy) return;
-    setAccountSettingsBusy(true);
-    try {
-      const { error } = await supabase.auth.updateUser({ email: nextEmail });
-      if (error) throw error;
-      toast.success('أرسلنا رابط تأكيد إلى البريد الجديد. سيُحدّث البريد بعد تأكيده.');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر تحديث البريد الإلكتروني.');
-    } finally {
-      setAccountSettingsBusy(false);
-    }
-  };
-
-  const startPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const nextPhone = phoneDraft.trim();
+    const nextPhone = phoneDraft.trim().replace(/[\s()-]/g, '');
     if (!/^\+[1-9]\d{7,14}$/.test(nextPhone)) {
       toast.error('أدخل رقم الهاتف بالصيغة الدولية، مثل ‎+9665XXXXXXXX.');
       return;
@@ -641,33 +658,17 @@ export default function ProfilePage({
     if (nextPhone === authPhone || accountSettingsBusy) return;
     setAccountSettingsBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ phone: nextPhone });
+      const { data, error } = await supabase.auth.updateUser({ phone: nextPhone });
       if (error) throw error;
-      setPendingPhone(nextPhone);
-      setPhoneVerificationCode('');
-      toast.success('أرسلنا رمز تحقق إلى الرقم الجديد.');
+      if (data.user?.phone !== nextPhone) {
+        throw new Error('يتطلب تحديث الهاتف مباشرة تعطيل تأكيد تغييرات الهاتف عبر SMS في إعدادات مصادقة Supabase.');
+      }
+      setAuthPhone(nextPhone);
+      setPhoneDraft(nextPhone);
+      setShowPhoneModal(false);
+      toast.success('تم تحديث رقم الهاتف مباشرة.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر إرسال رمز التحقق إلى الهاتف.');
-    } finally {
-      setAccountSettingsBusy(false);
-    }
-  };
-
-  const verifyPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!pendingPhone || !phoneVerificationCode.trim() || accountSettingsBusy) return;
-    setAccountSettingsBusy(true);
-    try {
-      const { data, error } = await supabase.auth.verifyOtp({ phone: pendingPhone, token: phoneVerificationCode.trim(), type: 'phone_change' });
-      if (error) throw error;
-      const verifiedPhone = data.user?.phone || pendingPhone;
-      setAuthPhone(verifiedPhone);
-      setPhoneDraft(verifiedPhone);
-      setPendingPhone('');
-      setPhoneVerificationCode('');
-      toast.success('تم تأكيد رقم الهاتف وتحديثه.');
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر تأكيد رقم الهاتف.');
+      toast.error(error instanceof Error ? error.message : 'تعذر تحديث رقم الهاتف.');
     } finally {
       setAccountSettingsBusy(false);
     }
@@ -681,9 +682,29 @@ export default function ProfilePage({
       const { error } = await supabase.auth.updateUser({ password: passwordDraft });
       if (error) throw error;
       setPasswordDraft('');
+      setHasPassword(true);
       toast.success('تم تحديث كلمة المرور.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'تعذر تحديث كلمة المرور.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const deleteAccountPermanently = async () => {
+    if (deleteAccountConfirmation.trim() !== 'حذف' || accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.functions.invoke('delete-account');
+      if (error) throw error;
+      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+      if (signOutError) throw signOutError;
+      setShowDeleteAccountConfirmation(false);
+      setShowSettingsOverlay(false);
+      toast.success('تم حذف الحساب وبياناته نهائياً.');
+      setLocation('/login');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر حذف الحساب.');
     } finally {
       setAccountSettingsBusy(false);
     }
@@ -1263,8 +1284,6 @@ export default function ProfilePage({
                 {({
                   home: 'الإعدادات',
                   account: 'إعدادات الحساب',
-                  email: 'البريد الإلكتروني',
-                  phone: 'رقم الهاتف',
                   password: 'كلمة المرور',
                   security: 'الأمان والأجهزة',
                   privacy: 'خصوصية الحساب',
@@ -1405,7 +1424,7 @@ export default function ProfilePage({
                   </details>
                   <details className="profile-settings-support-card">
                     <summary>هل يمكنني حذف حسابي من الإعدادات؟</summary>
-                    <p>خيار الحذف غير متاح حالياً؛ لا يحذف التطبيق بيانات الحساب قبل توفير مسار آمن لذلك.</p>
+                    <p>يمكنك حذف حسابك وبياناته نهائياً من «إعدادات الحساب» بعد تأكيد رغبتك في الحذف.</p>
                   </details>
                 </div>
               ) : settingsScreen === 'legal' ? (
@@ -1432,16 +1451,21 @@ export default function ProfilePage({
               ) : settingsScreen === 'account' ? (
                 <>
                   <p className="profile-settings-section-title">بيانات الدخول</p>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('email')}>
-                    <span className="profile-settings-copy"><span className="profile-settings-label">البريد الإلكتروني</span><span className="profile-settings-description" dir="ltr">{authEmail || 'جارٍ التحميل'}</span></span>
-                    <ChevronLeft size={18} aria-hidden="true" />
-                  </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('phone')}>
+                  <div className="profile-settings-row profile-settings-email-row" aria-readonly="true">
+                    <span className="profile-settings-copy">
+                      <span className="profile-settings-label">البريد الإلكتروني</span>
+                      <span className="profile-settings-email-value" dir="ltr">
+                        <span className="profile-settings-description">{authEmail || 'جارٍ التحميل'}</span>
+                        <span className="profile-settings-provider-badge">{authProviderLabel}</span>
+                      </span>
+                    </span>
+                  </div>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => { setPhoneDraft(authPhone); setShowPhoneModal(true); }}>
                     <span className="profile-settings-copy"><span className="profile-settings-label">رقم الهاتف</span><span className="profile-settings-description" dir="ltr">{authPhone || 'غير مضاف'}</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('password')}>
-                    <span>تغيير كلمة المرور</span>
+                    <span>{hasPassword ? 'تغيير كلمة المرور' : 'تعيين كلمة مرور احتياطية'}</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-section-title">الأمان</p>
@@ -1451,45 +1475,15 @@ export default function ProfilePage({
                   </button>
                   <p className="profile-settings-section-title">إدارة الحساب</p>
                   <button type="button" className="profile-settings-danger" disabled aria-disabled="true">تعطيل الحساب</button>
-                  <p className="profile-settings-note">يتطلب تعطيل الحساب ربطاً بخدمة آمنة على الخادم؛ هذا الإجراء غير متاح حالياً.</p>
-                  <button type="button" className="profile-settings-danger" disabled aria-disabled="true">حذف الحساب نهائياً</button>
-                  <p className="profile-settings-note">لم يتم إعداد مسار حذف آمن للحساب بعد. لن نجري حذفاً شكلياً من المتصفح.</p>
+                  <button type="button" className="profile-settings-danger" onClick={() => { setDeleteAccountConfirmation(''); setShowDeleteAccountConfirmation(true); }}>حذف الحساب نهائياً</button>
                 </>
-              ) : settingsScreen === 'email' ? (
-                <form onSubmit={saveEmailChange}>
-                  <p className="profile-settings-note">سيُرسل رابط تأكيد إلى البريد الجديد، ولن يتغير البريد المسجل قبل إتمام التأكيد.</p>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-email">البريد الإلكتروني الجديد</label>
-                    <input id="settings-email" type="email" autoComplete="email" required value={emailDraft} onChange={event => setEmailDraft(event.target.value)} />
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !emailDraft.trim() || emailDraft.trim() === authEmail}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رابط التأكيد'}</button>
-                  </div>
-                </form>
-              ) : settingsScreen === 'phone' ? pendingPhone ? (
-                <form onSubmit={verifyPhoneChange}>
-                  <p className="profile-settings-note">أدخل رمز الرسالة النصية المرسل إلى <span dir="ltr">{pendingPhone}</span>.</p>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-phone-code">رمز التحقق</label>
-                    <input id="settings-phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" required value={phoneVerificationCode} onChange={event => setPhoneVerificationCode(event.target.value)} />
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneVerificationCode.trim()}>{accountSettingsBusy ? 'جارٍ التحقق...' : 'تأكيد رقم الهاتف'}</button>
-                  </div>
-                  <button type="button" className="profile-settings-note" onClick={() => { setPendingPhone(''); setPhoneVerificationCode(''); }}>تغيير الرقم</button>
-                </form>
-              ) : (
-                <form onSubmit={startPhoneChange}>
-                  <p className="profile-settings-note">يجب إدخال الرقم بالصيغة الدولية، ثم تأكيده برمز SMS.</p>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-phone">رقم الهاتف الجديد</label>
-                    <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+9665XXXXXXXX" required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim() || phoneDraft.trim() === authPhone}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رمز التحقق'}</button>
-                  </div>
-                </form>
               ) : settingsScreen === 'password' ? (
                 <form onSubmit={savePasswordChange}>
-                  <p className="profile-settings-note">اختر كلمة مرور جديدة لا تقل عن 6 أحرف.</p>
+                  <p className="profile-settings-note">اختر كلمة مرور لا تقل عن 6 أحرف. سيتم حفظها مباشرة دون إرسال رسالة بريد إلكتروني.</p>
                   <div className="profile-settings-field">
-                    <label htmlFor="settings-password">كلمة المرور الجديدة</label>
+                    <label htmlFor="settings-password">{hasPassword ? 'كلمة المرور الجديدة' : 'كلمة المرور الاحتياطية الجديدة'}</label>
                     <input id="settings-password" type="password" autoComplete="new-password" minLength={6} required value={passwordDraft} onChange={event => setPasswordDraft(event.target.value)} />
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || passwordDraft.length < 6}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'تحديث كلمة المرور'}</button>
+                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || passwordDraft.length < 6}>{accountSettingsBusy ? 'جارٍ الحفظ...' : hasPassword ? 'تحديث كلمة المرور' : 'تعيين كلمة المرور'}</button>
                   </div>
                 </form>
               ) : settingsScreen === 'security' ? (
@@ -1597,6 +1591,40 @@ export default function ProfilePage({
                 <div className="mt-6 flex gap-3">
                   <button type="button" className="flex-1 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10" onClick={() => setShowLogoutConfirmation(false)}>إلغاء</button>
                   <button type="button" className="flex-1 rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-red-500 disabled:cursor-wait disabled:opacity-60" disabled={accountSettingsBusy} onClick={() => void endCurrentSession()}>{accountSettingsBusy ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}</button>
+                </div>
+              </section>
+            </div>
+          )}
+          {showPhoneModal && (
+            <div className="profile-settings-dialog-backdrop" onClick={() => { if (!accountSettingsBusy) setShowPhoneModal(false); }}>
+              <section role="dialog" aria-modal="true" aria-labelledby="phone-modal-title" className="profile-settings-dialog" onClick={event => event.stopPropagation()}>
+                <h3 id="phone-modal-title">تحديث رقم الهاتف</h3>
+                <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية. سيتم حفظه مباشرة دون رمز SMS.</p>
+                <form onSubmit={savePhoneChange}>
+                  <div className="profile-settings-field">
+                    <label htmlFor="settings-phone">رقم الهاتف</label>
+                    <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+9665XXXXXXXX" maxLength={20} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
+                  </div>
+                  <div className="profile-settings-dialog-actions">
+                    <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => setShowPhoneModal(false)}>إلغاء</button>
+                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim() || phoneDraft.trim() === authPhone}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'حفظ الرقم'}</button>
+                  </div>
+                </form>
+              </section>
+            </div>
+          )}
+          {showDeleteAccountConfirmation && (
+            <div className="profile-settings-dialog-backdrop" onClick={() => { if (!accountSettingsBusy) setShowDeleteAccountConfirmation(false); }}>
+              <section role="alertdialog" aria-modal="true" aria-labelledby="delete-account-title" aria-describedby="delete-account-description" className="profile-settings-dialog" onClick={event => event.stopPropagation()}>
+                <h3 id="delete-account-title">حذف الحساب نهائياً</h3>
+                <p id="delete-account-description" className="profile-settings-note">سيؤدي هذا إلى حذف حسابك وبياناته ومحتواه وملفاته نهائياً. لا يمكن التراجع عن هذا الإجراء.</p>
+                <div className="profile-settings-field">
+                  <label htmlFor="delete-account-confirmation">اكتب «حذف» للتأكيد</label>
+                  <input id="delete-account-confirmation" type="text" autoComplete="off" value={deleteAccountConfirmation} onChange={event => setDeleteAccountConfirmation(event.target.value)} />
+                </div>
+                <div className="profile-settings-dialog-actions">
+                  <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => setShowDeleteAccountConfirmation(false)}>إلغاء</button>
+                  <button type="button" className="profile-settings-dialog-delete" disabled={accountSettingsBusy || deleteAccountConfirmation.trim() !== 'حذف'} onClick={() => void deleteAccountPermanently()}>{accountSettingsBusy ? 'جارٍ الحذف...' : 'حذف نهائياً'}</button>
                 </div>
               </section>
             </div>

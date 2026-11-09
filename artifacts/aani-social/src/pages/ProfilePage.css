@@ -514,6 +514,9 @@
   display: block;
   width: 100%;
   margin-top: 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
   border: 1px solid #532626;
   border-radius: 12px;
   padding: 13px;
@@ -1325,4 +1328,106 @@
   .profile-reorder-item {
     transition-duration: 0.01ms;
   }
+}
+
+
+
+.profile-settings-email-row {
+  justify-content: flex-start;
+  cursor: default;
+}
+
+.profile-settings-email-value {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.profile-settings-email-value .profile-settings-description {
+  margin: 0;
+}
+
+.profile-settings-provider-badge {
+  display: inline-flex;
+  min-height: 20px;
+  align-items: center;
+  border: 1px solid #333;
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: #151515;
+  color: #c4c4c4;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.profile-settings-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgb(0 0 0 / 76%);
+  backdrop-filter: blur(8px);
+}
+
+.profile-settings-dialog {
+  width: min(100%, 420px);
+  max-height: min(85dvh, 620px);
+  overflow-y: auto;
+  border: 1px solid #292929;
+  border-radius: 18px;
+  padding: 22px;
+  background: #0a0a0a;
+  color: #fff;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 55%);
+}
+
+.profile-settings-dialog h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.profile-settings-dialog .profile-settings-note {
+  margin: 10px 0 2px;
+}
+
+.profile-settings-dialog-actions {
+  display: flex;
+  justify-content: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.profile-settings-dialog-actions > button {
+  min-height: 42px;
+  border-radius: 999px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.profile-settings-dialog-cancel {
+  border: 1px solid #333;
+  background: #171717;
+  color: #e5e5e5;
+}
+
+.profile-settings-dialog-delete {
+  border: 0;
+  background: #b91c1c;
+  color: #fff;
+}
+
+.profile-settings-dialog-actions > button:disabled {
+  cursor: wait;
+  opacity: .55;
 }

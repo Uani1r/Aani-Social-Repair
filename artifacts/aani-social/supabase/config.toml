@@ -3,3 +3,6 @@ verify_jwt = true
 
 [functions.ai-assistant]
 verify_jwt = true
+
+[functions.delete-account]
+verify_jwt = true
