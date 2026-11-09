@@ -11,6 +11,12 @@ create table if not exists public.profiles (
   cover_position_x real not null default 50,
   cover_position_y real not null default 50,
   location text,
+  city text,
+  job text,
+  birth_date date,
+  show_city boolean not null default true,
+  show_job boolean not null default false,
+  show_birth_date boolean not null default false,
   website text,
   bio text not null default '',
   display_name text not null default 'New member',
@@ -31,8 +37,17 @@ alter table public.profiles add column if not exists cover_url text;
 alter table public.profiles add column if not exists cover_position_x real not null default 50;
 alter table public.profiles add column if not exists cover_position_y real not null default 50;
 alter table public.profiles add column if not exists location text;
+alter table public.profiles add column if not exists city text;
+alter table public.profiles add column if not exists job text;
+alter table public.profiles add column if not exists birth_date date;
+alter table public.profiles add column if not exists show_city boolean not null default true;
+alter table public.profiles add column if not exists show_job boolean not null default false;
+alter table public.profiles add column if not exists show_birth_date boolean not null default false;
 alter table public.profiles add column if not exists website text;
 alter table public.profiles add column if not exists bio text not null default '';
+update public.profiles
+set city = nullif(btrim(location), '')
+where city is null and nullif(btrim(location), '') is not null;
 alter table public.profiles add column if not exists display_name text not null default 'New member';
 alter table public.profiles add column if not exists notification_settings jsonb not null default '{"messages": true, "followers": true, "interactions": true, "stories": true}'::jsonb;
 alter table public.profiles add column if not exists appearance_preference text not null default 'dark' check (appearance_preference in ('dark', 'light', 'system'));

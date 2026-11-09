@@ -16,6 +16,12 @@ export type Profile = {
   cover_position_x?: number | null;
   cover_position_y?: number | null;
   location?: string | null;
+  city?: string | null;
+  job?: string | null;
+  birth_date?: string | null;
+  show_city?: boolean | null;
+  show_job?: boolean | null;
+  show_birth_date?: boolean | null;
   website?: string | null;
   bio: string;
   is_private?: boolean;

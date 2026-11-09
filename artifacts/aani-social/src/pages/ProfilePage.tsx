@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Briefcase, CalendarDays, Camera, ChevronLeft, ChevronRight, MapPin, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -85,6 +85,17 @@ function normalizeWebsiteUrl(value?: string | null): string | null {
   }
 }
 
+function formatProfileBirthDate(value?: string | null): string {
+  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return '';
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return '';
+  return new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+}
+
 export default function ProfilePage({
   targetUserId,
   currentUserId,
@@ -143,8 +154,16 @@ export default function ProfilePage({
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
   const [coverPosition, setCoverPosition] = useState<CoverPosition>({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
+  const [nameDraft, setNameDraft] = useState(person?.full_name || person?.display_name || '');
+  const [usernameDraft, setUsernameDraft] = useState(person?.username || '');
   const [bioDraft, setBioDraft] = useState(person?.bio || '');
-  const [bioEditorOpen, setBioEditorOpen] = useState(false);
+  const [cityDraft, setCityDraft] = useState(person?.city || person?.location || '');
+  const [jobDraft, setJobDraft] = useState(person?.job || '');
+  const [birthDateDraft, setBirthDateDraft] = useState(person?.birth_date || '');
+  const [websiteDraft, setWebsiteDraft] = useState(person?.website || '');
+  const [showCityDraft, setShowCityDraft] = useState(person?.show_city ?? Boolean(person?.city || person?.location));
+  const [showJobDraft, setShowJobDraft] = useState(Boolean(person?.show_job));
+  const [showBirthDateDraft, setShowBirthDateDraft] = useState(Boolean(person?.show_birth_date));
   const usernameWrapperRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const coverInputRef = useRef<HTMLInputElement>(null);
@@ -157,8 +176,14 @@ export default function ProfilePage({
   const pageDirection = typeof document !== 'undefined' && document.documentElement.dir === 'ltr' ? 'ltr' : 'rtl';
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
   const username = cleanUsername(person?.username);
-  const profileLocation = person?.location?.trim() || '';
+  const profileCity = person?.city?.trim() || person?.location?.trim() || '';
+  const profileJob = person?.job?.trim() || '';
+  const profileBirthDate = person?.birth_date?.trim() || '';
   const profileWebsiteUrl = normalizeWebsiteUrl(person?.website);
+  const showPublicCity = person?.show_city ?? Boolean(profileCity);
+  const showPublicJob = Boolean(person?.show_job && profileJob);
+  const formattedBirthDate = formatProfileBirthDate(profileBirthDate);
+  const showPublicBirthDate = Boolean(person?.show_birth_date && formattedBirthDate);
   const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
   const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
 
@@ -176,8 +201,18 @@ export default function ProfilePage({
   }, [person?.id, person?.cover_position_x, person?.cover_position_y]);
 
   useEffect(() => {
+    if (isEditingProfile) return;
+    setNameDraft(person?.full_name || person?.display_name || '');
+    setUsernameDraft(person?.username || '');
     setBioDraft(person?.bio || '');
-  }, [person?.id, person?.bio]);
+    setCityDraft(person?.city || person?.location || '');
+    setJobDraft(person?.job || '');
+    setBirthDateDraft(person?.birth_date || '');
+    setWebsiteDraft(person?.website || '');
+    setShowCityDraft(person?.show_city ?? Boolean(person?.city || person?.location));
+    setShowJobDraft(Boolean(person?.show_job));
+    setShowBirthDateDraft(Boolean(person?.show_birth_date));
+  }, [isEditingProfile, person?.id, person?.full_name, person?.display_name, person?.username, person?.bio, person?.city, person?.location, person?.job, person?.birth_date, person?.website, person?.show_city, person?.show_job, person?.show_birth_date]);
 
   useEffect(() => {
     if (!showSettingsOverlay) return;
@@ -470,11 +505,47 @@ export default function ProfilePage({
   };
 
   const startProfileEditing = () => {
-    setBioDraft(person?.bio || '');
-    setBioEditorOpen(false);
-    setCoverPosition({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
+    if (!person) return;
+    setNameDraft(person.full_name || person.display_name || '');
+    setUsernameDraft(person.username || '');
+    setBioDraft(person.bio || '');
+    setCityDraft(person.city || person.location || '');
+    setJobDraft(person.job || '');
+    setBirthDateDraft(person.birth_date || '');
+    setWebsiteDraft(person.website || '');
+    setShowCityDraft(person.show_city ?? Boolean(person.city || person.location));
+    setShowJobDraft(Boolean(person.show_job));
+    setShowBirthDateDraft(Boolean(person.show_birth_date));
+    setCoverPosition({ x: person.cover_position_x ?? 50, y: person.cover_position_y ?? 50 });
+    setImagePreview('avatar', person.avatar_url || null);
+    setImagePreview('cover', person.cover_url || null);
+    setPendingAvatarFile(null);
+    setPendingCoverFile(null);
+    setAvatarCropFile(null);
     setIsEditingProfile(true);
     closeSettingsOverlay();
+  };
+
+  const cancelProfileEditing = () => {
+    if (!person) return;
+    setNameDraft(person.full_name || person.display_name || '');
+    setUsernameDraft(person.username || '');
+    setBioDraft(person.bio || '');
+    setCityDraft(person.city || person.location || '');
+    setJobDraft(person.job || '');
+    setBirthDateDraft(person.birth_date || '');
+    setWebsiteDraft(person.website || '');
+    setShowCityDraft(person.show_city ?? Boolean(person.city || person.location));
+    setShowJobDraft(Boolean(person.show_job));
+    setShowBirthDateDraft(Boolean(person.show_birth_date));
+    setCoverPosition({ x: person.cover_position_x ?? 50, y: person.cover_position_y ?? 50 });
+    setImagePreview('avatar', person.avatar_url || null);
+    setImagePreview('cover', person.cover_url || null);
+    setPendingAvatarFile(null);
+    setPendingCoverFile(null);
+    setAvatarCropFile(null);
+    coverPanGestureRef.current = null;
+    setIsEditingProfile(false);
   };
 
   const saveEmailChange = async (event: FormEvent<HTMLFormElement>) => {
@@ -682,10 +753,37 @@ export default function ProfilePage({
       return;
     }
 
+    const name = nameDraft.trim();
+    const normalizedUsername = cleanUsername(usernameDraft).toLowerCase();
+    if (!name || name.length > 120) {
+      toast.error('أدخل اسماً لا يتجاوز 120 حرفاً.');
+      return;
+    }
+    if (!/^[a-z0-9_.]{3,32}$/.test(normalizedUsername)) {
+      toast.error('اسم المستخدم يجب أن يتكون من 3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية.');
+      return;
+    }
+    if (birthDateDraft && !formatProfileBirthDate(birthDateDraft)) {
+      toast.error('أدخل تاريخ ميلاد صالحاً.');
+      return;
+    }
+
     setProfileSaving(true);
     const uploadedPaths: string[] = [];
+    const normalizedCity = cityDraft.trim() || null;
     const patch: Partial<Profile> = {
+      full_name: name,
+      display_name: name,
+      username: normalizedUsername,
       bio: bioDraft,
+      city: normalizedCity,
+      location: normalizedCity,
+      job: jobDraft.trim() || null,
+      birth_date: birthDateDraft || null,
+      website: websiteDraft.trim() || null,
+      show_city: showCityDraft,
+      show_job: showJobDraft,
+      show_birth_date: showBirthDateDraft,
       cover_position_x: coverPosition.x,
       cover_position_y: coverPosition.y,
     };
@@ -728,7 +826,6 @@ export default function ProfilePage({
       setPendingAvatarFile(null);
       setPendingCoverFile(null);
       setAvatarCropFile(null);
-      setBioEditorOpen(false);
       setIsEditingProfile(false);
       setShowProfileMenu(false);
       uploadedPaths.length = 0;
@@ -743,7 +840,14 @@ export default function ProfilePage({
         if (cleanupError) console.warn('[profile] تعذر حذف الصور غير المحفوظة:', cleanupError);
       }
       console.error('[profile] تعذر حفظ تعديلات الملف الشخصي:', error);
-      toast.error('تعذر حفظ تعديلات الملف الشخصي. حاول مرة أخرى.');
+      const saveError = error as { code?: string; message?: string };
+      if (saveError.code === '23505') {
+        toast.error('اسم المستخدم مستخدم بالفعل.');
+      } else if ((saveError.code === 'PGRST204' || saveError.code === '42703') && /city|job|birth_date|show_city|show_job|show_birth_date/i.test(saveError.message || '')) {
+        toast.error('تعذر حفظ بيانات الملف الجديدة. طبّق ترحيل بيانات الملف الشخصي في Supabase ثم حاول مجدداً.');
+      } else {
+        toast.error('تعذر حفظ تعديلات الملف الشخصي. حاول مرة أخرى.');
+      }
     } finally {
       setProfileSaving(false);
     }
@@ -771,6 +875,86 @@ export default function ProfilePage({
     <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none" dir={pageDirection}>
       <input ref={coverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة الغلاف" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('cover', event)} />
       <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار الصورة الشخصية" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('avatar', event)} />
+
+      {isEditingProfile && typeof document !== 'undefined' && createPortal(
+        <div className="profile-edit-overlay" role="dialog" aria-modal="true" aria-labelledby="profile-edit-title" dir={pageDirection}>
+          <form
+            className="profile-edit-form"
+            onSubmit={event => {
+              event.preventDefault();
+              void saveProfileEdits();
+            }}
+          >
+            <header className="profile-edit-header">
+              <button type="button" className="profile-edit-cancel" onClick={cancelProfileEditing} disabled={profileSaving}>إلغاء</button>
+              <h2 id="profile-edit-title">تعديل الملف الشخصي</h2>
+              <button type="submit" className="profile-edit-save" disabled={profileSaving}>{profileSaving ? 'جارٍ الحفظ…' : 'حفظ'}</button>
+            </header>
+            <div className="profile-edit-scroll">
+              <div
+                className="profile-edit-cover"
+                onPointerDown={handleCoverPointerDown}
+                onPointerMove={handleCoverPointerMove}
+                onPointerUp={handleCoverPointerEnd}
+                onPointerCancel={handleCoverPointerEnd}
+              >
+                {coverPreview ? (
+                  <img ref={coverImageRef} src={coverPreview} alt="معاينة صورة الغلاف" draggable={false} style={{ objectPosition: `${coverPosition.x}% ${coverPosition.y}%` }} />
+                ) : (
+                  <div className="profile-edit-cover-placeholder" aria-hidden="true"><Camera size={30} /></div>
+                )}
+                <button type="button" className="profile-edit-media-button" aria-label={coverPreview ? 'تغيير صورة الغلاف' : 'إضافة صورة غلاف'} onClick={() => coverInputRef.current?.click()} disabled={profileSaving}>
+                  <Camera size={22} />
+                </button>
+              </div>
+              <div className="profile-edit-avatar">
+                {avatarPreview ? <img src={avatarPreview} alt="معاينة الصورة الشخصية" /> : <span className="grid h-full w-full place-items-center text-3xl font-bold text-white/70">{displayName(person).slice(0, 1)}</span>}
+                <button type="button" className="profile-edit-media-button" aria-label={avatarPreview ? 'تغيير الصورة الشخصية' : 'إضافة صورة شخصية'} onClick={() => avatarInputRef.current?.click()} disabled={profileSaving}>
+                  <Camera size={21} />
+                </button>
+              </div>
+              <div className="profile-edit-fields">
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-name">الاسم الظاهر</label>
+                  <input id="profile-edit-name" value={nameDraft} onChange={event => setNameDraft(event.target.value)} maxLength={120} autoComplete="name" required dir="auto" placeholder="أدخل اسمك" />
+                </div>
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-username">اسم المستخدم</label>
+                  <div className="profile-edit-username-input">
+                    <span aria-hidden="true">@</span>
+                    <input id="profile-edit-username" value={usernameDraft} onChange={event => setUsernameDraft(event.target.value)} maxLength={32} autoCapitalize="none" autoCorrect="off" spellCheck={false} required aria-describedby="profile-edit-username-hint" />
+                  </div>
+                  <span id="profile-edit-username-hint" className="text-xs text-white/45">3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية</span>
+                </div>
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-bio">السيرة الذاتية</label>
+                  <textarea id="profile-edit-bio" value={bioDraft} onChange={event => setBioDraft(event.target.value)} rows={5} dir="auto" placeholder="اكتب نبذة عنك..." />
+                </div>
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-city">المدينة</label>
+                  <input id="profile-edit-city" value={cityDraft} onChange={event => setCityDraft(event.target.value)} maxLength={100} dir="auto" placeholder="أضف مدينتك" />
+                  <label className="profile-edit-visibility"><input type="checkbox" checked={showCityDraft} onChange={event => setShowCityDraft(event.target.checked)} />إظهار المدينة في الملف الشخصي العام</label>
+                </div>
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-job">الوظيفة</label>
+                  <input id="profile-edit-job" value={jobDraft} onChange={event => setJobDraft(event.target.value)} maxLength={120} dir="auto" placeholder="أضف وظيفتك" />
+                  <label className="profile-edit-visibility"><input type="checkbox" checked={showJobDraft} onChange={event => setShowJobDraft(event.target.checked)} />إظهار الوظيفة في الملف الشخصي العام</label>
+                </div>
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-birth-date">تاريخ الميلاد</label>
+                  <input id="profile-edit-birth-date" type="date" value={birthDateDraft} onChange={event => setBirthDateDraft(event.target.value)} max={new Date().toISOString().slice(0, 10)} />
+                  <label className="profile-edit-visibility"><input type="checkbox" checked={showBirthDateDraft} onChange={event => setShowBirthDateDraft(event.target.checked)} />إظهار تاريخ الميلاد في الملف الشخصي العام</label>
+                </div>
+                <div className="profile-edit-field">
+                  <label htmlFor="profile-edit-website">الموقع الإلكتروني</label>
+                  <input id="profile-edit-website" type="url" value={websiteDraft} onChange={event => setWebsiteDraft(event.target.value)} maxLength={200} dir="ltr" placeholder="https://example.com" />
+                </div>
+              </div>
+            </div>
+          </form>
+        </div>,
+        document.body,
+      )}
 
       <div className="profile-header-container">
         <div className="notch-safe-area" />
@@ -1172,7 +1356,6 @@ export default function ProfilePage({
       >
         {coverPreview && (
           <img
-            ref={coverImageRef}
             src={coverPreview}
             className="h-full w-full select-none object-cover"
             style={{ objectPosition: `${coverPosition.x}% ${coverPosition.y}%` }}
@@ -1266,47 +1449,23 @@ export default function ProfilePage({
         </div>
 
         <div id="bioSection" className="mb-3 mt-2">
-          {bioEditorOpen && isEditingProfile ? (
-            <div className="flex flex-col gap-2">
-              <textarea
-                rows={2}
-                value={bioDraft}
-                onChange={event => setBioDraft(event.currentTarget.value)}
-                autoFocus
-                className="w-full rounded-lg border border-neutral-700 bg-neutral-900 p-2 text-sm text-white focus:border-[#1D9BF0] focus:outline-none"
-                placeholder="اكتب سيرتك الذاتية هنا..."
-                aria-label="السيرة الذاتية"
-              />
-              <div className="flex items-center justify-between gap-2">
-                <button type="button" onClick={() => { setBioDraft(person.bio || ''); setBioEditorOpen(false); }} className="px-3 py-1 text-xs text-neutral-400">إلغاء</button>
-                <span className="text-[10px] text-white/45">اضغط «تم» لحفظ التعديلات</span>
-              </div>
-            </div>
-          ) : (
-            <>
-              {isEditingProfile && (
-                <button
-                  type="button"
-                  onClick={() => setBioEditorOpen(true)}
-                  className="mb-2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/90 backdrop-blur-sm transition hover:bg-white/15"
-                >تعديل السيرة</button>
-              )}
-              {person.bio?.trim() && <p id="bioText" className="whitespace-pre-line text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>}
-            </>
-          )}
+          {person.bio?.trim() && <p id="bioText" className="whitespace-pre-line text-[15px] leading-relaxed text-[#F7F9F9]">{person.bio}</p>}
         </div>
 
-        {(profileLocation || profileWebsiteUrl) && (
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-[#71767B]">
-            {profileLocation && (
-              <span className="flex items-center gap-1">
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                {profileLocation}
-              </span>
+        {(showPublicCity && profileCity || showPublicJob || showPublicBirthDate || profileWebsiteUrl) && (
+          <div className="profile-public-meta" aria-label="معلومات الملف الشخصي">
+            {showPublicCity && profileCity && (
+              <span className="profile-public-meta-item"><MapPin size={15} aria-hidden="true" />{profileCity}</span>
+            )}
+            {showPublicJob && (
+              <span className="profile-public-meta-item"><Briefcase size={15} aria-hidden="true" />{profileJob}</span>
+            )}
+            {showPublicBirthDate && (
+              <span className="profile-public-meta-item"><CalendarDays size={15} aria-hidden="true" />{formattedBirthDate}</span>
             )}
             {profileWebsiteUrl && (
-              <a href={profileWebsiteUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[#1D9BF0] hover:underline">
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
+              <a href={profileWebsiteUrl} target="_blank" rel="noreferrer" className="profile-public-meta-item text-[#1D9BF0] hover:underline">
+                <svg className="h-[15px] w-[15px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" /></svg>
                 {person.website?.trim()}
               </a>
             )}

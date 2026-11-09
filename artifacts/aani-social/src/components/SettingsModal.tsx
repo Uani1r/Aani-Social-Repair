@@ -20,7 +20,7 @@ import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import type { SettingsModalProps } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { cleanUsername, displayName } from '@/lib/types';
+import { cleanUsername, displayName, type Profile } from '@/lib/types';
 
 type SettingsView = 'home' | 'edit' | 'privacy' | 'appearance' | 'mulhim';
 
@@ -44,6 +44,12 @@ export default function SettingsModal({
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');
   const [bio, setBio] = useState('');
+  const [city, setCity] = useState('');
+  const [job, setJob] = useState('');
+  const [birthDate, setBirthDate] = useState('');
+  const [showCity, setShowCity] = useState(true);
+  const [showJob, setShowJob] = useState(false);
+  const [showBirthDate, setShowBirthDate] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [mode, setMode] = useState<'gemini' | 'chatgpt' | 'coanalysis'>('coanalysis');
@@ -55,6 +61,7 @@ export default function SettingsModal({
   const profileName = currentProfile?.full_name || currentProfile?.display_name || '';
   const profileUsername = currentProfile?.username || '';
   const profileBio = currentProfile?.bio || '';
+  const profileCity = currentProfile?.city || currentProfile?.location || '';
 
   useEffect(() => {
     if (isOpen) setView('home');
@@ -65,7 +72,13 @@ export default function SettingsModal({
     setFullName(profileName);
     setUsername(profileUsername);
     setBio(profileBio);
-  }, [isOpen, profileName, profileUsername, profileBio]);
+    setCity(profileCity);
+    setJob(currentProfile?.job || '');
+    setBirthDate(currentProfile?.birth_date || '');
+    setShowCity(currentProfile?.show_city ?? Boolean(profileCity));
+    setShowJob(Boolean(currentProfile?.show_job));
+    setShowBirthDate(Boolean(currentProfile?.show_birth_date));
+  }, [isOpen, profileName, profileUsername, profileBio, profileCity, currentProfile?.job, currentProfile?.birth_date, currentProfile?.show_city, currentProfile?.show_job, currentProfile?.show_birth_date]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -85,6 +98,8 @@ export default function SettingsModal({
     const name = fullName.trim();
     const normalizedUsername = cleanUsername(username).toLowerCase();
     const normalizedBio = bio.trim();
+    const normalizedCity = city.trim();
+    const normalizedJob = job.trim();
     if (!name || name.length > 120) {
       toast.error('أدخل اسماً لا يتجاوز 120 حرفاً.');
       return;
@@ -93,33 +108,41 @@ export default function SettingsModal({
       toast.error('اسم المستخدم يجب أن يتكون من 3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية.');
       return;
     }
-    if (normalizedBio.length > 300) {
-      toast.error('النبذة الشخصية يجب ألا تتجاوز 300 حرف.');
-      return;
-    }
     if (!supabaseConfigured) {
       toast.error('إعدادات الاتصال بقاعدة البيانات غير مكتملة.');
       return;
     }
 
-    setProfileSaving(true);
-    const { error } = await supabase
-      .from('profiles')
-      .update({ full_name: name, display_name: name, username: normalizedUsername, bio: normalizedBio })
-      .eq('id', currentProfile.id);
-    if (error) {
-      toast.error(error.code === '23505' ? 'اسم المستخدم مستخدم بالفعل.' : 'تعذر حفظ تعديلات الملف الشخصي.');
-      setProfileSaving(false);
-      return;
-    }
-
-    onProfileUpdate({
-      ...currentProfile,
+    const profilePatch: Partial<Profile> = {
       full_name: name,
       display_name: name,
       username: normalizedUsername,
       bio: normalizedBio,
-    });
+      city: normalizedCity || null,
+      location: normalizedCity || null,
+      job: normalizedJob || null,
+      birth_date: birthDate || null,
+      show_city: showCity,
+      show_job: showJob,
+      show_birth_date: showBirthDate,
+    };
+    setProfileSaving(true);
+    const { error } = await supabase
+      .from('profiles')
+      .update(profilePatch)
+      .eq('id', currentProfile.id);
+    if (error) {
+      const missingMetadataColumn = (error.code === 'PGRST204' || error.code === '42703') && /city|job|birth_date|show_city|show_job|show_birth_date/i.test(error.message);
+      toast.error(error.code === '23505'
+        ? 'اسم المستخدم مستخدم بالفعل.'
+        : missingMetadataColumn
+          ? 'تعذر حفظ البيانات الجديدة. طبّق ترحيل بيانات الملف الشخصي في Supabase.'
+          : 'تعذر حفظ تعديلات الملف الشخصي.');
+      setProfileSaving(false);
+      return;
+    }
+
+    onProfileUpdate({ ...currentProfile, ...profilePatch });
     setProfileSaving(false);
     setView('home');
     toast.success('تم تحديث الملف الشخصي.');
@@ -252,7 +275,7 @@ export default function SettingsModal({
 
         {view === 'edit' && (
           <form onSubmit={event => void handleSaveProfile(event)} className="flex min-h-0 flex-1 flex-col">
-            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-5">
+            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
               <label className="block space-y-2 text-xs font-semibold text-zinc-300">
                 الاسم الظاهر
                 <input value={fullName} onChange={event => setFullName(event.target.value)} maxLength={120} required className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
@@ -265,9 +288,23 @@ export default function SettingsModal({
                 </div>
               </label>
               <label className="block space-y-2 text-xs font-semibold text-zinc-300">
-                النبذة الشخصية
-                <textarea value={bio} onChange={event => setBio(event.target.value)} maxLength={300} rows={4} className="w-full resize-none rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
-                <span className="block text-left text-[10px] font-normal text-zinc-600">{bio.length}/300</span>
+                السيرة الذاتية
+                <textarea value={bio} onChange={event => setBio(event.target.value)} rows={6} className="w-full resize-y rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+              </label>
+              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
+                المدينة
+                <input value={city} onChange={event => setCity(event.target.value)} maxLength={100} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+                <span className="flex items-center gap-2 font-normal text-zinc-400"><input type="checkbox" checked={showCity} onChange={event => setShowCity(event.target.checked)} className="h-4 w-4 accent-sky-400" />إظهار المدينة في الملف الشخصي العام</span>
+              </label>
+              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
+                الوظيفة
+                <input value={job} onChange={event => setJob(event.target.value)} maxLength={120} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+                <span className="flex items-center gap-2 font-normal text-zinc-400"><input type="checkbox" checked={showJob} onChange={event => setShowJob(event.target.checked)} className="h-4 w-4 accent-sky-400" />إظهار الوظيفة في الملف الشخصي العام</span>
+              </label>
+              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
+                تاريخ الميلاد
+                <input type="date" value={birthDate} onChange={event => setBirthDate(event.target.value)} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition focus:border-white/25" />
+                <span className="flex items-center gap-2 font-normal text-zinc-400"><input type="checkbox" checked={showBirthDate} onChange={event => setShowBirthDate(event.target.checked)} className="h-4 w-4 accent-sky-400" />إظهار تاريخ الميلاد في الملف الشخصي العام</span>
               </label>
             </div>
             <div className="shrink-0 border-t border-white/[0.07] p-4">
