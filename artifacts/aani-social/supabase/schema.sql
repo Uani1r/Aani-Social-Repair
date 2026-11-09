@@ -92,6 +92,7 @@ create table if not exists public.posts (
   type text not null default 'text',
   destination text not null default 'feed',
   visibility text not null default 'public',
+  display_order integer not null default 0,
   created_at timestamptz not null default now()
 );
 
@@ -100,6 +101,7 @@ alter table public.posts add column if not exists visibility text not null defau
 alter table public.posts add column if not exists post_metadata jsonb not null default '[]'::jsonb;
 alter table public.posts add column if not exists type text not null default 'text';
 alter table public.posts add column if not exists destination text not null default 'feed';
+alter table public.posts add column if not exists display_order integer not null default 0;
 update public.posts
 set destination = 'reels'
 where type = 'reel' and destination = 'feed';
@@ -147,6 +149,8 @@ create index if not exists posts_created_at_idx
   on public.posts (created_at desc);
 create index if not exists posts_user_created_at_idx
   on public.posts (user_id, created_at desc);
+create index if not exists posts_user_display_order_idx
+  on public.posts (user_id, display_order, created_at desc);
 create index if not exists posts_destination_created_at_idx
   on public.posts (destination, created_at desc);
 

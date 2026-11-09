@@ -43,6 +43,7 @@ function normalizePostRow(value: unknown): PostRow | null {
     media_url: typeof value.media_url === 'string' ? value.media_url : null,
     media_urls: mediaUrls,
     type: value.type === 'photo' || value.type === 'reel' ? value.type : 'text',
+    display_order: typeof value.display_order === 'number' ? value.display_order : 0,
     destination: value.destination === 'reels' ? 'reels' : 'feed',
     visibility: value.visibility === 'private' ? 'private' : 'public',
     hide_likes: value.hide_likes === true,
@@ -225,12 +226,19 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         kind: 'feed' | 'reel' | 'profile',
         profileId?: string,
         postIds?: string[],
+        includeProfileOrder = true,
       ) => {
-        const request = supabase.from('posts').select(
-          'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, hide_likes, hide_comments, comment_privacy',
-        );
+        const selectColumns = kind === 'profile' && includeProfileOrder
+          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, hide_likes, hide_comments, comment_privacy'
+          : 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, hide_likes, hide_comments, comment_privacy';
+        const request = supabase.from('posts').select(selectColumns);
         if (kind === 'profile' && postIds) {
           return request.in('id', postIds).order('created_at', { ascending: false });
+        }
+        if (kind === 'profile' && includeProfileOrder) {
+          return request.eq('user_id', profileId || '')
+            .order('display_order', { ascending: true })
+            .order('created_at', { ascending: false });
         }
         if (kind === 'profile') {
           return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
@@ -265,7 +273,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         );
         setPosts(await hydratePostInteractions(feedPosts, currentUserId));
       } else if (query === 'profile' && targetUserId) {
-        const { data: postData, error: postsErr } = await fetchPostRows('profile', targetUserId);
+        let profileRowsResult = await fetchPostRows('profile', targetUserId);
+        if (profileRowsResult.error && /display_order/i.test(profileRowsResult.error.message)) {
+          profileRowsResult = await fetchPostRows('profile', targetUserId, undefined, false);
+        }
+        const { data: postData, error: postsErr } = profileRowsResult;
 
         if (postsErr) throw postsErr;
 
@@ -289,8 +301,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         repostRows.forEach(row => repostedAtById.set(row.post_id, row.created_at));
 
         if (repostPostIds.length > 0) {
-          const { data: originalPostData } = await fetchPostRows('profile', undefined, repostPostIds);
-          repostedRaw = (await normalizePostRowsWithVisibility(originalPostData)).map(post => ({ ...post, reposter_id: targetUserId }));
+          let repostRowsResult = await fetchPostRows('profile', undefined, repostPostIds);
+          if (repostRowsResult.error && /display_order/i.test(repostRowsResult.error.message)) {
+            repostRowsResult = await fetchPostRows('profile', undefined, repostPostIds, false);
+          }
+          repostedRaw = (await normalizePostRowsWithVisibility(repostRowsResult.data)).map(post => ({ ...post, reposter_id: targetUserId }));
         }
 
         const allRaw: PostRow[] = [...rawPosts, ...repostedRaw];
@@ -325,7 +340,17 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
               return new Date(bTime).getTime() - new Date(aTime).getTime();
             });
 
-          setPosts(await hydratePostInteractions(formattedPosts, currentUserId));
+          const orderedOwnedPosts = formattedPosts
+            .filter(post => post.user_id === targetUserId && !post.reposter_id)
+            .sort((a, b) => (a.display_order ?? Number.MAX_SAFE_INTEGER) - (b.display_order ?? Number.MAX_SAFE_INTEGER));
+          let ownedPostIndex = 0;
+          const postsWithProfileOrder = formattedPosts.map(post => (
+            post.user_id === targetUserId && !post.reposter_id
+              ? orderedOwnedPosts[ownedPostIndex++] || post
+              : post
+          ));
+
+          setPosts(await hydratePostInteractions(postsWithProfileOrder, currentUserId));
         } else {
           setPosts([]);
         }

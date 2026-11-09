@@ -42,6 +42,7 @@ export type ProfileHighlightCollectionSummary = {
   title: string;
   cover_url?: string | null;
   created_at: string;
+  display_order?: number;
 };
 
 export interface ProfileHighlightCollection extends ProfileHighlightCollectionSummary {

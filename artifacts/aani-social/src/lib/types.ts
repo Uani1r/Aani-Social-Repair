@@ -99,6 +99,7 @@ export type Post = {
   destination?: PostDestination;
   visibility?: PostVisibility;
   created_at: string;
+  display_order?: number;
   author: Profile | null;
 
   likes_count?: number;
@@ -135,7 +136,7 @@ export const getPostDestination = (post: Pick<Post, 'type' | 'destination'>): Po
 
 export type PostRow = Pick<
   Post,
-  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'destination' | 'visibility' | 'created_at'
+  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'destination' | 'visibility' | 'created_at' | 'display_order'
 > & {
   hide_likes?: boolean;
   hide_comments?: boolean;

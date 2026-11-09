@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, MapPin, X } from 'lucide-react';
+import { Camera, Check, ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -15,7 +15,7 @@ import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
-import { cleanUsername, displayName, type Profile } from '@/lib/types';
+import { cleanUsername, displayName, type Post, type Profile } from '@/lib/types';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
@@ -96,6 +96,41 @@ function formatProfileBirthDate(value?: string | null): string {
   return new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
 }
 
+type ProfileReorderKind = 'highlights' | 'posts';
+
+type ProfileReorderGesture = {
+  kind: ProfileReorderKind;
+  id: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  timer: number | null;
+  active: boolean;
+};
+
+function moveProfileItem(ids: string[], fromId: string, toId: string): string[] {
+  const fromIndex = ids.indexOf(fromId);
+  const toIndex = ids.indexOf(toId);
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return ids;
+  const next = [...ids];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+function orderOwnedPostsInProfileSlots(posts: Post[], ownerId: string, orderedIds: string[]): Post[] {
+  const order = new Map(orderedIds.map((id, index) => [id, index]));
+  const ownedPosts = posts
+    .filter(post => post.user_id === ownerId && !post.reposter_id)
+    .sort((first, second) => (order.get(first.id) ?? Number.MAX_SAFE_INTEGER) - (order.get(second.id) ?? Number.MAX_SAFE_INTEGER));
+  let ownedIndex = 0;
+  return posts.map(post => (
+    post.user_id === ownerId && !post.reposter_id
+      ? ownedPosts[ownedIndex++] || post
+      : post
+  ));
+}
+
 export default function ProfilePage({
   targetUserId,
   currentUserId,
@@ -121,6 +156,12 @@ export default function ProfilePage({
   const followCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const followActionPendingRef = useRef(false);
   const [profileHighlights, setProfileHighlights] = useState<ProfileHighlightCollection[]>([]);
+  const [showProfileReorder, setShowProfileReorder] = useState(false);
+  const [profilePostOrder, setProfilePostOrder] = useState<string[]>([]);
+  const [profileReorderSaving, setProfileReorderSaving] = useState(false);
+  const [draggingReorderKey, setDraggingReorderKey] = useState<string | null>(null);
+  const [dragOverReorderKey, setDragOverReorderKey] = useState<string | null>(null);
+  const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
@@ -174,6 +215,9 @@ export default function ProfilePage({
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
   const pageDirection = typeof document !== 'undefined' && document.documentElement.dir === 'ltr' ? 'ltr' : 'rtl';
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
+  const ownProfilePosts = posts.filter(post => post.user_id === activeUserId && !post.reposter_id);
+  const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, profilePostOrder);
+  const displayProfilePosts = orderOwnedPostsInProfileSlots(posts, activeUserId, profilePostOrder);
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';
@@ -189,6 +233,12 @@ export default function ProfilePage({
   useEffect(() => {
     if (own && profile) setPerson(profile);
   }, [own, profile]);
+
+  useEffect(() => {
+    setProfilePostOrder(posts
+      .filter(post => post.user_id === activeUserId && !post.reposter_id)
+      .map(post => post.id));
+  }, [activeUserId, posts]);
 
   useEffect(() => {
     setAvatarPreview(person?.avatar_url || null);
@@ -321,6 +371,9 @@ export default function ProfilePage({
     temporaryPreviewUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     temporaryPreviewUrlsRef.current.clear();
     if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
+    const reorderGesture = profileReorderGestureRef.current;
+    if (reorderGesture?.timer !== null && reorderGesture?.timer !== undefined) window.clearTimeout(reorderGesture.timer);
+    profileReorderGestureRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -344,13 +397,28 @@ export default function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
+      const loadHighlightCollections = async () => {
+        const orderedResult = await supabase.from('profile_highlight_collections')
+          .select('id, user_id, title, cover_url, created_at, display_order')
+          .eq('user_id', activeUserId)
+          .order('display_order', { ascending: true })
+          .order('created_at', { ascending: true })
+          .limit(100);
+        if (!orderedResult.error || !/display_order/i.test(orderedResult.error.message)) return orderedResult;
+        return supabase.from('profile_highlight_collections')
+          .select('id, user_id, title, cover_url, created_at')
+          .eq('user_id', activeUserId)
+          .order('created_at', { ascending: true })
+          .limit(100);
+      };
+
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
-        supabase.from('profile_highlight_collections').select('id, user_id, title, cover_url, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
+        loadHighlightCollections(),
         supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
       ]);
 
@@ -519,6 +587,7 @@ export default function ProfilePage({
     setPendingAvatarFile(null);
     setPendingCoverFile(null);
     setAvatarCropFile(null);
+    setShowProfileReorder(false);
     setIsEditingProfile(true);
     closeSettingsOverlay();
   };
@@ -542,6 +611,7 @@ export default function ProfilePage({
     setPendingCoverFile(null);
     setAvatarCropFile(null);
     coverPanGestureRef.current = null;
+    setShowProfileReorder(false);
     setIsEditingProfile(false);
   };
 
@@ -823,6 +893,7 @@ export default function ProfilePage({
       setPendingAvatarFile(null);
       setPendingCoverFile(null);
       setAvatarCropFile(null);
+      setShowProfileReorder(false);
       setIsEditingProfile(false);
       setShowProfileMenu(false);
       uploadedPaths.length = 0;
@@ -848,6 +919,122 @@ export default function ProfilePage({
     } finally {
       setProfileSaving(false);
     }
+  };
+
+  const saveProfileContentOrder = async (kind: ProfileReorderKind, nextIds: string[], previousIds: string[]) => {
+    const restorePreviousOrder = () => {
+      if (kind === 'highlights') {
+        const previousCollections = new Map(profileHighlights.map(collection => [collection.id, collection]));
+        setProfileHighlights(previousIds.flatMap(id => previousCollections.has(id) ? [previousCollections.get(id)!] : []));
+      } else {
+        setProfilePostOrder(previousIds);
+      }
+    };
+
+    if (!supabaseConfigured) {
+      restorePreviousOrder();
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    setProfileReorderSaving(true);
+    try {
+      const { error } = await supabase.rpc('aani_reorder_profile_content', { p_kind: kind, p_ids: nextIds });
+      if (error) {
+        restorePreviousOrder();
+        console.error('[profile] تعذر حفظ ترتيب المحتوى:', error);
+        toast.error(error.code === 'PGRST202' || error.code === '42883'
+          ? 'طبّق ترحيل إعادة ترتيب محتوى الملف الشخصي في Supabase أولاً.'
+          : 'تعذر حفظ الترتيب الجديد. حاول مرة أخرى.');
+      } else {
+        toast.success('تم حفظ الترتيب الجديد.');
+      }
+    } catch (error) {
+      restorePreviousOrder();
+      console.error('[profile] تعذر حفظ ترتيب المحتوى:', error);
+      toast.error('تعذر حفظ الترتيب الجديد. تحقق من الاتصال ثم حاول مرة أخرى.');
+    } finally {
+      setProfileReorderSaving(false);
+    }
+  };
+
+  const beginProfileReorder = (event: ReactPointerEvent<HTMLElement>, kind: ProfileReorderKind, id: string) => {
+    if (!own || !showProfileReorder || profileReorderSaving) return;
+    const previousGesture = profileReorderGestureRef.current;
+    if (previousGesture?.timer !== null && previousGesture?.timer !== undefined) window.clearTimeout(previousGesture.timer);
+    const gesture: ProfileReorderGesture = {
+      kind,
+      id,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      timer: null,
+      active: false,
+    };
+    profileReorderGestureRef.current = gesture;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    gesture.timer = window.setTimeout(() => {
+      if (profileReorderGestureRef.current !== gesture) return;
+      gesture.active = true;
+      setDraggingReorderKey(`${kind}:${id}`);
+    }, 450);
+  };
+
+  const moveProfileReorderPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = profileReorderGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (!gesture.active) {
+      if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 10) {
+        if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+        profileReorderGestureRef.current = null;
+      }
+      return;
+    }
+    event.preventDefault();
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-profile-reorder-kind][data-profile-reorder-id]');
+    const targetKind = target?.dataset.profileReorderKind;
+    const targetId = target?.dataset.profileReorderId;
+    setDragOverReorderKey(targetKind === gesture.kind && targetId ? `${gesture.kind}:${targetId}` : null);
+  };
+
+  const endProfileReorderPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = profileReorderGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+    profileReorderGestureRef.current = null;
+    setDraggingReorderKey(null);
+    setDragOverReorderKey(null);
+    if (!gesture.active) return;
+
+    const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-profile-reorder-kind][data-profile-reorder-id]');
+    const targetKind = target?.dataset.profileReorderKind;
+    const targetId = target?.dataset.profileReorderId;
+    if (targetKind !== gesture.kind || !targetId) return;
+
+    if (gesture.kind === 'highlights') {
+      const previousIds = profileHighlights.map(collection => collection.id);
+      const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
+      if (nextIds === previousIds) return;
+      const collectionById = new Map(profileHighlights.map(collection => [collection.id, collection]));
+      setProfileHighlights(nextIds.flatMap(id => collectionById.has(id) ? [collectionById.get(id)!] : []));
+      void saveProfileContentOrder('highlights', nextIds, previousIds);
+      return;
+    }
+
+    const previousIds = orderedEditablePosts.map(post => post.id);
+    const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
+    if (nextIds === previousIds) return;
+    setProfilePostOrder(nextIds);
+    void saveProfileContentOrder('posts', nextIds, previousIds);
+  };
+
+  const cancelProfileReorderPointer = (event: ReactPointerEvent<HTMLElement>) => {
+    const gesture = profileReorderGestureRef.current;
+    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+    profileReorderGestureRef.current = null;
+    setDraggingReorderKey(null);
+    setDragOverReorderKey(null);
   };
 
   if (!person) {
@@ -954,6 +1141,78 @@ export default function ProfilePage({
                   <input id="profile-edit-website" type="url" value={websiteDraft} onChange={event => setWebsiteDraft(event.target.value)} maxLength={200} dir="ltr" placeholder="https://example.com" />
                 </div>
               </div>
+              <div className="profile-reorder-launch">
+                <button
+                  type="button"
+                  className="profile-reorder-toggle"
+                  aria-expanded={showProfileReorder}
+                  onClick={() => setShowProfileReorder(open => !open)}
+                  disabled={profileReorderSaving}
+                >
+                  {showProfileReorder ? 'إخفاء الترتيب' : 'تعديل المنشورات'}
+                </button>
+              </div>
+              {showProfileReorder && (
+                <section className="profile-reorder-panel" aria-label="إعادة ترتيب القصص والمنشورات">
+                  <p className="profile-reorder-hint">اضغط مطولاً على عنصر ثم اسحبه إلى موضعه الجديد.</p>
+                  <h3>أبرز القصص</h3>
+                  <div className="profile-reorder-list" role="list">
+                    {profileHighlights.length ? profileHighlights.map(collection => {
+                      const cover = collection.stories[0];
+                      const key = `highlights:${collection.id}`;
+                      return (
+                        <button
+                          key={collection.id}
+                          type="button"
+                          className={`profile-reorder-item${draggingReorderKey === key ? ' is-dragging' : ''}${dragOverReorderKey === key ? ' is-drop-target' : ''}`}
+                          data-profile-reorder-kind="highlights"
+                          data-profile-reorder-id={collection.id}
+                          onPointerDown={event => beginProfileReorder(event, 'highlights', collection.id)}
+                          onPointerMove={moveProfileReorderPointer}
+                          onPointerUp={endProfileReorderPointer}
+                          onPointerCancel={cancelProfileReorderPointer}
+                          disabled={profileReorderSaving}
+                          aria-label={`اضغط مطولاً لإعادة ترتيب أبرز القصص: ${collection.title}`}
+                        >
+                          <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
+                          <span className="profile-reorder-thumb">
+                            {collection.cover_url ? <img src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <video src={cover.media_url} muted playsInline preload="metadata" /> : cover?.media_url ? <img src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
+                          </span>
+                          <span className="profile-reorder-copy"><strong>{collection.title}</strong><small>{collection.stories.length} قصص</small></span>
+                        </button>
+                      );
+                    }) : <p className="profile-reorder-empty">لا توجد قصص مميزة لترتيبها.</p>}
+                  </div>
+                  <h3>المنشورات</h3>
+                  <div className="profile-reorder-list" role="list">
+                    {orderedEditablePosts.length ? orderedEditablePosts.map(post => {
+                      const key = `posts:${post.id}`;
+                      return (
+                        <button
+                          key={post.id}
+                          type="button"
+                          className={`profile-reorder-item${draggingReorderKey === key ? ' is-dragging' : ''}${dragOverReorderKey === key ? ' is-drop-target' : ''}`}
+                          data-profile-reorder-kind="posts"
+                          data-profile-reorder-id={post.id}
+                          onPointerDown={event => beginProfileReorder(event, 'posts', post.id)}
+                          onPointerMove={moveProfileReorderPointer}
+                          onPointerUp={endProfileReorderPointer}
+                          onPointerCancel={cancelProfileReorderPointer}
+                          disabled={profileReorderSaving}
+                          aria-label={`اضغط مطولاً لإعادة ترتيب المنشور: ${post.content || 'منشور وسائط'}`}
+                        >
+                          <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
+                          <span className="profile-reorder-thumb">
+                            {post.media_url ? post.type === 'reel' ? <video src={post.media_url} muted playsInline preload="metadata" /> : <img src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
+                          </span>
+                          <span className="profile-reorder-copy"><strong>{post.content || 'منشور وسائط'}</strong><small>{new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(post.created_at))}</small></span>
+                        </button>
+                      );
+                    }) : <p className="profile-reorder-empty">لا توجد منشورات قابلة لإعادة الترتيب.</p>}
+                  </div>
+                  {profileReorderSaving && <p className="profile-reorder-saving" role="status">جارٍ حفظ الترتيب…</p>}
+                </section>
+              )}
             </div>
           </form>
         </div>,
@@ -1460,13 +1719,13 @@ export default function ProfilePage({
         {(showPublicCity && profileCity || showPublicJob || showPublicBirthDate || profileWebsiteUrl) && (
           <div className="profile-public-meta" aria-label="معلومات الملف الشخصي">
             {showPublicJob && (
-              <span className="profile-public-meta-item"><Briefcase size={15} aria-hidden="true" />{profileJob}</span>
+              <span className="profile-public-meta-item"><span aria-hidden="true">💼</span>{profileJob}</span>
             )}
             {showPublicCity && profileCity && (
-              <span className="profile-public-meta-item"><MapPin size={15} aria-hidden="true" />{profileCity}</span>
+              <span className="profile-public-meta-item"><span aria-hidden="true">📍</span>{profileCity}</span>
             )}
             {showPublicBirthDate && (
-              <span className="profile-public-meta-item"><Cake size={15} aria-hidden="true" />{formattedBirthDate}</span>
+              <span className="profile-public-meta-item"><span aria-hidden="true">🎂</span>{formattedBirthDate}</span>
             )}
             {profileWebsiteUrl && (
               <a href={profileWebsiteUrl} target="_blank" rel="noreferrer" className="profile-public-meta-item text-[#1D9BF0] hover:underline">
@@ -1532,7 +1791,7 @@ export default function ProfilePage({
         {!loading && !error && posts.length === 0 && Array.from({ length: 4 }, (_, index) => <div key={`empty-${index}`} className="h-32 w-full rounded-xl bg-neutral-900" />)}
         {!loading && !error && posts.length > 0 && (
           <div className="posts-list space-y-3">
-            {posts.map(post => (
+            {displayProfilePosts.map(post => (
               <FeedPostCard key={post.id} post={post} currentUserId={currentUserId} onRefresh={() => void refresh()} onOpenComments={onOpenComments} />
             ))}
           </div>
@@ -1553,7 +1812,9 @@ export default function ProfilePage({
               ? { ...item, ...collection, stories: [...item.stories, highlight].sort((a, b) => a.position - b.position) }
               : item);
           }
-          return [...current, { ...collection, stories: [highlight] }].sort((a, b) => a.created_at.localeCompare(b.created_at));
+          const nextDisplayOrder = collection.display_order ?? current.reduce((maximum, item, index) => Math.max(maximum, item.display_order ?? index), -1) + 1;
+          return [...current, { ...collection, display_order: nextDisplayOrder, stories: [highlight] }]
+            .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0) || a.created_at.localeCompare(b.created_at));
         })}
       />
       {avatarCropFile && (
