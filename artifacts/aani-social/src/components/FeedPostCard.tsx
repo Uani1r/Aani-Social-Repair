@@ -330,7 +330,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   return (
     <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''} ${isMainFeedImage ? 'main-feed-image-post' : ''}`}>
       {post.repost_attribution && (
-        <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-muted-foreground">
+        <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-zinc-500">
           <Repeat size={12} aria-hidden="true" />
           <span>
             قام <Link href={`/profile/${post.repost_attribution.id}`} className="font-bold text-zinc-300 hover:underline">{displayName(post.repost_attribution)}</Link> بإعادة نشر هذا المنشور
@@ -350,8 +350,8 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             name={<Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>}
             username={<Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username || 'user'}</Link>}
             className={`min-w-0 flex-1 ${isMainFeedVideo ? 'video-post-identity' : ''}`}
-            nameClassName="text-sm font-bold text-foreground"
-            usernameClassName="text-xs text-muted-foreground"
+            nameClassName="text-sm font-bold text-white"
+            usernameClassName="text-xs text-zinc-500"
           />
           {isMainFeedVideo ? (
             <div className="video-post-top-meta">
@@ -359,7 +359,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               {post.audio_title && <span>♫ {post.audio_title}</span>}
             </div>
           ) : (
-            <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-muted-foreground">{formatDate(post.created_at)}</time>
+            <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
           )}
         </div>
         <PostOptionsSheet
@@ -394,7 +394,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               )}
               {pendingState.stage === 'uploading' ? 'جارٍ رفع الوسائط' : pendingState.stage === 'publishing' ? 'جارٍ حفظ المنشور' : pendingState.stage === 'success' ? 'تم نشر المنشور' : 'تعذر نشر المنشور'}
             </span>
-            {pendingState.stage !== 'failed' && <span className="text-muted-foreground">{pendingState.progress}%</span>}
+            {pendingState.stage !== 'failed' && <span className="text-zinc-400">{pendingState.progress}%</span>}
           </div>
           {pendingState.stage !== 'failed' && (
             <div className="h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label="تقدم النشر" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
@@ -408,7 +408,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                 <button type="button" onClick={onRetryPending} className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/15">
                   <RotateCcw size={13} /> إعادة المحاولة
                 </button>
-                <button type="button" onClick={onDismissPending} className="rounded-full px-3 py-1.5 text-xs text-muted-foreground hover:bg-white/5">إزالة</button>
+                <button type="button" onClick={onDismissPending} className="rounded-full px-3 py-1.5 text-xs text-zinc-400 hover:bg-white/5">إزالة</button>
               </div>
             </>
           )}
@@ -422,7 +422,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             ? 'post-image-container relative mt-3 w-full'
             : isMainFeedVideo
               ? 'feed-video-container mt-3'
-              : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border-border ${post.type === 'reel' ? 'bg-black' : ''}`}
+              : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''}`}
           style={!isMainFeedVideo && activeVideoAspectRatio ? { aspectRatio: String(activeVideoAspectRatio) } : undefined}
         >
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
@@ -482,7 +482,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''}`}>
         <div className="post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto">
           {/* 1. الإعجاب */}
-          <div className={`post-action-btn ${liked ? 'liked text-rose-500 font-bold' : 'text-muted-foreground'}`}>
+          <div className={`post-action-btn ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}>
             <button
               type="button"
               onClick={toggleLike}
@@ -512,41 +512,41 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
           {/* 2. التعليقات */}
           {commentsVisible && (
-            <button type="button" className="post-action-btn flex items-center gap-1.5 text-muted-foreground hover:text-blue-400 transition" onClick={loadComments}>
+            <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition" onClick={loadComments}>
               <MessageSquare size={18} />
               <span className="text-xs">{commentsCount}</span>
             </button>
           )}
 
           {/* 3. إعادة النشر */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#FF0000]' : 'text-muted-foreground hover:text-foreground'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#FF0000]' : 'text-zinc-400 hover:text-zinc-200'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
             <RepostIcon active={reposted} size={18} />
             <span className="text-xs">{repostsCount}</span>
           </button>
 
           {/* 4. المشاركة */}
-          <button type="button" className="post-action-btn flex items-center gap-1.5 text-muted-foreground transition hover:text-purple-400" onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 transition hover:text-purple-400" onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
             <Send size={18} />
             <span className="text-xs">{sharesCount}</span>
           </button>
 
           {/* 5. الحفظ */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-muted-foreground hover:text-amber-400'}`} onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'}>
+          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-zinc-400 hover:text-amber-400'}`} onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'}>
             <Bookmark size={18} fill={bookmarked ? 'currentColor' : 'none'} />
           </button>
 
         </div>
 
         {comments && (
-          <div className="comments-list mt-3 border-t border-border/60 pt-2 w-full">
-            {busy && <p className="muted text-xs text-muted-foreground">جاري تحميل التعليقات...</p>}
+          <div className="comments-list mt-3 border-t border-zinc-800/40 pt-2 w-full">
+            {busy && <p className="muted text-xs text-zinc-500">جاري تحميل التعليقات...</p>}
             {comments.map(c => (
-              <p key={c.id} className="text-xs mb-1.5 text-foreground/90 break-words">
-                <b className="text-foreground ml-1">{displayName(c.author)}:</b> {c.content}
+              <p key={c.id} className="text-xs mb-1.5 text-zinc-300 break-words">
+                <b className="text-white ml-1">{displayName(c.author)}:</b> {c.content}
               </p>
             ))}
             <form className="comment-form flex gap-1.5 mt-2 w-full" onSubmit={addComment}>
-              <input className="bg-muted/40 border border-input rounded-lg px-2.5 py-1 text-xs text-foreground w-full outline-none" value={commentText} onChange={e => setCommentText(e.target.value)} placeholder="إضافة تعليق..." />
+              <input className="bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-white w-full outline-none" value={commentText} onChange={e => setCommentText(e.target.value)} placeholder="إضافة تعليق..." />
               <button className="button-primary text-xs px-3 py-1 shrink-0" type="submit" disabled={busy || !commentText.trim()}>نشر</button>
             </form>
           </div>

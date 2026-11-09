@@ -82,20 +82,21 @@ export default function ProfileSettingsPreferences({
   }, [profile.font_preference]);
 
   const savePreferences = (next: UserPreferences) => {
-    setPreferences(next);
-    saveLocalUserPreferences(currentUserId, next);
-    setTheme(next.appearance);
+    const locked: UserPreferences = { ...next, appearance: 'dark' };
+    setPreferences(locked);
+    saveLocalUserPreferences(currentUserId, locked);
+    setTheme('dark');
     if (typeof document !== 'undefined') {
       document.documentElement.lang = next.language === 'ar' ? 'ar' : 'en';
       document.documentElement.dir = next.language === 'ar' ? 'rtl' : 'ltr';
     }
-    onProfileUpdate({ ...profile, ...profilePreferencesPatch(next) });
+    onProfileUpdate({ ...profile, ...profilePreferencesPatch(locked) });
 
     saveQueueRef.current = saveQueueRef.current.then(async () => {
       if (!supabaseConfigured) throw new Error('إعدادات Supabase غير مكتملة.');
       const { error } = await supabase
         .from('profiles')
-        .update(profilePreferencesPatch(next))
+        .update(profilePreferencesPatch(locked))
         .eq('id', currentUserId);
       if (error) throw error;
     }).catch(error => {
@@ -191,11 +192,9 @@ export default function ProfileSettingsPreferences({
   if (screen === 'appearance') {
     return (
       <div className="profile-settings-preferences px-4 pb-6 pt-2">
-        <p className="profile-settings-note">يُطبّق المظهر فوراً على التطبيق، ويُحفظ محلياً وفي حسابك.</p>
+        <p className="profile-settings-note">الوضع الداكن هو مظهر التطبيق الوحيد حالياً ولا يمكن تغييره.</p>
         <div role="radiogroup" aria-label="المظهر">
-          <PreferenceChoice label="داكن" description="مظهر داكن" checked={preferences.appearance === 'dark'} onSelect={() => savePreferences({ ...preferences, appearance: 'dark' })} />
-          <PreferenceChoice label="فاتح" description="مظهر فاتح" checked={preferences.appearance === 'light'} onSelect={() => savePreferences({ ...preferences, appearance: 'light' })} />
-          <PreferenceChoice label="تلقائي" description="حسب إعداد الجهاز" checked={preferences.appearance === 'system'} onSelect={() => savePreferences({ ...preferences, appearance: 'system' })} />
+          <PreferenceChoice label="داكن" description="الوضع الداكن مفعّل دائماً" checked onSelect={() => savePreferences({ ...preferences, appearance: 'dark' })} />
         </div>
       </div>
     );

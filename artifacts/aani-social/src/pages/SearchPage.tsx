@@ -201,14 +201,14 @@ export default function SearchPage({ userId }: { userId: string }) {
   return (
     <section className="new-view mx-auto w-full max-w-lg space-y-4 px-4" dir="rtl">
       <form className="flex w-full items-center gap-3" onSubmit={handleSearchSubmit}>
-        <h1 className="shrink-0 text-xl font-bold text-foreground">بحث</h1>
-        <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-border bg-card shadow-inner">
+        <h1 className="shrink-0 text-xl font-bold text-white">بحث</h1>
+        <div className="relative flex min-w-0 flex-1 items-center rounded-full border border-zinc-800 bg-zinc-950 shadow-inner">
           <input
             value={term}
             onChange={event => handleSearchInput(event.target.value)}
             placeholder="ابحث عن الاسم أو اسم المستخدم..."
             aria-label="ابحث عن الاسم أو اسم المستخدم"
-            className="search-input bg-transparent text-sm font-medium text-foreground placeholder:text-muted-foreground touch-pan-y"
+            className="search-input bg-transparent text-sm font-medium text-white placeholder:text-zinc-500 touch-pan-y"
           />
           <button
             className="absolute left-2 flex h-8 w-8 items-center justify-center rounded-full text-[#FF007A] transition-colors hover:bg-pink-500/10 hover:text-pink-300"
@@ -223,11 +223,11 @@ export default function SearchPage({ userId }: { userId: string }) {
       {searchHistory.length > 0 && term.length === 0 && (
         <section className="space-y-2">
           <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-foreground">الأبحاث الأخيرة</h2>
+            <h2 className="text-sm font-bold text-white">الأبحاث الأخيرة</h2>
             <button
               type="button"
               onClick={clearAllHistory}
-              className="text-xs font-semibold text-pink-600 transition-colors hover:text-pink-500 dark:text-pink-400 dark:hover:text-pink-300"
+              className="text-xs font-semibold text-pink-400 transition-colors hover:text-pink-300"
             >
               مسح الكل
             </button>
@@ -248,14 +248,14 @@ export default function SearchPage({ userId }: { userId: string }) {
                     name={displayName(profile)}
                     username={profile.username}
                     className="min-w-0 flex-1"
-                    nameClassName="text-sm font-bold text-foreground"
-                    usernameClassName="text-xs text-muted-foreground"
+                    nameClassName="text-sm font-bold text-white"
+                    usernameClassName="text-xs text-zinc-400"
                   />
                 </Link>
                 <button
                   type="button"
                   onClick={() => deleteHistoryItem(profile.id)}
-                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-zinc-500 transition-colors hover:bg-zinc-700/70 hover:text-zinc-200"
                   aria-label={`حذف ${displayName(profile)} من سجل البحث`}
                   title="حذف من سجل البحث"
                 >
@@ -280,7 +280,7 @@ export default function SearchPage({ userId }: { userId: string }) {
                 preserveSearchState();
                 addProfileToHistory(profile);
               }}
-              className="flex items-center justify-between rounded-xl p-2.5 hover:bg-muted/60"
+              className="flex items-center justify-between rounded-xl p-2.5 hover:bg-zinc-800/50"
             >
               <div className="flex min-w-0 items-center gap-4">
                 <Avatar profile={profile} large />
@@ -288,8 +288,8 @@ export default function SearchPage({ userId }: { userId: string }) {
                   name={displayName(profile)}
                   username={profile.username}
                   className="min-w-0 flex-1"
-                  nameClassName="text-sm font-bold text-foreground"
-                  usernameClassName="text-xs text-muted-foreground"
+                  nameClassName="text-sm font-bold text-white"
+                  usernameClassName="text-xs text-zinc-400"
                 />
               </div>
             </Link>
@@ -300,7 +300,7 @@ export default function SearchPage({ userId }: { userId: string }) {
       {!loading && !searchError && normalizeSearchQuery(term) && profiles.length === 0 && (
         <div className="empty-state card">
           <h2>لا توجد نتائج مطابقة</h2>
-          <p className="text-xs text-muted-foreground">تأكد من كتابة اسم المستخدم أو الاسم الصحيح.</p>
+          <p className="text-xs text-zinc-400">تأكد من كتابة اسم المستخدم أو الاسم الصحيح.</p>
         </div>
       )}
     </section>

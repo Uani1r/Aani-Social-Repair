@@ -46,14 +46,14 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
   };
 
   return (
-    <section className="rounded-2xl border border-primary/30 bg-card px-4 py-3">
+    <section className="rounded-2xl border border-[#c98a66]/20 bg-[#141414] px-4 py-3">
       <div className="flex items-center gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-[#c98a66]/10 text-[#c98a66]">
           <BellRing size={19} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-bold text-foreground">إشعارات هذا الجهاز</p>
-          <p role="status" className="mt-1 text-xs leading-5 text-muted-foreground">
+          <p className="text-sm font-bold text-[#f0f0f0]">إشعارات هذا الجهاز</p>
+          <p role="status" className="mt-1 text-xs leading-5 text-[#9b9b9b]">
             {message || 'استقبل الرسائل والتفاعلات والمكالمات حتى عند إغلاق التطبيق.'}
           </p>
         </div>

@@ -248,9 +248,9 @@ export default function FeedPage({
       {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
 
       {!loading && error && (
-        <div role="alert" className="empty-state card border border-rose-500/30 rounded-2xl bg-card p-6 text-center">
-          <h2 className="text-foreground font-bold text-base mb-2">تعذر تحميل المنشورات</h2>
-          <p className="text-muted-foreground text-xs mb-4">{error}</p>
+        <div role="alert" className="empty-state card border border-rose-500/30 rounded-2xl bg-zinc-900/70 p-6 text-center">
+          <h2 className="text-white font-bold text-base mb-2">تعذر تحميل المنشورات</h2>
+          <p className="text-zinc-400 text-xs mb-4">{error}</p>
           <button type="button" onClick={() => void refresh()} className="rounded-full bg-pink-600 px-4 py-2 text-xs font-semibold text-white">
             إعادة المحاولة
           </button>
@@ -258,12 +258,12 @@ export default function FeedPage({
       )}
 
       {!loading && !error && visiblePosts.length === 0 && (
-        <div className="empty-state card text-center p-8 border border-border rounded-2xl bg-card/70">
+        <div className="empty-state card text-center p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50">
           <div className="w-12 h-12 bg-pink-500/10 text-pink-500 rounded-full flex items-center justify-center mx-auto mb-3">
             <MessageCircle size={22} />
           </div>
-          <h2 className="text-foreground font-bold text-base mb-1">لا يوجد محتوى منشور حالياً</h2>
-          <p className="text-muted-foreground text-xs">انقر على علامة (+) في الأعلى لنشر أول منشور لك!</p>
+          <h2 className="text-white font-bold text-base mb-1">لا يوجد محتوى منشور حالياً</h2>
+          <p className="text-zinc-400 text-xs">انقر على علامة (+) في الأعلى لنشر أول منشور لك!</p>
         </div>
       )}
 

@@ -47,7 +47,7 @@ function ProfileTabs() {
   return (
     <div className="mt-4 flex items-center justify-around border-b border-[#2F3336]" aria-label="تبويبات الملف الشخصي">
       <button type="button" aria-label="المنشورات" aria-current="page" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <svg className="h-[26px] w-[26px] text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7" rx="1" strokeWidth="1.5" />
           <rect x="14" y="3" width="7" height="7" rx="1" strokeWidth="1.5" />
           <rect x="14" y="14" width="7" height="7" rx="1" strokeWidth="1.5" />
@@ -56,18 +56,18 @@ function ProfileTabs() {
         <span className="absolute bottom-0 h-[3px] w-12 rounded-t-sm bg-[#1D9BF0]" />
       </button>
       <button type="button" aria-label="الفيديو" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M10 8l6 4-6 4V8z" />
         </svg>
       </button>
       <button type="button" aria-label="إعادات النشر" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
       </button>
       <button type="button" aria-label="الوسائط" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
           <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
         </svg>
@@ -1235,7 +1235,7 @@ export default function ProfilePage({
       <section className="profile-screen mx-auto w-full max-w-[600px]" dir={pageDirection}>
         {fromSearch && (
           <div className="flex justify-start px-2 pt-2">
-            <button type="button" aria-label="العودة إلى البحث" onClick={() => setLocation('/search')} className="flex h-10 w-10 items-center justify-center rounded-full text-foreground hover:bg-muted">
+            <button type="button" aria-label="العودة إلى البحث" onClick={() => setLocation('/search')} className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-zinc-800">
               <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 18l-6-6 6-6" /></svg>
             </button>
           </div>
@@ -1286,7 +1286,7 @@ export default function ProfilePage({
                 </button>
               </div>
               <div className="profile-edit-avatar">
-                {avatarPreview ? <img src={avatarPreview} alt="معاينة الصورة الشخصية" /> : <span className="grid h-full w-full place-items-center text-3xl font-bold text-foreground/70">{displayName(person).slice(0, 1)}</span>}
+                {avatarPreview ? <img src={avatarPreview} alt="معاينة الصورة الشخصية" /> : <span className="grid h-full w-full place-items-center text-3xl font-bold text-white/70">{displayName(person).slice(0, 1)}</span>}
                 <button type="button" className="profile-edit-media-button" aria-label={avatarPreview ? 'تغيير الصورة الشخصية' : 'إضافة صورة شخصية'} onClick={() => avatarInputRef.current?.click()} disabled={profileSaving}>
                   <Camera size={21} />
                 </button>
@@ -1302,7 +1302,7 @@ export default function ProfilePage({
                     <span aria-hidden="true">@</span>
                     <input id="profile-edit-username" value={usernameDraft} onChange={event => setUsernameDraft(event.target.value)} maxLength={32} autoCapitalize="none" autoCorrect="off" spellCheck={false} required aria-describedby="profile-edit-username-hint" />
                   </div>
-                  <span id="profile-edit-username-hint" className="text-xs text-muted-foreground">3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية</span>
+                  <span id="profile-edit-username-hint" className="text-xs text-white/45">3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية</span>
                 </div>
                 <div className="profile-edit-field">
                   <label htmlFor="profile-edit-bio">السيرة الذاتية</label>
@@ -1432,7 +1432,7 @@ export default function ProfilePage({
             )}
           </button>
           {!isEditingProfile && showProfileMenu && !own && (
-            <div role="menu" aria-label="خيارات الملف الشخصي" className="absolute left-4 top-full z-[60] max-h-[70dvh] w-[min(340px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-border bg-card p-3 text-card-foreground shadow-xl">
+            <div role="menu" aria-label="خيارات الملف الشخصي" className="absolute left-4 top-full z-[60] max-h-[70dvh] w-[min(340px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-[#2F3336] bg-[#111] p-3 text-white shadow-xl">
               <Link href={`/messages/${activeUserId}`} onClick={() => setShowProfileMenu(false)} role="menuitem" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-sm hover:bg-white/10">
                 <MessageCircle size={17} aria-hidden="true" />
                 <span>إرسال رسالة</span>
@@ -1456,15 +1456,15 @@ export default function ProfilePage({
       </div>
 
       <Dialog open={showProfileReportDialog} onOpenChange={open => { if (!profileReportSubmitting) setShowProfileReportDialog(open); }}>
-        <DialogContent dir={pageDirection} className="border-border bg-card text-card-foreground sm:max-w-md">
+        <DialogContent dir={pageDirection} className="border-[#2F3336] bg-[#111] text-white sm:max-w-md">
           <DialogHeader className="text-right">
             <DialogTitle>الإبلاغ عن {displayName(person)}</DialogTitle>
-            <DialogDescription className="text-right text-muted-foreground">اختر سبب البلاغ. سيُرسل إلى فريق المراجعة.</DialogDescription>
+            <DialogDescription className="text-right text-zinc-400">اختر سبب البلاغ. سيُرسل إلى فريق المراجعة.</DialogDescription>
           </DialogHeader>
           <form onSubmit={event => void submitProfileReport(event)} className="space-y-4">
             <label htmlFor="profile-report-category" className="block space-y-2 text-sm">
               <span>سبب الإبلاغ</span>
-              <select id="profile-report-category" value={profileReportCategory} onChange={event => setProfileReportCategory(event.target.value as ProfileReportCategory)} className="w-full rounded-lg border border-input bg-muted/40 px-3 py-2.5 text-foreground">
+              <select id="profile-report-category" value={profileReportCategory} onChange={event => setProfileReportCategory(event.target.value as ProfileReportCategory)} className="w-full rounded-lg border border-[#2F3336] bg-[#191919] px-3 py-2.5 text-white">
                 <option value="other">محتوى غير لائق أو سبب آخر</option>
                 <option value="fake_account">انتحال شخصية</option>
                 <option value="spam">سبام أو محتوى مزعج</option>
@@ -1474,7 +1474,7 @@ export default function ProfilePage({
             </label>
             <label htmlFor="profile-report-details" className="block space-y-2 text-sm">
               <span>تفاصيل إضافية (اختياري)</span>
-              <textarea id="profile-report-details" value={profileReportDetails} onChange={event => setProfileReportDetails(event.target.value)} maxLength={1000} rows={4} dir="auto" placeholder="أضف تفاصيل تساعدنا في مراجعة البلاغ" className="w-full resize-y rounded-lg border border-input bg-muted/40 px-3 py-2.5 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-[#1D9BF0]" />
+              <textarea id="profile-report-details" value={profileReportDetails} onChange={event => setProfileReportDetails(event.target.value)} maxLength={1000} rows={4} dir="auto" placeholder="أضف تفاصيل تساعدنا في مراجعة البلاغ" className="w-full resize-y rounded-lg border border-[#2F3336] bg-[#191919] px-3 py-2.5 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#1D9BF0]" />
             </label>
             <DialogFooter className="gap-2 sm:gap-2">
               <button type="button" onClick={() => setShowProfileReportDialog(false)} disabled={profileReportSubmitting} className="rounded-full border border-[#53575B] px-4 py-2 text-sm font-semibold hover:bg-white/10 disabled:opacity-50">إلغاء</button>
@@ -1661,8 +1661,8 @@ export default function ProfilePage({
               ) : settingsScreen === 'about' ? (
                 <div className="profile-settings-support-screen flex flex-col items-center justify-center text-center">
                   <div className="flex h-24 w-24 items-center justify-center rounded-[26px] bg-[#ff3c00] text-3xl font-black text-white shadow-lg" role="img" aria-label="شعار آني">آني</div>
-                  <h3 className="mt-5 text-lg font-bold text-foreground">آني Aani</h3>
-                  <p className="mt-2 text-sm text-muted-foreground">تواصل اجتماعي يجمعك بمن يهمك.</p>
+                  <h3 className="mt-5 text-lg font-bold text-white">آني Aani</h3>
+                  <p className="mt-2 text-sm text-neutral-400">تواصل اجتماعي يجمعك بمن يهمك.</p>
                   <p className="mt-6 rounded-full border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300">الإصدار v1.0.0</p>
                 </div>
               ) : settingsScreen === 'account' ? (
@@ -1744,7 +1744,7 @@ export default function ProfilePage({
                     (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).map(managedProfile => (
                       <div key={managedProfile.id} className="profile-settings-request-card">
                         <Avatar profile={managedProfile} />
-                        <UserIdentity name={displayName(managedProfile)} username={managedProfile.username} className="min-w-0 flex-1" nameClassName="text-sm text-foreground" usernameClassName="text-xs text-muted-foreground" />
+                        <UserIdentity name={displayName(managedProfile)} username={managedProfile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
                         <button type="button" className="profile-settings-action bg-white text-black" disabled={Boolean(managedProfileBusyId)} onClick={() => settingsScreen === 'blocked' ? void unblockProfile(managedProfile.id) : void unmuteProfile(managedProfile.id)}>{settingsScreen === 'blocked' ? managedProfileBusyId === managedProfile.id ? 'جارٍ...' : 'إلغاء الحظر' : managedProfileBusyId === managedProfile.id ? 'جارٍ...' : 'إلغاء الكتم'}</button>
                       </div>
                     ))
@@ -1815,11 +1815,11 @@ export default function ProfilePage({
           </section>
           {showLogoutConfirmation && (
             <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/75 p-5 backdrop-blur-sm" onClick={event => { event.stopPropagation(); setShowLogoutConfirmation(false); }}>
-              <section role="alertdialog" aria-modal="true" aria-labelledby="logout-confirmation-title" aria-describedby="logout-confirmation-description" className="w-full max-w-sm rounded-2xl border border-border bg-card p-5 text-card-foreground shadow-2xl" onClick={event => event.stopPropagation()}>
+              <section role="alertdialog" aria-modal="true" aria-labelledby="logout-confirmation-title" aria-describedby="logout-confirmation-description" className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a0a0a] p-5 text-white shadow-2xl" onClick={event => event.stopPropagation()}>
                 <h3 id="logout-confirmation-title" className="text-base font-bold">تأكيد تسجيل الخروج</h3>
                 <p id="logout-confirmation-description" className="mt-2 text-sm leading-6 text-neutral-400">هل تريد تسجيل الخروج من هذا الجهاز؟ ستحتاج إلى تسجيل الدخول مجدداً للعودة إلى حسابك.</p>
                 <div className="mt-6 flex gap-3">
-                  <button type="button" className="flex-1 rounded-xl border border-border bg-muted px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-foreground/10" onClick={() => setShowLogoutConfirmation(false)}>إلغاء</button>
+                  <button type="button" className="flex-1 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10" onClick={() => setShowLogoutConfirmation(false)}>إلغاء</button>
                   <button type="button" className="flex-1 rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-red-500 disabled:cursor-wait disabled:opacity-60" disabled={accountSettingsBusy} onClick={() => void endCurrentSession()}>{accountSettingsBusy ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}</button>
                 </div>
               </section>
@@ -1939,7 +1939,7 @@ export default function ProfilePage({
             )}
           </div>
           <div className="flex items-center gap-1 pb-2">
-            <h1 className="text-xl font-black text-foreground">{displayName(person)}</h1>
+            <h1 className="text-xl font-black text-white">{displayName(person)}</h1>
             <VerifiedBadge />
           </div>
         </div>
@@ -1953,7 +1953,7 @@ export default function ProfilePage({
                 type="button"
                 onClick={() => void toggleFollow()}
                 aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
-                className={`relative inline-flex h-9 min-w-[85px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-muted text-foreground' : 'bg-primary text-primary-foreground hover:bg-primary/90'}`}
+                className={`relative inline-flex h-9 min-w-[85px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
               >
                 <span className="invisible inline-flex items-center gap-1.5" aria-hidden="true">
                   <span>{followButtonLabel}</span>
@@ -1968,7 +1968,7 @@ export default function ProfilePage({
                   </span>
                 )}
               </button>
-              <Link href={`/messages/${activeUserId}`} aria-label="إرسال رسالة" className="flex h-9 w-9 items-center justify-center rounded-full border border-border text-foreground transition hover:bg-foreground/10">
+              <Link href={`/messages/${activeUserId}`} aria-label="إرسال رسالة" className="flex h-9 w-9 items-center justify-center rounded-full border border-[#53575B] text-white transition hover:bg-white/10">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
@@ -1976,9 +1976,9 @@ export default function ProfilePage({
             </div>
           )}
           <div dir="rtl" className="flex items-center gap-2 text-xs sm:gap-3 sm:text-sm">
-            <div className="whitespace-nowrap"><span className="font-bold text-foreground">{formattedPostCount}</span> <span className="text-muted-foreground">المنشورات</span></div>
-            <div className="whitespace-nowrap"><span className="font-bold text-foreground">{formattedFollowing}</span> <span className="text-muted-foreground">متابع</span></div>
-            <div className="whitespace-nowrap"><span className="font-bold text-foreground">{formattedFollowers}</span> <span className="text-muted-foreground">المتابعون</span></div>
+            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedPostCount}</span> <span className="text-[#71767B]">المنشورات</span></div>
+            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span></div>
+            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></div>
           </div>
         </div>
 

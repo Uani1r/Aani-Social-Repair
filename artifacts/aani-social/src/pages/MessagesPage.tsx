@@ -2942,8 +2942,8 @@ export default function MessagesPage({
                       name={displayName(target)}
                       username={target.username}
                       className="min-w-0"
-                      nameClassName="text-sm font-semibold text-foreground"
-                      usernameClassName="text-xs text-muted-foreground"
+                      nameClassName="text-sm font-semibold text-white"
+                      usernameClassName="text-xs text-[#a8a8a8]"
                     />
                   </Link>
                 ) : (
@@ -4033,8 +4033,8 @@ export default function MessagesPage({
                     name={displayName(person)}
                     username={person.username}
                     className="min-w-0 flex-1"
-                    nameClassName="text-sm font-semibold text-foreground"
-                    usernameClassName="text-xs text-muted-foreground"
+                    nameClassName="text-sm font-semibold text-white"
+                    usernameClassName="text-xs text-[#a8a8a8]"
                   />
                 </button>
               ))}
@@ -4140,8 +4140,8 @@ export default function MessagesPage({
                     name={displayName(person)}
                     username={person.username}
                     className="min-w-0 flex-1"
-                    nameClassName="text-sm font-semibold text-foreground"
-                    usernameClassName="text-xs text-muted-foreground"
+                    nameClassName="text-sm font-semibold text-white"
+                    usernameClassName="text-xs text-[#a8a8a8]"
                   />
                 </label>
               ))}

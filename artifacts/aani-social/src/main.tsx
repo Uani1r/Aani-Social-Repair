@@ -13,7 +13,7 @@ createRoot(document.getElementById('root')!, {
   },
 }).render(
   <ErrorBoundary>
-    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem storageKey="aani-theme">
+    <ThemeProvider attribute="class" defaultTheme="dark" forcedTheme="dark" storageKey="aani-theme">
       <App />
     </ThemeProvider>
   </ErrorBoundary>,
