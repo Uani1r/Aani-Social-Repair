@@ -601,12 +601,12 @@ export default function ProfilePage({
             <header className="profile-settings-header">
               {showFollowRequests && (
                 <button type="button" aria-label="العودة إلى الإعدادات" className="profile-settings-back" onClick={() => setShowFollowRequests(false)}>
-                  <ChevronRight size={24} />
+                  <ChevronRight size={20} />
                 </button>
               )}
               <h2 id="profile-settings-title">{showFollowRequests ? 'طلبات المتابعة' : 'الإعدادات'}</h2>
               <button type="button" aria-label="إغلاق الإعدادات" className="profile-settings-close" onClick={closeSettingsOverlay}>
-                <X size={30} strokeWidth={2.5} />
+                <X size={24} strokeWidth={2.5} />
               </button>
             </header>
 
@@ -615,7 +615,7 @@ export default function ProfilePage({
                 <>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={startProfileEditing}>
                     <span>تعديل الملف الشخصي</span>
-                    <ChevronLeft size={24} aria-hidden="true" />
+                    <ChevronLeft size={18} aria-hidden="true" />
                   </button>
 
                   <div className="profile-settings-row profile-settings-privacy">
@@ -647,7 +647,7 @@ export default function ProfilePage({
                     }}
                   >
                     <span>الإعدادات الأخرى</span>
-                    <ChevronLeft size={24} aria-hidden="true" />
+                    <ChevronLeft size={18} aria-hidden="true" />
                   </button>
 
                   <button type="button" className="profile-settings-row profile-settings-link profile-settings-requests" onClick={() => setShowFollowRequests(true)}>
@@ -655,7 +655,7 @@ export default function ProfilePage({
                       <span className="profile-settings-label">طلبات المتابعة ({followRequests.length})</span>
                       <span className="profile-settings-description">{followRequests.length ? 'عرض طلبات المتابعة الجديدة.' : 'لا توجد طلبات متابعة جديدة.'}</span>
                     </span>
-                    <ChevronLeft size={24} aria-hidden="true" />
+                    <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                 </>
               ) : followRequests.length ? (
