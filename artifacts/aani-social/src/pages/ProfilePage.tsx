@@ -16,7 +16,7 @@ import { cleanUsername, displayName, type Profile } from '@/lib/types';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 
-type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted';
+type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing';
 type ProfileImageKind = 'avatar' | 'cover';
 type CoverPosition = { x: number; y: number };
 type CoverPanGesture = {
@@ -106,16 +106,13 @@ export default function ProfilePage({
   const [followRequestSent, setFollowRequestSent] = useState(false);
   const followCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const followActionPendingRef = useRef(false);
-  const [followRequests, setFollowRequests] = useState<Array<{ profile: Profile; created_at: string }>>([]);
   const [profileHighlights, setProfileHighlights] = useState<ProfileHighlightCollection[]>([]);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
-  const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
   const [settingsOverlayEntered, setSettingsOverlayEntered] = useState(false);
-  const [showFollowRequests, setShowFollowRequests] = useState(false);
   const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>('home');
   const [authEmail, setAuthEmail] = useState('');
   const [authPhone, setAuthPhone] = useState('');
@@ -185,7 +182,6 @@ export default function ProfilePage({
       if (event.key !== 'Escape') return;
       setShowSettingsOverlay(false);
       setSettingsOverlayEntered(false);
-      setShowFollowRequests(false);
       setSettingsScreen('home');
     };
     window.addEventListener('keydown', closeOnEscape);
@@ -300,7 +296,7 @@ export default function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
-      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }, { data: incomingRequests }] = await Promise.all([
+      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
@@ -309,16 +305,8 @@ export default function ProfilePage({
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
         supabase.from('profile_highlight_collections').select('id, user_id, title, cover_url, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
         supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
-        own
-          ? supabase.from('follow_requests').select('requester_id, created_at').eq('recipient_id', currentUserId).order('created_at', { ascending: false }).limit(100)
-          : Promise.resolve({ data: [] }),
       ]);
 
-      const requestRows = (incomingRequests || []) as Array<{ requester_id: string; created_at: string }>;
-      const requesterIds = [...new Set(requestRows.map(row => row.requester_id))];
-      const { data: requesterProfiles } = requesterIds.length
-        ? await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url, bio, is_private').in('id', requesterIds)
-        : { data: [] };
       if (!active) return;
       if (collectionsError) {
         console.error('[profile highlights] تعذر تحميل المجموعات:', collectionsError);
@@ -345,11 +333,6 @@ export default function ProfilePage({
       setProfileHighlights(collectionData
         .map(collection => ({ ...collection, stories: storiesByCollection.get(collection.id) || [] }))
         .filter(collection => collection.stories.length > 0));
-      const profileById = new Map<string, Profile>(((requesterProfiles || []) as Profile[]).map(requester => [requester.id, requester] as [string, Profile]));
-      setFollowRequests(requestRows.flatMap(row => {
-        const requester = profileById.get(row.requester_id);
-        return requester ? [{ profile: requester, created_at: row.created_at }] : [];
-      }));
     };
     void loadProfileData();
     return () => { active = false; };
@@ -419,36 +402,6 @@ export default function ProfilePage({
     }
   };
 
-  const respondToFollowRequest = async (requesterId: string, accept: boolean) => {
-    if (!supabaseConfigured || !own || busyRequestId) return;
-    setBusyRequestId(requesterId);
-
-    if (accept) {
-      const { error } = await supabase.from('follows').insert({ follower_id: requesterId, following_id: currentUserId });
-      if (error && error.code !== '23505') {
-        toast.error('تعذر قبول طلب المتابعة');
-        setBusyRequestId(null);
-        return;
-      }
-      if (!error) setFollowers(value => value + 1);
-    }
-
-    const { error: deleteError } = await supabase
-      .from('follow_requests')
-      .delete()
-      .eq('requester_id', requesterId)
-      .eq('recipient_id', currentUserId);
-    if (deleteError) {
-      toast.error(accept ? 'تمت الموافقة لكن تعذر إخفاء الطلب' : 'تعذر رفض طلب المتابعة');
-      setBusyRequestId(null);
-      return;
-    }
-
-    setFollowRequests(current => current.filter(request => request.profile.id !== requesterId));
-    setBusyRequestId(null);
-    toast.success(accept ? 'تم قبول طلب المتابعة' : 'تم رفض طلب المتابعة');
-  };
-
   const toggleAccountPrivacy = async () => {
     if (!supabaseConfigured || !own || !person || privacySaving) return;
     const isPrivate = !Boolean(person.is_private);
@@ -470,23 +423,17 @@ export default function ProfilePage({
   const closeSettingsOverlay = () => {
     setShowSettingsOverlay(false);
     setSettingsOverlayEntered(false);
-    setShowFollowRequests(false);
     setSettingsScreen('home');
   };
 
   const openSettingsOverlay = () => {
     setShowProfileMenu(false);
-    setShowFollowRequests(false);
     setSettingsScreen('home');
     setSettingsOverlayEntered(false);
     setShowSettingsOverlay(true);
   };
 
   const goBackInSettings = () => {
-    if (showFollowRequests) {
-      setShowFollowRequests(false);
-      return;
-    }
     if (settingsScreen === 'blocked' || settingsScreen === 'muted') {
       setSettingsScreen('privacy');
       return;
@@ -826,13 +773,13 @@ export default function ProfilePage({
         >
           <section className="profile-settings-panel" onClick={event => event.stopPropagation()}>
             <header className="profile-settings-header">
-              {(showFollowRequests || settingsScreen !== 'home') && (
+              {settingsScreen !== 'home' && (
                 <button type="button" aria-label="عودة" className="profile-settings-back" onClick={goBackInSettings}>
                   <ChevronRight size={20} />
                 </button>
               )}
               <h2 id="profile-settings-title">
-                {showFollowRequests ? 'طلبات المتابعة' : ({
+                {({
                   home: 'الإعدادات',
                   account: 'إعدادات الحساب',
                   email: 'البريد الإلكتروني',
@@ -842,6 +789,8 @@ export default function ProfilePage({
                   privacy: 'خصوصية الحساب',
                   blocked: 'الحسابات المحظورة',
                   muted: 'الحسابات المكتومة',
+                  subscriptions: 'إدارة الاشتراكات',
+                  billing: 'سجل الفواتير والدفع',
                 } as Record<SettingsScreen, string>)[settingsScreen]}
               </h2>
               <button type="button" aria-label="إغلاق الإعدادات" className="profile-settings-close" onClick={closeSettingsOverlay}>
@@ -849,19 +798,8 @@ export default function ProfilePage({
               </button>
             </header>
 
-            <div key={showFollowRequests ? 'follow-requests' : settingsScreen} className="profile-settings-list">
-              {showFollowRequests ? followRequests.length ? (
-                followRequests.map(request => (
-                  <div key={request.profile.id} className="profile-settings-request-card">
-                    <Avatar profile={request.profile} />
-                    <UserIdentity name={displayName(request.profile)} username={request.profile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
-                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, true)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">قبول</button>
-                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, false)} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-zinc-300 disabled:opacity-50">رفض</button>
-                  </div>
-                ))
-              ) : (
-                <p className="profile-settings-empty">لا توجد طلبات متابعة جديدة.</p>
-              ) : settingsScreen === 'home' ? (
+            <div key={settingsScreen} className="profile-settings-list">
+              {settingsScreen === 'home' ? (
                 <>
                   <p className="profile-settings-section-title">الحساب والخصوصية</p>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={startProfileEditing}>
@@ -876,22 +814,16 @@ export default function ProfilePage({
                     <span>خصوصية الحساب</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button
-                    type="button"
-                    className="profile-settings-row profile-settings-link"
-                    onClick={() => {
-                      closeSettingsOverlay();
-                      window.dispatchEvent(new Event('aani:open-profile-settings'));
-                    }}
-                  >
-                    <span>الإعدادات الأخرى</span>
+                  <p className="profile-settings-subscriptions-heading -mx-5 px-5 pt-4 pb-1 text-xs font-semibold text-neutral-500">الاشتراكات</p>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => setSettingsScreen('subscriptions')}>
+                    <span className="flex items-center gap-2">
+                      <span>إدارة الاشتراكات</span>
+                      <span className="profile-settings-subscription-badge">مجاني</span>
+                    </span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-requests" onClick={() => setShowFollowRequests(true)}>
-                    <span className="profile-settings-copy">
-                      <span className="profile-settings-label">طلبات المتابعة ({followRequests.length})</span>
-                      <span className="profile-settings-description">{followRequests.length ? 'عرض طلبات المتابعة الجديدة.' : 'لا توجد طلبات متابعة جديدة.'}</span>
-                    </span>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => setSettingsScreen('billing')}>
+                    <span>سجل الفواتير والدفع</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                 </>
@@ -1007,6 +939,36 @@ export default function ProfilePage({
                     <p className="profile-settings-empty">{settingsScreen === 'blocked' ? 'لا توجد حسابات محظورة.' : 'لا توجد محادثات مكتومة.'}</p>
                   )}
                 </>
+              ) : settingsScreen === 'subscriptions' ? (
+                <div className="profile-settings-subscription-screen">
+                  <section className="profile-settings-subscription-card">
+                    <div className="profile-settings-subscription-card-heading">
+                      <span>الخطة الحالية</span>
+                      <span className="profile-settings-subscription-badge">مجاني</span>
+                    </div>
+                    <p className="profile-settings-subscription-plan">الخطة المجانية</p>
+                    <p className="profile-settings-note">لا يوجد اشتراك مدفوع نشط على هذا الحساب.</p>
+                  </section>
+                  <section>
+                    <p className="profile-settings-section-title">الباقات والعروض المتاحة</p>
+                    <div className="profile-settings-subscription-empty">
+                      <p className="profile-settings-subscription-plan">لا توجد باقات مدفوعة متاحة حالياً</p>
+                      <p className="profile-settings-note">ستظهر الباقات والعروض هنا عند تفعيل خدمة الاشتراكات.</p>
+                    </div>
+                  </section>
+                  <div className="profile-settings-subscription-actions">
+                    <button type="button" className="profile-settings-action" disabled aria-disabled="true">ترقية الاشتراك</button>
+                    <button type="button" className="profile-settings-action profile-settings-secondary-action" disabled aria-disabled="true">تجديد الاشتراك</button>
+                  </div>
+                  <p className="profile-settings-note">خيارات الترقية والتجديد غير متاحة قبل ربط مزوّد دفع آمن.</p>
+                </div>
+              ) : settingsScreen === 'billing' ? (
+                <div className="profile-settings-subscription-screen">
+                  <div className="profile-settings-subscription-empty">
+                    <p className="profile-settings-subscription-plan">لا توجد فواتير أو معاملات مالية سابقة.</p>
+                    <p className="profile-settings-note">سيظهر سجل الفواتير والمدفوعات هنا بعد تفعيل خدمة الاشتراكات والدفع.</p>
+                  </div>
+                </div>
               ) : null}
             </div>
           </section>

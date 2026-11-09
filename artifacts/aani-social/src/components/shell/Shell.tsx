@@ -106,12 +106,9 @@ export default function Shell({
   }, []);
 
   useEffect(() => {
-    const openProfileSettings = () => setShowSettingsModal(true);
     const openStoryComposer = () => requestStoryComposer();
-    window.addEventListener('aani:open-profile-settings', openProfileSettings);
     window.addEventListener('aani:request-story-composer', openStoryComposer);
     return () => {
-      window.removeEventListener('aani:open-profile-settings', openProfileSettings);
       window.removeEventListener('aani:request-story-composer', openStoryComposer);
     };
   }, [requestStoryComposer]);
