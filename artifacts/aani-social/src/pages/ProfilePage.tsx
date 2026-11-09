@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { createPortal } from 'react-dom';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -109,6 +111,9 @@ export default function ProfilePage({
   const [privacySaving, setPrivacySaving] = useState(false);
   const [busyRequestId, setBusyRequestId] = useState<string | null>(null);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
+  const [settingsOverlayEntered, setSettingsOverlayEntered] = useState(false);
+  const [showFollowRequests, setShowFollowRequests] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(person?.avatar_url || null);
@@ -150,6 +155,24 @@ export default function ProfilePage({
   useEffect(() => {
     setBioDraft(person?.bio || '');
   }, [person?.id, person?.bio]);
+
+  useEffect(() => {
+    if (!showSettingsOverlay) return;
+    const frame = window.requestAnimationFrame(() => setSettingsOverlayEntered(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [showSettingsOverlay]);
+
+  useEffect(() => {
+    if (!showSettingsOverlay) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setShowSettingsOverlay(false);
+      setSettingsOverlayEntered(false);
+      setShowFollowRequests(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [showSettingsOverlay]);
 
   useEffect(() => {
     setShowFollowCheckmark(false);
@@ -351,6 +374,27 @@ export default function ProfilePage({
     setPrivacySaving(false);
   };
 
+  const closeSettingsOverlay = () => {
+    setShowSettingsOverlay(false);
+    setSettingsOverlayEntered(false);
+    setShowFollowRequests(false);
+  };
+
+  const openSettingsOverlay = () => {
+    setShowProfileMenu(false);
+    setShowFollowRequests(false);
+    setSettingsOverlayEntered(false);
+    setShowSettingsOverlay(true);
+  };
+
+  const startProfileEditing = () => {
+    setBioDraft(person?.bio || '');
+    setBioEditorOpen(false);
+    setCoverPosition({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
+    setIsEditingProfile(true);
+    closeSettingsOverlay();
+  };
+
   const setImagePreview = (kind: ProfileImageKind, url: string | null) => {
     const previousUrl = kind === 'avatar' ? avatarPreview : coverPreview;
     if (previousUrl?.startsWith('blob:')) {
@@ -523,8 +567,8 @@ export default function ProfilePage({
           <button
             type="button"
             aria-label={isEditingProfile ? 'حفظ تعديلات الملف الشخصي' : 'المزيد من خيارات الملف الشخصي'}
-            aria-expanded={!isEditingProfile && showProfileMenu}
-            onClick={() => isEditingProfile ? void saveProfileEdits() : setShowProfileMenu(open => !open)}
+            aria-expanded={!isEditingProfile && (own ? showSettingsOverlay : showProfileMenu)}
+            onClick={() => isEditingProfile ? void saveProfileEdits() : own ? openSettingsOverlay() : setShowProfileMenu(open => !open)}
             disabled={profileSaving}
             className={`flex h-9 items-center justify-center rounded-full transition disabled:opacity-60 ${isEditingProfile ? 'min-w-12 bg-white px-4 py-1.5 text-sm font-bold text-black shadow-sm hover:bg-neutral-200' : 'w-9 bg-black/50 text-white hover:bg-black/70'}`}
           >
@@ -536,26 +580,50 @@ export default function ProfilePage({
               </svg>
             )}
           </button>
-          {!isEditingProfile && showProfileMenu && (
+          {!isEditingProfile && showProfileMenu && !own && (
             <div role="menu" className="absolute left-4 top-full z-[60] max-h-[70dvh] w-[min(340px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-[#2F3336] bg-[#111] p-3 text-white shadow-xl">
-              {own ? (
+              <Link href={`/messages/${activeUserId}`} onClick={() => setShowProfileMenu(false)} role="menuitem" className="block rounded-xl px-3 py-2 text-sm hover:bg-white/10">إرسال رسالة إلى {displayName(person)}</Link>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {showSettingsOverlay && typeof document !== 'undefined' && createPortal(
+        <div
+          className={`profile-settings-overlay${settingsOverlayEntered ? ' is-visible' : ''}`}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="profile-settings-title"
+          dir="rtl"
+          onClick={closeSettingsOverlay}
+        >
+          <section className="profile-settings-panel" onClick={event => event.stopPropagation()}>
+            <header className="profile-settings-header">
+              {showFollowRequests && (
+                <button type="button" aria-label="العودة إلى الإعدادات" className="profile-settings-back" onClick={() => setShowFollowRequests(false)}>
+                  <ChevronRight size={24} />
+                </button>
+              )}
+              <h2 id="profile-settings-title">{showFollowRequests ? 'طلبات المتابعة' : 'الإعدادات'}</h2>
+              <button type="button" aria-label="إغلاق الإعدادات" className="profile-settings-close" onClick={closeSettingsOverlay}>
+                <X size={30} strokeWidth={2.5} />
+              </button>
+            </header>
+
+            <div className="profile-settings-list">
+              {!showFollowRequests ? (
                 <>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    onClick={() => {
-                      setBioDraft(person.bio || '');
-                      setBioEditorOpen(false);
-                      setCoverPosition({ x: person.cover_position_x ?? 50, y: person.cover_position_y ?? 50 });
-                      setIsEditingProfile(true);
-                      setShowProfileMenu(false);
-                    }}
-                    className="w-full border-b border-[#2F3336] py-3 text-right text-sm font-bold hover:text-[#1D9BF0]"
-                  >تعديل الملف الشخصي</button>
-                  <div className="flex items-center justify-between gap-3 border-b border-[#2F3336] pb-3">
-                    <div>
-                      <span className="block text-sm font-bold">خصوصية الحساب</span>
-                      <span className="text-xs text-[#71767B]">{person.is_private ? 'خاص — القصص للمتابعين المقبولين' : 'عام — القصص متاحة من الملف الشخصي'}</span>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={startProfileEditing}>
+                    <span>تعديل الملف الشخصي</span>
+                    <ChevronLeft size={24} aria-hidden="true" />
+                  </button>
+
+                  <div className="profile-settings-row profile-settings-privacy">
+                    <div className="profile-settings-copy">
+                      <span className="profile-settings-label">خصوصية الحساب</span>
+                      <span className="profile-settings-description">
+                        {person.is_private ? 'خاص — القصص متاحة للمتابعين فقط' : 'عام — القصص متاحة من الملف الشخصي'}
+                      </span>
                     </div>
                     <button
                       type="button"
@@ -564,40 +632,49 @@ export default function ProfilePage({
                       aria-label="خصوصية الحساب"
                       onClick={() => void toggleAccountPrivacy()}
                       disabled={privacySaving}
-                      className={`relative h-6 w-11 shrink-0 rounded-full transition ${person.is_private ? 'bg-pink-600' : 'bg-zinc-700'} disabled:opacity-50`}
+                      className={`profile-settings-switch${person.is_private ? ' is-private' : ''}`}
                     >
-                      <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition-all ${person.is_private ? 'right-1' : 'right-6'}`} />
+                      <span />
                     </button>
                   </div>
+
                   <button
                     type="button"
-                    role="menuitem"
+                    className="profile-settings-row profile-settings-link"
                     onClick={() => {
+                      closeSettingsOverlay();
                       window.dispatchEvent(new Event('aani:open-profile-settings'));
-                      setShowProfileMenu(false);
                     }}
-                    className="w-full border-b border-[#2F3336] py-3 text-right text-sm hover:text-[#1D9BF0]"
-                  >الإعدادات</button>
-                  <div className="pt-3">
-                    <h2 className="mb-2 text-xs font-bold">طلبات المتابعة ({followRequests.length})</h2>
-                    {followRequests.length === 0 && <p className="text-xs text-[#71767B]">لا توجد طلبات متابعة جديدة.</p>}
-                    {followRequests.map(request => (
-                      <div key={request.profile.id} className="flex items-center gap-2 border-t border-[#2F3336] py-2">
-                        <Avatar profile={request.profile} />
-                        <UserIdentity name={displayName(request.profile)} username={request.profile.username} className="min-w-0 flex-1" nameClassName="text-xs text-white" usernameClassName="text-[10px] text-zinc-400" />
-                        <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, true)} className="rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white disabled:opacity-50">قبول</button>
-                        <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, false)} className="rounded-lg bg-zinc-800 px-2 py-1 text-[10px] font-bold text-zinc-300 disabled:opacity-50">رفض</button>
-                      </div>
-                    ))}
-                  </div>
+                  >
+                    <span>الإعدادات الأخرى</span>
+                    <ChevronLeft size={24} aria-hidden="true" />
+                  </button>
+
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-requests" onClick={() => setShowFollowRequests(true)}>
+                    <span className="profile-settings-copy">
+                      <span className="profile-settings-label">طلبات المتابعة ({followRequests.length})</span>
+                      <span className="profile-settings-description">{followRequests.length ? 'عرض طلبات المتابعة الجديدة.' : 'لا توجد طلبات متابعة جديدة.'}</span>
+                    </span>
+                    <ChevronLeft size={24} aria-hidden="true" />
+                  </button>
                 </>
+              ) : followRequests.length ? (
+                followRequests.map(request => (
+                  <div key={request.profile.id} className="profile-settings-request-card">
+                    <Avatar profile={request.profile} />
+                    <UserIdentity name={displayName(request.profile)} username={request.profile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
+                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, true)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">قبول</button>
+                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, false)} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-zinc-300 disabled:opacity-50">رفض</button>
+                  </div>
+                ))
               ) : (
-                <Link href={`/messages/${activeUserId}`} onClick={() => setShowProfileMenu(false)} role="menuitem" className="block rounded-xl px-3 py-2 text-sm hover:bg-white/10">إرسال رسالة إلى {displayName(person)}</Link>
+                <p className="profile-settings-empty">لا توجد طلبات متابعة جديدة.</p>
               )}
             </div>
-          )}
-        </div>
-      </div>
+          </section>
+        </div>,
+        document.body,
+      )}
 
       <div ref={usernameWrapperRef} className="sticky-username-wrapper" id="usernameWrapper">
         {username && <div className="username-text absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none" data-username={username}>{username}</div>}
