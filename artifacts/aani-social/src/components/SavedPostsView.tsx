@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Bookmark, Clapperboard, FileText, Image as ImageIcon, Layers, Play, X,
+  Bookmark, Clapperboard, FileText, Image as ImageIcon, Layers, X,
 } from 'lucide-react';
 
 import FeedPostCard from './FeedPostCard';
@@ -29,40 +29,39 @@ function getPostMedia(post: Post) {
   return mediaUrls;
 }
 
-function SavedPostTile({ post, onOpen }: { post: Post; onOpen: () => void }) {
+function SavedPostTile({ post, onOpen }: { post: Post; onOpen: (post: Post) => void }) {
   const mediaUrls = getPostMedia(post);
   const mediaUrl = mediaUrls[0];
   const caption = post.content?.trim();
+  const textWords = caption?.split(/\s+/).filter(Boolean) ?? [];
+  const textPreview = textWords.slice(0, 2).join(' ');
   const authorName = displayName(post.author);
 
   return (
     <button
       type="button"
-      onClick={onOpen}
+      onClick={event => {
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen(post);
+      }}
       aria-label={`فتح منشور ${authorName}`}
       className="group relative aspect-square w-full min-w-0 overflow-hidden rounded-xl border border-white/[0.08] bg-[#17171b] p-0 text-right shadow-sm transition duration-200 hover:border-white/20 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f1a17f]"
     >
       {post.type === 'text' ? (
         <span className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-[#30231e] via-[#1b1a20] to-[#17171b] p-3 text-center sm:p-4">
           <FileText size={18} className="mb-2 shrink-0 text-[#f1a17f]" aria-hidden="true" />
-          <span className="line-clamp-6 w-full whitespace-pre-wrap break-words text-[11px] leading-5 text-zinc-100 sm:text-sm sm:leading-6">
-            {caption || 'منشور نصي'}
+          <span className="line-clamp-2 w-full break-words text-[11px] leading-5 text-zinc-100 sm:text-sm sm:leading-6">
+            {textPreview ? `${textPreview}${textWords.length > 2 ? '…' : ''}` : 'منشور نصي'}
           </span>
         </span>
       ) : mediaUrl && post.type === 'photo' ? (
-        <>
-          <img
-            src={mediaUrl}
-            alt={caption ? `صورة من منشور: ${caption}` : 'صورة منشورة'}
-            loading="lazy"
-            className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
-          />
-          {caption && (
-            <span className="absolute inset-x-0 bottom-0 line-clamp-2 bg-gradient-to-t from-black/85 via-black/45 to-transparent px-2 pb-2 pt-8 text-[10px] leading-4 text-white sm:px-3 sm:pb-3 sm:text-xs">
-              {caption}
-            </span>
-          )}
-        </>
+        <img
+          src={mediaUrl}
+          alt={caption ? `صورة من منشور ${authorName}` : 'صورة منشورة'}
+          loading="lazy"
+          className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
+        />
       ) : mediaUrl && post.type === 'reel' ? (
         <>
           <video
@@ -70,18 +69,12 @@ function SavedPostTile({ post, onOpen }: { post: Post; onOpen: () => void }) {
             muted
             playsInline
             preload="metadata"
-            aria-label={caption ? `معاينة ريل: ${caption}` : 'معاينة ريل محفوظ'}
+            aria-label="معاينة ريل محفوظ"
             className="pointer-events-none absolute inset-0 h-full w-full object-cover"
           />
-          <span className="absolute inset-0 bg-gradient-to-t from-black/55 via-transparent to-black/10" />
           <span className="absolute left-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white backdrop-blur-sm">
-            <Play size={15} fill="currentColor" aria-hidden="true" />
+            <Clapperboard size={15} aria-hidden="true" />
           </span>
-          {caption && (
-            <span className="absolute inset-x-0 bottom-0 line-clamp-2 px-2 pb-2 text-[10px] leading-4 text-white sm:px-3 sm:pb-3 sm:text-xs">
-              {caption}
-            </span>
-          )}
         </>
       ) : (
         <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-zinc-800 to-zinc-950 text-zinc-400">
@@ -106,28 +99,32 @@ export default function SavedPostsView({
 }: SavedPostsViewProps) {
   const { posts, loading, error, refresh } = useSavedPosts(currentUserId);
   const [activeCategory, setActiveCategory] = useState<SavedCategory>('all');
-  const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
+  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
 
   const filteredPosts = useMemo(
     () => activeCategory === 'all' ? posts : posts.filter(post => post.type === activeCategory),
     [activeCategory, posts],
   );
-  const selectedPost = selectedPostId ? posts.find(post => post.id === selectedPostId) : null;
+  const selectedPostId = selectedPost?.id;
+
+  useEffect(() => {
+    if (!selectedPost) return;
+    const currentPost = posts.find(post => post.id === selectedPost.id);
+    if (!currentPost) {
+      setSelectedPost(null);
+    } else if (currentPost !== selectedPost) {
+      setSelectedPost(currentPost);
+    }
+  }, [posts, selectedPost]);
 
   useEffect(() => {
     if (!selectedPostId) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedPostId(null);
+      if (event.key === 'Escape') setSelectedPost(null);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [selectedPostId]);
-
-  useEffect(() => {
-    if (selectedPostId && !posts.some(post => post.id === selectedPostId)) {
-      setSelectedPostId(null);
-    }
-  }, [posts, selectedPostId]);
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-4" dir="rtl">
@@ -190,16 +187,16 @@ export default function SavedPostsView({
       ) : (
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2" aria-label="شبكة العناصر المحفوظة">
           {filteredPosts.map(post => (
-            <SavedPostTile key={post.id} post={post} onOpen={() => setSelectedPostId(post.id)} />
+            <SavedPostTile key={post.id} post={post} onOpen={selected => setSelectedPost(selected)} />
           ))}
         </div>
       )}
 
       {selectedPost && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-0 backdrop-blur-sm sm:p-6"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-0 backdrop-blur-sm sm:p-6"
           onClick={event => {
-            if (event.currentTarget === event.target) setSelectedPostId(null);
+            if (event.currentTarget === event.target) setSelectedPost(null);
           }}
         >
           <section
@@ -215,7 +212,7 @@ export default function SavedPostsView({
               </div>
               <button
                 type="button"
-                onClick={() => setSelectedPostId(null)}
+                onClick={() => setSelectedPost(null)}
                 aria-label="إغلاق المنشور"
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-white/[0.06] text-zinc-300 transition hover:bg-white/10 hover:text-white"
               >
