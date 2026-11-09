@@ -33,10 +33,22 @@ export default function useAppSession() {
 
     void loadSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
       setSession(nextSession);
       setProfile(null);
+      if (event === 'SIGNED_IN' && nextSession?.user?.id) {
+        const signedInUserId = nextSession.user.id;
+        window.setTimeout(() => {
+          void supabase.from('profiles')
+            .update({ is_deactivated: false })
+            .eq('id', signedInUserId)
+            .eq('is_deactivated', true)
+            .then(({ error }) => {
+              if (error) console.error('تعذر إعادة تفعيل الحساب عند تسجيل الدخول:', error);
+            });
+        }, 0);
+      }
     });
 
     return () => {

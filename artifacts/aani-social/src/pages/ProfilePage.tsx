@@ -172,6 +172,7 @@ export default function ProfilePage({
   const settingsScreen = (navStack[navStack.length - 1] === 'main' ? 'home' : navStack[navStack.length - 1]) as SettingsScreen;
   const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false);
   const [showPhoneModal, setShowPhoneModal] = useState(false);
+  const [showDeactivateAccountConfirmation, setShowDeactivateAccountConfirmation] = useState(false);
   const [showDeleteAccountConfirmation, setShowDeleteAccountConfirmation] = useState(false);
   const [deleteAccountConfirmation, setDeleteAccountConfirmation] = useState('');
   const [supportReport, setSupportReport] = useState('');
@@ -286,6 +287,11 @@ export default function ProfilePage({
         setShowPhoneModal(false);
         return;
       }
+      if (showDeactivateAccountConfirmation) {
+        event.preventDefault();
+        setShowDeactivateAccountConfirmation(false);
+        return;
+      }
       if (showDeleteAccountConfirmation) {
         event.preventDefault();
         setShowDeleteAccountConfirmation(false);
@@ -297,7 +303,7 @@ export default function ProfilePage({
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [showSettingsOverlay, showLogoutConfirmation, showPhoneModal, showDeleteAccountConfirmation, navStack.length]);
+  }, [showSettingsOverlay, showLogoutConfirmation, showPhoneModal, showDeactivateAccountConfirmation, showDeleteAccountConfirmation, navStack.length]);
 
   useEffect(() => {
     if (!showSettingsOverlay || !['account', 'password', 'security'].includes(settingsScreen)) return;
@@ -558,6 +564,7 @@ export default function ProfilePage({
     setSettingsOverlayEntered(false);
     setShowLogoutConfirmation(false);
     setShowPhoneModal(false);
+    setShowDeactivateAccountConfirmation(false);
     setShowDeleteAccountConfirmation(false);
     setDeleteAccountConfirmation('');
     setNavStack(['main']);
@@ -567,6 +574,7 @@ export default function ProfilePage({
     setShowProfileMenu(false);
     setShowLogoutConfirmation(false);
     setShowPhoneModal(false);
+    setShowDeactivateAccountConfirmation(false);
     setShowDeleteAccountConfirmation(false);
     setNavStack(['main']);
     setSettingsOverlayEntered(false);
@@ -588,6 +596,10 @@ export default function ProfilePage({
     }
     if (showPhoneModal) {
       setShowPhoneModal(false);
+      return;
+    }
+    if (showDeactivateAccountConfirmation) {
+      setShowDeactivateAccountConfirmation(false);
       return;
     }
     if (showDeleteAccountConfirmation) {
@@ -684,6 +696,36 @@ export default function ProfilePage({
       toast.success('تم تحديث كلمة المرور.');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'تعذر تحديث كلمة المرور.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const deactivateAccountTemporarily = async () => {
+    if (!currentUserId || accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { data, error } = await supabase.from('profiles')
+        .update({ is_deactivated: true })
+        .eq('id', currentUserId)
+        .select('id')
+        .maybeSingle();
+      if (error) {
+        if ((error.code === 'PGRST204' || error.code === '42703') && /is_deactivated/i.test(error.message)) {
+          throw new Error('طبّق ترحيل تعطيل الحساب في Supabase ثم حاول مجدداً.');
+        }
+        throw error;
+      }
+      if (!data?.id) throw new Error('تعذر العثور على ملف الحساب لتحديث حالته.');
+
+      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
+      if (signOutError) throw signOutError;
+      setShowDeactivateAccountConfirmation(false);
+      setShowSettingsOverlay(false);
+      toast.success('تم تعطيل الحساب مؤقتاً. سجّل الدخول مجدداً لإعادة تفعيله.');
+      setLocation('/login');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر تعطيل الحساب مؤقتاً.');
     } finally {
       setAccountSettingsBusy(false);
     }
@@ -1472,7 +1514,7 @@ export default function ProfilePage({
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-section-title">إدارة الحساب</p>
-                  <button type="button" className="profile-settings-danger" disabled aria-disabled="true">تعطيل الحساب</button>
+                  <button type="button" className="profile-settings-danger" onClick={() => setShowDeactivateAccountConfirmation(true)} disabled={!own || accountSettingsBusy}>تعطيل الحساب</button>
                   <button type="button" className="profile-settings-danger" onClick={() => { setDeleteAccountConfirmation(''); setShowDeleteAccountConfirmation(true); }}>حذف الحساب نهائياً</button>
                 </>
               ) : settingsScreen === 'password' ? (
@@ -1608,6 +1650,18 @@ export default function ProfilePage({
                     <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim() || phoneDraft.trim() === authPhone}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'حفظ الرقم'}</button>
                   </div>
                 </form>
+              </section>
+            </div>
+          )}
+          {showDeactivateAccountConfirmation && (
+            <div className="profile-settings-dialog-backdrop" onClick={() => { if (!accountSettingsBusy) setShowDeactivateAccountConfirmation(false); }}>
+              <section role="alertdialog" aria-modal="true" aria-labelledby="deactivate-account-title" aria-describedby="deactivate-account-description" className="profile-settings-dialog" onClick={event => event.stopPropagation()}>
+                <h3 id="deactivate-account-title">تعطيل الحساب مؤقتاً</h3>
+                <p id="deactivate-account-description" className="profile-settings-note">هل أنت متأكد من تعطيل حسابك مؤقتاً؟ سيتم تسجيل خروجك، ويمكنك إعادة تفعيل الحساب بتسجيل الدخول مجدداً.</p>
+                <div className="profile-settings-dialog-actions">
+                  <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => setShowDeactivateAccountConfirmation(false)}>إلغاء</button>
+                  <button type="button" className="profile-settings-action" disabled={accountSettingsBusy} onClick={() => void deactivateAccountTemporarily()}>{accountSettingsBusy ? 'جارٍ التعطيل...' : 'تعطيل مؤقتاً'}</button>
+                </div>
               </section>
             </div>
           )}

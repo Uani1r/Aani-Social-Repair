@@ -25,6 +25,7 @@ export type Profile = {
   website?: string | null;
   bio: string;
   is_private?: boolean;
+  is_deactivated?: boolean;
   notification_settings?: ProfileNotificationSettings | null;
   appearance_preference?: 'dark' | 'light' | 'system' | null;
   language_preference?: 'ar' | 'en' | null;
