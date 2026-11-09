@@ -32,6 +32,7 @@ export type Profile = {
   hd_uploads?: boolean | null;
   data_saver?: boolean | null;
   font_preference?: 'alexandria' | 'ibm-plex-sans-arabic' | 'tajawal' | 'cairo' | 'noto-sans-arabic' | null;
+  fcm_token?: string | null;
   created_at?: string | null;
 };
 

@@ -12,3 +12,6 @@ verify_jwt = true
 
 [functions.login-with-username]
 verify_jwt = false
+
+[functions.send-push-notification]
+verify_jwt = false

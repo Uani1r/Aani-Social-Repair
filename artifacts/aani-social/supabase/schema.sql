@@ -26,11 +26,15 @@ create table if not exists public.profiles (
   hd_uploads boolean not null default true,
   data_saver boolean not null default false,
   font_preference text not null default 'alexandria' check (font_preference in ('alexandria', 'ibm-plex-sans-arabic', 'tajawal', 'cairo', 'noto-sans-arabic')),
+  is_private boolean not null default false,
+  is_deactivated boolean not null default false,
+  fcm_token text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 alter table public.profiles add column if not exists username text;
+alter table public.profiles add column if not exists is_private boolean not null default false;
 alter table public.profiles add column if not exists is_deactivated boolean not null default false;
 alter table public.profiles add column if not exists full_name text;
 alter table public.profiles add column if not exists avatar_url text;
@@ -56,6 +60,8 @@ alter table public.profiles add column if not exists language_preference text no
 alter table public.profiles add column if not exists hd_uploads boolean not null default true;
 alter table public.profiles add column if not exists data_saver boolean not null default false;
 alter table public.profiles add column if not exists font_preference text not null default 'alexandria' check (font_preference in ('alexandria', 'ibm-plex-sans-arabic', 'tajawal', 'cairo', 'noto-sans-arabic'));
+alter table public.profiles add column if not exists fcm_token text;
+grant update (fcm_token) on table public.profiles to authenticated;
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 
@@ -475,7 +481,14 @@ revoke all on function public.aani_mark_conversation_read(uuid) from public, ano
 grant execute on function public.aani_mark_messages_delivered(uuid[]) to authenticated;
 grant execute on function public.aani_mark_conversation_read(uuid) to authenticated;
 
-grant select, insert, update on public.profiles to authenticated;
+revoke select on table public.profiles from public, anon, authenticated;
+grant select (
+  id, username, full_name, avatar_url, cover_url, cover_position_x, cover_position_y,
+  location, city, job, birth_date, show_city, show_job, show_birth_date, website,
+  bio, display_name, notification_settings, appearance_preference, language_preference,
+  hd_uploads, data_saver, font_preference, is_private, is_deactivated, created_at, updated_at
+) on table public.profiles to authenticated;
+grant insert, update on public.profiles to authenticated;
 grant select, insert, update, delete on public.posts to authenticated;
 grant select, insert, delete on public.likes to authenticated;
 grant select, insert, delete on public.comments to authenticated;

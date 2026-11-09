@@ -39,7 +39,8 @@ PORT=5173 BASE_PATH=/ pnpm --filter @workspace/aani-social run build
 
 في أسرار Supabase Edge Functions أضف `GEMINI_API_KEY` و`ALLOWED_ORIGINS`؛
 `GEMINI_MODEL` اختياري. لا يُخزّن مفتاح Gemini في Replit. تفاصيل الإعداد والنشر
-في [`docs/SETUP_AR.md`](./docs/SETUP_AR.md).
+في [`docs/SETUP_AR.md`](./docs/SETUP_AR.md). لإعداد إشعارات FCM الفورية، راجع
+[`docs/PUSH_NOTIFICATIONS_SETUP_AR.md`](./docs/PUSH_NOTIFICATIONS_SETUP_AR.md).
 
 ## قاعدة البيانات والوسائط
 

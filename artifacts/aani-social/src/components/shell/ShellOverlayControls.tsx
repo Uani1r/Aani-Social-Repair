@@ -52,6 +52,9 @@ type ShellOverlayControlsProps = {
   onSignOut: () => void;
   showNotifsModal: boolean;
   onCloseNotifications: () => void;
+  openFollowRequests: boolean;
+  onOpenFollowRequestsHandled: () => void;
+  onOpenFollowRequests: () => void;
   onOpenComments: (postId: string, commentId?: string) => void;
   onOpenStory: (storyId: string, ownerId: string) => void;
   NotificationsModalComponent: ComponentType<NotificationsModalProps>;
@@ -103,6 +106,9 @@ export default function ShellOverlayControls({
   onSignOut,
   showNotifsModal,
   onCloseNotifications,
+  openFollowRequests,
+  onOpenFollowRequestsHandled,
+  onOpenFollowRequests,
   onOpenComments,
   onOpenStory,
   NotificationsModalComponent,
@@ -182,6 +188,9 @@ export default function ShellOverlayControls({
         onOpenStory={onOpenStory}
         notificationSettings={profile?.notification_settings}
         language={profile?.language_preference || 'ar'}
+        openFollowRequests={openFollowRequests}
+        onOpenFollowRequestsHandled={onOpenFollowRequestsHandled}
+        onOpenFollowRequests={onOpenFollowRequests}
       />
 
       {!hideAssistantLauncher && (

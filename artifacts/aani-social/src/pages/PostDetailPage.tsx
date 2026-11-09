@@ -85,8 +85,9 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
   useEffect(() => { void refresh(); }, [refresh]);
 
   useEffect(() => {
-    const commentId = new URLSearchParams(window.location.search).get('commentId');
-    if (commentId) onOpenComments(postId, commentId);
+    const search = new URLSearchParams(window.location.search);
+    const commentId = search.get('commentId');
+    if (commentId || search.get('showComments') === '1') onOpenComments(postId, commentId || undefined);
   }, [location, onOpenComments, postId]);
 
   return (

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, UserPlus, UserRound, X } from 'lucide-react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -60,7 +60,17 @@ const formatRequestTime = (value: string) => {
   return formatter.format(Math.round(difference / 86_400_000), 'day');
 };
 
-export default function FollowRequestsSection({ currentUserId, dir = 'rtl' }: { currentUserId: string; dir?: 'rtl' | 'ltr' }) {
+export default function FollowRequestsSection({
+  currentUserId,
+  dir = 'rtl',
+  openInitially = false,
+  onOpenInitiallyHandled,
+}: {
+  currentUserId: string;
+  dir?: 'rtl' | 'ltr';
+  openInitially?: boolean;
+  onOpenInitiallyHandled?: () => void;
+}) {
   const [requests, setRequests] = useState<FollowRequestEntry[]>([]);
   const [mockRequests, setMockRequests] = useState<FollowRequestEntry[]>([]);
   const [mockVisible, setMockVisible] = useState(false);
@@ -200,7 +210,7 @@ export default function FollowRequestsSection({ currentUserId, dir = 'rtl' }: { 
     };
   }, [currentUserId]);
 
-  const openRequests = () => {
+  const openRequests = useCallback(() => {
     setOverlayOpen(true);
     setUnreadCount(0);
     setMockUnreadCount(0);
@@ -220,11 +230,17 @@ export default function FollowRequestsSection({ currentUserId, dir = 'rtl' }: { 
         .eq('is_read', false);
       if (updateError) {
         console.warn('[notifications] تعذر تحديد طلبات المتابعة كمقروءة:', updateError);
-        setError('تعذر حفظ حالة طلبات المتابعة كمقروءة.');
+        setError('تعذر حفظ طلبات المتابعة كمقروءة.');
         refreshUnreadCountRef.current?.();
       }
     })();
-  };
+  }, [currentUserId]);
+
+  useEffect(() => {
+    if (!openInitially) return;
+    openRequests();
+    onOpenInitiallyHandled?.();
+  }, [onOpenInitiallyHandled, openInitially, openRequests]);
 
   const respondToRequest = async (requesterId: string, accept: boolean) => {
     if (busyRequestId) return;
@@ -281,7 +297,7 @@ export default function FollowRequestsSection({ currentUserId, dir = 'rtl' }: { 
   ].sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
   const totalUnreadCount = unreadCount + mockUnreadCount;
 
-  if (!requests.length && !mockVisible) return null;
+  if (!requests.length && !mockVisible && !overlayOpen) return null;
 
   return (
     <>

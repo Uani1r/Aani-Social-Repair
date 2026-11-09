@@ -4,7 +4,7 @@ import { useLocation } from 'wouter';
 import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
-import CallManager, { CALL_LOG_EVENT, type CallLogEventDetail } from '@/components/CallManager';
+import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEventDetail } from '@/components/CallManager';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
@@ -100,6 +100,7 @@ export default function Shell({
   const [pendingStoryComposerRequest, setPendingStoryComposerRequest] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showNotifsModal, setShowNotifsModal] = useState(false);
+  const [openFollowRequestsOnOpen, setOpenFollowRequestsOnOpen] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const seenNotificationIdsRef = useRef(new Set<string>());
@@ -116,8 +117,66 @@ export default function Shell({
     setPendingStoryComposerRequest(true);
     if (currentPathRef.current !== '/' && currentPathRef.current !== '/feed') setLocation('/feed');
   }, [setLocation]);
+  const acknowledgeOpenFollowRequests = useCallback(() => setOpenFollowRequestsOnOpen(false), []);
+  const requestOpenFollowRequests = useCallback(() => {
+    setShowNotifsModal(true);
+    setOpenFollowRequestsOnOpen(true);
+  }, []);
+  const handlePushNavigation = useCallback((rawUrl: string) => {
+    try {
+      const target = new URL(rawUrl, window.location.origin);
+      if (target.origin !== window.location.origin) return;
 
-  const handleSignOut = () => {
+      const query = target.searchParams;
+      const pushedNotificationId = query.get('pushNotificationId');
+      if (pushedNotificationId) {
+        void supabase.from('notifications')
+          .update({ is_read: true })
+          .eq('id', pushedNotificationId)
+          .eq('user_id', userId);
+      }
+      const storyId = query.get('openStoryId');
+      const storyOwnerId = query.get('openStoryOwner');
+      if (storyId && storyOwnerId) {
+        onOpenStory(storyId, storyOwnerId);
+        setLocation('/feed');
+        return;
+      }
+
+      setLocation(`${target.pathname}${target.search}${target.hash}`);
+      const pathSegments = target.pathname.split('/').filter(Boolean);
+      if (query.get('showComments') === '1') {
+        const encodedPostId = pathSegments[0] === 'post' ? pathSegments[1] : '';
+        if (encodedPostId) {
+          onOpenComments(decodeURIComponent(encodedPostId), query.get('commentId') || undefined);
+        }
+      }
+      if (query.get('openFollowRequests') === '1') requestOpenFollowRequests();
+      if (query.get('openCall') === '1') {
+        const encodedCallerId = pathSegments[0] === 'messages' ? pathSegments[1] : '';
+        const callerId = query.get('callerId') || (encodedCallerId ? decodeURIComponent(encodedCallerId) : '');
+        const callId = query.get('callId');
+        if (callerId) {
+          window.setTimeout(() => window.dispatchEvent(new CustomEvent(OPEN_INCOMING_CALL_EVENT, {
+            detail: { callerId, callId },
+          })), 0);
+        }
+      }
+    } catch (error) {
+      console.warn('[push] تعذر فتح وجهة الإشعار:', error);
+    }
+  }, [onOpenComments, onOpenStory, requestOpenFollowRequests, setLocation, userId]);
+
+  const handleSignOut = async () => {
+    // Remove this browser's push destination before the session is cleared.
+    if (supabaseConfigured) {
+      try {
+        const { error } = await supabase.from('profiles').update({ fcm_token: null }).eq('id', userId);
+        if (error) console.warn('[push] تعذر إلغاء تسجيل هذا الجهاز قبل تسجيل الخروج:', error);
+      } catch (error) {
+        console.warn('[push] تعذر إلغاء تسجيل هذا الجهاز قبل تسجيل الخروج:', error);
+      }
+    }
     // Root is valid in both session states: feed before logout, login after it.
     setLocation('/');
     onSignOut();
@@ -140,6 +199,25 @@ export default function Shell({
       window.removeEventListener('aani:request-story-composer', openStoryComposer);
     };
   }, [requestStoryComposer]);
+
+  useEffect(() => {
+    const handleServiceWorkerMessage = (event: MessageEvent) => {
+      const message = event.data as { type?: unknown; url?: unknown } | null;
+      if (message?.type === 'AANI_PUSH_CLICK' && typeof message.url === 'string') {
+        handlePushNavigation(message.url);
+      }
+    };
+    if (!('serviceWorker' in navigator)) return undefined;
+    navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage);
+  }, [handlePushNavigation]);
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (['openFollowRequests', 'openCall', 'openStoryId', 'pushNotificationId', 'showComments'].some(key => query.has(key))) {
+      handlePushNavigation(window.location.href);
+    }
+  }, [handlePushNavigation]);
 
   useEffect(() => {
     let modalOpen = hasBlockingFeedDialog();
@@ -1048,6 +1126,9 @@ export default function Shell({
         onSignOut={handleSignOut}
         showNotifsModal={showNotifsModal}
         onCloseNotifications={() => setShowNotifsModal(false)}
+        openFollowRequests={openFollowRequestsOnOpen}
+        onOpenFollowRequestsHandled={acknowledgeOpenFollowRequests}
+        onOpenFollowRequests={requestOpenFollowRequests}
         onOpenComments={onOpenComments}
         onOpenStory={onOpenStory}
         NotificationsModalComponent={NotificationsModalComponent}

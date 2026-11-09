@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import FollowRequestsSection from '@/components/FollowRequestsSection';
+import PushNotificationsControl from '@/components/PushNotificationsControl';
 import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
@@ -19,6 +20,9 @@ type NotificationsModalProps = {
   onOpenStory: (storyId: string, ownerId: string) => void;
   notificationSettings?: ProfileNotificationSettings | null;
   language?: 'ar' | 'en';
+  openFollowRequests?: boolean;
+  onOpenFollowRequestsHandled?: () => void;
+  onOpenFollowRequests?: () => void;
 };
 
 type NotificationEntry = NotificationItem & {
@@ -41,8 +45,10 @@ type NotificationReferenceRow = {
 
 type NotificationTarget =
   | { kind: 'post'; postId: string }
-  | { kind: 'comment'; postId: string; commentId: string }
+  | { kind: 'comment'; postId: string; commentId: string | null }
   | { kind: 'story'; storyId: string; ownerId: string }
+  | { kind: 'profile'; userId: string }
+  | { kind: 'followRequests' }
   | { kind: 'conversation'; userId: string }
   | { kind: 'call'; callerId: string; callId: string | null };
 
@@ -145,11 +151,16 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
     return ownerId ? { kind: 'story', storyId: referenceId, ownerId } : null;
   }
 
-  if (item.type === 'comment' || item.type === 'reply' || (item.type === 'like' && Boolean(item.comment_id))) {
-    const commentId = item.comment_id;
+  if (item.type === 'comment' || item.type === 'reply') {
     const postId = item.post_id || referenceId;
-    return commentId && postId ? { kind: 'comment', postId, commentId } : null;
+    return postId ? { kind: 'comment', postId, commentId: item.comment_id || null } : null;
   }
+
+  if (['follow', 'followed', 'new_follower'].includes(item.type) && item.actor_id) {
+    return { kind: 'profile', userId: item.actor_id };
+  }
+
+  if (item.type === 'follow_request') return { kind: 'followRequests' };
 
   if (['message', 'new_message'].includes(item.type) && item.actor_id) {
     return { kind: 'conversation', userId: item.actor_id };
@@ -252,6 +263,9 @@ export default function NotificationsModal({
   onOpenStory,
   notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
   language = 'ar',
+  openFollowRequests = false,
+  onOpenFollowRequestsHandled,
+  onOpenFollowRequests,
 }: NotificationsModalProps) {
   const [, setLocation] = useLocation();
   const [items, setItems] = useState<NotificationEntry[]>([]);
@@ -535,12 +549,22 @@ export default function NotificationsModal({
     const target = getNotificationTarget(item, currentUserId);
     if (!target) return;
 
+    if (target.kind === 'followRequests') {
+      onOpenFollowRequests?.();
+      return;
+    }
+
     onClose();
     if (target.kind === 'post') {
       setLocation(`/post/${encodeURIComponent(target.postId)}`);
     } else if (target.kind === 'comment') {
-      onOpenComments(target.postId, target.commentId);
-      setLocation(`/post/${encodeURIComponent(target.postId)}?commentId=${encodeURIComponent(target.commentId)}`);
+      onOpenComments(target.postId, target.commentId || undefined);
+      const query = target.commentId
+        ? `commentId=${encodeURIComponent(target.commentId)}`
+        : 'showComments=1';
+      setLocation(`/post/${encodeURIComponent(target.postId)}?${query}`);
+    } else if (target.kind === 'profile') {
+      setLocation(`/profile/${encodeURIComponent(target.userId)}`);
     } else if (target.kind === 'story') {
       onOpenStory(target.storyId, target.ownerId);
       setLocation('/feed');
@@ -636,7 +660,14 @@ export default function NotificationsModal({
           </button>
         </header>
 
-        {notificationSettings.followers !== false && <FollowRequestsSection currentUserId={currentUserId} dir={language === 'ar' ? 'rtl' : 'ltr'} />}
+        {notificationSettings.followers !== false && (
+          <FollowRequestsSection
+            currentUserId={currentUserId}
+            dir={language === 'ar' ? 'rtl' : 'ltr'}
+            openInitially={openFollowRequests}
+            onOpenInitiallyHandled={onOpenFollowRequestsHandled}
+          />
+        )}
 
         <div role="tablist" aria-label="تصفية الإشعارات" className="flex shrink-0 gap-1 border-b border-white/[0.06] px-3 py-2">
           {FILTER_TABS.map(tab => (
@@ -662,6 +693,7 @@ export default function NotificationsModal({
             if (element.scrollHeight - element.scrollTop - element.clientHeight <= 120) loadMoreRef.current?.();
           }}
         >
+          <PushNotificationsControl currentUserId={currentUserId} />
           {loading && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
           {error && <p role="alert" className="mb-1 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">تعذر تحميل الإشعارات: {error}</p>}
           {readError && <p role="status" className="mb-1 rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3 text-xs text-amber-100">{readError}</p>}

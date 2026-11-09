@@ -10,6 +10,9 @@ export type NotificationsModalProps = {
   onOpenStory: (storyId: string, ownerId: string) => void;
   notificationSettings?: ProfileNotificationSettings | null;
   language?: 'ar' | 'en';
+  openFollowRequests?: boolean;
+  onOpenFollowRequestsHandled?: () => void;
+  onOpenFollowRequests?: () => void;
 };
 
 export type ShellProps = {
