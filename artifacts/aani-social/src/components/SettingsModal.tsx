@@ -291,21 +291,33 @@ export default function SettingsModal({
                 السيرة الذاتية
                 <textarea value={bio} onChange={event => setBio(event.target.value)} rows={6} className="w-full resize-y rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm leading-6 text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
               </label>
-              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
-                المدينة
-                <input value={city} onChange={event => setCity(event.target.value)} maxLength={100} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
-                <span className="flex items-center gap-2 font-normal text-zinc-400"><input type="checkbox" checked={showCity} onChange={event => setShowCity(event.target.checked)} className="h-4 w-4 accent-sky-400" />إظهار المدينة في الملف الشخصي العام</span>
-              </label>
-              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
-                الوظيفة
-                <input value={job} onChange={event => setJob(event.target.value)} maxLength={120} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
-                <span className="flex items-center gap-2 font-normal text-zinc-400"><input type="checkbox" checked={showJob} onChange={event => setShowJob(event.target.checked)} className="h-4 w-4 accent-sky-400" />إظهار الوظيفة في الملف الشخصي العام</span>
-              </label>
-              <label className="block space-y-2 text-xs font-semibold text-zinc-300">
-                تاريخ الميلاد
-                <input type="date" value={birthDate} onChange={event => setBirthDate(event.target.value)} className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition focus:border-white/25" />
-                <span className="flex items-center gap-2 font-normal text-zinc-400"><input type="checkbox" checked={showBirthDate} onChange={event => setShowBirthDate(event.target.checked)} className="h-4 w-4 accent-sky-400" />إظهار تاريخ الميلاد في الملف الشخصي العام</span>
-              </label>
+              <div className="space-y-2">
+                <label htmlFor="settings-profile-job" className="block text-xs font-semibold text-zinc-300">الوظيفة</label>
+                <div className="flex items-center gap-3">
+                  <input id="settings-profile-job" value={job} onChange={event => setJob(event.target.value)} maxLength={120} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+                  <button type="button" role="switch" aria-checked={showJob} aria-label="إظهار الوظيفة في الملف الشخصي العام" onClick={() => setShowJob(value => !value)} className={`grid h-7 w-7 shrink-0 place-items-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${showJob ? 'border-sky-400 bg-sky-400 text-black' : 'border-zinc-600 bg-transparent text-transparent hover:border-sky-400'}`}>
+                    {showJob && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="settings-profile-city" className="block text-xs font-semibold text-zinc-300">المدينة</label>
+                <div className="flex items-center gap-3">
+                  <input id="settings-profile-city" value={city} onChange={event => setCity(event.target.value)} maxLength={100} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition placeholder:text-zinc-600 focus:border-white/25" />
+                  <button type="button" role="switch" aria-checked={showCity} aria-label="إظهار المدينة في الملف الشخصي العام" onClick={() => setShowCity(value => !value)} className={`grid h-7 w-7 shrink-0 place-items-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${showCity ? 'border-sky-400 bg-sky-400 text-black' : 'border-zinc-600 bg-transparent text-transparent hover:border-sky-400'}`}>
+                    {showCity && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+                  </button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="settings-profile-birth-date" className="block text-xs font-semibold text-zinc-300">تاريخ الميلاد</label>
+                <div className="flex items-center gap-3">
+                  <input id="settings-profile-birth-date" type="date" value={birthDate} onChange={event => setBirthDate(event.target.value)} max={new Date().toISOString().slice(0, 10)} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm text-white outline-none transition focus:border-white/25" />
+                  <button type="button" role="switch" aria-checked={showBirthDate} aria-label="إظهار تاريخ الميلاد في الملف الشخصي العام" onClick={() => setShowBirthDate(value => !value)} className={`grid h-7 w-7 shrink-0 place-items-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 ${showBirthDate ? 'border-sky-400 bg-sky-400 text-black' : 'border-zinc-600 bg-transparent text-transparent hover:border-sky-400'}`}>
+                    {showBirthDate && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="shrink-0 border-t border-white/[0.07] p-4">
               <button type="submit" disabled={profileSaving} className="w-full rounded-2xl bg-white px-4 py-3 text-sm font-bold text-black transition hover:bg-zinc-200 disabled:cursor-wait disabled:opacity-60">

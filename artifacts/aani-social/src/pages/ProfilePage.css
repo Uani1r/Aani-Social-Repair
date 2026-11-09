@@ -1033,31 +1033,83 @@
   text-align: left;
 }
 
-.profile-edit-visibility {
-  display: inline-flex;
-  min-height: 32px;
+.profile-edit-metadata-row {
+  display: grid;
+  grid-template-columns: minmax(92px, max-content) minmax(0, 1fr) 28px;
   align-items: center;
-  gap: 9px;
-  color: #969696;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
+  gap: 12px;
+  border-bottom: 1px solid #242424;
+  padding: 16px 0;
+  color: #e5e5e5;
 }
 
-.profile-edit-visibility input {
-  width: 17px;
-  height: 17px;
-  accent-color: #1d9bf0;
+.profile-edit-metadata-row > label {
+  color: #f2f2f2;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.profile-edit-metadata-row > input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
+  color: #60a5fa;
+  font: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.profile-edit-metadata-row > input[type='date'] {
+  direction: ltr;
+  text-align: left;
+  color-scheme: dark;
+}
+
+.profile-edit-metadata-row > input::placeholder {
+  color: #777;
+}
+
+.profile-edit-visibility-toggle {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1.5px solid #646464;
+  border-radius: 50%;
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.profile-edit-visibility-toggle.is-enabled {
+  border-color: #1d9bf0;
+  background: #1d9bf0;
+  color: #fff;
+}
+
+.profile-edit-visibility-toggle:active {
+  transform: scale(.92);
+}
+
+.profile-edit-visibility-toggle:focus-visible {
+  outline: 2px solid #93c5fd;
+  outline-offset: 3px;
 }
 
 .profile-public-meta {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 16px;
-  margin-top: 12px;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin-top: 8px;
   color: #9ca3af;
-  font-size: 13px;
+  direction: rtl;
+  font-size: 12px;
+  text-align: right;
 }
 
 .profile-public-meta-item {

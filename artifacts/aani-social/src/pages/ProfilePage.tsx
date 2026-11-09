@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Briefcase, CalendarDays, Camera, ChevronLeft, ChevronRight, MapPin, X } from 'lucide-react';
+import { Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, MapPin, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -930,20 +930,26 @@ export default function ProfilePage({
                   <label htmlFor="profile-edit-bio">السيرة الذاتية</label>
                   <textarea id="profile-edit-bio" value={bioDraft} onChange={event => setBioDraft(event.target.value)} rows={5} dir="auto" placeholder="اكتب نبذة عنك..." />
                 </div>
-                <div className="profile-edit-field">
-                  <label htmlFor="profile-edit-city">المدينة</label>
-                  <input id="profile-edit-city" value={cityDraft} onChange={event => setCityDraft(event.target.value)} maxLength={100} dir="auto" placeholder="أضف مدينتك" />
-                  <label className="profile-edit-visibility"><input type="checkbox" checked={showCityDraft} onChange={event => setShowCityDraft(event.target.checked)} />إظهار المدينة في الملف الشخصي العام</label>
-                </div>
-                <div className="profile-edit-field">
+                <div className="profile-edit-metadata-row">
                   <label htmlFor="profile-edit-job">الوظيفة</label>
                   <input id="profile-edit-job" value={jobDraft} onChange={event => setJobDraft(event.target.value)} maxLength={120} dir="auto" placeholder="أضف وظيفتك" />
-                  <label className="profile-edit-visibility"><input type="checkbox" checked={showJobDraft} onChange={event => setShowJobDraft(event.target.checked)} />إظهار الوظيفة في الملف الشخصي العام</label>
+                  <button type="button" role="switch" aria-checked={showJobDraft} aria-label="إظهار الوظيفة في الملف الشخصي العام" onClick={() => setShowJobDraft(value => !value)} className={`profile-edit-visibility-toggle${showJobDraft ? ' is-enabled' : ''}`}>
+                    {showJobDraft && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+                  </button>
                 </div>
-                <div className="profile-edit-field">
+                <div className="profile-edit-metadata-row">
+                  <label htmlFor="profile-edit-city">الموقع الجغرافي</label>
+                  <input id="profile-edit-city" value={cityDraft} onChange={event => setCityDraft(event.target.value)} maxLength={100} dir="auto" placeholder="أضف مدينتك" />
+                  <button type="button" role="switch" aria-checked={showCityDraft} aria-label="إظهار المدينة في الملف الشخصي العام" onClick={() => setShowCityDraft(value => !value)} className={`profile-edit-visibility-toggle${showCityDraft ? ' is-enabled' : ''}`}>
+                    {showCityDraft && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+                  </button>
+                </div>
+                <div className="profile-edit-metadata-row">
                   <label htmlFor="profile-edit-birth-date">تاريخ الميلاد</label>
                   <input id="profile-edit-birth-date" type="date" value={birthDateDraft} onChange={event => setBirthDateDraft(event.target.value)} max={new Date().toISOString().slice(0, 10)} />
-                  <label className="profile-edit-visibility"><input type="checkbox" checked={showBirthDateDraft} onChange={event => setShowBirthDateDraft(event.target.checked)} />إظهار تاريخ الميلاد في الملف الشخصي العام</label>
+                  <button type="button" role="switch" aria-checked={showBirthDateDraft} aria-label="إظهار تاريخ الميلاد في الملف الشخصي العام" onClick={() => setShowBirthDateDraft(value => !value)} className={`profile-edit-visibility-toggle${showBirthDateDraft ? ' is-enabled' : ''}`}>
+                    {showBirthDateDraft && <Check size={14} strokeWidth={3} aria-hidden="true" />}
+                  </button>
                 </div>
                 <div className="profile-edit-field">
                   <label htmlFor="profile-edit-website">الموقع الإلكتروني</label>
@@ -1454,14 +1460,14 @@ export default function ProfilePage({
 
         {(showPublicCity && profileCity || showPublicJob || showPublicBirthDate || profileWebsiteUrl) && (
           <div className="profile-public-meta" aria-label="معلومات الملف الشخصي">
-            {showPublicCity && profileCity && (
-              <span className="profile-public-meta-item"><MapPin size={15} aria-hidden="true" />{profileCity}</span>
-            )}
             {showPublicJob && (
               <span className="profile-public-meta-item"><Briefcase size={15} aria-hidden="true" />{profileJob}</span>
             )}
+            {showPublicCity && profileCity && (
+              <span className="profile-public-meta-item"><MapPin size={15} aria-hidden="true" />{profileCity}</span>
+            )}
             {showPublicBirthDate && (
-              <span className="profile-public-meta-item"><CalendarDays size={15} aria-hidden="true" />{formattedBirthDate}</span>
+              <span className="profile-public-meta-item"><Cake size={15} aria-hidden="true" />{formattedBirthDate}</span>
             )}
             {profileWebsiteUrl && (
               <a href={profileWebsiteUrl} target="_blank" rel="noreferrer" className="profile-public-meta-item text-[#1D9BF0] hover:underline">
