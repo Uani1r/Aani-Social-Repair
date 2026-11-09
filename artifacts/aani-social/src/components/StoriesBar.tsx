@@ -1213,6 +1213,18 @@ export default function StoriesBar({
     setUploadDuration(duration);
   };
 
+  const archivedStoryReshareRef = useRef<(story: StoryRow) => void>(openArchivedStoryForReshare);
+  archivedStoryReshareRef.current = openArchivedStoryForReshare;
+
+  useEffect(() => {
+    const handleArchivedStoryReshare = (event: Event) => {
+      const story = (event as CustomEvent<StoryRow>).detail;
+      if (story?.user_id === userId) archivedStoryReshareRef.current(story);
+    };
+    window.addEventListener('aani:reshare-archived-story', handleArchivedStoryReshare);
+    return () => window.removeEventListener('aani:reshare-archived-story', handleArchivedStoryReshare);
+  }, [userId]);
+
   const handlePublishTextOnlyStory = (closeFriends: boolean) => {
     const canvasStyle: StoryCanvasStyle = {
       background: textCanvasBackground || '#000000',

@@ -194,6 +194,7 @@ export default function ProfilePage({
   const [accountSettingsBusy, setAccountSettingsBusy] = useState(false);
   const [blockedProfiles, setBlockedProfiles] = useState<Profile[]>([]);
   const [mutedProfiles, setMutedProfiles] = useState<Profile[]>([]);
+  const [storyHiddenUserIds, setStoryHiddenUserIds] = useState<Set<string>>(new Set());
   const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
   const [managedProfileBusyId, setManagedProfileBusyId] = useState<string | null>(null);
   const [currentSessionExpiry, setCurrentSessionExpiry] = useState<number | null>(null);
@@ -381,6 +382,7 @@ export default function ProfilePage({
       setManagedProfilesLoading(true);
       const isBlockedScreen = settingsScreen === 'blocked';
       const ids = isBlockedScreen ? readLocalBlockedUserIds(currentUserId) : readLocalMutedUserIds(currentUserId);
+      const hiddenStoryIds = new Set<string>();
       if (isBlockedScreen && supabaseConfigured) {
         const { data, error } = await supabase.from('user_blocks').select('blocked_user_id').eq('blocker_id', currentUserId);
         if (error) {
@@ -389,8 +391,19 @@ export default function ProfilePage({
         } else {
           (data || []).forEach(row => ids.add(row.blocked_user_id));
         }
+      } else if (!isBlockedScreen && supabaseConfigured) {
+        const [storyHides, legacyStoryHides] = await Promise.all([
+          supabase.from('story_hides').select('hidden_user_id').eq('hider_id', currentUserId),
+          supabase.from('story_hidden_users').select('hidden_user_id').eq('story_owner_id', currentUserId),
+        ]);
+        if (!storyHides.error) (storyHides.data || []).forEach(row => hiddenStoryIds.add(row.hidden_user_id));
+        else if (storyHides.error.code !== 'PGRST205' && storyHides.error.code !== '42P01') console.warn('[profile settings] تعذر تحميل الحسابات المخفية عن القصص:', storyHides.error);
+        if (!legacyStoryHides.error) (legacyStoryHides.data || []).forEach(row => hiddenStoryIds.add(row.hidden_user_id));
+        else console.warn('[profile settings] تعذر تحميل الحسابات المخفية القديمة:', legacyStoryHides.error);
+        hiddenStoryIds.forEach(id => ids.add(id));
       }
       if (!active) return;
+      setStoryHiddenUserIds(hiddenStoryIds);
       if (!ids.size) {
         if (isBlockedScreen) setBlockedProfiles([]);
         else setMutedProfiles([]);
@@ -870,12 +883,30 @@ export default function ProfilePage({
     }
   };
 
-  const unmuteProfile = (mutedUserId: string) => {
-    const ids = readLocalMutedUserIds(currentUserId);
-    ids.delete(mutedUserId);
-    writeLocalMutedUserIds(currentUserId, ids);
-    setMutedProfiles(current => current.filter(item => item.id !== mutedUserId));
-    toast.success('تم إلغاء كتم المحادثة.');
+  const unmuteProfile = async (mutedUserId: string) => {
+    if (managedProfileBusyId) return;
+    setManagedProfileBusyId(mutedUserId);
+    try {
+      if (storyHiddenUserIds.has(mutedUserId)) {
+        const { error } = await supabase.rpc('aani_unhide_story_from_user', { p_hidden_user_id: mutedUserId });
+        if (error) throw error;
+        setStoryHiddenUserIds(current => {
+          const next = new Set(current);
+          next.delete(mutedUserId);
+          return next;
+        });
+      }
+      const ids = readLocalMutedUserIds(currentUserId);
+      ids.delete(mutedUserId);
+      writeLocalMutedUserIds(currentUserId, ids);
+      setMutedProfiles(current => current.filter(item => item.id !== mutedUserId));
+      toast.success(storyHiddenUserIds.has(mutedUserId) ? 'تم إلغاء إخفاء القصص عن الحساب.' : 'تم إلغاء كتم المحادثة.');
+    } catch (error) {
+      console.error('[profile settings] تعذر إلغاء كتم/إخفاء الحساب:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر إلغاء إخفاء القصص. حاول مرة أخرى.');
+    } finally {
+      setManagedProfileBusyId(null);
+    }
   };
 
   const endCurrentSession = async () => {
@@ -1702,23 +1733,23 @@ export default function ProfilePage({
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('muted')}>
-                    <span className="profile-settings-copy"><span className="profile-settings-label">الحسابات المكتومة</span><span className="profile-settings-description">حسابات كتمت محادثاتها في الرسائل.</span></span>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">الحسابات المكتومة</span><span className="profile-settings-description">حسابات كتمت محادثاتها أو أُخفيت القصص عنها.</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                 </>
               ) : settingsScreen === 'blocked' || settingsScreen === 'muted' ? (
                 <>
-                  <p className="profile-settings-note">{settingsScreen === 'blocked' ? 'إلغاء الحظر يعيد إمكانية التواصل وفق إعدادات الحساب.' : 'هذه القائمة متزامنة مع كتم المحادثات المحفوظ على هذا الجهاز.'}</p>
+                  <p className="profile-settings-note">{settingsScreen === 'blocked' ? 'إلغاء الحظر يعيد إمكانية التواصل وفق إعدادات الحساب.' : 'تظهر هنا الحسابات المكتومة في الرسائل أو المخفية عنها قصصك.'}</p>
                   {managedProfilesLoading ? <p className="profile-settings-empty">جارٍ تحميل الحسابات...</p> : (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).length ? (
                     (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).map(managedProfile => (
                       <div key={managedProfile.id} className="profile-settings-request-card">
                         <Avatar profile={managedProfile} />
                         <UserIdentity name={displayName(managedProfile)} username={managedProfile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
-                        <button type="button" className="profile-settings-action" disabled={settingsScreen === 'blocked' && Boolean(managedProfileBusyId)} onClick={() => settingsScreen === 'blocked' ? void unblockProfile(managedProfile.id) : unmuteProfile(managedProfile.id)}>{settingsScreen === 'blocked' ? managedProfileBusyId === managedProfile.id ? 'جارٍ...' : 'إلغاء الحظر' : 'إلغاء الكتم'}</button>
+                        <button type="button" className="profile-settings-action bg-white text-black" disabled={Boolean(managedProfileBusyId)} onClick={() => settingsScreen === 'blocked' ? void unblockProfile(managedProfile.id) : void unmuteProfile(managedProfile.id)}>{settingsScreen === 'blocked' ? managedProfileBusyId === managedProfile.id ? 'جارٍ...' : 'إلغاء الحظر' : managedProfileBusyId === managedProfile.id ? 'جارٍ...' : 'إلغاء الكتم'}</button>
                       </div>
                     ))
                   ) : (
-                    <p className="profile-settings-empty">{settingsScreen === 'blocked' ? 'لا توجد حسابات محظورة.' : 'لا توجد محادثات مكتومة.'}</p>
+                    <p className="profile-settings-empty">{settingsScreen === 'blocked' ? 'لا توجد حسابات محظورة.' : 'لا توجد حسابات مكتومة أو مخفية.'}</p>
                   )}
                 </>
               ) : settingsScreen === 'subscriptions' ? (
@@ -1752,7 +1783,20 @@ export default function ProfilePage({
                   </div>
                 </div>
               ) : settingsScreen === 'archive' ? (
-                <ProfileStoryArchiveView userId={currentUserId} />
+                <ProfileStoryArchiveView
+                  userId={currentUserId}
+                  onHighlightAdded={(collection, highlight) => setProfileHighlights(current => {
+                    const existing = current.some(item => item.id === collection.id);
+                    if (existing) {
+                      return current.map(item => item.id === collection.id
+                        ? { ...item, ...collection, stories: [...item.stories, highlight].sort((a, b) => a.position - b.position) }
+                        : item);
+                    }
+                    const nextDisplayOrder = collection.display_order ?? current.reduce((maximum, item, index) => Math.max(maximum, item.display_order ?? index), -1) + 1;
+                    return [...current, { ...collection, display_order: nextDisplayOrder, stories: [highlight] }]
+                      .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0) || a.created_at.localeCompare(b.created_at));
+                  })}
+                />
               ) : settingsScreen === 'saved' ? (
                 <SavedPostsView currentUserId={currentUserId} onOpenComments={onOpenComments} />
               ) : settingsScreen === 'notifications' || settingsScreen === 'appearance' || settingsScreen === 'language' || settingsScreen === 'media-quality' || settingsScreen === 'font-style' ? (

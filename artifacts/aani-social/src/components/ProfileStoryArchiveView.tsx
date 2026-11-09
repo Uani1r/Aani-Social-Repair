@@ -1,15 +1,41 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Archive, Play, RefreshCw, X } from 'lucide-react';
+import { Archive, Heart, Play, Repeat2 } from 'lucide-react';
+import { toast } from 'sonner';
 
-import { normalizeStoryAuthor, normalizeStoryRow, type StoryCanvasStyleOverlay, type StoryMediaTransformOverlay, type StoryRow, type StoryTextOverlay } from '@/components/stories/types';
+import StoryHeader from '@/components/story/StoryHeader';
+import StoryMediaStage from '@/components/story/StoryMediaStage';
+import StoryProgressBar from '@/components/story/StoryProgressBar';
+import { normalizeStoryAuthor, normalizeStoryRow, type StoryRow } from '@/components/stories/types';
+import type { ProfileHighlight, ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
+import { decodeStoryFilterKey, getStoryFilterOverlay } from '@/lib/storyFilters';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
-export default function ProfileStoryArchiveView({ userId }: { userId: string }) {
+type HighlightCollectionOption = Pick<ProfileHighlightCollectionSummary, 'id' | 'title'>;
+
+type ProfileStoryArchiveViewProps = {
+  userId: string;
+  onHighlightAdded: (collection: ProfileHighlightCollectionSummary, highlight: ProfileHighlight) => void;
+};
+
+export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: ProfileStoryArchiveViewProps) {
   const [stories, setStories] = useState<StoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedStory, setSelectedStory] = useState<StoryRow | null>(null);
+  const [progress, setProgress] = useState(0);
+  const [currentTimeSec, setCurrentTimeSec] = useState(0);
+  const [durationSeconds, setDurationSeconds] = useState(5);
+  const [isPaused, setIsPaused] = useState(false);
+  const [showMenu, setShowMenu] = useState(false);
+  const [deletingStory, setDeletingStory] = useState(false);
+  const [highlightPickerOpen, setHighlightPickerOpen] = useState(false);
+  const [highlightCollections, setHighlightCollections] = useState<HighlightCollectionOption[]>([]);
+  const [highlightCollectionsLoading, setHighlightCollectionsLoading] = useState(false);
+  const [highlightSaving, setHighlightSaving] = useState(false);
   const requestIdRef = useRef(0);
+  const storyVideoRef = useRef<HTMLVideoElement | null>(null);
+  const elapsedMsRef = useRef(0);
+  const pausedBeforeHighlightPickerRef = useRef(false);
 
   const refresh = useCallback(async () => {
     const requestId = ++requestIdRef.current;
@@ -64,30 +90,147 @@ export default function ProfileStoryArchiveView({ userId }: { userId: string }) 
     return () => { requestIdRef.current += 1; };
   }, [refresh]);
 
-  const closePreview = () => setSelectedStory(null);
+  useEffect(() => {
+    if (!selectedStory) return;
+    const duration = Math.min(120, Math.max(5, Number(selectedStory.duration_seconds) || 5));
+    elapsedMsRef.current = 0;
+    setProgress(0);
+    setCurrentTimeSec(0);
+    setDurationSeconds(duration);
+    setIsPaused(false);
+    setShowMenu(false);
+  }, [selectedStory?.id]);
+
+  const goToNextStory = useCallback(() => {
+    if (!selectedStory) return;
+    const index = stories.findIndex(story => story.id === selectedStory.id);
+    const nextStory = stories[index + 1];
+    if (nextStory) setSelectedStory(nextStory);
+    else setSelectedStory(null);
+  }, [selectedStory, stories]);
+
+  const goToPreviousStory = useCallback(() => {
+    if (!selectedStory) return;
+    const index = stories.findIndex(story => story.id === selectedStory.id);
+    const previousStory = stories[index - 1];
+    if (previousStory) setSelectedStory(previousStory);
+  }, [selectedStory, stories]);
+
+  useEffect(() => {
+    if (!selectedStory || selectedStory.media_type === 'video' || isPaused) return;
+    let lastTick = Date.now();
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      elapsedMsRef.current += now - lastTick;
+      lastTick = now;
+      const elapsed = Math.min(durationSeconds, elapsedMsRef.current / 1000);
+      setCurrentTimeSec(elapsed);
+      setProgress(Math.min(100, (elapsed / durationSeconds) * 100));
+      if (elapsed >= durationSeconds) goToNextStory();
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [selectedStory?.id, selectedStory?.media_type, durationSeconds, isPaused, goToNextStory]);
+
+  const handleVideoTimeUpdate = (storyId: string, currentTime: number, videoDuration: number) => {
+    if (selectedStory?.id !== storyId || !Number.isFinite(currentTime)) return;
+    const safeDuration = Number.isFinite(videoDuration) && videoDuration > 0 ? videoDuration : durationSeconds;
+    setDurationSeconds(safeDuration);
+    setCurrentTimeSec(currentTime);
+    setProgress(Math.min(100, (currentTime / safeDuration) * 100));
+  };
+
+  const handleDeleteStory = async () => {
+    if (!selectedStory || deletingStory || selectedStory.user_id !== userId) return;
+    if (!window.confirm('هل أنت متأكد من رغبتك في حذف هذه الستوري؟')) return;
+    const storyToDelete = selectedStory;
+    const deletedIndex = stories.findIndex(story => story.id === storyToDelete.id);
+    setDeletingStory(true);
+    try {
+      const { error: deleteError } = await supabase
+        .from('stories')
+        .delete()
+        .eq('id', storyToDelete.id)
+        .eq('user_id', userId);
+      if (deleteError) throw deleteError;
+
+      const remainingStories = stories.filter(story => story.id !== storyToDelete.id);
+      setStories(remainingStories);
+      setShowMenu(false);
+      setSelectedStory(remainingStories.length ? remainingStories[Math.min(deletedIndex, remainingStories.length - 1)] : null);
+      toast.success('تم حذف الستوري.');
+    } catch (deleteError) {
+      console.error('[profile archive] تعذر حذف الستوري:', deleteError);
+      toast.error('تعذر حذف الستوري. حاول مرة أخرى.');
+    } finally {
+      setDeletingStory(false);
+    }
+  };
+
+  const openHighlightsPicker = async () => {
+    if (!supabaseConfigured || !selectedStory || highlightCollectionsLoading) return;
+    pausedBeforeHighlightPickerRef.current = isPaused;
+    setIsPaused(true);
+    setHighlightPickerOpen(true);
+    setHighlightCollectionsLoading(true);
+    try {
+      const { data, error: collectionsError } = await supabase
+        .from('profile_highlight_collections')
+        .select('id, title')
+        .eq('user_id', userId);
+      if (collectionsError) throw collectionsError;
+      setHighlightCollections((data || []) as HighlightCollectionOption[]);
+    } catch (collectionsError) {
+      console.error('[profile archive] تعذر تحميل مجموعات أبرز القصص:', collectionsError);
+      toast.error('تعذر تحميل مجموعات أبرز القصص. يمكنك المحاولة مجدداً.');
+      setHighlightCollections([]);
+    } finally {
+      setHighlightCollectionsLoading(false);
+    }
+  };
+
+  const closeHighlightsPicker = () => {
+    setHighlightPickerOpen(false);
+    setIsPaused(pausedBeforeHighlightPickerRef.current);
+  };
+
+  const addToHighlights = async (collectionId: string | null, title = 'أبرز القصص') => {
+    if (!selectedStory || highlightSaving) return;
+    setHighlightSaving(true);
+    try {
+      const { data, error: addError } = await supabase.rpc('aani_add_profile_highlight', {
+        p_collection_id: collectionId,
+        p_collection_title: collectionId ? null : title,
+        p_media_url: selectedStory.media_url,
+        p_media_type: selectedStory.media_type === 'video' ? 'video' : selectedStory.media_type === 'text' ? 'text' : 'image',
+        p_caption: selectedStory.caption,
+        p_source_story_id: selectedStory.id,
+      });
+      if (addError) throw addError;
+      const result = data as { collection?: ProfileHighlightCollectionSummary; highlight?: ProfileHighlight } | null;
+      if (!result?.collection?.id || !result.highlight?.id) throw new Error('لم تُرجع قاعدة البيانات القصة المحفوظة.');
+      onHighlightAdded(result.collection, result.highlight);
+      toast.success('تمت إضافة القصة إلى أبرز القصص.');
+      closeHighlightsPicker();
+    } catch (addError) {
+      console.error('[profile archive] تعذر إضافة القصة إلى أبرز القصص:', addError);
+      toast.error(addError && typeof addError === 'object' && 'code' in addError && addError.code === '23505'
+        ? 'هذه القصة موجودة بالفعل في هذه المجموعة.'
+        : 'تعذر إضافة القصة إلى أبرز القصص. حاول مرة أخرى.');
+    } finally {
+      setHighlightSaving(false);
+    }
+  };
+
+  const handleReshare = () => {
+    if (!selectedStory) return;
+    window.dispatchEvent(new CustomEvent<StoryRow>('aani:reshare-archived-story', { detail: selectedStory }));
+    setSelectedStory(null);
+  };
+
+  const activeFilter = selectedStory ? decodeStoryFilterKey(selectedStory.filter_key) : null;
 
   return (
-    <div className="space-y-4 py-4" dir="rtl">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-bold text-white">أرشيف القصص</h3>
-          <p className="mt-1 text-xs leading-6 text-zinc-500">القصص التي انتهت مدة عرضها محفوظة هنا.</p>
-        </div>
-        <button
-          type="button"
-          aria-label="تحديث أرشيف القصص"
-          onClick={() => void refresh()}
-          disabled={loading}
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-zinc-900 text-zinc-400 transition hover:bg-zinc-800 hover:text-white disabled:opacity-50"
-        >
-          <RefreshCw size={17} className={loading ? 'animate-spin' : ''} />
-        </button>
-      </div>
-
-      <div className="rounded-xl border border-[#262626] bg-[#0a0a0a] px-3 py-2.5 text-xs leading-6 text-zinc-500">
-        أرشيف المنشورات غير متاح حالياً؛ الأرشيف المدعوم في التطبيق يقتصر على القصص.
-      </div>
-
+    <div dir="rtl">
       {error ? (
         <div role="alert" className="rounded-xl border border-red-900/60 bg-red-950/20 p-4 text-sm text-red-300">
           <p>{error}</p>
@@ -129,49 +272,84 @@ export default function ProfileStoryArchiveView({ userId }: { userId: string }) 
         </div>
       )}
 
-      {selectedStory && (
-        <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/90 p-4" role="presentation" onClick={closePreview}>
-          <section className="relative flex h-[min(82dvh,720px)] w-full max-w-[390px] flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#111] text-white shadow-2xl" role="dialog" aria-modal="true" aria-label="عرض قصة مؤرشفة" onClick={event => event.stopPropagation()}>
-            <button type="button" aria-label="إغلاق القصة" onClick={closePreview} className="absolute right-3 top-3 z-20 flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white"><X size={20} /></button>
-            <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
-              {(() => {
-                const canvasStyle = selectedStory.timed_texts.find((layer): layer is StoryCanvasStyleOverlay => layer.type === 'canvas-style');
-                const mediaTransform = selectedStory.timed_texts.find((layer): layer is StoryMediaTransformOverlay => layer.type === 'media-transform');
-                const textLayers = selectedStory.timed_texts.filter((layer): layer is StoryTextOverlay => layer.type === undefined || layer.type === 'text');
-                const transform = mediaTransform
-                  ? `translate(${mediaTransform.x}%, ${mediaTransform.y}%) scale(${mediaTransform.scale}) rotate(${mediaTransform.rotation}deg)`
-                  : undefined;
-                return (
-                  <div className="absolute inset-0" style={{ background: canvasStyle?.background || '#111' }}>
-                    {selectedStory.media_url && selectedStory.media_type !== 'text' && (selectedStory.media_type === 'video' ? (
-                      <video src={selectedStory.media_url} controls playsInline className="h-full w-full object-contain" style={{ transform }} />
-                    ) : (
-                      <img src={selectedStory.media_url} alt="" className="h-full w-full object-contain" style={{ transform }} />
-                    ))}
-                    {textLayers.map(layer => (
-                      <span key={layer.id} className="absolute max-w-[88%] whitespace-pre-wrap break-words px-1 text-center font-bold" style={{
-                        left: `${layer.x}%`,
-                        top: `${layer.y}%`,
-                        transform: `translate(-50%, -50%) scale(${layer.scale ?? 1}) rotate(${layer.rotation ?? 0}deg)`,
-                        zIndex: layer.layerOrder ?? 10,
-                        fontSize: `${Math.max(12, (layer.fontSize ?? 30) * 0.65)}px`,
-                        color: layer.textColor || canvasStyle?.textColor || '#fff',
-                        fontFamily: layer.fontFamily || canvasStyle?.fontFamily || undefined,
-                        background: layer.textBackground || 'transparent',
-                      }}>{layer.text}</span>
-                    ))}
-                    {!textLayers.length && selectedStory.caption && (!selectedStory.media_url || selectedStory.media_type === 'text') && (
-                      <p className="absolute left-1/2 top-1/2 w-[88%] -translate-x-1/2 -translate-y-1/2 whitespace-pre-wrap text-center text-lg leading-8" style={{ color: canvasStyle?.textColor || '#fff', fontFamily: canvasStyle?.fontFamily || undefined }}>{selectedStory.caption}</p>
-                    )}
+      {selectedStory && activeFilter && (
+        <div className="fixed inset-0 z-[1100] h-[100dvh] w-screen overflow-hidden bg-[#0d0d0d] text-white" role="dialog" aria-modal="true" aria-label="عرض قصة مؤرشفة">
+          <div className="relative h-full w-full overflow-hidden bg-black select-none">
+            <StoryProgressBar activeStories={[selectedStory]} activeStoryIndex={0} progress={progress} />
+            <StoryHeader
+              currentStory={selectedStory}
+              originalStoryAuthor={null}
+              userId={userId}
+              showUI
+              showMenu={showMenu}
+              onMenuChange={setShowMenu}
+              onReportStory={() => {}}
+              onDeleteStory={() => void handleDeleteStory()}
+              onCloseViewer={() => setSelectedStory(null)}
+            />
+            <StoryMediaStage
+              currentStory={selectedStory}
+              currentStoryFilter={activeFilter}
+              currentStoryFilterOverlay={getStoryFilterOverlay(activeFilter.id)}
+              storyVideoRef={storyVideoRef}
+              currentTimeSec={currentTimeSec}
+              isStoryOwner
+              replyKeyboardInset={0}
+              onNextStory={goToNextStory}
+              onPreviousStory={goToPreviousStory}
+              onToggleShowUI={() => {}}
+              onPauseChange={setIsPaused}
+              isPaused={isPaused}
+              showUI
+              onVideoMetadata={(storyId, videoDuration) => {
+                if (storyId !== selectedStory.id || !Number.isFinite(videoDuration) || videoDuration <= 0) return;
+                setDurationSeconds(videoDuration);
+                setCurrentTimeSec(0);
+                setProgress(0);
+              }}
+              onVideoTimeUpdate={handleVideoTimeUpdate}
+              onVideoEnded={goToNextStory}
+            />
+            <div dir="ltr" className="absolute inset-x-0 z-30 flex justify-center gap-2 px-3" style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
+              <button type="button" dir="rtl" onClick={() => void openHighlightsPicker()} className="flex h-9 items-center gap-1.5 rounded-full border border-white/30 bg-black/60 px-3 text-[11px] font-semibold text-white shadow-lg backdrop-blur-md">
+                <Heart size={14} /> إضافة إلى أبرز القصص
+              </button>
+              <button type="button" dir="rtl" onClick={handleReshare} className="flex h-9 items-center gap-1.5 rounded-full border border-white/30 bg-black/60 px-3 text-[11px] font-semibold text-white shadow-lg backdrop-blur-md">
+                <Repeat2 size={14} /> إضافة إلى القصة
+              </button>
+            </div>
+
+            {highlightPickerOpen && (
+              <div className="fixed inset-0 z-[1200] flex items-end justify-center bg-black/70" role="presentation" onClick={event => { if (event.target === event.currentTarget && !highlightSaving) closeHighlightsPicker(); }}>
+                <section className="max-h-[55dvh] min-h-[230px] w-full max-w-[600px] rounded-t-3xl border border-white/10 bg-[#17171b] px-5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] pt-4 text-white shadow-2xl" role="dialog" aria-modal="true" aria-label="اختيار مجموعة أبرز القصص">
+                  <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/25" />
+                  <div className="mb-4 flex items-center justify-between">
+                    <div>
+                      <h2 className="text-base font-bold">إضافة إلى أبرز القصص</h2>
+                      <p className="mt-1 text-xs text-zinc-400">اختر مجموعة أو أنشئ مجموعة جديدة.</p>
+                    </div>
+                    <button type="button" onClick={closeHighlightsPicker} disabled={highlightSaving} className="rounded-full px-3 py-2 text-xs text-zinc-300 disabled:opacity-50">إغلاق</button>
                   </div>
-                );
-              })()}
-            </div>
-            <div className="shrink-0 border-t border-white/10 px-4 py-3">
-              <p className="text-xs text-zinc-400">{new Date(selectedStory.created_at).toLocaleString('ar')}</p>
-              {selectedStory.caption && selectedStory.media_type !== 'text' && <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-white">{selectedStory.caption}</p>}
-            </div>
-          </section>
+                  {highlightCollectionsLoading ? (
+                    <p className="py-8 text-center text-sm text-zinc-400">جارٍ تحميل المجموعات...</p>
+                  ) : (
+                    <div className="max-h-[32dvh] space-y-2 overflow-y-auto">
+                      {highlightCollections.map(collection => (
+                        <button key={collection.id} type="button" disabled={highlightSaving} onClick={() => void addToHighlights(collection.id)} className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-4 py-3 text-right text-sm font-semibold disabled:opacity-50">
+                          <span>{collection.title}</span>
+                          <Heart size={15} className="text-zinc-400" />
+                        </button>
+                      ))}
+                      <button type="button" disabled={highlightSaving} onClick={() => void addToHighlights(null)} className="flex w-full items-center justify-between rounded-xl bg-white px-4 py-3 text-right text-sm font-bold text-black disabled:opacity-50">
+                        <span>{highlightSaving ? 'جارٍ الإضافة...' : 'إنشاء مجموعة «أبرز القصص»'}</span>
+                        <Heart size={15} />
+                      </button>
+                    </div>
+                  )}
+                </section>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
