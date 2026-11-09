@@ -274,7 +274,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         setPosts(await hydratePostInteractions(feedPosts, currentUserId));
       } else if (query === 'profile' && targetUserId) {
         let profileRowsResult = await fetchPostRows('profile', targetUserId);
-        if (profileRowsResult.error && /display_order/i.test(profileRowsResult.error.message)) {
+        if (profileRowsResult.error && (/display_order/i.test(profileRowsResult.error.message) || isPostsPermissionError(profileRowsResult.error))) {
           profileRowsResult = await fetchPostRows('profile', targetUserId, undefined, false);
         }
         const { data: postData, error: postsErr } = profileRowsResult;
@@ -302,7 +302,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         if (repostPostIds.length > 0) {
           let repostRowsResult = await fetchPostRows('profile', undefined, repostPostIds);
-          if (repostRowsResult.error && /display_order/i.test(repostRowsResult.error.message)) {
+          if (repostRowsResult.error && (/display_order/i.test(repostRowsResult.error.message) || isPostsPermissionError(repostRowsResult.error))) {
             repostRowsResult = await fetchPostRows('profile', undefined, repostPostIds, false);
           }
           repostedRaw = (await normalizePostRowsWithVisibility(repostRowsResult.data)).map(post => ({ ...post, reposter_id: targetUserId }));

@@ -15,6 +15,9 @@ where ranked_posts.id = post.id;
 create index if not exists posts_user_display_order_idx
   on public.posts (user_id, display_order, created_at desc);
 
+-- Posts use column-level SELECT grants to keep allowed_commenters private.
+grant select (display_order) on table public.posts to authenticated;
+
 alter table public.profile_highlight_collections
   add column if not exists display_order integer not null default 0;
 
