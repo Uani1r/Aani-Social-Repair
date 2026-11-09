@@ -526,7 +526,7 @@ export default function ProfilePage({
             aria-expanded={!isEditingProfile && showProfileMenu}
             onClick={() => isEditingProfile ? void saveProfileEdits() : setShowProfileMenu(open => !open)}
             disabled={profileSaving}
-            className={`absolute left-4 top-2 flex h-9 items-center justify-center rounded-full transition disabled:opacity-60 ${isEditingProfile ? 'bg-white px-4 py-1.5 text-sm font-bold text-black shadow-sm hover:bg-neutral-200' : 'w-9 bg-black/50 text-white hover:bg-black/70'}`}
+            className={`flex h-9 items-center justify-center rounded-full transition disabled:opacity-60 ${isEditingProfile ? 'min-w-12 bg-white px-4 py-1.5 text-sm font-bold text-black shadow-sm hover:bg-neutral-200' : 'w-9 bg-black/50 text-white hover:bg-black/70'}`}
           >
             {isEditingProfile ? profileSaving ? 'جارٍ الحفظ...' : 'تم' : (
               <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
