@@ -52,7 +52,25 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
             body: { username: usernameIdentifier, password },
           });
-          if (functionError) throw functionError;
+          if (functionError) {
+            const context = (functionError as { context?: unknown }).context;
+            if (context instanceof Response) {
+              let responseBody: { error?: unknown; message?: unknown } | null = null;
+              try {
+                responseBody = await context.clone().json() as { error?: unknown; message?: unknown };
+              } catch {
+                // Keep the SDK error when the function response is not JSON.
+              }
+              if (context.status === 401) {
+                throw new Error(typeof responseBody?.error === 'string' ? responseBody.error : 'بيانات تسجيل الدخول غير صحيحة.');
+              }
+              const responseMessage = typeof responseBody?.error === 'string'
+                ? responseBody.error
+                : typeof responseBody?.message === 'string' ? responseBody.message : '';
+              if (responseMessage) throw new Error(responseMessage);
+            }
+            throw functionError;
+          }
           if (typeof data?.access_token !== 'string' || typeof data?.refresh_token !== 'string') {
             throw new Error('تعذر إكمال تسجيل الدخول. حاول مرة أخرى.');
           }
