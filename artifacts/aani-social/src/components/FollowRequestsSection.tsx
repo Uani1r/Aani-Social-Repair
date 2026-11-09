@@ -305,14 +305,14 @@ export default function FollowRequestsSection({
         <button
           type="button"
           onClick={openRequests}
-          className="flex w-full items-center justify-between rounded-[20px] border border-[#c98a66]/[0.2] bg-[#141414] px-4 py-4 text-right transition active:scale-[0.98] active:bg-[#1a1a1a]"
+          className="flex w-full items-center justify-between rounded-[20px] border border-primary/30 bg-card px-4 py-4 text-right transition active:scale-[0.98] active:bg-muted"
           aria-label={`فتح طلبات المتابعة${totalUnreadCount ? `، ${totalUnreadCount} طلب جديد` : ''}`}
         >
           <span className="flex items-center gap-3">
-            <span className="grid h-11 w-11 place-items-center rounded-full bg-[#222] text-[#c98a66]">
+            <span className="grid h-11 w-11 place-items-center rounded-full bg-muted text-primary">
               <UserPlus size={22} strokeWidth={2} />
             </span>
-            <span className="text-[15px] font-bold text-[#f0f0f0]">طلبات المتابعة</span>
+            <span className="text-[15px] font-bold text-foreground">طلبات المتابعة</span>
           </span>
           {totalUnreadCount > 0 && (
             <span className="grid h-6 min-w-6 place-items-center rounded-full bg-[#c98a66] px-1.5 text-[13px] font-extrabold text-black">
@@ -323,7 +323,7 @@ export default function FollowRequestsSection({
       </div>
 
       <div
-        className={`fixed inset-0 z-[170] flex transform flex-col bg-[#0a0a0a] text-[#f0f0f0] transition-transform duration-[400ms] [transition-timing-function:cubic-bezier(0.25,0.8,0.25,1)] ${overlayOpen ? 'pointer-events-auto translate-y-0' : 'pointer-events-none translate-y-full'}`}
+        className={`fixed inset-0 z-[170] flex transform flex-col bg-background text-foreground transition-transform duration-[400ms] [transition-timing-function:cubic-bezier(0.25,0.8,0.25,1)] ${overlayOpen ? 'pointer-events-auto translate-y-0' : 'pointer-events-none translate-y-full'}`}
         dir={dir}
         role="dialog"
         aria-modal={overlayOpen}
@@ -335,7 +335,7 @@ export default function FollowRequestsSection({
             type="button"
             onClick={() => setOverlayOpen(false)}
             tabIndex={overlayOpen ? 0 : -1}
-            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[#f0f0f0]"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-foreground"
             aria-label="العودة إلى الإشعارات"
           >
             <ChevronLeft size={24} />
@@ -345,7 +345,7 @@ export default function FollowRequestsSection({
             type="button"
             onClick={() => setOverlayOpen(false)}
             tabIndex={overlayOpen ? 0 : -1}
-            className="mr-auto grid h-9 w-9 place-items-center rounded-lg text-[#888]"
+            className="mr-auto grid h-9 w-9 place-items-center rounded-lg text-muted-foreground"
             aria-label="إغلاق طلبات المتابعة"
           >
             <X size={22} />
@@ -354,20 +354,20 @@ export default function FollowRequestsSection({
 
         <div className="flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
           {error && <p role="alert" className="rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">{error}</p>}
-          {loading && <p className="py-8 text-center text-sm text-[#888]">جارٍ تحميل طلبات المتابعة…</p>}
-          {!loading && visibleRequests.length === 0 && <p className="py-8 text-center text-sm text-[#888]">لا توجد طلبات متابعة حالياً.</p>}
+          {loading && <p className="py-8 text-center text-sm text-muted-foreground">جارٍ تحميل طلبات المتابعة…</p>}
+          {!loading && visibleRequests.length === 0 && <p className="py-8 text-center text-sm text-muted-foreground">لا توجد طلبات متابعة حالياً.</p>}
           {visibleRequests.map(request => {
             const name = displayName(request.profile);
             return (
-              <article key={request.requester_id} className="flex min-h-[96px] items-center gap-3 rounded-[20px] bg-[#141414] p-4">
-                <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full bg-[#222] text-[#555]">
+              <article key={request.requester_id} className="flex min-h-[96px] items-center gap-3 rounded-[20px] bg-card p-4">
+                <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-muted-foreground">
                   {request.profile?.avatar_url
                     ? <img src={request.profile.avatar_url} alt="" className="h-full w-full object-cover" />
                     : <UserRound size={28} strokeWidth={1.8} />}
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col gap-1">
-                  <strong className="truncate text-[16px] font-bold text-[#f0f0f0]">{name}</strong>
-                  <time className="text-[12px] text-[#888]">{formatRequestTime(request.created_at)}</time>
+                  <strong className="truncate text-[16px] font-bold text-foreground">{name}</strong>
+                  <time className="text-[12px] text-muted-foreground">{formatRequestTime(request.created_at)}</time>
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
                   <button
@@ -380,7 +380,7 @@ export default function FollowRequestsSection({
                     type="button"
                     disabled={!overlayOpen || Boolean(busyRequestId)}
                     onClick={() => void respondToRequest(request.requester_id, false)}
-                    className="rounded-[10px] bg-[#222] px-4 py-2 text-[14px] font-bold text-[#f0f0f0] transition active:opacity-70 disabled:opacity-50"
+                    className="rounded-[10px] bg-muted px-4 py-2 text-[14px] font-bold text-foreground transition active:opacity-70 disabled:opacity-50"
                   >رفض</button>
                 </span>
               </article>

@@ -1051,7 +1051,7 @@ export default function Shell({
   const isMessagesPath = path === '/messages' || isMessageThread;
 
   return (
-    <div className={`app-frame min-h-screen bg-black text-white ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}${isProfilePath ? ' is-profile' : ''}`}>
+    <div className={`app-frame min-h-screen bg-background text-foreground ${path === '/reels' ? 'is-reels' : ''} ${path === '/messages' || isMessageThread ? 'is-messages' : ''}${isMessageThread ? ' is-message-thread' : ''}${isProfilePath ? ' is-profile' : ''}`}>
       {!isMessagesPath && !isProfilePath && (
         <UnifiedTopBar
           hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}

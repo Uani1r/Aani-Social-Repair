@@ -127,8 +127,8 @@ body {
   max-height: 900px;
   min-height: min(100vh, 900px);
   margin: 0 auto;
-  border-left: 1px solid #2a2b33;
-  border-right: 1px solid #2a2b33;
+  border-left: 1px solid var(--border, #2a2b33);
+  border-right: 1px solid var(--border, #2a2b33);
   box-sizing: border-box;
   background-color: var(--app-canvas, #000) !important;
   color: var(--app-foreground, #fafafa) !important;
@@ -142,9 +142,9 @@ body {
   margin-bottom: 12px;
   border-radius: 16px;
   padding: 16px;
-  background: hsl(220 11% 12%);
-  color: hsl(38 16% 91%);
-  border: 1px solid hsl(220 8% 23%);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  border: 1px solid hsl(var(--border));
   box-sizing: border-box;
   direction: rtl;
   transition: border-color .2s ease, transform .2s ease;
@@ -7774,4 +7774,31 @@ select,
   color: #c4c4cb;
   font-size: 12px;
   text-overflow: ellipsis;
+}
+
+
+/* ===== Light Mode Overrides ===== */
+/* رسائل: تلوين سطح الرسائل بألوان فاتحة عند تفعيل الوضع الفاتح */
+:root.light .messages-view,
+:root.light .messages-context-backdrop,
+:root.light .messages-message-action-focus {
+  --messages-black: #ffffff;
+  --messages-surface: #f4f4f5;
+  --messages-raised: #ffffff;
+  --messages-border: #e4e4e7;
+  --messages-primary: #18181b;
+  --messages-secondary: #52525b;
+  --messages-muted: #a1a1aa;
+  --messages-blue: #0095f6;
+  --messages-green: #16a34a;
+  --messages-red: #ed4956;
+}
+
+:root.light .messages-view input,
+:root.light .messages-view textarea {
+  color-scheme: light;
+}
+
+:root.light .messages-scrollbar {
+  scrollbar-color: #d4d4d8 transparent;
 }

@@ -586,7 +586,7 @@ export default function NotificationsModal({
     const profileHref = item.actor_id ? `/profile/${encodeURIComponent(item.actor_id)}` : null;
 
     return (
-      <article key={item.id} className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}>
+      <article key={item.id} className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-muted/60 text-muted-foreground' : 'bg-card text-card-foreground'}`}>
         {item.is_read === false && (
           <span
             aria-hidden="true"
@@ -624,7 +624,7 @@ export default function NotificationsModal({
                   {Intl.NumberFormat('ar-IQ').format(item.aggregateCount)}
                 </span>
               ) : <span />}
-              <time className="block text-left text-[11px] text-[#8e8e93]/80">{formatDate(item.created_at)}</time>
+              <time className="block text-left text-[11px] text-muted-foreground/80">{formatDate(item.created_at)}</time>
             </span>
           </span>
         </button>
@@ -633,7 +633,7 @@ export default function NotificationsModal({
   };
 
   return (
-    <div className="aani-notifications-page fixed inset-0 z-[150] overflow-hidden bg-[#0a0a0a] text-[#f4f4f5]" dir={language === 'ar' ? 'rtl' : 'ltr'}>
+    <div className="aani-notifications-page fixed inset-0 z-[150] overflow-hidden bg-background text-foreground" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <section
         role="dialog"
         aria-modal="true"
@@ -655,7 +655,7 @@ export default function NotificationsModal({
             <CheckCheck size={16} />
             <span>قراءة الكل</span>
           </button>
-          <button type="button" onClick={onClose} className="absolute right-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-[#8e8e93] transition hover:bg-white/[0.05] hover:text-white" aria-label="إغلاق الإشعارات">
+          <button type="button" onClick={onClose} className="absolute right-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-muted-foreground transition hover:bg-foreground/[0.05] hover:text-foreground" aria-label="إغلاق الإشعارات">
             <X size={22} />
           </button>
         </header>
@@ -677,7 +677,7 @@ export default function NotificationsModal({
               role="tab"
               aria-selected={activeFilter === tab.id}
               onClick={() => setActiveFilter(tab.id)}
-              className={`min-h-9 flex-1 rounded-full px-1.5 text-[11px] font-semibold transition sm:text-xs ${activeFilter === tab.id ? 'bg-white/[0.12] text-white' : 'text-[#8e8e93] hover:bg-white/[0.05] hover:text-white'}`}
+              className={`min-h-9 flex-1 rounded-full px-1.5 text-[11px] font-semibold transition sm:text-xs ${activeFilter === tab.id ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-foreground/[0.05] hover:text-foreground'}`}
             >
               {tab.label}
             </button>
@@ -694,16 +694,16 @@ export default function NotificationsModal({
           }}
         >
           <PushNotificationsControl currentUserId={currentUserId} />
-          {loading && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
+          {loading && items.length === 0 && <p className="py-10 text-center text-sm text-muted-foreground">جارٍ تحميل الإشعارات…</p>}
           {error && <p role="alert" className="mb-1 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">تعذر تحميل الإشعارات: {error}</p>}
           {readError && <p role="status" className="mb-1 rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3 text-xs text-amber-100">{readError}</p>}
           {!loading && !error && visibleItems.length === 0 && (
-            <p className="py-10 text-center text-sm text-[#8e8e93]">
+            <p className="py-10 text-center text-sm text-muted-foreground">
               {items.length === 0 ? 'لا توجد إشعارات حالياً.' : 'لا توجد إشعارات ضمن هذا التصنيف.'}
             </p>
           )}
           {visibleItems.map(renderCard)}
-          {loadingMore && <p className="py-3 text-center text-xs text-[#8e8e93]">جارٍ تحميل المزيد…</p>}
+          {loadingMore && <p className="py-3 text-center text-xs text-muted-foreground">جارٍ تحميل المزيد…</p>}
           {error && hasMore && (
             <button type="button" onClick={() => loadMoreRef.current?.()} className="mx-auto rounded-full px-4 py-2 text-xs text-[#c98d73] hover:bg-white/[0.05]">إعادة المحاولة</button>
           )}
