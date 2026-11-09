@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode } from 'react';
 
-import type { Profile } from '@/lib/types';
+import type { Profile, ProfileNotificationSettings } from '@/lib/types';
 
 export type NotificationsModalProps = {
   isOpen: boolean;
@@ -8,6 +8,8 @@ export type NotificationsModalProps = {
   currentUserId: string;
   onOpenComments: (postId: string, commentId?: string) => void;
   onOpenStory: (storyId: string, ownerId: string) => void;
+  notificationSettings?: ProfileNotificationSettings | null;
+  language?: 'ar' | 'en';
 };
 
 export type ShellProps = {

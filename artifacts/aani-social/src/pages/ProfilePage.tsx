@@ -150,6 +150,7 @@ export default function ProfilePage({
   const [, setLocation] = useLocation();
 
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
+  const pageDirection = typeof document !== 'undefined' && document.documentElement.dir === 'ltr' ? 'ltr' : 'rtl';
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
   const username = cleanUsername(person?.username);
   const profileLocation = person?.location?.trim() || '';
@@ -717,7 +718,7 @@ export default function ProfilePage({
 
   if (!person) {
     return (
-      <section className="profile-screen mx-auto w-full max-w-[600px] bg-black text-white" dir="rtl">
+      <section className="profile-screen mx-auto w-full max-w-[600px]" dir={pageDirection}>
         {fromSearch && (
           <div className="flex justify-start px-2 pt-2">
             <button type="button" aria-label="العودة إلى البحث" onClick={() => setLocation('/search')} className="flex h-10 w-10 items-center justify-center rounded-full text-white hover:bg-zinc-800">
@@ -734,7 +735,7 @@ export default function ProfilePage({
   const formattedFollowing = following.toLocaleString('en-US');
 
   return (
-    <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none bg-black text-white" dir="rtl">
+    <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none" dir={pageDirection}>
       <input ref={coverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة الغلاف" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('cover', event)} />
       <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار الصورة الشخصية" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('avatar', event)} />
 
@@ -771,7 +772,7 @@ export default function ProfilePage({
           role="dialog"
           aria-modal="true"
           aria-labelledby="profile-settings-title"
-          dir="rtl"
+          dir={pageDirection}
           onClick={closeSettingsOverlay}
         >
           <section className="profile-settings-panel" onClick={event => event.stopPropagation()}>
@@ -845,19 +846,19 @@ export default function ProfilePage({
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-subscriptions-heading -mx-5 text-xs text-neutral-500 font-semibold px-5 pt-4 pb-1">التفضيلات والوسائط</p>
-                  <button type="button" className="profile-settings-row profile-settings-link bg-[#0a0a0a]" onClick={() => setSettingsScreen('notifications')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('notifications')}>
                     <span>الإشعارات</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link bg-[#0a0a0a]" onClick={() => setSettingsScreen('appearance')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('appearance')}>
                     <span>المظهر</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link bg-[#0a0a0a]" onClick={() => setSettingsScreen('language')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('language')}>
                     <span>اللغة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link bg-[#0a0a0a]" onClick={() => setSettingsScreen('media-quality')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('media-quality')}>
                     <span>جودة الوسائط</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
@@ -1009,7 +1010,16 @@ export default function ProfilePage({
               ) : settingsScreen === 'saved' ? (
                 <SavedPostsView currentUserId={currentUserId} onOpenComments={onOpenComments} />
               ) : settingsScreen === 'notifications' || settingsScreen === 'appearance' || settingsScreen === 'language' || settingsScreen === 'media-quality' ? (
-                <ProfileSettingsPreferences key={currentUserId} currentUserId={currentUserId} screen={settingsScreen} />
+                <ProfileSettingsPreferences
+                  key={currentUserId}
+                  currentUserId={currentUserId}
+                  profile={person}
+                  onProfileUpdate={nextProfile => {
+                    setPerson(nextProfile);
+                    onProfileUpdate(nextProfile);
+                  }}
+                  screen={settingsScreen}
+                />
               ) : null}
             </div>
           </section>

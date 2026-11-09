@@ -2,23 +2,62 @@
 
 import { supabase, storageBucket, supabasePublicKey, supabaseUrl } from '@/lib/supabase';
 import { safeExecute } from '@/lib/appErrors';
+import { readLocalUserPreferences, type MediaQualityPreference } from '@/lib/userPreferences';
 
 interface UploadOptions {
   file: File;
   path: string;
   onProgress?: (percent: number) => void;
+  quality?: MediaQualityPreference;
 }
 
-async function uploadMediaUnsafe({ file, path, onProgress }: UploadOptions): Promise<void> {
+async function prepareMediaFile(file: File, quality: MediaQualityPreference): Promise<File> {
+  if (
+    quality !== 'data-saving'
+    || !file.type.startsWith('image/')
+    || file.type === 'image/gif'
+    || file.type === 'image/svg+xml'
+  ) return file;
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('تعذر ضغط الصورة.'));
+      image.src = objectUrl;
+    });
+    const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) return file;
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/webp', 0.76));
+    if (!blob || blob.size >= file.size) return file;
+
+    const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
+    return new File([blob], `${baseName}.webp`, { type: 'image/webp', lastModified: Date.now() });
+  } catch {
+    return file;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOptions): Promise<void> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   const baseUrl = supabaseUrl;
   const anonKey = supabasePublicKey;
+  const resolvedQuality = quality || readLocalUserPreferences(data.session?.user?.id || '').mediaQuality;
+  const uploadFile = await prepareMediaFile(file, resolvedQuality);
 
   if (!token || !baseUrl) {
     const { error } = await supabase.storage
       .from(storageBucket)
-      .upload(path, file, { contentType: file.type, upsert: true });
+      .upload(path, uploadFile, { contentType: uploadFile.type, upsert: true });
     if (error) throw error;
     onProgress?.(100);
     return;
@@ -35,7 +74,7 @@ async function uploadMediaUnsafe({ file, path, onProgress }: UploadOptions): Pro
       try {
         const { error } = await supabase.storage
           .from(storageBucket)
-          .upload(path, file, { contentType: file.type, upsert: true });
+          .upload(path, uploadFile, { contentType: uploadFile.type, upsert: true });
         if (error) throw error;
         onProgress?.(100);
         resolve();
@@ -48,7 +87,7 @@ async function uploadMediaUnsafe({ file, path, onProgress }: UploadOptions): Pro
     xhr.setRequestHeader('authorization', `Bearer ${token}`);
     if (anonKey) xhr.setRequestHeader('apikey', anonKey);
     xhr.setRequestHeader('x-upsert', 'true');
-    xhr.setRequestHeader('content-type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('content-type', uploadFile.type || 'application/octet-stream');
 
     xhr.upload.onprogress = event => {
       if (event.lengthComputable && event.total > 0) {
@@ -67,7 +106,7 @@ async function uploadMediaUnsafe({ file, path, onProgress }: UploadOptions): Pro
 
     xhr.onerror = () => void fallbackUpload();
     xhr.onabort = () => reject(new Error('أُلغيت عملية رفع الوسائط'));
-    xhr.send(file);
+    xhr.send(uploadFile);
   });
 }
 

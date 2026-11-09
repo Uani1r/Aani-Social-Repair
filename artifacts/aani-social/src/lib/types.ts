@@ -1,4 +1,11 @@
 
+export type ProfileNotificationSettings = {
+  messages: boolean;
+  followers: boolean;
+  interactions: boolean;
+  stories: boolean;
+};
+
 export type Profile = {
   id: string;
   username: string;
@@ -12,6 +19,11 @@ export type Profile = {
   website?: string | null;
   bio: string;
   is_private?: boolean;
+  notification_settings?: ProfileNotificationSettings | null;
+  appearance_preference?: 'dark' | 'light' | 'system' | null;
+  language_preference?: 'ar' | 'en' | null;
+  hd_uploads?: boolean | null;
+  data_saver?: boolean | null;
   created_at?: string | null;
 };
 

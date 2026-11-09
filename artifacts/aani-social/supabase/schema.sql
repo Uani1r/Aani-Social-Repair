@@ -14,6 +14,11 @@ create table if not exists public.profiles (
   website text,
   bio text not null default '',
   display_name text not null default 'New member',
+  notification_settings jsonb not null default '{"messages": true, "followers": true, "interactions": true, "stories": true}'::jsonb,
+  appearance_preference text not null default 'dark' check (appearance_preference in ('dark', 'light', 'system')),
+  language_preference text not null default 'ar' check (language_preference in ('ar', 'en')),
+  hd_uploads boolean not null default true,
+  data_saver boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -28,6 +33,11 @@ alter table public.profiles add column if not exists location text;
 alter table public.profiles add column if not exists website text;
 alter table public.profiles add column if not exists bio text not null default '';
 alter table public.profiles add column if not exists display_name text not null default 'New member';
+alter table public.profiles add column if not exists notification_settings jsonb not null default '{"messages": true, "followers": true, "interactions": true, "stories": true}'::jsonb;
+alter table public.profiles add column if not exists appearance_preference text not null default 'dark' check (appearance_preference in ('dark', 'light', 'system'));
+alter table public.profiles add column if not exists language_preference text not null default 'ar' check (language_preference in ('ar', 'en'));
+alter table public.profiles add column if not exists hd_uploads boolean not null default true;
+alter table public.profiles add column if not exists data_saver boolean not null default false;
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 

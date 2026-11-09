@@ -8,7 +8,7 @@ import {
 import FollowRequestsSection from '@/components/FollowRequestsSection';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
-import { displayName, formatDate, type Profile } from '@/lib/types';
+import { displayName, formatDate, type Profile, type ProfileNotificationSettings } from '@/lib/types';
 
 type NotificationsModalProps = {
   isOpen: boolean;
@@ -16,6 +16,8 @@ type NotificationsModalProps = {
   currentUserId: string;
   onOpenComments: (postId: string, commentId?: string) => void;
   onOpenStory: (storyId: string, ownerId: string) => void;
+  notificationSettings?: ProfileNotificationSettings | null;
+  language?: 'ar' | 'en';
 };
 
 type NotificationEntry = NotificationItem & {
@@ -44,6 +46,12 @@ type NotificationTarget =
 type NotificationFilter = 'all' | 'likes' | 'comments' | 'other';
 
 const PAGE_SIZE = 20;
+const DEFAULT_NOTIFICATION_SETTINGS: ProfileNotificationSettings = {
+  messages: true,
+  followers: true,
+  interactions: true,
+  stories: true,
+};
 
 const FILTER_TABS: Array<{ id: NotificationFilter; label: string }> = [
   { id: 'all', label: 'الكل' },
@@ -150,6 +158,13 @@ const getFilterForNotification = (item: NotificationEntry): Exclude<Notification
   return 'other';
 };
 
+const getPreferenceCategory = (item: NotificationEntry): keyof ProfileNotificationSettings => {
+  if (isStoryNotification(item)) return 'stories';
+  if (['follow', 'followed', 'follow_request', 'new_follower'].includes(item.type)) return 'followers';
+  if (['message', 'new_message'].includes(item.type)) return 'messages';
+  return 'interactions';
+};
+
 function ActionBadge({ item }: { item: NotificationEntry }) {
   let Icon: LucideIcon = Bell;
   let label = 'إشعار';
@@ -212,6 +227,8 @@ export default function NotificationsModal({
   currentUserId,
   onOpenComments,
   onOpenStory,
+  notificationSettings = DEFAULT_NOTIFICATION_SETTINGS,
+  language = 'ar',
 }: NotificationsModalProps) {
   const [, setLocation] = useLocation();
   const [items, setItems] = useState<NotificationEntry[]>([]);
@@ -409,11 +426,11 @@ export default function NotificationsModal({
   }, [isOpen, onClose]);
 
   const visibleItems = useMemo(() => {
-    const aggregated = aggregateNotifications(items);
+    const aggregated = aggregateNotifications(items).filter(item => notificationSettings[getPreferenceCategory(item)] !== false);
     return activeFilter === 'all'
       ? aggregated
       : aggregated.filter(item => getFilterForNotification(item) === activeFilter);
-  }, [activeFilter, items]);
+  }, [activeFilter, items, notificationSettings]);
 
   const markNotificationRead = async (item: NotificationEntry) => {
     if (item.is_read) return;
@@ -502,7 +519,7 @@ export default function NotificationsModal({
   };
 
   return (
-    <div className="aani-notifications-page fixed inset-0 z-[150] overflow-hidden bg-[#0a0a0a] text-[#f4f4f5]" dir="rtl">
+    <div className="aani-notifications-page fixed inset-0 z-[150] overflow-hidden bg-[#0a0a0a] text-[#f4f4f5]" dir={language === 'ar' ? 'rtl' : 'ltr'}>
       <section
         role="dialog"
         aria-modal="true"
@@ -510,16 +527,16 @@ export default function NotificationsModal({
         className="relative z-[1] mx-auto flex h-full w-full max-w-[560px] flex-col border-x border-white/[0.04]"
       >
         <header className="relative flex min-h-[65px] shrink-0 items-center justify-center border-b border-white/[0.07] px-4" style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}>
-          <h1 id="aani-notifications-title" dir="ltr" className="flex items-center gap-2 text-[21px] font-bold">
+          <h1 id="aani-notifications-title" className="flex items-center gap-2 text-[21px] font-bold">
             <Bell size={20} className="text-[#c98d73]" />
-            <span dir="rtl">الإشعارات</span>
+            <span>الإشعارات</span>
           </h1>
           <button type="button" onClick={onClose} className="absolute right-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-[#8e8e93] transition hover:bg-white/[0.05] hover:text-white" aria-label="إغلاق الإشعارات">
             <X size={22} />
           </button>
         </header>
 
-        <FollowRequestsSection currentUserId={currentUserId} />
+        {notificationSettings.followers !== false && <FollowRequestsSection currentUserId={currentUserId} dir={language === 'ar' ? 'rtl' : 'ltr'} />}
 
         <div role="tablist" aria-label="تصفية الإشعارات" className="flex shrink-0 gap-1 border-b border-white/[0.06] px-3 py-2">
           {FILTER_TABS.map(tab => (

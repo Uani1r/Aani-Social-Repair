@@ -9,6 +9,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&family=Playfair+Display:wght@400;700&family=Courier+Prime:wght@400;700&family=Cormorant+Garamond:wght@400;700&family=Great+Vibes&family=Creepster&family=Bebas+Neue&display=swap');
 
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* 3. توجيه Tailwind لمسح كافة ملفات المكونات واستخراج الكلاسات */
 @source "./**/*.{js,ts,jsx,tsx,html}";
@@ -38,8 +39,10 @@
 }
 
 /* 5. التعريفات والألوان المتغيرة */
-:root, .dark {
+:root:not(.light), .dark {
   color-scheme: dark !important;
+  --app-canvas: #000;
+  --app-foreground: #fafafa;
   --background: 220 12% 8% !important;
   --foreground: 38 16% 91% !important;
   --card: 220 11% 12% !important;
@@ -58,11 +61,30 @@
   --app-font-serif: 'Newsreader', Georgia, serif;
 }
 
+:root.light {
+  color-scheme: light !important;
+  --app-canvas: #f6f7f8;
+  --app-foreground: #171717;
+  --background: 0 0% 98% !important;
+  --foreground: 220 17% 10% !important;
+  --card: 0 0% 100% !important;
+  --card-foreground: 220 17% 10% !important;
+  --border: 220 8% 82% !important;
+  --input: 220 8% 78% !important;
+  --primary: 34 82% 48% !important;
+  --primary-foreground: 0 0% 100% !important;
+  --secondary: 220 9% 93% !important;
+  --secondary-foreground: 220 17% 10% !important;
+  --muted: 220 9% 93% !important;
+  --muted-foreground: 220 7% 40% !important;
+  --accent: 16 67% 50% !important;
+  --accent-foreground: 0 0% 100% !important;
+}
+
 html, body, #root {
   width: 100%;
-  background-color: #000 !important;
-  color: #fafafa !important;
-  direction: rtl;
+  background-color: var(--app-canvas, #000) !important;
+  color: var(--app-foreground, #fafafa) !important;
   min-height: 100vh;
   min-height: 100dvh;
 }
@@ -71,7 +93,7 @@ body {
   display: flex;
   justify-content: center;
   margin: 0;
-  background-color: #000 !important;
+  background-color: var(--app-canvas, #000) !important;
   font-family: var(--app-font-sans);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
@@ -91,7 +113,8 @@ body {
   border-left: 1px solid #2a2b33;
   border-right: 1px solid #2a2b33;
   box-sizing: border-box;
-  background-color: #000 !important;
+  background-color: var(--app-canvas, #000) !important;
+  color: var(--app-foreground, #fafafa) !important;
 }
 
 /* ===== Post Card (X / Twitter Style) ===== */

@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useTheme } from 'next-themes';
+import { toast } from 'sonner';
 
-type NotificationCategory = 'messages' | 'followers' | 'interactions' | 'stories';
-type AppearancePreference = 'dark' | 'light' | 'automatic';
-type LanguagePreference = 'ar' | 'en';
-type MediaQualityPreference = 'hd' | 'data-saving';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
+import {
+  profilePreferencesPatch,
+  readLocalUserPreferences,
+  saveLocalUserPreferences,
+  userPreferencesFromProfile,
+  type UserPreferences,
+} from '@/lib/userPreferences';
+import type { Profile } from '@/lib/types';
 
-type SettingsPreferences = {
-  notifications: Record<NotificationCategory, boolean>;
-  appearance: AppearancePreference;
-  language: LanguagePreference;
-  mediaQuality: MediaQualityPreference;
-};
+type NotificationCategory = keyof UserPreferences['notifications'];
 
 export type ProfileSettingsPreferenceScreen = 'notifications' | 'appearance' | 'language' | 'media-quality';
 
@@ -20,36 +22,6 @@ const notificationOptions: { key: NotificationCategory; label: string; descripti
   { key: 'interactions', label: 'التفاعلات', description: 'الإعجابات والتعليقات والإشارات' },
   { key: 'stories', label: 'الستوريات', description: 'التفاعلات ومشاهدات القصص' },
 ];
-
-const defaultPreferences: SettingsPreferences = {
-  notifications: { messages: true, followers: true, interactions: true, stories: true },
-  appearance: 'dark',
-  language: 'ar',
-  mediaQuality: 'hd',
-};
-
-function readPreferences(userId: string): SettingsPreferences {
-  if (typeof window === 'undefined') return defaultPreferences;
-  try {
-    const stored = window.localStorage.getItem(`aani-settings-preferences:${userId}`);
-    if (!stored) return defaultPreferences;
-    const parsed = JSON.parse(stored) as Partial<SettingsPreferences>;
-    const notifications = parsed.notifications;
-    return {
-      notifications: {
-        messages: notifications?.messages !== false,
-        followers: notifications?.followers !== false,
-        interactions: notifications?.interactions !== false,
-        stories: notifications?.stories !== false,
-      },
-      appearance: parsed.appearance === 'light' || parsed.appearance === 'automatic' ? parsed.appearance : 'dark',
-      language: parsed.language === 'en' ? 'en' : 'ar',
-      mediaQuality: parsed.mediaQuality === 'data-saving' ? 'data-saving' : 'hd',
-    };
-  } catch {
-    return defaultPreferences;
-  }
-}
 
 function PreferenceChoice({
   label,
@@ -81,31 +53,50 @@ function PreferenceChoice({
 
 export default function ProfileSettingsPreferences({
   currentUserId,
+  profile,
+  onProfileUpdate,
   screen,
 }: {
   currentUserId: string;
+  profile: Profile;
+  onProfileUpdate: (next: Profile) => void;
   screen: ProfileSettingsPreferenceScreen;
 }) {
-  const [preferences, setPreferences] = useState(() => readPreferences(currentUserId));
-  const storageKey = `aani-settings-preferences:${currentUserId}`;
+  const [preferences, setPreferences] = useState(() => userPreferencesFromProfile(profile, readLocalUserPreferences(currentUserId)));
+  const { setTheme } = useTheme();
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  const savePreferences = (next: SettingsPreferences) => {
+  const savePreferences = (next: UserPreferences) => {
     setPreferences(next);
-    try {
-      window.localStorage.setItem(storageKey, JSON.stringify(next));
-    } catch {
-      // Preferences remain available for this view if local storage is unavailable.
+    saveLocalUserPreferences(currentUserId, next);
+    setTheme(next.appearance);
+    if (typeof document !== 'undefined') {
+      document.documentElement.lang = next.language === 'ar' ? 'ar' : 'en';
+      document.documentElement.dir = next.language === 'ar' ? 'rtl' : 'ltr';
     }
+    onProfileUpdate({ ...profile, ...profilePreferencesPatch(next) });
+
+    saveQueueRef.current = saveQueueRef.current.then(async () => {
+      if (!supabaseConfigured) throw new Error('إعدادات Supabase غير مكتملة.');
+      const { error } = await supabase
+        .from('profiles')
+        .update(profilePreferencesPatch(next))
+        .eq('id', currentUserId);
+      if (error) throw error;
+    }).catch(error => {
+      console.error('[profile settings] تعذرت مزامنة التفضيلات:', error);
+      toast.error('حُفظ التفضيل على هذا الجهاز، لكن تعذرت مزامنته مع Supabase. تحقق من تطبيق ترحيل التفضيلات.');
+    });
   };
 
   if (screen === 'notifications') {
     return (
-      <div className="profile-settings-preferences bg-[#0a0a0a] px-4 pb-6 pt-2">
-        <p className="profile-settings-note">تُحفظ هذه الخيارات على هذا الجهاز، ولا تتحكم حالياً بإشعارات النظام أو إعدادات الخادم.</p>
+      <div className="profile-settings-preferences px-4 pb-6 pt-2">
+        <p className="profile-settings-note">تتحكم هذه المفاتيح في الإشعارات التي تظهر داخل قائمة الإشعارات، وتُزامَن مع حسابك.</p>
         {notificationOptions.map(option => {
           const enabled = preferences.notifications[option.key];
           return (
-            <div key={option.key} className="profile-settings-row profile-settings-privacy bg-[#0a0a0a]">
+            <div key={option.key} className="profile-settings-row profile-settings-privacy">
               <div className="profile-settings-copy">
                 <span className="profile-settings-label">{option.label}</span>
                 <span className="profile-settings-description">{option.description}</span>
@@ -132,12 +123,12 @@ export default function ProfileSettingsPreferences({
 
   if (screen === 'appearance') {
     return (
-      <div className="profile-settings-preferences bg-[#0a0a0a] px-4 pb-6 pt-2">
-        <p className="profile-settings-note">يُحفظ اختيارك محلياً؛ الواجهة الحالية تعمل بالوضع الداكن حتى تفعيل دعم السمات الكامل.</p>
+      <div className="profile-settings-preferences px-4 pb-6 pt-2">
+        <p className="profile-settings-note">يُطبّق المظهر فوراً على التطبيق، ويُحفظ محلياً وفي حسابك.</p>
         <div role="radiogroup" aria-label="المظهر">
           <PreferenceChoice label="داكن" description="مظهر داكن" checked={preferences.appearance === 'dark'} onSelect={() => savePreferences({ ...preferences, appearance: 'dark' })} />
           <PreferenceChoice label="فاتح" description="مظهر فاتح" checked={preferences.appearance === 'light'} onSelect={() => savePreferences({ ...preferences, appearance: 'light' })} />
-          <PreferenceChoice label="تلقائي" description="حسب إعداد الجهاز" checked={preferences.appearance === 'automatic'} onSelect={() => savePreferences({ ...preferences, appearance: 'automatic' })} />
+          <PreferenceChoice label="تلقائي" description="حسب إعداد الجهاز" checked={preferences.appearance === 'system'} onSelect={() => savePreferences({ ...preferences, appearance: 'system' })} />
         </div>
       </div>
     );
@@ -145,22 +136,22 @@ export default function ProfileSettingsPreferences({
 
   if (screen === 'language') {
     return (
-      <div className="profile-settings-preferences bg-[#0a0a0a] px-4 pb-6 pt-2">
-        <p className="profile-settings-note">واجهة التطبيق متاحة بالعربية حالياً؛ اختيار الإنجليزية يُحفظ كتفضيل ولا يترجم الواجهة بعد.</p>
+      <div className="profile-settings-preferences px-4 pb-6 pt-2">
+        <p className="profile-settings-note">يتغير اتجاه الواجهة ولغتها المعلنة فوراً ويُحفظ الاختيار في حسابك؛ بعض النصوص ما زالت بالعربية.</p>
         <div role="radiogroup" aria-label="اللغة">
-          <PreferenceChoice label="العربية" description="لغة التطبيق" checked={preferences.language === 'ar'} onSelect={() => savePreferences({ ...preferences, language: 'ar' })} />
-          <PreferenceChoice label="English" description="App language" checked={preferences.language === 'en'} onSelect={() => savePreferences({ ...preferences, language: 'en' })} />
+          <PreferenceChoice label="العربية" description="من اليمين إلى اليسار" checked={preferences.language === 'ar'} onSelect={() => savePreferences({ ...preferences, language: 'ar' })} />
+          <PreferenceChoice label="English" description="Left to right" checked={preferences.language === 'en'} onSelect={() => savePreferences({ ...preferences, language: 'en' })} />
         </div>
       </div>
     );
   }
 
   return (
-    <div className="profile-settings-preferences bg-[#0a0a0a] px-4 pb-6 pt-2">
-      <p className="profile-settings-note">يُحفظ اختيار الجودة محلياً. لا تُضغط الفيديوهات حالياً، كما أن هذا التفضيل لم يُربط بعد بمسارات رفع الوسائط.</p>
+    <div className="profile-settings-preferences px-4 pb-6 pt-2">
+      <p className="profile-settings-note">تُحفظ جودة الرفع في حسابك وتُستخدم تلقائياً عند رفع الصور. لا يُضغط الفيديو.</p>
       <div role="radiogroup" aria-label="جودة الوسائط">
-        <PreferenceChoice label="جودة HD" description="الحفاظ على جودة الوسائط" checked={preferences.mediaQuality === 'hd'} onSelect={() => savePreferences({ ...preferences, mediaQuality: 'hd' })} />
-        <PreferenceChoice label="توفير البيانات" description="استخدام جودة أقل لتقليل استهلاك البيانات" checked={preferences.mediaQuality === 'data-saving'} onSelect={() => savePreferences({ ...preferences, mediaQuality: 'data-saving' })} />
+        <PreferenceChoice label="جودة HD" description="الحفاظ على جودة الصور" checked={preferences.mediaQuality === 'hd'} onSelect={() => savePreferences({ ...preferences, mediaQuality: 'hd' })} />
+        <PreferenceChoice label="توفير البيانات" description="ضغط الصور قبل رفعها" checked={preferences.mediaQuality === 'data-saving'} onSelect={() => savePreferences({ ...preferences, mediaQuality: 'data-saving' })} />
       </div>
     </div>
   );

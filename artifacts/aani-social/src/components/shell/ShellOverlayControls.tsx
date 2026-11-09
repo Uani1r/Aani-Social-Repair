@@ -180,6 +180,8 @@ export default function ShellOverlayControls({
         currentUserId={userId}
         onOpenComments={onOpenComments}
         onOpenStory={onOpenStory}
+        notificationSettings={profile?.notification_settings}
+        language={profile?.language_preference || 'ar'}
       />
 
       {!hideAssistantLauncher && (

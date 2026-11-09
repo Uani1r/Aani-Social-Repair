@@ -168,7 +168,7 @@ export default function SettingsModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="settings-modal-title"
-        dir="rtl"
+        dir={currentProfile?.language_preference === 'en' ? 'ltr' : 'rtl'}
         onClick={event => event.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-white/[0.07] px-5 py-4">

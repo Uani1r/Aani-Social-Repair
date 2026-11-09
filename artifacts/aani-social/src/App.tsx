@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTheme } from 'next-themes';
 import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
@@ -22,6 +23,7 @@ import { handleAppError, installSupabaseErrorInterceptor } from '@/lib/appErrors
 import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
+import { readLocalUserPreferences, saveLocalUserPreferences, userPreferencesFromProfile } from '@/lib/userPreferences';
 import '@/index.css';
 
 installSupabaseErrorInterceptor(supabase);
@@ -29,7 +31,23 @@ installSupabaseErrorInterceptor(supabase);
 function App() {
   useModalBodyScrollLock();
   const { authLoading, user, profile, setProfile, signOut } = useAppSession();
+  const { setTheme, resolvedTheme } = useTheme();
   useInteractionRealtime(user?.id);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!user?.id) {
+      setTheme('dark');
+      root.lang = 'ar';
+      root.dir = 'rtl';
+      return;
+    }
+    const preferences = userPreferencesFromProfile(profile, readLocalUserPreferences(user.id));
+    saveLocalUserPreferences(user.id, preferences);
+    setTheme(preferences.appearance);
+    root.lang = preferences.language;
+    root.dir = preferences.language === 'ar' ? 'rtl' : 'ltr';
+  }, [user?.id, profile?.notification_settings, profile?.appearance_preference, profile?.language_preference, profile?.hd_uploads, profile?.data_saver, setTheme]);
   const [selectedPostForComments, setSelectedPostForComments] = useState<string | null>(null);
   const [selectedCommentIdForComments, setSelectedCommentIdForComments] = useState<string | null>(null);
   const openComments = useCallback((postId: string, commentId?: string) => {
@@ -86,7 +104,7 @@ function App() {
       <>
         <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
         <GlobalErrorToast />
-        <Toaster position="top-center" duration={10000} theme="dark" />
+        <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
       </>
     );
   }
@@ -202,7 +220,7 @@ function App() {
         )}
       </WouterRouter>
       <GlobalErrorToast />
-      <Toaster position="top-center" duration={10000} theme="dark" />
+      <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
     </TooltipProvider>
   );
 }

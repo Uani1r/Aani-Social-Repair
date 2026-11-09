@@ -60,7 +60,7 @@ const formatRequestTime = (value: string) => {
   return formatter.format(Math.round(difference / 86_400_000), 'day');
 };
 
-export default function FollowRequestsSection({ currentUserId }: { currentUserId: string }) {
+export default function FollowRequestsSection({ currentUserId, dir = 'rtl' }: { currentUserId: string; dir?: 'rtl' | 'ltr' }) {
   const [requests, setRequests] = useState<FollowRequestEntry[]>([]);
   const [mockRequests, setMockRequests] = useState<FollowRequestEntry[]>([]);
   const [mockVisible, setMockVisible] = useState(false);
@@ -308,7 +308,7 @@ export default function FollowRequestsSection({ currentUserId }: { currentUserId
 
       <div
         className={`fixed inset-0 z-[170] flex transform flex-col bg-[#0a0a0a] text-[#f0f0f0] transition-transform duration-[400ms] [transition-timing-function:cubic-bezier(0.25,0.8,0.25,1)] ${overlayOpen ? 'pointer-events-auto translate-y-0' : 'pointer-events-none translate-y-full'}`}
-        dir="rtl"
+        dir={dir}
         role="dialog"
         aria-modal={overlayOpen}
         aria-labelledby="aani-follow-requests-title"

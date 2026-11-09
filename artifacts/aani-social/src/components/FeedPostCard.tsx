@@ -19,6 +19,7 @@ import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { uploadMedia } from '@/lib/storyUpload';
 import { getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
@@ -258,11 +259,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         }
         const safeName = replacementFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
         const path = `${currentUserId}/${Date.now()}-${safeName}`;
-        const { error: uploadError } = await supabase.storage.from(storageBucket).upload(path, replacementFile, {
-          upsert: true,
-          contentType: replacementFile.type,
-        });
-        if (uploadError) throw uploadError;
+        await uploadMedia({ file: replacementFile, path });
         mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
         mediaUrls = [mediaUrl];
       }

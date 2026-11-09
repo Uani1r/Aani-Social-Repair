@@ -7,6 +7,7 @@ import ChatPhotoEditor from '@/components/ChatPhotoEditor';
 import { CHAT_MEDIA_MESSAGE_PREFIX } from '@/components/ChatImageMessage';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
+import { readLocalUserPreferences } from '@/lib/userPreferences';
 
 type GalleryPhoto = { id: string; file: File; url: string };
 type PickerTab = 'photos' | 'albums';
@@ -32,34 +33,6 @@ type ChatMediaPickerProps = {
 
 const MAX_SELECTED_PHOTOS = 10;
 
-async function preparePhotoForUpload(file: File, hd: boolean): Promise<File> {
-  if (hd) return file;
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error('تعذر ضغط الصورة.'));
-      image.src = objectUrl;
-    });
-    const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-    const context = canvas.getContext('2d');
-    if (!context) return file;
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.76));
-    if (!blob) return file;
-    const baseName = file.name.replace(/\.[^.]+$/, '') || 'photo';
-    return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
-  } catch {
-    return file;
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
-
 function notifyCaptionChange(caption: string): void {
   window.dispatchEvent(new CustomEvent('aani-chat-media-caption-update', { detail: { caption } }));
 }
@@ -71,7 +44,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [caption, setCaption] = useState('');
   const [viewOnce, setViewOnce] = useState(false);
-  const [hd, setHd] = useState(true);
+  const [hd, setHd] = useState(() => readLocalUserPreferences(currentUserId).mediaQuality === 'hd');
   const [activeRecipientId, setActiveRecipientId] = useState<string | null>(recipientId || null);
   const recipientIdRef = useRef(recipientId);
   useEffect(() => { recipientIdRef.current = recipientId; }, [recipientId]);
@@ -97,12 +70,13 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
       const detail = (event as CustomEvent<{ caption?: string; recipientId?: string }>).detail;
       setCaption(detail?.caption || '');
       setActiveRecipientId(detail?.recipientId || recipientIdRef.current || null);
+      setHd(readLocalUserPreferences(currentUserId).mediaQuality === 'hd');
       setActiveTab('photos');
       setOpen(true);
     };
     window.addEventListener('aani-open-chat-media-picker', handleOpen);
     return () => window.removeEventListener('aani-open-chat-media-picker', handleOpen);
-  }, [sending]);
+  }, [currentUserId, sending]);
 
   const openDevicePicker = () => imageInputRef.current?.click();
 
@@ -212,10 +186,9 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
     let messageInserted = false;
     try {
       const uploadResults = await Promise.allSettled(selectedPhotosSnapshot.map(async (photo, index) => {
-        const uploadFile = await preparePhotoForUpload(photo.file, hdSnapshot);
-        const safeName = uploadFile.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'photo.jpg';
+        const safeName = photo.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'photo.jpg';
         const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
-        await uploadMedia({ file: uploadFile, path });
+        await uploadMedia({ file: photo.file, path, quality: hdSnapshot ? 'hd' : 'data-saving' });
         uploadedPaths.push(path);
         return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
       }));

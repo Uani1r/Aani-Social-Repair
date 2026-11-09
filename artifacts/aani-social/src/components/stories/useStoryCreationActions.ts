@@ -192,8 +192,7 @@ export function useStoryCreationActions({
       if (storyFile) {
         const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
         const filePath = `${userId}/story-${Date.now()}-${safeName}`;
-        const { error: uploadErr } = await supabase.storage.from(storageBucket).upload(filePath, storyFile, { contentType: storyFile.type, upsert: true });
-        if (uploadErr) throw uploadErr;
+        await uploadStoryMedia({ file: storyFile, path: filePath });
         mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
         mediaType = storyFile.type.startsWith('video') ? 'video' : 'photo';
       }

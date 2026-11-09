@@ -2,8 +2,8 @@
 
 .profile-screen {
   min-height: 150vh;
-  background: #000;
-  color: #fff;
+  background: var(--app-canvas, #000);
+  color: var(--app-foreground, #fff);
   font-family: 'Noto Kufi Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -252,8 +252,10 @@
   inset: 0;
   z-index: 1000;
   overflow: hidden;
-  background: #000;
-  color: #fff;
+  background: var(--app-canvas, #000);
+  color: var(--app-foreground, #fff);
+  --profile-settings-border: #181818;
+  --profile-settings-muted: #858585;
   transform: translateY(100%);
   transition: transform 300ms ease-out;
   overscroll-behavior: contain;
@@ -269,7 +271,7 @@
   height: 100%;
   height: 100dvh;
   flex-direction: column;
-  background: #000;
+  background: var(--app-canvas, #000);
   font-family: 'Noto Kufi Arabic', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
@@ -280,13 +282,13 @@
   min-height: calc(72px + env(safe-area-inset-top, 0px));
   align-items: center;
   justify-content: center;
-  border-bottom: 1px solid #181818;
+  border-bottom: 1px solid var(--profile-settings-border, #181818);
   padding-top: env(safe-area-inset-top, 0px);
 }
 
 .profile-settings-header h2 {
   margin: 0;
-  color: #fff;
+  color: var(--app-foreground, #fff);
   font-size: 16px;
   font-weight: 700;
   line-height: 1.4;
@@ -303,7 +305,7 @@
   justify-content: center;
   border: 0;
   background: transparent;
-  color: #fff;
+  color: var(--app-foreground, #fff);
   cursor: pointer;
 }
 
@@ -313,7 +315,7 @@
 
 .profile-settings-back {
   left: 16px;
-  color: #aaa;
+  color: var(--profile-settings-muted, #aaa);
 }
 
 .profile-settings-list {
@@ -333,10 +335,10 @@
   justify-content: space-between;
   gap: 20px;
   border: 0;
-  border-bottom: 1px solid #181818;
+  border-bottom: 1px solid var(--profile-settings-border, #181818);
   padding: 18px 0;
   background: transparent;
-  color: #fff;
+  color: var(--app-foreground, #fff);
   text-align: right;
 }
 
@@ -352,7 +354,7 @@
 }
 
 .profile-settings-link:hover > span:first-child {
-  color: #fff;
+  color: var(--app-foreground, #fff);
 }
 
 .profile-settings-privacy {
@@ -367,14 +369,14 @@
 }
 
 .profile-settings-label {
-  color: #fff;
+  color: var(--app-foreground, #fff);
   font-size: 15px;
   font-weight: 700;
 }
 
 .profile-settings-description {
   margin-top: 1px;
-  color: #737373;
+  color: var(--profile-settings-muted, #737373);
   font-size: 12px;
   font-weight: 400;
   line-height: 1.6;
@@ -451,7 +453,7 @@
 
 .profile-settings-note {
   margin: 14px 0;
-  color: #858585;
+  color: var(--profile-settings-muted, #858585);
   font-size: 12px;
   line-height: 1.8;
 }
@@ -655,11 +657,21 @@
 .profile-settings-preferences {
   min-height: 100%;
   border-radius: 12px;
-  background: #0a0a0a;
+  background: var(--app-canvas, #0a0a0a);
+  color: var(--app-foreground, #fff);
 }
 
 .profile-settings-preferences .profile-settings-row {
-  background: #0a0a0a;
+  background: var(--app-canvas, #0a0a0a);
+}
+
+:root.light .profile-settings-overlay {
+  --profile-settings-border: #dedfe3;
+  --profile-settings-muted: #666;
+}
+
+:root.light .profile-settings-switch:not(.is-enabled):not(.is-private) {
+  background: #c9cbd0;
 }
 
 .profile-settings-switch.is-enabled {
@@ -678,10 +690,10 @@
   justify-content: space-between;
   gap: 16px;
   border: 0;
-  border-bottom: 1px solid #181818;
+  border-bottom: 1px solid var(--profile-settings-border, #181818);
   padding: 14px 0;
-  background: #0a0a0a;
-  color: #fff;
+  background: var(--app-canvas, #0a0a0a);
+  color: var(--app-foreground, #fff);
   text-align: right;
   cursor: pointer;
 }

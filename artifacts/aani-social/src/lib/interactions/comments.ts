@@ -3,7 +3,8 @@ import { displayName } from "../types";
 import type { Post, Profile } from "../types";
 import { buildCommentTree } from "../comments/tree";
 import { handleAppError } from "../appErrors";
-import { storageBucket, supabase, supabaseConfigured } from "../supabase";
+import { supabase, supabaseConfigured, storageBucket } from "../supabase";
+import { uploadMedia } from "../storyUpload";
 import {
   attachCommentAuthors,
   fetchCommentProfiles,
@@ -295,11 +296,7 @@ export async function uploadCommentImage(
   const extension = file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "jpg";
   const path = `${userId}/comments/${crypto.randomUUID()}.${extension.toLowerCase()}`;
 
-  const { error } = await supabase.storage
-    .from(storageBucket)
-    .upload(path, file, { contentType: file.type, upsert: false });
-
-  if (error) throw error;
+  await uploadMedia({ file, path });
 
   const { data } = supabase.storage.from(storageBucket).getPublicUrl(path);
   return { publicUrl: data.publicUrl, path };
