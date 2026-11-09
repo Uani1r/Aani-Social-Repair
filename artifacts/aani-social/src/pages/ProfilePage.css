@@ -444,3 +444,124 @@
     transition-duration: 0.01ms;
   }
 }
+
+
+
+.profile-settings-section-title {
+  margin: 20px 0 8px;
+  color: #737373;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.profile-settings-note {
+  margin: 14px 0;
+  color: #858585;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.profile-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 0;
+  border-bottom: 1px solid #181818;
+}
+
+.profile-settings-field label {
+  color: #c8c8c8;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.profile-settings-field input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #303030;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #101010;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  direction: ltr;
+  text-align: left;
+}
+
+.profile-settings-field input:focus {
+  border-color: #22c55e;
+  outline: 2px solid rgb(34 197 94 / 18%);
+}
+
+.profile-settings-action {
+  min-height: 42px;
+  align-self: flex-start;
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 17px;
+  background: #fff;
+  color: #000;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.profile-settings-action:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.profile-settings-danger {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid #532626;
+  border-radius: 12px;
+  padding: 13px;
+  background: #170c0c;
+  color: #ff7777;
+  text-align: right;
+}
+
+.profile-settings-danger:disabled {
+  cursor: not-allowed;
+  opacity: .75;
+}
+
+
+
+.profile-settings-list > * {
+  animation: profile-settings-screen-in 180ms ease-out both;
+}
+
+@keyframes profile-settings-screen-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.profile-settings-list button.profile-settings-note {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-settings-list > * {
+    animation-duration: 0.01ms;
+  }
+}
+
+
+
+.profile-settings-request-card .profile-settings-action {
+  min-height: 36px;
+  align-self: center;
+  padding: 7px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}

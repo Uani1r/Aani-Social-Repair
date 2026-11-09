@@ -89,3 +89,29 @@ export function readLocalBlockedUserIds(userId: string): Set<string> {
 export function writeLocalBlockedUserIds(userId: string, ids: Set<string>): void {
   if (userId) writeIds(localIdsKey('blocked-users', userId), ids);
 }
+
+export function readLocalMutedUserIds(userId: string): Set<string> {
+  if (typeof window === 'undefined' || !userId) return new Set();
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(`aani_message_preferences_${userId}`) || '{}');
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return new Set();
+    const ids = (stored as Record<string, unknown>).mutedIds;
+    return Array.isArray(ids) ? new Set(ids.filter((value): value is string => typeof value === 'string')) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+export function writeLocalMutedUserIds(userId: string, ids: Set<string>): void {
+  if (typeof window === 'undefined' || !userId) return;
+  try {
+    const storageKey = `aani_message_preferences_${userId}`;
+    const stored: unknown = JSON.parse(window.localStorage.getItem(storageKey) || '{}');
+    const preferences = stored && typeof stored === 'object' && !Array.isArray(stored)
+      ? stored as Record<string, unknown>
+      : {};
+    window.localStorage.setItem(storageKey, JSON.stringify({ ...preferences, mutedIds: [...ids] }));
+  } catch {
+    // Storage can be unavailable in private browsing or restricted contexts.
+  }
+}

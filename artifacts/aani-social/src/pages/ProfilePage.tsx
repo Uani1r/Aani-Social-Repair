@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
@@ -13,8 +13,10 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
+import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 
+type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted';
 type ProfileImageKind = 'avatar' | 'cover';
 type CoverPosition = { x: number; y: number };
 type CoverPanGesture = {
@@ -114,6 +116,21 @@ export default function ProfilePage({
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
   const [settingsOverlayEntered, setSettingsOverlayEntered] = useState(false);
   const [showFollowRequests, setShowFollowRequests] = useState(false);
+  const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>('home');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+  const [emailDraft, setEmailDraft] = useState('');
+  const [phoneDraft, setPhoneDraft] = useState('');
+  const [phoneVerificationCode, setPhoneVerificationCode] = useState('');
+  const [pendingPhone, setPendingPhone] = useState('');
+  const [passwordDraft, setPasswordDraft] = useState('');
+  const [accountSettingsBusy, setAccountSettingsBusy] = useState(false);
+  const [blockedProfiles, setBlockedProfiles] = useState<Profile[]>([]);
+  const [mutedProfiles, setMutedProfiles] = useState<Profile[]>([]);
+  const [managedProfilesLoading, setManagedProfilesLoading] = useState(false);
+  const [managedProfileBusyId, setManagedProfileBusyId] = useState<string | null>(null);
+  const [currentSessionExpiry, setCurrentSessionExpiry] = useState<number | null>(null);
+  const [currentSessionLoading, setCurrentSessionLoading] = useState(false);
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(person?.avatar_url || null);
@@ -169,10 +186,86 @@ export default function ProfilePage({
       setShowSettingsOverlay(false);
       setSettingsOverlayEntered(false);
       setShowFollowRequests(false);
+      setSettingsScreen('home');
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [showSettingsOverlay]);
+
+  useEffect(() => {
+    if (!showSettingsOverlay || !['account', 'email', 'phone', 'password', 'security'].includes(settingsScreen)) return;
+    let active = true;
+    const loadAuthSettings = async () => {
+      if (settingsScreen === 'security') {
+        setCurrentSessionLoading(true);
+        try {
+          const { data, error } = await supabase.auth.getSession();
+          if (active) setCurrentSessionExpiry(error ? null : data.session?.expires_at ?? null);
+        } catch {
+          if (active) setCurrentSessionExpiry(null);
+        } finally {
+          if (active) setCurrentSessionLoading(false);
+        }
+        return;
+      }
+      const { data, error } = await supabase.auth.getUser();
+      if (!active) return;
+      if (error) {
+        toast.error('تعذر تحميل بيانات الحساب.');
+        return;
+      }
+      const nextEmail = data.user?.email || '';
+      const nextPhone = data.user?.phone || '';
+      setAuthEmail(nextEmail);
+      setAuthPhone(nextPhone);
+      if (settingsScreen === 'email') setEmailDraft(nextEmail);
+      if (settingsScreen === 'phone' && !pendingPhone) setPhoneDraft(nextPhone);
+    };
+    void loadAuthSettings();
+    return () => { active = false; };
+  }, [showSettingsOverlay, settingsScreen, pendingPhone]);
+
+  useEffect(() => {
+    if (!showSettingsOverlay || (settingsScreen !== 'blocked' && settingsScreen !== 'muted')) return;
+    let active = true;
+    const loadManagedProfiles = async () => {
+      setManagedProfilesLoading(true);
+      const isBlockedScreen = settingsScreen === 'blocked';
+      const ids = isBlockedScreen ? readLocalBlockedUserIds(currentUserId) : readLocalMutedUserIds(currentUserId);
+      if (isBlockedScreen && supabaseConfigured) {
+        const { data, error } = await supabase.from('user_blocks').select('blocked_user_id').eq('blocker_id', currentUserId);
+        if (error) {
+          console.error('[profile settings] تعذر تحميل قائمة الحظر:', error);
+          if (!ids.size) toast.error('تعذر تحميل الحسابات المحظورة.');
+        } else {
+          (data || []).forEach(row => ids.add(row.blocked_user_id));
+        }
+      }
+      if (!active) return;
+      if (!ids.size) {
+        if (isBlockedScreen) setBlockedProfiles([]);
+        else setMutedProfiles([]);
+        setManagedProfilesLoading(false);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, username, full_name, display_name, avatar_url, bio, is_private')
+        .in('id', [...ids]);
+      if (!active) return;
+      if (error) {
+        console.error('[profile settings] تعذر تحميل الحسابات:', error);
+        toast.error('تعذر تحميل بيانات الحسابات.');
+      } else {
+        const nextProfiles = (data || []) as Profile[];
+        if (isBlockedScreen) setBlockedProfiles(nextProfiles);
+        else setMutedProfiles(nextProfiles);
+      }
+      setManagedProfilesLoading(false);
+    };
+    void loadManagedProfiles();
+    return () => { active = false; };
+  }, [showSettingsOverlay, settingsScreen, currentUserId]);
 
   useEffect(() => {
     setShowFollowCheckmark(false);
@@ -378,13 +471,31 @@ export default function ProfilePage({
     setShowSettingsOverlay(false);
     setSettingsOverlayEntered(false);
     setShowFollowRequests(false);
+    setSettingsScreen('home');
   };
 
   const openSettingsOverlay = () => {
     setShowProfileMenu(false);
     setShowFollowRequests(false);
+    setSettingsScreen('home');
     setSettingsOverlayEntered(false);
     setShowSettingsOverlay(true);
+  };
+
+  const goBackInSettings = () => {
+    if (showFollowRequests) {
+      setShowFollowRequests(false);
+      return;
+    }
+    if (settingsScreen === 'blocked' || settingsScreen === 'muted') {
+      setSettingsScreen('privacy');
+      return;
+    }
+    if (settingsScreen === 'email' || settingsScreen === 'phone' || settingsScreen === 'password' || settingsScreen === 'security') {
+      setSettingsScreen('account');
+      return;
+    }
+    setSettingsScreen('home');
   };
 
   const startProfileEditing = () => {
@@ -393,6 +504,122 @@ export default function ProfilePage({
     setCoverPosition({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
     setIsEditingProfile(true);
     closeSettingsOverlay();
+  };
+
+  const saveEmailChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextEmail = emailDraft.trim();
+    if (!nextEmail || nextEmail === authEmail || accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ email: nextEmail });
+      if (error) throw error;
+      toast.success('أرسلنا رابط تأكيد إلى البريد الجديد. سيُحدّث البريد بعد تأكيده.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر تحديث البريد الإلكتروني.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const startPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextPhone = phoneDraft.trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(nextPhone)) {
+      toast.error('أدخل رقم الهاتف بالصيغة الدولية، مثل ‎+9665XXXXXXXX.');
+      return;
+    }
+    if (nextPhone === authPhone || accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ phone: nextPhone });
+      if (error) throw error;
+      setPendingPhone(nextPhone);
+      setPhoneVerificationCode('');
+      toast.success('أرسلنا رمز تحقق إلى الرقم الجديد.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر إرسال رمز التحقق إلى الهاتف.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const verifyPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!pendingPhone || !phoneVerificationCode.trim() || accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({ phone: pendingPhone, token: phoneVerificationCode.trim(), type: 'phone_change' });
+      if (error) throw error;
+      const verifiedPhone = data.user?.phone || pendingPhone;
+      setAuthPhone(verifiedPhone);
+      setPhoneDraft(verifiedPhone);
+      setPendingPhone('');
+      setPhoneVerificationCode('');
+      toast.success('تم تأكيد رقم الهاتف وتحديثه.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر تأكيد رقم الهاتف.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const savePasswordChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (passwordDraft.length < 6 || accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: passwordDraft });
+      if (error) throw error;
+      setPasswordDraft('');
+      toast.success('تم تحديث كلمة المرور.');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر تحديث كلمة المرور.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const unblockProfile = async (blockedUserId: string) => {
+    if (managedProfileBusyId) return;
+    setManagedProfileBusyId(blockedUserId);
+    try {
+      const { error } = await supabase.rpc('aani_unblock_user', { p_blocked_user_id: blockedUserId });
+      if (error) throw error;
+      const ids = readLocalBlockedUserIds(currentUserId);
+      ids.delete(blockedUserId);
+      writeLocalBlockedUserIds(currentUserId, ids);
+      setBlockedProfiles(current => current.filter(item => item.id !== blockedUserId));
+      toast.success('تم إلغاء حظر الحساب.');
+    } catch (error) {
+      console.error('[profile settings] تعذر إلغاء الحظر:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر إلغاء الحظر. طبّق تحديث إعدادات الخصوصية في Supabase ثم حاول مجدداً.');
+    } finally {
+      setManagedProfileBusyId(null);
+    }
+  };
+
+  const unmuteProfile = (mutedUserId: string) => {
+    const ids = readLocalMutedUserIds(currentUserId);
+    ids.delete(mutedUserId);
+    writeLocalMutedUserIds(currentUserId, ids);
+    setMutedProfiles(current => current.filter(item => item.id !== mutedUserId));
+    toast.success('تم إلغاء كتم المحادثة.');
+  };
+
+  const endCurrentSession = async () => {
+    if (accountSettingsBusy) return;
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.signOut({ scope: 'local' });
+      if (error) throw error;
+      closeSettingsOverlay();
+      setLocation('/login');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'تعذر تسجيل الخروج من هذا الجهاز.');
+    } finally {
+      setAccountSettingsBusy(false);
+    }
   };
 
   const setImagePreview = (kind: ProfileImageKind, url: string | null) => {
@@ -599,45 +826,56 @@ export default function ProfilePage({
         >
           <section className="profile-settings-panel" onClick={event => event.stopPropagation()}>
             <header className="profile-settings-header">
-              {showFollowRequests && (
-                <button type="button" aria-label="العودة إلى الإعدادات" className="profile-settings-back" onClick={() => setShowFollowRequests(false)}>
+              {(showFollowRequests || settingsScreen !== 'home') && (
+                <button type="button" aria-label="عودة" className="profile-settings-back" onClick={goBackInSettings}>
                   <ChevronRight size={20} />
                 </button>
               )}
-              <h2 id="profile-settings-title">{showFollowRequests ? 'طلبات المتابعة' : 'الإعدادات'}</h2>
+              <h2 id="profile-settings-title">
+                {showFollowRequests ? 'طلبات المتابعة' : ({
+                  home: 'الإعدادات',
+                  account: 'إعدادات الحساب',
+                  email: 'البريد الإلكتروني',
+                  phone: 'رقم الهاتف',
+                  password: 'كلمة المرور',
+                  security: 'الأمان والأجهزة',
+                  privacy: 'خصوصية الحساب',
+                  blocked: 'الحسابات المحظورة',
+                  muted: 'الحسابات المكتومة',
+                } as Record<SettingsScreen, string>)[settingsScreen]}
+              </h2>
               <button type="button" aria-label="إغلاق الإعدادات" className="profile-settings-close" onClick={closeSettingsOverlay}>
                 <X size={24} strokeWidth={2.5} />
               </button>
             </header>
 
-            <div className="profile-settings-list">
-              {!showFollowRequests ? (
+            <div key={showFollowRequests ? 'follow-requests' : settingsScreen} className="profile-settings-list">
+              {showFollowRequests ? followRequests.length ? (
+                followRequests.map(request => (
+                  <div key={request.profile.id} className="profile-settings-request-card">
+                    <Avatar profile={request.profile} />
+                    <UserIdentity name={displayName(request.profile)} username={request.profile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
+                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, true)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">قبول</button>
+                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, false)} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-zinc-300 disabled:opacity-50">رفض</button>
+                  </div>
+                ))
+              ) : (
+                <p className="profile-settings-empty">لا توجد طلبات متابعة جديدة.</p>
+              ) : settingsScreen === 'home' ? (
                 <>
+                  <p className="profile-settings-section-title">الحساب والخصوصية</p>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={startProfileEditing}>
                     <span>تعديل الملف الشخصي</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-
-                  <div className="profile-settings-row profile-settings-privacy">
-                    <div className="profile-settings-copy">
-                      <span className="profile-settings-label">خصوصية الحساب</span>
-                      <span className="profile-settings-description">
-                        {person.is_private ? 'خاص — القصص متاحة للمتابعين فقط' : 'عام — القصص متاحة من الملف الشخصي'}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={Boolean(person.is_private)}
-                      aria-label="خصوصية الحساب"
-                      onClick={() => void toggleAccountPrivacy()}
-                      disabled={privacySaving}
-                      className={`profile-settings-switch${person.is_private ? ' is-private' : ''}`}
-                    >
-                      <span />
-                    </button>
-                  </div>
-
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('account')}>
+                    <span>إعدادات الحساب</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('privacy')}>
+                    <span>خصوصية الحساب</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
                   <button
                     type="button"
                     className="profile-settings-row profile-settings-link"
@@ -649,7 +887,6 @@ export default function ProfilePage({
                     <span>الإعدادات الأخرى</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-
                   <button type="button" className="profile-settings-row profile-settings-link profile-settings-requests" onClick={() => setShowFollowRequests(true)}>
                     <span className="profile-settings-copy">
                       <span className="profile-settings-label">طلبات المتابعة ({followRequests.length})</span>
@@ -658,18 +895,119 @@ export default function ProfilePage({
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                 </>
-              ) : followRequests.length ? (
-                followRequests.map(request => (
-                  <div key={request.profile.id} className="profile-settings-request-card">
-                    <Avatar profile={request.profile} />
-                    <UserIdentity name={displayName(request.profile)} username={request.profile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
-                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, true)} className="rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">قبول</button>
-                    <button type="button" disabled={Boolean(busyRequestId)} onClick={() => void respondToFollowRequest(request.profile.id, false)} className="rounded-lg bg-zinc-800 px-3 py-2 text-xs font-bold text-zinc-300 disabled:opacity-50">رفض</button>
+              ) : settingsScreen === 'account' ? (
+                <>
+                  <p className="profile-settings-section-title">بيانات الدخول</p>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('email')}>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">البريد الإلكتروني</span><span className="profile-settings-description" dir="ltr">{authEmail || 'جارٍ التحميل'}</span></span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('phone')}>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">رقم الهاتف</span><span className="profile-settings-description" dir="ltr">{authPhone || 'غير مضاف'}</span></span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('password')}>
+                    <span>تغيير كلمة المرور</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <p className="profile-settings-section-title">الأمان</p>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('security')}>
+                    <span>الأمان والأجهزة</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <p className="profile-settings-section-title">إدارة الحساب</p>
+                  <button type="button" className="profile-settings-danger" disabled aria-disabled="true">تعطيل الحساب</button>
+                  <p className="profile-settings-note">يتطلب تعطيل الحساب ربطاً بخدمة آمنة على الخادم؛ هذا الإجراء غير متاح حالياً.</p>
+                  <button type="button" className="profile-settings-danger" disabled aria-disabled="true">حذف الحساب نهائياً</button>
+                  <p className="profile-settings-note">لم يتم إعداد مسار حذف آمن للحساب بعد. لن نجري حذفاً شكلياً من المتصفح.</p>
+                </>
+              ) : settingsScreen === 'email' ? (
+                <form onSubmit={saveEmailChange}>
+                  <p className="profile-settings-note">سيُرسل رابط تأكيد إلى البريد الجديد، ولن يتغير البريد المسجل قبل إتمام التأكيد.</p>
+                  <div className="profile-settings-field">
+                    <label htmlFor="settings-email">البريد الإلكتروني الجديد</label>
+                    <input id="settings-email" type="email" autoComplete="email" required value={emailDraft} onChange={event => setEmailDraft(event.target.value)} />
+                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !emailDraft.trim() || emailDraft.trim() === authEmail}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رابط التأكيد'}</button>
                   </div>
-                ))
+                </form>
+              ) : settingsScreen === 'phone' ? pendingPhone ? (
+                <form onSubmit={verifyPhoneChange}>
+                  <p className="profile-settings-note">أدخل رمز الرسالة النصية المرسل إلى <span dir="ltr">{pendingPhone}</span>.</p>
+                  <div className="profile-settings-field">
+                    <label htmlFor="settings-phone-code">رمز التحقق</label>
+                    <input id="settings-phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" required value={phoneVerificationCode} onChange={event => setPhoneVerificationCode(event.target.value)} />
+                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneVerificationCode.trim()}>{accountSettingsBusy ? 'جارٍ التحقق...' : 'تأكيد رقم الهاتف'}</button>
+                  </div>
+                  <button type="button" className="profile-settings-note" onClick={() => { setPendingPhone(''); setPhoneVerificationCode(''); }}>تغيير الرقم</button>
+                </form>
               ) : (
-                <p className="profile-settings-empty">لا توجد طلبات متابعة جديدة.</p>
-              )}
+                <form onSubmit={startPhoneChange}>
+                  <p className="profile-settings-note">يجب إدخال الرقم بالصيغة الدولية، ثم تأكيده برمز SMS.</p>
+                  <div className="profile-settings-field">
+                    <label htmlFor="settings-phone">رقم الهاتف الجديد</label>
+                    <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+9665XXXXXXXX" required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
+                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim() || phoneDraft.trim() === authPhone}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رمز التحقق'}</button>
+                  </div>
+                </form>
+              ) : settingsScreen === 'password' ? (
+                <form onSubmit={savePasswordChange}>
+                  <p className="profile-settings-note">اختر كلمة مرور جديدة لا تقل عن 6 أحرف.</p>
+                  <div className="profile-settings-field">
+                    <label htmlFor="settings-password">كلمة المرور الجديدة</label>
+                    <input id="settings-password" type="password" autoComplete="new-password" minLength={6} required value={passwordDraft} onChange={event => setPasswordDraft(event.target.value)} />
+                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || passwordDraft.length < 6}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'تحديث كلمة المرور'}</button>
+                  </div>
+                </form>
+              ) : settingsScreen === 'security' ? (
+                <>
+                  <p className="profile-settings-section-title">الجلسة الحالية</p>
+                  <div className="profile-settings-row profile-settings-privacy">
+                    <div className="profile-settings-copy">
+                      <span className="profile-settings-label">هذا الجهاز</span>
+                      <span className="profile-settings-description">{currentSessionLoading ? 'جارٍ تحميل الجلسة...' : currentSessionExpiry ? `الجلسة صالحة حتى ${new Date(currentSessionExpiry * 1000).toLocaleString('ar')}` : 'تعذر قراءة بيانات الجلسة الحالية.'}</span>
+                    </div>
+                  </div>
+                  <p className="profile-settings-note">يعرض التطبيق الجلسة الحالية فقط؛ واجهة Supabase المستخدمة لا تتيح تعداد جلسات الأجهزة الأخرى.</p>
+                  <button type="button" className="profile-settings-action" disabled={accountSettingsBusy} onClick={() => void endCurrentSession()}>{accountSettingsBusy ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج من هذا الجهاز'}</button>
+                  <p className="profile-settings-section-title">المصادقة الثنائية</p>
+                  <p className="profile-settings-note">إدارة العامل الثاني غير مفعّلة هنا. يتطلب تشغيلها تحديث تدفق تسجيل الدخول للتحقق من مستوى المصادقة قبل فتح الحساب.</p>
+                </>
+              ) : settingsScreen === 'privacy' ? (
+                <>
+                  <div className="profile-settings-row profile-settings-privacy">
+                    <div className="profile-settings-copy">
+                      <span className="profile-settings-label">خصوصية الحساب</span>
+                      <span className="profile-settings-description">{person.is_private ? 'خاص — يتطلب متابعة مقبولة لعرض المحتوى' : 'عام — يمكن للجميع رؤية المحتوى العام'}</span>
+                    </div>
+                    <button type="button" role="switch" aria-checked={Boolean(person.is_private)} aria-label="خصوصية الحساب" onClick={() => void toggleAccountPrivacy()} disabled={privacySaving} className={`profile-settings-switch${person.is_private ? ' is-private' : ''}`}>
+                      <span />
+                    </button>
+                  </div>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('blocked')}>
+                    <span>الحسابات المحظورة</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('muted')}>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">الحسابات المكتومة</span><span className="profile-settings-description">حسابات كتمت محادثاتها في الرسائل.</span></span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                </>
+              ) : settingsScreen === 'blocked' || settingsScreen === 'muted' ? (
+                <>
+                  <p className="profile-settings-note">{settingsScreen === 'blocked' ? 'إلغاء الحظر يعيد إمكانية التواصل وفق إعدادات الحساب.' : 'هذه القائمة متزامنة مع كتم المحادثات المحفوظ على هذا الجهاز.'}</p>
+                  {managedProfilesLoading ? <p className="profile-settings-empty">جارٍ تحميل الحسابات...</p> : (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).length ? (
+                    (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).map(managedProfile => (
+                      <div key={managedProfile.id} className="profile-settings-request-card">
+                        <Avatar profile={managedProfile} />
+                        <UserIdentity name={displayName(managedProfile)} username={managedProfile.username} className="min-w-0 flex-1" nameClassName="text-sm text-white" usernameClassName="text-xs text-zinc-400" />
+                        <button type="button" className="profile-settings-action" disabled={settingsScreen === 'blocked' && Boolean(managedProfileBusyId)} onClick={() => settingsScreen === 'blocked' ? void unblockProfile(managedProfile.id) : unmuteProfile(managedProfile.id)}>{settingsScreen === 'blocked' ? managedProfileBusyId === managedProfile.id ? 'جارٍ...' : 'إلغاء الحظر' : 'إلغاء الكتم'}</button>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="profile-settings-empty">{settingsScreen === 'blocked' ? 'لا توجد حسابات محظورة.' : 'لا توجد محادثات مكتومة.'}</p>
+                  )}
+                </>
+              ) : null}
             </div>
           </section>
         </div>,
