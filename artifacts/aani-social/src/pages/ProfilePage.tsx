@@ -115,7 +115,6 @@ export default function ProfilePage({
   const [person, setPerson] = useState<Profile | null>(own ? profile : null);
   const [followers, setFollowers] = useState(0);
   const [following, setFollowing] = useState(0);
-  const [postCount, setPostCount] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
   const [showFollowCheckmark, setShowFollowCheckmark] = useState(false);
   const [followRequestSent, setFollowRequestSent] = useState(false);
@@ -345,11 +344,10 @@ export default function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
-      const [{ data: prof }, { count: fCount }, { count: fingCount }, { count: pCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
+      const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
-        supabase.from('posts').select('id', { count: 'exact', head: true }).eq('user_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
         supabase.from('profile_highlight_collections').select('id, user_id, title, cover_url, created_at').eq('user_id', activeUserId).order('created_at', { ascending: true }).limit(100),
@@ -369,7 +367,6 @@ export default function ProfilePage({
       if (prof) setPerson(prof as Profile);
       setFollowers(fCount || 0);
       setFollowing(fingCount || 0);
-      setPostCount(pCount || 0);
       setIsFollowing(Boolean(checkFollow));
       setFollowRequestSent(Boolean(checkRequest));
       const storiesByCollection = new Map<string, ProfileHighlight[]>();
@@ -868,6 +865,7 @@ export default function ProfilePage({
     );
   }
 
+  const formattedPostCount = posts.length.toLocaleString('en-US');
   const formattedFollowers = followers.toLocaleString('en-US');
   const formattedFollowing = following.toLocaleString('en-US');
 
@@ -1448,9 +1446,10 @@ export default function ProfilePage({
               </Link>
             </div>
           )}
-          <div className="flex items-center gap-3 text-sm">
-            <div><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابَع</span></div>
-            <div><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></div>
+          <div dir="rtl" className="flex items-center gap-2 text-xs sm:gap-3 sm:text-sm">
+            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedPostCount}</span> <span className="text-[#71767B]">المنشورات</span></div>
+            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span></div>
+            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></div>
           </div>
         </div>
 
@@ -1539,7 +1538,6 @@ export default function ProfilePage({
           </div>
         )}
       </div>
-      <span className="sr-only">المنشورات: {postCount}</span>
       <ProfileHighlightsManager
         open={showHighlightsManager}
         onClose={() => setShowHighlightsManager(false)}
