@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 
@@ -10,11 +10,19 @@ import {
   userPreferencesFromProfile,
   type UserPreferences,
 } from '@/lib/userPreferences';
+import {
+  applyFontPreference,
+  DEFAULT_FONT_PREFERENCE,
+  FONT_PREFERENCES,
+  readLocalFontPreference,
+  resolveFontPreference,
+  type FontPreference,
+} from '@/lib/fontPreferences';
 import type { Profile } from '@/lib/types';
 
 type NotificationCategory = keyof UserPreferences['notifications'];
 
-export type ProfileSettingsPreferenceScreen = 'notifications' | 'appearance' | 'language' | 'media-quality';
+export type ProfileSettingsPreferenceScreen = 'notifications' | 'appearance' | 'language' | 'media-quality' | 'font-style';
 
 const notificationOptions: { key: NotificationCategory; label: string; description: string }[] = [
   { key: 'messages', label: 'الرسائل', description: 'إشعارات الرسائل الجديدة' },
@@ -63,8 +71,15 @@ export default function ProfileSettingsPreferences({
   screen: ProfileSettingsPreferenceScreen;
 }) {
   const [preferences, setPreferences] = useState(() => userPreferencesFromProfile(profile, readLocalUserPreferences(currentUserId)));
+  const [fontPreference, setFontPreference] = useState<FontPreference>(() => resolveFontPreference(profile.font_preference, readLocalFontPreference()));
   const { setTheme } = useTheme();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    const nextFontPreference = resolveFontPreference(profile.font_preference, readLocalFontPreference());
+    setFontPreference(nextFontPreference);
+    applyFontPreference(nextFontPreference);
+  }, [profile.font_preference]);
 
   const savePreferences = (next: UserPreferences) => {
     setPreferences(next);
@@ -88,6 +103,58 @@ export default function ProfileSettingsPreferences({
       toast.error('حُفظ التفضيل على هذا الجهاز، لكن تعذرت مزامنته مع Supabase. تحقق من تطبيق ترحيل التفضيلات.');
     });
   };
+
+  const saveFontPreference = (nextFontPreference: FontPreference) => {
+    setFontPreference(nextFontPreference);
+    applyFontPreference(nextFontPreference);
+    onProfileUpdate({ ...profile, font_preference: nextFontPreference });
+
+    saveQueueRef.current = saveQueueRef.current.then(async () => {
+      if (!supabaseConfigured) throw new Error('إعدادات Supabase غير مكتملة.');
+      const { error } = await supabase
+        .from('profiles')
+        .update({ font_preference: nextFontPreference })
+        .eq('id', currentUserId);
+      if (error) throw error;
+    }).catch(error => {
+      console.error('[profile settings] تعذرت مزامنة الخط:', error);
+      toast.error('طُبّق الخط وحُفظ على هذا الجهاز، لكن تعذرت مزامنته مع Supabase. تحقق من تطبيق ترحيل الخطوط.');
+    });
+  };
+
+  if (screen === 'font-style') {
+    return (
+      <div className="profile-settings-font-preferences px-4 pb-6 pt-2">
+        <p className="profile-settings-note">اختر الخط الذي يناسبك؛ يُطبّق فوراً على الواجهة ويُحفظ على هذا الجهاز وفي حسابك.</p>
+        <div role="radiogroup" aria-label="نوع الخط">
+          {FONT_PREFERENCES.map(font => (
+            <button
+              key={font.id}
+              type="button"
+              role="radio"
+              aria-checked={fontPreference === font.id}
+              onClick={() => saveFontPreference(font.id)}
+              className="profile-settings-choice"
+            >
+              <span className="profile-settings-copy">
+                <span className="profile-settings-label">{font.label}</span>
+                <span className={`profile-settings-description ${font.previewClass}`}>تطبيق آني - تجربة تواصل عصرية وفخمة</span>
+              </span>
+              <span className={`profile-settings-radio${fontPreference === font.id ? ' is-selected' : ''}`} aria-hidden="true"><span /></span>
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => saveFontPreference(DEFAULT_FONT_PREFERENCE)}
+          disabled={fontPreference === DEFAULT_FONT_PREFERENCE}
+          className="profile-settings-action mt-4 w-full disabled:cursor-default disabled:opacity-50"
+        >
+          استعادة الخط الافتراضي (Alexandria)
+        </button>
+      </div>
+    );
+  }
 
   if (screen === 'notifications') {
     return (

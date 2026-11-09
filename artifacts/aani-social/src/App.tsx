@@ -24,6 +24,7 @@ import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import { readLocalUserPreferences, saveLocalUserPreferences, userPreferencesFromProfile } from '@/lib/userPreferences';
+import { applyFontPreference, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import '@/index.css';
 
 installSupabaseErrorInterceptor(supabase);
@@ -37,6 +38,7 @@ function App() {
   useEffect(() => {
     const root = document.documentElement;
     if (!user?.id) {
+      applyFontPreference(readLocalFontPreference());
       setTheme('dark');
       root.lang = 'ar';
       root.dir = 'rtl';
@@ -44,10 +46,11 @@ function App() {
     }
     const preferences = userPreferencesFromProfile(profile, readLocalUserPreferences(user.id));
     saveLocalUserPreferences(user.id, preferences);
+    applyFontPreference(resolveFontPreference(profile?.font_preference, readLocalFontPreference()));
     setTheme(preferences.appearance);
     root.lang = preferences.language;
     root.dir = preferences.language === 'ar' ? 'rtl' : 'ltr';
-  }, [user?.id, profile?.notification_settings, profile?.appearance_preference, profile?.language_preference, profile?.hd_uploads, profile?.data_saver, setTheme]);
+  }, [user?.id, profile?.notification_settings, profile?.appearance_preference, profile?.language_preference, profile?.hd_uploads, profile?.data_saver, profile?.font_preference, setTheme]);
   const [selectedPostForComments, setSelectedPostForComments] = useState<string | null>(null);
   const [selectedCommentIdForComments, setSelectedCommentIdForComments] = useState<string | null>(null);
   const openComments = useCallback((postId: string, commentId?: string) => {

@@ -16,6 +16,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
+import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 
@@ -116,7 +117,8 @@ export default function ProfilePage({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
   const [settingsOverlayEntered, setSettingsOverlayEntered] = useState(false);
-  const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>('home');
+  const [navStack, setNavStack] = useState<string[]>(['main']);
+  const settingsScreen = (navStack[navStack.length - 1] === 'main' ? 'home' : navStack[navStack.length - 1]) as SettingsScreen;
   const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false);
   const [supportReport, setSupportReport] = useState('');
   const [authEmail, setAuthEmail] = useState('');
@@ -157,6 +159,7 @@ export default function ProfilePage({
   const username = cleanUsername(person?.username);
   const profileLocation = person?.location?.trim() || '';
   const profileWebsiteUrl = normalizeWebsiteUrl(person?.website);
+  const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
   const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
 
   useEffect(() => {
@@ -191,13 +194,13 @@ export default function ProfilePage({
         setShowLogoutConfirmation(false);
         return;
       }
-      setShowSettingsOverlay(false);
-      setSettingsOverlayEntered(false);
-      setSettingsScreen('home');
+      if (navStack.length > 1) {
+        setNavStack(previous => previous.length > 1 ? previous.slice(0, -1) : previous);
+      }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [showSettingsOverlay, showLogoutConfirmation]);
+  }, [showSettingsOverlay, showLogoutConfirmation, navStack.length]);
 
   useEffect(() => {
     if (!showSettingsOverlay || !['account', 'email', 'phone', 'password', 'security'].includes(settingsScreen)) return;
@@ -435,31 +438,35 @@ export default function ProfilePage({
     setShowSettingsOverlay(false);
     setSettingsOverlayEntered(false);
     setShowLogoutConfirmation(false);
-    setSettingsScreen('home');
+    setNavStack(['main']);
   };
 
   const openSettingsOverlay = () => {
     setShowProfileMenu(false);
     setShowLogoutConfirmation(false);
-    setSettingsScreen('home');
+    setNavStack(['main']);
     setSettingsOverlayEntered(false);
     setShowSettingsOverlay(true);
   };
 
+  const navigateToSettingsScreen = (screen: SettingsScreen) => {
+    if (screen === 'home') {
+      setNavStack(['main']);
+      return;
+    }
+    setNavStack(previous => [...previous, screen]);
+  };
+
   const goBackInSettings = () => {
-    if (settingsScreen === 'faq' || settingsScreen === 'report') {
-      setSettingsScreen('support');
+    if (showLogoutConfirmation) {
+      setShowLogoutConfirmation(false);
       return;
     }
-    if (settingsScreen === 'blocked' || settingsScreen === 'muted') {
-      setSettingsScreen('privacy');
+    if (navStack.length === 1) {
+      closeSettingsOverlay();
       return;
     }
-    if (settingsScreen === 'email' || settingsScreen === 'phone' || settingsScreen === 'password' || settingsScreen === 'security') {
-      setSettingsScreen('account');
-      return;
-    }
-    setSettingsScreen('home');
+    setNavStack(previous => (previous.length > 1 ? previous.slice(0, -1) : previous));
   };
 
   const startProfileEditing = () => {
@@ -799,15 +806,12 @@ export default function ProfilePage({
           aria-modal="true"
           aria-labelledby="profile-settings-title"
           dir={pageDirection}
-          onClick={closeSettingsOverlay}
         >
           <section className="profile-settings-panel" onClick={event => event.stopPropagation()}>
             <header className="profile-settings-header">
-              {settingsScreen !== 'home' && (
-                <button type="button" aria-label="عودة" className="profile-settings-back" onClick={goBackInSettings}>
-                  <ChevronRight size={20} />
-                </button>
-              )}
+              <button type="button" aria-label={navStack.length > 1 ? 'العودة إلى الشاشة السابقة' : 'العودة إلى الصفحة السابقة'} className="profile-settings-back" onClick={goBackInSettings}>
+                <ChevronRight size={20} />
+              </button>
               <h2 id="profile-settings-title">
                 {({
                   home: 'الإعدادات',
@@ -832,6 +836,7 @@ export default function ProfilePage({
                   appearance: 'المظهر',
                   language: 'اللغة',
                   'media-quality': 'جودة الوسائط',
+                  'font-style': 'نوع الخط',
                 } as Record<SettingsScreen, string>)[settingsScreen]}
               </h2>
               <button type="button" aria-label="إغلاق الإعدادات" className="profile-settings-close" onClick={closeSettingsOverlay}>
@@ -847,62 +852,66 @@ export default function ProfilePage({
                     <span>تعديل الملف الشخصي</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('account')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('account')}>
                     <span>إعدادات الحساب</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('privacy')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('privacy')}>
                     <span>خصوصية الحساب</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-subscriptions-heading -mx-5 px-5 pt-4 pb-1 text-xs font-semibold text-neutral-500">الاشتراكات</p>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => setSettingsScreen('subscriptions')}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => navigateToSettingsScreen('subscriptions')}>
                     <span className="flex items-center gap-2">
                       <span>إدارة الاشتراكات</span>
                       <span className="profile-settings-subscription-badge">مجاني</span>
                     </span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => setSettingsScreen('billing')}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => navigateToSettingsScreen('billing')}>
                     <span>سجل الفواتير والدفع</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-subscriptions-heading -mx-5 px-5 pt-4 pb-1 text-xs font-semibold text-neutral-500">المحتوى والنشاط</p>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('archive')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('archive')}>
                     <span>الأرشيف</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('saved')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('saved')}>
                     <span>العناصر المحفوظة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-subscriptions-heading -mx-5 text-xs text-neutral-500 font-semibold px-5 pt-4 pb-1">التفضيلات والوسائط</p>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('notifications')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('notifications')}>
                     <span>الإشعارات</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('appearance')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('appearance')}>
                     <span>المظهر</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('language')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('language')}>
                     <span>اللغة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('media-quality')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('media-quality')}>
                     <span>جودة الوسائط</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('font-style')}>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">نوع الخط</span><span className="profile-settings-description">{currentFontLabel}</span></span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
                   <p className="profile-settings-subscriptions-heading -mx-5 text-xs text-neutral-500 font-semibold px-5 pt-4 pb-1">الدعم والمعلومات</p>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('support')}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => navigateToSettingsScreen('support')}>
                     <span>مركز المساعدة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('legal')}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => navigateToSettingsScreen('legal')}>
                     <span>سياسة الخصوصية وشروط الخدمة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('about')}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => navigateToSettingsScreen('about')}>
                     <span>عن التطبيق</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
@@ -914,11 +923,11 @@ export default function ProfilePage({
               ) : settingsScreen === 'support' ? (
                 <div className="profile-settings-support-screen">
                   <p className="profile-settings-note">نحن هنا لمساعدتك. اختر الإبلاغ عن مشكلة أو تصفح الإجابات السريعة.</p>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => { setSupportReport(''); setSettingsScreen('report'); }}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => { setSupportReport(''); navigateToSettingsScreen('report'); }}>
                     <span className="profile-settings-copy"><span className="profile-settings-label">الإبلاغ عن مشكلة</span><span className="profile-settings-description">أخبرنا بما حدث لنساعدك في حل المشكلة.</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('faq')}>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => navigateToSettingsScreen('faq')}>
                     <span className="profile-settings-copy"><span className="profile-settings-label">الأسئلة الشائعة</span><span className="profile-settings-description">إجابات حول الحساب والخصوصية واستخدام التطبيق.</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
@@ -976,20 +985,20 @@ export default function ProfilePage({
               ) : settingsScreen === 'account' ? (
                 <>
                   <p className="profile-settings-section-title">بيانات الدخول</p>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('email')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('email')}>
                     <span className="profile-settings-copy"><span className="profile-settings-label">البريد الإلكتروني</span><span className="profile-settings-description" dir="ltr">{authEmail || 'جارٍ التحميل'}</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('phone')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('phone')}>
                     <span className="profile-settings-copy"><span className="profile-settings-label">رقم الهاتف</span><span className="profile-settings-description" dir="ltr">{authPhone || 'غير مضاف'}</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('password')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('password')}>
                     <span>تغيير كلمة المرور</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <p className="profile-settings-section-title">الأمان</p>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('security')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('security')}>
                     <span>الأمان والأجهزة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
@@ -1061,11 +1070,11 @@ export default function ProfilePage({
                       <span />
                     </button>
                   </div>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('blocked')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('blocked')}>
                     <span>الحسابات المحظورة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('muted')}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('muted')}>
                     <span className="profile-settings-copy"><span className="profile-settings-label">الحسابات المكتومة</span><span className="profile-settings-description">حسابات كتمت محادثاتها في الرسائل.</span></span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
@@ -1119,7 +1128,7 @@ export default function ProfilePage({
                 <ProfileStoryArchiveView userId={currentUserId} />
               ) : settingsScreen === 'saved' ? (
                 <SavedPostsView currentUserId={currentUserId} onOpenComments={onOpenComments} />
-              ) : settingsScreen === 'notifications' || settingsScreen === 'appearance' || settingsScreen === 'language' || settingsScreen === 'media-quality' ? (
+              ) : settingsScreen === 'notifications' || settingsScreen === 'appearance' || settingsScreen === 'language' || settingsScreen === 'media-quality' || settingsScreen === 'font-style' ? (
                 <ProfileSettingsPreferences
                   key={currentUserId}
                   currentUserId={currentUserId}

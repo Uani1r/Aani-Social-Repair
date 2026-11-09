@@ -803,3 +803,26 @@
 .profile-settings-field textarea::placeholder {
   color: #737373;
 }
+
+
+
+.profile-settings-font-preferences {
+  min-height: 100%;
+  border-radius: 12px;
+  background: #0a0a0a;
+  color: #fff;
+}
+
+.profile-settings-font-preferences .profile-settings-choice {
+  background: #0a0a0a;
+  color: #fff;
+}
+
+.profile-settings-font-preferences .profile-settings-label {
+  color: #fff;
+}
+
+.profile-settings-font-preferences .profile-settings-description,
+.profile-settings-font-preferences .profile-settings-note {
+  color: #a3a3a3;
+}

@@ -19,6 +19,7 @@ create table if not exists public.profiles (
   language_preference text not null default 'ar' check (language_preference in ('ar', 'en')),
   hd_uploads boolean not null default true,
   data_saver boolean not null default false,
+  font_preference text not null default 'alexandria' check (font_preference in ('alexandria', 'ibm-plex-sans-arabic', 'tajawal', 'cairo', 'noto-sans-arabic')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -38,6 +39,7 @@ alter table public.profiles add column if not exists appearance_preference text 
 alter table public.profiles add column if not exists language_preference text not null default 'ar' check (language_preference in ('ar', 'en'));
 alter table public.profiles add column if not exists hd_uploads boolean not null default true;
 alter table public.profiles add column if not exists data_saver boolean not null default false;
+alter table public.profiles add column if not exists font_preference text not null default 'alexandria' check (font_preference in ('alexandria', 'ibm-plex-sans-arabic', 'tajawal', 'cairo', 'noto-sans-arabic'));
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
 

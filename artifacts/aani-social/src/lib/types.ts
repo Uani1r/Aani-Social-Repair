@@ -24,6 +24,7 @@ export type Profile = {
   language_preference?: 'ar' | 'en' | null;
   hd_uploads?: boolean | null;
   data_saver?: boolean | null;
+  font_preference?: 'alexandria' | 'ibm-plex-sans-arabic' | 'tajawal' | 'cairo' | 'noto-sans-arabic' | null;
   created_at?: string | null;
 };
 

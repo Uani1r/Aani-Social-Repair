@@ -1,9 +1,9 @@
 /* 1. استدعاء الخطوط الخارجية (يجب أن يكون في البداية تماماً) */
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Noto+Sans+Arabic:wght@400;500;600;700&family=Tajawal:wght@400;500;700&family=Cairo:wght@400;600;700&family=Almarai:wght@400;700&family=Amiri:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,500;6..72,600&family=Almarai:wght@400;700&family=Amiri:wght@400;700&display=swap');
 
 /* 2. استدعاء Tailwind 4 */
 /* مكتبة خطوط نص القصة: خطوط عربية متنوعة (رسمية، نسخ ورقعة، كوفية، حركية) */
-@import url('https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=Aref+Ruqaa+Ink:wght@400;700&family=Reem+Kufi:wght@400;700&family=Noto+Kufi+Arabic:wght@400;700&family=Noto+Naskh+Arabic:wght@400;700&family=Scheherazade+New:wght@400;700&family=Lateef:wght@400;700&family=El+Messiri:wght@400;700&family=Changa:wght@400;700&family=Mada:wght@400;700&family=Markazi+Text:wght@400;700&family=Harmattan:wght@400;700&family=Baloo+Bhaijaan+2:wght@400;700&family=IBM+Plex+Sans+Arabic:wght@400;700&family=Alexandria:wght@400;700&family=Kufam:wght@400;700&family=Marhey:wght@400;700&family=Readex+Pro:wght@400;700&family=Rubik:wght@400;700&family=Rakkas&family=Lalezar&family=Katibeh&family=Jomhuria&family=Qahiri&family=Gulzar&family=Vibes&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Aref+Ruqaa:wght@400;700&family=Aref+Ruqaa+Ink:wght@400;700&family=Reem+Kufi:wght@400;700&family=Noto+Kufi+Arabic:wght@400;700&family=Noto+Naskh+Arabic:wght@400;700&family=Scheherazade+New:wght@400;700&family=Lateef:wght@400;700&family=El+Messiri:wght@400;700&family=Changa:wght@400;700&family=Mada:wght@400;700&family=Markazi+Text:wght@400;700&family=Harmattan:wght@400;700&family=Baloo+Bhaijaan+2:wght@400;700&family=Kufam:wght@400;700&family=Marhey:wght@400;700&family=Readex+Pro:wght@400;700&family=Rubik:wght@400;700&family=Rakkas&family=Lalezar&family=Katibeh&family=Jomhuria&family=Qahiri&family=Gulzar&family=Vibes&display=swap');
 
 /* خطوط إنجليزية لنص القصة */
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;700&family=Playfair+Display:wght@400;700&family=Courier+Prime:wght@400;700&family=Cormorant+Garamond:wght@400;700&family=Great+Vibes&family=Creepster&family=Bebas+Neue&display=swap');
@@ -34,11 +34,16 @@
   --color-accent-foreground: hsl(var(--accent-foreground));
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
-  --font-sans: var(--app-font-sans);
+  --font-sans: var(--app-font-family);
   --font-serif: var(--app-font-serif);
 }
 
 /* 5. التعريفات والألوان المتغيرة */
+:root {
+  --app-font-family: 'Alexandria', sans-serif;
+  --app-font-sans: var(--app-font-family);
+}
+
 :root:not(.light), .dark {
   color-scheme: dark !important;
   --app-canvas: #000;
@@ -57,7 +62,7 @@
   --muted-foreground: 220 7% 64% !important;
   --accent: 16 67% 61% !important;
   --accent-foreground: 220 17% 10% !important;
-  --app-font-sans: 'Tajawal', 'Cairo', 'Noto Sans Arabic', 'DM Sans', Tahoma, Arial, sans-serif;
+  --app-font-sans: var(--app-font-family);
   --app-font-serif: 'Newsreader', Georgia, serif;
 }
 
@@ -80,6 +85,18 @@
   --accent: 16 67% 50% !important;
   --accent-foreground: 0 0% 100% !important;
 }
+
+*,
+*::before,
+*::after {
+  font-family: var(--app-font-family) !important;
+}
+
+.font-preview-alexandria { font-family: 'Alexandria', sans-serif !important; }
+.font-preview-ibm-plex-sans-arabic { font-family: 'IBM Plex Sans Arabic', sans-serif !important; }
+.font-preview-tajawal { font-family: 'Tajawal', sans-serif !important; }
+.font-preview-cairo { font-family: 'Cairo', sans-serif !important; }
+.font-preview-noto-sans-arabic { font-family: 'Noto Sans Arabic', sans-serif !important; }
 
 html, body, #root {
   width: 100%;
