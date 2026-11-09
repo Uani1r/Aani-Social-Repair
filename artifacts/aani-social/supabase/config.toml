@@ -6,3 +6,6 @@ verify_jwt = true
 
 [functions.delete-account]
 verify_jwt = true
+
+[functions.update-account-phone]
+verify_jwt = true

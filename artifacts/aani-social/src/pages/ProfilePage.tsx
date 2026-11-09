@@ -658,11 +658,9 @@ export default function ProfilePage({
     if (nextPhone === authPhone || accountSettingsBusy) return;
     setAccountSettingsBusy(true);
     try {
-      const { data, error } = await supabase.auth.updateUser({ phone: nextPhone });
+      const { data, error } = await supabase.functions.invoke('update-account-phone', { body: { phone: nextPhone } });
       if (error) throw error;
-      if (data.user?.phone !== nextPhone) {
-        throw new Error('يتطلب تحديث الهاتف مباشرة تعطيل تأكيد تغييرات الهاتف عبر SMS في إعدادات مصادقة Supabase.');
-      }
+      if (data?.phone !== nextPhone) throw new Error('لم يتم إرجاع رقم الهاتف المحدّث من الخادم.');
       setAuthPhone(nextPhone);
       setPhoneDraft(nextPhone);
       setShowPhoneModal(false);
