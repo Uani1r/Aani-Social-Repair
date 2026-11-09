@@ -719,3 +719,87 @@
   border-radius: 50%;
   background: #22c55e;
 }
+
+
+
+.profile-settings-support-row {
+  background: #0a0a0a;
+  color: #fff;
+}
+
+.profile-settings-support-row .profile-settings-label {
+  color: #fff;
+}
+
+.profile-settings-logout-row {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.profile-settings-logout-row > svg {
+  color: currentColor;
+}
+
+.profile-settings-logout-row:hover > span:first-child {
+  color: #ef4444;
+}
+
+.profile-settings-support-screen {
+  min-height: 100%;
+  padding: 16px 0;
+  background: #0a0a0a;
+  color: #fff;
+}
+
+.profile-settings-support-card {
+  border: 1px solid #202020;
+  border-radius: 14px;
+  padding: 16px;
+  background: #0a0a0a;
+  color: #fff;
+}
+
+.profile-settings-support-card summary {
+  color: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.profile-settings-support-card p {
+  margin: 12px 0 0;
+  color: #a3a3a3;
+  font-size: 13px;
+  line-height: 1.9;
+}
+
+.profile-settings-support-card h3 {
+  margin: 0;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.profile-settings-field textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid #303030;
+  border-radius: 10px;
+  padding: 12px;
+  background: #111;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.7;
+  outline: none;
+}
+
+.profile-settings-field textarea:focus {
+  border-color: #666;
+}
+
+.profile-settings-field textarea::placeholder {
+  color: #737373;
+}

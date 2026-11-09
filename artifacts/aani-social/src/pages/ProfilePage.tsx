@@ -19,7 +19,7 @@ import { cleanUsername, displayName, type Profile } from '@/lib/types';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 
-type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | ProfileSettingsPreferenceScreen;
+type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | 'support' | 'report' | 'faq' | 'legal' | 'about' | ProfileSettingsPreferenceScreen;
 type ProfileImageKind = 'avatar' | 'cover';
 type CoverPosition = { x: number; y: number };
 type CoverPanGesture = {
@@ -117,6 +117,8 @@ export default function ProfilePage({
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
   const [settingsOverlayEntered, setSettingsOverlayEntered] = useState(false);
   const [settingsScreen, setSettingsScreen] = useState<SettingsScreen>('home');
+  const [showLogoutConfirmation, setShowLogoutConfirmation] = useState(false);
+  const [supportReport, setSupportReport] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPhone, setAuthPhone] = useState('');
   const [emailDraft, setEmailDraft] = useState('');
@@ -184,13 +186,18 @@ export default function ProfilePage({
     if (!showSettingsOverlay) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (showLogoutConfirmation) {
+        event.preventDefault();
+        setShowLogoutConfirmation(false);
+        return;
+      }
       setShowSettingsOverlay(false);
       setSettingsOverlayEntered(false);
       setSettingsScreen('home');
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [showSettingsOverlay]);
+  }, [showSettingsOverlay, showLogoutConfirmation]);
 
   useEffect(() => {
     if (!showSettingsOverlay || !['account', 'email', 'phone', 'password', 'security'].includes(settingsScreen)) return;
@@ -427,17 +434,23 @@ export default function ProfilePage({
   const closeSettingsOverlay = () => {
     setShowSettingsOverlay(false);
     setSettingsOverlayEntered(false);
+    setShowLogoutConfirmation(false);
     setSettingsScreen('home');
   };
 
   const openSettingsOverlay = () => {
     setShowProfileMenu(false);
+    setShowLogoutConfirmation(false);
     setSettingsScreen('home');
     setSettingsOverlayEntered(false);
     setShowSettingsOverlay(true);
   };
 
   const goBackInSettings = () => {
+    if (settingsScreen === 'faq' || settingsScreen === 'report') {
+      setSettingsScreen('support');
+      return;
+    }
     if (settingsScreen === 'blocked' || settingsScreen === 'muted') {
       setSettingsScreen('privacy');
       return;
@@ -564,6 +577,7 @@ export default function ProfilePage({
     try {
       const { error } = await supabase.auth.signOut({ scope: 'local' });
       if (error) throw error;
+      setShowLogoutConfirmation(false);
       closeSettingsOverlay();
       setLocation('/login');
     } catch (error) {
@@ -571,6 +585,18 @@ export default function ProfilePage({
     } finally {
       setAccountSettingsBusy(false);
     }
+  };
+
+  const openSupportEmailDraft = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const description = supportReport.trim();
+    if (!description) {
+      toast.error('اكتب وصفاً للمشكلة أولاً.');
+      return;
+    }
+    const subject = encodeURIComponent('بلاغ عن مشكلة في تطبيق آني');
+    const body = encodeURIComponent(`مرحباً، أود الإبلاغ عن المشكلة التالية في تطبيق آني:\n\n${description}`);
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
   };
 
   const setImagePreview = (kind: ProfileImageKind, url: string | null) => {
@@ -797,6 +823,11 @@ export default function ProfilePage({
                   billing: 'سجل الفواتير والدفع',
                   archive: 'الأرشيف',
                   saved: 'العناصر المحفوظة',
+                  support: 'مركز المساعدة',
+                  report: 'الإبلاغ عن مشكلة',
+                  faq: 'الأسئلة الشائعة',
+                  legal: 'سياسة الخصوصية وشروط الخدمة',
+                  about: 'عن التطبيق',
                   notifications: 'الإشعارات',
                   appearance: 'المظهر',
                   language: 'اللغة',
@@ -862,7 +893,86 @@ export default function ProfilePage({
                     <span>جودة الوسائط</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
+                  <p className="profile-settings-subscriptions-heading -mx-5 text-xs text-neutral-500 font-semibold px-5 pt-4 pb-1">الدعم والمعلومات</p>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('support')}>
+                    <span>مركز المساعدة</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('legal')}>
+                    <span>سياسة الخصوصية وشروط الخدمة</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('about')}>
+                    <span>عن التطبيق</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row profile-settings-logout-row" onClick={() => setShowLogoutConfirmation(true)}>
+                    <span>تسجيل الخروج</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
                 </>
+              ) : settingsScreen === 'support' ? (
+                <div className="profile-settings-support-screen">
+                  <p className="profile-settings-note">نحن هنا لمساعدتك. اختر الإبلاغ عن مشكلة أو تصفح الإجابات السريعة.</p>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => { setSupportReport(''); setSettingsScreen('report'); }}>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">الإبلاغ عن مشكلة</span><span className="profile-settings-description">أخبرنا بما حدث لنساعدك في حل المشكلة.</span></span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link profile-settings-support-row" onClick={() => setSettingsScreen('faq')}>
+                    <span className="profile-settings-copy"><span className="profile-settings-label">الأسئلة الشائعة</span><span className="profile-settings-description">إجابات حول الحساب والخصوصية واستخدام التطبيق.</span></span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                </div>
+              ) : settingsScreen === 'report' ? (
+                <div className="profile-settings-support-screen">
+                  <p className="profile-settings-note">صف المشكلة والخطوات التي أدت إليها، وسنجهز رسالة يمكنك إرسالها إلى فريق الدعم.</p>
+                  <form onSubmit={openSupportEmailDraft} className="profile-settings-field">
+                    <label htmlFor="support-report-description">وصف المشكلة</label>
+                    <textarea id="support-report-description" required value={supportReport} onChange={event => setSupportReport(event.target.value)} rows={6} maxLength={2000} placeholder="اكتب تفاصيل المشكلة هنا..." />
+                    <button className="profile-settings-action" type="submit" disabled={!supportReport.trim()}>فتح البريد لإرسال البلاغ</button>
+                  </form>
+                  <p className="profile-settings-note">يفتح هذا الإجراء تطبيق البريد برسالة جاهزة. أضف عنوان فريق الدعم الرسمي قبل الإرسال.</p>
+                </div>
+              ) : settingsScreen === 'faq' ? (
+                <div className="profile-settings-support-screen space-y-3">
+                  <details className="profile-settings-support-card" open>
+                    <summary>كيف أغيّر إعدادات الإشعارات والمظهر؟</summary>
+                    <p>ارجع إلى الإعدادات ثم افتح قسم «التفضيلات والوسائط» لاختيار الإشعارات أو المظهر أو اللغة.</p>
+                  </details>
+                  <details className="profile-settings-support-card">
+                    <summary>كيف أجعل حسابي خاصاً؟</summary>
+                    <p>من «خصوصية الحساب» فعّل خيار الحساب الخاص. ستحتاج طلبات المتابعة الجديدة إلى موافقتك.</p>
+                  </details>
+                  <details className="profile-settings-support-card">
+                    <summary>كيف أبلّغ عن مشكلة؟</summary>
+                    <p>من مركز المساعدة اختر «الإبلاغ عن مشكلة»، واكتب وصفاً مختصراً ثم افتح رسالة البريد الجاهزة.</p>
+                  </details>
+                  <details className="profile-settings-support-card">
+                    <summary>هل يمكنني حذف حسابي من الإعدادات؟</summary>
+                    <p>خيار الحذف غير متاح حالياً؛ لا يحذف التطبيق بيانات الحساب قبل توفير مسار آمن لذلك.</p>
+                  </details>
+                </div>
+              ) : settingsScreen === 'legal' ? (
+                <div className="profile-settings-support-screen space-y-5">
+                  <section className="profile-settings-support-card">
+                    <h3>سياسة الخصوصية</h3>
+                    <p>يستخدم التطبيق بيانات الحساب والملف الشخصي والمحتوى الذي تنشئه لتقديم ميزات آني الاجتماعية، مثل المنشورات والرسائل والإشعارات. تُحفظ بيانات التطبيق المرتبطة بالحساب في خدماته السحابية، بينما قد تبقى بعض تفضيلات الاستخدام على جهازك.</p>
+                    <p>لا تشارك كلمة مرورك مع الآخرين، وتجنّب نشر معلومات شخصية لا ترغب في إتاحتها. استخدم أدوات الخصوصية والإبلاغ داخل التطبيق عند الحاجة.</p>
+                  </section>
+                  <section className="profile-settings-support-card">
+                    <h3>شروط الخدمة</h3>
+                    <p>باستخدام آني، توافق على احترام حقوق الآخرين وعدم نشر محتوى غير قانوني أو مضلل أو مسيء، وعدم محاولة تعطيل الخدمة أو الوصول غير المصرح به إلى الحسابات والبيانات.</p>
+                    <p>أنت مسؤول عن المحتوى الذي تنشره وعن حماية بيانات الدخول إلى حسابك. قد تتغير الميزات أو تتوقف مؤقتاً لأعمال الصيانة أو لأسباب أمنية.</p>
+                  </section>
+                  <p className="profile-settings-note">هذه معلومات عامة داخل التطبيق وليست استشارة قانونية. راجع الشروط المحدثة عند نشرها رسمياً.</p>
+                </div>
+              ) : settingsScreen === 'about' ? (
+                <div className="profile-settings-support-screen flex flex-col items-center justify-center text-center">
+                  <div className="flex h-24 w-24 items-center justify-center rounded-[26px] bg-[#ff3c00] text-3xl font-black text-white shadow-lg" role="img" aria-label="شعار آني">آني</div>
+                  <h3 className="mt-5 text-lg font-bold text-white">آني Aani</h3>
+                  <p className="mt-2 text-sm text-neutral-400">تواصل اجتماعي يجمعك بمن يهمك.</p>
+                  <p className="mt-6 rounded-full border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300">الإصدار v1.0.0</p>
+                </div>
               ) : settingsScreen === 'account' ? (
                 <>
                   <p className="profile-settings-section-title">بيانات الدخول</p>
@@ -1023,6 +1133,18 @@ export default function ProfilePage({
               ) : null}
             </div>
           </section>
+          {showLogoutConfirmation && (
+            <div className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/75 p-5 backdrop-blur-sm" onClick={event => { event.stopPropagation(); setShowLogoutConfirmation(false); }}>
+              <section role="alertdialog" aria-modal="true" aria-labelledby="logout-confirmation-title" aria-describedby="logout-confirmation-description" className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0a0a0a] p-5 text-white shadow-2xl" onClick={event => event.stopPropagation()}>
+                <h3 id="logout-confirmation-title" className="text-base font-bold">تأكيد تسجيل الخروج</h3>
+                <p id="logout-confirmation-description" className="mt-2 text-sm leading-6 text-neutral-400">هل تريد تسجيل الخروج من هذا الجهاز؟ ستحتاج إلى تسجيل الدخول مجدداً للعودة إلى حسابك.</p>
+                <div className="mt-6 flex gap-3">
+                  <button type="button" className="flex-1 rounded-xl border border-white/10 bg-white/[0.06] px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10" onClick={() => setShowLogoutConfirmation(false)}>إلغاء</button>
+                  <button type="button" className="flex-1 rounded-xl bg-red-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-red-500 disabled:cursor-wait disabled:opacity-60" disabled={accountSettingsBusy} onClick={() => void endCurrentSession()}>{accountSettingsBusy ? 'جارٍ تسجيل الخروج...' : 'تسجيل الخروج'}</button>
+                </div>
+              </section>
+            </div>
+          )}
         </div>,
         document.body,
       )}
