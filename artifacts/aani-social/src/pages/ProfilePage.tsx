@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
+import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
+import SavedPostsView from '@/components/SavedPostsView';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
@@ -16,7 +18,7 @@ import { cleanUsername, displayName, type Profile } from '@/lib/types';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 
-type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing';
+type SettingsScreen = 'home' | 'account' | 'email' | 'phone' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved';
 type ProfileImageKind = 'avatar' | 'cover';
 type CoverPosition = { x: number; y: number };
 type CoverPanGesture = {
@@ -791,6 +793,8 @@ export default function ProfilePage({
                   muted: 'الحسابات المكتومة',
                   subscriptions: 'إدارة الاشتراكات',
                   billing: 'سجل الفواتير والدفع',
+                  archive: 'الأرشيف',
+                  saved: 'العناصر المحفوظة',
                 } as Record<SettingsScreen, string>)[settingsScreen]}
               </h2>
               <button type="button" aria-label="إغلاق الإعدادات" className="profile-settings-close" onClick={closeSettingsOverlay}>
@@ -824,6 +828,15 @@ export default function ProfilePage({
                   </button>
                   <button type="button" className="profile-settings-row profile-settings-link profile-settings-subscription-link" onClick={() => setSettingsScreen('billing')}>
                     <span>سجل الفواتير والدفع</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <p className="profile-settings-subscriptions-heading -mx-5 px-5 pt-4 pb-1 text-xs font-semibold text-neutral-500">المحتوى والنشاط</p>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('archive')}>
+                    <span>الأرشيف</span>
+                    <ChevronLeft size={18} aria-hidden="true" />
+                  </button>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => setSettingsScreen('saved')}>
+                    <span>العناصر المحفوظة</span>
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                 </>
@@ -969,6 +982,10 @@ export default function ProfilePage({
                     <p className="profile-settings-note">سيظهر سجل الفواتير والمدفوعات هنا بعد تفعيل خدمة الاشتراكات والدفع.</p>
                   </div>
                 </div>
+              ) : settingsScreen === 'archive' ? (
+                <ProfileStoryArchiveView userId={currentUserId} />
+              ) : settingsScreen === 'saved' ? (
+                <SavedPostsView currentUserId={currentUserId} onOpenComments={onOpenComments} />
               ) : null}
             </div>
           </section>
