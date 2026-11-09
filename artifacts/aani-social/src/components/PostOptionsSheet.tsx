@@ -57,11 +57,11 @@ export default function PostOptionsSheet({
       </DialogPrimitive.Trigger>
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay
-          className={`post-options-overlay fixed inset-0 ${reelOverlay ? 'z-[9998] pointer-events-auto bg-black/70' : 'z-[110] bg-black/65'} backdrop-blur-[4px]`}
+          className={`post-options-overlay fixed inset-0 ${reelOverlay ? 'z-[9998] pointer-events-auto bg-black/70' : 'z-[1200] bg-black/65'} backdrop-blur-[4px]`}
         />
         <DialogPrimitive.Content
           dir="rtl"
-          className={`post-options-content fixed inset-x-0 bottom-0 ${reelOverlay ? 'z-[9999] pointer-events-auto' : 'z-[111]'} max-h-[85vh] overflow-y-auto rounded-t-[24px] border border-white/10 bg-[#1c1c1e] px-4 pt-2 text-white shadow-[0_-12px_50px_rgba(0,0,0,0.45)] focus:outline-none`}
+          className={`post-options-content fixed inset-x-0 bottom-0 ${reelOverlay ? 'z-[9999] pointer-events-auto' : 'z-[1201]'} max-h-[85vh] overflow-y-auto rounded-t-[24px] border border-white/10 bg-[#1c1c1e] px-4 pt-2 text-white shadow-[0_-12px_50px_rgba(0,0,0,0.45)] focus:outline-none`}
           style={{
             transform: dragOffset > 0 ? `translate3d(0, ${dragOffset}px, 0)` : undefined,
             transition: dragging ? 'none' : 'transform 220ms ease-out',

@@ -111,7 +111,7 @@ export default function CustomAllowedCommentersModal({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-black/75 p-3" dir="rtl">
+    <div className="fixed inset-0 z-[1300] flex items-center justify-center bg-black/75 p-3" dir="rtl">
       <button type="button" aria-label="إغلاق اختيار المعلقين" onClick={onClose} className="absolute inset-0 h-full w-full" />
       <section
         role="dialog"

@@ -127,10 +127,10 @@ export default function PostPrivacySheet({ open, post, currentUserId, onClose, o
     <>
       <DialogPrimitive.Root open={open} onOpenChange={nextOpen => { if (!nextOpen) onClose(); }}>
         <DialogPrimitive.Portal>
-          <DialogPrimitive.Overlay className="fixed inset-0 z-[110] bg-black/70 backdrop-blur-[5px]" />
+          <DialogPrimitive.Overlay className="fixed inset-0 z-[1200] bg-black/70 backdrop-blur-[5px]" />
           <DialogPrimitive.Content
             dir="rtl"
-            className="fixed inset-x-0 bottom-0 z-[111] mx-auto max-h-[90dvh] w-full max-w-[500px] overflow-y-auto rounded-t-[28px] border border-white/10 bg-[#19191d]/[0.98] px-5 pt-3 text-white shadow-[0_-12px_50px_rgba(0,0,0,0.55)] focus:outline-none"
+            className="fixed inset-x-0 bottom-0 z-[1201] mx-auto max-h-[90dvh] w-full max-w-[500px] overflow-y-auto rounded-t-[28px] border border-white/10 bg-[#19191d]/[0.98] px-5 pt-3 text-white shadow-[0_-12px_50px_rgba(0,0,0,0.55)] focus:outline-none"
             style={{
               transform: dragOffset > 0 ? `translate3d(0, ${dragOffset}px, 0)` : undefined,
               transition: dragging ? 'none' : 'transform 220ms ease-out',

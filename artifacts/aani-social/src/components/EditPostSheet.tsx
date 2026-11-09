@@ -32,10 +32,10 @@ export default function EditPostSheet({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="edit-post-overlay fixed inset-0 z-[100] bg-black/70 backdrop-blur-[5px]" />
+        <DialogPrimitive.Overlay className="edit-post-overlay fixed inset-0 z-[1200] bg-black/70 backdrop-blur-[5px]" />
         <DialogPrimitive.Content
           dir="rtl"
-          className="edit-post-sheet fixed inset-x-0 bottom-0 z-[101] mx-auto max-h-[90dvh] w-full max-w-[500px] overflow-y-auto rounded-t-[24px] bg-[#1c1c1e] px-5 pt-4 text-white shadow-[0_-4px_30px_rgba(0,0,0,0.5)] focus:outline-none"
+          className="edit-post-sheet fixed inset-x-0 bottom-0 z-[1201] mx-auto max-h-[90dvh] w-full max-w-[500px] overflow-y-auto rounded-t-[24px] bg-[#1c1c1e] px-5 pt-4 text-white shadow-[0_-4px_30px_rgba(0,0,0,0.5)] focus:outline-none"
           style={{
             transform: dragOffset > 0 ? `translate3d(0, ${dragOffset}px, 0)` : undefined,
             transition: dragging ? 'none' : 'transform 220ms ease-out',

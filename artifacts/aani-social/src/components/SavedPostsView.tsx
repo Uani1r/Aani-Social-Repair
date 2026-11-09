@@ -194,7 +194,7 @@ export default function SavedPostsView({
 
       {selectedPost && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-0 backdrop-blur-sm sm:p-6"
+          className="fixed inset-0 z-[1100] flex items-center justify-center bg-black/85 p-0 backdrop-blur-sm sm:p-6"
           onClick={event => {
             if (event.currentTarget === event.target) setSelectedPost(null);
           }}

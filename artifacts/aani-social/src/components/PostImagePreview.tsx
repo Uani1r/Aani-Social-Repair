@@ -128,7 +128,7 @@ export default function PostImagePreview({ src, alt, className }: {
 
       {isOpen && createPortal(
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 p-3"
+          className="fixed inset-0 z-[1200] flex items-center justify-center bg-black/95 p-3"
           role="dialog"
           aria-modal="true"
           aria-label="معاينة الصورة"
