@@ -197,7 +197,7 @@ export default function SavedPostsView({
 
       {selectedPost && typeof document !== 'undefined' && createPortal(
         <div
-          className="fixed inset-0 z-[3000] flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm sm:p-6"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85 p-0 backdrop-blur-sm sm:p-6"
           onClick={event => {
             if (event.currentTarget === event.target) setSelectedPostId(null);
           }}
@@ -206,9 +206,9 @@ export default function SavedPostsView({
             role="dialog"
             aria-modal="true"
             aria-label="عرض المنشور المحفوظ"
-            className="relative max-h-[calc(100dvh-1.5rem)] w-full max-w-[640px] overflow-y-auto rounded-2xl border border-white/10 bg-[#0b0b0d] shadow-2xl sm:max-h-[calc(100dvh-3rem)]"
+            className="relative max-h-[100dvh] w-full max-w-[450px] overflow-y-auto sm:max-h-[calc(100dvh-3rem)]"
           >
-            <div className="sticky top-0 z-20 flex items-center justify-between border-b border-white/[0.08] bg-[#0b0b0d]/95 px-4 py-3 backdrop-blur">
+            <div className="sticky top-0 z-20 flex items-center justify-between bg-black/90 px-4 py-2.5 backdrop-blur">
               <div className="flex items-center gap-2 text-sm font-semibold text-zinc-200">
                 <Bookmark size={16} className="text-[#f1a17f]" aria-hidden="true" />
                 <span>المنشور المحفوظ</span>
@@ -222,14 +222,15 @@ export default function SavedPostsView({
                 <X size={19} />
               </button>
             </div>
-            <div className="p-2 sm:p-4">
-              <FeedPostCard
-                post={selectedPost}
-                currentUserId={currentUserId}
-                onRefresh={() => void refresh()}
-                onOpenComments={onOpenComments}
-              />
-            </div>
+            <FeedPostCard
+              post={selectedPost}
+              currentUserId={currentUserId}
+              isMainFeed
+              feedVideoPosts={selectedPost.type === 'reel' ? [selectedPost] : undefined}
+              initialVideoIndex={0}
+              onRefresh={() => void refresh()}
+              onOpenComments={onOpenComments}
+            />
           </section>
         </div>,
         document.body,

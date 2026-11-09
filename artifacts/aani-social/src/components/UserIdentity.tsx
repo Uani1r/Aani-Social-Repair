@@ -3,7 +3,7 @@ import { cleanUsername } from '@/lib/types';
 
 interface UserIdentityProps {
   name: ReactNode;
-  username?: string | null;
+  username?: ReactNode;
   className?: string;
   nameClassName?: string;
   usernameClassName?: string;
@@ -16,7 +16,7 @@ export default function UserIdentity({
   nameClassName = 'text-sm font-bold text-white',
   usernameClassName = 'text-xs text-zinc-400',
 }: UserIdentityProps) {
-  const visibleUsername = cleanUsername(username);
+  const visibleUsername = typeof username === 'string' ? cleanUsername(username) : username;
 
   return (
     <div className={`user-identity-meta ${className}`} dir="rtl">

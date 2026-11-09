@@ -338,11 +338,17 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         </div>
       )}
       <header className={`flex w-full items-start gap-4 ${isMainFeedVideo ? 'video-post-header' : ''}`}>
-        <Avatar profile={post.author} large={!isMainFeedVideo} />
+        <Link
+          href={`/profile/${post.user_id}`}
+          aria-label={`عرض ملف ${displayName(post.author)}`}
+          className="block shrink-0 rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f1a17f]"
+        >
+          <Avatar profile={post.author} large={!isMainFeedVideo} />
+        </Link>
         <div className={`flex min-w-0 flex-1 items-start gap-2 ${isMainFeedVideo ? 'video-post-identity-row' : ''}`}>
           <UserIdentity
             name={<Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>}
-            username={post.author?.username || 'user'}
+            username={<Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username || 'user'}</Link>}
             className={`min-w-0 flex-1 ${isMainFeedVideo ? 'video-post-identity' : ''}`}
             nameClassName="text-sm font-bold text-white"
             usernameClassName="text-xs text-zinc-500"
