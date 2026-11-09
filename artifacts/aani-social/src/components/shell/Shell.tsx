@@ -4,6 +4,8 @@ import { useLocation } from 'wouter';
 import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
+import CallManager, { CALL_LOG_EVENT, type CallLogEventDetail } from '@/components/CallManager';
+import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
@@ -28,6 +30,30 @@ const createPostId = () => {
     return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
   });
 };
+
+const createCallLogMessageId = () => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const isCallLogEventDetail = (value: unknown): value is CallLogEventDetail => isRecord(value)
+  && typeof value.callId === 'string'
+  && Boolean(value.callId.trim())
+  && value.callId.length <= 160
+  && typeof value.recipientId === 'string'
+  && Boolean(value.recipientId.trim())
+  && value.recipientId.length <= 160
+  && (value.mode === 'audio' || value.mode === 'video')
+  && (value.outcome === 'completed' || value.outcome === 'declined' || value.outcome === 'missed' || value.outcome === 'busy')
+  && typeof value.durationSeconds === 'number'
+  && Number.isSafeInteger(value.durationSeconds)
+  && value.durationSeconds >= 0;
 
 const isPostsPermissionError = (error: { code?: string; message?: string }) =>
   error.code === '42501' || /permission denied|row-level security/i.test(error.message || '');
@@ -76,6 +102,8 @@ export default function Shell({
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const seenNotificationIdsRef = useRef(new Set<string>());
+  const handledCallLogsRef = useRef(new Set<string>());
   const [unifiedTopBarHidden, setUnifiedTopBarHidden] = useState(() => Math.max(
     window.scrollY || 0,
     document.documentElement.scrollTop || 0,
@@ -583,11 +611,110 @@ export default function Shell({
   }, [filePreviews]);
 
   useEffect(() => {
-    if (!supabaseConfigured || !userId) return;
-    void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count }) => {
-      setUnreadCount(count || 0);
+    const unlockAudio = () => {
+      void unlockNotificationAudio();
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+    window.addEventListener('pointerdown', unlockAudio, { passive: true });
+    window.addEventListener('keydown', unlockAudio);
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!supabaseConfigured || !userId) return undefined;
+    const handleCallLog = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (!isCallLogEventDetail(detail) || handledCallLogsRef.current.has(detail.callId)) return;
+      handledCallLogsRef.current.add(detail.callId);
+      if (handledCallLogsRef.current.size > 250) {
+        const oldestCallId = handledCallLogsRef.current.values().next().value;
+        if (oldestCallId) handledCallLogsRef.current.delete(oldestCallId);
+      }
+      const content = `[aani-call:v1]${JSON.stringify({
+        callId: detail.callId,
+        mode: detail.mode,
+        outcome: detail.outcome,
+        durationSeconds: detail.durationSeconds,
+      })}`;
+      void (async () => {
+        try {
+          const { error } = await supabase.from('messages').insert({
+            id: createCallLogMessageId(),
+            sender_id: userId,
+            recipient_id: detail.recipientId,
+            content,
+          });
+          if (error) throw error;
+        } catch (error) {
+          handledCallLogsRef.current.delete(detail.callId);
+          console.error('[calls] تعذر حفظ سجل المكالمة في المحادثة:', error);
+        }
+      })();
+    };
+    window.addEventListener(CALL_LOG_EVENT, handleCallLog);
+    return () => window.removeEventListener(CALL_LOG_EVENT, handleCallLog);
+  }, [userId]);
+
+  useEffect(() => {
+    if (!supabaseConfigured || !userId) {
+      setUnreadCount(0);
+      return;
+    }
+    let active = true;
+    void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count, error }) => {
+      if (active && !error) setUnreadCount(count || 0);
     });
+    return () => { active = false; };
   }, [userId, showNotifsModal]);
+
+  useEffect(() => {
+    if (!supabaseConfigured || !userId) return undefined;
+    let countRefreshTimer: number | null = null;
+    const refreshUnreadCount = () => {
+      if (countRefreshTimer !== null) window.clearTimeout(countRefreshTimer);
+      countRefreshTimer = window.setTimeout(() => {
+        countRefreshTimer = null;
+        void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count, error }) => {
+          if (!error) setUnreadCount(count || 0);
+        });
+      }, 80);
+    };
+    const channel = supabase.channel(`aani-notifications-${userId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      }, payload => {
+        const notification = payload.new as { id?: unknown; type?: unknown; is_read?: unknown };
+        const notificationId = typeof notification.id === 'string' ? notification.id : '';
+        if (notificationId && !seenNotificationIdsRef.current.has(notificationId)) {
+          seenNotificationIdsRef.current.add(notificationId);
+          if (seenNotificationIdsRef.current.size > 250) {
+            const oldestId = seenNotificationIdsRef.current.values().next().value;
+            if (oldestId) seenNotificationIdsRef.current.delete(oldestId);
+          }
+          if (['message', 'new_message'].includes(String(notification.type))
+            && profile?.notification_settings?.messages !== false) playMessageChime();
+        }
+        refreshUnreadCount();
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${userId}`,
+      }, refreshUnreadCount)
+      .subscribe();
+    return () => {
+      if (countRefreshTimer !== null) window.clearTimeout(countRefreshTimer);
+      void supabase.removeChannel(channel);
+    };
+  }, [profile?.notification_settings?.messages, userId]);
 
   const handleSelectPublishImages = async (files: File[]) => {
     if (!files.length) return;
@@ -930,6 +1057,7 @@ export default function Shell({
         onOpenAssistant={() => setShowAssistantModal(true)}
         onCloseAssistant={() => setShowAssistantModal(false)}
       />
+      <CallManager currentUserId={userId} currentProfile={profile} contact={null} />
 
       <div className="content-shell" style={{ paddingBottom: isMessageThread ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main

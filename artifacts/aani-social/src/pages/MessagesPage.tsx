@@ -5,7 +5,7 @@ import { Archive, ArrowLeft, ArrowRight, Ban, BellOff, Camera, Check, CheckCheck
 import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
-import CallManager, { CALL_LOG_EVENT, openCallPicker, startCallNow, type CallLogEventDetail, type CallLogOutcome, type CallMode } from '@/components/CallManager';
+import { openCallPicker, startCallNow, type CallLogEventDetail, type CallLogOutcome, type CallMode } from '@/components/CallManager';
 import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
 import MessageAttachmentSheet, { CHAT_DOCUMENT_MESSAGE_PREFIX, CHAT_LOCATION_MESSAGE_PREFIX, parseChatDocumentMessage, parseChatLocationMessage } from '@/components/MessageAttachmentSheet';
@@ -92,21 +92,6 @@ function parseCallLogMessage(content: string): CallLogMessagePayload | null {
   } catch {
     return null;
   }
-}
-
-function isCallLogEventDetail(value: unknown): value is CallLogEventDetail {
-  return isRecord(value)
-    && typeof value.callId === 'string'
-    && Boolean(value.callId.trim())
-    && value.callId.length <= 160
-    && typeof value.recipientId === 'string'
-    && Boolean(value.recipientId.trim())
-    && value.recipientId.length <= 160
-    && (value.mode === 'audio' || value.mode === 'video')
-    && isCallLogOutcome(value.outcome)
-    && typeof value.durationSeconds === 'number'
-    && Number.isSafeInteger(value.durationSeconds)
-    && value.durationSeconds >= 0;
 }
 
 function callLogMessageContent(payload: CallLogMessagePayload): string {
@@ -875,7 +860,6 @@ export default function MessagesPage({
   const requestTabReadAtRef = useRef(readRequestTabReadAt(currentUserId));
   const readAtByContactRef = useRef(readAtByContact);
   readAtByContactRef.current = readAtByContact;
-  const callLogHandledRef = useRef(new Set<string>());
   const selectedIdRef = useRef(selectedId);
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
@@ -1316,66 +1300,6 @@ export default function MessagesPage({
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
-
-  useEffect(() => {
-    const handleCallLog = (event: Event) => {
-      const detail = (event as CustomEvent<unknown>).detail;
-      if (!supabaseConfigured || !isCallLogEventDetail(detail) || callLogHandledRef.current.has(detail.callId)) return;
-      callLogHandledRef.current.add(detail.callId);
-      const payload: CallLogMessagePayload = {
-        callId: detail.callId,
-        mode: detail.mode,
-        outcome: detail.outcome,
-        durationSeconds: detail.durationSeconds,
-      };
-      const messageId = createMessageId();
-      const content = callLogMessageContent(payload);
-      const recipientId = detail.recipientId;
-      const optimisticMessage: MessageRow = {
-        id: messageId,
-        sender_id: currentUserId,
-        recipient_id: recipientId,
-        content,
-        post_id: null,
-        story_id: null,
-        created_at: new Date().toISOString(),
-        delivered_at: null,
-        read_at: null,
-        reply_to_message_id: null,
-        sendState: 'pending',
-      };
-      if (selectedIdRef.current === recipientId) {
-        setThread(current => current.some(message => message.id === messageId) ? current : [...current, optimisticMessage]);
-        setThreadCacheReady(true);
-      }
-
-      void (async () => {
-        try {
-          const { error } = await supabase.from('messages').insert({
-            id: messageId,
-            sender_id: currentUserId,
-            recipient_id: recipientId,
-            content,
-          });
-          if (error) throw error;
-          if (selectedIdRef.current === recipientId) {
-            setThread(current => current.map(message => message.id === messageId ? { ...message, sendState: 'sent' } : message));
-            void loadThread();
-          }
-          void loadConversationList();
-        } catch (error) {
-          console.error('[messages] تعذر حفظ سجل المكالمة:', error);
-          if (selectedIdRef.current === recipientId) {
-            setThread(current => current.map(message => message.id === messageId ? { ...message, sendState: 'failed' } : message));
-          }
-          toast.error('تعذر حفظ سجل المكالمة في المحادثة.');
-        }
-      })();
-    };
-
-    window.addEventListener(CALL_LOG_EVENT, handleCallLog);
-    return () => window.removeEventListener(CALL_LOG_EVENT, handleCallLog);
-  }, [currentUserId, loadConversationList, loadThread]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -3029,7 +2953,7 @@ export default function MessagesPage({
                   </div>
                 )}
                 <div className="messages-thread-actions">
-                  <button type="button" aria-label="اتصال صوتي أو فيديو" onClick={openCallPicker} disabled={isConversationRequestLocked(selectedConversation)}>
+                  <button type="button" aria-label="اتصال صوتي أو فيديو" onClick={() => openCallPicker(target)} disabled={isConversationRequestLocked(selectedConversation)}>
                     <Phone size={20} />
                   </button>
                   <button
@@ -3237,7 +3161,7 @@ export default function MessagesPage({
                                     disabled={isConversationRequestLocked(selectedConversation)}
                                     onClick={event => {
                                       event.stopPropagation();
-                                      startCallNow(callLogMessage.mode);
+                                      startCallNow(callLogMessage.mode, target);
                                     }}
                                     style={{
                                       display: 'inline-flex',
@@ -4332,7 +4256,6 @@ export default function MessagesPage({
         document.body,
       )}
 
-      <CallManager currentUserId={currentUserId} currentProfile={currentProfile} contact={target} />
     </section>
   );
 }

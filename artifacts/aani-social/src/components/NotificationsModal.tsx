@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
-  Bell, Heart, MessageSquare, Repeat2, UserRound, X,
+  Bell, CheckCheck, Heart, MessageSquare, Phone, Repeat2, UserRound, X,
   type LucideIcon,
 } from 'lucide-react';
 
 import FollowRequestsSection from '@/components/FollowRequestsSection';
+import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
 import { displayName, formatDate, type Profile, type ProfileNotificationSettings } from '@/lib/types';
@@ -41,7 +42,9 @@ type NotificationReferenceRow = {
 type NotificationTarget =
   | { kind: 'post'; postId: string }
   | { kind: 'comment'; postId: string; commentId: string }
-  | { kind: 'story'; storyId: string; ownerId: string };
+  | { kind: 'story'; storyId: string; ownerId: string }
+  | { kind: 'conversation'; userId: string }
+  | { kind: 'call'; callerId: string; callId: string | null };
 
 type NotificationFilter = 'all' | 'likes' | 'comments' | 'other';
 
@@ -86,6 +89,10 @@ const notificationAction = (item: NotificationEntry, aggregateCount = 1) => {
     reply: 'ردّ على تعليقك',
     follow: 'بدأ بمتابعتك',
     mention: 'أشار إليك في تعليق',
+    message: 'أرسل لك رسالة',
+    new_message: 'أرسل لك رسالة',
+    call: item.content || 'اتصل بك',
+    incoming_call: item.content || 'اتصل بك',
   };
   return actions[item.type] || item.content || 'أرسل لك إشعاراً جديداً';
 };
@@ -144,6 +151,14 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
     return commentId && postId ? { kind: 'comment', postId, commentId } : null;
   }
 
+  if (['message', 'new_message'].includes(item.type) && item.actor_id) {
+    return { kind: 'conversation', userId: item.actor_id };
+  }
+
+  if (['call', 'incoming_call'].includes(item.type) && item.actor_id) {
+    return { kind: 'call', callerId: item.actor_id, callId: referenceId || null };
+  }
+
   if ((item.type === 'like' || item.type === 'repost') && (referenceId || item.post_id)) {
     return { kind: 'post', postId: referenceId || item.post_id! };
   }
@@ -161,7 +176,7 @@ const getFilterForNotification = (item: NotificationEntry): Exclude<Notification
 const getPreferenceCategory = (item: NotificationEntry): keyof ProfileNotificationSettings => {
   if (isStoryNotification(item)) return 'stories';
   if (['follow', 'followed', 'follow_request', 'new_follower'].includes(item.type)) return 'followers';
-  if (['message', 'new_message'].includes(item.type)) return 'messages';
+  if (['message', 'new_message', 'call', 'incoming_call'].includes(item.type)) return 'messages';
   return 'interactions';
 };
 
@@ -186,6 +201,14 @@ function ActionBadge({ item }: { item: NotificationEntry }) {
   } else if (item.type === 'repost') {
     Icon = Repeat2;
     label = 'إعادة نشر';
+    color = '#2ed573';
+  } else if (['message', 'new_message'].includes(item.type)) {
+    Icon = MessageSquare;
+    label = 'رسالة';
+    color = '#70a1ff';
+  } else if (['call', 'incoming_call'].includes(item.type)) {
+    Icon = Phone;
+    label = 'مكالمة';
     color = '#2ed573';
   }
 
@@ -237,6 +260,7 @@ export default function NotificationsModal({
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState('');
   const [readError, setReadError] = useState('');
+  const [markingAllRead, setMarkingAllRead] = useState(false);
   const [activeFilter, setActiveFilter] = useState<NotificationFilter>('all');
   const listRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
@@ -257,6 +281,7 @@ export default function NotificationsModal({
     let nextOffset = 0;
     let canLoadMore = true;
     let pageRequestInProgress = false;
+    let realtimeRefreshPending = false;
     setItems([]);
     setLoading(true);
     setLoadingMore(false);
@@ -264,8 +289,9 @@ export default function NotificationsModal({
     setError('');
     setReadError('');
 
-    const fetchPage = async (offset: number, replace: boolean) => {
-      if (!active || pageRequestInProgress || (!replace && !canLoadMore)) return;
+    let fetchPage: (offset: number, replace: boolean) => Promise<void>;
+    fetchPage = async (offset: number, replace: boolean) => {
+      if (!active || pageRequestInProgress || (!replace && offset !== 0 && !canLoadMore)) return;
       pageRequestInProgress = true;
       if (replace) setLoading(true);
       else setLoadingMore(true);
@@ -361,11 +387,18 @@ export default function NotificationsModal({
 
         if (!active) return;
         setItems(current => {
-          if (replace) return rows;
           const existingIds = new Set(current.map(item => item.id));
-          return [...current, ...rows.filter(item => !existingIds.has(item.id))];
+          const merged = replace
+            ? rows
+            : [...current, ...rows.filter(item => !existingIds.has(item.id))];
+          return merged.sort((left, right) => (
+            (Date.parse(right.created_at) || 0) - (Date.parse(left.created_at) || 0)
+            || right.id.localeCompare(left.id)
+          ));
         });
-        nextOffset = offset + (data || []).length;
+        nextOffset = replace
+          ? offset + (data || []).length
+          : Math.max(nextOffset, offset + (data || []).length);
         canLoadMore = (data || []).length === PAGE_SIZE;
         setHasMore(canLoadMore);
       } catch (loadError) {
@@ -375,6 +408,10 @@ export default function NotificationsModal({
         if (active) {
           setLoading(false);
           setLoadingMore(false);
+          if (realtimeRefreshPending) {
+            realtimeRefreshPending = false;
+            void fetchPage(0, false);
+          }
         }
       }
     };
@@ -397,9 +434,31 @@ export default function NotificationsModal({
     };
 
     void loadInitialPage();
+    const channel = supabase.channel(`aani-notifications-modal-${currentUserId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUserId}`,
+      }, () => {
+        if (pageRequestInProgress) realtimeRefreshPending = true;
+        else void fetchPage(0, false);
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'notifications',
+        filter: `user_id=eq.${currentUserId}`,
+      }, payload => {
+        const updated = payload.new as { id?: unknown; is_read?: unknown };
+        if (typeof updated.id !== 'string' || typeof updated.is_read !== 'boolean') return;
+        setItems(current => current.map(item => item.id === updated.id ? { ...item, is_read: updated.is_read as boolean } : item));
+      })
+      .subscribe();
     return () => {
       active = false;
       if (loadMoreRef.current === loadMore) loadMoreRef.current = null;
+      void supabase.removeChannel(channel);
     };
   }, [isOpen, currentUserId]);
 
@@ -447,6 +506,30 @@ export default function NotificationsModal({
     }
   };
 
+  const markAllNotificationsRead = async () => {
+    if (!supabaseConfigured || markingAllRead) return;
+    const previousReadStates = new Map(items.map(item => [item.id, item.is_read]));
+    setMarkingAllRead(true);
+    setReadError('');
+    setItems(current => current.map(item => ({ ...item, is_read: true })));
+    try {
+      const { error: updateError } = await supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('user_id', currentUserId)
+        .eq('is_read', false);
+      if (updateError) throw updateError;
+    } catch {
+      setItems(current => current.map(item => ({
+        ...item,
+        is_read: previousReadStates.get(item.id) ?? item.is_read,
+      })));
+      setReadError('تعذر تحديد الإشعارات كمقروءة. حاول مرة أخرى.');
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
+
   const activateNotification = (item: NotificationEntry) => {
     void markNotificationRead(item);
     const target = getNotificationTarget(item, currentUserId);
@@ -458,9 +541,16 @@ export default function NotificationsModal({
     } else if (target.kind === 'comment') {
       onOpenComments(target.postId, target.commentId);
       setLocation(`/post/${encodeURIComponent(target.postId)}?commentId=${encodeURIComponent(target.commentId)}`);
-    } else {
+    } else if (target.kind === 'story') {
       onOpenStory(target.storyId, target.ownerId);
       setLocation('/feed');
+    } else if (target.kind === 'call') {
+      setLocation(`/messages/${encodeURIComponent(target.callerId)}`);
+      window.dispatchEvent(new CustomEvent(OPEN_INCOMING_CALL_EVENT, {
+        detail: { callerId: target.callerId, callId: target.callId },
+      }));
+    } else {
+      setLocation(`/messages/${encodeURIComponent(target.userId)}`);
     }
   };
 
@@ -531,6 +621,16 @@ export default function NotificationsModal({
             <Bell size={20} className="text-[#c98d73]" />
             <span>الإشعارات</span>
           </h1>
+          <button
+            type="button"
+            onClick={() => { void markAllNotificationsRead(); }}
+            disabled={markingAllRead}
+            className="absolute left-3 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-semibold text-[#c98d73] transition hover:bg-white/[0.05] disabled:opacity-50 sm:left-4 sm:text-xs"
+            aria-label="تحديد كل الإشعارات كمقروءة"
+          >
+            <CheckCheck size={16} />
+            <span>قراءة الكل</span>
+          </button>
           <button type="button" onClick={onClose} className="absolute right-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-[#8e8e93] transition hover:bg-white/[0.05] hover:text-white" aria-label="إغلاق الإشعارات">
             <X size={22} />
           </button>

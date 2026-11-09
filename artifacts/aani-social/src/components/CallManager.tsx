@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
 export const OPEN_CALL_PICKER_EVENT = 'aani:open-call-picker';
+export const OPEN_INCOMING_CALL_EVENT = 'aani:open-incoming-call';
 export const CALL_LOG_EVENT = 'aani:call-log';
 const START_CALL_EVENT = 'aani:start-call';
 
@@ -21,12 +22,12 @@ export type CallLogEventDetail = {
   durationSeconds: number;
 };
 
-export function openCallPicker(): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(OPEN_CALL_PICKER_EVENT));
+export function openCallPicker(contact?: Profile | null): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(OPEN_CALL_PICKER_EVENT, { detail: { contact } }));
 }
 
-export function startCallNow(mode: CallMode): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(START_CALL_EVENT, { detail: { mode } }));
+export function startCallNow(mode: CallMode, contact?: Profile | null): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent(START_CALL_EVENT, { detail: { mode, contact } }));
 }
 
 type CallPhase = 'outgoing' | 'incoming' | 'active';
@@ -279,6 +280,14 @@ function formatCallDuration(seconds: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(remainingSeconds).padStart(2, '0')}`;
 }
 
+function createCallId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
+}
+
 function CallAvatar({ peer, className = '' }: { peer: CallPeer; className?: string }) {
   return (
     <div className={`aani-call-avatar ${className}`.trim()} aria-label={peer.name}>
@@ -308,6 +317,7 @@ export default function CallManager({
   const [minimizedPosition, setMinimizedPosition] = useState<{ left: number; top: number } | null>(null);
   const callRef = useRef<CallUiState | null>(null);
   const contactRef = useRef<Profile | null>(contact);
+  const externalContactRef = useRef<Profile | null>(contact);
   const currentProfileRef = useRef<Profile | null>(currentProfile);
   const inboxChannelRef = useRef<RealtimeChannel | null>(null);
   const inboxReadyRef = useRef(false);
@@ -335,7 +345,8 @@ export default function CallManager({
   const skipMinimizedClickRef = useRef(false);
   const receiveSignalRef = useRef<(payload: unknown) => void>(() => undefined);
 
-  contactRef.current = contact;
+  if (contact) externalContactRef.current = contact;
+  contactRef.current = contact || externalContactRef.current;
   currentProfileRef.current = currentProfile;
 
   const setActiveCall = useCallback((next: CallUiState | null) => {
@@ -833,9 +844,7 @@ export default function CallManager({
     }
 
     const peer = makePeerFromProfile(profile);
-    const callId = typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const callId = createCallId();
     setPickerOpen(false);
     setMinimizedPosition(null);
     setLocalPipPosition(null);
@@ -908,6 +917,20 @@ export default function CallManager({
         username: callerProfile?.username || '',
         avatarUrl: callerProfile?.avatar_url || null,
       });
+      void (async () => {
+        try {
+          const { error } = await supabase.from('notifications').insert({
+            user_id: peer.id,
+            actor_id: currentUserId,
+            type: 'call',
+            content: mode === 'video' ? 'مكالمة فيديو واردة' : 'مكالمة صوتية واردة',
+            reference_id: callId,
+          });
+          if (error) console.warn('[calls] تعذر إنشاء إشعار المكالمة:', error);
+        } catch (error) {
+          console.warn('[calls] تعذر إنشاء إشعار المكالمة:', error);
+        }
+      })();
     } catch (error) {
       acquiredStream?.getTracks().forEach(track => track.stop());
       if (localStreamRef.current === acquiredStream) localStreamRef.current = null;
@@ -1266,7 +1289,15 @@ export default function CallManager({
   }, [callState?.phase, callState?.remoteStream, showActiveVideo]);
 
   useEffect(() => {
-    const handleOpenPicker = () => {
+    const readContactFromEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ contact?: unknown }>).detail;
+      const nextContact = detail?.contact;
+      if (!isRecord(nextContact) || typeof nextContact.id !== 'string') return;
+      externalContactRef.current = nextContact as unknown as Profile;
+      contactRef.current = externalContactRef.current;
+    };
+    const handleOpenPicker = (event: Event) => {
+      readContactFromEvent(event);
       if (!contactRef.current) {
         toast.info('افتح محادثة مع الشخص الذي تريد الاتصال به أولاً.');
         return;
@@ -1278,14 +1309,29 @@ export default function CallManager({
       setPickerOpen(true);
     };
     const handleStartCall = (event: Event) => {
+      readContactFromEvent(event);
       const mode = (event as CustomEvent<{ mode?: unknown }>).detail?.mode;
       if (mode === 'audio' || mode === 'video') void startCall(mode);
     };
+    const handleOpenIncomingCall = (event: Event) => {
+      const detail = (event as CustomEvent<{ callerId?: unknown; callId?: unknown }>).detail;
+      const activeCall = callRef.current;
+      if (!activeCall || activeCall.phase !== 'incoming'
+        || (typeof detail?.callId === 'string' && activeCall.callId !== detail.callId)
+        || (typeof detail?.callerId === 'string' && activeCall.peer.id !== detail.callerId)) {
+        toast.info('انتهت المكالمة الواردة أو لم تعد متاحة.');
+        return;
+      }
+      setIsMinimized(false);
+      setMinimizedPosition(null);
+    };
     window.addEventListener(OPEN_CALL_PICKER_EVENT, handleOpenPicker);
     window.addEventListener(START_CALL_EVENT, handleStartCall);
+    window.addEventListener(OPEN_INCOMING_CALL_EVENT, handleOpenIncomingCall);
     return () => {
       window.removeEventListener(OPEN_CALL_PICKER_EVENT, handleOpenPicker);
       window.removeEventListener(START_CALL_EVENT, handleStartCall);
+      window.removeEventListener(OPEN_INCOMING_CALL_EVENT, handleOpenIncomingCall);
     };
   }, [startCall]);
 
