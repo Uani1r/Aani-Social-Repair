@@ -36,8 +36,32 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           setSuccess('تم إنشاء الحساب. افتح رسالة التفعيل التي أرسلناها إلى بريدك الإلكتروني، ثم سجّل الدخول.');
         }
       } else {
-        const { error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
-        if (authError) throw authError;
+        const loginIdentifier = email.trim();
+        const normalizedPhone = loginIdentifier.replace(/[\s()-]/g, '');
+        if (loginIdentifier.includes('@')) {
+          const { error: authError } = await supabase.auth.signInWithPassword({ email: loginIdentifier.toLowerCase(), password });
+          if (authError) throw authError;
+        } else if (/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
+          const { error: authError } = await supabase.auth.signInWithPassword({ phone: normalizedPhone, password });
+          if (authError) throw authError;
+        } else {
+          const usernameIdentifier = loginIdentifier.replace(/^@/, '').toLowerCase();
+          if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
+            throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف دوليًا يبدأ بـ +.');
+          }
+          const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
+            body: { username: usernameIdentifier, password },
+          });
+          if (functionError) throw functionError;
+          if (typeof data?.access_token !== 'string' || typeof data?.refresh_token !== 'string') {
+            throw new Error('تعذر إكمال تسجيل الدخول. حاول مرة أخرى.');
+          }
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: data.access_token,
+            refresh_token: data.refresh_token,
+          });
+          if (sessionError) throw sessionError;
+        }
         afterAuth(); setLocation('/feed');
       }
     } catch (reason: any) {
@@ -52,6 +76,21 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         setError(message || 'حدث خطأ في الاتصال. حاول مرة أخرى.');
       }
     } finally { setBusy(false); }
+  };
+
+  const signInWithProvider = async (provider: 'google' | 'apple') => {
+    if (!supabaseConfigured || busy) return;
+    setBusy(true); setError(''); setSuccess('');
+    try {
+      const { error: authError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo: window.location.origin },
+      });
+      if (authError) throw authError;
+    } catch (reason: any) {
+      setError(reason?.message || `تعذر المتابعة باستخدام ${provider === 'google' ? 'Google' : 'Apple'}.`);
+      setBusy(false);
+    }
   };
 
   return (
@@ -115,13 +154,16 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             )}
 
             <div style={styles.formGroup}>
-              <label style={styles.label} htmlFor="email">البريد الإلكتروني</label>
+              <label style={styles.label} htmlFor={signUp ? 'email' : 'login-identifier'}>
+                {signUp ? 'البريد الإلكتروني' : 'البريد الإلكتروني أو اسم المستخدم أو رقم الهاتف'}
+              </label>
               <input
-                id="email"
-                type="email"
+                id={signUp ? 'email' : 'login-identifier'}
+                type={signUp ? 'email' : 'text'}
                 required
-                autoComplete="email"
-                placeholder="أدخل بريدك الإلكتروني"
+                autoComplete={signUp ? 'email' : 'username'}
+                dir="ltr"
+                placeholder={signUp ? 'أدخل بريدك الإلكتروني' : 'name@example.com أو username أو +9665XXXXXXXX'}
                 value={email}
                 onChange={event => setEmail(event.target.value)}
                 style={styles.input}
@@ -151,6 +193,30 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
               {busy ? 'جاري الدخول...' : signUp ? 'إنشاء حساب' : 'تسجيل الدخول'}
             </button>
           </form>
+
+          <div aria-label="خيارات تسجيل الدخول عبر مزود خارجي" style={{ marginTop: '18px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#65716c', fontSize: '12px', marginBottom: '10px' }}>
+              <span style={{ height: '1px', flex: 1, background: '#d8dfdb' }} />
+              <span>أو المتابعة باستخدام</span>
+              <span style={{ height: '1px', flex: 1, background: '#d8dfdb' }} />
+            </div>
+            <button
+              type="button"
+              disabled={busy || !supabaseConfigured}
+              onClick={() => void signInWithProvider('google')}
+              style={{ width: '100%', marginTop: '8px', padding: '13px', border: '1px solid #d8dfdb', borderRadius: '12px', background: '#fff', color: '#243b35', fontSize: '14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.65 : 1 }}
+            >
+              {signUp ? 'المتابعة باستخدام Google' : 'الدخول باستخدام Google'}
+            </button>
+            <button
+              type="button"
+              disabled={busy || !supabaseConfigured}
+              onClick={() => void signInWithProvider('apple')}
+              style={{ width: '100%', marginTop: '8px', padding: '13px', border: '1px solid #d8dfdb', borderRadius: '12px', background: '#fff', color: '#243b35', fontSize: '14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.65 : 1 }}
+            >
+              {signUp ? 'المتابعة باستخدام Apple' : 'الدخول باستخدام Apple'}
+            </button>
+          </div>
 
           <div style={styles.signupLink}>
             {signUp ? 'لديك حساب؟ ' : 'جديد هنا؟ '}

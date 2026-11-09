@@ -331,7 +331,7 @@ export default function ProfilePage({
       setAuthEmail(user?.email || '');
       setAuthPhone(user?.phone || '');
       setAuthProvider(typeof primaryProvider === 'string' ? primaryProvider : linkedProvider || providers[0] || 'email');
-      setHasPassword(providers.includes('email'));
+      setHasPassword(providers.includes('email') || identities.some(identity => identity.provider === 'email'));
       if (settingsScreen === 'account') setPhoneDraft(user?.phone || '');
     };
     void loadAuthSettings();
