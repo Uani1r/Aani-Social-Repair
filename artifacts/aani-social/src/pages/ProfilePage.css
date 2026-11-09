@@ -649,3 +649,61 @@
   font-size: 12px;
   font-weight: 600;
 }
+
+
+
+.profile-settings-preferences {
+  min-height: 100%;
+  border-radius: 12px;
+  background: #0a0a0a;
+}
+
+.profile-settings-preferences .profile-settings-row {
+  background: #0a0a0a;
+}
+
+.profile-settings-switch.is-enabled {
+  background: #22c55e;
+}
+
+.profile-settings-switch.is-enabled span {
+  transform: translateX(-19px);
+}
+
+.profile-settings-choice {
+  display: flex;
+  width: 100%;
+  min-height: 70px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  border-bottom: 1px solid #181818;
+  padding: 14px 0;
+  background: #0a0a0a;
+  color: #fff;
+  text-align: right;
+  cursor: pointer;
+}
+
+.profile-settings-radio {
+  display: flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid #555;
+  border-radius: 50%;
+}
+
+.profile-settings-radio.is-selected {
+  border-color: #22c55e;
+}
+
+.profile-settings-radio.is-selected > span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #22c55e;
+}
