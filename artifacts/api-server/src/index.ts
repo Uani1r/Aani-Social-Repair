@@ -10,7 +10,9 @@ const publicPath = path.resolve(process.cwd(), "dist/public");
 app.use(express.static(publicPath));
 
 // توجيه باقي المسارات إلى index.html لدعم تطبيقات الصفحات الواحدة (SPA)
-app.get("*", (req, res, next) => {
+// ملاحظة: في Express 5 لم يعد النمط "*" صالحاً في المسارات (path-to-regexp v8)
+// ويسبب PathError عند الإقلاع، لذلك نستخدم وسيطاً بلا نمط بدلاً منه.
+app.use((req, res, next) => {
   if (req.path.startsWith("/api")) return next();
   res.sendFile(path.join(publicPath, "index.html"));
 });

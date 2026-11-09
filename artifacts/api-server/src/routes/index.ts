@@ -1,9 +1,11 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import pushNotificationsRouter from "./pushNotifications";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(pushNotificationsRouter);
 
 /**
  * ملاحظة مهمة:
