@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, Check, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, MapPin, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -1719,13 +1719,13 @@ export default function ProfilePage({
         {(showPublicCity && profileCity || showPublicJob || showPublicBirthDate || profileWebsiteUrl) && (
           <div className="profile-public-meta" aria-label="معلومات الملف الشخصي">
             {showPublicJob && (
-              <span className="profile-public-meta-item"><span aria-hidden="true">💼</span>{profileJob}</span>
+              <span className="profile-public-meta-item"><Briefcase aria-hidden="true" />{profileJob}</span>
             )}
             {showPublicCity && profileCity && (
-              <span className="profile-public-meta-item"><span aria-hidden="true">📍</span>{profileCity}</span>
+              <span className="profile-public-meta-item"><MapPin aria-hidden="true" />{profileCity}</span>
             )}
             {showPublicBirthDate && (
-              <span className="profile-public-meta-item"><span aria-hidden="true">🎂</span>{formattedBirthDate}</span>
+              <span className="profile-public-meta-item"><Cake aria-hidden="true" />{formattedBirthDate}</span>
             )}
             {profileWebsiteUrl && (
               <a href={profileWebsiteUrl} target="_blank" rel="noreferrer" className="profile-public-meta-item text-[#1D9BF0] hover:underline">

@@ -1120,8 +1120,11 @@
 }
 
 .profile-public-meta-item svg {
+  width: 19px;
+  height: 19px;
   flex: 0 0 auto;
-  color: #7c8797;
+  color: #a1a1aa;
+  stroke-width: 1.8;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1315,12 +1318,6 @@
 .profile-reorder-copy small {
   color: #858585;
   font-size: 10px;
-}
-
-.profile-public-meta-item > span:first-child {
-  flex: 0 0 auto;
-  font-size: 13px;
-  line-height: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
