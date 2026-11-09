@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, MapPin, X } from 'lucide-react';
+import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Eye, EyeOff, Flag, MapPin, MessageCircle, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
+
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
 import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
@@ -21,6 +23,7 @@ import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserId
 import './ProfilePage.css';
 
 type SettingsScreen = 'home' | 'account' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | 'support' | 'report' | 'faq' | 'legal' | 'about' | ProfileSettingsPreferenceScreen;
+type ProfileReportCategory = 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';
 type ProfileImageKind = 'avatar' | 'cover';
 type CoverPosition = { x: number; y: number };
 type CoverPanGesture = {
@@ -166,6 +169,12 @@ export default function ProfilePage({
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [storyHiddenFromTarget, setStoryHiddenFromTarget] = useState(false);
+  const [profileActionBusy, setProfileActionBusy] = useState(false);
+  const [showProfileReportDialog, setShowProfileReportDialog] = useState(false);
+  const [profileReportCategory, setProfileReportCategory] = useState<ProfileReportCategory>('other');
+  const [profileReportDetails, setProfileReportDetails] = useState('');
+  const [profileReportSubmitting, setProfileReportSubmitting] = useState(false);
   const [showSettingsOverlay, setShowSettingsOverlay] = useState(false);
   const [settingsOverlayEntered, setSettingsOverlayEntered] = useState(false);
   const [navStack, setNavStack] = useState<string[]>(['main']);
@@ -237,6 +246,27 @@ export default function ProfilePage({
   useEffect(() => {
     if (own && profile) setPerson(profile);
   }, [own, profile]);
+
+  useEffect(() => {
+    let active = true;
+    setStoryHiddenFromTarget(false);
+    if (own || !currentUserId || !activeUserId || !supabaseConfigured) return () => { active = false; };
+
+    void (async () => {
+      const [newHide, legacyHide] = await Promise.all([
+        supabase.from('story_hides').select('hidden_user_id').eq('hider_id', currentUserId).eq('hidden_user_id', activeUserId).maybeSingle(),
+        supabase.from('story_hidden_users').select('hidden_user_id').eq('story_owner_id', currentUserId).eq('hidden_user_id', activeUserId).maybeSingle(),
+      ]);
+      if (!active) return;
+      if (newHide.error && newHide.error.code !== 'PGRST205' && newHide.error.code !== '42P01') {
+        console.warn('[profile] تعذر تحميل إعداد إخفاء الستوري:', newHide.error);
+      }
+      if (legacyHide.error) console.warn('[profile] تعذر تحميل إعداد إخفاء الستوري القديم:', legacyHide.error);
+      setStoryHiddenFromTarget(Boolean(newHide.data || legacyHide.data));
+    })();
+
+    return () => { active = false; };
+  }, [activeUserId, currentUserId, own]);
 
   useEffect(() => {
     setProfilePostOrder(posts
@@ -538,6 +568,77 @@ export default function ProfilePage({
       setFollowers(prev => prev + (error ? 0 : 1));
     } finally {
       followActionPendingRef.current = false;
+    }
+  };
+
+  const toggleStoryVisibilityForProfile = async () => {
+    if (!supabaseConfigured || own || !currentUserId || profileActionBusy) return;
+    setProfileActionBusy(true);
+    try {
+      const { error } = await supabase.rpc(
+        storyHiddenFromTarget ? 'aani_unhide_story_from_user' : 'aani_hide_story_from_user',
+        { p_hidden_user_id: activeUserId },
+      );
+      if (error) throw error;
+      setStoryHiddenFromTarget(!storyHiddenFromTarget);
+      setShowProfileMenu(false);
+      toast.success(storyHiddenFromTarget ? 'سيتمكن هذا الحساب من رؤية قصصك مجدداً.' : 'لن يتمكن هذا الحساب من رؤية قصصك.');
+    } catch (error) {
+      console.error('[profile] تعذر تحديث إخفاء الستوري:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر تحديث إعداد إخفاء الستوري. شغّل سكريبت إعدادات الملف الشخصي في Supabase ثم أعد المحاولة.');
+    } finally {
+      setProfileActionBusy(false);
+    }
+  };
+
+  const blockProfile = async () => {
+    if (!supabaseConfigured || own || !currentUserId || profileActionBusy) return;
+    if (!window.confirm(`هل تريد حظر ${displayName(person)}؟ سيؤدي ذلك إلى إلغاء المتابعة ومنع التواصل.`)) return;
+    setProfileActionBusy(true);
+    try {
+      const { error } = await supabase.rpc('aani_block_user', { p_blocked_user_id: activeUserId });
+      if (error) throw error;
+      const ids = readLocalBlockedUserIds(currentUserId);
+      ids.add(activeUserId);
+      writeLocalBlockedUserIds(currentUserId, ids);
+      setShowProfileMenu(false);
+      toast.success('تم حظر الحساب وإلغاء المتابعة.');
+      setLocation('/');
+    } catch (error) {
+      console.error('[profile] تعذر حظر الحساب:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر حظر الحساب. تأكد من تطبيق تحديث الحظر في Supabase.');
+    } finally {
+      setProfileActionBusy(false);
+    }
+  };
+
+  const openProfileReportDialog = () => {
+    setShowProfileMenu(false);
+    setProfileReportCategory('other');
+    setProfileReportDetails('');
+    setShowProfileReportDialog(true);
+  };
+
+  const submitProfileReport = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabaseConfigured || own || !currentUserId || profileReportSubmitting) return;
+    setProfileReportSubmitting(true);
+    try {
+      const { error } = await supabase.from('user_reports').insert({
+        reporter_id: currentUserId,
+        reported_user_id: activeUserId,
+        category: profileReportCategory,
+        details: profileReportDetails.trim(),
+      });
+      if (error?.code === '23505') throw new Error('سبق أن أبلغت عن هذا الحساب.');
+      if (error) throw error;
+      setShowProfileReportDialog(false);
+      toast.success('تم إرسال البلاغ لمراجعته.');
+    } catch (error) {
+      console.error('[profile] تعذر إرسال بلاغ الحساب:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر إرسال البلاغ. تأكد من تطبيق جداول البلاغات في Supabase.');
+    } finally {
+      setProfileReportSubmitting(false);
     }
   };
 
@@ -1300,12 +1401,57 @@ export default function ProfilePage({
             )}
           </button>
           {!isEditingProfile && showProfileMenu && !own && (
-            <div role="menu" className="absolute left-4 top-full z-[60] max-h-[70dvh] w-[min(340px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-[#2F3336] bg-[#111] p-3 text-white shadow-xl">
-              <Link href={`/messages/${activeUserId}`} onClick={() => setShowProfileMenu(false)} role="menuitem" className="block rounded-xl px-3 py-2 text-sm hover:bg-white/10">إرسال رسالة إلى {displayName(person)}</Link>
+            <div role="menu" aria-label="خيارات الملف الشخصي" className="absolute left-4 top-full z-[60] max-h-[70dvh] w-[min(340px,calc(100vw-32px))] overflow-y-auto rounded-2xl border border-[#2F3336] bg-[#111] p-3 text-white shadow-xl">
+              <Link href={`/messages/${activeUserId}`} onClick={() => setShowProfileMenu(false)} role="menuitem" className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-sm hover:bg-white/10">
+                <MessageCircle size={17} aria-hidden="true" />
+                <span>إرسال رسالة</span>
+              </Link>
+              <button type="button" role="menuitem" onClick={() => void toggleStoryVisibilityForProfile()} disabled={profileActionBusy} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-sm hover:bg-white/10 disabled:opacity-50">
+                {storyHiddenFromTarget ? <Eye size={17} aria-hidden="true" /> : <EyeOff size={17} aria-hidden="true" />}
+                <span>{storyHiddenFromTarget ? 'إلغاء إخفاء الستوري' : 'إخفاء الستوري عن هذا الشخص'}</span>
+              </button>
+              <div role="separator" className="my-2 border-t border-[#2F3336]" />
+              <button type="button" role="menuitem" onClick={() => void blockProfile()} disabled={profileActionBusy} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50">
+                <Ban size={17} aria-hidden="true" />
+                <span>حظر</span>
+              </button>
+              <button type="button" role="menuitem" onClick={openProfileReportDialog} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-right text-sm hover:bg-white/10">
+                <Flag size={17} aria-hidden="true" />
+                <span>الإبلاغ</span>
+              </button>
             </div>
           )}
         </div>
       </div>
+
+      <Dialog open={showProfileReportDialog} onOpenChange={open => { if (!profileReportSubmitting) setShowProfileReportDialog(open); }}>
+        <DialogContent dir={pageDirection} className="border-[#2F3336] bg-[#111] text-white sm:max-w-md">
+          <DialogHeader className="text-right">
+            <DialogTitle>الإبلاغ عن {displayName(person)}</DialogTitle>
+            <DialogDescription className="text-right text-zinc-400">اختر سبب البلاغ. سيُرسل إلى فريق المراجعة.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={event => void submitProfileReport(event)} className="space-y-4">
+            <label htmlFor="profile-report-category" className="block space-y-2 text-sm">
+              <span>سبب الإبلاغ</span>
+              <select id="profile-report-category" value={profileReportCategory} onChange={event => setProfileReportCategory(event.target.value as ProfileReportCategory)} className="w-full rounded-lg border border-[#2F3336] bg-[#191919] px-3 py-2.5 text-white">
+                <option value="other">محتوى غير لائق أو سبب آخر</option>
+                <option value="fake_account">انتحال شخصية</option>
+                <option value="spam">سبام أو محتوى مزعج</option>
+                <option value="harassment">مضايقة أو تنمّر</option>
+                <option value="hate">خطاب كراهية</option>
+              </select>
+            </label>
+            <label htmlFor="profile-report-details" className="block space-y-2 text-sm">
+              <span>تفاصيل إضافية (اختياري)</span>
+              <textarea id="profile-report-details" value={profileReportDetails} onChange={event => setProfileReportDetails(event.target.value)} maxLength={1000} rows={4} dir="auto" placeholder="أضف تفاصيل تساعدنا في مراجعة البلاغ" className="w-full resize-y rounded-lg border border-[#2F3336] bg-[#191919] px-3 py-2.5 text-white placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-[#1D9BF0]" />
+            </label>
+            <DialogFooter className="gap-2 sm:gap-2">
+              <button type="button" onClick={() => setShowProfileReportDialog(false)} disabled={profileReportSubmitting} className="rounded-full border border-[#53575B] px-4 py-2 text-sm font-semibold hover:bg-white/10 disabled:opacity-50">إلغاء</button>
+              <button type="submit" disabled={profileReportSubmitting} className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-neutral-200 disabled:opacity-50">{profileReportSubmitting ? 'جارٍ الإرسال…' : 'إرسال البلاغ'}</button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       {showSettingsOverlay && typeof document !== 'undefined' && createPortal(
         <div

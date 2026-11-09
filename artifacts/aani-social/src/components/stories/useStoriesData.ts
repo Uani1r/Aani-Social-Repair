@@ -56,7 +56,7 @@ export function useStoriesData({
     const followedIds = (followings || []).map(f => f.following_id);
     const allowedUserIds = [userId, ...followedIds];
 
-    // صلاحية القصة ووقت انتهائها يتحقق منهما RLS بساعة قاعدة البيانات، لا ساعة الجهاز.
+    // RLS يتحقق من صلاحية القصة وانتهائها ويستبعد أيضاً القصص التي أخفاها صاحبها عن هذا المستخدم.
     const { data, error } = await supabase
       .from('stories')
       .select('*')
