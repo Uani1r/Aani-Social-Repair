@@ -14,7 +14,6 @@ type PostHeaderIdentityProps = {
   usernameClassName?: string;
   nameLinkClass?: string;
   taggedNameLinkClass?: string;
-  usernameLinkClass?: string;
   moreTriggerClass?: string;
 };
 
@@ -31,7 +30,6 @@ export default function PostHeaderIdentity({
   usernameClassName,
   nameLinkClass = 'hover:underline',
   taggedNameLinkClass = 'hover:underline',
-  usernameLinkClass = 'hover:underline',
   moreTriggerClass = 'mx-0.5 inline-flex shrink-0 items-center rounded-full px-0.5 align-middle text-current opacity-70 transition hover:opacity-100',
 }: PostHeaderIdentityProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -68,20 +66,8 @@ export default function PostHeaderIdentity({
     </>
   );
 
-  const usernameNode = primary?.profileId ? (
-    <>
-      <Link href={publisherHref} className={usernameLinkClass}>
-        {post.author?.username || 'user'}
-      </Link>
-      <span className="mx-1 font-normal">و</span>
-      <Link href={`/profile/${encodeURIComponent(primary.profileId)}`} className={usernameLinkClass}>
-        @{primary.label}
-      </Link>
-      {hasMore && moreButton(13)}
-    </>
-  ) : (
-    post.author?.username || 'user'
-  );
+  // منشورات الإشارة: يظهر الاسم فقط (اسم الناشر و اسم المشار إليه) دون سطر اليوزرات
+  const usernameNode = primary?.profileId ? undefined : (post.author?.username || 'user');
 
   return (
     <>
