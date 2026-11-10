@@ -10,7 +10,7 @@ import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
 import PostVideoPreview from './PostVideoPreview';
 import LikesListSheet from './LikesListSheet';
-import { getVideoAspectRatio, parseVideoCrop } from '../lib/videoMedia';
+import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '../lib/videoMedia';
 
 export interface PostCardProps {
   post: Post;
@@ -65,6 +65,12 @@ export default function PostCard({
     : '';
   const postImages = (post.media_urls || []).filter(Boolean);
   if (postImages.length === 0 && post.media_url) postImages.push(post.media_url);
+  // نسبة أبعاد الوسيط المخزنة مع الرابط عند النشر (4:5 / 3:4 / 9:16)
+  const mediaAspect = postImages.length > 0
+    ? (post.type === 'reel'
+      ? getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))
+      : getImageMediaAspectRatio(postImages[0] || ''))
+    : undefined;
 
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-white shadow-sm" dir="rtl">
@@ -98,9 +104,7 @@ export default function PostCard({
       {postImages.length > 0 && (
         <div
           className="mt-3 flex aspect-[4/5] w-full gap-2 overflow-x-auto rounded-xl no-scrollbar"
-          style={post.type === 'reel' && getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))
-            ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))) }
-            : undefined}
+          style={mediaAspect ? { aspectRatio: String(mediaAspect) } : undefined}
         >
           {postImages.map((url, index) => (
             <div key={`${url}-${index}`} className="relative h-full min-w-full shrink-0 overflow-hidden rounded-xl border border-zinc-800">

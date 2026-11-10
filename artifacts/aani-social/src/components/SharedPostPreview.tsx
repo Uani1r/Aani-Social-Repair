@@ -9,7 +9,7 @@ import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile 
 import PostMetadataChips from '@/components/PostMetadataChips';
 import PostImagePreview from '@/components/PostImagePreview';
 import PostVideoPreview from '@/components/PostVideoPreview';
-import { getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
+import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 
 export default function SharedPostPreview({
   content,
@@ -198,8 +198,14 @@ export default function SharedPostPreview({
       >
         <div
           className="relative aspect-[4/5] w-full overflow-hidden bg-black"
-          style={isVideo && info?.media && getVideoAspectRatio(parseVideoCrop(info.media))
-            ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(info.media))) }
+          style={info?.media
+            ? (isVideo
+              ? (getVideoAspectRatio(parseVideoCrop(info.media))
+                ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(info.media))) }
+                : undefined)
+              : (getImageMediaAspectRatio(info.media)
+                ? { aspectRatio: String(getImageMediaAspectRatio(info.media)) }
+                : undefined))
             : undefined}
         >
           {loading ? (

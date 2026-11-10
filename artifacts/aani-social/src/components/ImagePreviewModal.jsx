@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Minus, Music2, Plus, X } from 'lucide-react';
 
+import { DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
+
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
-// القالب القياسي الإلزامي لإنستغرام: 4:5 (الناتج 1080x1350)
-const STANDARD_ASPECT = 4 / 5;
+// القياس الافتراضي القياسي لإنستغرام: 4:5
 const OUTPUT_WIDTH = 1080;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const distanceBetween = (first, second) => Math.hypot(second.x - first.x, second.y - first.y);
@@ -32,8 +33,8 @@ function getImageBounds(frame, image, zoom) {
   };
 }
 
-// القص وفق القالب المحدد: 4:5 (1080x1350) أو القالب الحر بأبعاد الصورة الأصلية
-async function cropImage(image, view, frameBounds, preserve) {
+// القص وفق القالب المختار (4:5 / 3:4 / 9:16) وفق موضع الصورة وتكبيرها
+async function cropImage(image, view, frameBounds, aspectValue, aspectLabel) {
   const source = new window.Image();
   await new Promise((resolve, reject) => {
     source.onload = resolve;
@@ -48,10 +49,8 @@ async function cropImage(image, view, frameBounds, preserve) {
   const sourceX = clamp((source.naturalWidth - sourceWidth) / 2 - view.x / renderedScale, 0, source.naturalWidth - sourceWidth);
   const sourceY = clamp((source.naturalHeight - sourceHeight) / 2 - view.y / renderedScale, 0, source.naturalHeight - sourceHeight);
   const canvas = document.createElement('canvas');
-  canvas.width = preserve ? Math.max(1, Math.round(sourceWidth)) : OUTPUT_WIDTH;
-  canvas.height = preserve
-    ? Math.max(1, Math.round(sourceHeight))
-    : Math.round(OUTPUT_WIDTH / STANDARD_ASPECT);
+  canvas.width = OUTPUT_WIDTH;
+  canvas.height = Math.round(OUTPUT_WIDTH / aspectValue);
 
   const context = canvas.getContext('2d');
   if (!context) throw new Error('تعذر تجهيز مساحة القص.');
@@ -64,8 +63,10 @@ async function cropImage(image, view, frameBounds, preserve) {
     canvas.toBlob(result => result ? resolve(result) : reject(new Error('تعذر حفظ الصورة المقصوصة.')), outputType, 0.92);
   });
   const extension = outputType === 'image/png' ? 'png' : outputType === 'image/webp' ? 'webp' : 'jpg';
+  const option = IMAGE_ASPECT_OPTIONS.find(item => item.label === aspectLabel);
+  const aspectSuffix = option ? option.suffix : '4x5';
   const originalName = image.file.name.replace(/\.[^.]+$/, '');
-  const file = new File([blob], `${originalName}-cropped.${extension}`, {
+  const file = new File([blob], `${originalName}-cropped-${aspectSuffix}.${extension}`, {
     type: outputType,
     lastModified: Date.now(),
   });
@@ -74,8 +75,8 @@ async function cropImage(image, view, frameBounds, preserve) {
 }
 
 // شاشة المعاينة الأولى: القص والتكبير والسحب مدموجان داخلها —
-// القالب الافتراضي إلزامي 4:5، مع إمكانية التحويل إلى القالب الحر (الأصل)،
-// وعند «التالي» تُجهَّز جميع الصور دون أي شاشة قص إضافية.
+// 3 قوالب قياسية فقط (4:5 الافتراضي، 3:4، 9:16) بلا قص حر،
+// وعند «التالي» تُجهَّز جميع الصور بنسبها المختارة دون أي شاشة قص إضافية.
 export default function ImagePreviewModal({ open, images, onImagesChange, onClose, onNext }) {
   const trackRef = useRef(null);
   const cropFrameRef = useRef(null);
@@ -86,18 +87,18 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
   const onCloseRef = useRef(onClose);
   const [activeIndex, setActiveIndex] = useState(0);
   const [cropView, setCropView] = useState({ scale: MIN_ZOOM, x: 0, y: 0 });
-  // قالب كل صورة: 'standard' (4:5 إلزامي) أو 'free' (الأصل)
+  // قالب كل صورة: '4:5' (افتراضي) أو '3:4' أو '9:16'
   const [cropModes, setCropModes] = useState({});
-  const [originalAspects, setOriginalAspects] = useState({});
   const [cropError, setCropError] = useState('');
   const [isFinishing, setIsFinishing] = useState(false);
   const [musicNotice, setMusicNotice] = useState(false);
   const activeImage = images[activeIndex];
-  const activeMode = cropModes[activeIndex] || 'standard';
+  const activeMode = cropModes[activeIndex] || DEFAULT_IMAGE_ASPECT_LABEL;
 
   const aspectFor = index => {
-    if ((cropModes[index] || 'standard') !== 'free') return STANDARD_ASPECT;
-    return originalAspects[index] || STANDARD_ASPECT;
+    const label = cropModes[index] || DEFAULT_IMAGE_ASPECT_LABEL;
+    const option = IMAGE_ASPECT_OPTIONS.find(item => item.label === label);
+    return option ? option.value : 4 / 5;
   };
 
   const updateCropView = (index, view) => {
@@ -128,27 +129,10 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
       setActiveIndex(0);
       cropViewsRef.current.clear();
       setCropModes({});
-      setOriginalAspects({});
       setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
       setCropError('');
     }
   }, [open, images.length]);
-
-  // قياس أبعاد الصور الأصلية لعرضها في القالب الحر
-  useEffect(() => {
-    if (!open) return undefined;
-    let cancelled = false;
-    images.forEach((image, index) => {
-      const source = new window.Image();
-      source.onload = () => {
-        if (!cancelled && source.naturalWidth > 0 && source.naturalHeight > 0) {
-          setOriginalAspects(current => ({ ...current, [index]: source.naturalWidth / source.naturalHeight }));
-        }
-      };
-      source.src = image.dataUrl;
-    });
-    return () => { cancelled = true; };
-  }, [open, images]);
 
   // استرجاع ضبط الصورة عند التنقل بين الصور، أو البدء من الوسط
   useEffect(() => {
@@ -179,7 +163,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
   };
 
   const selectCropMode = mode => {
-    if (mode === (cropModes[activeIndex] || 'standard')) return;
+    if (mode === (cropModes[activeIndex] || DEFAULT_IMAGE_ASPECT_LABEL)) return;
     setCropModes(current => ({ ...current, [activeIndex]: mode }));
     // إعادة ضبط موضع الصورة عند تغيير القالب
     cropViewsRef.current.delete(activeIndex);
@@ -290,7 +274,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     });
   };
 
-  // «التالي»: تجهيز جميع الصور وفق قالبها (4:5 أو الأصل) دون شاشة قص إضافية
+  // «التالي»: تجهيز جميع الصور وفق قوالبها المختارة دون شاشة قص إضافية
   const finishAndNext = async () => {
     if (!activeImage || isFinishing) return;
     setIsFinishing(true);
@@ -302,8 +286,8 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
         const frame = frameRefsRef.current[index];
         const bounds = frame?.getBoundingClientRect();
         if (!bounds) throw new Error('تعذر تجهيز مساحة القص.');
-        const preserve = (cropModes[index] || 'standard') === 'free';
-        croppedImages.push(await cropImage(images[index], view, bounds, preserve));
+        const label = cropModes[index] || DEFAULT_IMAGE_ASPECT_LABEL;
+        croppedImages.push(await cropImage(images[index], view, bounds, aspectFor(index), label));
       }
       onImagesChange(croppedImages);
       onNext();
@@ -407,30 +391,26 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
       </div>
 
       <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 flex w-[min(94vw,390px)] -translate-x-1/2 flex-col gap-3 rounded-2xl border border-white/10 bg-[#242326]/95 px-3 py-3 shadow-2xl backdrop-blur-xl">
-        <div className="flex items-center justify-between gap-3" dir="rtl">
-          <button type="button" onClick={() => setMusicNotice(true)} className="flex min-w-20 flex-col items-center gap-1 rounded-full px-3 py-1 text-[#f1a17f] transition hover:bg-white/5">
+        <div className="flex items-center justify-between gap-2" dir="rtl">
+          <button type="button" onClick={() => setMusicNotice(true)} className="flex min-w-16 flex-col items-center gap-1 rounded-full px-3 py-1 text-[#f1a17f] transition hover:bg-white/5">
             <Music2 size={22} />
             <span className="text-[11px] font-medium">موسيقى</span>
           </button>
           <div role="group" aria-label="قالب القص" className="flex items-center gap-1 rounded-full bg-white/5 p-1">
-            <button
-              type="button"
-              aria-pressed={activeMode === 'standard'}
-              onClick={() => selectCropMode('standard')}
-              className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${activeMode === 'standard' ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
-            >
-              4:5 قياسي
-            </button>
-            <button
-              type="button"
-              aria-pressed={activeMode === 'free'}
-              onClick={() => selectCropMode('free')}
-              className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${activeMode === 'free' ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
-            >
-              حر (الأصل)
-            </button>
+            {IMAGE_ASPECT_OPTIONS.map(option => (
+              <button
+                key={option.label}
+                type="button"
+                aria-pressed={activeMode === option.label}
+                onClick={() => selectCropMode(option.label)}
+                className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold transition ${activeMode === option.label ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
+              >
+                {option.label}
+              </button>
+            ))}
           </div>
         </div>
+        <p className="text-center text-[10px] text-white/45">القالب الافتراضي 4:5 — 3:4 أطول، 9:16 يملأ طول الشاشة</p>
         <div className="flex items-center gap-3" dir="ltr">
           <button type="button" onClick={() => updateZoom(cropView.scale - 0.2)} aria-label="تصغير الصورة" disabled={cropView.scale <= MIN_ZOOM} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-40">
             <Minus size={18} />
@@ -452,7 +432,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
       </div>
 
       {musicNotice && (
-        <p role="status" className="absolute left-1/2 -translate-x-1/2 rounded-full bg-zinc-800 px-4 py-2 text-xs whitespace-nowrap text-white shadow-lg" style={{ bottom: 'calc(9rem + env(safe-area-inset-bottom))' }}>
+        <p role="status" className="absolute left-1/2 -translate-x-1/2 rounded-full bg-zinc-800 px-4 py-2 text-xs whitespace-nowrap text-white shadow-lg" style={{ bottom: 'calc(10rem + env(safe-area-inset-bottom))' }}>
           إضافة الموسيقى غير متاحة حالياً للمنشورات.
         </p>
       )}

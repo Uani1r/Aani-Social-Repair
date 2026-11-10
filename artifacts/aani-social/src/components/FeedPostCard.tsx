@@ -20,7 +20,7 @@ import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
+import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, type Post, type Profile } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
@@ -117,6 +117,8 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   }, [post.media_urls, post.media_url]);
   const activeVideoUrl = urls[currentImageIndex] || post.media_url;
   const activeVideoAspectRatio = post.type === 'reel' ? getVideoAspectRatio(parseVideoCrop(activeVideoUrl || '')) : undefined;
+  // نسبة أبعاد الصورة المخزنة مع الرابط عند النشر (4:5 / 3:4 / 9:16)
+  const imageMediaAspect = getImageMediaAspectRatio(urls[currentImageIndex] || '');
   const fullScreenPost = useMemo(() => ({
     ...post,
     media_url: activeVideoUrl,
@@ -423,7 +425,9 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             : isMainFeedVideo
               ? 'feed-video-container mt-3'
               : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''}`}
-          style={!isMainFeedVideo && activeVideoAspectRatio ? { aspectRatio: String(activeVideoAspectRatio) } : undefined}
+          style={!isMainFeedVideo && (imageMediaAspect || activeVideoAspectRatio)
+            ? { aspectRatio: String(imageMediaAspect || activeVideoAspectRatio) }
+            : undefined}
         >
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
             {urls.map((url, i) => (

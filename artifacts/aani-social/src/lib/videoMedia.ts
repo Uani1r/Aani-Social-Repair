@@ -93,3 +93,36 @@ export function buildVideoMediaUrl(
   const baseUrl = stripVideoEditFragment(src);
   return edits.length > 0 ? `${baseUrl}#${edits.join('&')}` : baseUrl;
 }
+
+// ===== قوالب قص الصور القياسية (4:5 / 3:4 / 9:16) =====
+export const IMAGE_ASPECT_OPTIONS = [
+  { label: '4:5', value: 4 / 5, suffix: '4x5' },
+  { label: '3:4', value: 3 / 4, suffix: '3x4' },
+  { label: '9:16', value: 9 / 16, suffix: '9x16' },
+] as const;
+
+export type ImageAspectLabel = (typeof IMAGE_ASPECT_OPTIONS)[number]['label'];
+
+export const DEFAULT_IMAGE_ASPECT_LABEL: ImageAspectLabel = '4:5';
+
+export function imageAspectLabelFromFilename(filename: string): ImageAspectLabel | null {
+  const match = filename.toLowerCase().match(/-(4x5|3x4|9x16)\.[a-z0-9]+$/);
+  if (!match) return null;
+  return match[1] === '4x5' ? '4:5' : match[1] === '3x4' ? '3:4' : '9:16';
+}
+
+// إلحاق نسبة القص المختارة بروابط الوسائط المحفوظة في قاعدة البيانات
+export function appendImageMediaAspect(url: string, filename: string): string {
+  const label = imageAspectLabelFromFilename(filename);
+  if (!label || /[#&]ar=/.test(url)) return url;
+  return `${url}#ar=${label}`;
+}
+
+// قراءة نسبة الأبعاد المخزنة مع رابط صورة المنشور عند العرض
+export function getImageMediaAspectRatio(url: string): number | undefined {
+  const match = url.match(/[#&]ar=(4:5|3:4|9:16)(?=&|$)/);
+  if (!match) return undefined;
+  if (match[1] === '3:4') return 3 / 4;
+  if (match[1] === '9:16') return 9 / 16;
+  return 4 / 5;
+}

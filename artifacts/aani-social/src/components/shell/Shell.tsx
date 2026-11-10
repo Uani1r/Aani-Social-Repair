@@ -11,7 +11,7 @@ import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
-import { buildVideoMediaUrl } from '@/lib/videoMedia';
+import { appendImageMediaAspect, buildVideoMediaUrl } from '@/lib/videoMedia';
 import type { Post, PostDestination, PostMetadataTag, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 import { requestContentRefresh } from '@/lib/contentRefresh';
@@ -889,7 +889,7 @@ export default function Shell({
     const postId = createPostId();
     const createdAt = new Date().toISOString();
     const objectUrls = files.map(file => URL.createObjectURL(file));
-    const localMediaUrls = objectUrls.map(url => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : url);
+    const localMediaUrls = objectUrls.map((url, index) => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : appendImageMediaAspect(url, files[index].name));
     const type: Post['type'] = files.length === 0 ? 'text' : mediaType === 'image' ? 'photo' : 'reel';
     const author = profile || {
       id: userId,
@@ -949,7 +949,7 @@ export default function Shell({
             },
           });
           const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
-          uploadedUrls[index] = mediaType === 'video' ? buildVideoMediaUrl(publicUrl, trim, crop) : publicUrl;
+          uploadedUrls[index] = mediaType === 'video' ? buildVideoMediaUrl(publicUrl, trim, crop) : appendImageMediaAspect(publicUrl, file.name);
         }));
 
         const publishedPost: Post = {
