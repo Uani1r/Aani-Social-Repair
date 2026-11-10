@@ -71,7 +71,7 @@ export default function CreatePostModal({
     const textarea = textareaRef.current;
     if (!textarea) return;
     textarea.style.height = 'auto';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 120)}px`;
   }, [postText]);
   const [activeTool, setActiveTool] = useState<TagTool>(null);
   const [tagInput, setTagInput] = useState('');
@@ -238,7 +238,7 @@ export default function CreatePostModal({
         aria-label="إنشاء منشور"
         dir="rtl"
         onClick={event => event.stopPropagation()}
-        className="relative z-10 flex max-h-[86dvh] w-full max-w-[450px] flex-col gap-3 overflow-hidden rounded-[32px] border border-white/10 bg-[#1d1b21]/95 text-white shadow-[0_24px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-300"
+        className="relative z-10 flex max-h-[94dvh] w-full max-w-[450px] flex-col gap-3 overflow-hidden rounded-[32px] border border-white/10 bg-[#1d1b21]/95 text-white shadow-[0_24px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-300"
       >
         <div className="flex items-center justify-between px-6 pt-5">
           <div className="flex min-w-0 items-center gap-3">
@@ -260,12 +260,11 @@ export default function CreatePostModal({
           </button>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
         {filePreviews.length > 0 && fileType && (
-          <div className="relative w-full bg-black">
-            <div className="flex w-full snap-x snap-mandatory overflow-x-auto no-scrollbar">
+          <div className="relative min-h-0 flex-1 overflow-hidden bg-black">
+            <div className="flex h-full w-full snap-x snap-mandatory overflow-x-auto no-scrollbar">
               {filePreviews.map((preview, index) => (
-                <div key={preview.url} className="relative aspect-[4/5] w-full shrink-0 snap-center">
+                <div key={preview.url} className="relative h-full w-full shrink-0 snap-center">
                   {fileType === 'image' ? (
                     <img src={preview.url} alt="معاينة الصورة المحددة" className="h-full w-full object-cover" />
                   ) : (
@@ -308,19 +307,19 @@ export default function CreatePostModal({
             maxLength={2000}
             placeholder="اكتب وصفاً للمنشور..."
             aria-label="اكتب وصفاً للمنشور"
-            className="max-h-[220px] min-h-[70px] mb-3 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-[#2a2a35] p-3 text-right text-[15px] leading-[1.8] text-white outline-none transition-colors placeholder:text-gray-400 focus:border-pink-400/50"
+            className="max-h-[120px] min-h-[60px] mb-3 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-[#2a2a35] p-3 text-right text-[15px] leading-[1.8] text-white outline-none transition-colors placeholder:text-gray-400 focus:border-pink-400/50"
             rows={2}
           />
         </div>
 
-        <section className="mx-6 rounded-2xl border border-white/10 bg-white/[0.04] p-3" aria-label="وجهة النشر">
-          <p className="mb-2 text-right text-xs font-semibold text-white/70">مكان ظهور المنشور</p>
+        <section className="mx-6 rounded-2xl border border-white/10 bg-white/[0.04] p-2.5" aria-label="وجهة النشر">
+          <p className="mb-1.5 text-right text-xs font-semibold text-white/70">مكان ظهور المنشور</p>
           <div className="grid grid-cols-2 gap-2" role="group" aria-label="وجهة النشر">
             <button
               type="button"
               aria-pressed={destination === 'feed'}
               onClick={() => onDestinationChange('feed')}
-              className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition ${destination === 'feed' ? 'border-pink-400/60 bg-pink-500/15 text-white' : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/[0.06]'}`}
+              className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${destination === 'feed' ? 'border-pink-400/60 bg-pink-500/15 text-white' : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/[0.06]'}`}
             >
               الواجهة الرئيسية
             </button>
@@ -329,12 +328,12 @@ export default function CreatePostModal({
               aria-pressed={destination === 'reels'}
               disabled={fileType !== 'video'}
               onClick={() => onDestinationChange('reels')}
-              className={`rounded-xl border px-3 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 ${destination === 'reels' ? 'border-pink-400/60 bg-pink-500/15 text-white' : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/[0.06]'}`}
+              className={`rounded-xl border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-35 ${destination === 'reels' ? 'border-pink-400/60 bg-pink-500/15 text-white' : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/[0.06]'}`}
             >
               الريلز
             </button>
           </div>
-          {fileType !== 'video' && <p className="mt-2 text-right text-[11px] text-white/45">النشر في الريلز متاح لمقاطع الفيديو فقط.</p>}
+          {fileType !== 'video' && <p className="mt-1 text-right text-[10px] text-white/45">النشر في الريلز متاح لمقاطع الفيديو فقط.</p>}
         </section>
 
         <PostMetadataChips
@@ -428,7 +427,6 @@ export default function CreatePostModal({
             {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
           </div>
         )}
-        </div>
 
         <footer className="border-t border-white/10 px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
           <div className="flex items-center justify-between gap-2">
