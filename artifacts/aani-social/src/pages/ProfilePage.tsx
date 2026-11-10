@@ -328,10 +328,17 @@ export default function ProfilePage({
       setTaggedLoading(true);
       setTaggedError(null);
       try {
+        if (!activeUserId) throw new Error('معرف المستخدم غير متوفر');
+        // فلتر JSONB آمن: containment لكائن واحد (وليس مصفوفة).
+        // عامل cs ضد عمود jsonb مصفوفة يطابق أي عنصر فيه هو
+        // مجموعة شاملة من الكائن (أي وسم mention بنفس profileId)،
+        // ومصدر الخطأ 22P02 السابق كان إرسال مصفوفة كائنات `[...]`
+        // وهو صياغة JSON غير مقبولة لـ PostgREST.
+        const mentionContainment = JSON.stringify({ kind: 'mention', profileId: activeUserId });
         const { data, error } = await supabase
           .from('posts')
           .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy')
-          .contains('post_metadata', [{ kind: 'mention', profileId: activeUserId }])
+          .filter('post_metadata', 'cs', mentionContainment)
           .neq('user_id', activeUserId)
           .order('created_at', { ascending: false })
           .limit(60);
@@ -364,7 +371,10 @@ export default function ProfilePage({
           } as Post;
         }));
       } catch {
+        // معالجة آمنة: إرجاع مصفوفة فارغة دائماً حتى لا تنكسر
+        // الواجهة أو تظهر شاشة التعطل عند أي فشل استعلام.
         if (active) {
+          setTaggedPosts([]);
           setTaggedError('تعذر تحميل المنشورات المشار فيها. أعد المحاولة.');
           taggedFetchedUserRef.current = null;
         }
