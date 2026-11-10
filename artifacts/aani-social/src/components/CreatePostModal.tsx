@@ -35,6 +35,8 @@ type CreatePostModalProps = {
   videoCrop: VideoCropTransform | null;
   isSubmitting: boolean;
   createError: string;
+  /** وسوم محفوظة مسبقاً (مثل إشارة اختيرت من شاشة معاينة الفيديو) */
+  initialTags?: PostMetadataTag[];
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
@@ -58,6 +60,7 @@ export default function CreatePostModal({
   videoCrop,
   isSubmitting,
   createError,
+  initialTags,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -65,7 +68,9 @@ export default function CreatePostModal({
 }: CreatePostModalProps) {
   const nextTagIdRef = useRef(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [tags, setTags] = useState<ComposerTag[]>([]);
+  const [tags, setTags] = useState<ComposerTag[]>(() =>
+    (initialTags || []).map((tag, index) => ({ ...tag, id: `composer-tag-seeded-${index}` })),
+  );
 
   // تمديد تلقائي لحقل الوصف مع سقف أقصى ثم تمرير داخلي
   useEffect(() => {
@@ -221,7 +226,13 @@ export default function CreatePostModal({
   };
 
   const handlePublish = () => onPublish(
-    tags.map(({ kind, label, href, profileId }) => ({ kind, label, href, profileId })),
+    tags.map(tag => ({
+      kind: tag.kind,
+      label: tag.label,
+      href: tag.href,
+      ...(tag.profileId ? { profileId: tag.profileId } : {}),
+      ...(tag.displayName ? { displayName: tag.displayName } : {}),
+    })),
     destination,
   );
 
@@ -379,6 +390,7 @@ export default function CreatePostModal({
                         label: person.username,
                         href: `/profile/${person.id}`,
                         profileId: person.id,
+                        displayName: displayName(person),
                       })}
                       className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-right transition hover:bg-white/10"
                     >

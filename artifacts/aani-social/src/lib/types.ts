@@ -37,10 +37,12 @@ export type Profile = {
 };
 
 export type PostMetadataTag = {
-  kind: 'location' | 'link' | 'mention';
+  kind: 'location' | 'link' | 'mention' | 'cover';
   label: string;
   href: string;
   profileId?: string;
+  /** اسم العرض المحفوظ لحساب الإشارة (يُستخدم في رأس المنشور) */
+  displayName?: string;
 };
 
 export type VideoTrimRange = {
@@ -67,12 +69,19 @@ export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
     const row = item as Record<string, unknown>;
     const kind = row.kind;
     const label = typeof row.label === 'string' ? row.label.trim() : '';
-    if (!label || (kind !== 'location' && kind !== 'link' && kind !== 'mention')) return [];
+    if (!label || (kind !== 'location' && kind !== 'link' && kind !== 'mention' && kind !== 'cover')) return [];
 
     if (kind === 'mention') {
       const profileId = typeof row.profileId === 'string' ? row.profileId.trim() : '';
       if (!profileId) return [];
-      return [{ kind, label: label.replace(/^@+/, ''), href: `/profile/${encodeURIComponent(profileId)}`, profileId }];
+      const taggedName = typeof row.displayName === 'string' ? row.displayName.trim() : '';
+      return [{
+        kind,
+        label: label.replace(/^@+/, ''),
+        href: `/profile/${encodeURIComponent(profileId)}`,
+        profileId,
+        ...(taggedName ? { displayName: taggedName.slice(0, 80) } : {}),
+      }];
     }
 
     if (typeof row.href !== 'string') return [];
@@ -135,6 +144,12 @@ export type Post = {
 
 export const getPostDestination = (post: Pick<Post, 'type' | 'destination'>): PostDestination =>
   post.destination ?? 'feed';
+
+/** رابط صورة الغلاف المختارة للمنشور (تُحفظ كوسام cover ضمن post_metadata) */
+export const getPostCoverUrl = (post: Pick<Post, 'post_metadata'>): string | null => {
+  const cover = (post.post_metadata || []).find(tag => tag.kind === 'cover');
+  return cover?.href || null;
+};
 
 export type PostRow = Pick<
   Post,

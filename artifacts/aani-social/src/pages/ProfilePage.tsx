@@ -20,7 +20,7 @@ import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
-import { cleanUsername, displayName, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
+import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
@@ -2255,6 +2255,8 @@ export default function ProfilePage({
               const isReel = post.type === 'reel' || getPostDestination(post) === 'reels';
               const mediaUrls = post.media_urls?.length ? post.media_urls : post.media_url ? [post.media_url] : [];
               const cover = mediaUrls[0] || '';
+              // الغلاف المختار عند النشر: صورة خفيفة تُعرض بدل عنصر الفيديو
+              const postCoverUrl = getPostCoverUrl(post);
               const isMultiImage = mediaUrls.length > 1;
               return (
                 <button
@@ -2298,7 +2300,23 @@ export default function ProfilePage({
                   className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
                 >
                   {isReel ? (
-                    cover ? (
+                    postCoverUrl ? (
+                      <img
+                        src={thumbnailUrl(postCoverUrl)}
+                        alt={post.content.slice(0, 80)}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover"
+                        onError={event => {
+                          // فشل تحويل المصغّرة → الرجوع لرابط الغلاف الأصلي
+                          const image = event.currentTarget;
+                          if (image.dataset.fallback !== '1') {
+                            image.dataset.fallback = '1';
+                            image.src = postCoverUrl;
+                          }
+                        }}
+                      />
+                    ) : cover ? (
                       <video src={cover} muted playsInline preload="metadata" className="h-full w-full object-cover" />
                     ) : (
                       <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>

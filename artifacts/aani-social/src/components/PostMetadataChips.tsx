@@ -16,7 +16,9 @@ export default function PostMetadataChips({
   onRemove,
   onMentionClick,
 }: PostMetadataChipsProps) {
-  if (tags.length === 0) return null;
+  // وسام الغلاف وسيلة تخزين للصورة المصغرة وليس شريحة معروضة
+  const visibleTags = tags.filter(tag => tag.kind !== 'cover');
+  if (visibleTags.length === 0) return null;
 
   return (
     <div
@@ -25,7 +27,7 @@ export default function PostMetadataChips({
       onClick={event => event.stopPropagation()}
       onKeyDown={event => event.stopPropagation()}
     >
-      {tags.map((tag, index) => {
+      {visibleTags.map((tag, index) => {
         const TagIcon = tag.kind === 'location' ? MapPin : tag.kind === 'link' ? Link2 : AtSign;
         const label = tag.kind === 'mention' ? tag.label.replace(/^@+/, '') : tag.label;
         const linkClass = 'flex min-w-0 max-w-[220px] items-center gap-2 truncate px-3 py-2 text-xs text-violet-200';

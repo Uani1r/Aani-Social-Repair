@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
+import { Link } from 'wouter';
 import {
   Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
@@ -18,7 +19,7 @@ import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { displayName, formatDate, type Post } from '@/lib/types';
+import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
@@ -404,6 +405,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     onRefresh();
   };
 
+  // تنسيق الإشارة في رأس المنشور (غير متاح للمنشورات النصية)
+  const taggedMention = post.type !== 'text'
+    ? (post.post_metadata || []).find(tag => tag.kind === 'mention' && tag.profileId) || null
+    : null;
+  const postCoverUrl = getPostCoverUrl(post);
+
   return (
     <section
       ref={containerRef}
@@ -425,6 +432,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           <video
             ref={videoRef}
             src={videoSrc}
+            poster={postCoverUrl || undefined}
             loop={!videoTimeRange}
             autoPlay={isOverlayOpen && isVisible}
             muted={muted}
@@ -541,8 +549,30 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         <div className="reel-account-row">
           <span className="reel-avatar-frame"><Avatar profile={post.author} /></span>
           <UserIdentity
-            name={displayName(post.author)}
-            username={post.author?.username}
+            name={
+              <>
+                <Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>
+                {taggedMention?.profileId && (
+                  <>
+                    <span className="mx-1 font-normal">و</span>
+                    <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">
+                      {taggedMention.displayName || taggedMention.label}
+                    </Link>
+                  </>
+                )}
+              </>
+            }
+            username={
+              taggedMention?.profileId ? (
+                <>
+                  <Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username}</Link>
+                  <span className="mx-1 font-normal">و</span>
+                  <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">@{taggedMention.label}</Link>
+                </>
+              ) : (
+                post.author?.username
+              )
+            }
             className="reel-account-identity"
             nameClassName="reel-account-name"
             usernameClassName="reel-account-handle"

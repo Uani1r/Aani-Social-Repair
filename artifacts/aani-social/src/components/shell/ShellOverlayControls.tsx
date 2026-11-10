@@ -5,7 +5,7 @@ import AIAssistantModal from '@/components/AIAssistantModal';
 import CreatePostModal from '@/components/CreatePostModal';
 import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
-import VideoPreviewModal from '@/components/VideoPreviewModal';
+import VideoPreviewModal, { type VideoMentionPerson } from '@/components/VideoPreviewModal';
 import SettingsModal from '@/components/SettingsModal';
 import type { PostDestination, PostMetadataTag, Profile, VideoCropTransform, VideoTrimRange } from '@/lib/types';
 
@@ -27,8 +27,11 @@ type ShellOverlayControlsProps = {
   videoPreviewUrl: string | null;
   videoTrim: VideoTrimRange | null;
   videoCrop: VideoCropTransform | null;
+  videoCoverPreview: string | null;
   onVideoTrimChange: (range: VideoTrimRange) => void;
   onVideoCropChange: (crop: VideoCropTransform) => void;
+  onVideoCoverChange: (cover: File | null, previewUrl: string | null) => void;
+  onVideoMentionSelect: (person: VideoMentionPerson) => void;
   onCloseVideoPreview: () => void;
   onNextVideoPreview: (range: VideoTrimRange, crop: VideoCropTransform) => void;
   showCreateModal: boolean;
@@ -40,6 +43,7 @@ type ShellOverlayControlsProps = {
   filePreviews: { file: File; url: string }[];
   isSubmitting: boolean;
   createError: string;
+  initialCreateTags: PostMetadataTag[];
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
@@ -81,8 +85,11 @@ export default function ShellOverlayControls({
   videoPreviewUrl,
   videoTrim,
   videoCrop,
+  videoCoverPreview,
   onVideoTrimChange,
   onVideoCropChange,
+  onVideoCoverChange,
+  onVideoMentionSelect,
   onCloseVideoPreview,
   onNextVideoPreview,
   showCreateModal,
@@ -94,6 +101,7 @@ export default function ShellOverlayControls({
   filePreviews,
   isSubmitting,
   createError,
+  initialCreateTags,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -140,10 +148,14 @@ export default function ShellOverlayControls({
       <VideoPreviewModal
         open={showVideoPreviewModal && Boolean(videoPreviewUrl)}
         src={videoPreviewUrl || ''}
+        userId={userId}
         initialTrim={videoTrim}
         initialCrop={videoCrop}
+        initialCoverPreview={videoCoverPreview}
         onTrimChange={onVideoTrimChange}
         onCropChange={onVideoCropChange}
+        onCoverChange={onVideoCoverChange}
+        onMentionSelect={onVideoMentionSelect}
         onClose={onCloseVideoPreview}
         onNext={onNextVideoPreview}
       />
@@ -162,6 +174,7 @@ export default function ShellOverlayControls({
           videoCrop={videoCrop}
           isSubmitting={isSubmitting}
           createError={createError}
+          initialTags={initialCreateTags}
           onPostTextChange={onPostTextChange}
           onRemoveFile={onRemoveFile}
           onPublish={onPublish}

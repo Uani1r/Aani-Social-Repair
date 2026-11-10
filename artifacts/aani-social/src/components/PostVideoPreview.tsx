@@ -7,6 +7,8 @@ import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoE
 type PostVideoPreviewProps = {
   src: string;
   className?: string;
+  /** صورة الغلاف تظهر قبل تشغيل الفيديو (poster) */
+  poster?: string;
   controls?: boolean;
   muted?: boolean;
   autoPlay?: boolean;
@@ -32,6 +34,7 @@ const hasOpenFeedDialog = () => typeof document !== 'undefined' && Boolean(docum
 export default function PostVideoPreview({
   src,
   className = '',
+  poster,
   controls = true,
   muted = false,
   autoPlay = false,
@@ -213,6 +216,7 @@ export default function PostVideoPreview({
       <video
         ref={videoRef}
         src={mediaSrc}
+        poster={poster || undefined}
         controls={!showCustomControls && controls}
         muted={showMuteToggle ? videoMuted : muted}
         autoPlay={autoPlay && !autoPlayWhenVisible}

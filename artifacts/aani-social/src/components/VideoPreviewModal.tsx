@@ -1,16 +1,37 @@
 import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
-import { Check, Crop, Music2, Scissors, Volume2, VolumeX, X } from 'lucide-react';
+import { AtSign, Check, Crop, Image as ImageIcon, Music2, Scissors, Search, Volume2, VolumeX, X } from 'lucide-react';
 
-import type { VideoAspectRatio, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import Avatar from '@/components/Avatar';
+import UserIdentity from '@/components/UserIdentity';
+import { ListSkeleton } from '@/components/Skeletons';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { cleanUsername, displayName, type VideoAspectRatio, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { DEFAULT_VIDEO_CROP, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
+
+/** شخص اختير للإشارة إليه من شاشة معاينة الفيديو */
+export type VideoMentionPerson = {
+  id: string;
+  username: string;
+  full_name: string;
+  display_name?: string | null;
+  avatar_url: string | null;
+};
 
 type VideoPreviewModalProps = {
   open: boolean;
   src: string;
+  /** مستخدم الجلسة الحالية (لايُعرض في نتائج الإشارة) */
+  userId?: string;
   initialTrim: VideoTrimRange | null;
   initialCrop: VideoCropTransform | null;
+  /** معاينة الغلاف المحفوظ مسبقاً لاستعادتها عند إعادة الفتح */
+  initialCoverPreview?: string | null;
   onTrimChange: (range: VideoTrimRange) => void;
   onCropChange: (crop: VideoCropTransform) => void;
+  /** يُستدعى عند حفظ الغلاف أو إزالته (الملف يُرفع مع النشر) */
+  onCoverChange?: (cover: File | null, previewUrl: string | null) => void;
+  /** يُستدعى عند اختيار حساب للإشارة إليه في المنشور */
+  onMentionSelect?: (person: VideoMentionPerson) => void;
   onClose: () => void;
   onNext: (range: VideoTrimRange, crop: VideoCropTransform) => void;
 };
@@ -49,10 +70,14 @@ function formatTime(seconds: number) {
 export default function VideoPreviewModal({
   open,
   src,
+  userId = '',
   initialTrim,
   initialCrop,
+  initialCoverPreview = null,
   onTrimChange,
   onCropChange,
+  onCoverChange,
+  onMentionSelect,
   onClose,
   onNext,
 }: VideoPreviewModalProps) {
@@ -65,6 +90,10 @@ export default function VideoPreviewModal({
   const cropGestureRef = useRef<CropGesture | null>(null);
   const initialCropRef = useRef(initialCrop);
   const activeRangeRef = useRef<VideoTrimRange | null>(null);
+  const cancelCoverEditingRef = useRef<() => void>(() => {});
+  // معاينة الغلاف المحفوظ يُقرأ عبر مرجع حتى لا يُعاد ضبط الشاشة عند تغيّره بعد الحفظ
+  const initialCoverPreviewRef = useRef(initialCoverPreview);
+  initialCoverPreviewRef.current = initialCoverPreview;
   const [duration, setDuration] = useState(0);
   const [savedRange, setSavedRange] = useState<VideoTrimRange | null>(null);
   const [draftRange, setDraftRange] = useState<VideoTrimRange | null>(null);
@@ -76,6 +105,18 @@ export default function VideoPreviewModal({
   const [isCropping, setIsCropping] = useState(false);
   const [musicNotice, setMusicNotice] = useState(false);
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
+  // الغلاف: مسودة داخل الشاشة، تُحوَّل إلى الحاوية الأب عند الحفظ فقط
+  const [isCoverEditing, setIsCoverEditing] = useState(false);
+  const [draftCover, setDraftCover] = useState<File | null>(null);
+  const [draftCoverPreview, setDraftCoverPreview] = useState<string | null>(null);
+  const ownedCoverUrlRef = useRef<string | null>(null);
+  // الإشارة: بحث سريع واختيار حساب يُخزَّن مع المنشور كوسام mention
+  const [isMentionPicking, setIsMentionPicking] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionResults, setMentionResults] = useState<VideoMentionPerson[]>([]);
+  const [mentionSearching, setMentionSearching] = useState(false);
+  const [mentionError, setMentionError] = useState('');
+  const [mentionNotice, setMentionNotice] = useState('');
 
   useEffect(() => {
     if (!open) return undefined;
@@ -84,6 +125,8 @@ export default function VideoPreviewModal({
       if (event.key !== 'Escape') return;
       if (isTrimming) setIsTrimming(false);
       else if (isCropping) setIsCropping(false);
+      else if (isCoverEditing) cancelCoverEditingRef.current();
+      else if (isMentionPicking) setIsMentionPicking(false);
       else onClose();
     };
     window.addEventListener('keydown', closeOnEscape);
@@ -91,7 +134,7 @@ export default function VideoPreviewModal({
     return () => {
       window.removeEventListener('keydown', closeOnEscape);
     };
-  }, [isCropping, isTrimming, onClose, open]);
+  }, [isCoverEditing, isCropping, isMentionPicking, isTrimming, onClose, open]);
 
   useEffect(() => {
     if (!open) initialCropRef.current = initialCrop;
@@ -116,6 +159,21 @@ export default function VideoPreviewModal({
     setIsCropping(true);
     cropPointersRef.current.clear();
     cropGestureRef.current = null;
+    // الغلاف: استعادة المحفوظ من الحاوية الأب وتصفير المسودة
+    if (ownedCoverUrlRef.current) {
+      URL.revokeObjectURL(ownedCoverUrlRef.current);
+      ownedCoverUrlRef.current = null;
+    }
+    setDraftCover(null);
+    setDraftCoverPreview(initialCoverPreviewRef.current);
+    setIsCoverEditing(false);
+    // الإشارة: تصفير لوحة البحث
+    setIsMentionPicking(false);
+    setMentionQuery('');
+    setMentionResults([]);
+    setMentionSearching(false);
+    setMentionError('');
+    setMentionNotice('');
   }, [open, src]);
 
   useEffect(() => {
@@ -146,6 +204,77 @@ export default function VideoPreviewModal({
     const timer = window.setTimeout(() => setMusicNotice(false), 2400);
     return () => window.clearTimeout(timer);
   }, [musicNotice]);
+
+  useEffect(() => {
+    if (!mentionNotice) return undefined;
+    const timer = window.setTimeout(() => setMentionNotice(''), 2400);
+    return () => window.clearTimeout(timer);
+  }, [mentionNotice]);
+
+  // بحث سريع عن حسابات للإشارة إليها (منشِّد بقصير، مثل أداة المنشن في إنشاء المنشور)
+  useEffect(() => {
+    if (!isMentionPicking) return undefined;
+    const term = mentionQuery.trim().replace(/^@+/, '').replace(/[%_(),]/g, ' ').trim();
+    if (!term) {
+      setMentionResults([]);
+      setMentionSearching(false);
+      setMentionError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (!supabaseConfigured) {
+        setMentionError('تعذر الاتصال بالحسابات الآن.');
+        setMentionResults([]);
+        return;
+      }
+
+      setMentionSearching(true);
+      setMentionError('');
+      void (async () => {
+        try {
+          const [usernameResult, nameResult] = await Promise.all([
+            supabase.from('profiles')
+              .select('id, username, full_name, display_name, avatar_url')
+              .neq('id', userId)
+              .ilike('username', `%${term}%`)
+              .limit(8),
+            supabase.from('profiles')
+              .select('id, username, full_name, display_name, avatar_url')
+              .neq('id', userId)
+              .or(`full_name.ilike.%${term}%,display_name.ilike.%${term}%`)
+              .limit(8),
+          ]);
+
+          if (cancelled) return;
+          if (usernameResult.error && nameResult.error) {
+            setMentionError('تعذر تحميل الحسابات. حاول مرة أخرى.');
+            setMentionResults([]);
+            return;
+          }
+
+          const seen = new Set<string>();
+          const candidates = [...(usernameResult.data || []), ...(nameResult.data || [])]
+            .filter(person => person.id !== userId && !seen.has(person.id) && Boolean(seen.add(person.id)))
+            .slice(0, 8) as VideoMentionPerson[];
+          setMentionResults(candidates);
+        } catch {
+          if (!cancelled) {
+            setMentionError('تعذر تحميل الحسابات. حاول مرة أخرى.');
+            setMentionResults([]);
+          }
+        } finally {
+          if (!cancelled) setMentionSearching(false);
+        }
+      })();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [isMentionPicking, mentionQuery, userId]);
 
   useEffect(() => {
     if (!open || duration <= 0 || !src) return undefined;
@@ -238,6 +367,10 @@ export default function VideoPreviewModal({
       video.load();
     } catch {
       /* العنصر قد يكون أفلت مرجعه بالفعل */
+    }
+    if (ownedCoverUrlRef.current) {
+      URL.revokeObjectURL(ownedCoverUrlRef.current);
+      ownedCoverUrlRef.current = null;
     }
   }, []);
 
@@ -339,6 +472,77 @@ export default function VideoPreviewModal({
     setDraftCrop(crop);
     onCropChange(crop);
     setIsCropping(false);
+  };
+
+  const revokeOwnedCoverPreview = () => {
+    if (ownedCoverUrlRef.current) {
+      URL.revokeObjectURL(ownedCoverUrlRef.current);
+      ownedCoverUrlRef.current = null;
+    }
+  };
+
+  const applyDraftCover = (file: File) => {
+    revokeOwnedCoverPreview();
+    const previewUrl = URL.createObjectURL(file);
+    ownedCoverUrlRef.current = previewUrl;
+    setDraftCover(file);
+    setDraftCoverPreview(previewUrl);
+  };
+
+  // التقاط الإطار المعروض حالياً (مع تحويل القص نفسه المعروض على المعاينة) كصورة غلاف
+  const captureCoverFrame = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth || !video.videoHeight) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const crop = normalizeVideoCrop(activeCrop);
+    const offsetX = crop.x * (crop.zoom - 1) * 0.5 * canvas.width;
+    const offsetY = crop.y * (crop.zoom - 1) * 0.5 * canvas.height;
+    context.translate(canvas.width / 2 + offsetX, canvas.height / 2 + offsetY);
+    if (crop.zoom > 1.001) context.scale(crop.zoom, crop.zoom);
+    context.drawImage(video, -canvas.width / 2, -canvas.height / 2);
+    canvas.toBlob(blob => {
+      if (!blob) return;
+      applyDraftCover(new File([blob], `cover-${Date.now()}.jpg`, { type: 'image/jpeg' }));
+    }, 'image/jpeg', 0.85);
+  };
+
+  const beginCoverEditing = () => {
+    setDraftCover(null);
+    setDraftCoverPreview(initialCoverPreview);
+    setIsCoverEditing(true);
+  };
+
+  const cancelCoverEditing = () => {
+    revokeOwnedCoverPreview();
+    setDraftCover(null);
+    setDraftCoverPreview(initialCoverPreview);
+    setIsCoverEditing(false);
+  };
+  cancelCoverEditingRef.current = cancelCoverEditing;
+
+  const saveCover = () => {
+    onCoverChange?.(draftCover, draftCoverPreview);
+    ownedCoverUrlRef.current = null;
+    setIsCoverEditing(false);
+  };
+
+  const clearDraftCover = () => {
+    revokeOwnedCoverPreview();
+    setDraftCover(null);
+    setDraftCoverPreview(null);
+  };
+
+  const pickMention = (person: VideoMentionPerson) => {
+    onMentionSelect?.(person);
+    setIsMentionPicking(false);
+    setMentionQuery('');
+    setMentionResults([]);
+    setMentionError('');
+    setMentionNotice(`@${cleanUsername(person.username)}`);
   };
 
   const handleTimelinePointerDown = (event: ReactPointerEvent<HTMLButtonElement>, part: 'start' | 'end') => {
@@ -476,6 +680,14 @@ export default function VideoPreviewModal({
               <Check size={17} /> حفظ الإطار
             </button>
           </>
+        ) : isCoverEditing ? (
+          <>
+            <button type="button" onClick={cancelCoverEditing} className="rounded-full px-4 py-2 text-sm text-white/75">إلغاء</button>
+            <span className="text-sm font-semibold">تغيير الغلاف</span>
+            <button type="button" onClick={saveCover} className="flex min-w-24 items-center justify-center gap-1 rounded-full bg-[#f1a17f] px-4 py-2 text-sm font-bold text-black">
+              <Check size={17} /> حفظ الغلاف
+            </button>
+          </>
         ) : (
           <>
             <button type="button" onClick={onClose} aria-label="إغلاق معاينة الفيديو" className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-white/5 text-white transition hover:bg-white/10">
@@ -487,7 +699,7 @@ export default function VideoPreviewModal({
         )}
       </header>
 
-      <div ref={stageRef} className={`relative flex min-h-0 flex-1 flex-col items-center justify-center ${isTrimming ? 'pb-[19rem]' : isCropping ? 'pb-56' : 'pb-28'}`}>
+      <div ref={stageRef} className={`relative flex min-h-0 flex-1 flex-col items-center justify-center ${isTrimming ? 'pb-[19rem]' : isCropping ? 'pb-56' : isCoverEditing || isMentionPicking ? 'pb-64' : 'pb-28'}`}>
         <div
           ref={cropFrameRef}
           className={`relative max-h-full shrink-0 overflow-hidden rounded-xl bg-black ${isCropping ? 'cursor-grab active:cursor-grabbing' : ''}`}
@@ -685,26 +897,123 @@ export default function VideoPreviewModal({
         </section>
       )}
 
-      {!isTrimming && !isCropping && (
-        <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 flex -translate-x-1/2 items-center gap-3 rounded-full border border-white/10 bg-[#242326]/95 px-4 py-3 shadow-2xl backdrop-blur-xl">
-          <button type="button" onClick={() => setMusicNotice(true)} className="flex min-w-24 flex-col items-center gap-1 rounded-full px-3 py-1 text-[#f1a17f] transition hover:bg-white/5">
-            <Music2 size={24} />
-            <span className="text-xs font-medium">موسيقى</span>
+      {isCoverEditing && (
+        <section className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 w-[min(94vw,420px)] -translate-x-1/2 rounded-3xl border border-white/10 bg-[#1a1b22]/95 p-3 shadow-2xl backdrop-blur-xl" aria-label="تغيير غلاف الفيديو">
+          <div className="mb-2 flex items-center justify-between text-xs text-white/70" dir="rtl">
+            <span>يظهر الغلاف في الشبكة وقبل تشغيل الفيديو</span>
+            {draftCoverPreview && <span className="font-semibold text-[#f1a17f]">غلاف محدد</span>}
+          </div>
+          <div className="flex items-center gap-2" dir="rtl">
+            {draftCoverPreview ? (
+              <img src={draftCoverPreview} alt="معاينة الغلاف" className="h-16 w-16 shrink-0 rounded-lg border border-white/10 object-cover" />
+            ) : (
+              <span className="grid h-16 w-16 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/5 text-white/40"><ImageIcon size={20} /></span>
+            )}
+            <button type="button" onClick={captureCoverFrame} disabled={!duration} className="flex-1 rounded-xl bg-white/10 px-2 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
+              التقاط إطار من الفيديو
+            </button>
+            <label className="flex-1 cursor-pointer rounded-xl bg-white/10 px-2 py-2 text-center text-xs font-semibold text-white transition hover:bg-white/15">
+              من الجهاز
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={event => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = '';
+                  if (file && file.type.startsWith('image/')) applyDraftCover(file);
+                }}
+              />
+            </label>
+          </div>
+          {draftCoverPreview && (
+            <button type="button" onClick={clearDraftCover} className="mt-2 w-full rounded-xl px-3 py-2 text-xs text-rose-300 transition hover:bg-white/10">
+              إزالة الغلاف
+            </button>
+          )}
+        </section>
+      )}
+
+      {isMentionPicking && (
+        <section className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 w-[min(94vw,420px)] -translate-x-1/2 rounded-3xl border border-white/10 bg-[#1a1b22]/95 p-3 shadow-2xl backdrop-blur-xl" aria-label="الإشارة إلى حساب">
+          <div className="mb-2 flex items-center justify-between" dir="rtl">
+            <span className="text-xs font-semibold text-white/80">الإشارة إلى حساب</span>
+            <button type="button" aria-label="إغلاق اختيار الإشارة" onClick={() => setIsMentionPicking(false)} className="rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+              <X size={15} />
+            </button>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2" dir="rtl">
+            <Search size={15} className="shrink-0 text-white/50" />
+            <input
+              type="search"
+              value={mentionQuery}
+              onChange={event => { setMentionQuery(event.target.value); setMentionError(''); }}
+              placeholder="ابحث بالاسم أو اسم المستخدم"
+              className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/40"
+            />
+          </div>
+          <div className="mt-2 max-h-44 overflow-y-auto">
+            {mentionSearching && <ListSkeleton count={2} compact className="py-1" />}
+            {!mentionSearching && mentionResults.map(person => (
+              <button
+                key={person.id}
+                type="button"
+                onClick={() => pickMention(person)}
+                dir="rtl"
+                className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-right transition hover:bg-white/10"
+              >
+                <Avatar profile={person} />
+                <UserIdentity
+                  name={displayName(person)}
+                  username={person.username}
+                  className="min-w-0 flex-1"
+                  nameClassName="text-xs font-semibold text-white"
+                  usernameClassName="text-[10px] text-white/50"
+                />
+              </button>
+            ))}
+            {!mentionSearching && mentionQuery.trim() && mentionResults.length === 0 && !mentionError && (
+              <p className="py-3 text-center text-xs text-white/45">لا توجد حسابات مطابقة</p>
+            )}
+            {mentionError && <p role="alert" className="mt-1 text-xs text-rose-300">{mentionError}</p>}
+          </div>
+        </section>
+      )}
+
+      {!isTrimming && !isCropping && !isCoverEditing && !isMentionPicking && (
+        <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 grid w-[min(94vw,430px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-2xl border border-white/10 bg-[#242326]/95 px-2 py-2 shadow-2xl backdrop-blur-xl">
+          <button type="button" onClick={() => setMusicNotice(true)} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-[#f1a17f] transition hover:bg-white/5">
+            <Music2 size={22} />
+            <span className="text-[11px] font-medium">موسيقى</span>
           </button>
-          <button type="button" onClick={beginTrimming} disabled={!duration} className="flex min-w-24 flex-col items-center gap-1 rounded-full px-3 py-1 text-white/85 transition hover:bg-white/5 disabled:opacity-50">
-            <Scissors size={24} />
-            <span className="text-xs font-medium">قص المدة</span>
+          <button type="button" onClick={beginTrimming} disabled={!duration} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-white/85 transition hover:bg-white/5 disabled:opacity-50">
+            <Scissors size={22} />
+            <span className="text-[11px] font-medium">قص المدة</span>
           </button>
-          <button type="button" onClick={beginCropping} disabled={!duration} className="flex min-w-24 flex-col items-center gap-1 rounded-full px-3 py-1 text-white/85 transition hover:bg-white/5 disabled:opacity-50">
-            <Crop size={24} />
-            <span className="text-xs font-medium">قص الإطار</span>
+          <button type="button" onClick={beginCropping} disabled={!duration} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-white/85 transition hover:bg-white/5 disabled:opacity-50">
+            <Crop size={22} />
+            <span className="text-[11px] font-medium">قص الإطار</span>
+          </button>
+          <button type="button" onClick={beginCoverEditing} disabled={!duration} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-white/85 transition hover:bg-white/5 disabled:opacity-50">
+            <ImageIcon size={22} />
+            <span className="text-[11px] font-medium">تغيير الغلاف</span>
+          </button>
+          <button type="button" onClick={() => setIsMentionPicking(true)} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-white/85 transition hover:bg-white/5">
+            <AtSign size={22} />
+            <span className="text-[11px] font-medium">منشن</span>
           </button>
         </div>
       )}
 
-      {musicNotice && !isTrimming && !isCropping && (
+      {musicNotice && !isTrimming && !isCropping && !isCoverEditing && !isMentionPicking && (
         <p role="status" className="absolute left-1/2 -translate-x-1/2 rounded-full bg-zinc-800 px-4 py-2 text-xs whitespace-nowrap text-white shadow-lg" style={{ bottom: 'calc(6.5rem + env(safe-area-inset-bottom))' }}>
           إضافة الموسيقى غير متاحة حالياً للمنشورات.
+        </p>
+      )}
+
+      {mentionNotice && !isTrimming && !isCropping && !isCoverEditing && (
+        <p role="status" className="absolute left-1/2 -translate-x-1/2 rounded-full bg-zinc-800 px-4 py-2 text-xs whitespace-nowrap text-white shadow-lg" style={{ bottom: 'calc(6.5rem + env(safe-area-inset-bottom))' }}>
+          سيتم الإشارة إلى {mentionNotice} في المنشور.
         </p>
       )}
     </div>
