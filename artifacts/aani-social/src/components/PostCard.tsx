@@ -1,10 +1,9 @@
 import React from 'react';
-import { Link } from 'wouter';
 import { Bookmark, Heart, MessageCircle, Share2 } from 'lucide-react';
 
 import { usePostInteractions } from '../lib/interactions';
-import { displayName, getPostCoverUrl, taggedMentionDisplayName, type Post } from '../lib/types';
-import UserIdentity from './UserIdentity';
+import { displayName, getPostCoverUrl, type Post } from '../lib/types';
+import PostHeaderIdentity from './PostHeaderIdentity';
 import RepostIcon from './RepostIcon';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
@@ -67,10 +66,6 @@ export default function PostCard({
   const postImages = (post.media_urls || []).filter(Boolean);
   if (postImages.length === 0 && post.media_url) postImages.push(post.media_url);
   const postCoverUrl = getPostCoverUrl(post);
-  // تنسيق الإشارة في رأس المنشور (غير متاح للمنشورات النصية)
-  const taggedMention = post.type !== 'text'
-    ? (post.post_metadata || []).find(tag => tag.kind === 'mention' && tag.profileId) || null
-    : null;
   // نسبة أبعاد الوسيط المخزنة مع الرابط عند النشر (4:5 / 3:4 / 9:16)
   const mediaAspect = postImages.length > 0
     ? (post.type === 'reel'
@@ -95,29 +90,8 @@ export default function PostCard({
             </div>
           )}
           <div className="min-w-0">
-            <UserIdentity
-              name={
-                <>
-                  <Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>
-                  {taggedMention?.profileId && (
-                    <>
-                      <span className="mx-1 font-normal text-zinc-400">و</span>
-                      <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="text-zinc-300 hover:underline">
-                        {taggedMentionDisplayName(taggedMention)}
-                      </Link>
-                    </>
-                  )}
-                </>
-              }
-              username={
-                taggedMention?.profileId ? (
-                  <>
-                    <Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username}</Link>
-                    <span className="mx-1 font-normal">و</span>
-                    <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">@{taggedMention.label}</Link>
-                  </>
-                ) : post.author?.username
-              }
+            <PostHeaderIdentity
+              post={post}
               nameClassName="font-semibold text-zinc-100"
               usernameClassName="text-xs text-zinc-400"
             />

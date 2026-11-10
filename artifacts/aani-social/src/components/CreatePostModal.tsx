@@ -99,6 +99,14 @@ export default function CreatePostModal({
     setTags(current => current.some(item => item.kind === tag.kind && item.href === tag.href)
       ? current
       : [...current, { ...tag, id }]);
+    if (tag.kind === 'mention') {
+      // أبقِ أداة الإشارة مفتوحة لاختيار أكثر من حساب قبل النشر
+      setTagInput('');
+      setMentionCandidates([]);
+      setMentionLoading(false);
+      setTagError('');
+      return;
+    }
     closeTagEditor();
   };
 

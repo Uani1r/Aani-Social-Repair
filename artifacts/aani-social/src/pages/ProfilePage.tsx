@@ -329,22 +329,83 @@ export default function ProfilePage({
       setTaggedError(null);
       try {
         if (!activeUserId) throw new Error('معرف المستخدم غير متوفر');
+        const ownerUsername = cleanUsername(person?.username);
         // فلتر JSONB آمن: containment لكائن واحد (وليس مصفوفة).
         // عامل cs ضد عمود jsonb مصفوفة يطابق أي عنصر فيه هو
-        // مجموعة شاملة من الكائن (أي وسم mention بنفس profileId)،
+        // مجموعة شاملة من الكائن (وسم mention بنفس profileId،
+        // أو وسام tagged_users الذي تحتوي مصفوفة معرفاته المستخدم)،
         // ومصدر الخطأ 22P02 السابق كان إرسال مصفوفة كائنات `[...]`
         // وهو صياغة JSON غير مقبولة لـ PostgREST.
         const mentionContainment = JSON.stringify({ kind: 'mention', profileId: activeUserId });
-        const { data, error } = await supabase
-          .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy')
-          .filter('post_metadata', 'cs', mentionContainment)
-          .neq('user_id', activeUserId)
-          .order('created_at', { ascending: false })
-          .limit(60);
-        if (error) throw error;
+        const taggedUsersContainment = JSON.stringify({ kind: 'tagged_users', profileIds: [activeUserId] });
+        const baseColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy';
 
-        const rows = (data || []) as unknown[];
+        const escapeLike = (value: string) => value.replace(/[%\\]/g, match => `\\${match}`);
+        // بحث الوصف عن @username فقط عند توفر اسم المستخدم
+        const captionQuery = ownerUsername
+          ? supabase
+              .from('posts')
+              .select(baseColumns)
+              .ilike('content', `%@${escapeLike(ownerUsername)}%`)
+              .neq('user_id', activeUserId)
+              .order('created_at', { ascending: false })
+              .limit(60)
+          : Promise.resolve(null);
+
+        // ثلاثة مسارات متوازية: وسم الإشارة، مصفوفة المعرفات المخزنة، و@username في الوصف
+        const [mentionResult, taggedUsersResult, captionResult] = await Promise.all([
+          supabase
+            .from('posts')
+            .select(baseColumns)
+            .filter('post_metadata', 'cs', mentionContainment)
+            .neq('user_id', activeUserId)
+            .order('created_at', { ascending: false })
+            .limit(60),
+          supabase
+            .from('posts')
+            .select(baseColumns)
+            .filter('post_metadata', 'cs', taggedUsersContainment)
+            .neq('user_id', activeUserId)
+            .order('created_at', { ascending: false })
+            .limit(60),
+          captionQuery,
+        ]);
+
+        const collectRows = (result: unknown): Record<string, unknown>[] => {
+          if (!result || typeof result !== 'object') return [];
+          const record = result as { data?: unknown; error?: unknown };
+          if (record.error) return [];
+          return Array.isArray(record.data) ? (record.data as Record<string, unknown>[]) : [];
+        };
+        // اعرض خطأً فقط إذا فشلت كل المسارات (مسار فاشل واحد لا يعطل التبويب)
+        const failedCount = [mentionResult, taggedUsersResult, captionResult]
+          .filter(result => Boolean(result) && typeof result === 'object' && (result as { error?: unknown }).error)
+          .length;
+        if (failedCount === 3) throw new Error('تعذر جلب المنشورات المشار فيها');
+
+        const merged = new Map<string, Record<string, unknown>>();
+        const addRows = (queryRows: Record<string, unknown>[]) => {
+          queryRows.forEach(row => {
+            if (typeof row.id === 'string') merged.set(row.id, row);
+          });
+        };
+        addRows(collectRows(mentionResult));
+        addRows(collectRows(taggedUsersResult));
+
+        // نتائج الوصف: تأكد من وجود @username كإشارة كاملة (وليس مطابقة جزئية مثل @qwe داخل @qwer)
+        const mentionRegex = ownerUsername
+          ? new RegExp(`@${ownerUsername.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![A-Za-z0-9_.\\u0600-\\u06FF])`, 'i')
+          : null;
+        if (mentionRegex) {
+          collectRows(captionResult).forEach(row => {
+            const rowId = typeof row.id === 'string' ? row.id : '';
+            if (!rowId || merged.has(rowId)) return;
+            const content = typeof row.content === 'string' ? row.content : '';
+            if (mentionRegex.test(content)) merged.set(rowId, row);
+          });
+        }
+
+        const rows = Array.from(merged.values()) as unknown[];
         const authorIds = [...new Set(rows
           .map(row => (row as Record<string, unknown>).user_id)
           .filter((id): id is string => typeof id === 'string' && Boolean(id)))];
@@ -385,7 +446,7 @@ export default function ProfilePage({
     return () => {
       active = false;
     };
-  }, [profileContentTab, activeUserId]);
+  }, [profileContentTab, activeUserId, person?.username]);
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';

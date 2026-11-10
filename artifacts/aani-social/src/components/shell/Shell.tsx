@@ -5,6 +5,7 @@ import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
 import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEventDetail } from '@/components/CallManager';
+import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
@@ -660,14 +661,8 @@ export default function Shell({
   // غلاف الفيديو المختار من شاشة المعاينة (يُرفع ويُحفظ كوسام cover في post_metadata)
   const [videoCoverFile, setVideoCoverFile] = useState<File | null>(null);
   const [videoCoverPreview, setVideoCoverPreview] = useState<string | null>(null);
-  // حساب الإشارة المختار من شاشة معاينة الفيديو
-  const [videoMention, setVideoMention] = useState<{
-    id: string;
-    username: string;
-    full_name: string;
-    display_name?: string | null;
-    avatar_url: string | null;
-  } | null>(null);
+  // حسابات الإشارة المختارة من شاشة معاينة الفيديو (إشارة متعددة)
+  const [videoMentions, setVideoMentions] = useState<VideoMentionPerson[]>([]);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -688,23 +683,22 @@ export default function Shell({
     }
   }, [isPublishFlowOpen]);
 
-  // وسوم مُهيّأة لشاشة إنشاء المنشور (إشارة اختيرت أثناء معاينة الفيديو)
-  const initialCreateTags = useMemo<PostMetadataTag[]>(() => {
-    if (!videoMention) return [];
+  // وسوم مُهيّأة لشاشة إنشاء المنشور (إشارات اختيرت أثناء معاينة الفيديو)
+  const initialCreateTags = useMemo<PostMetadataTag[]>(() => videoMentions.map(person => {
     // استخدم الاسم الظاهر الحقيقي مع تجاهل الأسماء الافتراضية (مثل "New member")
     const taggedName = displayName({
-      display_name: videoMention.display_name,
-      full_name: videoMention.full_name,
-      username: videoMention.username,
+      display_name: person.display_name,
+      full_name: person.full_name,
+      username: person.username,
     });
-    return [{
-      kind: 'mention',
-      label: videoMention.username,
-      href: `/profile/${videoMention.id}`,
-      profileId: videoMention.id,
+    return {
+      kind: 'mention' as const,
+      label: person.username,
+      href: `/profile/${person.id}`,
+      profileId: person.id,
       ...(taggedName ? { displayName: taggedName } : {}),
-    }];
-  }, [videoMention]);
+    };
+  }), [videoMentions]);
 
   // معاينات الملفات: إنشاء الروابط مرة واحدة لكل ملف مع تنظيفها بعد الاستخدام
   const filePreviews = useMemo(
@@ -875,7 +869,7 @@ export default function Shell({
     setVideoCrop(null);
     setCreateError('');
     clearVideoCover();
-    setVideoMention(null);
+    setVideoMentions([]);
     setShowVideoPreviewModal(true);
   };
 
@@ -891,8 +885,12 @@ export default function Shell({
     setVideoCoverPreview(previewUrl);
   };
 
-  const handleVideoMentionSelect = (person: { id: string; username: string; full_name: string; display_name?: string | null; avatar_url: string | null }) => {
-    setVideoMention(person);
+  const handleVideoMentionSelect = (person: VideoMentionPerson) => {
+    setVideoMentions(current => current.some(item => item.id === person.id) ? current : [...current, person]);
+  };
+
+  const handleVideoMentionDeselect = (personId: string) => {
+    setVideoMentions(current => current.filter(item => item.id !== personId));
   };
 
   const closeVideoPreview = () => {
@@ -903,7 +901,7 @@ export default function Shell({
     setFileType(null);
     setDestination('feed');
     clearVideoCover();
-    setVideoMention(null);
+    setVideoMentions([]);
   };
 
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
@@ -925,6 +923,15 @@ export default function Shell({
     const trim = videoTrim;
     const crop = videoCrop;
     const metadata = [...postMetadata];
+    // مصفوفة معرفات المشار إليهم الصريحة (UUIDs) تُخزَّن مع المنشور للسؤال السريع في تبويب «المشار فيها»
+    const taggedUserIds = Array.from(new Set(
+      metadata
+        .filter(tag => tag.kind === 'mention' && tag.profileId)
+        .map(tag => tag.profileId as string),
+    ));
+    const taggedUsersTag: PostMetadataTag | null = taggedUserIds.length > 0
+      ? { kind: 'tagged_users', label: 'إشارات', href: '', profileIds: taggedUserIds }
+      : null;
     // غلاف الفيديو المختار في المعاينة (يُرفع فقط عند نشر فيديو)
     const coverFile = mediaType === 'video' ? videoCoverFile : null;
     if (postDestination === 'reels' && mediaType !== 'video') {
@@ -953,7 +960,7 @@ export default function Shell({
       id: postId,
       user_id: userId,
       content,
-      post_metadata: metadata,
+      post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
       media_url: localMediaUrls[0] || null,
       media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
       type,
@@ -1016,8 +1023,12 @@ export default function Shell({
           }
         }
 
-        // الوسوم المخزنة: وسوم المحرر + وسام الغلاف إن وُجد
-        const storedMetadata = coverTag ? [...metadata, coverTag] : metadata;
+        // الوسوم المخزنة: وسوم المحرر + وسام tagged_users + وسام الغلاف إن وُجد
+        const storedMetadata = [
+          ...metadata,
+          ...(taggedUsersTag ? [taggedUsersTag] : []),
+          ...(coverTag ? [coverTag] : []),
+        ];
 
         const publishedPost: Post = {
           ...optimisticPost,
@@ -1063,10 +1074,12 @@ export default function Shell({
         ) {
           postError = (await supabase.from('posts').upsert({
             ...postPayload,
-            post_metadata: metadata,
+            // أعد المحاولة بلا وسام الغلاف مع الإبقاء على وسوم الإشارة وtagged_users
+            post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
           }, { onConflict: 'id' })).error;
           if (!postError) {
-            updatePendingPost(postId, { post: { ...publishedPost, post_metadata: metadata }, error: null });
+            const metadataWithoutCover = [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])];
+            updatePendingPost(postId, { post: { ...publishedPost, post_metadata: metadataWithoutCover }, error: null });
           }
         }
 
@@ -1127,7 +1140,7 @@ export default function Shell({
     setFileType(null);
     setDestination('feed');
     clearVideoCover();
-    setVideoMention(null);
+    setVideoMentions([]);
     setShowCreateModal(false);
     setIsSubmitting(false);
     setCreateError('');
@@ -1159,7 +1172,7 @@ export default function Shell({
         onClosePublishOptionsSheet={() => setShowPublishOptionsSheet(false)}
         onCreateTextPost={() => {
           setDestination('feed');
-          setVideoMention(null);
+          setVideoMentions([]);
           setShowCreateModal(true);
         }}
         onSelectPublishImages={handleSelectPublishImages}
@@ -1179,6 +1192,8 @@ export default function Shell({
         onVideoCropChange={setVideoCrop}
         onVideoCoverChange={handleVideoCoverChange}
         onVideoMentionSelect={handleVideoMentionSelect}
+        onVideoMentionDeselect={handleVideoMentionDeselect}
+        initialVideoMentions={videoMentions}
         onCloseVideoPreview={closeVideoPreview}
         onNextVideoPreview={continueToVideoCaption}
         showCreateModal={showCreateModal}
@@ -1204,7 +1219,7 @@ export default function Shell({
         onPublish={(tagContent, postDestination) => void handlePublish(tagContent, postDestination)}
         onCloseCreatePost={() => {
           setShowCreateModal(false);
-          setVideoMention(null);
+          setVideoMentions([]);
           if (fileType === 'video') {
             setSelectedFiles([]);
             setVideoTrim(null);

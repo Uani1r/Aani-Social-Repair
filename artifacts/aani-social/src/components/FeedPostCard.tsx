@@ -10,11 +10,11 @@ import LikesListSheet from './LikesListSheet';
 import RepostIcon from './RepostIcon';
 import FeedReelViewer from './FeedReelViewer';
 import ShareSheet from './ShareSheet';
-import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import { CommentsSkeleton } from './Skeletons';
 import PostImagePreview from './PostImagePreview';
+import PostHeaderIdentity from './PostHeaderIdentity';
 import PostVideoPreview from './PostVideoPreview';
 import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
@@ -23,7 +23,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
-import { displayName, formatDate, getPostCoverUrl, taggedMentionDisplayName, type Post, type Profile } from '@/lib/types';
+import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 
 type FeedPostComment = {
@@ -120,10 +120,6 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const activeVideoAspectRatio = post.type === 'reel' ? getVideoAspectRatio(parseVideoCrop(activeVideoUrl || '')) : undefined;
   // رابط غلاف الفيديو المختار عند النشر (يظهر في الشبكة وكصورة poster قبل التشغيل)
   const postCoverUrl = getPostCoverUrl(post);
-  // تنسيق الإشارة في رأس المنشور (غير متاح للمنشورات النصية)
-  const taggedMention = post.type !== 'text'
-    ? (post.post_metadata || []).find(tag => tag.kind === 'mention' && tag.profileId) || null
-    : null;
   // نسبة أبعاد الصورة المخزنة مع الرابط عند النشر (4:5 / 3:4 / 9:16)
   const imageMediaAspect = getImageMediaAspectRatio(urls[currentImageIndex] || '');
   const fullScreenPost = useMemo(() => ({
@@ -355,34 +351,12 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           <Avatar profile={post.author} large={!isMainFeedVideo} />
         </Link>
         <div className={`flex min-w-0 flex-1 items-start gap-2 ${isMainFeedVideo ? 'video-post-identity-row' : ''}`}>
-          <UserIdentity
-            name={
-              <>
-                <Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>
-                {taggedMention?.profileId && (
-                  <>
-                    <span className="mx-1 font-normal text-zinc-400">و</span>
-                    <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="text-zinc-300 hover:underline">
-                      {taggedMentionDisplayName(taggedMention)}
-                    </Link>
-                  </>
-                )}
-              </>
-            }
-            username={
-              taggedMention?.profileId ? (
-                <>
-                  <Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username || 'user'}</Link>
-                  <span className="mx-1 font-normal">و</span>
-                  <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">@{taggedMention.label}</Link>
-                </>
-              ) : (
-                <Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username || 'user'}</Link>
-              )
-            }
+          <PostHeaderIdentity
+            post={post}
             className={`min-w-0 flex-1 ${isMainFeedVideo ? 'video-post-identity' : ''}`}
             nameClassName="text-sm font-bold text-white"
             usernameClassName="text-xs text-zinc-500"
+            moreTriggerClass="mx-0.5 inline-flex shrink-0 items-center rounded-full px-0.5 align-middle text-zinc-400 transition hover:text-white"
           />
           {isMainFeedVideo ? (
             <div className="video-post-top-meta">

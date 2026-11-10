@@ -1,10 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
-import { Link } from 'wouter';
 import {
   Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import PostHeaderIdentity from '@/components/PostHeaderIdentity';
 import RepostIcon from '@/components/RepostIcon';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
@@ -13,13 +13,12 @@ import PostOptionsSheet from '@/components/PostOptionsSheet';
 import PostPrivacySheet from '@/components/PostPrivacySheet';
 import ShareSheet from '@/components/ShareSheet';
 import LikesListSheet from '@/components/LikesListSheet';
-import UserIdentity from '@/components/UserIdentity';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { displayName, formatDate, getPostCoverUrl, taggedMentionDisplayName, type Post } from '@/lib/types';
+import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
@@ -405,10 +404,6 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     onRefresh();
   };
 
-  // تنسيق الإشارة في رأس المنشور (غير متاح للمنشورات النصية)
-  const taggedMention = post.type !== 'text'
-    ? (post.post_metadata || []).find(tag => tag.kind === 'mention' && tag.profileId) || null
-    : null;
   const postCoverUrl = getPostCoverUrl(post);
 
   return (
@@ -548,31 +543,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       <div className="reel-bottom-info" dir="rtl">
         <div className="reel-account-row">
           <span className="reel-avatar-frame"><Avatar profile={post.author} /></span>
-          <UserIdentity
-            name={
-              <>
-                <Link href={`/profile/${post.user_id}`} className="hover:underline">{displayName(post.author)}</Link>
-                {taggedMention?.profileId && (
-                  <>
-                    <span className="mx-1 font-normal">و</span>
-                    <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">
-                      {taggedMentionDisplayName(taggedMention)}
-                    </Link>
-                  </>
-                )}
-              </>
-            }
-            username={
-              taggedMention?.profileId ? (
-                <>
-                  <Link href={`/profile/${post.user_id}`} className="hover:underline">{post.author?.username}</Link>
-                  <span className="mx-1 font-normal">و</span>
-                  <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">@{taggedMention.label}</Link>
-                </>
-              ) : (
-                post.author?.username
-              )
-            }
+          <PostHeaderIdentity
+            post={post}
             className="reel-account-identity"
             nameClassName="reel-account-name"
             usernameClassName="reel-account-handle"

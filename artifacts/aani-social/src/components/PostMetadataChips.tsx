@@ -19,9 +19,13 @@ export default function PostMetadataChips({
   onMentionClick,
   hideMentions = false,
 }: PostMetadataChipsProps) {
-  // وسام الغلاف وسيلة تخزين للصورة المصغرة وليس شريحة معروضة،
+  // وسام الغلاف ووسام tagged_users وسيلة تخزين وليست شرائح معروضة،
   // وشرائح الإشارة تُخفى للمنشورات غير النصية (الإشارة تظهر في الرأس)
-  const visibleTags = tags.filter(tag => tag.kind !== 'cover' && !(hideMentions && tag.kind === 'mention'));
+  const visibleTags = tags.filter(tag =>
+    tag.kind !== 'cover'
+    && tag.kind !== 'tagged_users'
+    && !(hideMentions && tag.kind === 'mention'),
+  );
   if (visibleTags.length === 0) return null;
 
   return (

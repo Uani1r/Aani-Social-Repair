@@ -37,10 +37,12 @@ export type Profile = {
 };
 
 export type PostMetadataTag = {
-  kind: 'location' | 'link' | 'mention' | 'cover';
+  kind: 'location' | 'link' | 'mention' | 'cover' | 'tagged_users';
   label: string;
   href: string;
   profileId?: string;
+  /** معرفات جميع المشار إليهم كمصفوفة UUIDs صريحة (وسام tagged_users) */
+  profileIds?: string[];
   /** اسم العرض المحفوظ لحساب الإشارة (يُستخدم في رأس المنشور) */
   displayName?: string;
 };
@@ -69,7 +71,22 @@ export const normalizePostMetadata = (value: unknown): PostMetadataTag[] => {
     const row = item as Record<string, unknown>;
     const kind = row.kind;
     const label = typeof row.label === 'string' ? row.label.trim() : '';
-    if (!label || (kind !== 'location' && kind !== 'link' && kind !== 'mention' && kind !== 'cover')) return [];
+    if (!label || (kind !== 'location' && kind !== 'link' && kind !== 'mention' && kind !== 'cover' && kind !== 'tagged_users')) return [];
+
+    if (kind === 'tagged_users') {
+      // مصفوفة معرفات صريحة: تُقبل UUIDs الصالحة فقط
+      const ids = Array.isArray(row.profileIds)
+        ? (row.profileIds as unknown[]).filter((value): value is string =>
+            typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value))
+        : [];
+      if (ids.length === 0) return [];
+      return [{
+        kind,
+        label: label || 'إشارات',
+        href: typeof row.href === 'string' ? row.href : '',
+        profileIds: Array.from(new Set(ids)).slice(0, 50),
+      }];
+    }
 
     if (kind === 'mention') {
       const profileId = typeof row.profileId === 'string' ? row.profileId.trim() : '';
@@ -157,6 +174,30 @@ export const getPostCoverUrl = (post: Pick<Post, 'post_metadata'>): string | nul
  */
 export const taggedMentionDisplayName = (tag: PostMetadataTag): string =>
   displayName({ full_name: tag.displayName || '', username: tag.label });
+
+/** قائمة الإشارات الفريدة في المنشور بالترتيب المخزن */
+export const getPostMentions = (post: Pick<Post, 'post_metadata'>): PostMetadataTag[] => {
+  const seen = new Set<string>();
+  const mentions: PostMetadataTag[] = [];
+  for (const tag of post.post_metadata || []) {
+    if (tag.kind !== 'mention' || !tag.profileId || seen.has(tag.profileId)) continue;
+    seen.add(tag.profileId);
+    mentions.push(tag);
+  }
+  return mentions;
+};
+
+/** كل معرفات المشار إليهم في المنشور (من وسوم mention ومن مصفوفة tagged_users الصريحة) */
+export const getPostTaggedUserIds = (post: Pick<Post, 'post_metadata'>): string[] => {
+  const ids = new Set<string>();
+  for (const tag of post.post_metadata || []) {
+    if (tag.kind === 'mention' && tag.profileId) ids.add(tag.profileId);
+    if (tag.kind === 'tagged_users' && Array.isArray(tag.profileIds)) {
+      tag.profileIds.forEach(id => ids.add(id));
+    }
+  }
+  return Array.from(ids);
+};
 
 export type PostRow = Pick<
   Post,

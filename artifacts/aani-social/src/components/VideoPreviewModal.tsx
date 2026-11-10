@@ -5,7 +5,7 @@ import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { cleanUsername, displayName, type VideoAspectRatio, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
+import { displayName, type VideoAspectRatio, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { DEFAULT_VIDEO_CROP, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
 
 /** شخص اختير للإشارة إليه من شاشة معاينة الفيديو */
@@ -32,6 +32,10 @@ type VideoPreviewModalProps = {
   onCoverChange?: (cover: File | null, previewUrl: string | null) => void;
   /** يُستدعى عند اختيار حساب للإشارة إليه في المنشور */
   onMentionSelect?: (person: VideoMentionPerson) => void;
+  /** يُستدعى عند إلغاء إشارة حساب اختير مسبقاً */
+  onMentionDeselect?: (personId: string) => void;
+  /** إشارات محفوظة مسبقاً لاستعادتها عند إعادة الفتح */
+  initialMentions?: VideoMentionPerson[];
   onClose: () => void;
   onNext: (range: VideoTrimRange, crop: VideoCropTransform) => void;
 };
@@ -78,6 +82,8 @@ export default function VideoPreviewModal({
   onCropChange,
   onCoverChange,
   onMentionSelect,
+  onMentionDeselect,
+  initialMentions = [],
   onClose,
   onNext,
 }: VideoPreviewModalProps) {
@@ -91,9 +97,13 @@ export default function VideoPreviewModal({
   const initialCropRef = useRef(initialCrop);
   const activeRangeRef = useRef<VideoTrimRange | null>(null);
   const cancelCoverEditingRef = useRef<() => void>(() => {});
+  const closeMentionPanelRef = useRef<() => void>(() => {});
   // معاينة الغلاف المحفوظ يُقرأ عبر مرجع حتى لا يُعاد ضبط الشاشة عند تغيّره بعد الحفظ
   const initialCoverPreviewRef = useRef(initialCoverPreview);
   initialCoverPreviewRef.current = initialCoverPreview;
+  // إشارات محفوظة تُقرأ عبر مرجع عند إعادة ضبط الشاشة فقط
+  const initialMentionsRef = useRef<VideoMentionPerson[]>(initialMentions);
+  initialMentionsRef.current = initialMentions;
   const [duration, setDuration] = useState(0);
   const [savedRange, setSavedRange] = useState<VideoTrimRange | null>(null);
   const [draftRange, setDraftRange] = useState<VideoTrimRange | null>(null);
@@ -117,6 +127,7 @@ export default function VideoPreviewModal({
   const [mentionSearching, setMentionSearching] = useState(false);
   const [mentionError, setMentionError] = useState('');
   const [mentionNotice, setMentionNotice] = useState('');
+  const [pickedMentions, setPickedMentions] = useState<VideoMentionPerson[]>([]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -126,7 +137,7 @@ export default function VideoPreviewModal({
       if (isTrimming) setIsTrimming(false);
       else if (isCropping) setIsCropping(false);
       else if (isCoverEditing) cancelCoverEditingRef.current();
-      else if (isMentionPicking) setIsMentionPicking(false);
+      else if (isMentionPicking) closeMentionPanelRef.current();
       else onClose();
     };
     window.addEventListener('keydown', closeOnEscape);
@@ -167,13 +178,14 @@ export default function VideoPreviewModal({
     setDraftCover(null);
     setDraftCoverPreview(initialCoverPreviewRef.current);
     setIsCoverEditing(false);
-    // الإشارة: تصفير لوحة البحث
+    // الإشارة: تصفير لوحة البحث مع استعادة المحفوظ من الحاوية الأب
     setIsMentionPicking(false);
     setMentionQuery('');
     setMentionResults([]);
     setMentionSearching(false);
     setMentionError('');
     setMentionNotice('');
+    setPickedMentions(initialMentionsRef.current);
   }, [open, src]);
 
   useEffect(() => {
@@ -536,14 +548,27 @@ export default function VideoPreviewModal({
     setDraftCoverPreview(null);
   };
 
-  const pickMention = (person: VideoMentionPerson) => {
+  const toggleMention = (person: VideoMentionPerson) => {
+    const alreadyPicked = pickedMentions.some(item => item.id === person.id);
+    if (alreadyPicked) {
+      setPickedMentions(current => current.filter(item => item.id !== person.id));
+      onMentionDeselect?.(person.id);
+      return;
+    }
+    setPickedMentions(current => [...current, person]);
     onMentionSelect?.(person);
+  };
+
+  const closeMentionPanel = () => {
     setIsMentionPicking(false);
     setMentionQuery('');
     setMentionResults([]);
     setMentionError('');
-    setMentionNotice(`@${cleanUsername(person.username)}`);
+    setMentionNotice(pickedMentions.length > 0
+      ? `سيتم الإشارة إلى ${pickedMentions.length} ${pickedMentions.length === 1 ? 'شخص' : 'أشخاص'} في المنشور.`
+      : '');
   };
+  closeMentionPanelRef.current = closeMentionPanel;
 
   const handleTimelinePointerDown = (event: ReactPointerEvent<HTMLButtonElement>, part: 'start' | 'end') => {
     draggingTrimRef.current = part;
@@ -937,8 +962,15 @@ export default function VideoPreviewModal({
       {isMentionPicking && (
         <section className="absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-1/2 w-[min(94vw,420px)] -translate-x-1/2 rounded-3xl border border-white/10 bg-[#1a1b22]/95 p-3 shadow-2xl backdrop-blur-xl" aria-label="الإشارة إلى حساب">
           <div className="mb-2 flex items-center justify-between" dir="rtl">
-            <span className="text-xs font-semibold text-white/80">الإشارة إلى حساب</span>
-            <button type="button" aria-label="إغلاق اختيار الإشارة" onClick={() => setIsMentionPicking(false)} className="rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-white/80">الإشارة إلى حساب</span>
+              {pickedMentions.length > 0 && (
+                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] text-white/70">
+                  {pickedMentions.length} محدد
+                </span>
+              )}
+            </div>
+            <button type="button" aria-label="إغلاق اختيار الإشارة" onClick={closeMentionPanel} className="rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
               <X size={15} />
             </button>
           </div>
@@ -954,24 +986,34 @@ export default function VideoPreviewModal({
           </div>
           <div className="mt-2 max-h-44 overflow-y-auto">
             {mentionSearching && <ListSkeleton count={2} compact className="py-1" />}
-            {!mentionSearching && mentionResults.map(person => (
-              <button
-                key={person.id}
-                type="button"
-                onClick={() => pickMention(person)}
-                dir="rtl"
-                className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-right transition hover:bg-white/10"
-              >
-                <Avatar profile={person} />
-                <UserIdentity
-                  name={displayName(person)}
-                  username={person.username}
-                  className="min-w-0 flex-1"
-                  nameClassName="text-xs font-semibold text-white"
-                  usernameClassName="text-[10px] text-white/50"
-                />
-              </button>
-            ))}
+            {!mentionSearching && mentionResults.map(person => {
+              const picked = pickedMentions.some(item => item.id === person.id);
+              return (
+                <button
+                  key={person.id}
+                  type="button"
+                  onClick={() => toggleMention(person)}
+                  dir="rtl"
+                  className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-right transition hover:bg-white/10"
+                >
+                  <Avatar profile={person} />
+                  <UserIdentity
+                    name={displayName(person)}
+                    username={person.username}
+                    className="min-w-0 flex-1"
+                    nameClassName="text-xs font-semibold text-white"
+                    usernameClassName="text-[10px] text-white/50"
+                  />
+                  <span
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border transition ${
+                      picked ? 'border-white bg-white text-[#121212]' : 'border-white/30 text-transparent'
+                    }`}
+                  >
+                    <Check size={13} />
+                  </span>
+                </button>
+              );
+            })}
             {!mentionSearching && mentionQuery.trim() && mentionResults.length === 0 && !mentionError && (
               <p className="py-3 text-center text-xs text-white/45">لا توجد حسابات مطابقة</p>
             )}

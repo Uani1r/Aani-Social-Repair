@@ -32,6 +32,8 @@ type ShellOverlayControlsProps = {
   onVideoCropChange: (crop: VideoCropTransform) => void;
   onVideoCoverChange: (cover: File | null, previewUrl: string | null) => void;
   onVideoMentionSelect: (person: VideoMentionPerson) => void;
+  onVideoMentionDeselect: (personId: string) => void;
+  initialVideoMentions: VideoMentionPerson[];
   onCloseVideoPreview: () => void;
   onNextVideoPreview: (range: VideoTrimRange, crop: VideoCropTransform) => void;
   showCreateModal: boolean;
@@ -90,6 +92,8 @@ export default function ShellOverlayControls({
   onVideoCropChange,
   onVideoCoverChange,
   onVideoMentionSelect,
+  onVideoMentionDeselect,
+  initialVideoMentions,
   onCloseVideoPreview,
   onNextVideoPreview,
   showCreateModal,
@@ -156,6 +160,8 @@ export default function ShellOverlayControls({
         onCropChange={onVideoCropChange}
         onCoverChange={onVideoCoverChange}
         onMentionSelect={onVideoMentionSelect}
+        onMentionDeselect={onVideoMentionDeselect}
+        initialMentions={initialVideoMentions}
         onClose={onCloseVideoPreview}
         onNext={onNextVideoPreview}
       />
