@@ -7813,7 +7813,8 @@ select,
   position: relative;
   overflow: hidden;
   background: rgba(255, 255, 255, 0.07);
-  border-radius: 8px;
+  /* لا نُجبر نصف قطر هنا حتى لا يلغي rounded-full للصور
+     الشخصية: القطر يُحدَّد عبر كلاسات Tailwind لكل عنصر. */
 }
 
 .skeleton-box::after {

@@ -11,7 +11,7 @@ export function SkeletonBlock({ className, ...props }: HTMLAttributes<HTMLDivEle
   return (
     <div
       aria-hidden="true"
-      className={cn('skeleton-box', className)}
+      className={cn('skeleton-box rounded-lg', className)}
       {...props}
     />
   );
@@ -34,7 +34,7 @@ export function FeedSkeleton({ count = 3, className }: { count?: number; classNa
       {Array.from({ length: count }, (_, index) => (
         <article key={index} className="mx-auto w-full max-w-lg overflow-hidden border-b border-zinc-900 bg-[#0b0b0d] sm:rounded-2xl sm:border sm:border-zinc-900">
           <div className="flex items-center gap-3 px-4 py-3">
-            <SkeletonCircle className="h-10 w-10 shrink-0" />
+            <SkeletonCircle className="h-12 w-12 shrink-0" />
             <div className="min-w-0 flex-1 space-y-2">
               <SkeletonLine width="w-24" />
               <SkeletonLine width="w-16" className="h-2.5 opacity-60" />
@@ -67,11 +67,11 @@ export function ProfileSkeleton({ className }: { className?: string }) {
       aria-label="جارٍ تحميل الملف الشخصي"
       dir="rtl"
     >
-      <SkeletonBlock className="h-36 w-full rounded-none" />
+      <SkeletonBlock className="h-[135px] w-full rounded-none" />
       <div className="px-4">
-        <div className="-mt-10 flex items-end justify-between">
-          <SkeletonCircle className="h-24 w-24 shrink-0 border-4 border-black" />
-          <SkeletonBlock className="h-8 w-24 rounded-full" />
+        <div className="-mt-11 flex items-end justify-between">
+          <SkeletonCircle className="h-[82px] w-[82px] shrink-0 border-[3px] border-black ring-2 ring-black" />
+          <SkeletonBlock className="h-9 w-[85px] rounded-full" />
         </div>
         <div className="mt-4 space-y-2">
           <SkeletonLine width="w-36" className="h-4" />
@@ -138,7 +138,7 @@ export function CommentsSkeleton({ count = 4, compact = false, className }: { co
     >
       {Array.from({ length: count }, (_, index) => (
         <div key={index} className="flex items-start gap-3">
-          <SkeletonCircle className={cn('shrink-0', compact ? 'h-6 w-6' : 'h-10 w-10')} />
+          <SkeletonCircle className={cn('shrink-0', compact ? 'h-6 w-6' : 'h-9 w-9')} />
           <div className={cn('min-w-0 flex-1 space-y-2', compact ? 'pt-0.5' : 'pt-1')}>
             <SkeletonLine width="w-20" className={compact ? 'h-2' : ''} />
             <SkeletonLine width={widths[index % widths.length]} className={compact ? 'h-2' : ''} />
@@ -186,7 +186,7 @@ export function NotificationsSkeleton({ count = 5, className }: { count?: number
 }
 
 /** هيكل قائمة أشخاص (بحث، طلبات متابعة، إعجابات، مشاهدين...): دائرة + سطران متدرجان */
-export function ListSkeleton({ count = 5, compact = false, className }: { count?: number; compact?: boolean; className?: string }) {
+export function ListSkeleton({ count = 5, compact = false, avatarClass, className }: { count?: number; compact?: boolean; avatarClass?: string; className?: string }) {
   const widths = ['w-3/4', 'w-1/2', 'w-2/3', 'w-5/6'];
   return (
     <div
@@ -196,7 +196,7 @@ export function ListSkeleton({ count = 5, compact = false, className }: { count?
     >
       {Array.from({ length: count }, (_, index) => (
         <div key={index} className="flex items-center gap-3 px-2 py-1">
-          <SkeletonCircle className={cn('shrink-0', compact ? 'h-8 w-8' : 'h-12 w-12')} />
+          <SkeletonCircle className={cn('shrink-0', compact ? 'h-8 w-8' : 'h-12 w-12', avatarClass)} />
           <div className="min-w-0 flex-1 space-y-2">
             <SkeletonLine width="w-28" className={compact ? 'h-2.5' : ''} />
             <SkeletonLine width={widths[(index + 1) % widths.length]} className={compact ? 'h-2 opacity-60' : 'h-2.5 opacity-60'} />

@@ -355,7 +355,7 @@ export default function FollowRequestsSection({
 
         <div className="flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 py-4" style={{ paddingBottom: 'max(24px, env(safe-area-inset-bottom))' }}>
           {error && <p role="alert" className="rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">{error}</p>}
-          {loading && <ListSkeleton count={4} className="px-2" />}
+          {loading && <ListSkeleton count={4} avatarClass="h-14 w-14" className="px-2" />}
           {!loading && visibleRequests.length === 0 && <p className="py-8 text-center text-sm text-[#888]">لا توجد طلبات متابعة حالياً.</p>}
           {visibleRequests.map(request => {
             const name = displayName(request.profile);

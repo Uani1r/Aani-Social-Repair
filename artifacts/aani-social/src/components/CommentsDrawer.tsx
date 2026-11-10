@@ -235,6 +235,18 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // عند إغلاق الدرج (Unmount) يجب أن يعود تمرير الصفحة فوراً:
+  // شبكة أمان إلزامية إن بقي body مقفلاً بلا أي حوار مفتوح آخر.
+  useEffect(() => () => {
+    const remainingOpenDialog = Boolean(document.querySelector(
+      '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+    ));
+    if (!remainingOpenDialog && document.body.style.overflow === 'hidden') {
+      document.body.style.overflow = 'unset';
+      document.body.style.overscrollBehavior = '';
+    }
+  }, []);
+
   // إزالة الاعتمادية الحركية لتجنب الحلقة اللانهائية
   const loadComments = useCallback(async (showLoadingSpinner = true) => {
     if (!postId) return;

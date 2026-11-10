@@ -292,7 +292,7 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
           {loading ? (
-            <ListSkeleton count={6} />
+            <ListSkeleton count={6} compact />
           ) : error ? (
             <p className="py-8 text-center text-xs text-zinc-400">تعذر تحميل قائمة الإعجابات.</p>
           ) : users.length === 0 ? (

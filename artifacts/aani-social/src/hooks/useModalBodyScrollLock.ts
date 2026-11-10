@@ -35,7 +35,8 @@ export function useModalBodyScrollLock() {
     const unlock = (scheduleRestore = true) => {
       if (!locked) return;
       locked = false;
-      body.style.overflow = previousBodyOverflow;
+      // 'unset' بدلاً من '' لضمان إعادة تفعيل التمرير دائماً
+      body.style.overflow = previousBodyOverflow || 'unset';
       body.style.overscrollBehavior = previousBodyOverscroll;
       restorePageScroll();
       if (scheduleRestore) scheduleScrollRestore(false);
@@ -88,6 +89,15 @@ export function useModalBodyScrollLock() {
       unlockFrame = null;
       cancelRestoreFrame();
       unlock(false);
+      // شبكة أمان إلزامية عند الإغلاق/العودة للبروفايل: حتى لو تعطل
+      // مسار المراقب (MutationObserver) يجب ألا يبقى body مقفلاً أبداً،
+      // وإلا يتجمد تمرير الصفحة بعد مغادرة عارض المنشورات أو مشغل الريلز.
+      const remainingOpenDialog = Boolean(document.querySelector(OPEN_DIALOG_SELECTOR));
+      if (!remainingOpenDialog && body.style.overflow === 'hidden') {
+        document.body.style.overflow = 'unset';
+        document.body.style.overscrollBehavior = '';
+        restorePageScroll();
+      }
     };
   }, []);
 }
