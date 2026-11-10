@@ -391,6 +391,10 @@ body {
   z-index: 1101;
 }
 
+.profile-reels-player {
+  z-index: 1103;
+}
+
 [role="dialog"][aria-modal="true"] {
   overscroll-behavior: contain;
 }

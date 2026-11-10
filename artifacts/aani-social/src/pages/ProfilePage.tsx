@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
 import ProfileFeedViewer from '@/components/ProfileFeedViewer';
+import ProfileReelsPlayer from '@/components/ProfileReelsPlayer';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -135,6 +136,10 @@ function orderOwnedPostsInProfileSlots(posts: Post[], ownerId: string, orderedId
   ));
 }
 
+function isProfileReel(post: Post): boolean {
+  return post.type === 'reel' || getPostDestination(post) === 'reels';
+}
+
 export default function ProfilePage({
   targetUserId,
   currentUserId,
@@ -168,6 +173,7 @@ export default function ProfilePage({
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
+  const [reelsPlayerPostId, setReelsPlayerPostId] = useState<string | null>(null);
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -2088,7 +2094,10 @@ export default function ProfilePage({
                 <button
                   key={post.id}
                   type="button"
-                  onClick={() => setFeedViewerPostId(post.id)}
+                  onClick={() => {
+                    if (isProfileReel(post)) setReelsPlayerPostId(post.id);
+                    else setFeedViewerPostId(post.id);
+                  }}
                   aria-label={isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
                   className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
                 >
@@ -2117,14 +2126,34 @@ export default function ProfilePage({
           </div>
         );
       })()}
-      {feedViewerPostId && displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text') && (
+      {feedViewerPostId && displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post)) && (
         <ProfileFeedViewer
-          posts={displayProfilePosts.filter(post => post.type !== 'text')}
+          posts={displayProfilePosts.filter(post => post.type !== 'text' && !isProfileReel(post))}
           initialPostId={feedViewerPostId}
           currentUserId={currentUserId}
           onOpenComments={onOpenComments}
           onRefresh={() => void refresh()}
           onClose={() => setFeedViewerPostId(null)}
+        />
+      )}
+      {reelsPlayerPostId && displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post)) && (
+        <ProfileReelsPlayer
+          posts={displayProfilePosts.filter(isProfileReel)}
+          initialPostId={reelsPlayerPostId}
+          currentUserId={currentUserId}
+          onOpenComments={onOpenComments}
+          onRefresh={() => void refresh()}
+          onClose={() => setReelsPlayerPostId(null)}
+          trailingAccountControl={own ? undefined : (
+            <button
+              type="button"
+              onClick={() => void toggleFollow()}
+              disabled={profileActionBusy}
+              className="ms-auto shrink-0 rounded-full border border-white/50 px-3 py-1 text-[11px] font-bold text-white transition hover:bg-white/20 disabled:opacity-50"
+            >
+              {isFollowing ? 'أتابع' : followRequestSent ? 'طلب مرسل' : 'متابعة'}
+            </button>
+          )}
         />
       )}
       <ProfileHighlightsManager

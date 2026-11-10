@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type SyntheticEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
 import {
   Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
@@ -32,7 +32,7 @@ const formatReelTime = (value: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false }: {
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
@@ -45,6 +45,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   onPlaybackTimeChange?: (currentTime: number) => void;
   showCreatedAt?: boolean;
   captionSheet?: boolean;
+  trailingAccountControl?: ReactNode;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLElement>(null);
@@ -531,6 +532,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             nameClassName="reel-account-name"
             usernameClassName="reel-account-handle"
           />
+          {trailingAccountControl}
           {showCreatedAt && <time className="reel-created-at">{formatDate(post.created_at)}</time>}
         </div>
         {post.content && (captionSheet ? (
