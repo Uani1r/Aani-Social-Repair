@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Eye, EyeOff, Flag, MapPin, MessageCircle, X } from 'lucide-react';
+import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Flag, MapPin, MessageCircle, Play, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -17,7 +17,7 @@ import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
-import { cleanUsername, displayName, type Post, type Profile } from '@/lib/types';
+import { cleanUsername, displayName, getPostDestination, type Post, type Profile } from '@/lib/types';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
@@ -2050,23 +2050,70 @@ export default function ProfilePage({
 
       <ProfileTabs />
 
-      <div className="mt-4 flex flex-col gap-4 p-4">
-        {loading && Array.from({ length: 4 }, (_, index) => <div key={`loading-${index}`} className="h-32 w-full rounded-xl bg-neutral-900" />)}
-        {!loading && error && (
+      {loading && (
+        <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
+          {Array.from({ length: 9 }, (_, index) => <div key={`loading-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
+        </div>
+      )}
+      {!loading && error && (
+        <div className="mt-4 px-4">
           <div role="alert" className="rounded-xl border border-[#2F3336] bg-neutral-900 p-5 text-center text-sm text-zinc-300">
             <p>{error}</p>
             <button type="button" onClick={() => void refresh()} className="mt-3 rounded-full bg-white px-4 py-2 font-semibold text-black">إعادة المحاولة</button>
           </div>
-        )}
-        {!loading && !error && posts.length === 0 && Array.from({ length: 4 }, (_, index) => <div key={`empty-${index}`} className="h-32 w-full rounded-xl bg-neutral-900" />)}
-        {!loading && !error && posts.length > 0 && (
-          <div className="posts-list space-y-3">
-            {displayProfilePosts.map(post => (
-              <FeedPostCard key={post.id} post={post} currentUserId={currentUserId} onRefresh={() => void refresh()} onOpenComments={onOpenComments} />
-            ))}
+        </div>
+      )}
+      {!loading && !error && posts.length === 0 && (
+        <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
+          {Array.from({ length: 9 }, (_, index) => <div key={`empty-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
+        </div>
+      )}
+      {!loading && !error && posts.length > 0 && (() => {
+        // شبكة إنستغرام: 3 أعمدة — الصور والفيديوهات والريلز فقط،
+        // والمنشورات الكتابية (text) مستبعدة كلياً من الشبكة.
+        const mediaPosts = displayProfilePosts.filter(post => post.type !== 'text');
+        if (!mediaPosts.length) {
+          return <p className="mt-6 text-center text-sm text-zinc-400">لا توجد صور أو فيديوهات منشورة.</p>;
+        }
+        return (
+          <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
+            {mediaPosts.map(post => {
+              const isReel = post.type === 'reel' || getPostDestination(post) === 'reels';
+              const mediaUrls = post.media_urls?.length ? post.media_urls : post.media_url ? [post.media_url] : [];
+              const cover = mediaUrls[0] || '';
+              const isMultiImage = mediaUrls.length > 1;
+              return (
+                <Link
+                  key={post.id}
+                  href={isReel ? `/reels?openReel=${encodeURIComponent(post.id)}` : `/post/${encodeURIComponent(post.id)}`}
+                  aria-label={isReel ? 'فتح الريل في مشغّل الريلز' : 'فتح المنشور'}
+                  className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
+                >
+                  {isReel ? (
+                    cover ? (
+                      <video src={cover} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                    ) : (
+                      <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>
+                    )
+                  ) : cover ? (
+                    <img src={cover} alt={post.content.slice(0, 80)} loading="lazy" className="h-full w-full object-cover" />
+                  ) : (
+                    <span className="grid h-full w-full place-items-center text-neutral-600"><Camera size={24} aria-hidden="true" /></span>
+                  )}
+                  {isReel && (
+                    <span aria-hidden="true" className="absolute right-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="4" width="20" height="16" rx="4" /><path d="M10 9.2v5.6a.8.8 0 0 0 1.22.68l4.4-2.8a.8.8 0 0 0 0-1.36l-4.4-2.8A.8.8 0 0 0 10 9.2Z" fill="black" /></svg>
+                    </span>
+                  )}
+                  {isMultiImage && (
+                    <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
+                  )}
+                </Link>
+              );
+            })}
           </div>
-        )}
-      </div>
+        );
+      })()}
       <ProfileHighlightsManager
         open={showHighlightsManager}
         onClose={() => setShowHighlightsManager(false)}
