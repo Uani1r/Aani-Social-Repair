@@ -46,7 +46,7 @@ function SavedPostTile({ post, onOpen }: { post: Post; onOpen: (post: Post) => v
         onOpen(post);
       }}
       aria-label={`فتح منشور ${authorName}`}
-      className="group relative aspect-square w-full min-w-0 overflow-hidden rounded-xl border border-white/[0.08] bg-[#17171b] p-0 text-right shadow-sm transition duration-200 hover:border-white/20 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f1a17f]"
+      className="group relative aspect-[4/5] w-full min-w-0 overflow-hidden rounded-xl border border-white/[0.08] bg-[#17171b] p-0 text-right shadow-sm transition duration-200 hover:border-white/20 hover:shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f1a17f]"
     >
       {post.type === 'text' ? (
         <span className="absolute inset-0 flex flex-col items-center justify-center overflow-hidden bg-gradient-to-br from-[#30231e] via-[#1b1a20] to-[#17171b] p-3 text-center sm:p-4">
@@ -167,7 +167,7 @@ export default function SavedPostsView({
       {loading && posts.length === 0 ? (
         <div role="status" aria-label="جارٍ تحميل العناصر المحفوظة" className="grid grid-cols-3 gap-1.5 sm:gap-2">
           {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="aspect-square animate-pulse rounded-xl border border-white/[0.06] bg-zinc-900" />
+            <div key={index} className="aspect-[4/5] animate-pulse rounded-xl border border-white/[0.06] bg-zinc-900" />
           ))}
         </div>
       ) : filteredPosts.length === 0 ? (

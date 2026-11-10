@@ -176,7 +176,7 @@ body {
 
 .post-image-container {
   width: 100%;
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 4 / 5;
   position: relative;
   background-color: #111;
   overflow: hidden;

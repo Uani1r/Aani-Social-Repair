@@ -3,7 +3,6 @@ import { AtSign, Link2, Loader2, MapPin, Search, X } from 'lucide-react';
 
 import Avatar from './Avatar';
 import UserIdentity from './UserIdentity';
-import PostImageCropper from './PostImageCropper';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -37,7 +36,6 @@ type CreatePostModalProps = {
   createError: string;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onFilesCrop: (files: File[]) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
   onClose: () => void;
 };
@@ -61,15 +59,11 @@ export default function CreatePostModal({
   createError,
   onPostTextChange,
   onRemoveFile,
-  onFilesCrop,
   onPublish,
   onClose,
 }: CreatePostModalProps) {
   const nextTagIdRef = useRef(0);
   const [tags, setTags] = useState<ComposerTag[]>([]);
-  // القص الإجباري: عدد الصور التي مرّت بأداة القص قبل السماح بالنشر
-  const [croppedCount, setCroppedCount] = useState(0);
-  const previousFilesLengthRef = useRef(selectedFiles.length);
   const [activeTool, setActiveTool] = useState<TagTool>(null);
   const [tagInput, setTagInput] = useState('');
   const [tagError, setTagError] = useState('');
@@ -83,38 +77,6 @@ export default function CreatePostModal({
     setTagError('');
     setMentionCandidates([]);
     setMentionLoading(false);
-  };
-
-  useEffect(() => {
-    const filesLength = selectedFiles.length;
-    if (filesLength > previousFilesLengthRef.current) {
-      // اختيار صور جديدة: يعاد فرض القص على جميع الصور من البداية
-      setCroppedCount(0);
-    } else if (filesLength < previousFilesLengthRef.current) {
-      // إزالة صورة: يتم تقليص عدّاد القص حتى لا يعلق النشر
-      setCroppedCount(current => Math.min(current, filesLength));
-    }
-    previousFilesLengthRef.current = filesLength;
-  }, [selectedFiles.length]);
-
-  const cropPending = fileType === 'image' && croppedCount < selectedFiles.length;
-  const cropFile = fileType === 'image' && cropPending ? selectedFiles[croppedCount] : null;
-
-  const handleCropConfirm = (croppedFile: File) => {
-    const nextFiles = [
-      ...selectedFiles.slice(0, croppedCount),
-      croppedFile,
-      ...selectedFiles.slice(croppedCount + 1),
-    ];
-    setCroppedCount(current => current + 1);
-    previousFilesLengthRef.current = nextFiles.length;
-    onFilesCrop(nextFiles);
-  };
-
-  const handleRemoveFile = (index: number) => {
-    // حذف صورة تم قصها سابقاً يقلّل عدّاد القص المكتمل
-    setCroppedCount(current => Math.max(0, index < current ? current - 1 : current));
-    onRemoveFile(index);
   };
 
   const addTag = (tag: Omit<ComposerTag, 'id'>) => {
@@ -292,7 +254,7 @@ export default function CreatePostModal({
         {filePreviews.length > 0 && (
           <div className="flex gap-3 overflow-x-auto px-6 pb-5 no-scrollbar">
             {filePreviews.map((preview, index) => (
-              <div key={preview.url} className="relative h-24 w-24 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/40">
+              <div key={preview.url} className="relative aspect-[4/5] h-24 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/40">
                 {fileType === 'image' ? (
                   <img src={preview.url} alt="معاينة الصورة المحددة" className="h-full w-full object-cover" />
                 ) : (
@@ -308,7 +270,7 @@ export default function CreatePostModal({
                 <button
                   type="button"
                   aria-label="إزالة الملف"
-                  onClick={() => handleRemoveFile(index)}
+                  onClick={() => onRemoveFile(index)}
                   className="absolute left-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white"
                 >
                   <X size={14} />
@@ -481,23 +443,15 @@ export default function CreatePostModal({
             <button
               type="button"
               onClick={handlePublish}
-              disabled={isSubmitting || cropPending || (!postText.trim() && selectedFiles.length === 0 && tags.length === 0)}
+              disabled={isSubmitting || (!postText.trim() && selectedFiles.length === 0 && tags.length === 0)}
               className="min-w-[120px] rounded-full bg-white px-8 py-3 text-base font-bold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSubmitting ? 'جاري النشر...' : 'نشر'}
             </button>
           </div>
-          {cropPending && <p className="mt-3 text-right text-xs text-white/60">يجب قص الصور على المقاس المربع 1:1 قبل النشر.</p>}
           {createError && <p role="alert" className="mt-3 text-sm text-red-400">{createError}</p>}
         </footer>
       </section>
-      {cropFile && (
-        <PostImageCropper
-          file={cropFile}
-          onCancelAll={onClose}
-          onConfirm={handleCropConfirm}
-        />
-      )}
     </div>
   );
 }

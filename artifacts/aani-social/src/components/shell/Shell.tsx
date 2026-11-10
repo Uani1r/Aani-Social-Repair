@@ -1107,9 +1107,6 @@ export default function Shell({
             setDestination('feed');
           }
         }}
-        onFilesCrop={files => {
-          if (fileType === 'image') setSelectedFiles(files);
-        }}
         onPublish={(tagContent, postDestination) => void handlePublish(tagContent, postDestination)}
         onCloseCreatePost={() => {
           setShowCreateModal(false);
