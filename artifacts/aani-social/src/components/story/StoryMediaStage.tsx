@@ -72,6 +72,20 @@ export default function StoryMediaStage({
     if (video.readyState >= 1) void video.play().catch(() => {});
   }, [currentStory.id, isPaused, storyVideoRef]);
 
+  // إيقاف الصوت وإطلاق موارده عند مغادرة عارض القصص:
+  // Safari قد يواصل تشغيل صوت عنصر فيديو منزوع من الشجرة.
+  useEffect(() => () => {
+    const video = storyVideoRef.current;
+    if (!video) return;
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    } catch {
+      /* العنصر قد يكون أفلت مرجعه بالفعل */
+    }
+  }, []);
+
   return (
     <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-zinc-950">
       {currentStory.media_url ? (

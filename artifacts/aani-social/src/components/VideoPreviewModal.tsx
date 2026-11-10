@@ -227,6 +227,20 @@ export default function VideoPreviewModal({
     };
   }, [duration, open, src]);
 
+  // إيقاف الفيديو الرئيسي وإطلاق موارده عند إغلاق المعاينة حتى لا
+  // يستمر صوته بعد الخروج (WebKit يشغّل صوت العناصر المنزوعة).
+  useEffect(() => () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    } catch {
+      /* العنصر قد يكون أفلت مرجعه بالفعل */
+    }
+  }, []);
+
   const handleLoadedMetadata = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
     const loadedDuration = video.duration;

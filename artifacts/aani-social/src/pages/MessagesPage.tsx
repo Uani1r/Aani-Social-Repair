@@ -190,6 +190,17 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
 
   useEffect(() => () => {
     if (loadingTimeoutRef.current !== null) window.clearTimeout(loadingTimeoutRef.current);
+    // إيقاف الصوت وتفريغ المصدر عند مغادرة الرسالة حتى لا يستمر
+    // تشغيل الرسالة الصوتية بعد الخروج من المحادثة.
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+    } catch {
+      /* العنصر قد يكون أفلت مرجعه بالفعل */
+    }
   }, []);
 
   const togglePlayback = async () => {

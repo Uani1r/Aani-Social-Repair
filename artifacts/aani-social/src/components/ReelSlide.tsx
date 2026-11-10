@@ -147,6 +147,21 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     if (repostNoticeTimerRef.current !== null) window.clearTimeout(repostNoticeTimerRef.current);
   }, []);
 
+  // إيقاف الصوت وإطلاق موارده عند إزالة الشريحة (الخروج من الريلز):
+  // Safari/WebKit قد يواصل تشغيل صوت عنصر فيديو منزوع من الشجرة
+  // إن بقي مرجعاً في JS — يجب الإيقاف الصريح وتفريغ المصدر.
+  useEffect(() => () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    } catch {
+      /* العنصر قد يكون أفلت مرجعه بالفعل */
+    }
+  }, []);
+
   useEffect(() => {
     if (!isOverlayOpen) return;
     const video = videoRef.current;
