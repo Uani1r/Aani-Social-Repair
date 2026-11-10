@@ -70,7 +70,7 @@ export function ProfileSkeleton({ className }: { className?: string }) {
       <SkeletonBlock className="h-[135px] w-full rounded-none" />
       <div className="px-4">
         <div className="-mt-11 flex items-end justify-between">
-          <SkeletonCircle className="h-[82px] w-[82px] shrink-0" />
+          <SkeletonCircle className="h-[82px] w-[82px] shrink-0 border-4 border-black" />
           <SkeletonBlock className="h-9 w-[85px] rounded-full" />
         </div>
         <div className="mt-4 space-y-2">

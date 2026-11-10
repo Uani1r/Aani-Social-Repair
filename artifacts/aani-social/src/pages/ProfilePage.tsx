@@ -1925,7 +1925,7 @@ export default function ProfilePage({
       <div className="relative z-20 flex items-end justify-between px-4 pb-2">
         <div className="relative flex items-end gap-3">
           <div className="relative -mt-11 h-[82px] w-[82px] shrink-0">
-            <span className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full">
+            <span className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full border-4 border-black">
               {avatarPreview ? (
                 <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
               ) : (
