@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 
 import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
+import ProfileFeedViewer from '@/components/ProfileFeedViewer';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -166,6 +167,7 @@ export default function ProfilePage({
   const [dragOverReorderKey, setDragOverReorderKey] = useState<string | null>(null);
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
+  const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -2083,10 +2085,11 @@ export default function ProfilePage({
               const cover = mediaUrls[0] || '';
               const isMultiImage = mediaUrls.length > 1;
               return (
-                <Link
+                <button
                   key={post.id}
-                  href={isReel ? `/reels?openReel=${encodeURIComponent(post.id)}` : `/post/${encodeURIComponent(post.id)}`}
-                  aria-label={isReel ? 'فتح الريل في مشغّل الريلز' : 'فتح المنشور'}
+                  type="button"
+                  onClick={() => setFeedViewerPostId(post.id)}
+                  aria-label={isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
                   className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
                 >
                   {isReel ? (
@@ -2108,12 +2111,22 @@ export default function ProfilePage({
                   {isMultiImage && (
                     <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
                   )}
-                </Link>
+                </button>
               );
             })}
           </div>
         );
       })()}
+      {feedViewerPostId && displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text') && (
+        <ProfileFeedViewer
+          posts={displayProfilePosts.filter(post => post.type !== 'text')}
+          initialPostId={feedViewerPostId}
+          currentUserId={currentUserId}
+          onOpenComments={onOpenComments}
+          onRefresh={() => void refresh()}
+          onClose={() => setFeedViewerPostId(null)}
+        />
+      )}
       <ProfileHighlightsManager
         open={showHighlightsManager}
         onClose={() => setShowHighlightsManager(false)}
