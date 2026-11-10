@@ -297,7 +297,6 @@ export default function ProfilePage({
   const [taggedPosts, setTaggedPosts] = useState<Post[]>(() => []);
   const [taggedLoading, setTaggedLoading] = useState(false);
   const [taggedError, setTaggedError] = useState<string | null>(null);
-  const taggedFetchedUserRef = useRef<string | null>(null);
 
   // تحميل مسبق (Preload/Prebuffer) لأول 9 وسائط في القائمة المعروضة
   // حتى يفتح النقر على البطاقة من ذاكرة المتصفح بلا انتظار شبكة.
@@ -316,13 +315,12 @@ export default function ProfilePage({
     preloadMediaList(visibleList.slice(0, 9).map(firstMediaUrlOfPost));
   }, [profileContentTab, profileVideoPosts, profileReposts, displayProfilePosts, taggedPosts]);
 
-  // تبويب المنشورات المشار فيها: جلب كسول عند أول فتح للتبويب فقط،
+  // تبويب المنشورات المشار فيها: يُعاد الجلب في كل فتح للتبويب حتى
+  // تظهر فوراً المنشورات المنشورة حديثاً التي فيها إشارة لصاحب الملف،
   // والإشارات تُقرأ من post_metadata (kind: mention + profileId)
   // في متن/وصف المنشور الأصلي — إشارات التعليقات مستبعدة كلياً.
   useEffect(() => {
     if (profileContentTab !== 'tagged' || !supabaseConfigured) return;
-    if (taggedFetchedUserRef.current === activeUserId) return;
-    taggedFetchedUserRef.current = activeUserId;
     let active = true;
     void (async () => {
       setTaggedLoading(true);
@@ -437,7 +435,6 @@ export default function ProfilePage({
         if (active) {
           setTaggedPosts([]);
           setTaggedError('تعذر تحميل المنشورات المشار فيها. أعد المحاولة.');
-          taggedFetchedUserRef.current = null;
         }
       } finally {
         if (active) setTaggedLoading(false);
