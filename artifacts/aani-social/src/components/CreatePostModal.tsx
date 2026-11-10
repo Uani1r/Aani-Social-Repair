@@ -63,7 +63,16 @@ export default function CreatePostModal({
   onClose,
 }: CreatePostModalProps) {
   const nextTagIdRef = useRef(0);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [tags, setTags] = useState<ComposerTag[]>([]);
+
+  // تمديد تلقائي لحقل الوصف مع سقف أقصى ثم تمرير داخلي
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 220)}px`;
+  }, [postText]);
   const [activeTool, setActiveTool] = useState<TagTool>(null);
   const [tagInput, setTagInput] = useState('');
   const [tagError, setTagError] = useState('');
@@ -292,13 +301,14 @@ export default function CreatePostModal({
 
         <div className="px-6 pb-4">
           <textarea
+            ref={textareaRef}
             value={postText}
             onChange={event => onPostTextChange(event.target.value)}
             maxLength={2000}
-            placeholder="ما الذي يدور في ذهنك اليوم؟..."
-            aria-label="اكتب محتوى المنشور"
-            className="min-h-[110px] w-full resize-none border-0 bg-transparent p-0 text-right text-[17px] leading-[1.8] text-white outline-none placeholder:text-zinc-500 focus:ring-0"
-            rows={3}
+            placeholder="اكتب وصفاً للمنشور..."
+            aria-label="اكتب وصفاً للمنشور"
+            className="max-h-[220px] min-h-[68px] w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-[#2a2a35] px-4 py-3 text-right text-[15px] leading-[1.8] text-white outline-none transition-colors placeholder:text-zinc-500 focus:border-pink-400/50"
+            rows={2}
           />
         </div>
 
