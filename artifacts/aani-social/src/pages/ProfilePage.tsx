@@ -292,6 +292,13 @@ export default function ProfilePage({
     .filter(post => post.reposter_id === activeUserId)
     .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
 
+  // تبويب المنشورات المشار فيها: تُعرَّف حالتها قبل أي تأثير يستخدمها
+  // (taggedPosts) لتفادي ReferenceError: Cannot access before initialization.
+  const [taggedPosts, setTaggedPosts] = useState<Post[]>(() => []);
+  const [taggedLoading, setTaggedLoading] = useState(false);
+  const [taggedError, setTaggedError] = useState<string | null>(null);
+  const taggedFetchedUserRef = useRef<string | null>(null);
+
   // تحميل مسبق (Preload/Prebuffer) لأول 9 وسائط في القائمة المعروضة
   // حتى يفتح النقر على البطاقة من ذاكرة المتصفح بلا انتظار شبكة.
   const preloadSignatureRef = useRef('');
@@ -301,7 +308,7 @@ export default function ProfilePage({
       : profileContentTab === 'reposts'
         ? profileReposts
         : profileContentTab === 'tagged'
-          ? taggedPosts
+          ? (Array.isArray(taggedPosts) ? taggedPosts : [])
           : displayProfilePosts;
     const signature = `${profileContentTab}:${visibleList.length}:${visibleList.slice(0, 12).map(post => post.id).join(',')}`;
     if (preloadSignatureRef.current === signature) return;
@@ -312,11 +319,6 @@ export default function ProfilePage({
   // تبويب المنشورات المشار فيها: جلب كسول عند أول فتح للتبويب فقط،
   // والإشارات تُقرأ من post_metadata (kind: mention + profileId)
   // في متن/وصف المنشور الأصلي — إشارات التعليقات مستبعدة كلياً.
-  const [taggedPosts, setTaggedPosts] = useState<Post[]>([]);
-  const [taggedLoading, setTaggedLoading] = useState(false);
-  const [taggedError, setTaggedError] = useState<string | null>(null);
-  const taggedFetchedUserRef = useRef<string | null>(null);
-
   useEffect(() => {
     if (profileContentTab !== 'tagged' || !supabaseConfigured) return;
     if (taggedFetchedUserRef.current === activeUserId) return;
