@@ -3,8 +3,8 @@ import { Minus, Music2, Plus, X } from 'lucide-react';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
-// القياس الطولي القياسي لإنستغرام: 4:5 (الناتج 1080x1350)
-const ASPECT_RATIO = 4 / 5;
+// القالب القياسي الإلزامي لإنستغرام: 4:5 (الناتج 1080x1350)
+const STANDARD_ASPECT = 4 / 5;
 const OUTPUT_WIDTH = 1080;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const distanceBetween = (first, second) => Math.hypot(second.x - first.x, second.y - first.y);
@@ -32,8 +32,8 @@ function getImageBounds(frame, image, zoom) {
   };
 }
 
-// القص إلى 4:5 (1080x1350) وفق موضع الصورة وتكبيرها داخل الإطار
-async function cropImage(image, view, frameBounds) {
+// القص وفق القالب المحدد: 4:5 (1080x1350) أو القالب الحر بأبعاد الصورة الأصلية
+async function cropImage(image, view, frameBounds, preserve) {
   const source = new window.Image();
   await new Promise((resolve, reject) => {
     source.onload = resolve;
@@ -48,8 +48,10 @@ async function cropImage(image, view, frameBounds) {
   const sourceX = clamp((source.naturalWidth - sourceWidth) / 2 - view.x / renderedScale, 0, source.naturalWidth - sourceWidth);
   const sourceY = clamp((source.naturalHeight - sourceHeight) / 2 - view.y / renderedScale, 0, source.naturalHeight - sourceHeight);
   const canvas = document.createElement('canvas');
-  canvas.width = OUTPUT_WIDTH;
-  canvas.height = Math.round(OUTPUT_WIDTH / ASPECT_RATIO);
+  canvas.width = preserve ? Math.max(1, Math.round(sourceWidth)) : OUTPUT_WIDTH;
+  canvas.height = preserve
+    ? Math.max(1, Math.round(sourceHeight))
+    : Math.round(OUTPUT_WIDTH / STANDARD_ASPECT);
 
   const context = canvas.getContext('2d');
   if (!context) throw new Error('تعذر تجهيز مساحة القص.');
@@ -71,21 +73,32 @@ async function cropImage(image, view, frameBounds) {
   return { file, dataUrl: await blobToDataUrl(blob) };
 }
 
-// شاشة المعاينة الأولى: القص والتكبير والسحب مدموجان داخلها بإطار 4:5،
-// وعند الضغط على «التالي» تُقص جميع الصور جاهزة دون أي شاشة قص إضافية.
+// شاشة المعاينة الأولى: القص والتكبير والسحب مدموجان داخلها —
+// القالب الافتراضي إلزامي 4:5، مع إمكانية التحويل إلى القالب الحر (الأصل)،
+// وعند «التالي» تُجهَّز جميع الصور دون أي شاشة قص إضافية.
 export default function ImagePreviewModal({ open, images, onImagesChange, onClose, onNext }) {
   const trackRef = useRef(null);
   const cropFrameRef = useRef(null);
+  const frameRefsRef = useRef([]);
   const cropPointersRef = useRef(new Map());
   const cropGestureRef = useRef(null);
   const cropViewsRef = useRef(new Map());
   const onCloseRef = useRef(onClose);
   const [activeIndex, setActiveIndex] = useState(0);
   const [cropView, setCropView] = useState({ scale: MIN_ZOOM, x: 0, y: 0 });
+  // قالب كل صورة: 'standard' (4:5 إلزامي) أو 'free' (الأصل)
+  const [cropModes, setCropModes] = useState({});
+  const [originalAspects, setOriginalAspects] = useState({});
   const [cropError, setCropError] = useState('');
   const [isFinishing, setIsFinishing] = useState(false);
   const [musicNotice, setMusicNotice] = useState(false);
   const activeImage = images[activeIndex];
+  const activeMode = cropModes[activeIndex] || 'standard';
+
+  const aspectFor = index => {
+    if ((cropModes[index] || 'standard') !== 'free') return STANDARD_ASPECT;
+    return originalAspects[index] || STANDARD_ASPECT;
+  };
 
   const updateCropView = (index, view) => {
     cropViewsRef.current.set(index, view);
@@ -114,10 +127,28 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     if (open) {
       setActiveIndex(0);
       cropViewsRef.current.clear();
+      setCropModes({});
+      setOriginalAspects({});
       setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
       setCropError('');
     }
   }, [open, images.length]);
+
+  // قياس أبعاد الصور الأصلية لعرضها في القالب الحر
+  useEffect(() => {
+    if (!open) return undefined;
+    let cancelled = false;
+    images.forEach((image, index) => {
+      const source = new window.Image();
+      source.onload = () => {
+        if (!cancelled && source.naturalWidth > 0 && source.naturalHeight > 0) {
+          setOriginalAspects(current => ({ ...current, [index]: source.naturalWidth / source.naturalHeight }));
+        }
+      };
+      source.src = image.dataUrl;
+    });
+    return () => { cancelled = true; };
+  }, [open, images]);
 
   // استرجاع ضبط الصورة عند التنقل بين الصور، أو البدء من الوسط
   useEffect(() => {
@@ -145,6 +176,14 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     if (!track) return;
     track.scrollTo({ left: index * track.clientWidth, behavior: 'smooth' });
     setActiveIndex(index);
+  };
+
+  const selectCropMode = mode => {
+    if (mode === (cropModes[activeIndex] || 'standard')) return;
+    setCropModes(current => ({ ...current, [activeIndex]: mode }));
+    // إعادة ضبط موضع الصورة عند تغيير القالب
+    cropViewsRef.current.delete(activeIndex);
+    setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
   };
 
   const handleCropPointerDown = (event, corner = null) => {
@@ -204,7 +243,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     const deltaX = event.clientX - gesture.startPoint.x;
     const deltaY = event.clientY - gesture.startPoint.y;
     if (gesture.type === 'resize') {
-      // مقابض الزوايا: تقريب/إبعاد الصورة داخل الإطار الثابت 4:5
+      // مقابض الزوايا: تقريب/إبعاد الصورة داخل الإطار الثابت
       const directionX = gesture.corner.includes('right') ? 1 : -1;
       const directionY = gesture.corner.includes('bottom') ? 1 : -1;
       const outwardDelta = (deltaX * directionX + deltaY * directionY) / 2;
@@ -251,18 +290,20 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
     });
   };
 
-  // «التالي»: قص جميع الصور على 4:5 (1080x1350) وفق الضبط الحالي لكل صورة
+  // «التالي»: تجهيز جميع الصور وفق قالبها (4:5 أو الأصل) دون شاشة قص إضافية
   const finishAndNext = async () => {
-    const frame = cropFrameRef.current;
-    if (!activeImage || !frame || isFinishing) return;
+    if (!activeImage || isFinishing) return;
     setIsFinishing(true);
     setCropError('');
     try {
-      const frameBounds = frame.getBoundingClientRect();
       const croppedImages = [];
       for (let index = 0; index < images.length; index++) {
         const view = cropViewsRef.current.get(index) || { scale: MIN_ZOOM, x: 0, y: 0 };
-        croppedImages.push(await cropImage(images[index], view, frameBounds));
+        const frame = frameRefsRef.current[index];
+        const bounds = frame?.getBoundingClientRect();
+        if (!bounds) throw new Error('تعذر تجهيز مساحة القص.');
+        const preserve = (cropModes[index] || 'standard') === 'free';
+        croppedImages.push(await cropImage(images[index], view, bounds, preserve));
       }
       onImagesChange(croppedImages);
       onNext();
@@ -296,14 +337,17 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
           {images.map((image, index) => (
             <div key={`${image.file.name}-${image.file.lastModified}-${index}`} className="flex h-full w-full shrink-0 snap-center items-center justify-center px-4">
               <div
-                ref={index === activeIndex ? cropFrameRef : null}
+                ref={el => {
+                  frameRefsRef.current[index] = el;
+                  if (index === activeIndex) cropFrameRef.current = el;
+                }}
                 className="relative h-full max-h-full w-auto max-w-full shrink-0 overflow-hidden rounded-xl bg-black"
                 onPointerDown={index === activeIndex ? handleCropPointerDown : undefined}
                 onPointerMove={index === activeIndex ? handleCropPointerMove : undefined}
                 onPointerUp={index === activeIndex ? endCropPointer : undefined}
                 onPointerCancel={index === activeIndex ? endCropPointer : undefined}
-                aria-label="حرّك الصورة داخل إطار 4:5 واضبط القص"
-                style={{ aspectRatio: String(ASPECT_RATIO), touchAction: 'none' }}
+                aria-label="حرّك الصورة داخل إطار القص واضبط التكبير"
+                style={{ aspectRatio: String(aspectFor(index)), touchAction: 'none' }}
               >
                 <img
                   src={image.dataUrl}
@@ -368,10 +412,24 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
             <Music2 size={22} />
             <span className="text-[11px] font-medium">موسيقى</span>
           </button>
-          <span className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/80">
-            <span className="grid h-6 w-5 place-items-center rounded border border-white/40 text-[9px] font-bold">4:5</span>
-            القياس القياسي
-          </span>
+          <div role="group" aria-label="قالب القص" className="flex items-center gap-1 rounded-full bg-white/5 p-1">
+            <button
+              type="button"
+              aria-pressed={activeMode === 'standard'}
+              onClick={() => selectCropMode('standard')}
+              className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${activeMode === 'standard' ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
+            >
+              4:5 قياسي
+            </button>
+            <button
+              type="button"
+              aria-pressed={activeMode === 'free'}
+              onClick={() => selectCropMode('free')}
+              className={`rounded-full px-3 py-1.5 text-[11px] font-semibold transition ${activeMode === 'free' ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
+            >
+              حر (الأصل)
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-3" dir="ltr">
           <button type="button" onClick={() => updateZoom(cropView.scale - 0.2)} aria-label="تصغير الصورة" disabled={cropView.scale <= MIN_ZOOM} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-40">
@@ -379,7 +437,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, onClos
           </button>
           <input
             type="range"
-            aria-label="تكبير الصورة داخل إطار 4:5"
+            aria-label="تكبير الصورة داخل إطار القص"
             min={MIN_ZOOM}
             max={MAX_ZOOM}
             step="0.01"

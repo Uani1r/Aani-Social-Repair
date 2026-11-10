@@ -97,7 +97,7 @@ export default function PostCard({
       {/* مرفقات الوسائط */}
       {postImages.length > 0 && (
         <div
-          className="mt-3 flex aspect-[4/5] gap-2 overflow-x-auto rounded-xl no-scrollbar"
+          className="mt-3 flex aspect-[4/5] w-full gap-2 overflow-x-auto rounded-xl no-scrollbar"
           style={post.type === 'reel' && getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))
             ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(postImages[0] || ''))) }
             : undefined}
