@@ -82,13 +82,23 @@ export async function processPushNotificationPayload(
     return skipOutcome("Unrecognized payload.");
   }
 
+  const type = asText(record.type).toLowerCase();
+
+  // الرسائل والمكالمات الواردة (message / new_message / chat_message / call /
+  // incoming_call) لا تدخل الشاشة العامة للإشعارات إطلاقاً:
+  // لا تُضَف سجلاتها في جدول notifications، ولا يُرسل لها إشعار عام.
+  // إشعارها الخارجي (FCM) يُرسل حصراً من Webhook جدول messages؛
+  // والمكالمات تُدار عبر Realtime في CallManager.
+  if (["message", "new_message", "chat_message", "call", "incoming_call"].includes(type)) {
+    return skipOutcome("Messages and calls are pushed externally via the messages webhook only.");
+  }
+
   const recipient = await loadRecipientDevice(supabase, userId);
   if (!recipient.deviceToken) {
     return skipOutcome("Recipient has no registered device token.");
   }
 
   // احترام تفضيلات الإشعارات للمستلم
-  const type = asText(record.type).toLowerCase();
   if (recipient.notificationSettings?.[preferenceCategory(type)] === false) {
     return skipOutcome("Recipient disabled this notification category.");
   }
