@@ -330,14 +330,14 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   return (
     <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''} ${isMainFeedImage ? 'main-feed-image-post' : ''}`}>
       {post.repost_attribution && (
-        <div className="flex items-center gap-1.5 px-1 pt-2 text-[11px] text-zinc-500">
+        <div className={`flex items-center gap-1.5 pt-2 text-[11px] text-zinc-500 ${isMainFeedImage ? 'px-4' : 'px-1'}`}>
           <Repeat size={12} aria-hidden="true" />
           <span>
             قام <Link href={`/profile/${post.repost_attribution.id}`} className="font-bold text-zinc-300 hover:underline">{displayName(post.repost_attribution)}</Link> بإعادة نشر هذا المنشور
           </span>
         </div>
       )}
-      <header className={`flex w-full items-start gap-4 ${isMainFeedVideo ? 'video-post-header' : ''}`}>
+      <header className={`flex w-full items-start gap-4 ${isMainFeedVideo ? 'video-post-header' : ''} ${isMainFeedImage ? 'px-4 pt-3' : ''}`}>
         <Link
           href={`/profile/${post.user_id}`}
           aria-label={`عرض ملف ${displayName(post.author)}`}
@@ -382,7 +382,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       </header>
 
       {pendingState && (
-        <section className={`mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 ${isMainFeedVideo ? 'video-post-pending' : ''}`} aria-label="حالة نشر المنشور">
+        <section className={`mt-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 ${isMainFeedVideo ? 'video-post-pending' : ''} ${isMainFeedImage ? 'mx-4' : ''}`} aria-label="حالة نشر المنشور">
           <div className="mb-2 flex items-center justify-between gap-3 text-xs">
             <span className="flex items-center gap-2 text-zinc-200">
               {pendingState.stage === 'success' ? (
@@ -473,13 +473,13 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         <ExpandablePostText
           text={post.content}
           maxLines={post.type === 'text' ? 7 : 2}
-          className="post-content text-sm text-zinc-200 mt-2.5 leading-relaxed"
+          className={`${isMainFeedImage ? 'mx-4' : ''} post-content text-sm text-zinc-200 mt-2.5 leading-relaxed`}
         />
       )}
-      {!isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />}
+      {!isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className={isMainFeedImage ? 'mx-4 mt-2.5' : 'mt-2.5'} />}
 
       {/* شريط الأزرار المتجمع جهة اليمين */}
-      <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''}`}>
+      <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''} ${isMainFeedImage ? 'px-4 pb-1' : ''}`}>
         <div className="post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto">
           {/* 1. الإعجاب */}
           <div className={`post-action-btn ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}>
