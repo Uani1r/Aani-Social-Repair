@@ -961,6 +961,7 @@ export default function Shell({
       user_id: userId,
       content,
       post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
+      tagged_user_ids: taggedUserIds,
       media_url: localMediaUrls[0] || null,
       media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
       type,
@@ -1047,6 +1048,8 @@ export default function Shell({
           media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
           type,
           created_at: createdAt,
+          // العمود الصريح لمصفوفة معرفات المشار إليهم (ترحيل 20270102000000)
+          ...(taggedUserIds.length > 0 ? { tagged_user_ids: taggedUserIds } : {}),
         };
         let postError = (await supabase.from('posts').upsert({
           ...postPayload,
@@ -1060,6 +1063,18 @@ export default function Shell({
           && postError.message.includes('destination')
         ) {
           postError = (await supabase.from('posts').upsert(postPayload, { onConflict: 'id' })).error;
+        }
+
+        // قاعدة بيانات لم يُطبَّق عليها عمود tagged_user_ids بعد → أعد المحاولة بدونه حتى لا يتعطل النشر
+        if (
+          postError
+          && 'tagged_user_ids' in postPayload
+          && (postError.code === '42703' || postError.code === 'PGRST204')
+          && postError.message.includes('tagged_user_ids')
+        ) {
+          const payloadWithoutColumn = { ...postPayload } as Record<string, unknown>;
+          delete payloadWithoutColumn.tagged_user_ids;
+          postError = (await supabase.from('posts').upsert(payloadWithoutColumn, { onConflict: 'id' })).error;
         }
 
         // قاعدة بيانات لا تقبل وسام الغلاف بعد → أعد المحاولة بدونه حتى لا يتعطل النشر

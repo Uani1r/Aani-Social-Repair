@@ -330,13 +330,11 @@ export default function ProfilePage({
         const ownerUsername = cleanUsername(person?.username);
         // فلتر JSONB آمن: containment لكائن واحد (وليس مصفوفة).
         // عامل cs ضد عمود jsonb مصفوفة يطابق أي عنصر فيه هو
-        // مجموعة شاملة من الكائن (وسم mention بنفس profileId،
-        // أو وسام tagged_users الذي تحتوي مصفوفة معرفاته المستخدم)،
+        // مجموعة شاملة من الكائن (وسم mention بنفس profileId)،
         // ومصدر الخطأ 22P02 السابق كان إرسال مصفوفة كائنات `[...]`
         // وهو صياغة JSON غير مقبولة لـ PostgREST.
         const mentionContainment = JSON.stringify({ kind: 'mention', profileId: activeUserId });
-        const taggedUsersContainment = JSON.stringify({ kind: 'tagged_users', profileIds: [activeUserId] });
-        const baseColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy';
+        const baseColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, tagged_user_ids';
 
         const escapeLike = (value: string) => value.replace(/[%\\]/g, match => `\\${match}`);
         // بحث الوصف عن @username فقط عند توفر اسم المستخدم
@@ -350,19 +348,19 @@ export default function ProfilePage({
               .limit(60)
           : Promise.resolve(null);
 
-        // ثلاثة مسارات متوازية: وسم الإشارة، مصفوفة المعرفات المخزنة، و@username في الوصف
-        const [mentionResult, taggedUsersResult, captionResult] = await Promise.all([
+        // ثلاثة مسارات متوازية: العمود الصريح tagged_user_ids، وسم الإشارة في post_metadata، و@username في الوصف
+        const [taggedColumnResult, mentionResult, captionResult] = await Promise.all([
           supabase
             .from('posts')
             .select(baseColumns)
-            .filter('post_metadata', 'cs', mentionContainment)
+            .contains('tagged_user_ids', [activeUserId])
             .neq('user_id', activeUserId)
             .order('created_at', { ascending: false })
             .limit(60),
           supabase
             .from('posts')
             .select(baseColumns)
-            .filter('post_metadata', 'cs', taggedUsersContainment)
+            .filter('post_metadata', 'cs', mentionContainment)
             .neq('user_id', activeUserId)
             .order('created_at', { ascending: false })
             .limit(60),
@@ -376,7 +374,7 @@ export default function ProfilePage({
           return Array.isArray(record.data) ? (record.data as Record<string, unknown>[]) : [];
         };
         // اعرض خطأً فقط إذا فشلت كل المسارات (مسار فاشل واحد لا يعطل التبويب)
-        const failedCount = [mentionResult, taggedUsersResult, captionResult]
+        const failedCount = [taggedColumnResult, mentionResult, captionResult]
           .filter(result => Boolean(result) && typeof result === 'object' && (result as { error?: unknown }).error)
           .length;
         if (failedCount === 3) throw new Error('تعذر جلب المنشورات المشار فيها');
@@ -387,8 +385,8 @@ export default function ProfilePage({
             if (typeof row.id === 'string') merged.set(row.id, row);
           });
         };
+        addRows(collectRows(taggedColumnResult));
         addRows(collectRows(mentionResult));
-        addRows(collectRows(taggedUsersResult));
 
         // نتائج الوصف: تأكد من وجود @username كإشارة كاملة (وليس مطابقة جزئية مثل @qwe داخل @qwer)
         const mentionRegex = ownerUsername

@@ -129,6 +129,8 @@ export type Post = {
   created_at: string;
   display_order?: number;
   author: Profile | null;
+  /** مصفوفة معرفات المشار إليهم الصريحة (عمود tagged_user_ids في قاعدة البيانات) */
+  tagged_user_ids?: string[] | null;
 
   likes_count?: number;
   comments_count?: number;
@@ -187,9 +189,10 @@ export const getPostMentions = (post: Pick<Post, 'post_metadata'>): PostMetadata
   return mentions;
 };
 
-/** كل معرفات المشار إليهم في المنشور (من وسوم mention ومن مصفوفة tagged_users الصريحة) */
-export const getPostTaggedUserIds = (post: Pick<Post, 'post_metadata'>): string[] => {
+/** كل معرفات المشار إليهم في المنشور (عمود tagged_user_ids + وسوم mention + وسام tagged_users) */
+export const getPostTaggedUserIds = (post: Pick<Post, 'post_metadata' | 'tagged_user_ids'>): string[] => {
   const ids = new Set<string>();
+  (post.tagged_user_ids || []).forEach(id => ids.add(id));
   for (const tag of post.post_metadata || []) {
     if (tag.kind === 'mention' && tag.profileId) ids.add(tag.profileId);
     if (tag.kind === 'tagged_users' && Array.isArray(tag.profileIds)) {
