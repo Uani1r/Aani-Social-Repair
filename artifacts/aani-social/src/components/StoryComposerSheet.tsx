@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Archive, Camera, Check, ImagePlus, Play, X } from 'lucide-react';
 
 import StoryImageSticker from '@/components/StoryImageSticker';
+import { GridSkeleton } from '@/components/Skeletons';
 import type { StoryImageOverlay, StoryMediaTransformOverlay, StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
 
 type StoryMedia = StoryRow;
@@ -174,7 +175,7 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
             /* الأرشيف */
             <div className="px-4 pb-6 pt-3">
               {archiveLoading ? (
-                <p className="py-10 text-center text-xs text-zinc-500">جارٍ تحميل الأرشيف...</p>
+                <GridSkeleton count={6} className="px-2 py-4" />
               ) : archive.length === 0 ? (
                 <p className="py-10 text-center text-xs text-zinc-500">لا توجد قصص مؤرشفة بعد</p>
               ) : (

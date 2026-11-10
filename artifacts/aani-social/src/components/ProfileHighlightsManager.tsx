@@ -5,6 +5,7 @@ import { Check, ChevronLeft, Heart, ImagePlus, Loader2, MoreVertical, Pencil, Pl
 
 import Avatar from '@/components/Avatar';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
+import { GridSkeleton } from '@/components/Skeletons';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -582,7 +583,7 @@ export default function ProfileHighlightsManager({
             </div>
           )}
           {archiveLoading ? (
-            <div className="grid min-h-48 place-items-center text-sm text-zinc-400">جارٍ تحميل الأرشيف...</div>
+            <GridSkeleton count={9} className="px-2 py-6" />
           ) : archiveError ? (
             <div role="alert" className="rounded-2xl border border-red-900/70 bg-red-950/30 p-4 text-sm text-red-200">تعذر تحميل الأرشيف: {archiveError}</div>
           ) : archiveStories.length === 0 ? (

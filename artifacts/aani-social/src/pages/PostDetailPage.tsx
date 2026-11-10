@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'wouter';
 
 import FeedPostCard from '@/components/FeedPostCard';
+import { FeedSkeleton } from '@/components/Skeletons';
 import { hydratePostInteractions } from '@/hooks/usePosts';
 import { decoratePost, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -92,7 +93,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
 
   return (
     <section className="new-view mx-auto w-full max-w-lg">
-      {loading && <p className="py-8 text-center text-sm text-zinc-400">جارٍ تحميل المنشور...</p>}
+      {loading && <FeedSkeleton count={1} />}
       {!loading && !post && <p className="py-8 text-center text-sm text-zinc-400">هذا المنشور غير متاح.</p>}
       {visiblePost && <FeedPostCard post={visiblePost} currentUserId={currentUserId} onRefresh={() => void refresh()} onOpenComments={onOpenComments} />}
     </section>

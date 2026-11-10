@@ -9,6 +9,7 @@ import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile 
 import PostMetadataChips from '@/components/PostMetadataChips';
 import PostImagePreview from '@/components/PostImagePreview';
 import PostVideoPreview from '@/components/PostVideoPreview';
+import { SkeletonBlock, SkeletonCircle, SkeletonLine } from '@/components/Skeletons';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 
 export default function SharedPostPreview({
@@ -114,7 +115,7 @@ export default function SharedPostPreview({
         onClick={onPreview}
       >
         {loading ? (
-          <span className="messages-shared-post-tile-text">جارٍ تحميل المشاركة...</span>
+          <SkeletonBlock className="absolute inset-2 rounded-xl" />
         ) : hasMedia && isGalleryVideo ? (
           <video src={info?.media} muted playsInline preload="metadata" aria-hidden="true" />
         ) : hasMedia ? (
@@ -138,13 +139,22 @@ export default function SharedPostPreview({
         <header className="messages-shared-post-preview-header">
           {info?.author?.avatar_url ? (
             <img src={info.author.avatar_url} alt="" />
+          ) : loading ? (
+            <SkeletonCircle className="messages-shared-post-preview-avatar" />
           ) : (
             <span className="messages-shared-post-preview-avatar">{info?.author ? displayName(info.author).replace('@', '').charAt(0) : 'آ'}</span>
           )}
-          <strong>{info?.author ? displayName(info.author) : loading ? 'جارٍ تحميل المشاركة...' : 'منشور على آني'}</strong>
+          {loading ? (
+            <SkeletonLine width="w-24" className="h-3.5" />
+          ) : (
+            <strong>{info?.author ? displayName(info.author) : 'منشور على آني'}</strong>
+          )}
         </header>
         {loading ? (
-          <div className="messages-shared-post-preview-copy">جارٍ تحميل المشاركة...</div>
+          <div className="messages-shared-post-preview-copy" aria-hidden="true">
+            <SkeletonLine width="w-5/6" className="h-2.5" />
+            <SkeletonLine width="w-2/3" className="h-2.5 opacity-60" />
+          </div>
         ) : !info ? (
           <div className="messages-shared-post-preview-copy">هذا المنشور لم يعد متاحاً.</div>
         ) : (

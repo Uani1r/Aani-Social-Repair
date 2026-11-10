@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
+import { SkeletonBlock } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName } from '@/lib/types';
 
@@ -81,10 +82,12 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
   return (
     <div className="w-[78%] max-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl">
       <div className="relative aspect-[9/16] w-full bg-zinc-800">
-        {!story || !story.media_url ? (
+        {loading ? (
+          <SkeletonBlock className="absolute inset-0 rounded-none" />
+        ) : !story || !story.media_url ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-2 p-4 text-center">
             <span className="text-[11px] text-zinc-400">
-              {loading ? 'جارٍ التحميل…' : 'هذه القصة لم تعد متاحة'}
+              هذه القصة لم تعد متاحة
             </span>
           </div>
         ) : story.media_type === 'video' ? (

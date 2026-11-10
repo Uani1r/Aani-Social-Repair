@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Music2, Search, X } from 'lucide-react';
 
+import { MusicTracksSkeleton } from '@/components/Skeletons';
+
 import {
   MUSIC_FEATURE_ENABLED,
   getMusicProvider,
@@ -101,7 +103,7 @@ export default function StoryMusicSheet({ open, onClose, onSelect }: StoryMusicS
           </div>
 
           <div className="aani-hscroll mt-3 flex-1 overflow-y-auto">
-            {loading && <p className="py-4 text-center text-[11px] text-white/50">جارٍ التحميل…</p>}
+            {loading && <MusicTracksSkeleton count={6} />}
             {!loading && failed && (
               <p className="py-4 text-center text-[11px] text-white/50">تعذّر تحميل المكتبة</p>
             )}

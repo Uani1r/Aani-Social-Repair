@@ -5,6 +5,7 @@ import { Link } from 'wouter';
 import { toast } from 'sonner';
 
 import Avatar from './Avatar';
+import { ListSkeleton } from './Skeletons';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
@@ -291,7 +292,7 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-2">
           {loading ? (
-            <p className="py-8 text-center text-xs text-zinc-400">جارٍ تحميل قائمة الإعجابات...</p>
+            <ListSkeleton count={6} />
           ) : error ? (
             <p className="py-8 text-center text-xs text-zinc-400">تعذر تحميل قائمة الإعجابات.</p>
           ) : users.length === 0 ? (

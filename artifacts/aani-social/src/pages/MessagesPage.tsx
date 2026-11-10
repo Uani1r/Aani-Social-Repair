@@ -16,6 +16,7 @@ import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
+import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, type Profile } from '@/lib/types';
@@ -4016,7 +4017,7 @@ export default function MessagesPage({
               />
             </div>
             <div className="messages-new-results">
-              {newMessageLoading && <div className="messages-list-status">جارٍ البحث...</div>}
+              {newMessageLoading && <MessagesSkeleton count={5} />}
               {newMessageError && !newMessageLoading && <div className="messages-list-status" role="alert">{newMessageError}</div>}
               {!newMessageLoading && !newMessageError && newMessageProfiles.map(person => (
                 <button
@@ -4115,7 +4116,7 @@ export default function MessagesPage({
               <span>{broadcastSelectedIds.size} محدد</span>
             </div>
             <div className="messages-broadcast-list">
-              {mutualFollowersLoading && <div className="messages-list-status">جارٍ تحميل المتابعين المتبادلين...</div>}
+              {mutualFollowersLoading && <MessagesSkeleton count={5} />}
               {!mutualFollowersLoading && mutualFollowers.length === 0 && (
                 <div className="messages-list-empty"><span>لا يوجد متابعون متبادلون</span><small>ستظهر هنا الحسابات التي تتابعها وتتابعك.</small></div>
               )}
@@ -4185,7 +4186,7 @@ export default function MessagesPage({
             </header>
             <div className="messages-global-timer-content">
               <p>اختر مدة حذف الرسائل الجديدة تلقائياً في جميع محادثاتك.</p>
-              {globalExpirationLoading ? <div className="messages-list-status">جارٍ تحميل الإعداد...</div> : GLOBAL_MESSAGE_EXPIRATION_OPTIONS.map(option => (
+              {globalExpirationLoading ? <ListSkeleton count={3} /> : GLOBAL_MESSAGE_EXPIRATION_OPTIONS.map(option => (
                 <button
                   key={option.seconds ?? 'off'}
                   type="button"

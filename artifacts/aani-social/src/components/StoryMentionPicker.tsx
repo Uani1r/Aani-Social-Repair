@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Loader2, Search, X } from 'lucide-react';
+import { Check, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
+import { ListSkeleton } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
 
@@ -176,9 +177,7 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
 
         <div className="aani-hscroll flex-1 overflow-y-auto px-3 pb-4">
           {loading && people.length === 0 && (
-            <p className="flex items-center justify-center gap-2 py-8 text-[11px] text-white/50">
-              <Loader2 size={14} className="animate-spin" /> جارٍ التحميل…
-            </p>
+            <ListSkeleton count={5} compact />
           )}
 
           {!loading && failed && (

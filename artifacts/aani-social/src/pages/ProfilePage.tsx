@@ -10,6 +10,7 @@ import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
 import ProfileFeedViewer from '@/components/ProfileFeedViewer';
 import ProfileReelsPlayer from '@/components/ProfileReelsPlayer';
+import { ListSkeleton, ProfileSkeleton } from '@/components/Skeletons';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -1249,7 +1250,7 @@ export default function ProfilePage({
             </button>
           </div>
         )}
-        <div className="status-box mx-4 mt-4">جاري تحميل البروفايل...</div>
+        <ProfileSkeleton />
       </section>
     );
   }
@@ -1259,7 +1260,7 @@ export default function ProfilePage({
   const formattedFollowing = following.toLocaleString('en-US');
 
   return (
-    <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none" dir={pageDirection}>
+    <section className="profile-screen relative mx-auto min-h-[150vh] w-full max-w-[600px] select-none content-fade-in" dir={pageDirection}>
       <input ref={coverInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار صورة الغلاف" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('cover', event)} />
       <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" aria-label="اختيار الصورة الشخصية" disabled={!isEditingProfile || profileSaving} onChange={event => handleProfileImageSelection('avatar', event)} />
 
@@ -1749,7 +1750,7 @@ export default function ProfilePage({
               ) : settingsScreen === 'blocked' || settingsScreen === 'muted' ? (
                 <>
                   <p className="profile-settings-note">{settingsScreen === 'blocked' ? 'إلغاء الحظر يعيد إمكانية التواصل وفق إعدادات الحساب.' : 'تظهر هنا الحسابات المكتومة في الرسائل أو المخفية عنها قصصك.'}</p>
-                  {managedProfilesLoading ? <p className="profile-settings-empty">جارٍ تحميل الحسابات...</p> : (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).length ? (
+                  {managedProfilesLoading ? <ListSkeleton count={3} compact className="px-1" /> : (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).length ? (
                     (settingsScreen === 'blocked' ? blockedProfiles : mutedProfiles).map(managedProfile => (
                       <div key={managedProfile.id} className="profile-settings-request-card">
                         <Avatar profile={managedProfile} />

@@ -13,6 +13,7 @@ import ShareSheet from './ShareSheet';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
+import { CommentsSkeleton } from './Skeletons';
 import PostImagePreview from './PostImagePreview';
 import PostVideoPreview from './PostVideoPreview';
 import PostOptionsSheet from './PostOptionsSheet';
@@ -543,7 +544,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
 
         {comments && (
           <div className="comments-list mt-3 border-t border-zinc-800/40 pt-2 w-full">
-            {busy && <p className="muted text-xs text-zinc-500">جاري تحميل التعليقات...</p>}
+            {busy && <CommentsSkeleton count={2} compact className="px-0 py-2" />}
             {comments.map(c => (
               <p key={c.id} className="text-xs mb-1.5 text-zinc-300 break-words">
                 <b className="text-white ml-1">{displayName(c.author)}:</b> {c.content}

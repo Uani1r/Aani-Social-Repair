@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 
 import CommentComposer from './comments/CommentComposer';
 import CommentsList from './comments/CommentsList';
+import { CommentsSkeleton } from './Skeletons';
 import type { CommentComposerProfile, MentionCandidate } from './comments/types';
 import {
   countComments,
@@ -1328,7 +1329,9 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         </header>
 
         {commentAccess.checking ? (
-          <div className="flex flex-1 items-center justify-center text-xs text-zinc-400">جارٍ التحقق من خصوصية التعليقات…</div>
+          <div className="px-4 py-2">
+            <CommentsSkeleton count={3} />
+          </div>
         ) : commentAccess.canRead ? (
           <CommentsList
             comments={visibleComments}

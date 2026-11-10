@@ -7785,3 +7785,66 @@ select,
   text-overflow: ellipsis;
 }
 
+
+.messages-document-card strong,
+.messages-location-card strong {
+  overflow: hidden;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messages-document-card small,
+.messages-location-card small {
+  overflow: hidden;
+  color: #c4c4cb;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+/* ==== Skeleton Loading System ==== */
+/* القاعدة المشتركة لكل عناصر الهيكل العظمي: لون محايد + وميض متحرك */
+@keyframes skeleton-shimmer {
+  0% { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
+}
+
+.skeleton-box {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 8px;
+}
+
+.skeleton-box::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(100%);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.09) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: skeleton-shimmer 1.6s infinite;
+}
+
+/* الانتقال الناعم من الهيكل العظمي إلى المحتوى الحقيقي (بدون قفزات) */
+@keyframes content-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+.content-fade-in {
+  animation: content-fade-in 0.3s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-box::after {
+    animation: none;
+  }
+  .content-fade-in {
+    animation: none;
+  }
+}

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Loader2, Search, X } from 'lucide-react';
+import { Check, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
+import { ListSkeleton } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
 
@@ -146,7 +147,7 @@ export default function CustomAllowedCommentersModal({
         </div>
 
         <div className="min-h-36 flex-1 overflow-y-auto px-3 py-2">
-          {loading && <p className="flex items-center justify-center gap-2 py-8 text-xs text-white/55"><Loader2 size={15} className="animate-spin" /> جارٍ تحميل الحسابات…</p>}
+          {loading && <ListSkeleton count={5} compact className="px-2" />}
           {!loading && failed && <p role="alert" className="py-8 text-center text-xs text-rose-300">تعذر تحميل الأصدقاء المتبادلين. تحقق من الاتصال ثم حاول مرة أخرى.</p>}
           {!loading && !failed && visiblePeople.length === 0 && (
             <p className="py-8 text-center text-xs text-white/50">

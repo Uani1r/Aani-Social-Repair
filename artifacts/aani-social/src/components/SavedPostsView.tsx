@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 
 import FeedPostCard from './FeedPostCard';
+import { GridSkeleton } from './Skeletons';
 import { useSavedPosts } from '../lib/interactions';
 import { displayName, type Post } from '../lib/types';
 import { stripVideoEditFragment } from '../lib/videoMedia';
@@ -165,11 +166,7 @@ export default function SavedPostsView({
       )}
 
       {loading && posts.length === 0 ? (
-        <div role="status" aria-label="جارٍ تحميل العناصر المحفوظة" className="grid grid-cols-3 gap-1.5 sm:gap-2">
-          {Array.from({ length: 6 }, (_, index) => (
-            <div key={index} className="aspect-[4/5] animate-pulse rounded-xl border border-white/[0.06] bg-zinc-900" />
-          ))}
-        </div>
+        <GridSkeleton count={6} />
       ) : filteredPosts.length === 0 ? (
         <div className="flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-6 py-10 text-center">
           <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-[#f1a17f]/15 bg-[#f1a17f]/[0.08] text-[#f1a17f]">
@@ -185,7 +182,7 @@ export default function SavedPostsView({
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-3 gap-1.5 sm:gap-2" aria-label="شبكة العناصر المحفوظة">
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 content-fade-in" aria-label="شبكة العناصر المحفوظة">
           {filteredPosts.map(post => (
             <SavedPostTile key={post.id} post={post} onOpen={selected => setSelectedPost(selected)} />
           ))}

@@ -1,8 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Loader2 } from 'lucide-react';
 
 import ReelSlide from '@/components/ReelSlide';
+import { ReelsSkeleton } from '@/components/Skeletons';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type Profile } from '@/lib/types';
@@ -102,10 +102,7 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
       onScroll={event => event.stopPropagation()}
     >
       {isLoading ? (
-        <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white">
-          <Loader2 size={28} className="animate-spin text-pink-500" />
-          <p className="text-sm text-zinc-300">جارٍ تحميل الريلز...</p>
-        </div>
+        <ReelsSkeleton />
       ) : reelsList.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white">
           <p className="text-lg font-bold">لا توجد مقاطع ريلز لعرضها</p>

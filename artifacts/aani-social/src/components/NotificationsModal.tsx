@@ -7,6 +7,7 @@ import {
 
 import FollowRequestsSection from '@/components/FollowRequestsSection';
 import PushNotificationsControl from '@/components/PushNotificationsControl';
+import { NotificationsSkeleton } from '@/components/Skeletons';
 import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
@@ -746,7 +747,7 @@ export default function NotificationsModal({
           }}
         >
           <PushNotificationsControl currentUserId={currentUserId} />
-          {loading && items.length === 0 && <p className="py-10 text-center text-sm text-[#8e8e93]">جارٍ تحميل الإشعارات…</p>}
+          {loading && items.length === 0 && <NotificationsSkeleton count={5} />}
           {error && <p role="alert" className="mb-1 rounded-xl border border-rose-400/20 bg-rose-400/[0.06] p-3 text-sm text-rose-200">تعذر تحميل الإشعارات: {error}</p>}
           {readError && <p role="status" className="mb-1 rounded-xl border border-amber-400/20 bg-amber-400/[0.05] p-3 text-xs text-amber-100">{readError}</p>}
           {!loading && !error && visibleItems.length === 0 && (
@@ -755,7 +756,7 @@ export default function NotificationsModal({
             </p>
           )}
           {visibleItems.map(renderCard)}
-          {loadingMore && <p className="py-3 text-center text-xs text-[#8e8e93]">جارٍ تحميل المزيد…</p>}
+          {loadingMore && <NotificationsSkeleton count={2} className="pt-2 opacity-70" />}
           {error && hasMore && (
             <button type="button" onClick={() => loadMoreRef.current?.()} className="mx-auto rounded-full px-4 py-2 text-xs text-[#c98d73] hover:bg-white/[0.05]">إعادة المحاولة</button>
           )}

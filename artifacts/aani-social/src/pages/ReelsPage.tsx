@@ -3,6 +3,7 @@ import { useLocation } from 'wouter';
 import { Film as FilmIcon } from 'lucide-react';
 
 import ReelSlide from '@/components/ReelSlide';
+import { ReelsSkeleton } from '@/components/Skeletons';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
 import { getPostDestination } from '@/lib/types';
@@ -73,7 +74,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
       className="reels-container"
       onScroll={event => saveReelsScrollPosition(userId, event.currentTarget.scrollTop)}
     >
-      {loading && <div className="status-box flex h-full items-center justify-center text-white">جاري تحميل الريلز...</div>}
+      {loading && <ReelsSkeleton />}
       {!loading && error && (
         <div role="alert" className="status-box flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-white">
           <p className="text-sm text-zinc-300">{error}</p>

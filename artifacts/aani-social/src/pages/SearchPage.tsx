@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
+import { ListSkeleton } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -267,11 +268,11 @@ export default function SearchPage({ userId }: { userId: string }) {
         </section>
       )}
 
-      {loading && <div className="status-box">جاري البحث عن الحسابات...</div>}
+      {loading && <ListSkeleton count={6} />}
       {searchError && !loading && <div className="status-box">{searchError}</div>}
 
       {!loading && !searchError && profiles.length > 0 && (
-        <div className="card space-y-2">
+        <div className="card space-y-2 content-fade-in">
           {profiles.map(profile => (
             <Link
               key={profile.id}

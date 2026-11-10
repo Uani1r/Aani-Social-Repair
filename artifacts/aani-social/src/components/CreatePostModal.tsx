@@ -5,6 +5,7 @@ import Avatar from './Avatar';
 import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
+import { ListSkeleton } from './Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type PostDestination, type PostMetadataTag, type Profile, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
@@ -367,9 +368,7 @@ export default function CreatePostModal({
                 </div>
                 <div className="mt-2 max-h-36 overflow-y-auto">
                   {mentionLoading && (
-                    <p className="flex items-center justify-center gap-2 py-3 text-xs text-white/50">
-                      <Loader2 size={14} className="animate-spin" /> جارٍ البحث...
-                    </p>
+                    <ListSkeleton count={2} compact className="py-1" />
                   )}
                   {!mentionLoading && mentionCandidates.map(person => (
                     <button

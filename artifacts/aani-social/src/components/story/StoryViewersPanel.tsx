@@ -3,6 +3,7 @@ import { Ban, Eye, EyeOff, Flag, Heart, Loader2, MoreVertical, UserRound, X } fr
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
+import { ListSkeleton } from '@/components/Skeletons';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -110,8 +111,8 @@ export default function StoryViewersPanel({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto pb-2">
           {storyViewsLoading && (
-            <div className="flex items-center justify-center py-5 text-zinc-400" role="status" aria-label="جارٍ تحميل المشاهدات">
-              <Loader2 size={20} className="animate-spin" />
+            <div role="status" aria-label="جارٍ تحميل المشاهدات">
+              <ListSkeleton count={4} compact className="px-3" />
             </div>
           )}
           {storyViewsError && (

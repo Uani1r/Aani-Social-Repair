@@ -9,6 +9,7 @@ import { normalizeStoryAuthor, normalizeStoryRow, type StoryRow } from '@/compon
 import type { ProfileHighlight, ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { decodeStoryFilterKey, getStoryFilterOverlay } from '@/lib/storyFilters';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { GridSkeleton, ListSkeleton } from '@/components/Skeletons';
 
 type HighlightCollectionOption = Pick<ProfileHighlightCollectionSummary, 'id' | 'title'>;
 
@@ -237,7 +238,7 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
           <button type="button" onClick={() => void refresh()} className="mt-3 rounded-full bg-white px-4 py-2 text-xs font-bold text-black">إعادة المحاولة</button>
         </div>
       ) : loading && stories.length === 0 ? (
-        <p className="py-12 text-center text-sm text-zinc-500">جارٍ تحميل أرشيف القصص...</p>
+        <GridSkeleton count={9} className="px-2 py-6" />
       ) : stories.length === 0 ? (
         <div className="flex flex-col items-center rounded-2xl border border-[#242424] bg-[#0a0a0a] px-5 py-12 text-center">
           <Archive size={30} className="text-zinc-600" />
@@ -331,7 +332,7 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
                     <button type="button" onClick={closeHighlightsPicker} disabled={highlightSaving} className="rounded-full px-3 py-2 text-xs text-zinc-300 disabled:opacity-50">إغلاق</button>
                   </div>
                   {highlightCollectionsLoading ? (
-                    <p className="py-8 text-center text-sm text-zinc-400">جارٍ تحميل المجموعات...</p>
+                    <ListSkeleton count={3} />
                   ) : (
                     <div className="max-h-[32dvh] space-y-2 overflow-y-auto">
                       {highlightCollections.map(collection => (

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Loader2, Search, Star, X } from 'lucide-react';
+import { Check, Search, Star, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import UserIdentity from '@/components/UserIdentity';
+import { ListSkeleton } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
 
@@ -192,9 +193,7 @@ export default function CloseFriendsSheet({ open, currentUserId, onClose }: Clos
 
         <div className="flex-1 overflow-y-auto px-3 py-2">
           {loading && (
-            <p className="flex items-center justify-center gap-2 py-8 text-[11px] text-white/55">
-              <Loader2 size={14} className="animate-spin" /> جارٍ تحميل الحسابات…
-            </p>
+            <ListSkeleton count={5} compact className="px-2" />
           )}
           {!loading && failed && <p className="py-8 text-center text-[11px] text-red-300">تعذر تحميل القائمة. حاول مرة أخرى.</p>}
           {!loading && !failed && visiblePeople.length === 0 && (

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, MessageCircle } from 'lucide-react';
 
 import FeedPostCard from '../components/FeedPostCard';
+import { FeedSkeleton } from '@/components/Skeletons';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
@@ -245,7 +246,7 @@ export default function FeedPage({
         </div>
       )}
 
-      {loading && <div className="loading-grid">{[1, 2].map(n => <div className="post-skeleton card" key={n}><i className="skeleton skeleton-avatar" /><div className="skeleton-copy"><i className="skeleton skeleton-line short" /></div></div>)}</div>}
+      {loading && <FeedSkeleton count={3} />}
 
       {!loading && error && (
         <div role="alert" className="empty-state card border border-rose-500/30 rounded-2xl bg-zinc-900/70 p-6 text-center">
@@ -268,7 +269,7 @@ export default function FeedPage({
       )}
 
       {visiblePosts.length > 0 && (
-        <div className="posts-list space-y-3">
+        <div className="posts-list space-y-3 content-fade-in">
           {visiblePosts.map(post => {
             const pending = pendingById.get(post.id);
             return (

@@ -3,6 +3,7 @@ import { MessageCircle } from 'lucide-react';
 
 import type { CommentWithDetails } from '../../lib/interactions';
 import CommentItem from '../CommentItem';
+import { CommentsSkeleton } from '../Skeletons';
 
 interface CommentsListProps {
   comments: CommentWithDetails[];
@@ -73,18 +74,7 @@ const CommentsList: React.FC<CommentsListProps> = ({
     )}
 
     {loading && comments.length === 0 && !error ? (
-      <div className="space-y-5 py-4" role="status" aria-label="جارٍ تحميل التعليقات">
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="flex animate-pulse items-start gap-3">
-            <div className="h-10 w-10 shrink-0 rounded-full bg-zinc-800" />
-            <div className="flex-1 space-y-2 pt-1">
-              <div className="h-3 w-24 rounded bg-zinc-800" />
-              <div className="h-3 w-full rounded bg-zinc-800/70" />
-              <div className="h-3 w-2/3 rounded bg-zinc-800/50" />
-            </div>
-          </div>
-        ))}
-      </div>
+      <CommentsSkeleton count={4} />
     ) : !loading && !error && comments.length === 0 ? (
       <div className="flex h-40 flex-col items-center justify-center gap-2 text-center text-zinc-500">
         <MessageCircle size={32} className="text-zinc-700" />
