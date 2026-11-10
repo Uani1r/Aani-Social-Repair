@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 
 import ReelSlide from '@/components/ReelSlide';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import type { Post } from '@/lib/types';
 
 type FeedReelViewerProps = {
@@ -42,6 +43,9 @@ export default function FeedReelViewer({ posts, initialIndex, initialPostId, ini
     }
     onClose(playbackTimeRef.current);
   };
+
+  // زر الرجوع (الهاتف/المتصفح) يغلق عارض الريلز ويعيدك للتغذية بنفس اللحظة
+  useOverlayBack(true, closeViewer);
 
   useLayoutEffect(() => {
     const container = scrollRef.current;

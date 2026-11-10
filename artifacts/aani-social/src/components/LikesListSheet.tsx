@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import Avatar from './Avatar';
 import { ListSkeleton } from './Skeletons';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
 
@@ -44,6 +45,8 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
   open: boolean;
   onClose: () => void;
 }) {
+  // زر الرجوع (الهاتف/المتصفح) يغلق قائمة الإعجابات دون مغادرة الصفحة
+  useOverlayBack(open, onClose);
   const [users, setUsers] = useState<LikeUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);

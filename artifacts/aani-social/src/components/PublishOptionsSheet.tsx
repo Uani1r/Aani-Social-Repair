@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { Image, MoreHorizontal, Type, Video } from 'lucide-react';
 
+import { useOverlayBack } from '@/hooks/useOverlayBack';
+
 type PublishOptionsSheetProps = {
   open: boolean;
   onClose: () => void;
@@ -25,6 +27,8 @@ export default function PublishOptionsSheet({
   onVideoSelected,
   onOpenMore,
 }: PublishOptionsSheetProps) {
+  // زر الرجوع (الهاتف/المتصفح) يغلق قائمة النشر دون مغادرة الصفحة
+  useOverlayBack(open, onClose);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const dragStartYRef = useRef<number | null>(null);
   const dragStartTimeRef = useRef(0);

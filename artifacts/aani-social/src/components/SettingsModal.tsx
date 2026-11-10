@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import type { SettingsModalProps } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
@@ -40,6 +41,8 @@ export default function SettingsModal({
   onOpenNotifications,
   onSignOut,
 }: SettingsModalProps) {
+  // زر الرجوع (الهاتف/المتصفح) يغلق الإعدادات ويعيدك لنفس المكان
+  useOverlayBack(isOpen, onClose);
   const [view, setView] = useState<SettingsView>('home');
   const [fullName, setFullName] = useState('');
   const [username, setUsername] = useState('');

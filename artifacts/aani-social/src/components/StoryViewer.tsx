@@ -6,6 +6,7 @@ import StoryProgressBar from './story/StoryProgressBar';
 import StoryReplyControls from './story/StoryReplyControls';
 import StoryViewersPanel from './story/StoryViewersPanel';
 import { preloadMedia } from '@/lib/mediaPreload';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import type { StoryViewerProps } from './story/types';
 
 type StoryViewerTouchStart = {
@@ -78,6 +79,8 @@ export default function StoryViewer({
   onViewerReportCategoryChange,
   onViewerReportDetailsChange,
 }: StoryViewerProps) {
+  // زر الرجوع (الهاتف/المتصفح) يغلق عارض الستوري ويعيدك لنفس المكان
+  useOverlayBack(Boolean(currentStory), onCloseViewer);
   const storyViewerTouchStartRef = useRef<StoryViewerTouchStart | null>(null);
   const storyViewerPausedBeforeTouchRef = useRef(false);
   const suppressStoryClickUntilRef = useRef(0);

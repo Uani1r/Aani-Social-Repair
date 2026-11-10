@@ -16,6 +16,7 @@ import { appendImageMediaAspect, buildVideoMediaUrl } from '@/lib/videoMedia';
 import { displayName, type Post, type PostDestination, type PostMetadataTag, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 import { requestContentRefresh } from '@/lib/contentRefresh';
+import { useRouteScrollMemory } from '@/hooks/useRouteScrollMemory';
 
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -95,6 +96,8 @@ export default function Shell({
   headerStories,
 }: ShellProps) {
   const [path, setLocation] = useLocation();
+  // ذاكرة موضع التمرير لكل مسار: العودة لمسار سبق زيارته تستعيد موضع التمرير
+  useRouteScrollMemory(path);
   const isProfilePath = path === '/profile' || path.startsWith('/profile/');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPublishOptionsSheet, setShowPublishOptionsSheet] = useState(false);
@@ -1159,8 +1162,14 @@ export default function Shell({
     setShowCreateModal(false);
     setIsSubmitting(false);
     setCreateError('');
+    // لا إعادة توجيه تلقائية للرئيسية: ابقَ في الشاشة التي كنت عليها،
+    // والانتقال فقط عند تغيّر السياق الفعلي (نشر ريلز من غير شاشة الريلز،
+    // أو مغادرة شاشة الريلز بعد نشر منشور تغذية)
     const destinationPath = postDestination === 'reels' ? '/reels' : '/feed';
-    if (path !== destinationPath) setLocation(destinationPath);
+    const shouldNavigate = postDestination === 'reels'
+      ? path !== '/reels'
+      : path === '/reels';
+    if (shouldNavigate) setLocation(destinationPath);
   };
 
   const isFeedPath = path === '/' || path === '/feed';

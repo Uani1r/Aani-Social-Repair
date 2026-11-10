@@ -9,6 +9,7 @@ import FollowRequestsSection from '@/components/FollowRequestsSection';
 import PushNotificationsControl from '@/components/PushNotificationsControl';
 import { NotificationsSkeleton } from '@/components/Skeletons';
 import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
 import { displayName, formatDate, type Profile, type ProfileNotificationSettings } from '@/lib/types';
@@ -280,6 +281,8 @@ export default function NotificationsModal({
   onOpenFollowRequestsHandled,
   onOpenFollowRequests,
 }: NotificationsModalProps) {
+  // زر الرجوع (الهاتف/المتصفح) يغلق الإشعارات ويعيدك لنفس المكان
+  useOverlayBack(isOpen, onClose);
   const [, setLocation] = useLocation();
   const [items, setItems] = useState<NotificationEntry[]>([]);
   const [loading, setLoading] = useState(false);

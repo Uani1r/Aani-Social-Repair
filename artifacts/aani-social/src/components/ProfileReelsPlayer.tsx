@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom';
 import ReelSlide from '@/components/ReelSlide';
 import { ReelsSkeleton } from '@/components/Skeletons';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 
@@ -26,6 +27,8 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
   const [fetchedReels, setFetchedReels] = useState<Post[] | null>(null);
 
   useModalBodyScrollLock();
+  // زر الرجوع (الهاتف/المتصفح) يغلق المشغل ويعيدك للبروفايل مباشرة
+  useOverlayBack(true, onClose);
 
   // تنظيف صريح وملزم عند الإغلاق (زر X / رجوع / Unmount):
   // يجب أن يعود تمرير صفحة البروفايل فوراً حتى لو بقيت أي حالة

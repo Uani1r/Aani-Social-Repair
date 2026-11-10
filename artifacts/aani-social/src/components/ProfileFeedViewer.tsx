@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 
 import FeedPostCard from '@/components/FeedPostCard';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import type { Post } from '@/lib/types';
 
 // شاشة تغذية منشورات الملف الشخصي: تفتح بعرض كامل بأسلوب إنستغرام
@@ -21,6 +22,8 @@ export default function ProfileFeedViewer({ posts, initialPostId, currentUserId,
   const savedProfileScrollTopRef = useRef(0);
 
   useModalBodyScrollLock();
+  // زر الرجوع (الهاتف/المتصفح) يغلق العارض ويعيدك للبروفايل مباشرة
+  useOverlayBack(true, onClose);
 
   // تنظيف صريح وملزم عند الإغلاق (زر X / Escape / Unmount):
   // يعيد تفعيل تمرير صفحة البروفايل فوراً ويستعيد موضع التمرير المحفوظ.

@@ -4,6 +4,7 @@ import { AtSign, Check, Crop, Image as ImageIcon, Music2, Scissors, Search, Volu
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type VideoAspectRatio, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { DEFAULT_VIDEO_CROP, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
@@ -128,6 +129,9 @@ export default function VideoPreviewModal({
   const [mentionError, setMentionError] = useState('');
   const [mentionNotice, setMentionNotice] = useState('');
   const [pickedMentions, setPickedMentions] = useState<VideoMentionPerson[]>([]);
+
+  // زر الرجوع (الهاتف/المتصفح) يغلق المعاينة ويعيدك لنفس المكان
+  useOverlayBack(open, onClose);
 
   useEffect(() => {
     if (!open) return undefined;

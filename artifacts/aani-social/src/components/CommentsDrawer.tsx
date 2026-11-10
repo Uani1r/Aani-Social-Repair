@@ -27,6 +27,7 @@ import { supabase, supabaseConfigured, storageBucket } from '../lib/supabase';
 import { cleanUsername, displayName } from '../lib/types';
 import { extractMentions, findActiveMention, type MentionQuery } from '../lib/mentions';
 import { useBottomSheetDismiss } from '../hooks/useBottomSheetDismiss';
+import { useOverlayBack } from '../hooks/useOverlayBack';
 import {
   isMissingOptionalModerationAction,
   isMissingOptionalModerationRelation,
@@ -150,6 +151,8 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
   initialCommentsCount = 0,
   initialCommentId,
 }) => {
+  // زر الرجوع (الهاتف/المتصفح) يغلق نافذة التعليقات دون مغادرة الصفحة
+  useOverlayBack(isOpen, onClose);
   const [comments, setComments] = useState<CommentWithDetails[]>([]);
   const [postOwnerId, setPostOwnerId] = useState<string | null>(null);
   const [restrictedUserIds, setRestrictedUserIds] = useState<Set<string>>(new Set());

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Minus, Music2, Plus, X } from 'lucide-react';
 
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
 
 const MIN_ZOOM = 1;
@@ -78,6 +79,7 @@ async function cropImage(image, view, frameBounds, aspectValue, aspectLabel) {
 // 3 قوالب قياسية فقط (4:5 الافتراضي، 3:4، 9:16) بلا قص حر،
 // وعند «التالي» تُجهَّز جميع الصور بنسبها المختارة دون أي شاشة قص إضافية.
 export default function ImagePreviewModal({ open, images, onImagesChange, onClose, onNext }) {
+  useOverlayBack(open, onClose);
   const trackRef = useRef(null);
   const cropFrameRef = useRef(null);
   const frameRefsRef = useRef([]);

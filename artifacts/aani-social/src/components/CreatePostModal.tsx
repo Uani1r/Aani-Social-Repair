@@ -6,6 +6,7 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
 import { ListSkeleton } from './Skeletons';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type PostDestination, type PostMetadataTag, type Profile, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
@@ -71,6 +72,9 @@ export default function CreatePostModal({
   const [tags, setTags] = useState<ComposerTag[]>(() =>
     (initialTags || []).map((tag, index) => ({ ...tag, id: `composer-tag-seeded-${index}` })),
   );
+
+  // زر الرجوع (الهاتف/المتصفح) يغلق شاشة النشر دون مغادرة الصفحة
+  useOverlayBack(true, onClose);
 
   // تمديد تلقائي لحقل الوصف مع سقف أقصى ثم تمرير داخلي
   useEffect(() => {
