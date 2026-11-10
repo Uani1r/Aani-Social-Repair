@@ -4,7 +4,6 @@ import { AtSign, Send, Sticker, X } from 'lucide-react';
 import type { CommentWithDetails } from '../../lib/interactions';
 import type { MentionQuery } from '../../lib/mentions';
 import type { CommentComposerProfile, MentionCandidate } from './types';
-import { buildInitials } from './utils';
 import { displayName } from '../../lib/types';
 import CommentMediaPicker from './CommentMediaPicker';
 import CommentMediaPreview from './CommentMediaPreview';
@@ -39,7 +38,6 @@ const stickers = ['❤️', '🥰', '😂', '👏', '🙏', '✨', '🌷', '🤍
 const CommentComposer: React.FC<CommentComposerProps> = ({
   content,
   replyingTo,
-  currentUser,
   selectedImage,
   previewUrl,
   submitting,
@@ -90,19 +88,17 @@ const CommentComposer: React.FC<CommentComposerProps> = ({
     )}
 
     <form className="flex items-center gap-2.5" onSubmit={onSubmit}>
-      <div className="shrink-0">
-        {currentUser?.avatar_url ? (
-          <img
-            src={currentUser.avatar_url}
-            alt={displayName(currentUser)}
-            className="h-11 w-11 rounded-full object-cover ring-1 ring-zinc-700"
-          />
-        ) : (
-          <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-sm font-bold text-white ring-1 ring-zinc-700">
-            {buildInitials(displayName(currentUser))}
-          </div>
-        )}
-      </div>
+      {/* زر الإرسال في أقصى اليمين (مكان صورة الملف الشخصي السابقة):
+          طائرة ورقية بأسلوب تليجرام، ويبقى ظاهراً دائماً لكنه معطل
+          حين لا يوجد نص أو صورة للإرسال. */}
+      <button
+        type="submit"
+        disabled={submitting || (!content.trim() && !selectedImage)}
+        className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-pink-600 text-white transition hover:bg-pink-500 disabled:cursor-not-allowed disabled:opacity-50"
+        aria-label="نشر التعليق"
+      >
+        <Send size={20} className="-rotate-45" />
+      </button>
 
       <div className="comments-composer-pill relative flex min-w-0 flex-1 items-center px-3 py-2.5">
         {mentionQuery && mentionSuggestions.length > 0 && (
@@ -169,17 +165,6 @@ const CommentComposer: React.FC<CommentComposerProps> = ({
           </button>
 
           <CommentMediaPicker onSelectImage={onSelectImage} />
-
-          {(content.trim() || selectedImage) && (
-            <button
-              type="submit"
-              disabled={submitting}
-              className="rounded-full bg-pink-600 p-2 text-white transition hover:bg-pink-500 disabled:cursor-wait disabled:opacity-50"
-              aria-label="نشر التعليق"
-            >
-              <Send size={18} className="rotate-180" />
-            </button>
-          )}
         </div>
       </div>
     </form>

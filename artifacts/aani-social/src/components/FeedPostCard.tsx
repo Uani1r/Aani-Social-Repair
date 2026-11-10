@@ -487,7 +487,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''} ${isMainFeedImage ? 'px-4 pb-1' : ''}`}>
         <div className="post-actions-right flex flex-nowrap items-center gap-4 justify-start w-full overflow-x-auto">
           {/* 1. الإعجاب */}
-          <div className={`post-action-btn ${liked ? 'liked text-rose-500 font-bold' : 'text-zinc-400'}`}>
+          <div className={`post-action-btn ${liked ? 'liked text-[#FF0000] font-bold' : 'text-zinc-400'}`}>
             <button
               type="button"
               onClick={toggleLike}
@@ -496,18 +496,18 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               className="inline-flex items-center justify-center border-0 bg-transparent p-0 text-inherit"
             >
               <Heart
-                size={18}
+                size={21}
                 fill={liked ? 'currentColor' : 'none'}
                 className={`transition-transform ${isAnimating ? 'animate-heart-pulse' : ''}`}
               />
             </button>
             {likesVisible && (post.hide_likes ? (
-              <span className="cursor-default text-xs">{likesCount}</span>
+              <span className="cursor-default text-[13px]">{likesCount}</span>
             ) : (
               <button
                 type="button"
                 onClick={() => setShowLikesSheet(true)}
-                className="cursor-pointer border-0 bg-transparent p-0 text-xs text-inherit"
+                className="cursor-pointer border-0 bg-transparent p-0 text-[13px] text-inherit"
                 aria-label="عرض قائمة الإعجابات"
               >
                 {likesCount}
@@ -518,26 +518,26 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           {/* 2. التعليقات */}
           {commentsVisible && (
             <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 hover:text-blue-400 transition" onClick={loadComments}>
-              <MessageSquare size={18} />
-              <span className="text-xs">{commentsCount}</span>
+              <MessageSquare size={21} />
+              <span className="text-[13px]">{commentsCount}</span>
             </button>
           )}
 
-          {/* 3. إعادة النشر */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${reposted ? 'text-[#FF0000]' : 'text-zinc-400 hover:text-zinc-200'}`} onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
-            <RepostIcon active={reposted} size={18} />
-            <span className="text-xs">{repostsCount}</span>
+          {/* 3. إعادة النشر: أبيض دائماً، وعلامة صح عند التفعيل */}
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-white transition" onClick={toggleRepost} aria-pressed={reposted} aria-label={reposted ? 'إلغاء إعادة النشر' : 'إعادة النشر'}>
+            <RepostIcon active={reposted} size={21} />
+            <span className="text-[13px]">{repostsCount}</span>
           </button>
 
           {/* 4. المشاركة */}
           <button type="button" className="post-action-btn flex items-center gap-1.5 text-zinc-400 transition hover:text-purple-400" onClick={() => setShowShareSheet(true)} aria-label="مشاركة المنشور">
-            <Send size={18} />
-            <span className="text-xs">{sharesCount}</span>
+            <Send size={21} />
+            <span className="text-[13px]">{sharesCount}</span>
           </button>
 
-          {/* 5. الحفظ */}
-          <button type="button" className={`post-action-btn flex items-center gap-1.5 transition ${bookmarked ? 'saved text-amber-400' : 'text-zinc-400 hover:text-amber-400'}`} onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'}>
-            <Bookmark size={18} fill={bookmarked ? 'currentColor' : 'none'} />
+          {/* 5. الحفظ: مفرغ افتراضياً ويمتلئ أبيض عند الحفظ */}
+          <button type="button" className="post-action-btn flex items-center gap-1.5 text-white transition" onClick={toggleBookmark} aria-label={bookmarked ? 'إزالة من المحفوظات' : 'حفظ المنشور'} aria-pressed={bookmarked}>
+            <Bookmark size={21} fill={bookmarked ? 'currentColor' : 'none'} />
           </button>
 
         </div>

@@ -1331,7 +1331,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           </button>
 
           <div className="flex items-center gap-2" aria-live="polite">
-            <MessageCircle size={18} className="text-pink-500" />
+            <MessageCircle size={18} className="text-white" />
             <span className="text-base font-bold text-zinc-100">
               {formatCommentsTitle(totalComments)}
             </span>

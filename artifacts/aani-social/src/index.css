@@ -472,11 +472,11 @@ body {
 }
 
 .post-action-btn.liked {
-  color: #ec4899;
+  color: #ff0000;
 }
 
 .post-action-btn.saved {
-  color: #f59e0b;
+  color: #ffffff;
 }
 
 .reel-actions {
@@ -1676,11 +1676,11 @@ a:active > .aani-notifications-card {
 }
 
 .reel-sidebar-button.is-liked {
-  color: #ff2a5f;
+  color: #ff0000;
 }
 
 .reel-sidebar-button.is-reposted {
-  color: #FF0000;
+  color: #ffffff;
 }
 
 .reel-repost-pill {
@@ -1744,7 +1744,7 @@ a:active > .aani-notifications-card {
 }
 
 .reel-sidebar-button.is-saved {
-  color: #fbbf24;
+  color: #ffffff;
 }
 
 .reel-options-trigger {
