@@ -3,13 +3,18 @@ import type {
   RealtimeChannel,
   RealtimePostgresChangesPayload,
 } from "@supabase/supabase-js";
-import { handleAppError } from "../appErrors";
 import { supabase, supabaseConfigured } from "../supabase";
+import { registerRealtimeReconnect } from "../realtimeReconnect";
 import { hydratePostIds, hydrateSavesCount } from "./hydration";
 import { patchCache } from "./store";
 import type { InteractionSnapshot, RawRow } from "./types";
 
-function buildChannel(userId: string): { dispose: () => void } {
+const REBUILD_COOLDOWN_MS = 5000;
+
+function buildChannel(
+  userId: string,
+  onBroken: () => void,
+): { channel: RealtimeChannel; dispose: () => void } {
   const dirtyPosts = new Set<string>();
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -87,16 +92,14 @@ function buildChannel(userId: string): { dispose: () => void } {
   );
 
   channel.subscribe((status) => {
+    // نتجاهل الخطأ صامتاً (بلا نافذة خطأ) ونعيد بناء القناة تلقائياً.
     if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-      handleAppError(
-        'فشل تحديث التفاعلات المباشرة',
-        new Error(`Realtime channel ${status}`),
-        'تعذر تحديث الإعجابات والتعليقات مباشرة. تحقق من الاتصال.',
-      );
+      onBroken();
     }
   });
 
   return {
+    channel,
     dispose: () => {
       if (flushTimer) {
         clearTimeout(flushTimer);
@@ -114,7 +117,30 @@ export function useInteractionRealtime(
   useEffect(() => {
     if (!supabaseConfigured || !userId) return;
 
-    const channel = buildChannel(userId);
-    return channel.dispose;
+    let disposed = false;
+    let lastRebuildAt = 0;
+    let current = buildChannel(userId, () => rebuildChannel());
+
+    // إعادة بناء القناة فقط عندما تكون مقطوعة فعلاً (بعد تجميد المتصفح مثلاً)
+    const rebuildChannel = () => {
+      if (disposed) return;
+      const { channel } = current;
+      if (channel.state === "SUBSCRIBED" || channel.state === "JOINING") return;
+      const now = Date.now();
+      if (now - lastRebuildAt < REBUILD_COOLDOWN_MS) return;
+      lastRebuildAt = now;
+
+      current.dispose();
+      current = buildChannel(userId, () => rebuildChannel());
+    };
+
+    // عند العودة للتطبيق (visibilitychange) أو عودة الشبكة (online)
+    const offReconnect = registerRealtimeReconnect(() => rebuildChannel());
+
+    return () => {
+      disposed = true;
+      offReconnect();
+      current.dispose();
+    };
   }, [userId]);
 }

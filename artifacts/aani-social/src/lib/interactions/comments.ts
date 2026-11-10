@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { displayName } from "../types";
 import type { Post, Profile } from "../types";
 import { buildCommentTree } from "../comments/tree";
-import { handleAppError } from "../appErrors";
 import { supabase, supabaseConfigured, storageBucket } from "../supabase";
 import { uploadMedia } from "../storyUpload";
 import {
@@ -458,12 +457,10 @@ export function usePostComments(
         },
       )
       .subscribe((status) => {
+        // إخفاء خطأ CHANNEL_ERROR: إعادة الاشتراك تتم تلقائياً وبصمت عبر
+        // realtimeReconnect عند العودة للتطبيق أو عودة الشبكة.
         if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-          handleAppError(
-            'فشل تحديث التعليقات مباشرة',
-            new Error(`Comments realtime channel ${status}`),
-            'تعذر تحديث التعليقات مباشرة. تحقق من الاتصال.',
-          );
+          console.warn(`[comments] Realtime channel ${status} — ستتم إعادة الاشتراك تلقائياً.`);
         }
       });
 
