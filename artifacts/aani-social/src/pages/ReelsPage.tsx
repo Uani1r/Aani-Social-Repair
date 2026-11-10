@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useLocation } from 'wouter';
 import { Film as FilmIcon } from 'lucide-react';
 
 import ReelSlide from '@/components/ReelSlide';
@@ -18,6 +19,7 @@ function saveReelsScrollPosition(userId: string, scrollTop: number) {
 }
 
 export default function ReelsPage({ userId, onOpenComments }: { userId: string; onOpenComments: (postId: string) => void }) {
+  const [location] = useLocation();
   const { posts, loading, refresh, error } = usePosts('reel', undefined, userId);
   const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -50,6 +52,20 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
     ...userPendingPosts.map(item => item.post),
     ...posts.filter(post => !userPendingPosts.some(item => item.id === post.id)),
   ];
+
+  // فتح ريل محدد عند الوصول من إشعار (‎/reels?openReel=<post_id>‎):
+  // يمرر مشغّل الريلز مباشرة إلى الريل المستهدف.
+  useEffect(() => {
+    if (loading) return;
+    const query = new URLSearchParams(location.split('?')[1] || '');
+    const openReelId = query.get('openReel');
+    if (!openReelId) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const index = visiblePosts.findIndex(post => post.id === openReelId);
+    if (index < 0) return;
+    container.scrollTop = index * container.clientHeight;
+  }, [loading, location, visiblePosts]);
 
   return (
     <div

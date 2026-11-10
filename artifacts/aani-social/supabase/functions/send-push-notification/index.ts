@@ -152,7 +152,11 @@ function notificationUrl(record: NotificationRecord, postIdForComment = ''): str
     if (commentId) query.set('commentId', commentId);
     return `/post/${encode(postId)}?${query.toString()}`;
   }
-  if (['like', 'repost'].includes(type) && postId) return `/post/${encode(postId)}`;
+  if (['like', 'repost'].includes(type) && postId) {
+    // فتح الريل في مشغّل الريلز الخاص به عند الضغط على إشعاره
+    if (asText(record.content_kind).toLowerCase() === 'reel') return `/reels?openReel=${encode(postId)}`;
+    return `/post/${encode(postId)}`;
+  }
   return '/feed';
 }
 

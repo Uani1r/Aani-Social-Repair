@@ -29,6 +29,7 @@ type NotificationEntry = NotificationItem & {
   reference_id?: string | null;
   comment_id?: string | null;
   post_id?: string | null;
+  content_kind?: string | null;
 };
 
 type NotificationDisplayEntry = NotificationEntry & {
@@ -44,7 +45,7 @@ type NotificationReferenceRow = {
 };
 
 type NotificationTarget =
-  | { kind: 'post'; postId: string }
+  | { kind: 'post'; postId: string; contentKind?: string | null }
   | { kind: 'comment'; postId: string; commentId: string | null }
   | { kind: 'story'; storyId: string; ownerId: string }
   | { kind: 'profile'; userId: string }
@@ -182,7 +183,7 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
   }
 
   if ((item.type === 'like' || item.type === 'repost') && (referenceId || item.post_id)) {
-    return { kind: 'post', postId: referenceId || item.post_id! };
+    return { kind: 'post', postId: referenceId || item.post_id!, contentKind: item.content_kind || null };
   }
 
   return null;
@@ -323,22 +324,27 @@ export default function NotificationsModal({
       setError('');
 
       try {
-        const { data, error: queryError } = await supabase
+        const loadRows = (includeContentKind: boolean) => supabase
           .from('notifications')
-          .select('id,content,type,is_read,created_at')
+          .select(includeContentKind ? 'id,content,type,is_read,created_at,content_kind' : 'id,content,type,is_read,created_at')
           .eq('user_id', currentUserId)
           .neq('type', 'follow_request')
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(offset, offset + PAGE_SIZE - 1);
+        let pageResult = await loadRows(true);
+        if (pageResult.error && (pageResult.error.code === '42703' || pageResult.error.code === 'PGRST204')) {
+          // عمود content_kind غير مُطبَّق بعد في قاعدة البيانات
+          pageResult = await loadRows(false);
+        }
         if (!active) return;
-        if (queryError) {
-          setError(queryError.message);
+        if (pageResult.error) {
+          setError(pageResult.error.message);
           if (replace) setItems([]);
           return;
         }
 
-        let rows = (data || []) as NotificationEntry[];
+        let rows = (pageResult.data || []) as NotificationEntry[];
         try {
           let refs: NotificationReferenceRow[] = [];
           const referenceResult = await supabase
@@ -569,7 +575,13 @@ export default function NotificationsModal({
 
     onClose();
     if (target.kind === 'post') {
-      setLocation(`/post/${encodeURIComponent(target.postId)}`);
+      // فتح المحتوى الحقيقي: الريلز في مشغّل الريلز الخاص بها،
+      // وبقية المنشورات في صفحة المنشور بشكله الكامل (Post Modal).
+      if (target.contentKind === 'reel') {
+        setLocation(`/reels?openReel=${encodeURIComponent(target.postId)}`);
+      } else {
+        setLocation(`/post/${encodeURIComponent(target.postId)}`);
+      }
     } else if (target.kind === 'comment') {
       onOpenComments(target.postId, target.commentId || undefined);
       const query = target.commentId
@@ -599,7 +611,23 @@ export default function NotificationsModal({
     const profileHref = item.actor_id ? `/profile/${encodeURIComponent(item.actor_id)}` : null;
 
     return (
-      <article key={item.id} className={`aani-notifications-card relative flex min-h-[80px] w-full items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}>
+      <article
+        key={item.id}
+        role="button"
+        tabIndex={0}
+        onClick={event => {
+          // تجنّب الازدواجية عند الضغط على زر الملف الشخصي أو أزرار البطاقة
+          if ((event.target as HTMLElement).closest('a, button')) return;
+          activateNotification(item);
+        }}
+        onKeyDown={event => {
+          if ((event.key === 'Enter' || event.key === ' ') && !(event.target as HTMLElement).closest('a, button')) {
+            event.preventDefault();
+            activateNotification(item);
+          }
+        }}
+        className={`aani-notifications-card relative flex min-h-[80px] w-full cursor-pointer select-none items-center gap-3 rounded-[20px] border border-white/[0.04] px-3 py-3 text-right transition-transform duration-150 active:scale-[0.985] ${item.is_read ? 'bg-[#141414] text-[#8e8e93]' : 'bg-[#1a1a1a] text-[#f4f4f5]'}`}
+      >
         {item.is_read === false && (
           <span
             aria-hidden="true"
