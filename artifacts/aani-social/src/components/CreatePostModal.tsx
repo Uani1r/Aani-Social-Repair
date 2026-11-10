@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { AtSign, Link2, Loader2, MapPin, Search, X } from 'lucide-react';
+import { AtSign, ChevronUp, Link2, Loader2, MapPin, Search, Trash2, X } from 'lucide-react';
 
 import Avatar from './Avatar';
 import UserIdentity from './UserIdentity';
@@ -238,9 +238,9 @@ export default function CreatePostModal({
         aria-label="إنشاء منشور"
         dir="rtl"
         onClick={event => event.stopPropagation()}
-        className="relative z-10 flex max-h-[86dvh] w-full max-w-[450px] flex-col overflow-y-auto rounded-[32px] border border-white/10 bg-[#1d1b21]/95 text-white shadow-[0_24px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-300"
+        className="relative z-10 flex max-h-[86dvh] w-full max-w-[450px] flex-col gap-3 overflow-y-auto rounded-[32px] border border-white/10 bg-[#1d1b21]/95 text-white shadow-[0_24px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-300"
       >
-        <div className="flex items-center justify-between px-6 pb-4 pt-5">
+        <div className="flex items-center justify-between px-6 pt-5">
           <div className="flex min-w-0 items-center gap-3">
             <Avatar profile={profile} extraLarge />
             <UserIdentity
@@ -283,7 +283,7 @@ export default function CreatePostModal({
                     onClick={() => onRemoveFile(index)}
                     className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/70 text-white backdrop-blur transition hover:bg-black/85"
                   >
-                    <X size={16} />
+                    <Trash2 size={15} />
                   </button>
                 </div>
               ))}
@@ -299,7 +299,7 @@ export default function CreatePostModal({
           </div>
         )}
 
-        <div className="px-6 pb-4">
+        <div className="px-6">
           <textarea
             ref={textareaRef}
             value={postText}
@@ -307,12 +307,12 @@ export default function CreatePostModal({
             maxLength={2000}
             placeholder="اكتب وصفاً للمنشور..."
             aria-label="اكتب وصفاً للمنشور"
-            className="max-h-[220px] min-h-[68px] w-full resize-none overflow-y-auto rounded-2xl border border-white/10 bg-[#2a2a35] px-4 py-3 text-right text-[15px] leading-[1.8] text-white outline-none transition-colors placeholder:text-zinc-500 focus:border-pink-400/50"
+            className="max-h-[220px] min-h-[70px] mb-3 w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-[#2a2a35] p-3 text-right text-[15px] leading-[1.8] text-white outline-none transition-colors placeholder:text-gray-400 focus:border-pink-400/50"
             rows={2}
           />
         </div>
 
-        <section className="mx-6 mb-4 rounded-2xl border border-white/10 bg-white/[0.04] p-3" aria-label="وجهة النشر">
+        <section className="mx-6 rounded-2xl border border-white/10 bg-white/[0.04] p-3" aria-label="وجهة النشر">
           <p className="mb-2 text-right text-xs font-semibold text-white/70">مكان ظهور المنشور</p>
           <div className="grid grid-cols-2 gap-2" role="group" aria-label="وجهة النشر">
             <button
@@ -338,19 +338,19 @@ export default function CreatePostModal({
 
         <PostMetadataChips
           tags={tags}
-          className="mx-6 mb-3"
+          className="mx-6"
           onRemove={index => setTags(current => current.filter((_, tagIndex) => tagIndex !== index))}
           onMentionClick={onClose}
         />
 
         {activeTool && (
-          <div className="mx-6 mb-3 rounded-2xl border border-white/10 bg-white/[0.06] p-3 backdrop-blur-xl">
+          <div className="mx-6 rounded-2xl border border-white/10 bg-white/[0.06] p-3 backdrop-blur-xl">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-semibold text-white/80">
                 {activeTool === 'location' ? 'إضافة موقع' : activeTool === 'link' ? 'إضافة رابط' : 'الإشارة إلى حساب'}
               </span>
-              <button type="button" aria-label="إغلاق أدوات الوسوم" onClick={closeTagEditor} className="rounded-full p-1 text-white/60 hover:bg-white/10 hover:text-white">
-                <X size={15} />
+              <button type="button" aria-label="طي أدوات الوسوم" onClick={closeTagEditor} className="rounded-full p-1 text-white/60 hover:bg-white/10 hover:text-white">
+                <ChevronUp size={15} />
               </button>
             </div>
 
@@ -429,7 +429,7 @@ export default function CreatePostModal({
           </div>
         )}
 
-        <footer className="sticky bottom-0 z-10 mt-2 rounded-b-[32px] border-t border-white/10 bg-[#1d1b21] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+        <footer className="sticky bottom-0 z-10 rounded-b-[32px] border-t border-white/10 bg-[#1d1b21] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <button
