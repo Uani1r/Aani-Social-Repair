@@ -3,7 +3,7 @@ import { Link } from 'wouter';
 import { Bookmark, Heart, MessageCircle, Share2 } from 'lucide-react';
 
 import { usePostInteractions } from '../lib/interactions';
-import { displayName, getPostCoverUrl, type Post } from '../lib/types';
+import { displayName, getPostCoverUrl, taggedMentionDisplayName, type Post } from '../lib/types';
 import UserIdentity from './UserIdentity';
 import RepostIcon from './RepostIcon';
 import PostMetadataChips from './PostMetadataChips';
@@ -103,7 +103,7 @@ export default function PostCard({
                     <>
                       <span className="mx-1 font-normal text-zinc-400">و</span>
                       <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="text-zinc-300 hover:underline">
-                        {taggedMention.displayName || taggedMention.label}
+                        {taggedMentionDisplayName(taggedMention)}
                       </Link>
                     </>
                   )}
@@ -156,7 +156,7 @@ export default function PostCard({
           className="mt-3 text-sm leading-6 text-zinc-200"
         />
       )}
-      <PostMetadataChips tags={post.post_metadata || []} className="mt-2.5" />
+      <PostMetadataChips tags={post.post_metadata || []} hideMentions={post.type !== 'text'} className="mt-2.5" />
 
       {/* شريط الأزرار */}
       <div className="mt-4 flex items-center justify-between border-t border-zinc-800/60 pt-3 text-zinc-300">

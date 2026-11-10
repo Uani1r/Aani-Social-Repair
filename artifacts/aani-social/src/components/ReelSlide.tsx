@@ -19,7 +19,7 @@ import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
+import { displayName, formatDate, getPostCoverUrl, taggedMentionDisplayName, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
@@ -556,7 +556,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                   <>
                     <span className="mx-1 font-normal">و</span>
                     <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="hover:underline">
-                      {taggedMention.displayName || taggedMention.label}
+                      {taggedMentionDisplayName(taggedMention)}
                     </Link>
                   </>
                 )}
@@ -592,7 +592,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         ) : (
           <ExpandablePostText text={post.content} className="reel-description" />
         ))}
-        <PostMetadataChips tags={post.post_metadata || []} className="mt-2" />
+        <PostMetadataChips tags={post.post_metadata || []} hideMentions className="mt-2" />
       </div>
 
       {captionSheet && showCaptionSheet && (

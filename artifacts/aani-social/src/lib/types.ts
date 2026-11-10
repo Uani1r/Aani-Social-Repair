@@ -151,6 +151,13 @@ export const getPostCoverUrl = (post: Pick<Post, 'post_metadata'>): string | nul
   return cover?.href || null;
 };
 
+/**
+ * اسم الشخص المشار إليه للعرض في رأس المنشور:
+ * يتجاهل الأسماء الافتراضية المخزنة (مثل "New member") ويرجع إلى اسم المستخدم.
+ */
+export const taggedMentionDisplayName = (tag: PostMetadataTag): string =>
+  displayName({ full_name: tag.displayName || '', username: tag.label });
+
 export type PostRow = Pick<
   Post,
   'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'destination' | 'visibility' | 'created_at' | 'display_order'

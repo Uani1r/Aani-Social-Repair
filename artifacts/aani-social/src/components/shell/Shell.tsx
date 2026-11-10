@@ -12,7 +12,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
 import { appendImageMediaAspect, buildVideoMediaUrl } from '@/lib/videoMedia';
-import type { Post, PostDestination, PostMetadataTag, VideoCropTransform, VideoTrimRange } from '@/lib/types';
+import { displayName, type Post, type PostDestination, type PostMetadataTag, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 import { requestContentRefresh } from '@/lib/contentRefresh';
 
@@ -691,9 +691,12 @@ export default function Shell({
   // وسوم مُهيّأة لشاشة إنشاء المنشور (إشارة اختيرت أثناء معاينة الفيديو)
   const initialCreateTags = useMemo<PostMetadataTag[]>(() => {
     if (!videoMention) return [];
-    const taggedName = [videoMention.display_name, videoMention.full_name]
-      .map(value => value?.trim() || '')
-      .find(Boolean);
+    // استخدم الاسم الظاهر الحقيقي مع تجاهل الأسماء الافتراضية (مثل "New member")
+    const taggedName = displayName({
+      display_name: videoMention.display_name,
+      full_name: videoMention.full_name,
+      username: videoMention.username,
+    });
     return [{
       kind: 'mention',
       label: videoMention.username,

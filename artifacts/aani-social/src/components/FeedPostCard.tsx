@@ -23,7 +23,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
-import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
+import { displayName, formatDate, getPostCoverUrl, taggedMentionDisplayName, type Post, type Profile } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 
 type FeedPostComment = {
@@ -363,7 +363,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                   <>
                     <span className="mx-1 font-normal text-zinc-400">و</span>
                     <Link href={`/profile/${encodeURIComponent(taggedMention.profileId)}`} className="text-zinc-300 hover:underline">
-                      {taggedMention.displayName || taggedMention.label}
+                      {taggedMentionDisplayName(taggedMention)}
                     </Link>
                   </>
                 )}
@@ -510,7 +510,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           className={`${isMainFeedImage ? 'mx-4' : ''} post-content text-sm text-zinc-200 mt-2.5 leading-relaxed`}
         />
       )}
-      {!isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className={isMainFeedImage ? 'mx-4 mt-2.5' : 'mt-2.5'} />}
+      {!isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} hideMentions={post.type !== 'text'} className={isMainFeedImage ? 'mx-4 mt-2.5' : 'mt-2.5'} />}
 
       {/* شريط الأزرار المتجمع جهة اليمين */}
       <footer className={`border-t border-zinc-800/80 pt-2.5 mt-3 ${isMainFeedVideo ? 'video-post-footer' : ''} ${isMainFeedImage ? 'px-4 pb-1' : ''}`}>
@@ -595,7 +595,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             />
           </div>
         )}
-        {isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} className="video-post-metadata" />}
+        {isMainFeedVideo && <PostMetadataChips tags={post.post_metadata || []} hideMentions className="video-post-metadata" />}
       </footer>
 
       <EditPostSheet

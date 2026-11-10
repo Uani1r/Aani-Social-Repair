@@ -8,6 +8,8 @@ type PostMetadataChipsProps = {
   className?: string;
   onRemove?: (index: number) => void;
   onMentionClick?: () => void;
+  /** إخفاء شرائح الإشارة (تُعرض في رأس المنشور بدلاً منها للمنشورات غير النصية) */
+  hideMentions?: boolean;
 };
 
 export default function PostMetadataChips({
@@ -15,9 +17,11 @@ export default function PostMetadataChips({
   className = '',
   onRemove,
   onMentionClick,
+  hideMentions = false,
 }: PostMetadataChipsProps) {
-  // وسام الغلاف وسيلة تخزين للصورة المصغرة وليس شريحة معروضة
-  const visibleTags = tags.filter(tag => tag.kind !== 'cover');
+  // وسام الغلاف وسيلة تخزين للصورة المصغرة وليس شريحة معروضة،
+  // وشرائح الإشارة تُخفى للمنشورات غير النصية (الإشارة تظهر في الرأس)
+  const visibleTags = tags.filter(tag => tag.kind !== 'cover' && !(hideMentions && tag.kind === 'mention'));
   if (visibleTags.length === 0) return null;
 
   return (
