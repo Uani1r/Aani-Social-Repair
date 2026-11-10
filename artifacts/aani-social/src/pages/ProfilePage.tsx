@@ -10,7 +10,7 @@ import Avatar from '@/components/Avatar';
 import FeedPostCard from '@/components/FeedPostCard';
 import ProfileFeedViewer from '@/components/ProfileFeedViewer';
 import ProfileReelsPlayer from '@/components/ProfileReelsPlayer';
-import { ListSkeleton, ProfileSkeleton } from '@/components/Skeletons';
+import { ListSkeleton, ProfileSkeleton, GridSkeleton } from '@/components/Skeletons';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -46,7 +46,7 @@ function VerifiedBadge() {
   );
 }
 
-type ProfileContentTab = 'posts' | 'videos';
+type ProfileContentTab = 'posts' | 'videos' | 'reposts';
 
 function ProfileTabs({ activeTab, onChange }: {
   activeTab: ProfileContentTab;
@@ -75,6 +75,15 @@ function ProfileTabs({ activeTab, onChange }: {
         </svg>
       ),
     },
+    {
+      id: 'reposts' as const,
+      label: 'إعادات النشر',
+      icon: (active: boolean) => (
+        <svg className={`h-[26px] w-[26px] ${active ? 'text-white' : 'text-[#71767B]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -92,11 +101,6 @@ function ProfileTabs({ activeTab, onChange }: {
           {activeTab === id && <span className="absolute bottom-0 h-[3px] w-12 rounded-t-sm bg-[#1D9BF0]" />}
         </button>
       ))}
-      <button type="button" aria-label="إعادات النشر" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
       <button type="button" aria-label="الوسائط" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
         <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
@@ -202,9 +206,10 @@ export default function ProfilePage({
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
+  const [feedViewerSource, setFeedViewerSource] = useState<'grid' | 'reposts'>('grid');
   const [reelsPlayerPostId, setReelsPlayerPostId] = useState<string | null>(null);
   const [profileContentTab, setProfileContentTab] = useState<ProfileContentTab>('posts');
-  const [reelsPlayerSource, setReelsPlayerSource] = useState<'grid' | 'videos'>('grid');
+  const [reelsPlayerSource, setReelsPlayerSource] = useState<'grid' | 'videos' | 'reposts'>('grid');
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -275,6 +280,11 @@ export default function ProfilePage({
   // (type = 'reel' أياً كانت الوجهة)، بترتيب زمني من الأحدث للأقدم.
   const profileVideoPosts = displayProfilePosts
     .filter(post => post.type === 'reel')
+    .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
+  // تبويب إعادات النشر: ما أعاد صاحب الملف نشره فقط، بترتيب زمني
+  // من الأحدث للأقدم (استعلام usePosts يجلبها مع reposter_id).
+  const profileReposts = displayProfilePosts
+    .filter(post => post.reposter_id === activeUserId && post.type !== 'text')
     .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
@@ -2096,9 +2106,7 @@ export default function ProfilePage({
       <ProfileTabs activeTab={profileContentTab} onChange={setProfileContentTab} />
 
       {loading && (
-        <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
-          {Array.from({ length: 9 }, (_, index) => <div key={`loading-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
-        </div>
+        <GridSkeleton count={9} className="mt-4 gap-[2px] rounded-none" />
       )}
       {!loading && error && (
         <div className="mt-4 px-4">
@@ -2118,12 +2126,16 @@ export default function ProfilePage({
         // والمنشورات الكتابية (text) مستبعدة كلياً من الشبكة.
         // تبويب الفيديوهات: نفس الشبكة والحجم بالضبط لكن بقائمة
         // الفيديوهات فقط (ريلز + فيديوهات التغذية) بترتيبها الزمني.
-        const mediaPosts = profileContentTab === 'videos' ? profileVideoPosts : displayProfilePosts.filter(post => post.type !== 'text');
+        const mediaPosts = profileContentTab === 'videos'
+          ? profileVideoPosts
+          : profileContentTab === 'reposts'
+            ? profileReposts
+            : displayProfilePosts.filter(post => post.type !== 'text');
         if (!mediaPosts.length) {
-          return <p className="mt-6 text-center text-sm text-zinc-400">{profileContentTab === 'videos' ? 'لا توجد فيديوهات منشورة.' : 'لا توجد صور أو فيديوهات منشورة.'}</p>;
+          return <p className="mt-6 text-center text-sm text-zinc-400">{profileContentTab === 'videos' ? 'لا توجد فيديوهات منشورة.' : profileContentTab === 'reposts' ? 'لا توجد إعادات نشر بعد.' : 'لا توجد صور أو فيديوهات منشورة.'}</p>;
         }
         return (
-          <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
+          <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black content-fade-in">
             {mediaPosts.map(post => {
               const isReel = post.type === 'reel' || getPostDestination(post) === 'reels';
               const mediaUrls = post.media_urls?.length ? post.media_urls : post.media_url ? [post.media_url] : [];
@@ -2139,14 +2151,25 @@ export default function ProfilePage({
                       // الريلز الكامل متسلسلاً بين فيديوهات هذا التبويب.
                       setReelsPlayerSource('videos');
                       setReelsPlayerPostId(post.id);
+                    } else if (profileContentTab === 'reposts') {
+                      // من تبويب الريبوست: ريلز → مشغل الريلز محصوراً
+                      // بريلوزات الريبوست، وغيرها → التغذية بين ريبوستاته.
+                      if (isProfileReel(post)) {
+                        setReelsPlayerSource('reposts');
+                        setReelsPlayerPostId(post.id);
+                      } else {
+                        setFeedViewerSource('reposts');
+                        setFeedViewerPostId(post.id);
+                      }
                     } else if (isProfileReel(post)) {
                       setReelsPlayerSource('grid');
                       setReelsPlayerPostId(post.id);
                     } else {
+                      setFeedViewerSource('grid');
                       setFeedViewerPostId(post.id);
                     }
                   }}
-                  aria-label={profileContentTab === 'videos' || isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
+                  aria-label={profileContentTab !== 'posts' || isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
                   className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
                 >
                   {isReel ? (
@@ -2165,6 +2188,11 @@ export default function ProfilePage({
                       <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="4" width="20" height="16" rx="4" /><path d="M10 9.2v5.6a.8.8 0 0 0 1.22.68l4.4-2.8a.8.8 0 0 0 0-1.36l-4.4-2.8A.8.8 0 0 0 10 9.2Z" fill="black" /></svg>
                     </span>
                   )}
+                  {profileContentTab === 'reposts' && (
+                    <span aria-hidden="true" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                    </span>
+                  )}
                   {isMultiImage && (
                     <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
                   )}
@@ -2174,9 +2202,13 @@ export default function ProfilePage({
           </div>
         );
       })()}
-      {feedViewerPostId && displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post)) && (
+      {feedViewerPostId && (feedViewerSource === 'reposts'
+        ? profileReposts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post))
+        : displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post))) && (
         <ProfileFeedViewer
-          posts={displayProfilePosts.filter(post => post.type !== 'text' && !isProfileReel(post))}
+          posts={feedViewerSource === 'reposts'
+            ? profileReposts.filter(post => post.type !== 'text' && !isProfileReel(post))
+            : displayProfilePosts.filter(post => post.type !== 'text' && !isProfileReel(post))}
           initialPostId={feedViewerPostId}
           currentUserId={currentUserId}
           onOpenComments={onOpenComments}
@@ -2186,9 +2218,15 @@ export default function ProfilePage({
       )}
       {reelsPlayerPostId && (reelsPlayerSource === 'videos'
         ? profileVideoPosts.some(post => post.id === reelsPlayerPostId)
-        : displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))) && (
+        : reelsPlayerSource === 'reposts'
+          ? profileReposts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))
+          : displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))) && (
         <ProfileReelsPlayer
-          reels={reelsPlayerSource === 'videos' ? profileVideoPosts : displayProfilePosts.filter(isProfileReel)}
+          reels={reelsPlayerSource === 'videos'
+            ? profileVideoPosts
+            : reelsPlayerSource === 'reposts'
+              ? profileReposts.filter(isProfileReel)
+              : displayProfilePosts.filter(isProfileReel)}
           profileUserId={activeUserId}
           initialReelId={reelsPlayerPostId}
           currentUserId={currentUserId}
