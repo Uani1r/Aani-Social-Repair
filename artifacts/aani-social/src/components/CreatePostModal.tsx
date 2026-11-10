@@ -238,7 +238,7 @@ export default function CreatePostModal({
         aria-label="إنشاء منشور"
         dir="rtl"
         onClick={event => event.stopPropagation()}
-        className="relative z-10 flex max-h-[86dvh] w-full max-w-[450px] flex-col gap-3 overflow-y-auto rounded-[32px] border border-white/10 bg-[#1d1b21]/95 text-white shadow-[0_24px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-300"
+        className="relative z-10 flex max-h-[86dvh] w-full max-w-[450px] flex-col gap-3 overflow-hidden rounded-[32px] border border-white/10 bg-[#1d1b21]/95 text-white shadow-[0_24px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-bottom-4 duration-300"
       >
         <div className="flex items-center justify-between px-6 pt-5">
           <div className="flex min-w-0 items-center gap-3">
@@ -260,6 +260,7 @@ export default function CreatePostModal({
           </button>
         </div>
 
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
         {filePreviews.length > 0 && fileType && (
           <div className="relative w-full bg-black">
             <div className="flex w-full snap-x snap-mandatory overflow-x-auto no-scrollbar">
@@ -344,8 +345,7 @@ export default function CreatePostModal({
         />
 
         {activeTool && (
-          <div className="mx-6 rounded-2xl border border-white/10 bg-white/[0.06] p-3 backdrop-blur-xl">
-            <div className="mb-2 flex items-center justify-between">
+          <div className="mx-6 rounded-2xl border border-white/10 bg-white/[0.06] p-3 backdrop-blur-xl">            <div className="mb-2 flex items-center justify-between">
               <span className="text-xs font-semibold text-white/80">
                 {activeTool === 'location' ? 'إضافة موقع' : activeTool === 'link' ? 'إضافة رابط' : 'الإشارة إلى حساب'}
               </span>
@@ -428,8 +428,9 @@ export default function CreatePostModal({
             {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
           </div>
         )}
+        </div>
 
-        <footer className="sticky bottom-0 z-10 rounded-b-[32px] border-t border-white/10 bg-[#1d1b21] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+        <footer className="border-t border-white/10 px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <button
