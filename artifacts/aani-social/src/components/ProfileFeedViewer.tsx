@@ -18,8 +18,29 @@ export default function ProfileFeedViewer({ posts, initialPostId, currentUserId,
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const itemRefsRef = useRef(new Map<string, HTMLDivElement>());
+  const savedProfileScrollTopRef = useRef(0);
 
   useModalBodyScrollLock();
+
+  // تنظيف صريح وملزم عند الإغلاق (زر X / Escape / Unmount):
+  // يعيد تفعيل تمرير صفحة البروفايل فوراً ويستعيد موضع التمرير المحفوظ.
+  useEffect(() => {
+    savedProfileScrollTopRef.current = window.scrollY;
+    return () => {
+      const remainingOpenDialog = Boolean(document.querySelector(
+        '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+      ));
+      if (remainingOpenDialog) return;
+      document.body.style.overflow = 'unset';
+      document.body.style.position = 'static';
+      document.body.style.overscrollBehavior = '';
+      document.body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
+      const savedTop = savedProfileScrollTopRef.current;
+      if (Number.isFinite(savedTop) && window.scrollY !== savedTop) {
+        window.scrollTo({ left: window.scrollX, top: savedTop, behavior: 'auto' });
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {

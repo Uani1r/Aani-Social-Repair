@@ -93,9 +93,12 @@ export function useModalBodyScrollLock() {
       // مسار المراقب (MutationObserver) يجب ألا يبقى body مقفلاً أبداً،
       // وإلا يتجمد تمرير الصفحة بعد مغادرة عارض المنشورات أو مشغل الريلز.
       const remainingOpenDialog = Boolean(document.querySelector(OPEN_DIALOG_SELECTOR));
-      if (!remainingOpenDialog && body.style.overflow === 'hidden') {
+      const bodyOverflowLocked = body.style.overflow === 'hidden' || body.classList.contains('overflow-hidden');
+      if (!remainingOpenDialog && bodyOverflowLocked) {
         document.body.style.overflow = 'unset';
+        document.body.style.position = 'static';
         document.body.style.overscrollBehavior = '';
+        document.body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
         restorePageScroll();
       }
     };

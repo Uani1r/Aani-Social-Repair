@@ -22,9 +22,31 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
   trailingAccountControl?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const savedProfileScrollTopRef = useRef(0);
   const [fetchedReels, setFetchedReels] = useState<Post[] | null>(null);
 
   useModalBodyScrollLock();
+
+  // تنظيف صريح وملزم عند الإغلاق (زر X / رجوع / Unmount):
+  // يجب أن يعود تمرير صفحة البروفايل فوراً حتى لو بقيت أي حالة
+  // قفل سابقة (overflow/position) أو كلاسات قفل على body.
+  useEffect(() => {
+    savedProfileScrollTopRef.current = window.scrollY;
+    return () => {
+      const remainingOpenDialog = Boolean(document.querySelector(
+        '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+      ));
+      if (remainingOpenDialog) return;
+      document.body.style.overflow = 'unset';
+      document.body.style.position = 'static';
+      document.body.style.overscrollBehavior = '';
+      document.body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
+      const savedTop = savedProfileScrollTopRef.current;
+      if (Number.isFinite(savedTop) && window.scrollY !== savedTop) {
+        window.scrollTo({ left: window.scrollX, top: savedTop, behavior: 'auto' });
+      }
+    };
+  }, []);
 
   // الريلز الممررة جاهزة → تُستخدم فوراً وتُتخطى شاشة التحميل تماماً
   const providedReels = Array.isArray(reels) ? reels : [];
