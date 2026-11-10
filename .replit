@@ -7,6 +7,9 @@ run = "PORT=5000 pnpm --filter @workspace/aani-social run dev"
 localPort = 5000
 externalPort = 80
 
+[[ports]]
+localPort = 8080
+
 [deployment]
 build = ["sh", "-c", "npx vite build artifacts/aani-social"]
 run = ["node", "dist/index.js"]
