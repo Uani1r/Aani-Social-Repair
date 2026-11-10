@@ -35,8 +35,10 @@ type WebhookPayload = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-// معالجة حمولة الإشعار (بعد التحقق من السر): جلب رمز جهاز المستلم
-// من profiles وإرسال الإشعار عبر FCM HTTP v1.
+// معالجة حمولة الإشعار (بعد التحقق من السر):
+// - جدول notifications (أنواع التفاعلات): FCM فقط، بلا مسّ للجدول.
+// - جدول messages (رسائل مباشرة): FCM فقط — لا تُنشأ سجلات في جدول
+//   الإشعارات العامة، وتحديث تبويب الرسائل يتم عبر Realtime على messages.
 export async function processPushNotificationPayload(
   payload: Record<string, unknown>,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -50,7 +52,21 @@ export async function processPushNotificationPayload(
     };
   }
 
-  // صيغة Supabase Webhook ({ type, table, record }) أو حقول مباشرة
+  const table = asText(payload.table).toLowerCase();
+
+  // Webhook على جدول messages: رسائل ومكالمات — إرسال FCM خارجي فقط
+  if (table === "messages") {
+    if (asText(payload.type).toUpperCase() !== "INSERT") {
+      return skipOutcome("Not a messages insert.");
+    }
+    return deliverMessagePush(
+      supabase,
+      serviceAccount,
+      isRecord(payload.record) ? payload.record : {},
+    );
+  }
+
+  // صيغة Supabase Webhook لجدول notifications (أنواع التفاعلات غير الرسائل)
   const record = isRecord(payload.record) ? payload.record : payload;
   const isNotificationInsert =
     asText(payload.schema) === "public" &&
@@ -59,36 +75,22 @@ export async function processPushNotificationPayload(
 
   const userId = asText(record.user_id);
   if (!userId) {
-    return {
-      status: 200,
-      body: { success: true, skipped: true, reason: "Notification is missing its recipient." },
-    };
+    return skipOutcome("Notification is missing its recipient.");
   }
 
   if (!isNotificationInsert && !isRecord(payload.record)) {
-    return {
-      status: 200,
-      body: { success: true, skipped: true, reason: "Unrecognized payload." },
-    };
+    return skipOutcome("Unrecognized payload.");
   }
 
-  // جلب رمز جهاز المستلم من profiles (مع تجربة user_tokens كاحتياط)
-  const profile = await fetchRecipientPushProfile(supabase, userId);
-  const deviceToken = profile?.fcmToken || "";
-  if (!deviceToken) {
-    return {
-      status: 200,
-      body: { success: true, skipped: true, reason: "Recipient has no registered device token." },
-    };
+  const recipient = await loadRecipientDevice(supabase, userId);
+  if (!recipient.deviceToken) {
+    return skipOutcome("Recipient has no registered device token.");
   }
 
   // احترام تفضيلات الإشعارات للمستلم
   const type = asText(record.type).toLowerCase();
-  if (profile?.notificationSettings?.[preferenceCategory(type)] === false) {
-    return {
-      status: 200,
-      body: { success: true, skipped: true, reason: "Recipient disabled this notification category." },
-    };
+  if (recipient.notificationSettings?.[preferenceCategory(type)] === false) {
+    return skipOutcome("Recipient disabled this notification category.");
   }
 
   // بناء المحتوى (العنوان، النص، مسار الفتح) وإرسال الرسالة إلى FCM
@@ -99,7 +101,7 @@ export async function processPushNotificationPayload(
       : "";
   const content = buildNotificationContent(record, postIdForComment);
 
-  const result = await sendFcmMessage(serviceAccount, deviceToken, {
+  const result = await sendFcmMessage(serviceAccount, recipient.deviceToken, {
     data: {
       title: content.title,
       body: content.body,
@@ -123,6 +125,90 @@ export async function processPushNotificationPayload(
   }
 
   return { status: 200, body: { success: true, sent: true } };
+}
+
+const skipOutcome = (reason: string): { status: number; body: Record<string, unknown> } => ({
+  status: 200,
+  body: { success: true, skipped: true, reason },
+});
+
+type RecipientDevice = {
+  deviceToken: string;
+  notificationSettings: Record<string, unknown> | null;
+};
+
+async function loadRecipientDevice(
+  config: { url: string; serviceRoleKey: string },
+  userId: string,
+): Promise<RecipientDevice> {
+  const profile = await fetchRecipientPushProfile(config, userId);
+  return {
+    deviceToken: profile?.fcmToken || "",
+    notificationSettings: profile?.notificationSettings ?? null,
+  };
+}
+
+// رسائل مباشرة ومكالمات: إرسال FCM لجهاز المستلم فقط —
+// لا إضافة أي سجل في جدول الإشعارات العامة (notifications).
+// تحديث المحادثات يبقى عبر اشتراكات Realtime على جدول messages.
+async function deliverMessagePush(
+  config: { url: string; serviceRoleKey: string },
+  serviceAccount: Parameters<typeof sendFcmMessage>[0],
+  record: Record<string, unknown>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const senderId = asText(record.sender_id);
+  const recipientId = asText(record.recipient_id);
+  const messageContent = asText(record.content);
+
+  if (!recipientId || !senderId || recipientId === senderId) {
+    return skipOutcome("Message is missing sender or recipient.");
+  }
+
+  // إشارات المكالمات الواردة تُدار عبر Realtime (CallManager) فقط —
+  // لا إشعار عام ولا إشعار FCM من هذا المسار.
+  if (messageContent.startsWith("[aani-call:v1]")) {
+    return skipOutcome("Call signal handled via realtime only.");
+  }
+
+  const recipient = await loadRecipientDevice(config, recipientId);
+  if (!recipient.deviceToken) {
+    return skipOutcome("Recipient has no registered device token.");
+  }
+
+  if (recipient.notificationSettings?.messages === false) {
+    return skipOutcome("Recipient disabled message notifications.");
+  }
+
+  const content = buildNotificationContent({
+    ...record,
+    type: "message",
+    title: "رسالة جديدة",
+    body: messageContent,
+    url: `/messages/${senderId}`,
+  });
+
+  const result = await sendFcmMessage(serviceAccount, recipient.deviceToken, {
+    data: {
+      title: content.title,
+      body: content.body,
+      url: content.url,
+      message_id: asText(record.id),
+      type: "message",
+      actor_id: senderId,
+      conversation_id: senderId,
+    },
+    webpush: { headers: { Urgency: "high" } },
+  });
+
+  if (!result.ok) {
+    logger.error({ status: result.status, errorBody: result.errorBody }, "FCM message push failed");
+    return {
+      status: 502,
+      body: { success: false, error: "Firebase rejected the message push." },
+    };
+  }
+
+  return { status: 200, body: { success: true, sent: true, channel: "message-fcm-only" } };
 }
 
 // التحقق من سرّ الـWebhook (ترويسة x-push-webhook-secret أو Bearer)
