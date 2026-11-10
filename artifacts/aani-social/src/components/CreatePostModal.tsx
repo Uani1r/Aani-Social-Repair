@@ -251,44 +251,54 @@ export default function CreatePostModal({
           </button>
         </div>
 
-        {filePreviews.length > 0 && (
-          <div className="flex gap-3 overflow-x-auto px-6 pb-5 no-scrollbar">
-            {filePreviews.map((preview, index) => (
-              <div key={preview.url} className="relative aspect-[4/5] h-24 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-black/40">
-                {fileType === 'image' ? (
-                  <img src={preview.url} alt="معاينة الصورة المحددة" className="h-full w-full object-cover" />
-                ) : (
-                  <PostVideoPreview
-                    src={buildVideoMediaUrl(preview.url, videoTrim, videoCrop)}
-                    muted
-                    autoPlay
-                    loop
-                    controls={false}
-                    className="h-full w-full object-cover"
-                  />
-                )}
-                <button
-                  type="button"
-                  aria-label="إزالة الملف"
-                  onClick={() => onRemoveFile(index)}
-                  className="absolute left-1 top-1 grid h-7 w-7 place-items-center rounded-full bg-black/70 text-white"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
+        {filePreviews.length > 0 && fileType && (
+          <div className="relative w-full bg-black">
+            <div className="flex w-full snap-x snap-mandatory overflow-x-auto no-scrollbar">
+              {filePreviews.map((preview, index) => (
+                <div key={preview.url} className="relative aspect-[4/5] w-full shrink-0 snap-center">
+                  {fileType === 'image' ? (
+                    <img src={preview.url} alt="معاينة الصورة المحددة" className="h-full w-full object-cover" />
+                  ) : (
+                    <PostVideoPreview
+                      src={buildVideoMediaUrl(preview.url, videoTrim, videoCrop)}
+                      muted
+                      autoPlay
+                      loop
+                      controls={false}
+                      className="h-full w-full object-cover"
+                    />
+                  )}
+                  <button
+                    type="button"
+                    aria-label="إزالة الملف"
+                    onClick={() => onRemoveFile(index)}
+                    className="absolute left-3 top-3 grid h-8 w-8 place-items-center rounded-full bg-black/70 text-white backdrop-blur transition hover:bg-black/85"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+            {filePreviews.length > 1 && (
+              <span
+                className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white backdrop-blur"
+                dir="ltr"
+              >
+                {filePreviews.length} {fileType === 'image' ? 'صور' : 'مقاطع'}
+              </span>
+            )}
           </div>
         )}
 
-        <div className="px-6 pb-5">
+        <div className="px-6 pb-4">
           <textarea
             value={postText}
             onChange={event => onPostTextChange(event.target.value)}
             maxLength={2000}
             placeholder="ما الذي يدور في ذهنك اليوم؟..."
             aria-label="اكتب محتوى المنشور"
-            className="min-h-[280px] max-h-[42dvh] w-full resize-none border-0 bg-transparent p-0 text-right text-[18px] leading-[1.9] text-white outline-none placeholder:text-zinc-500 focus:ring-0"
-            rows={8}
+            className="min-h-[110px] w-full resize-none border-0 bg-transparent p-0 text-right text-[17px] leading-[1.8] text-white outline-none placeholder:text-zinc-500 focus:ring-0"
+            rows={3}
           />
         </div>
 
@@ -409,7 +419,7 @@ export default function CreatePostModal({
           </div>
         )}
 
-        <footer className="mx-6 border-t border-white/10 py-4">
+        <footer className="sticky bottom-0 z-10 mt-2 rounded-b-[32px] border-t border-white/10 bg-[#1d1b21] px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <button
