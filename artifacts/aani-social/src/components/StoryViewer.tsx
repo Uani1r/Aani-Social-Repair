@@ -5,6 +5,7 @@ import StoryMediaStage from './story/StoryMediaStage';
 import StoryProgressBar from './story/StoryProgressBar';
 import StoryReplyControls from './story/StoryReplyControls';
 import StoryViewersPanel from './story/StoryViewersPanel';
+import { preloadMedia } from '@/lib/mediaPreload';
 import type { StoryViewerProps } from './story/types';
 
 type StoryViewerTouchStart = {
@@ -142,6 +143,13 @@ export default function StoryViewer({
   useEffect(() => () => {
     if (longPressTimerRef.current !== null) window.clearTimeout(longPressTimerRef.current);
   }, []);
+
+  // تهيئة الستوري التالي مسبقاً (صورة/بيانات وصفية للفيديو) أثناء
+  // عرض الستوري الحالي، فلا انتظار شبكة عند الانتقال للقصة الموالية.
+  useEffect(() => {
+    const nextStory = activeStories[activeStoryIndex + 1];
+    if (nextStory?.media_url) preloadMedia(nextStory.media_url);
+  }, [activeStories, activeStoryIndex]);
 
   const handleStoryViewerTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     suppressStoryClickUntilRef.current = 0;

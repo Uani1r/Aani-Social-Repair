@@ -3,6 +3,7 @@ import { Loader2, MessageCircle } from 'lucide-react';
 
 import FeedPostCard from '../components/FeedPostCard';
 import { FeedSkeleton } from '@/components/Skeletons';
+import { firstMediaUrlOfPost, preloadMediaList } from '@/lib/mediaPreload';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
@@ -96,6 +97,18 @@ export default function FeedPage({
   const feedVideoPosts = visiblePosts.filter(post => post.type === 'reel');
   const feedVideoIndexById = new Map(feedVideoPosts.map((post, index) => [post.id, index] as const));
   const pendingById = new Map(userPendingPosts.map(item => [item.id, item] as const));
+
+  // تحميل مسبق لأول 9 وسائط في التغذية (صور + تهيئة الفيديوهات)
+  // حتى تفتح البطاقات فوراً من ذاكرة المتصفح بلا انتظار الشبكة.
+  const preloadSignatureRef = useRef('');
+  useEffect(() => {
+    if (loading) return;
+    const signature = visiblePosts.slice(0, 9).map(post => post.id).join(',');
+    if (preloadSignatureRef.current === signature) return;
+    preloadSignatureRef.current = signature;
+    preloadMediaList(visiblePosts.slice(0, 9).map(firstMediaUrlOfPost));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, visiblePosts]);
 
   const refreshFeed = useCallback(async () => {
     if (refreshingRef.current || loading) return;

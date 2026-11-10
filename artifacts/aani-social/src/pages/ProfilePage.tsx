@@ -24,6 +24,7 @@ import { cleanUsername, displayName, getPostDestination, type Post, type Profile
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
+import { firstMediaUrlOfPost, preloadMediaList, thumbnailUrl } from '@/lib/mediaPreload';
 
 type SettingsScreen = 'home' | 'account' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | 'support' | 'report' | 'faq' | 'legal' | 'about' | ProfileSettingsPreferenceScreen;
 type ProfileReportCategory = 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';
@@ -286,6 +287,21 @@ export default function ProfilePage({
   const profileReposts = displayProfilePosts
     .filter(post => post.reposter_id === activeUserId)
     .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
+
+  // تحميل مسبق (Preload/Prebuffer) لأول 9 وسائط في القائمة المعروضة
+  // حتى يفتح النقر على البطاقة من ذاكرة المتصفح بلا انتظار شبكة.
+  const preloadSignatureRef = useRef('');
+  useEffect(() => {
+    const visibleList = profileContentTab === 'videos'
+      ? profileVideoPosts
+      : profileContentTab === 'reposts'
+        ? profileReposts
+        : displayProfilePosts;
+    const signature = `${profileContentTab}:${visibleList.length}:${visibleList.slice(0, 12).map(post => post.id).join(',')}`;
+    if (preloadSignatureRef.current === signature) return;
+    preloadSignatureRef.current = signature;
+    preloadMediaList(visibleList.slice(0, 9).map(firstMediaUrlOfPost));
+  }, [profileContentTab, profileVideoPosts, profileReposts, displayProfilePosts]);
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';
@@ -2179,7 +2195,21 @@ export default function ProfilePage({
                       <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>
                     )
                   ) : cover ? (
-                    <img src={cover} alt={post.content.slice(0, 80)} loading="lazy" className="h-full w-full object-cover" />
+                    <img
+                      src={thumbnailUrl(cover)}
+                      alt={post.content.slice(0, 80)}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                      onError={event => {
+                        // فشل تحويل المصغّرة → الرجوع للرابط الأصلي كامل الدقة
+                        const image = event.currentTarget;
+                        if (image.dataset.fallback !== '1') {
+                          image.dataset.fallback = '1';
+                          image.src = cover;
+                        }
+                      }}
+                    />
                   ) : post.type === 'text' ? (
                     <span className="flex h-full w-full items-center justify-center overflow-hidden p-2 text-center text-[11px] leading-5 text-neutral-200">
                       {post.content?.slice(0, 90) || 'منشور'}
