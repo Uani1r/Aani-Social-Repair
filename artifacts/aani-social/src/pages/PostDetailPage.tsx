@@ -72,7 +72,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
         ...data,
         ...postSettings,
         post_metadata: normalizePostMetadata(data.post_metadata),
-        author: author || { id: data.user_id, username: 'user', full_name: 'مستخدم آني' },
+        author: author || { id: data.user_id, username: '', full_name: '' },
       } as unknown as Post], currentUserId);
       setPost(hydrated[0] || null);
     } catch {

@@ -893,8 +893,8 @@ export default function Shell({
     const type: Post['type'] = files.length === 0 ? 'text' : mediaType === 'image' ? 'photo' : 'reel';
     const author = profile || {
       id: userId,
-      username: 'user',
-      full_name: 'مستخدم آني',
+      username: '',
+      full_name: '',
       avatar_url: null,
       bio: '',
     };

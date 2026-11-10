@@ -118,8 +118,8 @@ function normalizePostProfile(value: unknown): Profile | null {
 
   return {
     id: value.id,
-    username: typeof value.username === 'string' ? value.username : 'user',
-    full_name: typeof value.full_name === 'string' ? value.full_name : 'مستخدم',
+    username: typeof value.username === 'string' ? value.username : '',
+    full_name: typeof value.full_name === 'string' ? value.full_name : '',
     display_name: typeof value.display_name === 'string' || value.display_name === null
       ? value.display_name
       : undefined,
@@ -140,7 +140,7 @@ function profileMap(value: unknown): Map<string, Profile> {
 }
 
 function fallbackProfile(id: string, fullName: string): Profile {
-  return { id, username: 'user', full_name: fullName, avatar_url: null, bio: '' };
+  return { id, username: '', full_name: fullName, avatar_url: null, bio: '' };
 }
 
 async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]> {
@@ -186,10 +186,10 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
       if (!post) return [];
       return [{
         ...post,
-        author: profiles.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
+        author: profiles.get(post.user_id) || fallbackProfile(post.user_id, ''),
         reposter_id: repost.user_id,
         reposted_at: repost.created_at,
-        repost_attribution: profiles.get(repost.user_id) || fallbackProfile(repost.user_id, 'مستخدم'),
+        repost_attribution: profiles.get(repost.user_id) || fallbackProfile(repost.user_id, ''),
         likes: [],
         comments: [],
       }];
@@ -261,7 +261,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
           formatted = rawPosts.map(post => ({
             ...post,
-            author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
+            author: profMap.get(post.user_id) || fallbackProfile(post.user_id, ''),
             likes: [],
             comments: [],
           }));
@@ -369,7 +369,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
           formatted = rawPosts.map(post => ({
             ...post,
-            author: profMap.get(post.user_id) || fallbackProfile(post.user_id, 'مستخدم آني'),
+            author: profMap.get(post.user_id) || fallbackProfile(post.user_id, ''),
             likes: [],
             comments: [],
           }));

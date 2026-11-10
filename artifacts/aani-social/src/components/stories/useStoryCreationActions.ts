@@ -213,7 +213,7 @@ export function useStoryCreationActions({
       if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
 
       if (storyMentions.length > 0) {
-        void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', storyMentions);
+        void linkStoryMentions(storyId, currentProfile?.username || '', storyMentions);
       }
 
       setStoryFile(null);
@@ -284,7 +284,7 @@ export function useStoryCreationActions({
 
         if (insertError) throw insertError;
         if (typeof storyId === 'string' && mentions.length > 0) {
-          void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', mentions);
+          void linkStoryMentions(storyId, currentProfile?.username || '', mentions);
         }
 
         setStoryFile(current => current === mediaFile ? null : current);
@@ -371,7 +371,7 @@ export function useStoryCreationActions({
       if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
 
       if (storyMentions.length > 0) {
-        void linkStoryMentions(storyId, currentProfile?.username || 'مستخدم', storyMentions);
+        void linkStoryMentions(storyId, currentProfile?.username || '', storyMentions);
       }
 
       setUploadProgress(100);

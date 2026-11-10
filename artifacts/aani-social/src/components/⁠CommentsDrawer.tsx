@@ -65,7 +65,7 @@ function PostCard({
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-white">
       <div className="flex items-center justify-between">
-        <div className="font-semibold">{post.author?.full_name || 'مستخدم'}</div>
+        <div className="font-semibold">{post.author?.full_name || ''}</div>
         <div className="text-xs text-zinc-400">
           {post.created_at ? new Date(post.created_at).toLocaleDateString() : ''}
         </div>

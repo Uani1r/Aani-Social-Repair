@@ -76,7 +76,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
   const expired = !story || !Number.isFinite(expiresAt) || expiresAt <= Date.now();
   const canReshare = Boolean(story && !expired && story.user_id !== currentUserId && story.media_url);
 
-  const authorLabel = story?.author ? displayName(story.author) : senderName || 'مستخدم';
+  const authorLabel = story?.author ? displayName(story.author) : senderName || '';
 
   return (
     <div className="w-[78%] max-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl">

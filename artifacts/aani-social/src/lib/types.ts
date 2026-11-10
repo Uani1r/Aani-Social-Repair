@@ -189,7 +189,7 @@ export const displayName = (
   const name = [profile?.full_name, profile?.display_name]
     .map(value => value?.trim() || '')
     .find(value => value && !PLACEHOLDER_PROFILE_NAMES.has(value.toLowerCase()));
-  return name || cleanUsername(profile?.username) || 'عضو آني';
+  return name || cleanUsername(profile?.username) || '';
 };
 
 export const normalizeProfile = (

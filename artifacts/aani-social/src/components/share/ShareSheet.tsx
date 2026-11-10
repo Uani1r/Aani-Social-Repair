@@ -233,7 +233,7 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
                 user_id: post.user_id,
                 actor_id: currentUserId,
                 type: 'repost',
-                content: `${myName || 'مستخدم'} أعاد نشر منشورك`,
+                content: `${myName || ''} أعاد نشر منشورك`,
               };
               const attempts = [
                 { ...notificationBase, reference_id: post.id, entity_id: post.id },

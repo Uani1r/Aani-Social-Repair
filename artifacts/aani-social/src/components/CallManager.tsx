@@ -268,7 +268,7 @@ function makePeerFromSignal(signal: CallSignal): CallPeer {
   const name = typeof signal.name === 'string' ? signal.name.trim().slice(0, 80) : '';
   return {
     id: signal.from,
-    name: name || username || 'مستخدم آني',
+    name: name || username || '',
     username,
     avatarUrl: safeAvatarUrl(signal.avatarUrl),
   };
@@ -913,7 +913,7 @@ export default function CallManager({
         to: peer.id,
         mode,
         description: localDescription.toJSON(),
-        name: callerProfile ? displayName(callerProfile) : 'مستخدم آني',
+        name: callerProfile ? displayName(callerProfile) : '',
         username: callerProfile?.username || '',
         avatarUrl: callerProfile?.avatar_url || null,
       });
