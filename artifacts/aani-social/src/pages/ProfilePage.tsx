@@ -1924,17 +1924,17 @@ export default function ProfilePage({
 
       <div className="relative z-20 flex items-end justify-between px-4 pb-2">
         <div className="relative flex items-end gap-3">
-          <div className="relative -mt-11 h-[82px] w-[82px] shrink-0 rounded-full">
-            <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-[3px] border-black bg-neutral-800 p-[3px] ring-2 ring-black">
-              <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                {avatarPreview ? (
-                  <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
-                ) : (
+          <div className="relative -mt-11 h-[82px] w-[82px] shrink-0">
+            <span className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full">
+              {avatarPreview ? (
+                <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
+              ) : (
+                <span className="flex h-full w-full items-center justify-center rounded-full bg-neutral-800">
                   <svg className="h-8 w-8 text-neutral-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z" />
                   </svg>
-                )}
-              </span>
+                </span>
+              )}
             </span>
             {isEditingProfile && (
               <button
