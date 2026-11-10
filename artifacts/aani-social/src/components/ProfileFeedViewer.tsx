@@ -1,16 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 import FeedPostCard from '@/components/FeedPostCard';
-import ReelSlide from '@/components/ReelSlide';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
-import { getPostDestination, type Post } from '@/lib/types';
+import type { Post } from '@/lib/types';
 
-export const isReelPost = (post: Post) => post.type === 'reel' || getPostDestination(post) === 'reels';
-
-// نافذة العرض الكاملة داخل صفحة البروفايل: تفتح من المنشور المختار
-// وتتيح التمرير العمودي بين باقي منشورات الشبكة دون مغادرة الملف الشخصي.
+// شاشة تغذية منشورات الملف الشخصي: تفتح بعرض كامل بأسلوب إنستغرام
+// وتبدأ التمرير من المنشور المختار مباشرة مع تمرير حر لأعلى ولأسفل.
 export default function ProfileFeedViewer({ posts, initialPostId, currentUserId, onOpenComments, onRefresh, onClose }: {
   posts: Post[];
   initialPostId: string;
@@ -20,10 +17,7 @@ export default function ProfileFeedViewer({ posts, initialPostId, currentUserId,
   onClose: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [currentIndex, setCurrentIndex] = useState(() => {
-    const index = posts.findIndex(post => post.id === initialPostId);
-    return index >= 0 ? index : 0;
-  });
+  const itemRefsRef = useRef(new Map<string, HTMLDivElement>());
 
   useModalBodyScrollLock();
 
@@ -37,74 +31,50 @@ export default function ProfileFeedViewer({ posts, initialPostId, currentUserId,
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [onClose]);
 
+  // الانتقال التلقائي إلى المنشور المختار عند الفتح
   useLayoutEffect(() => {
     const container = scrollRef.current;
-    if (!container) return;
-    const index = posts.findIndex(post => post.id === initialPostId);
-    const lastIndex = Math.max(0, container.children.length - 1);
-    container.scrollTop = Math.min(lastIndex, Math.max(0, index)) * container.clientHeight;
-    // تُفتح النافذة دائماً من المنشور المختار مرة واحدة فقط.
+    const target = itemRefsRef.current.get(initialPostId);
+    if (!container || !target) return;
+    container.scrollTop = Math.max(0, target.offsetTop - 8);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const currentPost = posts[currentIndex];
-  const currentIsReel = currentPost ? isReelPost(currentPost) : false;
-
   return createPortal(
-    <div className="relative" aria-label="عارض منشورات الملف الشخصي">
-      <div
-        ref={scrollRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label="استعراض منشورات الملف الشخصي"
-        className="reels-container feed-reel-viewer profile-feed-viewer"
-        onScroll={event => {
-          event.stopPropagation();
-          const container = event.currentTarget;
-          if (!container.clientHeight) return;
-          setCurrentIndex(Math.round(container.scrollTop / container.clientHeight));
-        }}
-        onWheel={event => event.stopPropagation()}
-      >
-        {posts.map(post => isReelPost(post) ? (
-          <ReelSlide
-            key={post.id}
-            post={post}
-            currentUserId={currentUserId}
-            onOpenComments={onOpenComments}
-            onRefresh={onRefresh}
-            onClose={onClose}
-            showCreatedAt
-            captionSheet
-          />
-        ) : (
-          <section
-            key={post.id}
-            aria-label="منشور صورة"
-            className="flex h-[100dvh] w-full snap-start snap-always items-center justify-center overflow-y-auto bg-black p-3"
-          >
-            <div className="w-full max-w-[520px]">
-              <FeedPostCard
-                post={post}
-                currentUserId={currentUserId}
-                onRefresh={onRefresh}
-                onOpenComments={onOpenComments}
-              />
-            </div>
-          </section>
-        ))}
-      </div>
-      {/* زر إغلاق ثابت لبطاقات الصور — الريلز له زر إغلاق داخل شريطه العلوي */}
-      {!currentIsReel && (
+    <div className="fixed inset-0 z-[1102] flex flex-col bg-black" aria-label="تغذية منشورات الملف الشخصي">
+      <header className="flex shrink-0 items-center justify-between border-b border-white/10 px-4 pb-2 pt-[max(1rem,env(safe-area-inset-top))]">
+        <span className="text-sm font-bold text-white">المنشورات</span>
         <button
           type="button"
           onClick={onClose}
-          aria-label="إغلاق العارض"
-          className="absolute right-3 top-3 z-[3] grid h-10 w-10 place-items-center rounded-full bg-black/60 text-white backdrop-blur transition hover:bg-black/80"
+          aria-label="إغلاق عرض المنشورات"
+          className="grid h-10 w-10 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
         >
-          <X size={22} aria-hidden="true" />
+          <X size={20} aria-hidden="true" />
         </button>
-      )}
+      </header>
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overscroll-contain overflow-y-auto">
+        {posts.map(post => (
+          <div
+            key={post.id}
+            data-post-id={post.id}
+            ref={el => {
+              if (el) itemRefsRef.current.set(post.id, el);
+              else itemRefsRef.current.delete(post.id);
+            }}
+            className="w-full border-b border-zinc-900"
+          >
+            <FeedPostCard
+              post={post}
+              isMainFeed
+              currentUserId={currentUserId}
+              onRefresh={onRefresh}
+              onOpenComments={onOpenComments}
+            />
+          </div>
+        ))}
+      </div>
     </div>,
     document.body,
   );
