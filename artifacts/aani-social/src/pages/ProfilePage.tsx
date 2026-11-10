@@ -2054,7 +2054,7 @@ export default function ProfilePage({
 
       {loading && (
         <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
-          {Array.from({ length: 9 }, (_, index) => <div key={`loading-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
+          {Array.from({ length: 9 }, (_, index) => <div key={`loading-${index}`} className="aspect-square bg-neutral-900" />)}
         </div>
       )}
       {!loading && error && (
@@ -2067,7 +2067,7 @@ export default function ProfilePage({
       )}
       {!loading && !error && posts.length === 0 && (
         <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
-          {Array.from({ length: 9 }, (_, index) => <div key={`empty-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
+          {Array.from({ length: 9 }, (_, index) => <div key={`empty-${index}`} className="aspect-square bg-neutral-900" />)}
         </div>
       )}
       {!loading && !error && posts.length > 0 && (() => {
@@ -2090,7 +2090,7 @@ export default function ProfilePage({
                   type="button"
                   onClick={() => setFeedViewerPostId(post.id)}
                   aria-label={isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
-                  className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
+                  className="relative block aspect-square overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
                 >
                   {isReel ? (
                     cover ? (

@@ -487,7 +487,7 @@ export default function CreatePostModal({
               {isSubmitting ? 'جاري النشر...' : 'نشر'}
             </button>
           </div>
-          {cropPending && <p className="mt-3 text-right text-xs text-white/60">يجب قص الصور على مقاس إنستغرام قبل النشر.</p>}
+          {cropPending && <p className="mt-3 text-right text-xs text-white/60">يجب قص الصور على المقاس المربع 1:1 قبل النشر.</p>}
           {createError && <p role="alert" className="mt-3 text-sm text-red-400">{createError}</p>}
         </footer>
       </section>

@@ -197,7 +197,7 @@ export default function SharedPostPreview({
         className="w-[62%] min-w-0 shrink-0 cursor-pointer overflow-hidden rounded-2xl border-[1.5px] border-dashed border-zinc-300/60 bg-zinc-900/75 transition hover:border-pink-500/60"
       >
         <div
-          className="relative aspect-[4/5] w-full overflow-hidden bg-black"
+          className="relative aspect-square w-full overflow-hidden bg-black"
           style={isVideo && info?.media && getVideoAspectRatio(parseVideoCrop(info.media))
             ? { aspectRatio: String(getVideoAspectRatio(parseVideoCrop(info.media))) }
             : undefined}

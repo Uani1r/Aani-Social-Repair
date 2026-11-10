@@ -422,7 +422,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
             ? 'post-image-container relative mt-3 w-full'
             : isMainFeedVideo
               ? 'feed-video-container mt-3'
-              : `relative mt-3 aspect-[4/5] w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''}`}
+              : `relative mt-3 aspect-square w-full overflow-hidden rounded-xl border border-zinc-800 ${post.type === 'reel' ? 'bg-black' : ''}`}
           style={!isMainFeedVideo && activeVideoAspectRatio ? { aspectRatio: String(activeVideoAspectRatio) } : undefined}
         >
           <div ref={trackRef} onScroll={handleScroll} className="carousel-track h-full">
