@@ -1,10 +1,17 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/interactions';
 import { handleAppError } from '@/lib/appErrors';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type PostRow, type Profile } from '@/lib/types';
 import { registerContentRefreshRequest } from '@/lib/contentRefresh';
+
+// ذاكرة مؤقتة على مستوى الوحدة (بديل Keep-Alive/staleTime):
+// عند التنقل بين التبويبات (الرئيسية/الريلز/الملف الشخصي) تُركَّب
+// الشاشة من جديد لكنها تُهيَّأ فوراً من هذه الذاكرة بلا شاشة
+// Skeleton، مع تحديث صامت في الخلفية. الشاشة لا تُصفَّر إلا عند
+// السحب للتحديث القسري (Pull to Refresh) أو عند النشر/الريبوست.
+const postsCache = new Map<string, Post[]>();
 
 interface RepostRow {
   post_id: string;
@@ -207,9 +214,19 @@ export async function hydratePostInteractions(
 }
 
 export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, currentUserId = '') {
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `${query}:${targetUserId || ''}`;
+  const hadCachedPosts = postsCache.has(cacheKey);
+  const [posts, setPostsState] = useState<Post[]>(() => postsCache.get(cacheKey) || []);
+  const [loading, setLoading] = useState(!hadCachedPosts);
   const [error, setError] = useState('');
+  const hadCachedPostsRef = useRef(hadCachedPosts);
+
+  // كل نجاح جلب يُخزَّن في الذاكرة المؤقتة ليُعاد استخدامه عند
+  // العودة إلى الشاشة بدون شاشة تحميل.
+  const setPosts = useCallback((value: Post[]) => {
+    postsCache.set(cacheKey, value);
+    setPostsState(value);
+  }, [cacheKey]);
 
   const refresh = useCallback(async (silent = false) => {
     if (!supabaseConfigured) {
@@ -289,7 +306,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           .select('post_id, user_id, created_at')
           .eq('user_id', targetUserId)
           .order('created_at', { ascending: false })
-          .limit(50);
+          .limit(100);
 
         const repostRows = normalizeRepostRows(repostData);
         const repostPostIds = repostRows
@@ -383,7 +400,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       }
     } catch (caughtError) {
       if (!silent) {
-        setPosts([]);
+        setPostsState([]);
         setError(isPostsPermissionError(caughtError)
           ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
           : 'تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
@@ -396,10 +413,12 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [query, targetUserId, currentUserId]);
+  }, [query, targetUserId, currentUserId, setPosts]);
 
   useEffect(() => {
-    void refresh();
+    // عند وجود محتوى محفوظ: تحديث صامت في الخلفية بلا شاشة تحميل؛
+    // وإلا جلب عادي أول مرة يظهر فيه السكلتون.
+    void refresh(hadCachedPostsRef.current);
     let repostRefreshTimer: number | null = null;
     const onPostCreated = () => void refresh();
     const onRepostChanged = () => {

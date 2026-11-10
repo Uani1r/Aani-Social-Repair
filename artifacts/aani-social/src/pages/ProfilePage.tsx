@@ -284,7 +284,7 @@ export default function ProfilePage({
   // تبويب إعادات النشر: ما أعاد صاحب الملف نشره فقط، بترتيب زمني
   // من الأحدث للأقدم (استعلام usePosts يجلبها مع reposter_id).
   const profileReposts = displayProfilePosts
-    .filter(post => post.reposter_id === activeUserId && post.type !== 'text')
+    .filter(post => post.reposter_id === activeUserId)
     .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
@@ -2180,6 +2180,10 @@ export default function ProfilePage({
                     )
                   ) : cover ? (
                     <img src={cover} alt={post.content.slice(0, 80)} loading="lazy" className="h-full w-full object-cover" />
+                  ) : post.type === 'text' ? (
+                    <span className="flex h-full w-full items-center justify-center overflow-hidden p-2 text-center text-[11px] leading-5 text-neutral-200">
+                      {post.content?.slice(0, 90) || 'منشور'}
+                    </span>
                   ) : (
                     <span className="grid h-full w-full place-items-center text-neutral-600"><Camera size={24} aria-hidden="true" /></span>
                   )}
@@ -2203,11 +2207,11 @@ export default function ProfilePage({
         );
       })()}
       {feedViewerPostId && (feedViewerSource === 'reposts'
-        ? profileReposts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post))
+        ? profileReposts.some(post => post.id === feedViewerPostId && !isProfileReel(post))
         : displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post))) && (
         <ProfileFeedViewer
           posts={feedViewerSource === 'reposts'
-            ? profileReposts.filter(post => post.type !== 'text' && !isProfileReel(post))
+            ? profileReposts.filter(post => !isProfileReel(post))
             : displayProfilePosts.filter(post => post.type !== 'text' && !isProfileReel(post))}
           initialPostId={feedViewerPostId}
           currentUserId={currentUserId}
