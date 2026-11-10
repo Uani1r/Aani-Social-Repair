@@ -6,13 +6,15 @@ import { isFirebaseMessagingConfigured, registerPushNotifications } from '@/lib/
 type PushStatus = 'idle' | 'loading' | 'enabled' | 'unavailable' | 'error';
 
 export default function PushNotificationsControl({ currentUserId }: { currentUserId: string }) {
+  // تُخفى البطاقة تماماً من شاشة الإشعارات طالما لم يُربط Firebase بنجاح
+  const firebaseReady = isFirebaseMessagingConfigured();
   const [status, setStatus] = useState<PushStatus>('idle');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (!isFirebaseMessagingConfigured()) {
+    if (!firebaseReady) {
       setStatus('unavailable');
-      setMessage('إعداد Firebase غير مكتمل لهذا التطبيق.');
+      setMessage('');
       return;
     }
     if (typeof Notification === 'undefined') {
@@ -35,7 +37,7 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
       setMessage(result.message);
     });
     return () => { active = false; };
-  }, [currentUserId]);
+  }, [currentUserId, firebaseReady]);
 
   const enableNotifications = async () => {
     setStatus('loading');
@@ -44,6 +46,8 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
     setStatus(result.ok ? 'enabled' : 'error');
     setMessage(result.message);
   };
+
+  if (!firebaseReady) return null;
 
   return (
     <section className="rounded-2xl border border-[#c98a66]/20 bg-[#141414] px-4 py-3">

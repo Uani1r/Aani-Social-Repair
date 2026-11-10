@@ -74,6 +74,17 @@ const isStoryNotification = (item: NotificationEntry) => {
   return ['like', 'reply', 'mention'].includes(item.type) && /ستوري|قصة/i.test(item.content || '');
 };
 
+// تصفية سجلات قديمة لا تظهر في القائمة العامة:
+// الرسائل والمكالمات الفائتة تُدار خارج قائمة الإشعارات (تبويب الرسائل/المكالمات).
+const SUPPRESSED_NOTIFICATION_TYPES = ['message', 'new_message', 'chat_message', 'call', 'incoming_call', 'missed_call'];
+const SUPPRESSED_NOTIFICATION_PATTERNS = ['مكالمة صوتية', 'أرسل لك رسالة'];
+
+const isSuppressedLegacyNotification = (item: NotificationEntry): boolean => {
+  if (SUPPRESSED_NOTIFICATION_TYPES.includes(String(item.type || '').toLowerCase())) return true;
+  const text = `${item.content || ''}`;
+  return SUPPRESSED_NOTIFICATION_PATTERNS.some(pattern => text.includes(pattern));
+};
+
 const notificationAction = (item: NotificationEntry, aggregateCount = 1) => {
   if (item.type === 'like' && aggregateCount > 1) {
     const target = isStoryNotification(item)
@@ -499,7 +510,9 @@ export default function NotificationsModal({
   }, [isOpen, onClose]);
 
   const visibleItems = useMemo(() => {
-    const aggregated = aggregateNotifications(items).filter(item => notificationSettings[getPreferenceCategory(item)] !== false);
+    const aggregated = aggregateNotifications(items)
+      .filter(item => !isSuppressedLegacyNotification(item))
+      .filter(item => notificationSettings[getPreferenceCategory(item)] !== false);
     return activeFilter === 'all'
       ? aggregated
       : aggregated.filter(item => getFilterForNotification(item) === activeFilter);
