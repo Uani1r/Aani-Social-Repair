@@ -123,7 +123,26 @@ async function getPostIdForComment(
   return asText(rows[0]?.post_id);
 }
 
-function notificationUrl(record: NotificationRecord, postIdForComment = ''): string {
+// نوع المحتوى الحقيقي للمنشور (reel / photo / video / text ...)
+// لتوجيه إشعار الريل إلى مشغّل الريلز الخاص به.
+async function getPostType(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  postId: string,
+): Promise<string> {
+  const url = new URL('/rest/v1/posts', supabaseUrl);
+  url.searchParams.set('select', 'type');
+  url.searchParams.set('id', `eq.${postId}`);
+  url.searchParams.set('limit', '1');
+  const response = await fetch(url, {
+    headers: { apikey: serviceRoleKey, authorization: `Bearer ${serviceRoleKey}` },
+  });
+  if (!response.ok) return '';
+  const rows = await response.json().catch(() => []) as Array<{ type?: unknown }>;
+  return asText(rows[0]?.type);
+}
+
+function notificationUrl(record: NotificationRecord, postIdForComment = '', postType = ''): string {
   const type = asText(record.type).toLowerCase();
   const actorId = asText(record.actor_id);
   const referenceId = asText(record.reference_id) || asText(record.entity_id);
@@ -154,7 +173,9 @@ function notificationUrl(record: NotificationRecord, postIdForComment = ''): str
   }
   if (['like', 'repost'].includes(type) && postId) {
     // فتح الريل في مشغّل الريلز الخاص به عند الضغط على إشعاره
-    if (asText(record.content_kind).toLowerCase() === 'reel') return `/reels?openReel=${encode(postId)}`;
+    if (asText(record.content_kind).toLowerCase() === 'reel' || postType === 'reel') {
+      return `/reels?openReel=${encode(postId)}`;
+    }
     return `/post/${encode(postId)}`;
   }
   return '/feed';
@@ -244,6 +265,12 @@ Deno.serve(async request => {
     ? await getPostIdForComment(supabaseUrl, serviceRoleKey, commentId)
     : '';
   const accessToken = await getGoogleAccessToken(account);
+  // الريلز تُفتح في مشغّل الريلز الخاص بها: نوع المحتوى يُستنتَج
+  // من جدول posts مباشرة (بلا اعتماد على عمود content_kind).
+  const likePostId = ['like', 'repost'].includes(type)
+    ? (asText(record.post_id) || postIdForComment || asText(record.reference_id) || asText(record.entity_id))
+    : '';
+  const postType = likePostId ? await getPostType(supabaseUrl, serviceRoleKey, likePostId) : '';
   const fcmResponse = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(account.project_id)}/messages:send`, {
     method: 'POST',
     headers: {
@@ -256,7 +283,7 @@ Deno.serve(async request => {
         data: {
           title: notificationTitle(type),
           body: truncateUtf8(asText(record.content) || notificationTitle(type), 1500),
-          url: notificationUrl(record, postIdForComment),
+          url: notificationUrl(record, postIdForComment, postType),
           notification_id: asText(record.id),
           type,
           actor_id: asText(record.actor_id),

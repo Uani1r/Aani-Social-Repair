@@ -89,3 +89,17 @@ export async function getPostIdForComment(
   });
   return asText((rows?.[0] as { post_id?: unknown } | undefined)?.post_id);
 }
+
+// نوع المحتوى الحقيقي للمنشور (reel / photo / video / text ...)
+// يُستخدم لتوجيه إشعار الريل إلى مشغّل الريلز الخاص به.
+export async function getPostType(
+  config: SupabaseAdminConfig,
+  postId: string,
+): Promise<string> {
+  const rows = await queryRest(config, "posts", {
+    select: "type",
+    id: `eq.${postId}`,
+    limit: "1",
+  });
+  return asText((rows?.[0] as { type?: unknown } | undefined)?.type);
+}

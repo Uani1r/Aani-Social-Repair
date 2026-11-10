@@ -4,6 +4,7 @@ import { readServiceAccount, sendFcmMessage } from "../lib/fcm";
 import {
   fetchRecipientPushProfile,
   getPostIdForComment,
+  getPostType,
   readSupabaseAdminConfig,
 } from "../lib/supabaseAdmin";
 import { buildNotificationContent, preferenceCategory } from "../lib/notificationContent";
@@ -111,15 +112,27 @@ export async function processPushNotificationPayload(
       : "";
   const content = buildNotificationContent(record, postIdForComment);
 
+  // الريلز تُفتح في مشغّل الريلز الخاص بها: نوع المحتوى يُستنتَج
+  // من جدول posts مباشرة (بلا اعتماد على عمود content_kind).
+  const targetPostId =
+    asText(record.post_id) || postIdForComment || asText(record.reference_id) || asText(record.entity_id);
+  let pushUrl = content.url;
+  if (["like", "repost"].includes(type) && targetPostId) {
+    const postType = await getPostType(supabase, targetPostId);
+    if (postType === "reel") {
+      pushUrl = `/reels?openReel=${encodeURIComponent(targetPostId)}`;
+    }
+  }
+
   const result = await sendFcmMessage(serviceAccount, recipient.deviceToken, {
     data: {
       title: content.title,
       body: content.body,
-      url: content.url,
+      url: pushUrl,
       notification_id: asText(record.id),
       type: content.type,
       actor_id: asText(record.actor_id),
-      post_id: asText(record.post_id) || postIdForComment || asText(record.reference_id) || asText(record.entity_id),
+      post_id: targetPostId,
       comment_id: commentId,
       call_id: ["call", "incoming_call"].includes(type) ? asText(record.reference_id) : "",
     },

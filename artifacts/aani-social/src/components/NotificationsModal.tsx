@@ -324,27 +324,22 @@ export default function NotificationsModal({
       setError('');
 
       try {
-        const loadRows = (includeContentKind: boolean) => supabase
+        const { data, error: queryError } = await supabase
           .from('notifications')
-          .select(includeContentKind ? 'id,content,type,is_read,created_at,content_kind' : 'id,content,type,is_read,created_at')
+          .select('id,content,type,is_read,created_at')
           .eq('user_id', currentUserId)
           .neq('type', 'follow_request')
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(offset, offset + PAGE_SIZE - 1);
-        let pageResult = await loadRows(true);
-        if (pageResult.error && (pageResult.error.code === '42703' || pageResult.error.code === 'PGRST204')) {
-          // عمود content_kind غير مُطبَّق بعد في قاعدة البيانات
-          pageResult = await loadRows(false);
-        }
         if (!active) return;
-        if (pageResult.error) {
-          setError(pageResult.error.message);
+        if (queryError) {
+          setError(queryError.message);
           if (replace) setItems([]);
           return;
         }
 
-        let rows = (pageResult.data || []) as NotificationEntry[];
+        let rows = (data || []) as NotificationEntry[];
         try {
           let refs: NotificationReferenceRow[] = [];
           const referenceResult = await supabase
@@ -577,11 +572,27 @@ export default function NotificationsModal({
     if (target.kind === 'post') {
       // فتح المحتوى الحقيقي: الريلز في مشغّل الريلز الخاص بها،
       // وبقية المنشورات في صفحة المنشور بشكله الكامل (Post Modal).
-      if (target.contentKind === 'reel') {
-        setLocation(`/reels?openReel=${encodeURIComponent(target.postId)}`);
-      } else {
-        setLocation(`/post/${encodeURIComponent(target.postId)}`);
-      }
+      // نوع المحتوى يُستنتَج من جدول posts مباشرة بدل عمود content_kind.
+      void (async () => {
+        let isReel = false;
+        try {
+          if (supabaseConfigured) {
+            const { data: postRow } = await supabase
+              .from('posts')
+              .select('type')
+              .eq('id', target.postId)
+              .maybeSingle();
+            isReel = postRow?.type === 'reel';
+          }
+        } catch {
+          // في حال التعذر نفتح المنشور بصيغته العادية
+        }
+        if (isReel) {
+          setLocation(`/reels?openReel=${encodeURIComponent(target.postId)}`);
+        } else {
+          setLocation(`/post/${encodeURIComponent(target.postId)}`);
+        }
+      })();
     } else if (target.kind === 'comment') {
       onOpenComments(target.postId, target.commentId || undefined);
       const query = target.commentId
