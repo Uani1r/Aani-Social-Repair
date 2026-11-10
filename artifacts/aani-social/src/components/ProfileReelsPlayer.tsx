@@ -1,17 +1,20 @@
-import { useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2 } from 'lucide-react';
 
 import ReelSlide from '@/components/ReelSlide';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
-import type { Post } from '@/lib/types';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 
-// مشغل الريلز الكامل لملف شخصي واحد: يفتح بالشاشة الكاملة من الريل المختار
-// ويقتصر التنقل (السحب) على ريلز هذا الملف الشخصي فقط بنفس ترتيبها فيه.
-// حماية دفاعية: مصفوفة الريلز قد تكون غير جاهزة أثناء التحميل.
-export default function ProfileReelsPlayer({ reels = [], initialPostId = '', currentUserId = '', onOpenComments, onRefresh, onClose, trailingAccountControl }: {
+// مشغل الريلز الكامل لملف شخصي واحد: يفتح من الريل المختار مباشرة
+// ويقتصر التنقل (السحب) على ريلز هذا الملف الشخصي فقط بنفس ترتيبها.
+// إذا مُرّرت الريلز كـ Props تُستخدم فوراً بلا مؤشر تحميل، وإلا يُجلب
+// الملف من قاعدة البيانات مع إنهاء حالة التحميل في كل الحالات.
+export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId = '', currentUserId = '', onOpenComments, onRefresh, onClose, trailingAccountControl }: {
   reels?: Post[];
-  initialPostId?: string;
+  profileUserId?: string;
+  initialReelId?: string;
   currentUserId?: string;
   onOpenComments: (postId: string) => void;
   onRefresh: () => void;
@@ -19,28 +22,74 @@ export default function ProfileReelsPlayer({ reels = [], initialPostId = '', cur
   trailingAccountControl?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const reelsList = Array.isArray(reels) ? reels : [];
+  const [fetchedReels, setFetchedReels] = useState<Post[] | null>(null);
 
   useModalBodyScrollLock();
 
-  useEffect(() => {
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [onClose]);
+  // الريلز الممررة جاهزة → تُستخدم فوراً وتُتخطى شاشة التحميل تماماً
+  const providedReels = Array.isArray(reels) ? reels : [];
+  const useProvided = providedReels.length > 0;
+  const reelsList = useProvided ? providedReels : (fetchedReels || []);
+  const isLoading = !useProvided && fetchedReels === null;
 
+  useEffect(() => {
+    if (useProvided || !profileUserId || !supabaseConfigured) {
+      if (!useProvided) setFetchedReels([]);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const { data: rows, error } = await supabase
+          .from('posts')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title')
+          .eq('user_id', profileUserId)
+          .eq('type', 'reel')
+          .order('created_at', { ascending: false })
+          .limit(60);
+        const safeRows = (!error && Array.isArray(rows) ? rows : []) as unknown[];
+        const authorIds = Array.from(new Set(safeRows
+          .map(row => (row as Record<string, unknown>).user_id)
+          .filter((id): id is string => typeof id === 'string' && Boolean(id))));
+
+        const profiles = new Map<string, Profile>();
+        if (authorIds.length > 0) {
+          const { data: profileRows } = await supabase
+            .from('profiles')
+            .select('id, username, full_name, display_name, avatar_url, bio')
+            .in('id', authorIds);
+          (Array.isArray(profileRows) ? profileRows : []).forEach(profile => {
+            const row = profile as unknown as Record<string, unknown>;
+            if (typeof row?.id === 'string') profiles.set(row.id, row as unknown as Profile);
+          });
+        }
+
+        if (!active) return;
+        setFetchedReels(safeRows.map(row => {
+          const record = row as Record<string, unknown>;
+          const authorId = typeof record.user_id === 'string' ? record.user_id : '';
+          return {
+            ...(record as unknown as Post),
+            post_metadata: normalizePostMetadata(record.post_metadata),
+            author: profiles.get(authorId) || { id: authorId, username: '', full_name: '', avatar_url: null, bio: '' },
+          } as Post;
+        }));
+      } catch {
+        if (active) setFetchedReels([]);
+      }
+    })();
+    return () => { active = false; };
+  }, [useProvided, profileUserId]);
+
+  // الانتقال التلقائي إلى الريل المختار بمجرد جاهزية القائمة
   useLayoutEffect(() => {
     const container = scrollRef.current;
     if (!container || reelsList.length === 0) return;
-    const index = reelsList.findIndex(reel => reel.id === initialPostId);
+    const foundIndex = reelsList.findIndex(reel => reel?.id === initialReelId);
+    const index = foundIndex >= 0 ? foundIndex : 0;
     const lastIndex = Math.max(0, container.children.length - 1);
-    container.scrollTop = Math.min(lastIndex, Math.max(0, index)) * container.clientHeight;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reelsList, initialPostId]);
+    container.scrollTop = Math.min(lastIndex, index) * container.clientHeight;
+  }, [reelsList, initialReelId]);
 
   return createPortal(
     <div
@@ -52,11 +101,14 @@ export default function ProfileReelsPlayer({ reels = [], initialPostId = '', cur
       onWheel={event => event.stopPropagation()}
       onScroll={event => event.stopPropagation()}
     >
-      {reelsList.length === 0 ? (
-        <div className="empty-state flex h-full flex-col items-center justify-center gap-3 text-center text-white">
+      {isLoading ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white">
           <Loader2 size={28} className="animate-spin text-pink-500" />
           <p className="text-sm text-zinc-300">جارٍ تحميل الريلز...</p>
-          <p className="text-xs text-zinc-500">إذا استمرت هذه الشاشة فلا توجد مقاطع ريلز لعرضها.</p>
+        </div>
+      ) : reelsList.length === 0 ? (
+        <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white">
+          <p className="text-lg font-bold">لا توجد مقاطع ريلز لعرضها</p>
           <button
             type="button"
             onClick={onClose}

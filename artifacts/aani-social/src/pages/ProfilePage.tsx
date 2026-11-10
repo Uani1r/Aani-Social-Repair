@@ -2139,8 +2139,9 @@ export default function ProfilePage({
       )}
       {reelsPlayerPostId && displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post)) && (
         <ProfileReelsPlayer
-          posts={displayProfilePosts.filter(isProfileReel)}
-          initialPostId={reelsPlayerPostId}
+          reels={displayProfilePosts.filter(isProfileReel)}
+          profileUserId={activeUserId}
+          initialReelId={reelsPlayerPostId}
           currentUserId={currentUserId}
           onOpenComments={onOpenComments}
           onRefresh={() => void refresh()}
