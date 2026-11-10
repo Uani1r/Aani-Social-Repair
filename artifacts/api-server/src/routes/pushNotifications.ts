@@ -35,7 +35,7 @@ type WebhookPayload = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
 
-router.post("/send-push-notification", async (req: Request, res: Response) => {
+export async function handlePushWebhook(req: Request, res: Response): Promise<Response> {
   try {
     // 1) التحقق من سرّ الـWebhook (ترويسة x-push-webhook-secret أو Bearer)
     const expectedSecret = process.env["PUSH_WEBHOOK_SECRET"] || "";
@@ -133,6 +133,20 @@ router.post("/send-push-notification", async (req: Request, res: Response) => {
     logger.error({ err: error }, "send-push-notification failed");
     return res.status(500).json({ success: false, error: "حدث خطأ داخلي في الخادم" });
   }
+}
+
+// المسار الأساسي للـWebhook
+router.post("/send-push-notification", (req, res) => {
+  void handlePushWebhook(req, res);
+});
+
+// مسارات إضافية قبِلها Supabase Webhook وشيكات الاتصال (200 دائماً، بلا 404)
+router.post(["/push-webhook", "/webhook", "/notifications/webhook"], (req, res) => {
+  void handlePushWebhook(req, res);
+});
+
+router.get(["/push-webhook", "/webhook", "/notifications/webhook"], (_req, res) => {
+  res.status(200).json({ success: true, message: "Push webhook endpoint is live." });
 });
 
 export default router;
