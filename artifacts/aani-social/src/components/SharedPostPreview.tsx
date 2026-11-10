@@ -214,7 +214,7 @@ export default function SharedPostPreview({
               className="h-full w-full object-cover"
             />
           ) : info?.media ? (
-            <PostImagePreview src={info.media} alt="" className="h-full w-full object-contain" />
+            <PostImagePreview src={info.media} alt="" className="h-full w-full object-cover" />
           ) : (
             <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-pink-600/25 to-violet-600/25 p-3">
               <p className="line-clamp-5 text-center text-[11px] leading-5 text-zinc-100">

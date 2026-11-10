@@ -110,7 +110,7 @@ export default function PostCard({
                 <PostImagePreview
                   src={url}
                   alt={`صورة المنشور ${index + 1}`}
-                  className="block h-full w-full object-contain"
+                  className="block h-full w-full object-cover"
                 />
               )}
             </div>

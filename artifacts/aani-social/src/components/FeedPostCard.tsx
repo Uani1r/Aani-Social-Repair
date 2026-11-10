@@ -445,7 +445,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                   <PostImagePreview
                     src={url}
                     alt=""
-                    className={isMainFeedImage ? 'post-image' : 'block h-full w-full select-none object-contain'}
+                    className={isMainFeedImage ? 'post-image' : 'block h-full w-full select-none object-cover'}
                   />
                 )}
               </div>
