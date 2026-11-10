@@ -236,9 +236,10 @@ export default function ProfilePage({
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
   const pageDirection = typeof document !== 'undefined' && document.documentElement.dir === 'ltr' ? 'ltr' : 'rtl';
   const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
-  const ownProfilePosts = posts.filter(post => post.user_id === activeUserId && !post.reposter_id);
-  const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, profilePostOrder);
-  const displayProfilePosts = orderOwnedPostsInProfileSlots(posts, activeUserId, profilePostOrder);
+  const safeProfilePosts = Array.isArray(posts) ? posts : [];
+  const ownProfilePosts = safeProfilePosts.filter(post => post.user_id === activeUserId && !post.reposter_id);
+  const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
+  const displayProfilePosts = orderOwnedPostsInProfileSlots(safeProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';
