@@ -20,7 +20,7 @@ import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
-import { cleanUsername, displayName, getPostDestination, type Post, type Profile } from '@/lib/types';
+import { cleanUsername, displayName, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
@@ -47,7 +47,7 @@ function VerifiedBadge() {
   );
 }
 
-type ProfileContentTab = 'posts' | 'videos' | 'reposts';
+type ProfileContentTab = 'posts' | 'videos' | 'reposts' | 'tagged';
 
 function ProfileTabs({ activeTab, onChange }: {
   activeTab: ProfileContentTab;
@@ -85,6 +85,16 @@ function ProfileTabs({ activeTab, onChange }: {
         </svg>
       ),
     },
+    {
+      id: 'tagged' as const,
+      label: 'المنشورات المشار فيها',
+      icon: (active: boolean) => (
+        <svg className={`h-[26px] w-[26px] ${active ? 'text-white' : 'text-[#71767B]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+          <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -102,12 +112,6 @@ function ProfileTabs({ activeTab, onChange }: {
           {activeTab === id && <span className="absolute bottom-0 h-[3px] w-12 rounded-t-sm bg-[#1D9BF0]" />}
         </button>
       ))}
-      <button type="button" aria-label="الوسائط" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-          <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
-        </svg>
-      </button>
     </div>
   );
 }
@@ -207,10 +211,10 @@ export default function ProfilePage({
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
-  const [feedViewerSource, setFeedViewerSource] = useState<'grid' | 'reposts'>('grid');
+  const [feedViewerSource, setFeedViewerSource] = useState<'grid' | 'reposts' | 'tagged'>('grid');
   const [reelsPlayerPostId, setReelsPlayerPostId] = useState<string | null>(null);
   const [profileContentTab, setProfileContentTab] = useState<ProfileContentTab>('posts');
-  const [reelsPlayerSource, setReelsPlayerSource] = useState<'grid' | 'videos' | 'reposts'>('grid');
+  const [reelsPlayerSource, setReelsPlayerSource] = useState<'grid' | 'videos' | 'reposts' | 'tagged'>('grid');
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -296,12 +300,80 @@ export default function ProfilePage({
       ? profileVideoPosts
       : profileContentTab === 'reposts'
         ? profileReposts
-        : displayProfilePosts;
+        : profileContentTab === 'tagged'
+          ? taggedPosts
+          : displayProfilePosts;
     const signature = `${profileContentTab}:${visibleList.length}:${visibleList.slice(0, 12).map(post => post.id).join(',')}`;
     if (preloadSignatureRef.current === signature) return;
     preloadSignatureRef.current = signature;
     preloadMediaList(visibleList.slice(0, 9).map(firstMediaUrlOfPost));
-  }, [profileContentTab, profileVideoPosts, profileReposts, displayProfilePosts]);
+  }, [profileContentTab, profileVideoPosts, profileReposts, displayProfilePosts, taggedPosts]);
+
+  // تبويب المنشورات المشار فيها: جلب كسول عند أول فتح للتبويب فقط،
+  // والإشارات تُقرأ من post_metadata (kind: mention + profileId)
+  // في متن/وصف المنشور الأصلي — إشارات التعليقات مستبعدة كلياً.
+  const [taggedPosts, setTaggedPosts] = useState<Post[]>([]);
+  const [taggedLoading, setTaggedLoading] = useState(false);
+  const [taggedError, setTaggedError] = useState<string | null>(null);
+  const taggedFetchedUserRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (profileContentTab !== 'tagged' || !supabaseConfigured) return;
+    if (taggedFetchedUserRef.current === activeUserId) return;
+    taggedFetchedUserRef.current = activeUserId;
+    let active = true;
+    void (async () => {
+      setTaggedLoading(true);
+      setTaggedError(null);
+      try {
+        const { data, error } = await supabase
+          .from('posts')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy')
+          .contains('post_metadata', [{ kind: 'mention', profileId: activeUserId }])
+          .neq('user_id', activeUserId)
+          .order('created_at', { ascending: false })
+          .limit(60);
+        if (error) throw error;
+
+        const rows = (data || []) as unknown[];
+        const authorIds = [...new Set(rows
+          .map(row => (row as Record<string, unknown>).user_id)
+          .filter((id): id is string => typeof id === 'string' && Boolean(id)))];
+        const profMap = new Map<string, Profile>();
+        if (authorIds.length > 0) {
+          const { data: profileRows } = await supabase
+            .from('profiles')
+            .select('id, username, full_name, display_name, avatar_url')
+            .in('id', authorIds);
+          (profileRows || []).forEach(profileRow => {
+            const row = profileRow as Record<string, unknown>;
+            if (typeof row.id === 'string') profMap.set(row.id, row as unknown as Profile);
+          });
+        }
+
+        if (!active) return;
+        setTaggedPosts(rows.map(row => {
+          const record = row as Record<string, unknown>;
+          const authorId = typeof record.user_id === 'string' ? record.user_id : '';
+          return {
+            ...(record as unknown as Post),
+            post_metadata: normalizePostMetadata(record.post_metadata),
+            author: profMap.get(authorId) || { id: authorId, username: '', full_name: '', avatar_url: null, bio: '' },
+          } as Post;
+        }));
+      } catch {
+        if (active) {
+          setTaggedError('تعذر تحميل المنشورات المشار فيها. أعد المحاولة.');
+          taggedFetchedUserRef.current = null;
+        }
+      } finally {
+        if (active) setTaggedLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [profileContentTab, activeUserId]);
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';
@@ -2124,6 +2196,9 @@ export default function ProfilePage({
       {loading && (
         <GridSkeleton count={9} className="mt-4 gap-[2px] rounded-none" />
       )}
+      {profileContentTab === 'tagged' && taggedLoading && (
+        <GridSkeleton count={9} className="mt-4 gap-[2px] rounded-none" />
+      )}
       {!loading && error && (
         <div className="mt-4 px-4">
           <div role="alert" className="rounded-xl border border-[#2F3336] bg-neutral-900 p-5 text-center text-sm text-zinc-300">
@@ -2132,12 +2207,12 @@ export default function ProfilePage({
           </div>
         </div>
       )}
-      {!loading && !error && posts.length === 0 && (
+      {!loading && !error && posts.length === 0 && profileContentTab !== 'tagged' && (
         <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
           {Array.from({ length: 9 }, (_, index) => <div key={`empty-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
         </div>
       )}
-      {!loading && !error && posts.length > 0 && (() => {
+      {!loading && !error && (posts.length > 0 || profileContentTab === 'tagged') && (() => {
         // شبكة إنستغرام: 3 أعمدة — الصور والفيديوهات والريلز فقط،
         // والمنشورات الكتابية (text) مستبعدة كلياً من الشبكة.
         // تبويب الفيديوهات: نفس الشبكة والحجم بالضبط لكن بقائمة
@@ -2146,9 +2221,21 @@ export default function ProfilePage({
           ? profileVideoPosts
           : profileContentTab === 'reposts'
             ? profileReposts
-            : displayProfilePosts.filter(post => post.type !== 'text');
+            : profileContentTab === 'tagged'
+              ? taggedPosts
+              : displayProfilePosts.filter(post => post.type !== 'text');
         if (!mediaPosts.length) {
-          return <p className="mt-6 text-center text-sm text-zinc-400">{profileContentTab === 'videos' ? 'لا توجد فيديوهات منشورة.' : profileContentTab === 'reposts' ? 'لا توجد إعادات نشر بعد.' : 'لا توجد صور أو فيديوهات منشورة.'}</p>;
+          const emptyMessage = profileContentTab === 'videos'
+            ? 'لا توجد فيديوهات منشورة.'
+            : profileContentTab === 'reposts'
+              ? 'لا توجد إعادات نشر بعد.'
+              : profileContentTab === 'tagged'
+                ? 'لا توجد منشورات تمت الإشارة إليك فيها بعد'
+                : 'لا توجد صور أو فيديوهات منشورة.';
+          if (profileContentTab === 'tagged' && taggedError) {
+            return <p role="alert" className="mt-6 text-center text-sm text-rose-300">{taggedError}</p>;
+          }
+          return <p className="mt-6 text-center text-sm text-zinc-400">{emptyMessage}</p>;
         }
         return (
           <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black content-fade-in">
@@ -2175,6 +2262,16 @@ export default function ProfilePage({
                         setReelsPlayerPostId(post.id);
                       } else {
                         setFeedViewerSource('reposts');
+                        setFeedViewerPostId(post.id);
+                      }
+                    } else if (profileContentTab === 'tagged') {
+                      // من تبويب الإشارات: ريلز → مشغل الريلز بين المشار
+                      // فيها، وغيرها (صور/نصوص/فيديو تغذية) → التغذية الكاملة.
+                      if (isProfileReel(post)) {
+                        setReelsPlayerSource('tagged');
+                        setReelsPlayerPostId(post.id);
+                      } else {
+                        setFeedViewerSource('tagged');
                         setFeedViewerPostId(post.id);
                       }
                     } else if (isProfileReel(post)) {
@@ -2227,6 +2324,9 @@ export default function ProfilePage({
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                     </span>
                   )}
+                  {post.type === 'text' && (
+                    <span aria-hidden="true" className="absolute right-2 top-2 z-[2] rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">نص</span>
+                  )}
                   {isMultiImage && (
                     <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
                   )}
@@ -2238,11 +2338,15 @@ export default function ProfilePage({
       })()}
       {feedViewerPostId && (feedViewerSource === 'reposts'
         ? profileReposts.some(post => post.id === feedViewerPostId && !isProfileReel(post))
-        : displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post))) && (
+        : feedViewerSource === 'tagged'
+          ? taggedPosts.some(post => post.id === feedViewerPostId && !isProfileReel(post))
+          : displayProfilePosts.some(post => post.id === feedViewerPostId && post.type !== 'text' && !isProfileReel(post))) && (
         <ProfileFeedViewer
           posts={feedViewerSource === 'reposts'
             ? profileReposts.filter(post => !isProfileReel(post))
-            : displayProfilePosts.filter(post => post.type !== 'text' && !isProfileReel(post))}
+            : feedViewerSource === 'tagged'
+              ? taggedPosts.filter(post => !isProfileReel(post))
+              : displayProfilePosts.filter(post => post.type !== 'text' && !isProfileReel(post))}
           initialPostId={feedViewerPostId}
           currentUserId={currentUserId}
           onOpenComments={onOpenComments}
@@ -2254,13 +2358,17 @@ export default function ProfilePage({
         ? profileVideoPosts.some(post => post.id === reelsPlayerPostId)
         : reelsPlayerSource === 'reposts'
           ? profileReposts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))
-          : displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))) && (
+          : reelsPlayerSource === 'tagged'
+            ? taggedPosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))
+            : displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))) && (
         <ProfileReelsPlayer
           reels={reelsPlayerSource === 'videos'
             ? profileVideoPosts
             : reelsPlayerSource === 'reposts'
               ? profileReposts.filter(isProfileReel)
-              : displayProfilePosts.filter(isProfileReel)}
+              : reelsPlayerSource === 'tagged'
+                ? taggedPosts.filter(isProfileReel)
+                : displayProfilePosts.filter(isProfileReel)}
           profileUserId={activeUserId}
           initialReelId={reelsPlayerPostId}
           currentUserId={currentUserId}
