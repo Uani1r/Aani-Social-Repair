@@ -46,24 +46,52 @@ function VerifiedBadge() {
   );
 }
 
-function ProfileTabs() {
-  return (
-    <div className="mt-4 flex items-center justify-around border-b border-[#2F3336]" aria-label="تبويبات الملف الشخصي">
-      <button type="button" aria-label="المنشورات" aria-current="page" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+type ProfileContentTab = 'posts' | 'videos';
+
+function ProfileTabs({ activeTab, onChange }: {
+  activeTab: ProfileContentTab;
+  onChange: (tab: ProfileContentTab) => void;
+}) {
+  const tabs = [
+    {
+      id: 'posts' as const,
+      label: 'المنشورات',
+      icon: (active: boolean) => (
+        <svg className={`h-[26px] w-[26px] ${active ? 'text-white' : 'text-[#71767B]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="3" y="3" width="7" height="7" rx="1" strokeWidth="1.5" />
           <rect x="14" y="3" width="7" height="7" rx="1" strokeWidth="1.5" />
           <rect x="14" y="14" width="7" height="7" rx="1" strokeWidth="1.5" />
           <rect x="3" y="14" width="7" height="7" rx="1" strokeWidth="1.5" />
         </svg>
-        <span className="absolute bottom-0 h-[3px] w-12 rounded-t-sm bg-[#1D9BF0]" />
-      </button>
-      <button type="button" aria-label="الفيديو" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
-        <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      ),
+    },
+    {
+      id: 'videos' as const,
+      label: 'الفيديو',
+      icon: (active: boolean) => (
+        <svg className={`h-[26px] w-[26px] ${active ? 'text-white' : 'text-[#71767B]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <rect x="2" y="2" width="20" height="20" rx="5" strokeWidth="1.5" />
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M10 8l6 4-6 4V8z" />
         </svg>
-      </button>
+      ),
+    },
+  ];
+
+  return (
+    <div className="mt-4 flex items-center justify-around border-b border-[#2F3336]" aria-label="تبويبات الملف الشخصي">
+      {tabs.map(({ id, label, icon }) => (
+        <button
+          key={id}
+          type="button"
+          aria-label={label}
+          aria-current={activeTab === id ? 'page' : undefined}
+          onClick={() => onChange(id)}
+          className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3"
+        >
+          {icon(activeTab === id)}
+          {activeTab === id && <span className="absolute bottom-0 h-[3px] w-12 rounded-t-sm bg-[#1D9BF0]" />}
+        </button>
+      ))}
       <button type="button" aria-label="إعادات النشر" className="relative flex flex-1 flex-col items-center justify-center pb-3 pt-3">
         <svg className="h-[26px] w-[26px] text-[#71767B]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -175,6 +203,8 @@ export default function ProfilePage({
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
   const [reelsPlayerPostId, setReelsPlayerPostId] = useState<string | null>(null);
+  const [profileContentTab, setProfileContentTab] = useState<ProfileContentTab>('posts');
+  const [reelsPlayerSource, setReelsPlayerSource] = useState<'grid' | 'videos'>('grid');
   const [selectedHighlightCollection, setSelectedHighlightCollection] = useState<ProfileHighlightCollection | null>(null);
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
@@ -241,6 +271,11 @@ export default function ProfilePage({
   const ownProfilePosts = safeProfilePosts.filter(post => post.user_id === activeUserId && !post.reposter_id);
   const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
   const displayProfilePosts = orderOwnedPostsInProfileSlots(safeProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
+  // تبويب الفيديوهات: كل ما نشره المستخدم كريل أو فيديو في التغذية
+  // (type = 'reel' أياً كانت الوجهة)، بترتيب زمني من الأحدث للأقدم.
+  const profileVideoPosts = displayProfilePosts
+    .filter(post => post.type === 'reel')
+    .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';
@@ -2058,7 +2093,7 @@ export default function ProfilePage({
         </div>
       )}
 
-      <ProfileTabs />
+      <ProfileTabs activeTab={profileContentTab} onChange={setProfileContentTab} />
 
       {loading && (
         <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
@@ -2081,9 +2116,11 @@ export default function ProfilePage({
       {!loading && !error && posts.length > 0 && (() => {
         // شبكة إنستغرام: 3 أعمدة — الصور والفيديوهات والريلز فقط،
         // والمنشورات الكتابية (text) مستبعدة كلياً من الشبكة.
-        const mediaPosts = displayProfilePosts.filter(post => post.type !== 'text');
+        // تبويب الفيديوهات: نفس الشبكة والحجم بالضبط لكن بقائمة
+        // الفيديوهات فقط (ريلز + فيديوهات التغذية) بترتيبها الزمني.
+        const mediaPosts = profileContentTab === 'videos' ? profileVideoPosts : displayProfilePosts.filter(post => post.type !== 'text');
         if (!mediaPosts.length) {
-          return <p className="mt-6 text-center text-sm text-zinc-400">لا توجد صور أو فيديوهات منشورة.</p>;
+          return <p className="mt-6 text-center text-sm text-zinc-400">{profileContentTab === 'videos' ? 'لا توجد فيديوهات منشورة.' : 'لا توجد صور أو فيديوهات منشورة.'}</p>;
         }
         return (
           <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
@@ -2097,10 +2134,19 @@ export default function ProfilePage({
                   key={post.id}
                   type="button"
                   onClick={() => {
-                    if (isProfileReel(post)) setReelsPlayerPostId(post.id);
-                    else setFeedViewerPostId(post.id);
+                    if (profileContentTab === 'videos') {
+                      // من تبويب الفيديوهات: كل الفيديوهات تفتح مشغل
+                      // الريلز الكامل متسلسلاً بين فيديوهات هذا التبويب.
+                      setReelsPlayerSource('videos');
+                      setReelsPlayerPostId(post.id);
+                    } else if (isProfileReel(post)) {
+                      setReelsPlayerSource('grid');
+                      setReelsPlayerPostId(post.id);
+                    } else {
+                      setFeedViewerPostId(post.id);
+                    }
                   }}
-                  aria-label={isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
+                  aria-label={profileContentTab === 'videos' || isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
                   className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
                 >
                   {isReel ? (
@@ -2138,9 +2184,11 @@ export default function ProfilePage({
           onClose={() => setFeedViewerPostId(null)}
         />
       )}
-      {reelsPlayerPostId && displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post)) && (
+      {reelsPlayerPostId && (reelsPlayerSource === 'videos'
+        ? profileVideoPosts.some(post => post.id === reelsPlayerPostId)
+        : displayProfilePosts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))) && (
         <ProfileReelsPlayer
-          reels={displayProfilePosts.filter(isProfileReel)}
+          reels={reelsPlayerSource === 'videos' ? profileVideoPosts : displayProfilePosts.filter(isProfileReel)}
           profileUserId={activeUserId}
           initialReelId={reelsPlayerPostId}
           currentUserId={currentUserId}
@@ -2163,7 +2211,7 @@ export default function ProfilePage({
         open={showHighlightsManager}
         onClose={() => setShowHighlightsManager(false)}
         userId={currentUserId}
-        ownerName={person ? displayName(person) : 'محمد'}
+        ownerName={person ? displayName(person) : ''}
         ownerAvatarUrl={person?.avatar_url || null}
         collections={profileHighlights}
         existingSourceStoryIds={new Set(profileHighlights.flatMap(collection => collection.stories.flatMap(story => story.source_story_id ? [story.source_story_id] : [])))}
@@ -2213,7 +2261,7 @@ export default function ProfilePage({
             setSelectedHighlightCollection(current => current?.id === collectionId ? removeHighlight(current) : current);
           }}
           currentUserId={currentUserId}
-          ownerName={person ? displayName(person) : 'محمد'}
+          ownerName={person ? displayName(person) : ''}
           ownerAvatarUrl={person?.avatar_url || null}
         />
       )}
