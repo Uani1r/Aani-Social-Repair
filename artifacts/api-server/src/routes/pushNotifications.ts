@@ -135,17 +135,34 @@ export async function handlePushWebhook(req: Request, res: Response): Promise<Re
   }
 }
 
+// جميع مسارات الـWebhook المدعومة (تُطبع كاملة في الـConsole عند الإقلاع
+// لنسخ أحدها مباشرة إلى إعدادات Webhook في Supabase).
+export const PUSH_WEBHOOK_PATHS: readonly string[] = [
+  "/api/send-push-notification",
+  "/api/push-webhook",
+  "/api/webhook",
+  "/api/webhook/push",
+  "/api/push-notification",
+  "/api/notifications/webhook",
+  "/webhook",
+  "/webhook/push",
+  "/push-webhook",
+  "/push-notification",
+  "/notifications/webhook",
+  "/",
+];
+
 // المسار الأساسي للـWebhook
 router.post("/send-push-notification", (req, res) => {
   void handlePushWebhook(req, res);
 });
 
 // مسارات إضافية قبِلها Supabase Webhook وشيكات الاتصال (200 دائماً، بلا 404)
-router.post(["/push-webhook", "/webhook", "/notifications/webhook"], (req, res) => {
+router.post(["/push-webhook", "/webhook", "/webhook/push", "/push-notification", "/notifications/webhook"], (req, res) => {
   void handlePushWebhook(req, res);
 });
 
-router.get(["/push-webhook", "/webhook", "/notifications/webhook"], (_req, res) => {
+router.get(["/push-webhook", "/webhook", "/webhook/push", "/push-notification", "/notifications/webhook"], (_req, res) => {
   res.status(200).json({ success: true, message: "Push webhook endpoint is live." });
 });
 

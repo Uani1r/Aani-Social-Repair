@@ -2,6 +2,7 @@ import path from "path";
 import express from "express";
 import app from "./app";
 import { logger } from "./lib/logger";
+import { PUSH_WEBHOOK_PATHS } from "./routes/pushNotifications";
 
 // تحديد مسار الملفات الثابتة الناتجة عن البناء
 const publicPath = path.resolve(process.cwd(), "dist/public");
@@ -38,4 +39,30 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // طباعة مسار الـWebhook الصحيح بالكامل لوضعه في إعدادات Webhook بـSupabase
+  const replitDomain =
+    process.env["REPLIT_DEVDOMAIN"] ||
+    process.env["REPLIT_DOMAINS"]?.split(",")[0] ||
+    "";
+  const publicBaseUrl =
+    process.env["PUBLIC_BASE_URL"] ||
+    (replitDomain ? `https://${replitDomain}` : `http://localhost:${port}`);
+  const primaryWebhookUrl = `${publicBaseUrl}/api/send-push-notification`;
+
+  console.log("=".repeat(64));
+  console.log("🔔 مسار Webhook الإشعارات الصحيح (ضعه في Supabase):");
+  console.log(`   POST ${primaryWebhookUrl}`);
+  console.log("   الترويسة المطلوبة: x-push-webhook-secret = <قيمة PUSH_WEBHOOK_SECRET>");
+  console.log("-".repeat(64));
+  console.log("   المسارات الإضافية المدعومة (كلها تعمل بنفس المعالج):");
+  for (const webhookPath of PUSH_WEBHOOK_PATHS) {
+    console.log(`   POST ${publicBaseUrl}${webhookPath}`);
+  }
+  console.log("=".repeat(64));
+
+  logger.info(
+    { primaryWebhookUrl, paths: PUSH_WEBHOOK_PATHS },
+    "Push notification webhook endpoints ready",
+  );
 });

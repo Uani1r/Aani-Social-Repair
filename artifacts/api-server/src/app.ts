@@ -39,11 +39,11 @@ app.use("/api", router);
 // مسارات Webhook إضافية على جذر الخادم (إضافة إلى /api/send-push-notification
 // و /api/push-webhook و /api/webhook المسجلة داخل الراوتر).
 // أي استدعاء من Supabase على هذه المسارات يُعالج فوراً ويعيد 200 — لا 404.
-app.post(["/", "/webhook", "/push-webhook", "/notifications/webhook"], (req, res) => {
+app.post(["/", "/webhook", "/webhook/push", "/push-webhook", "/push-notification", "/notifications/webhook"], (req, res) => {
   void handlePushWebhook(req, res);
 });
 
-app.get(["/webhook", "/push-webhook", "/notifications/webhook"], (_req, res) => {
+app.get(["/webhook", "/webhook/push", "/push-webhook", "/push-notification", "/notifications/webhook"], (_req, res) => {
   res.status(200).json({ success: true, message: "Push webhook endpoint is live." });
 });
 
