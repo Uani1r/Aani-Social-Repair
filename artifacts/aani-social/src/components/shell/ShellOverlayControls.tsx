@@ -49,6 +49,10 @@ type ShellOverlayControlsProps = {
   /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title + أوقات الاقتصاص) */
   music: { id: string; title: string; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
   onClearMusic: () => void;
+  /** هل الوسائط الحالية خلفية تلقائية مولدة من الصوت؟ */
+  autoSoundMedia: boolean;
+  onReplaceAutoMedia: () => void;
+  onClearAutoMedia: () => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
@@ -111,6 +115,9 @@ export default function ShellOverlayControls({
   initialCreateTags,
   music,
   onClearMusic,
+  autoSoundMedia,
+  onReplaceAutoMedia,
+  onClearAutoMedia,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -192,6 +199,9 @@ export default function ShellOverlayControls({
           initialTags={initialCreateTags}
           pendingSound={music}
           onClearMusic={onClearMusic}
+          autoSoundMedia={autoSoundMedia}
+          onReplaceAutoMedia={onReplaceAutoMedia}
+          onClearAutoMedia={onClearAutoMedia}
           onPostTextChange={onPostTextChange}
           onRemoveFile={onRemoveFile}
           onPublish={onPublish}

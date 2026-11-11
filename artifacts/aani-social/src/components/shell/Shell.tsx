@@ -50,6 +50,68 @@ const createCallLogMessageId = () => {
   });
 };
 
+const truncateCanvasText = (value: string, max: number): string => {
+  const characters = Array.from(value);
+  return characters.length > max ? `${characters.slice(0, max).join('')}…` : value;
+};
+
+/**
+ * خلفية مرئية افتراضية مولّدة تلقائياً (نظام الأصوات):
+ * canvas يدمج أيقونة الصوت واسم صاحبه ليتمكن المستخدم من النشر فوراً
+ * عند استخدام صوت بلا فيديو/صورة مختارة. تُبنى كصورة PNG تُرفع كأي وسائط.
+ */
+const createAutoSoundCanvas = async (soundTitle: string, creatorName: string): Promise<File> => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1350;
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('تعذر تجهيز مساحة الرسم.');
+
+  // خلفية متدرجة داكنة
+  const background = context.createLinearGradient(0, 0, 1080, 1350);
+  background.addColorStop(0, '#1d1b21');
+  background.addColorStop(0.55, '#3a2630');
+  background.addColorStop(1, '#243b35');
+  context.fillStyle = background;
+  context.fillRect(0, 0, 1080, 1350);
+
+  // هالة دائرية ناعمة بلون الصوت
+  const halo = context.createRadialGradient(540, 520, 80, 540, 520, 540);
+  halo.addColorStop(0, 'rgba(241, 161, 127, 0.32)');
+  halo.addColorStop(1, 'rgba(241, 161, 127, 0)');
+  context.fillStyle = halo;
+  context.fillRect(0, 0, 1080, 1350);
+
+  // أيقونة الصوت (نغمة)
+  context.fillStyle = '#f1a17f';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.font = 'bold 340px serif';
+  context.fillText('♪', 540, 480);
+
+  // عنوان الصوت
+  context.fillStyle = '#ffffff';
+  context.font = 'bold 62px sans-serif';
+  context.fillText(truncateCanvasText(soundTitle, 24), 540, 910);
+
+  // اسم صاحب الصوت
+  if (creatorName.trim()) {
+    context.fillStyle = 'rgba(255, 255, 255, 0.65)';
+    context.font = '38px sans-serif';
+    context.fillText(`@${truncateCanvasText(creatorName, 20)}`, 540, 995);
+  }
+
+  // توقيع التطبيق
+  context.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  context.font = '30px sans-serif';
+  context.fillText('آني Aani', 540, 1255);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(result => result ? resolve(result) : reject(new Error('تعذر تجهيز الخلفية التلقائية.')), 'image/png');
+  });
+  return new File([blob], `sound-canvas-${Date.now()}.png`, { type: 'image/png' });
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -125,7 +187,10 @@ export default function Shell({
     title: string;
     sourceVideoUrl?: string | null;
     soundTrim?: { start: number; end: number } | null;
+    creatorName?: string | null;
   } | null>(null);
+  // التوليد التلقائي للوسائط: هل الوسائط الحالية خلفية مولّدة من الصوت؟
+  const [autoSoundMedia, setAutoSoundMedia] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
   const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
@@ -151,6 +216,7 @@ export default function Shell({
         title?: string | null;
         sourceVideoUrl?: string | null;
         soundTrim?: { start: number; end: number } | null;
+        creatorName?: string | null;
         source?: 'picker' | 'post';
       }>).detail;
       if (!detail?.soundId) return;
@@ -159,11 +225,32 @@ export default function Shell({
         title: detail.title || 'الصوت المختار',
         sourceVideoUrl: detail.sourceVideoUrl ?? null,
         soundTrim: detail.soundTrim ?? null,
+        creatorName: detail.creatorName ?? null,
       });
       // من مكتبة الأصوات: يُطبق فوراً على المنشور الجاري إنشاؤه
       // من شريط الصوت في منشور آخر: يفتح مسار إنشاء فيديو جديد بنفس الصوت
       if (detail.source === 'picker') {
         toast.success(`تم اختيار الصوت: ${detail.title || 'الصوت المختار'}`);
+        // التوليد التلقائي للوسائط: إن لم تُختر وسائط بعد، جهّز خلفية مرئية
+        // افتراضية تدمج أيقونة الصوت واسم صاحبه ليتمكن المستخدم من النشر فوراً
+        // (مع إمكانية إزالتها أو استبدالها من شاشة المعاينة)
+        if (selectedFilesRef.current.length === 0) {
+          void (async () => {
+            try {
+              const canvasFile = await createAutoSoundCanvas(detail.title || 'صوت', detail.creatorName || '');
+              setSelectedFiles([canvasFile]);
+              setFileType('image');
+              setDestination('feed');
+              setVideoTrim(null);
+              setVideoCrop(null);
+              setAutoSoundMedia(true);
+              setShowCreateModal(true);
+              toast.success('تم تجهيز منشور بالصوت — انشره مباشرة أو استبدل الوسائط.');
+            } catch (error) {
+              handleAppError('فشل تجهيز الخلفية التلقائية', error, 'تعذر تجهيز الخلفية التلقائية. اختر وسائط يدوياً ثم انشر.');
+            }
+          })();
+        }
         return;
       }
       setShowPublishOptionsSheet(true);
@@ -860,6 +947,10 @@ export default function Shell({
     return () => filePreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
   }, [filePreviews]);
 
+  // مرجع لملفات المنشور الجاري إنشاؤه (يُستخدم في أحداث نظام الأصوات)
+  const selectedFilesRef = useRef(selectedFiles);
+  selectedFilesRef.current = selectedFiles;
+
   useEffect(() => {
     const unlockAudio = () => {
       void unlockNotificationAudio();
@@ -1080,6 +1171,7 @@ export default function Shell({
     setVideoCrop(null);
     setDestination('feed');
     setCreateError('');
+    setAutoSoundMedia(false);
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
       setSelectedFiles(previews.map(preview => preview.file));
@@ -1124,6 +1216,7 @@ export default function Shell({
     setVideoTrim(null);
     setVideoCrop(null);
     setCreateError('');
+    setAutoSoundMedia(false);
     clearVideoCover();
     setVideoMentions([]);
     setShowVideoPreviewModal(true);
@@ -1158,7 +1251,21 @@ export default function Shell({
     setDestination('feed');
     clearVideoCover();
     setVideoMentions([]);
+    setAutoSoundMedia(false);
     setPendingSound(null);
+  };
+
+  // إزالة الخلفية التلقائية المولدة من الصوت (بعدها يكتب نصاً أو يختار وسائط يدوياً)
+  const clearAutoSoundMedia = () => {
+    setSelectedFiles([]);
+    setAutoSoundMedia(false);
+  };
+
+  // استبدال الخلفية التلقائية بوسائط يدوية (فيديو/صورة) من الاستوديو
+  const replaceAutoSoundMedia = () => {
+    setAutoSoundMedia(false);
+    setShowCreateModal(false);
+    setShowPublishOptionsSheet(true);
   };
 
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
@@ -1526,6 +1633,7 @@ export default function Shell({
     setIsSubmitting(false);
     setCreateError('');
     setPendingSound(null);
+    setAutoSoundMedia(false);
     // لا إعادة توجيه تلقائية للرئيسية: ابقَ في الشاشة التي كنت عليها،
     // والانتقال فقط عند تغيّر السياق الفعلي (نشر ريلز من غير شاشة الريلز،
     // أو مغادرة شاشة الريلز بعد نشر منشور تغذية)
@@ -1598,6 +1706,9 @@ export default function Shell({
         initialCreateTags={initialCreateTags}
         music={pendingSound}
         onClearMusic={() => setPendingSound(null)}
+        autoSoundMedia={autoSoundMedia}
+        onReplaceAutoMedia={replaceAutoSoundMedia}
+        onClearAutoMedia={clearAutoSoundMedia}
         onPostTextChange={setPostText}
         onRemoveFile={index => {
           setSelectedFiles(files => files.filter((_, idx) => idx !== index));
@@ -1612,6 +1723,7 @@ export default function Shell({
         onCloseCreatePost={() => {
           setShowCreateModal(false);
           setVideoMentions([]);
+          setAutoSoundMedia(false);
           setPendingSound(null);
           if (fileType === 'video') {
             setSelectedFiles([]);

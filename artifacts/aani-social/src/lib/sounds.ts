@@ -18,6 +18,8 @@ export type UseSoundDetail = {
   sourceVideoUrl?: string | null;
   /** زمني اقتصاص الصوت المختار (بالثواني) — يُحفظ مع المنشور في sound_trim_start/sound_trim_end */
   soundTrim?: SoundTrimRange | null;
+  /** اسم صاحب الصوت الأصلي (يُستخدم في الخلفية التلقائية المولدة) */
+  creatorName?: string | null;
   /** مصدر الطلب: 'picker' = مكتبة الأصوات داخل مسار النشر، غير ذلك = شريط الصوت في المنشور */
   source?: 'picker' | 'post';
 };

@@ -44,6 +44,12 @@ type CreatePostModalProps = {
   pendingSound?: { id: string; title: string; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
   /** إزالة الصوت المختار من داخل نافذة النشر */
   onClearMusic?: () => void;
+  /** هل الوسائط الحالية خلفية تلقائية مولدة من الصوت؟ */
+  autoSoundMedia?: boolean;
+  /** استبدال الخلفية التلقائية بوسائط يدوية (فيديو/صورة) */
+  onReplaceAutoMedia?: () => void;
+  /** إزالة الخلفية التلقائية */
+  onClearAutoMedia?: () => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
@@ -70,6 +76,9 @@ export default function CreatePostModal({
   initialTags,
   pendingSound,
   onClearMusic,
+  autoSoundMedia,
+  onReplaceAutoMedia,
+  onClearAutoMedia,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -457,6 +466,36 @@ export default function CreatePostModal({
               </button>
             )}
             {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
+          </div>
+        )}
+
+        {/* الخلفية التلقائية المولدة من الصوت: انشرها فوراً أو استبدلها/أزلها */}
+        {autoSoundMedia && selectedFiles.length > 0 && (
+          <div className="mx-6 rounded-xl border border-amber-300/25 bg-amber-300/[0.07] px-3 py-2.5 text-xs text-amber-100">
+            <div className="flex items-center gap-2">
+              <Music2 size={14} className="shrink-0" />
+              <span className="min-w-0 flex-1">خلفية تلقائية مولّدة من الصوت — انشرها فوراً أو استبدلها بفيديو/صورة.</span>
+            </div>
+            <div className="mt-2 flex gap-2">
+              {onReplaceAutoMedia && (
+                <button
+                  type="button"
+                  onClick={onReplaceAutoMedia}
+                  className="flex-1 rounded-lg bg-white/10 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-white/15"
+                >
+                  تغيير الوسائط
+                </button>
+              )}
+              {onClearAutoMedia && (
+                <button
+                  type="button"
+                  onClick={onClearAutoMedia}
+                  className="flex-1 rounded-lg bg-white/[0.06] px-3 py-2 text-[11px] text-white/70 transition hover:bg-white/10"
+                >
+                  إزالة الخلفية
+                </button>
+              )}
+            </div>
           </div>
         )}
 

@@ -166,14 +166,24 @@ export default function SoundPickerSheet() {
     }
   };
 
-  // معاينة الجزء المقتص مباشرة: يبدأ من زمن البداية وينتهي عند زمن النهاية
-  const toggleTrimPreview = () => {
+  // يبدأ/يستأنف الاستماع من زمن البداية المحدد بالمقبض (يُستدعى لحظة بدء السحب أيضاً)
+  const beginLivePreview = () => {
     const audio = trimPreviewRef.current;
     if (!audio || !trimTarget?.source_video_url) return;
     if (audio.paused) {
       audio.src = appendVideoTrimFragment(trimTarget.source_video_url, trimDraft);
       try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
       void audio.play().then(() => setTrimPlaying(true)).catch(() => setTrimPlaying(false));
+    } else {
+      try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+    }
+  };
+
+  const toggleTrimPreview = () => {
+    const audio = trimPreviewRef.current;
+    if (!audio || !trimTarget?.source_video_url) return;
+    if (audio.paused) {
+      beginLivePreview();
     } else {
       audio.pause();
       setTrimPlaying(false);
@@ -226,6 +236,7 @@ export default function SoundPickerSheet() {
       soundTrim: trimDraft.end > trimDraft.start
         ? { start: trimDraft.start, end: trimDraft.end }
         : null,
+      creatorName: displayName(trimTarget.creator || null),
       source: 'picker',
     });
     setTrimTarget(null);
@@ -240,6 +251,7 @@ export default function SoundPickerSheet() {
       title: sound.title,
       sourceVideoUrl: sound.source_video_url || null,
       soundTrim: null,
+      creatorName: displayName(sound.creator || null),
       source: 'picker',
     });
     setOpen(false);
@@ -322,6 +334,7 @@ export default function SoundPickerSheet() {
                 />
                 {(['start', 'end'] as const).map(handle => {
                   const value = handle === 'start' ? trimDraft.start : trimDraft.end;
+                  const percent = soundDuration > 0 ? (value / soundDuration) * 100 : 0;
                   return (
                     <button
                       key={handle}
@@ -329,11 +342,23 @@ export default function SoundPickerSheet() {
                       aria-label={handle === 'start' ? 'مقبض زمن البداية' : 'مقبض زمن النهاية'}
                       onPointerDown={event => {
                         event.preventDefault();
+                        // استماع حي لحظة السحب: يبدأ الصوت من زمن البداية المحدد
+                        beginLivePreview();
                         setDraggingHandle(handle);
                       }}
-                      className={`absolute top-1/2 z-10 h-6 w-6 -translate-y-1/2 rounded-full border-2 border-black/70 bg-white shadow-lg transition-transform ${draggingHandle === handle ? 'scale-110' : ''} active:scale-110`}
-                      style={{ left: `calc(${handle === 'start' ? startPercent : endPercent}% - 12px)` }}
-                    />
+                      className={`absolute top-1/2 z-10 flex h-12 w-5 -translate-y-1/2 flex-col items-center justify-center gap-[3px] rounded-full border border-black/40 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.5)] transition-transform ${draggingHandle === handle ? 'scale-110' : ''} active:scale-95`}
+                      style={{ left: `calc(${percent}% - 10px)` }}
+                    >
+                      {/* فقاعة الوقت الحي فوق المقبض أثناء السحب */}
+                      {draggingHandle === handle && (
+                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 rounded-md bg-black/85 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white">
+                          {formatSeconds(value)}
+                        </span>
+                      )}
+                      <span className="h-[2px] w-2 rounded-full bg-zinc-400" />
+                      <span className="h-[2px] w-2 rounded-full bg-zinc-400" />
+                      <span className="h-[2px] w-2 rounded-full bg-zinc-400" />
+                    </button>
                   );
                 })}
               </div>
