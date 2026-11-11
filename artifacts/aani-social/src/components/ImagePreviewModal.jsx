@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { AtSign, Crop, Loader2, MapPin, Minus, Music2, Plus, Search, X } from 'lucide-react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { AtSign, Crop, Loader2, MapPin, Minus, Music2, Play, Plus, Search, X } from 'lucide-react';
+
+import { getSoundLibraryState, setSoundLibraryState, subscribeSoundLibrary } from '@/audio/SoundLibraryStore';
 
 import Avatar from '@/components/Avatar';
 import PostMetadataChips from '@/components/PostMetadataChips';
@@ -188,6 +190,25 @@ export default function ImagePreviewModal({
       ? appendVideoTrimFragment(previewBaseUrl, music.soundTrim)
       : previewBaseUrl)
     : null;
+  const blockedSoundId = useSyncExternalStore(
+    subscribeSoundLibrary,
+    () => getSoundLibraryState().blockedId,
+    () => null,
+  );
+  const soundPlaybackCallbacks = {
+    onPlaying: () => setSoundLibraryState({ playingId: music?.id || null, loadingId: null, blockedId: null }),
+    onBlocked: () => setSoundLibraryState({ playingId: null, loadingId: null, blockedId: music?.id || null }),
+    onError: () => setSoundLibraryState({ playingId: null, loadingId: null, blockedId: music?.id || null }),
+  };
+  const startSelectedSound = () => {
+    if (!soundPreviewUrl) return;
+    previewAudio(
+      { id: music?.id, url: soundPreviewUrl },
+      music?.soundTrim?.start || 0,
+      music?.soundTrim?.end,
+      soundPlaybackCallbacks,
+    );
+  };
 
   // التشغيل التلقائي الفوري للصوت المقترح/المختار أثناء معاينة الصورة (قبل أي زر)
   // — عبر المشغّل العالمي الموحّد (عنصر Audio واحد يُعاد استخدامه مع preload='auto')
@@ -198,15 +219,9 @@ export default function ImagePreviewModal({
     }
     // إن كان المشغّل الموحّد يشغّل هذا الصوت أصلاً (مقترح تلقائياً لحظة اختيار
     // الصورة) فاستأنفه كما هو بدل إعادة سحبه من الصفر — صفر تأخير وبلا انقطاع
-    if (!resumeInstantIfSame(soundPreviewUrl)) {
-      previewAudio(
-        { id: music?.id, url: soundPreviewUrl },
-        music?.soundTrim?.start || 0,
-        music?.soundTrim?.end,
-      );
-    }
+    if (!resumeInstantIfSame(soundPreviewUrl, soundPlaybackCallbacks)) startSelectedSound();
     return undefined;
-  }, [open, soundPreviewUrl, music?.soundTrim?.start, music?.soundTrim?.end]);
+  }, [open, soundPreviewUrl, music?.id, music?.soundTrim?.start, music?.soundTrim?.end]);
 
   // إيقاف معاينة الصوت المرفق عند فتح مكتبة الأصوات (منع تداخل الأصوات)
   useEffect(() => {
@@ -685,6 +700,16 @@ export default function ImagePreviewModal({
             موقع
           </button>
         </div>
+        {music?.id && blockedSoundId === music.id && soundPreviewUrl && (
+          <button
+            type="button"
+            onClick={startSelectedSound}
+            className="flex w-full items-center justify-center gap-2 rounded-full bg-[#f1a17f]/15 px-3 py-2 text-xs font-semibold text-[#f1a17f]"
+          >
+            <Play size={14} />
+            اضغط لتشغيل الصوت
+          </button>
+        )}
 
         {/* نافذة القص السفلية: قوالب الأبعاد + التكبير */}
         {toolPanel === 'crop' && (

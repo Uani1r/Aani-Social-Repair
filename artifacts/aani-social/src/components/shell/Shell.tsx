@@ -15,7 +15,8 @@ import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSou
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
-import { isPlaybackActive, playInstant, playSoundPreview, warmAudioContext, warmPreviewClip } from '@/lib/instantAudio';
+import { playInstant, warmAudioContext } from '@/lib/instantAudio';
+import { resumeBackgroundMedia, suspendBackgroundMedia } from '@/lib/activeVideo';
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
@@ -380,17 +381,14 @@ export default function Shell({
 
   useEffect(() => {
     let modalOpen = hasBlockingFeedDialog();
-    const pauseFeedVideos = () => window.dispatchEvent(new Event('aani:pause-feed-videos'));
-    const resumeFeedVideos = () => window.dispatchEvent(new Event('aani:resume-feed-videos'));
-
-    if (modalOpen) pauseFeedVideos();
+    if (modalOpen) suspendBackgroundMedia('blocking-dialog');
 
     const observer = new MutationObserver(() => {
       const nextModalOpen = hasBlockingFeedDialog();
       if (nextModalOpen === modalOpen) return;
       modalOpen = nextModalOpen;
-      if (nextModalOpen) pauseFeedVideos();
-      else resumeFeedVideos();
+      if (nextModalOpen) suspendBackgroundMedia('blocking-dialog');
+      else resumeBackgroundMedia('blocking-dialog');
     });
 
     observer.observe(document.body, {
@@ -400,7 +398,10 @@ export default function Shell({
       attributeFilter: ['role', 'aria-modal', 'aria-hidden', 'data-state'],
     });
 
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (modalOpen) resumeBackgroundMedia('blocking-dialog');
+    };
   }, []);
 
   useEffect(() => {
@@ -925,9 +926,9 @@ export default function Shell({
     if (wasOpen === isPublishFlowOpen) return;
 
     if (isPublishFlowOpen) {
-      window.dispatchEvent(new Event('aani:pause-feed-videos'));
+      suspendBackgroundMedia('publish-flow');
     } else {
-      if (!hasOpenDialog()) window.dispatchEvent(new Event('aani:resume-feed-videos'));
+      resumeBackgroundMedia('publish-flow');
       releasePageInteraction();
     }
   }, [isPublishFlowOpen]);
@@ -1266,10 +1267,12 @@ export default function Shell({
   };
 
   const handleImagePickerStart = () => {
+    suspendBackgroundMedia('media-picker');
     imagePickerPreparedSoundIdRef.current = prepareSuggestedSound();
   };
 
   const handleImagePickerCancel = () => {
+    resumeBackgroundMedia('media-picker');
     const preparedId = imagePickerPreparedSoundIdRef.current;
     imagePickerPreparedSoundIdRef.current = null;
     if (!preparedId) return;
@@ -1281,6 +1284,7 @@ export default function Shell({
   };
 
   const handleSelectPublishImages = async (files: File[]) => {
+    resumeBackgroundMedia('media-picker');
     if (!files.length) return;
     setShowVideoPreviewModal(false);
     setVideoTrim(null);
@@ -1439,26 +1443,13 @@ export default function Shell({
         soundTrim: null,
         origin: 'auto',
       });
-      // التشغيل الفوري لحظة وصول الصوت: أولاً عبر البث الأصلي إن ما زال
-      // سياق الإيماءة صالحاً، وعند رفض المتصفح (الاستدعاء غير المتزامن بعد
-      // الـ await) يُفكُّ رأس المقطع في RAM ويُشغَّل عبر AudioBufferSourceNode
-      // من خلال AudioContext المفتوح مسبقاً — فالاقتراح يعمل دائماً بلا حظر
+      // شغّل رابط الفيديو الأصلي بالبث المباشر؛ تخزين RAM مخصص حصراً
+      // لروابط preview_url الصوتية الصغيرة التي جرى تسخينها مسبقاً.
       if (chosen.source_video_url) {
-        const suggestedUrl = chosen.source_video_url;
-        const suggestedId = chosen.id;
-        let started = false;
-        playInstant(suggestedUrl, {
+        playInstant(chosen.source_video_url, {
           loop: true,
-          onPlaying: () => { started = true; },
           onError: () => undefined,
         });
-        void warmPreviewClip(suggestedUrl).then(buffer => {
-          if (!buffer) return;
-          if (started) return; // البث الأصلي نجح — لا داعي للعقدة
-          if (pendingSoundRef.current?.id !== suggestedId) return; // اقتراح أُلغي
-          if (isPlaybackActive()) return; // شيء آخر يعمل بالفعل
-          playSoundPreview(suggestedUrl);
-        }).catch(() => undefined);
       }
     } catch {
       // فشل الاقتراح لا يعطل مسار النشر

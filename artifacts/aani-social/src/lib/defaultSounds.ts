@@ -98,7 +98,7 @@ export async function warmDefaultSounds(): Promise<void> {
     }
     pool.forEach(sound => {
       if (!sound.source_video_url) return;
-      if (sound.preview_url) void warmPreviewClip(sound.preview_url, 131072);
+      if (sound.preview_url) void warmPreviewClip(sound.preview_url);
       else warmAudioCache(sound.source_video_url, 65536);
     });
   } catch {

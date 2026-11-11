@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
 import {
   Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Music2, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
@@ -16,7 +16,13 @@ import LikesListSheet from '@/components/LikesListSheet';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
-import { playExclusive, releaseActiveVideo } from '@/lib/activeVideo';
+import {
+  isBackgroundMediaSuspended,
+  playBackgroundMedia,
+  playExclusive,
+  releaseActiveVideo,
+  subscribeBackgroundMediaSuspension,
+} from '@/lib/activeVideo';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
@@ -50,6 +56,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   trailingAccountControl?: ReactNode;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backgroundMediaSuspended = useSyncExternalStore(
+    subscribeBackgroundMediaSuspension,
+    isBackgroundMediaSuspended,
+    () => false,
+  );
   const containerRef = useRef<HTMLElement>(null);
   const initialPlaybackAppliedRef = useRef(initialPlaybackTime === undefined);
   const manuallyPausedRef = useRef(false);
@@ -147,7 +158,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         entries.forEach(entry => {
           const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.6;
           setIsVisible(isVisible);
-          if (isVisible && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
+          if (isVisible && !backgroundMediaSuspended && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
             // تشغيل مع حصرية المدير الموحد: يوقف أي فيديو آخر يعمل في التطبيق
             playExclusive(post.id, video);
           } else if (!isVisible) {
@@ -166,7 +177,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       video.pause();
       releaseActiveVideo(post.id);
     };
-  }, [videoSrc]);
+  }, [backgroundMediaSuspended, videoSrc]);
 
   useEffect(() => {
     const reposterId = post.repost_attribution?.id;
@@ -216,7 +227,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     if (!isOverlayOpen) return;
     const video = videoRef.current;
     const container = containerRef.current;
-    if (!video || !container || manuallyPausedRef.current || hasOpenFeedDialog()) return;
+    if (!video || !container || backgroundMediaSuspended || manuallyPausedRef.current || hasOpenFeedDialog()) return;
 
     const bounds = container.getBoundingClientRect();
     const visibleHeight = Math.min(bounds.bottom, window.innerHeight) - Math.max(bounds.top, 0);
@@ -224,7 +235,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
     video.muted = muted;
     playExclusive(post.id, video);
-  }, [isOverlayOpen, muted, videoSrc]);
+  }, [backgroundMediaSuspended, isOverlayOpen, muted, videoSrc]);
 
   useEffect(() => {
     const pauseForModal = () => {
@@ -246,7 +257,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       if (!video || !previousState) return;
       modalPlaybackStateRef.current = null;
       manuallyPausedRef.current = previousState.wasManuallyPaused;
-      if (previousState.wasPlaying) playExclusive(post.id, video);
+      if (previousState.wasPlaying && !isBackgroundMediaSuspended()) playExclusive(post.id, video);
     };
 
     window.addEventListener('aani:pause-feed-videos', pauseForModal);
@@ -389,6 +400,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   const handleVideoPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
+    if (isBackgroundMediaSuspended()) {
+      video.pause();
+      backgroundAudioRef.current?.pause();
+      return;
+    }
     reportPlaybackTime(video.currentTime);
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
       seekToTrimStart(video);
@@ -403,7 +419,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       } catch {
         /* قد يرفض المتصفح الضبط قبل جهوزية المقطع */
       }
-      void backgroundAudio.play().catch(() => undefined);
+      void playBackgroundMedia(backgroundAudio);
     }
   };
 
@@ -514,13 +530,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           ) : (
             <video
               ref={videoRef}
-              src={videoSrc}
+              src={backgroundMediaSuspended ? undefined : videoSrc}
+              data-aani-background-media=""
+              data-aani-video-id={post.id}
               poster={postCoverUrl || undefined}
               loop={!videoTimeRange}
-              autoPlay={isOverlayOpen && isVisible}
+              autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
               muted={muted}
               playsInline
-              preload="auto"
+              preload="none"
               onLoadedMetadata={handleVideoLoadedMetadata}
               onSeeking={handleVideoSeeking}
               onTimeUpdate={handleVideoTimeUpdate}
@@ -633,9 +651,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       {backgroundSoundUrl && (
         <audio
           ref={backgroundAudioRef}
-          src={backgroundSoundSrc}
+          src={backgroundMediaSuspended ? undefined : backgroundSoundSrc}
+          data-aani-background-media=""
           loop
-          preload="auto"
+          preload="none"
           aria-hidden="true"
           className="hidden"
           onTimeUpdate={handleBackgroundTimeUpdate}
@@ -709,7 +728,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         )}
         {post.audio_url && !backgroundSoundUrl && (
           <audio
-            src={post.audio_url}
+            src={backgroundMediaSuspended ? undefined : post.audio_url}
+            data-aani-background-media=""
             controls
             loop
             preload="none"

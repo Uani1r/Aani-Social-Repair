@@ -1,8 +1,13 @@
 import { Volume2, VolumeX } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type KeyboardEvent, type SyntheticEvent } from 'react';
 
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
-import { playExclusive, releaseActiveVideo } from '@/lib/activeVideo';
+import {
+  isBackgroundMediaSuspended,
+  playExclusive,
+  releaseActiveVideo,
+  subscribeBackgroundMediaSuspension,
+} from '@/lib/activeVideo';
 import { appendVideoTrimFragment, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
 
 type PostVideoPreviewProps = {
@@ -54,6 +59,11 @@ export default function PostVideoPreview({
   onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const backgroundMediaSuspended = useSyncExternalStore(
+    subscribeBackgroundMediaSuspension,
+    isBackgroundMediaSuspended,
+    () => false,
+  );
   const manuallyPausedRef = useRef(false);
   const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
   // حدود القص: ترميز #t= في العنوان أولاً ثم عمودا المنشور trim_start/trim_end
@@ -138,7 +148,7 @@ export default function PostVideoPreview({
       video.muted = previousState.wasMuted;
       setVideoMuted(previousState.wasMuted);
       manuallyPausedRef.current = previousState.wasManuallyPaused;
-      if (previousState.wasPlaying) playExclusive(videoId, video);
+      if (previousState.wasPlaying && !isBackgroundMediaSuspended()) playExclusive(videoId, video);
     };
     window.addEventListener('aani:pause-feed-videos', pauseForModal);
     window.addEventListener('aani:resume-feed-videos', resumeAfterModal);
@@ -178,7 +188,7 @@ export default function PostVideoPreview({
       video.pause();
       if (videoId) releaseActiveVideo(videoId);
     };
-  }, [autoPlayWhenVisible, mediaSrc, videoId]);
+  }, [autoPlayWhenVisible, backgroundMediaSuspended, mediaSrc, videoId]);
 
   // تنظيف نهائي عند إزالة المكوّن: إيقاف صريح وتفريغ المصدر
   // — Safari/WebKit قد يواصل تشغيل صوت عنصر منزوع من الشجرة إن بقي مرجعاً
@@ -244,13 +254,15 @@ export default function PostVideoPreview({
     >
       <video
         ref={videoRef}
-        src={mediaSrc}
+        src={feedVideo && backgroundMediaSuspended ? undefined : mediaSrc}
+        data-aani-background-media={feedVideo ? '' : undefined}
+        data-aani-video-id={feedVideo ? videoId : undefined}
         poster={poster || undefined}
         controls={!showCustomControls && controls}
         muted={showMuteToggle ? videoMuted : muted}
-        autoPlay={autoPlay && !autoPlayWhenVisible}
+        autoPlay={autoPlay && !autoPlayWhenVisible && !backgroundMediaSuspended}
         playsInline
-        preload="auto"
+        preload={feedVideo ? 'none' : 'auto'}
         onLoadedMetadata={seekToStart}
         onSeeking={event => {
           const video = event.currentTarget;

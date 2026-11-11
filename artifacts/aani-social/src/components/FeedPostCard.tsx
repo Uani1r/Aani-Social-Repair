@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import {
   Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Music2, Pause, Play, Repeat, RotateCcw, Send, ThumbsUp, X,
 } from 'lucide-react';
@@ -26,6 +26,11 @@ import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
 import { defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
 import type { PendingPost } from '@/lib/pendingPosts';
+import {
+  isBackgroundMediaSuspended,
+  playBackgroundMedia,
+  subscribeBackgroundMediaSuspension,
+} from '@/lib/activeVideo';
 
 /** عنوان الصوت المعروض للمنشور: الموسيقى المرفقة أو الصوت الأصلي باسم صاحبه */
 const postSoundLabel = (post: Post): string =>
@@ -110,6 +115,11 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   // نظام الأصوات: مشغل صوتي خلفي لمنشورات الصور (ريل بصري) يعمل تلقائياً عند ظهور الصورة
   const photoMediaRef = useRef<HTMLDivElement>(null);
   const photoAudioRef = useRef<HTMLAudioElement>(null);
+  const backgroundMediaSuspended = useSyncExternalStore(
+    subscribeBackgroundMediaSuspension,
+    isBackgroundMediaSuspended,
+    () => false,
+  );
   const photoAudioBlockedRef = useRef(false);
   const [photoAudioPlaying, setPhotoAudioPlaying] = useState(false);
   const interactions = usePostInteractions(post, currentUserId);
@@ -200,17 +210,20 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     if (!audio || !container || typeof IntersectionObserver === 'undefined') return undefined;
 
     const tryPlay = () => {
-      void audio.play().then(() => {
-        photoAudioBlockedRef.current = false;
-        setPhotoAudioPlaying(true);
-      }).catch(() => {
-        photoAudioBlockedRef.current = true;
-        setPhotoAudioPlaying(false);
+      if (isBackgroundMediaSuspended()) return;
+      void playBackgroundMedia(audio).then(played => {
+        if (played) {
+          photoAudioBlockedRef.current = false;
+          setPhotoAudioPlaying(true);
+        } else if (!isBackgroundMediaSuspended()) {
+          photoAudioBlockedRef.current = true;
+          setPhotoAudioPlaying(false);
+        }
       });
     };
     const observer = new IntersectionObserver(entries => {
       entries.forEach(entry => {
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) tryPlay();
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6 && !isBackgroundMediaSuspended()) tryPlay();
         else {
           audio.pause();
           setPhotoAudioPlaying(false);
@@ -220,7 +233,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     observer.observe(container);
 
     const resumeOnInteraction = () => {
-      if (!photoAudioBlockedRef.current) return;
+      if (isBackgroundMediaSuspended() || !photoAudioBlockedRef.current) return;
       tryPlay();
     };
     window.addEventListener('pointerdown', resumeOnInteraction);
@@ -229,13 +242,13 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       window.removeEventListener('pointerdown', resumeOnInteraction);
       audio.pause();
     };
-  }, [post.type, post.audio_url, post.id]);
+  }, [backgroundMediaSuspended, post.type, post.audio_url, post.id]);
 
   const togglePhotoAudio = () => {
     const audio = photoAudioRef.current;
-    if (!audio) return;
+    if (!audio || isBackgroundMediaSuspended()) return;
     if (audio.paused) {
-      void audio.play().then(() => setPhotoAudioPlaying(true)).catch(() => undefined);
+      void playBackgroundMedia(audio).then(played => setPhotoAudioPlaying(played));
     } else {
       audio.pause();
       setPhotoAudioPlaying(false);
@@ -628,7 +641,8 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
           <audio
             ref={photoAudioRef}
-            src={photoAudioSrc}
+            src={backgroundMediaSuspended ? undefined : photoAudioSrc}
+            data-aani-background-media=""
             loop
             preload="none"
             aria-hidden="true"

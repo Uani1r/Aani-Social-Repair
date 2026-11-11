@@ -70,7 +70,7 @@ export function installGlobalUnlockListener(): void {
         if (generation !== visibilityResumeGeneration) return;
         engineActive = false;
         activeSoundId = null;
-        setSoundLibraryState({ playingId: null, loadingId: null, ...(soundId ? { blockedId: soundId } : {}) });
+        setSoundLibraryState({ playingId: null, loadingId: null, blockedId: soundId });
       };
       void resumeInstant().then(resumed => {
         if (generation === visibilityResumeGeneration && !resumed) markResumeBlocked();

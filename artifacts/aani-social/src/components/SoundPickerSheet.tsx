@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Loader2, Pause, Play, Search, Scissors, X } from 'lucide-react';
 
@@ -10,6 +10,7 @@ import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, consumeSoundPickerTarget, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
 import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
 import { setSoundLibraryState } from '@/audio/SoundLibraryStore';
+import { resumeBackgroundMedia, suspendBackgroundMedia } from '@/lib/activeVideo';
 import { useSoundPicker } from '@/hooks/useSoundPicker';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
@@ -97,6 +98,12 @@ export default function SoundPickerSheet() {
     setDraggingHandle(null);
   };
 
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    suspendBackgroundMedia('sound-picker');
+    return () => resumeBackgroundMedia('sound-picker');
+  }, [open]);
+
   // زر الرجوع (الهاتف/المتصفح): يعود من شاشة الاقتصاص للقائمة ثم يغلق المكتبة
   useOverlayBack(open, () => {
     if (trimTarget) {
@@ -110,6 +117,7 @@ export default function SoundPickerSheet() {
   // الاستماع لطلب فتح مكتبة الأصوات من أزرار الموسيقى
   useEffect(() => {
     const onOpenPicker = () => {
+      suspendBackgroundMedia('sound-picker');
       setOpen(true);
       setQuery('');
       setSoundLibraryState({ playingId: null, loadingId: null, blockedId: null });
@@ -155,7 +163,7 @@ export default function SoundPickerSheet() {
         rows.slice(0, 6).forEach(sound => {
           const clipUrl = sound.preview_url || sound.source_video_url;
           if (!clipUrl) return;
-          if (sound.preview_url) void warmPreviewClip(clipUrl, 131072);
+          if (sound.preview_url) void warmPreviewClip(clipUrl);
           else warmAudioCache(clipUrl, 65536);
         });
         const creatorIds = Array.from(new Set(rows
@@ -316,7 +324,7 @@ export default function SoundPickerSheet() {
   const [trimPeaks, setTrimPeaks] = useState<number[] | null>(null);
   const [trimClipDuration, setTrimClipDuration] = useState(0);
   useEffect(() => {
-    const clipUrl = trimTarget?.preview_url || trimTarget?.source_video_url || '';
+    const clipUrl = trimTarget?.preview_url || '';
     setTrimPeaks(null);
     setTrimClipDuration(0);
     if (!clipUrl) return;
@@ -328,7 +336,7 @@ export default function SoundPickerSheet() {
       setTrimClipDuration(getClipDuration(clipUrl) ?? 0);
     })();
     return () => { active = false; };
-  }, [trimTarget?.preview_url, trimTarget?.source_video_url]);
+  }, [trimTarget?.preview_url]);
 
   // تطبيق الصوت المقتص على المنشور الجاري إنشاؤه
   const applyTrimmedSound = () => {

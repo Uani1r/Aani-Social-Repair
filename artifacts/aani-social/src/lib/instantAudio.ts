@@ -227,13 +227,32 @@ export function stopInstant(): void {
  * Returns true when it handled the resume itself; false when a fresh
  * playInstant call is required.
  */
-export function resumeInstantIfSame(url: string): boolean {
+export type InstantResumeCallbacks = {
+  onPlaying?: () => void;
+  onBlocked?: () => void;
+  onError?: (error?: unknown) => void;
+};
+
+export function resumeInstantIfSame(url: string, callbacks: InstantResumeCallbacks = {}): boolean {
   if (!audio || !url || currentSrc !== url) return false;
-  if (!audio.paused) return true; // already playing this sound, nothing to do
+  if (!audio.paused) {
+    callbacks.onPlaying?.();
+    return true;
+  }
+  const element = audio;
   const generation = ++playGeneration;
-  void audio.play().catch(() => {
+  void element.play().then(() => {
+    if (generation === playGeneration && !element.paused) callbacks.onPlaying?.();
+  }).catch((error: unknown) => {
     if (generation !== playGeneration) return;
-    /* a failed resume is silently ignored; the screen can call playInstant later */
+    const isBlocked = Boolean(
+      error
+      && typeof error === 'object'
+      && 'name' in error
+      && (error as { name?: unknown }).name === 'NotAllowedError',
+    );
+    if (isBlocked) callbacks.onBlocked?.();
+    else callbacks.onError?.(error);
   });
   return true;
 }
@@ -427,6 +446,7 @@ export const installAudioUnlock = warmAudioContext;
 // using native streaming so RAM stays bounded.
 
 const PREVIEW_CLIP_SECONDS = 15;   // head seconds kept in RAM per clip
+const MAX_PREVIEW_CLIP_BYTES = 180 * 1024;
 const MAX_CACHED_CLIPS = 6;        // oldest clips are evicted beyond this
 
 const previewClipCache = new Map<string, AudioBuffer>();
@@ -450,9 +470,9 @@ function ensureMediaContext(): AudioContext | null {
 }
 
 /** Fetch + decode a short head clip into RAM (idempotent per URL). Resolves null on failure. */
-export function warmPreviewClip(url: string, bytes = 61440): Promise<AudioBuffer | null> {
+export function warmPreviewClip(url: string, bytes = MAX_PREVIEW_CLIP_BYTES): Promise<AudioBuffer | null> {
   if (!url || typeof window === 'undefined') return Promise.resolve(null);
-  const maxBytes = Math.max(16384, Math.min(131072, Math.floor(bytes)));
+  const maxBytes = Math.max(16384, Math.min(MAX_PREVIEW_CLIP_BYTES, Math.floor(bytes)));
   const cached = previewClipCache.get(url);
   if (cached) return Promise.resolve(cached);
   const pending = previewClipPending.get(url);
@@ -462,11 +482,19 @@ export function warmPreviewClip(url: string, bytes = 61440): Promise<AudioBuffer
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const response = await fetch(url.replace(/#.*$/, ''), {
+      const request: RequestInit & { priority?: 'high' } = {
         headers: { Range: `bytes=0-${maxBytes - 1}` },
         signal: controller.signal,
-      });
+        priority: 'high',
+      };
+      const response = await fetch(url.replace(/#.*$/, ''), request);
       if (response.status !== 206) {
+        await response.body?.cancel();
+        return null;
+      }
+      const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+      const totalBytes = Number(response.headers.get('content-range')?.match(/\/(\d+)$/)?.[1]);
+      if (contentType.startsWith('video/') || (Number.isFinite(totalBytes) && totalBytes > MAX_PREVIEW_CLIP_BYTES)) {
         await response.body?.cancel();
         return null;
       }
@@ -490,11 +518,10 @@ export function warmPreviewClip(url: string, bytes = 61440): Promise<AudioBuffer
         raw.set(chunk, offset);
         offset += chunk.byteLength;
       });
+      if (raw.byteLength === 0) return null;
       const context = ensureMediaContext();
       if (!context) return null;
-      // decodeAudioData requires an ArrayBuffer, not a Uint8Array view.
-      const audioData = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
-      const decoded = await context.decodeAudioData(audioData);
+      const decoded = await context.decodeAudioData(raw.buffer as ArrayBuffer);
       if (epoch !== clipCacheEpoch) return null; // disposed mid-flight — discard
       // Bound RAM: keep only the head seconds of the decoded buffer.
       let clip = decoded;

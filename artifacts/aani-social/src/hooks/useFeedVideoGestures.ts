@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
+import { playExclusive } from '@/lib/activeVideo';
+
 type GestureState = {
   pointerId: number;
   startX: number;
@@ -55,7 +57,7 @@ export function useFeedVideoGestures(
   const resumeAfterCancelledHold = (gesture: GestureState) => {
     const video = videoRef.current;
     if (video && gesture.activated && gesture.wasPlaying && video.paused) {
-      void video.play().catch(() => undefined);
+      playExclusive(video.dataset.aaniVideoId, video);
     }
   };
 
