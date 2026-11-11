@@ -10,6 +10,9 @@ import type { ComposerAudio } from '@/components/CreatePostModal';
 import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
+import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
+import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
+import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
@@ -104,6 +107,7 @@ export default function Shell({
   const isProfilePath = path === '/profile' || path.startsWith('/profile/');
   // ملف شخصي فرعي (ليس تبويب البروفايل الرئيسي): تُعطَّل سحبة التبويبات وتُستبدل بإيماءة رجوع
   const isProfileSubView = path !== '/profile' && path.startsWith('/profile/');
+  const isMessagesScreenNow = path === '/messages' || path.startsWith('/messages/');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPublishOptionsSheet, setShowPublishOptionsSheet] = useState(false);
   const [pendingStoryComposerRequest, setPendingStoryComposerRequest] = useState(false);
@@ -112,8 +116,12 @@ export default function Shell({
   const [openFollowRequestsOnOpen, setOpenFollowRequestsOnOpen] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
+  const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
   const seenNotificationIdsRef = useRef(new Set<string>());
   const handledCallLogsRef = useRef(new Set<string>());
+  const messagesCountTimerRef = useRef<number | null>(null);
+  const showNotifsModalRef = useRef(showNotifsModal);
   const [unifiedTopBarHidden, setUnifiedTopBarHidden] = useState(() => Math.max(
     window.scrollY || 0,
     document.documentElement.scrollTop || 0,
@@ -122,6 +130,7 @@ export default function Shell({
   const unifiedTopBarHiddenRef = useRef(unifiedTopBarHidden);
   const currentPathRef = useRef(path);
   currentPathRef.current = path;
+  showNotifsModalRef.current = showNotifsModal;
   const requestStoryComposer = useCallback(() => {
     setPendingStoryComposerRequest(true);
     if (currentPathRef.current !== '/' && currentPathRef.current !== '/feed') setLocation('/feed');
@@ -869,6 +878,62 @@ export default function Shell({
     return () => { active = false; };
   }, [userId, showNotifsModal]);
 
+  // شارة الرسائل غير المقروءة: حساب أولي عند بدء الجلسة،
+  // وإعادة حساب عند كل دخول شاشة الرسائل (بعد تعليم الرسائل مقروءة)
+  useEffect(() => {
+    if (!supabaseConfigured || !userId) {
+      setMessagesUnreadCount(0);
+      return;
+    }
+    void fetchUnreadMessagesCount(userId).then(count => {
+      if (count !== null) setMessagesUnreadCount(count);
+    });
+  }, [userId, isMessagesScreenNow]);
+
+  const refreshMessagesUnreadCount = useCallback(() => {
+    if (!supabaseConfigured || !userId) return;
+    if (messagesCountTimerRef.current !== null) window.clearTimeout(messagesCountTimerRef.current);
+    messagesCountTimerRef.current = window.setTimeout(() => {
+      messagesCountTimerRef.current = null;
+      void fetchUnreadMessagesCount(userId).then(count => {
+        if (count !== null) setMessagesUnreadCount(count);
+      });
+    }, 120);
+  }, [userId]);
+
+  useEffect(() => () => {
+    if (messagesCountTimerRef.current !== null) window.clearTimeout(messagesCountTimerRef.current);
+  }, []);
+
+  // استماع Realtime لجدول messages: أي رسالة واردة أو تعليم قراءة أو حذف
+  // يُحدّث شارة الرسائل فوراً دون الحاجة لفتح واجهة المحادثات
+  useEffect(() => {
+    if (!supabaseConfigured || !userId) return undefined;
+    const channel = supabase.channel(`aani-messages-unread-${userId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `recipient_id=eq.${userId}`,
+      }, refreshMessagesUnreadCount)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `recipient_id=eq.${userId}`,
+      }, refreshMessagesUnreadCount)
+      .on('postgres_changes', {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'messages',
+        filter: `recipient_id=eq.${userId}`,
+      }, refreshMessagesUnreadCount)
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [refreshMessagesUnreadCount, userId]);
+
   useEffect(() => {
     if (!supabaseConfigured || !userId) return undefined;
     let countRefreshTimer: number | null = null;
@@ -881,6 +946,35 @@ export default function Shell({
         });
       }, 80);
     };
+    // تنبيه منبثق فوري للإشعارات المهمة (متابعة / رسالة) مع اسم صاحب الإشعار
+    const showRealtimeToast = (type: string, actorId: string) => {
+      if (showNotifsModalRef.current) return;
+      void supabase.from('profiles')
+        .select('display_name, full_name, username')
+        .eq('id', actorId)
+        .maybeSingle()
+        .then(({ data }) => {
+          const actorName = displayName(data as { display_name?: string | null; full_name?: string | null; username?: string | null } | null) || 'مستخدم';
+          if (type === 'follow') {
+            toast(`${actorName} بدأ متابعتك`, {
+              description: 'إشعار متابعة جديد',
+              action: { label: 'عرض', onClick: () => setLocation(`/profile/${actorId}`) },
+            });
+          } else if (type === 'follow_request') {
+            toast(`${actorName} أرسل طلب متابعة`, {
+              description: 'راجع طلبات المتابعة من نافذة الإشعارات',
+              action: { label: 'عرض', onClick: () => requestOpenFollowRequests() },
+            });
+          } else if (['message', 'new_message'].includes(type)) {
+            // داخل شاشة الرسائل تُحدَّث القائمة لحظياً، فلا داعي للتنبيه المنبثق
+            if (currentPathRef.current.startsWith('/messages')) return;
+            toast(`رسالة جديدة من ${actorName}`, {
+              description: 'اضغط لفتح المحادثة',
+              action: { label: 'فتح', onClick: () => setLocation(`/messages/${actorId}`) },
+            });
+          }
+        });
+    };
     const channel = supabase.channel(`aani-notifications-${userId}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -888,7 +982,7 @@ export default function Shell({
         table: 'notifications',
         filter: `user_id=eq.${userId}`,
       }, payload => {
-        const notification = payload.new as { id?: unknown; type?: unknown; is_read?: unknown };
+        const notification = payload.new as { id?: unknown; type?: unknown; is_read?: unknown; actor_id?: unknown };
         const notificationId = typeof notification.id === 'string' ? notification.id : '';
         if (notificationId && !seenNotificationIdsRef.current.has(notificationId)) {
           seenNotificationIdsRef.current.add(notificationId);
@@ -896,8 +990,15 @@ export default function Shell({
             const oldestId = seenNotificationIdsRef.current.values().next().value;
             if (oldestId) seenNotificationIdsRef.current.delete(oldestId);
           }
-          if (['message', 'new_message'].includes(String(notification.type))
+          const notificationType = String(notification.type || '');
+          if (['message', 'new_message'].includes(notificationType)
             && profile?.notification_settings?.messages !== false) playMessageChime();
+          // زيادة فورية للشارة قبل وصول نتيجة الاستعلام المضاد
+          if (notification.is_read === false) setUnreadCount(current => current + 1);
+          const actorId = typeof notification.actor_id === 'string' ? notification.actor_id : '';
+          if (['follow', 'follow_request', 'message', 'new_message'].includes(notificationType) && actorId) {
+            showRealtimeToast(notificationType, actorId);
+          }
         }
         refreshUnreadCount();
       })
@@ -912,7 +1013,22 @@ export default function Shell({
       if (countRefreshTimer !== null) window.clearTimeout(countRefreshTimer);
       void supabase.removeChannel(channel);
     };
-  }, [profile?.notification_settings?.messages, userId]);
+  }, [profile?.notification_settings?.messages, requestOpenFollowRequests, setLocation, userId]);
+
+  // إعادة الاتصال التلقائي: عند عودة التطبيق من الخلفية أو رجوع الشبكة
+  // تُعاد القنوات للاشتراك (عبر realtimeReconnect) ويُعاد حساب كل عدّادات
+  // الشارات لمحاذاة الحالة الفعلية في قاعدة البيانات
+  useEffect(() => {
+    if (!supabaseConfigured || !userId) return undefined;
+    return registerRealtimeReconnect(() => {
+      void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count, error }) => {
+        if (!error) setUnreadCount(count || 0);
+      });
+      void fetchUnreadMessagesCount(userId).then(count => {
+        if (count !== null) setMessagesUnreadCount(count);
+      });
+    });
+  }, [userId]);
 
   const handleSelectPublishImages = async (files: File[]) => {
     if (!files.length) return;
@@ -1441,6 +1557,7 @@ export default function Shell({
           <ShellBottomNav
             path={path}
             chromeHidden={isProfilePath ? false : chromeHidden}
+            messagesUnreadCount={messagesUnreadCount}
             onNavigationTap={handleHomeNavigationTap}
           />
         )}

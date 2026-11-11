@@ -5,10 +5,12 @@ import { Film, Home, MessageCircle, Search, UserRound } from 'lucide-react';
 type ShellBottomNavProps = {
   path: string;
   chromeHidden: boolean;
+  /** عدد الرسائل غير المقروءة — يُعرض كشارة حمراء على أيقونة الرسائل */
+  messagesUnreadCount: number;
   onNavigationTap: (event: MouseEvent<HTMLAnchorElement>, navId: string) => void;
 };
 
-export default function ShellBottomNav({ path, chromeHidden, onNavigationTap }: ShellBottomNavProps) {
+export default function ShellBottomNav({ path, chromeHidden, messagesUnreadCount, onNavigationTap }: ShellBottomNavProps) {
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
   const nav = [
     ['/feed', Home, 'الرئيسية', 'feed'],
@@ -42,11 +44,16 @@ export default function ShellBottomNav({ path, chromeHidden, onNavigationTap }: 
             className={`flex flex-col items-center gap-1 text-[10px] transition ${active ? 'text-pink-500 font-bold' : 'text-zinc-400'}`}
           >
             <span
-              className={`flex h-8 w-8 items-center justify-center rounded-full transition-all duration-300 ${
+              className={`relative flex h-8 w-8 items-center justify-center rounded-full transition-all duration-300 ${
                 active ? 'bg-zinc-200 text-zinc-900' : 'bg-transparent'
               }`}
             >
               <Icon size={19} />
+              {id === 'messages' && messagesUnreadCount > 0 && (
+                <span className="absolute -top-1 -left-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white shadow-md ring-2 ring-zinc-900/90">
+                  {messagesUnreadCount > 99 ? '99+' : messagesUnreadCount}
+                </span>
+              )}
             </span>
             <span>{label}</span>
           </Link>
