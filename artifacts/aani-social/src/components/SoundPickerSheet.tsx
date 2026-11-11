@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Music2, Pause, Play, Search, Scissors, X } from 'lucide-react';
+import { ArrowRight, Pause, Play, Search, Scissors, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
@@ -24,9 +24,9 @@ const formatSeconds = (value: number): string => {
 /**
  * مكتبة أصوات التطبيق (نظام الأصوات بنمط TikTok):
  * منبثق يعرض الأصوات المخزنة في جدول public.sounds مع خانة بحث باسم الصوت
- * أو اسم صاحبه، ومعاينة تشغيل/إيقاف لكل صوت، وأداة اقتصاص (شريطا زمن البداية
- * والنهاية بالثواني بحد أقصى 15 ثانية)، وزر استخدام يُطبق الصوت المقتص على
- * المنشور الجاري إنشاؤه (sound_id + audio_url + audio_title + أوقات الاقتصاص).
+ * أو اسم صاحبه، ومعاينة تشغيل/إيقاف لكل صوت، وأداة اقتصاص بشريط زمني موحد
+ * بمقبضين (بداية/نهاية) بحد أقصى 15 ثانية، وزر استخدام يُطبق الصوت المقتص
+ * على المنشور الجاري إنشاؤه (sound_id + audio_url + audio_title + أوقات الاقتصاص).
  * تُفتح من أزرار «موسيقى» في شاشات المعاينة ونافذة النشر عبر حدث عام.
  */
 export default function SoundPickerSheet() {
@@ -41,15 +41,20 @@ export default function SoundPickerSheet() {
   const [trimDraft, setTrimDraft] = useState<SoundTrimRange>({ start: 0, end: MAX_TRIM_SECONDS });
   const [soundDuration, setSoundDuration] = useState(0);
   const [trimPlaying, setTrimPlaying] = useState(false);
-  const trimAudioRef = useRef<HTMLAudioElement>(null);
+  const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null);
+  const trimDurationLoadedRef = useRef(false);
+  const trimProbeRef = useRef<HTMLAudioElement>(null);
+  const trimPreviewRef = useRef<HTMLAudioElement>(null);
+  const trimTrackRef = useRef<HTMLDivElement>(null);
 
   const stopEverything = () => {
     const previewAudio = previewAudioRef.current;
     if (previewAudio) previewAudio.pause();
     setPlayingId(null);
-    const trimAudio = trimAudioRef.current;
-    if (trimAudio) trimAudio.pause();
+    const trimPreview = trimPreviewRef.current;
+    if (trimPreview) trimPreview.pause();
     setTrimPlaying(false);
+    setDraggingHandle(null);
   };
 
   // زر الرجوع (الهاتف/المتصفح): يعود من شاشة الاقتصاص للقائمة ثم يغلق المكتبة
@@ -72,6 +77,7 @@ export default function SoundPickerSheet() {
       setLoadError(false);
       setTrimTarget(null);
       setTrimPlaying(false);
+      setDraggingHandle(null);
     };
     window.addEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
     return () => window.removeEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
@@ -139,32 +145,34 @@ export default function SoundPickerSheet() {
       return;
     }
     // صوت واحد فقط يعمل في المكتبة: أوقف أي معاينة أخرى
-    const trimAudio = trimAudioRef.current;
-    if (trimAudio) trimAudio.pause();
+    const trimPreview = trimPreviewRef.current;
+    if (trimPreview) trimPreview.pause();
     setTrimPlaying(false);
     audio.src = sound.source_video_url;
     void audio.play().then(() => setPlayingId(sound.id)).catch(() => setPlayingId(null));
   };
 
-  // فتح أداة الاقتصاص للصوت المختار (تُقرأ المدة من عنصر الصوت المخفي)
+  // فتح أداة الاقتصاص: عنصر صوت مخفي منفصل يقرأ مدة الصوت الكاملة
   const beginTrim = (sound: LibrarySound) => {
     stopEverything();
     setTrimTarget(sound);
     setSoundDuration(0);
     setTrimDraft({ start: 0, end: MAX_TRIM_SECONDS });
-    const audio = trimAudioRef.current;
-    if (audio) {
-      audio.src = sound.source_video_url || '';
-      audio.load();
+    trimDurationLoadedRef.current = false;
+    const probe = trimProbeRef.current;
+    if (probe) {
+      probe.src = sound.source_video_url || '';
+      probe.load();
     }
   };
 
-  // معاينة الجزء المقتص مباشرة: يعمل ضمن زمني البداية/النهاية المختارَين
+  // معاينة الجزء المقتص مباشرة: يبدأ من زمن البداية وينتهي عند زمن النهاية
   const toggleTrimPreview = () => {
-    const audio = trimAudioRef.current;
+    const audio = trimPreviewRef.current;
     if (!audio || !trimTarget?.source_video_url) return;
     if (audio.paused) {
       audio.src = appendVideoTrimFragment(trimTarget.source_video_url, trimDraft);
+      try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
       void audio.play().then(() => setTrimPlaying(true)).catch(() => setTrimPlaying(false));
     } else {
       audio.pause();
@@ -172,19 +180,40 @@ export default function SoundPickerSheet() {
     }
   };
 
-  // تقييد طول المقتطف: البداية والنهاية ضمن المدة، والفارق بحد أقصى 15 ثانية
-  const updateTrimStart = (start: number) => {
-    setTrimDraft(current => ({
-      start,
-      end: Math.max(start + 0.5, Math.min(current.end, Math.min(start + MAX_TRIM_SECONDS, Math.max(soundDuration, start + 0.5)))),
-    }));
-  };
-  const updateTrimEnd = (end: number) => {
-    setTrimDraft(current => ({
-      end,
-      start: Math.min(current.start, Math.max(0, end - MAX_TRIM_SECONDS)),
-    }));
-  };
+  // سحب المقبضين على الشريط الزمني الموحد (بحد أقصى 15 ثانية للمقتطف)
+  useEffect(() => {
+    if (!draggingHandle) return undefined;
+    const valueFromPointer = (clientX: number): number | null => {
+      const track = trimTrackRef.current;
+      if (!track || soundDuration <= 0) return null;
+      const rect = track.getBoundingClientRect();
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(rect.width, 1)));
+      return ratio * soundDuration;
+    };
+    const onMove = (event: PointerEvent) => {
+      const value = valueFromPointer(event.clientX);
+      if (value === null) return;
+      setTrimDraft(current => {
+        if (draggingHandle === 'start') {
+          const start = Math.min(Math.max(0, value), Math.max(0, current.end - 0.5));
+          const end = Math.min(Math.max(current.end, start + 0.5), Math.min(start + MAX_TRIM_SECONDS, soundDuration));
+          return { start, end };
+        }
+        const end = Math.min(Math.max(value, current.start + 0.5), soundDuration);
+        const start = Math.max(0, Math.max(current.start, end - MAX_TRIM_SECONDS));
+        return { start, end };
+      });
+    };
+    const onUp = () => setDraggingHandle(null);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [draggingHandle, soundDuration]);
 
   // تطبيق الصوت المقتص على المنشور الجاري إنشاؤه
   const applyTrimmedSound = () => {
@@ -218,6 +247,9 @@ export default function SoundPickerSheet() {
 
   if (!open) return null;
 
+  const startPercent = soundDuration > 0 ? (trimDraft.start / soundDuration) * 100 : 0;
+  const endPercent = soundDuration > 0 ? (trimDraft.end / soundDuration) * 100 : 0;
+
   return createPortal(
     <div
       className="fixed inset-0 z-[1250] flex flex-col justify-end bg-black/70 backdrop-blur-sm"
@@ -240,7 +272,7 @@ export default function SoundPickerSheet() {
                 type="button"
                 onClick={() => { stopEverything(); setTrimTarget(null); }}
                 aria-label="رجوع للقائمة"
-                className="grid h-10 w-10 place-items-center rounded-full transition hover:bg-white/10"
+                className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10"
               >
                 <ArrowRight size={22} />
               </button>
@@ -249,7 +281,7 @@ export default function SoundPickerSheet() {
                 type="button"
                 onClick={() => { stopEverything(); setOpen(false); }}
                 aria-label="إغلاق"
-                className="grid h-10 w-10 place-items-center rounded-full transition hover:bg-white/10"
+                className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10"
               >
                 <X size={20} />
               </button>
@@ -259,60 +291,58 @@ export default function SoundPickerSheet() {
               <p className="mb-1 truncate text-sm font-semibold text-white">{trimTarget.title}</p>
               <p className="mb-4 text-xs text-zinc-500">{displayName(trimTarget.creator || null) || 'مستخدم'}</p>
 
-              <div className="mb-4 flex items-center justify-center gap-3">
+              <div className="mb-5 flex items-center justify-center gap-3">
+                {/* زر المعاينة: دائرة 56×56 والأيقونة ممركزة تماماً في المنتصف */}
                 <button
                   type="button"
                   onClick={toggleTrimPreview}
                   disabled={!trimTarget.source_video_url}
                   aria-label={trimPlaying ? 'إيقاف معاينة الجزء المختار' : 'معاينة الجزء المختار'}
-                  className="grid h-14 w-14 place-items-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-lg transition disabled:opacity-40 hover:brightness-105"
+                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-lg transition disabled:opacity-40 hover:brightness-105 active:scale-95"
                 >
-                  {trimPlaying ? <Pause size={22} /> : <Play size={22} className="translate-x-0.5" />}
+                  {trimPlaying ? <Pause size={22} /> : <Play size={22} />}
                 </button>
-                <div className="text-xs text-zinc-400">
-                  <span className="tabular-nums">{formatSeconds(trimDraft.start)}</span>
-                  <span className="mx-1.5 text-zinc-600">—</span>
-                  <span className="tabular-nums">{formatSeconds(trimDraft.end)}</span>
+                <div className="text-xs tabular-nums text-zinc-400">
+                  <div>{formatSeconds(trimDraft.start)} — {formatSeconds(trimDraft.end)}</div>
+                  <div className="mt-0.5 text-[10px] text-zinc-600">المدة {formatSeconds(soundDuration)}</div>
                 </div>
               </div>
 
-              {/* شريطا زمن البداية والنهاية (بالثواني) */}
-              <div className="space-y-4">
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between text-xs">
-                    <span className="font-semibold text-white/80">زمن البداية</span>
-                    <span className="tabular-nums text-zinc-400">{formatSeconds(trimDraft.start)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0.1, soundDuration)}
-                    step="0.1"
-                    value={trimDraft.start}
-                    onChange={event => updateTrimStart(Number(event.currentTarget.value))}
-                    className="w-full accent-[#f1a17f]"
-                    aria-label="زمن بداية الصوت بالثواني"
-                  />
-                </div>
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between text-xs">
-                    <span className="font-semibold text-white/80">زمن النهاية</span>
-                    <span className="tabular-nums text-zinc-400">{formatSeconds(trimDraft.end)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={Math.max(0.1, soundDuration)}
-                    step="0.1"
-                    value={trimDraft.end}
-                    onChange={event => updateTrimEnd(Number(event.currentTarget.value))}
-                    className="w-full accent-[#f1a17f]"
-                    aria-label="زمن نهاية الصوت بالثواني"
-                  />
-                </div>
+              {/* الشريط الزمني الموحد بمقبضين: يسار البداية ويمين النهاية */}
+              <div
+                ref={trimTrackRef}
+                dir="ltr"
+                className="relative mx-1 h-12 select-none"
+                style={{ touchAction: 'none' }}
+              >
+                <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/15" />
+                <div
+                  className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-[#f1a17f]"
+                  style={{ left: `${startPercent}%`, width: `${Math.max(0, endPercent - startPercent)}%` }}
+                />
+                {(['start', 'end'] as const).map(handle => {
+                  const value = handle === 'start' ? trimDraft.start : trimDraft.end;
+                  return (
+                    <button
+                      key={handle}
+                      type="button"
+                      aria-label={handle === 'start' ? 'مقبض زمن البداية' : 'مقبض زمن النهاية'}
+                      onPointerDown={event => {
+                        event.preventDefault();
+                        setDraggingHandle(handle);
+                      }}
+                      className={`absolute top-1/2 z-10 h-6 w-6 -translate-y-1/2 rounded-full border-2 border-black/70 bg-white shadow-lg transition-transform ${draggingHandle === handle ? 'scale-110' : ''} active:scale-110`}
+                      style={{ left: `calc(${handle === 'start' ? startPercent : endPercent}% - 12px)` }}
+                    />
+                  );
+                })}
               </div>
-              <p className="mt-3 text-center text-[11px] text-white/40">
-                الحد الأقصى للجزء المختار {MAX_TRIM_SECONDS} ثانية — الجميع سيسمع نفس الجزء بعد النشر.
+              <div className="flex justify-between px-1 text-[10px] tabular-nums text-zinc-500" dir="ltr">
+                <span>0:00</span>
+                <span>{formatSeconds(soundDuration)}</span>
+              </div>
+              <p className="mt-2 text-center text-[11px] text-white/40">
+                اسحب المقبضين لتحديد الجزء — الحد الأقصى {MAX_TRIM_SECONDS} ثانية، والجميع سيسمع نفس الجزء بعد النشر.
               </p>
             </div>
 
@@ -334,19 +364,29 @@ export default function SoundPickerSheet() {
               </button>
             </div>
 
+            {/* عنصر قياس المدة الكاملة (منفصل عن المعاينة حتى لا يفسدها ترميز #t=) */}
             <audio
-              ref={trimAudioRef}
+              ref={trimProbeRef}
               preload="metadata"
               className="hidden"
               onLoadedMetadata={event => {
                 const duration = Math.max(1, event.currentTarget.duration || 0);
                 setSoundDuration(duration);
-                setTrimDraft({ start: 0, end: Math.min(MAX_TRIM_SECONDS, duration) });
+                if (!trimDurationLoadedRef.current) {
+                  trimDurationLoadedRef.current = true;
+                  setTrimDraft({ start: 0, end: Math.min(MAX_TRIM_SECONDS, duration) });
+                }
               }}
+            />
+            {/* عنصر معاينة الجزء المقتص */}
+            <audio
+              ref={trimPreviewRef}
+              preload="auto"
+              className="hidden"
               onTimeUpdate={() => {
-                const audio = trimAudioRef.current;
-                if (!audio || trimPlaying) return;
-                if (audio.currentTime >= trimDraft.end - 0.05 || audio.currentTime < trimDraft.start - 0.05) {
+                const audio = trimPreviewRef.current;
+                if (!audio || !trimPlaying) return;
+                if (audio.currentTime >= trimDraft.end - 0.04 || audio.currentTime < trimDraft.start - 0.05) {
                   try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
                 }
               }}
@@ -361,7 +401,7 @@ export default function SoundPickerSheet() {
                 type="button"
                 onClick={() => { stopEverything(); setOpen(false); }}
                 aria-label="رجوع"
-                className="grid h-10 w-10 place-items-center rounded-full transition hover:bg-white/10"
+                className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10"
               >
                 <ArrowRight size={22} />
               </button>
@@ -370,7 +410,7 @@ export default function SoundPickerSheet() {
                 type="button"
                 onClick={() => { stopEverything(); setOpen(false); }}
                 aria-label="إغلاق مكتبة الأصوات"
-                className="grid h-10 w-10 place-items-center rounded-full transition hover:bg-white/10"
+                className="flex h-10 w-10 items-center justify-center rounded-full transition hover:bg-white/10"
               >
                 <X size={20} />
               </button>
@@ -406,15 +446,16 @@ export default function SoundPickerSheet() {
                 <ul>
                   {filteredSounds.map(sound => (
                     <li key={sound.id}>
-                      <div className="flex min-h-[64px] items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white/[0.05]">
+                      <div className="flex min-h-[68px] items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white/[0.05]">
+                        {/* زر المعاينة: دائرة 56×56 والأيقونة ممركزة تماماً في المنتصف */}
                         <button
                           type="button"
                           onClick={() => togglePreview(sound)}
                           disabled={!sound.source_video_url}
                           aria-label={playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
-                          className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black transition disabled:opacity-40 hover:brightness-105"
+                          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-md transition disabled:opacity-40 hover:brightness-105 active:scale-95"
                         >
-                          {playingId === sound.id ? <Pause size={17} /> : <Play size={17} className="translate-x-0.5" />}
+                          {playingId === sound.id ? <Pause size={20} /> : <Play size={20} />}
                         </button>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold text-white">{sound.title}</p>
