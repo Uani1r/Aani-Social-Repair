@@ -4,8 +4,10 @@ import { toast } from 'sonner';
 import type { StoryDrawStroke } from '@/lib/appShared';
 import type { StoryCanvasStyle, StoryMediaTransformOverlay, StoryTextOverlay, StoryTimedText } from '@/components/stories/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { stopInstant } from '@/lib/instantAudio';
 import { uploadStoryMedia } from '@/lib/storyUpload';
 import type { Profile } from '@/lib/types';
+import type { StorySound } from '@/lib/sounds';
 import { encodeStoryFilterKey, type StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryRow as StoryDmCardStory } from '../StoryDmCard';
 import type { MentionCandidate } from '../StoryMentionPicker';
@@ -49,6 +51,8 @@ interface UseStoryCreationActionsOptions {
   storyDurationManuallyChosenRef: MutableRefObject<boolean>;
   setShowUploadModal: Dispatch<SetStateAction<boolean>>;
   setStoryText: Dispatch<SetStateAction<string>>;
+  storySound: StorySound | null;
+  setStorySound: Dispatch<SetStateAction<StorySound | null>>;
 }
 
 export function useStoryCreationActions({
@@ -83,7 +87,31 @@ export function useStoryCreationActions({
   storyDurationManuallyChosenRef,
   setShowUploadModal,
   setStoryText,
+  storySound,
+  setStorySound,
 }: UseStoryCreationActionsOptions) {
+  // إنشاء سجل القصة: يمرر sound_id وزمني اقتصاص الصوت (sound_trim_start/sound_trim_end)
+  // مع بقية البيانات في طلب واحد. قاعدة بيانات بترحيل أقدم (بلا أعمدة الصوت) →
+  // تنشر القصة بلا الصوت بدل إخفاق النشر كاملاً.
+  const createStoryRecord = async (baseArgs: Record<string, unknown>): Promise<{ storyId: string | null; error: { message: string; code?: string } | null }> => {
+    if (!storySound) {
+      const { data, error } = await supabase.rpc('aani_create_story', baseArgs);
+      return { storyId: typeof data === 'string' ? data : null, error: error ? { message: error.message, code: error.code } : null };
+    }
+    const { data, error } = await supabase.rpc('aani_create_story', {
+      ...baseArgs,
+      p_sound_id: storySound.soundId,
+      p_sound_trim_start: storySound.soundTrim ? Number(storySound.soundTrim.start.toFixed(3)) : null,
+      p_sound_trim_end: storySound.soundTrim ? Number(storySound.soundTrim.end.toFixed(3)) : null,
+    });
+    if (!error) return { storyId: typeof data === 'string' ? data : null, error: null };
+    const fallback = await supabase.rpc('aani_create_story', baseArgs);
+    if (!fallback.error && typeof fallback.data === 'string') {
+      console.warn('[stories] نُشرت القصة بلا الصوت — طبّق ترحيل أعمدة صوت القصص على قاعدة البيانات');
+      return { storyId: fallback.data, error: null };
+    }
+    return { storyId: null, error: error ? { message: error.message, code: error.code } : null };
+  };
   const buildStoryTimedTexts = async (
     layers: TimedText[] = timedTexts,
     onProgress?: (percent: number) => void,
@@ -197,7 +225,7 @@ export function useStoryCreationActions({
         mediaType = storyFile.type.startsWith('video') ? 'video' : 'photo';
       }
 
-      const { data: storyId, error: insertError } = await supabase.rpc('aani_create_story', {
+      const created = await createStoryRecord({
         p_media_url: mediaUrl || null,
         p_media_type: mediaType,
         p_caption: caption.trim() || sourceStory?.caption || null,
@@ -209,8 +237,13 @@ export function useStoryCreationActions({
         p_share_type: originalStoryId ? 'reshare' : 'original',
         p_expiry_seconds: null,
       });
-      if (insertError) throw insertError;
-      if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
+      if (created.error) {
+        const publishError = new Error(created.error.message) as Error & { code?: string };
+        publishError.code = created.error.code;
+        throw publishError;
+      }
+      const storyId = created.storyId;
+      if (!storyId) throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
 
       if (storyMentions.length > 0) {
         void linkStoryMentions(storyId, currentProfile?.username || '', storyMentions);
@@ -227,6 +260,9 @@ export function useStoryCreationActions({
       setStoryMentions([]);
       setStoryDurationOpen(false);
       storyDurationManuallyChosenRef.current = false;
+      // توقف معاينة الصوت وأفرغه بعد النشر
+      stopInstant();
+      setStorySound(null);
       setShowUploadModal(false);
       await fetchStories();
     } catch (err) {
@@ -269,7 +305,7 @@ export function useStoryCreationActions({
           setUploadProgress(85);
         }
 
-        const { data: storyId, error: insertError } = await supabase.rpc('aani_create_story', {
+        const created = await createStoryRecord({
           p_media_url: mediaUrl || null,
           p_media_type: mediaType,
           p_caption: storyCaption || sourceStory?.caption || null,
@@ -281,9 +317,13 @@ export function useStoryCreationActions({
           p_share_type: originalStoryId ? 'reshare' : 'original',
           p_expiry_seconds: null,
         });
-
-        if (insertError) throw insertError;
-        if (typeof storyId === 'string' && mentions.length > 0) {
+        if (created.error) {
+          const publishError = new Error(created.error.message) as Error & { code?: string };
+          publishError.code = created.error.code;
+          throw publishError;
+        }
+        const storyId = created.storyId;
+        if (storyId && mentions.length > 0) {
           void linkStoryMentions(storyId, currentProfile?.username || '', mentions);
         }
 
@@ -299,6 +339,9 @@ export function useStoryCreationActions({
         setStoryMentions([]);
         setStoryDurationOpen(false);
         storyDurationManuallyChosenRef.current = false;
+        // توقف معاينة الصوت وأفرغه بعد النشر
+        stopInstant();
+        setStorySound(null);
         await fetchStories();
         toast.success('تم نشر القصة بنجاح', { duration: 5000 });
       } catch (error) {
@@ -354,7 +397,7 @@ export function useStoryCreationActions({
         },
         ...persistedTextLayers,
       ];
-      const { data: storyId, error } = await supabase.rpc('aani_create_story', {
+      const created = await createStoryRecord({
         p_media_url: null,
         p_media_type: 'text',
         p_caption: trimmedText || null,
@@ -367,8 +410,13 @@ export function useStoryCreationActions({
         p_expiry_seconds: null,
       });
 
-      if (error) throw error;
-      if (typeof storyId !== 'string') throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
+      if (created.error) {
+        const publishError = new Error(created.error.message) as Error & { code?: string };
+        publishError.code = created.error.code;
+        throw publishError;
+      }
+      const storyId = created.storyId;
+      if (!storyId) throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
 
       if (storyMentions.length > 0) {
         void linkStoryMentions(storyId, currentProfile?.username || '', storyMentions);
@@ -384,6 +432,9 @@ export function useStoryCreationActions({
       setStoryMentions([]);
       setStoryDurationOpen(false);
       storyDurationManuallyChosenRef.current = false;
+      // توقف معاينة الصوت وأفرغه بعد النشر
+      stopInstant();
+      setStorySound(null);
       setShowUploadModal(false);
       void fetchStories().catch(error => console.warn('[stories] تعذر تحديث القصص بعد النشر:', error));
       return true;

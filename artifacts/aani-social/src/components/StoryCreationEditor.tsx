@@ -79,6 +79,7 @@ type StoryCreationEditorProps = {
   closeFriendsOpen: boolean;
   onCloseMusic: () => void;
   onSelectMusic: (track: MusicTrack) => void;
+  onClearMusic?: () => void;
   onCloseMentions: () => void;
   onConfirmMentions: (people: MentionCandidate[]) => void;
   onCloseCloseFriends: () => void;
@@ -182,6 +183,7 @@ export default function StoryCreationEditor({
   closeFriendsOpen,
   onCloseMusic,
   onSelectMusic,
+  onClearMusic,
   onCloseMentions,
   onConfirmMentions,
   onCloseCloseFriends,
@@ -509,6 +511,7 @@ export default function StoryCreationEditor({
           storyFilterId={storyFilterId}
           storyFilterAdjustments={storyFilterAdjustments}
           storyMusicTrack={storyMusicTrack}
+          onClearMusic={onClearMusic}
           onSelectFilter={onSelectFilter}
           onAdjustFilter={onAdjustFilter}
           onResetFilters={onResetFilters}

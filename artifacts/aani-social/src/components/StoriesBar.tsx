@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 
 import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { USE_SOUND_EVENT, type StorySound } from '@/lib/sounds';
+import { playInstant, stopInstant } from '@/lib/instantAudio';
 import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import {
@@ -236,14 +238,35 @@ export default function StoriesBar({
   const [storyFilterAdjustments, setStoryFilterAdjustments] = useState<StoryAdjustments>(DEFAULT_FILTER_ADJUSTMENTS);
   const storyFilterValue = buildStoryFilterCss(storyFilterId, storyFilterAdjustments);
   const storyFilterOverlay = getStoryFilterOverlay(storyFilterId);
-  // مقطع موسيقي مختار (يُحفظ للاستخدام عند تفعيل المزوّد الحقيقي)
+  // صوت القصة من مكتبة الأصوات الموحدة (sound_id + زمني القص) — يُحفظ مع القصة عند النشر
   const [storyMusicOpen, setStoryMusicOpen] = useState(false);
-  const [storyMusicTrack, setStoryMusicTrack] = useState<{ id: string; title: string; artist: string } | null>(null);
+  const [storySound, setStorySound] = useState<StorySound | null>(null);
   // أشخاص تمت الإشارة إليهم (مخفيون بصرياً، يُحفظون مع القصة)
   const [storyMentionsOpen, setStoryMentionsOpen] = useState(false);
   const [storyMentions, setStoryMentions] = useState<MentionCandidate[]>([]);
   const [closeFriendsOpen, setCloseFriendsOpen] = useState(false);
   const storyToolsRef = useRef<HTMLDivElement | null>(null);
+
+  // استقبال الصوت المختار من مكتبة الأصوات الموحدة (باتجاه القصة):
+  // كبسولة فورية + تشغيل معاينة فوري عبر المشغّل الموحّد instantAudio
+  useEffect(() => {
+    const onUseSound = (event: Event) => {
+      const detail = (event as CustomEvent<{ source?: string; soundId?: string; title?: string | null; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null }>).detail;
+      if (detail?.source !== 'story' || !detail.soundId) return;
+      const sound: StorySound = {
+        soundId: detail.soundId,
+        title: detail.title || 'الصوت المختار',
+        sourceVideoUrl: detail.sourceVideoUrl ?? null,
+        soundTrim: detail.soundTrim ?? null,
+      };
+      setStorySound(sound);
+      setStoryMusicOpen(false);
+      if (sound.sourceVideoUrl) playInstant(sound.sourceVideoUrl, { trim: sound.soundTrim, loop: true });
+      toast.success(`تم اختيار الصوت: ${sound.title}`);
+    };
+    window.addEventListener(USE_SOUND_EVENT, onUseSound);
+    return () => window.removeEventListener(USE_SOUND_EVENT, onUseSound);
+  }, []);
 
 
   // محرر النص الغني للقصة
@@ -959,6 +982,8 @@ export default function StoriesBar({
     storyDurationManuallyChosenRef,
     setShowUploadModal,
     setStoryText,
+    storySound,
+    setStorySound,
   });
 
   const buildStoryTextLayer = (text: string): StoryTextOverlay => ({
@@ -1128,7 +1153,7 @@ export default function StoriesBar({
     setStoryFilterId('original');
     setStoryFilterAdjustments(DEFAULT_FILTER_ADJUSTMENTS);
     setStoryMusicOpen(false);
-    setStoryMusicTrack(null);
+    setStorySound(null);
     setStoryMentionsOpen(false);
     setStoryMentions([]);
     setCloseFriendsOpen(false);
@@ -1167,7 +1192,7 @@ export default function StoriesBar({
       setStoryDrawingOpen(false);
       activeStoryDrawStrokeRef.current = null;
       setStoryMentions([]);
-      setStoryMusicTrack(null);
+      setStorySound(null);
       setStoryCanvasScale(1);
       setStoryCanvasOffset({ x: 0, y: 0 });
       setStoryMediaOffset({
@@ -2004,7 +2029,7 @@ export default function StoriesBar({
           storyFilterAdjustments={storyFilterAdjustments}
           storyFilterValue={storyFilterValue}
           storyFilterOverlay={storyFilterOverlay}
-          storyMusicTrack={storyMusicTrack}
+          storyMusicTrack={storySound ? { id: storySound.soundId, title: storySound.title, artist: '' } : null}
           storyDrawingOpen={storyDrawingOpen}
           storyDrawTool={storyDrawingTool}
           storyDrawColor={storyDrawColor}
@@ -2087,12 +2112,10 @@ export default function StoriesBar({
           onCanvasTouchStart={handleStoryCanvasTouchStart}
           onCanvasTouchMove={handleStoryCanvasTouchMove}
           onCanvasTouchEnd={handleStoryCanvasTouchEnd}
+          onClearMusic={() => { stopInstant(); setStorySound(null); }}
           onCloseMusic={() => setStoryMusicOpen(false)}
-          onSelectMusic={track => {
-            setStoryMusicTrack({ id: track.id, title: track.title, artist: track.artist });
-            setStoryMusicOpen(false);
-            toast.success(`تم اختيار: ${track.title}`);
-          }}
+          // مكتبة الأصوات الموحدة تصل عبر حدث USE_SOUND_EVENT — هذا المعالج احتياط فقط
+          onSelectMusic={() => undefined}
           onCloseMentions={() => setStoryMentionsOpen(false)}
           onConfirmMentions={people => {
             setStoryMentions(people);
@@ -2222,7 +2245,7 @@ export default function StoriesBar({
           storyFiltersOpen={storyFiltersOpen}
           storyFilterId={storyFilterId}
           storyFilterAdjustments={storyFilterAdjustments}
-          storyMusicTrack={storyMusicTrack}
+          storyMusicTrack={storySound ? { id: storySound.soundId, title: storySound.title, artist: '' } : null}
           storyDrawColor={storyDrawColor}
           storyDrawSize={storyDrawSize}
           storyDrawStrokesCount={storyDrawStrokes.length}
@@ -2233,11 +2256,9 @@ export default function StoriesBar({
           storyMentionsOpen={storyMentionsOpen}
           closeFriendsOpen={closeFriendsOpen}
           onCloseMusic={() => setStoryMusicOpen(false)}
-          onSelectMusic={track => {
-            setStoryMusicTrack({ id: track.id, title: track.title, artist: track.artist });
-            setStoryMusicOpen(false);
-            toast.success(`تم اختيار: ${track.title}`);
-          }}
+          // مكتبة الأصوات الموحدة تصل عبر حدث USE_SOUND_EVENT — هذا المعالج احتياط فقط
+          onSelectMusic={() => undefined}
+          onClearMusic={() => { stopInstant(); setStorySound(null); }}
           onCloseMentions={() => setStoryMentionsOpen(false)}
           onConfirmMentions={people => {
             setStoryMentions(people);

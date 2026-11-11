@@ -226,6 +226,8 @@ export default function Shell({
         source?: 'picker' | 'post';
       }>).detail;
       if (!detail?.soundId) return;
+      // أصوات القصة يديرها StoriesBar بنفسه (باتجاه القصة) — لا مسار نشر منشورات
+      if (detail.source === 'story') return;
       setPendingSound({
         id: detail.soundId,
         title: detail.title || 'الصوت المختار',

@@ -7,7 +7,7 @@ import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
-import { OPEN_SOUND_PICKER_EVENT, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
+import { OPEN_SOUND_PICKER_EVENT, consumeSoundPickerTarget, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
 import { playInstant, seekInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
@@ -304,7 +304,7 @@ export default function SoundPickerSheet() {
         ? { start: trimDraft.start, end: trimDraft.end }
         : null,
       creatorName: displayName(trimTarget.creator || null),
-      source: 'picker',
+      source: consumeSoundPickerTarget() === 'story' ? 'story' : 'picker',
     });
     setTrimTarget(null);
     setOpen(false);
@@ -319,7 +319,7 @@ export default function SoundPickerSheet() {
       sourceVideoUrl: sound.source_video_url || null,
       soundTrim: null,
       creatorName: displayName(sound.creator || null),
-      source: 'picker',
+      source: consumeSoundPickerTarget() === 'story' ? 'story' : 'picker',
     });
     setOpen(false);
   };

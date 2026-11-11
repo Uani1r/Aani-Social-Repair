@@ -20,8 +20,16 @@ export type UseSoundDetail = {
   soundTrim?: SoundTrimRange | null;
   /** اسم صاحب الصوت الأصلي (يُستخدم في الخلفية التلقائية المولدة) */
   creatorName?: string | null;
-  /** مصدر الطلب: 'picker' = مكتبة الأصوات داخل مسار النشر، غير ذلك = شريط الصوت في المنشور */
-  source?: 'picker' | 'post';
+  /** مصدر الطلب: 'picker' = مسار النشر، 'post' = شريط الصوت في المنشور، 'story' = القصة */
+  source?: 'picker' | 'post' | 'story';
+};
+
+/** صوت القصة المختار من مكتبة الأصوات (يُحفظ مع القصة في sound_id وزمني القص) */
+export type StorySound = {
+  soundId: string;
+  title: string;
+  sourceVideoUrl: string | null;
+  soundTrim: SoundTrimRange | null;
 };
 
 export const OPEN_SOUND_EVENT = 'aani:open-sound';
@@ -38,9 +46,20 @@ export function useExistingSound(detail: UseSoundDetail): void {
   window.dispatchEvent(new CustomEvent<UseSoundDetail>(USE_SOUND_EVENT, { detail }));
 }
 
-/** فتح مكتبة أصوات التطبيق (public.sounds) لاختيار صوت للمنشور الجاري إنشاؤه */
-export function openSoundPicker(): void {
+/** وجهة مكتبة الأصوات القادمة: 'post' = مسار النشر (الافتراضي)، 'story' = القصة */
+let soundPickerTarget: 'post' | 'story' = 'post';
+
+/** فتح مكتبة أصوات التطبيق (public.sounds) مع تحديد وجهة الاختيار */
+export function openSoundPicker(target: 'post' | 'story' = 'post'): void {
+  soundPickerTarget = target;
   window.dispatchEvent(new CustomEvent(OPEN_SOUND_PICKER_EVENT));
+}
+
+/** قراءة وجهة الاختيار عند تطبيق الصوت (تُستهلك مرة واحدة ثم تعود لـ 'post') */
+export function consumeSoundPickerTarget(): 'post' | 'story' {
+  const target = soundPickerTarget;
+  soundPickerTarget = 'post';
+  return target;
 }
 
 /** الاسم المعروض للصوت الأصلي المرتبط بمنشور */

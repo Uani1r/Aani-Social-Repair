@@ -669,6 +669,7 @@ type StoryEditorPanelsProps = {
   storyFilterId: string;
   storyFilterAdjustments: StoryAdjustments;
   storyMusicTrack: { id: string; title: string; artist: string } | null;
+  onClearMusic?: () => void;
   onSelectFilter: (id: string) => void;
   onAdjustFilter: (key: keyof StoryAdjustments, value: number) => void;
   onResetFilters: () => void;
@@ -682,6 +683,7 @@ export function StoryEditorPanels({
   storyFilterId,
   storyFilterAdjustments,
   storyMusicTrack,
+  onClearMusic,
   onSelectFilter,
   onAdjustFilter,
   onResetFilters,
@@ -701,10 +703,21 @@ export function StoryEditorPanels({
           onClose={onCloseFilters}
         />
       )}
+      {/* كبسولة الصوت أعلى أزرار النشر: الاسم + زر الإلغاء (X) يوقف المعاينة ويفرغ الصوت */}
       {storyMusicTrack && (
         <div className="mx-auto mb-2 flex w-fit items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-[10px] text-white backdrop-blur-sm">
           <Music2 size={12} />
           <span className="max-w-[55vw] truncate">{storyMusicTrack.title}</span>
+          {onClearMusic && (
+            <button
+              type="button"
+              onClick={onClearMusic}
+              aria-label="إزالة الصوت من القصة"
+              className="rounded-full p-0.5 text-white/60 transition hover:text-white"
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
       )}
     </div>

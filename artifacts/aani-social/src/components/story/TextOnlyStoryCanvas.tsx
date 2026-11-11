@@ -111,6 +111,7 @@ interface TextOnlyStoryCanvasProps {
   onCanvasTouchEnd: (event: ReactTouchEvent<HTMLDivElement>) => void;
   onCloseMusic: () => void;
   onSelectMusic: (track: MusicTrack) => void;
+  onClearMusic?: () => void;
   onCloseMentions: () => void;
   onConfirmMentions: (people: MentionCandidate[]) => void;
   onCloseCloseFriends: () => void;
@@ -215,6 +216,7 @@ export default function TextOnlyStoryCanvas({
   onCanvasTouchEnd,
   onCloseMusic,
   onSelectMusic,
+  onClearMusic,
   onCloseMentions,
   onConfirmMentions,
   onCloseCloseFriends,
@@ -440,6 +442,7 @@ export default function TextOnlyStoryCanvas({
             storyFilterId={storyFilterId}
             storyFilterAdjustments={storyFilterAdjustments}
             storyMusicTrack={storyMusicTrack}
+            onClearMusic={onClearMusic}
             onSelectFilter={onSelectFilter}
             onAdjustFilter={onAdjustFilter}
             onResetFilters={onResetFilters}
