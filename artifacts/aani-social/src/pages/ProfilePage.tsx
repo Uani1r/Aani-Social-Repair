@@ -5,7 +5,6 @@ import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 import FollowButton from '@/components/FollowButton';
 import { setFollowState } from '@/lib/followState';
-import { fetchProfileRow } from '@/lib/profileQuery';
 
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
@@ -687,8 +686,7 @@ export default function ProfilePage({
       };
 
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
-        // قراءة الملف تتحمل قاعدة بيانات بلا عمود gender بعد (إعادة محاولة بلا العمود)
-        fetchProfileRow(activeUserId),
+        supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,gender,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
