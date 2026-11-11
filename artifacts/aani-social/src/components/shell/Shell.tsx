@@ -14,7 +14,8 @@ import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSou
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
-import { playInstant } from '@/lib/instantAudio';
+import { playInstant, stopInstant } from '@/lib/instantAudio';
+import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
@@ -922,6 +923,14 @@ export default function Shell({
     }
   }, [isPublishFlowOpen]);
 
+  // تجهيز مسبق (Pre-Warming) لأعلى 3 أصوات افتراضية فور فتح واجهة النشر:
+  // روابطها تُحفظ في الذاكرة وتُسخَّن في الكاش الشبكي ليبدأ التشغيل
+  // لحظة اختيار الصورة (أقل من 50ms) دون أي استعلام في المسار الحرج
+  useEffect(() => {
+    if (!isPublishFlowOpen) return;
+    void warmDefaultSounds();
+  }, [isPublishFlowOpen]);
+
   // وسوم مُهيّأة لشاشة إنشاء المنشور (إشارات اختيرت أثناء معاينة الفيديو)
   const initialCreateTags = useMemo<PostMetadataTag[]>(() => videoMentions.map(person => {
     // استخدم الاسم الظاهر الحقيقي مع تجاهل الأسماء الافتراضية (مثل "New member")
@@ -1189,6 +1198,29 @@ export default function Shell({
     });
   }, [userId]);
 
+  // ربط الصوت بحدث اختيار الصورة المباشر (Direct User Gesture Audio Trigger):
+  // يُستدعى تزامنياً من onChange لاختيار الملفات (بلا أي await قبله) — يختار
+  // صوتاً من الوساط المجهزة مسبقاً ويستدعي playInstant() داخل نفس سياق
+  // الإيماءة لتجاوز قيود Autoplay Policy نهائياً. يعيد true عند النجاح
+  // (فيُتخطى الاقتراح غير المتزامن) وfalse إن لم توجد أوساط مجهزة بعد.
+  const attachWarmedSound = (): boolean => {
+    if (!supabaseConfigured) return false;
+    // صوت اختاره المستخدم بالفعل (يدوياً أو من اقتراح سابق) لا يُستبدل
+    if (pendingSoundRef.current) return true;
+    const chosen = pickDefaultSound(readLastSuggestedSoundId());
+    if (!chosen || !chosen.source_video_url) return false;
+    rememberSuggestedSoundId(chosen.id);
+    setPendingSound({
+      id: chosen.id,
+      title: chosen.title,
+      sourceVideoUrl: chosen.source_video_url || null,
+      soundTrim: null,
+    });
+    // التشغيل في نفس الملي ثانية داخل سياق إيماءة المستخدم
+    playInstant(chosen.source_video_url, { loop: true });
+    return true;
+  };
+
   const handleSelectPublishImages = async (files: File[]) => {
     if (!files.length) return;
     setShowVideoPreviewModal(false);
@@ -1197,9 +1229,10 @@ export default function Shell({
     setDestination('feed');
     setCreateError('');
     setAutoSoundMedia(false);
-    // الاقتراح الذكي يبدأ فوراً (بالتوازي مع تجهيز المعاينات) — التشغيل الفوري
-    // للصوت يبدأ لحظة وصوله دون انتظار أي عملية جانبية (Non-blocking Async)
-    void suggestTrendingSound();
+    // التشغيل الفوري داخل نفس سياق إيماءة المستخدم (onChange): صوت مجهّز مسبقاً
+    // يبدأ فور اختيار الصورة بلا أي انتظار — وإن لم توجد أوساط مجهزة بعد
+    // استُكمل بالاقتراح الذكي غير المتزامن (يبدأ التشغيل لحظة وصول الصوت)
+    if (!attachWarmedSound()) void suggestTrendingSound();
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
       setSelectedFiles(previews.map(preview => preview.file));
@@ -1793,7 +1826,8 @@ export default function Shell({
         createError={createError}
         initialCreateTags={initialCreateTags}
         music={pendingSound}
-        onClearMusic={() => setPendingSound(null)}
+        // زر الإلغاء (X): يوقف المشغّل الموحّد فوراً ويفرغ الصوت المختار
+        onClearMusic={() => { stopInstant(); setPendingSound(null); }}
         autoSoundMedia={autoSoundMedia}
         onReplaceAutoMedia={replaceAutoSoundMedia}
         onClearAutoMedia={clearAutoSoundMedia}
