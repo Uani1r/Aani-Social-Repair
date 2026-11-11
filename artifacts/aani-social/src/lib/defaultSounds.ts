@@ -6,11 +6,13 @@
  * وتختلف الأوساط المتاحة بين الدخول والخروج فلا يتكرر الصوت المقترح.
  */
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
 
 export type DefaultSound = {
   id: string;
   title: string;
   source_video_url: string | null;
+  preview_url?: string | null;
 };
 
 const POOL_SIZE = 3;
@@ -27,7 +29,8 @@ function readCachedPool(): DefaultSound[] {
       && typeof item === 'object'
       && typeof (item as DefaultSound).id === 'string'
       && typeof (item as DefaultSound).title === 'string'
-      && (typeof (item as DefaultSound).source_video_url === 'string' || (item as DefaultSound).source_video_url === null),
+      && (typeof (item as DefaultSound).source_video_url === 'string' || (item as DefaultSound).source_video_url === null)
+      && (typeof (item as DefaultSound).preview_url === 'string' || (item as DefaultSound).preview_url === null || (item as DefaultSound).preview_url === undefined),
     ));
   } catch {
     return [];
@@ -43,24 +46,49 @@ export async function warmDefaultSounds(): Promise<void> {
   warming = true;
   try {
     let rows: DefaultSound[] = [];
-    // ترتيب عشوائي في SQL (ORDER BY random()) عبر دالة ترحيل 20270112000000
     const randomized = await supabase.rpc('random_trending_sounds', { pool_size: POOL_SIZE });
     if (!randomized.error && Array.isArray(randomized.data) && randomized.data.length > 0) {
-      rows = randomized.data as DefaultSound[];
-    } else {
-      // الاحتياط: بلا دالة الترتيب العشوائي بعد → استعلام عادي + خلط محلي
-      const { data, error } = await supabase
+      const randomRows = randomized.data as DefaultSound[];
+      rows = randomRows;
+      // The RPC intentionally returns only source URLs; hydrate optional audio-only previews separately.
+      const ids = randomRows.map(sound => sound.id).filter(Boolean);
+      const { data: mediaRows, error: mediaError } = await supabase
         .from('sounds')
-        .select('id, title, source_video_url')
+        .select('id, title, source_video_url, preview_url')
+        .in('id', ids);
+      if (!mediaError && Array.isArray(mediaRows)) {
+        const byId = new Map((mediaRows as unknown as DefaultSound[]).map(sound => [sound.id, sound]));
+        rows = randomRows.map(sound => byId.get(sound.id) || sound);
+      }
+    } else {
+      const extendedQuery = await supabase
+        .from('sounds')
+        .select('id, title, source_video_url, preview_url')
         .order('created_at', { ascending: false })
         .limit(10);
-      if (error) return;
-      const candidates = (data || []) as DefaultSound[];
-      for (let index = candidates.length - 1; index > 0; index--) {
-        const swap = Math.floor(Math.random() * (index + 1));
-        [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
+      if (!extendedQuery.error) {
+        const candidates = (extendedQuery.data || []) as unknown as DefaultSound[];
+        for (let index = candidates.length - 1; index > 0; index--) {
+          const swap = Math.floor(Math.random() * (index + 1));
+          [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
+        }
+        rows = candidates.slice(0, POOL_SIZE);
+      } else if (/preview_url/i.test(extendedQuery.error.message)) {
+        const { data, error } = await supabase
+          .from('sounds')
+          .select('id, title, source_video_url')
+          .order('created_at', { ascending: false })
+          .limit(10);
+        if (error) return;
+        const candidates = (data || []) as DefaultSound[];
+        for (let index = candidates.length - 1; index > 0; index--) {
+          const swap = Math.floor(Math.random() * (index + 1));
+          [candidates[index], candidates[swap]] = [candidates[swap], candidates[index]];
+        }
+        rows = candidates.slice(0, POOL_SIZE);
+      } else {
+        return;
       }
-      rows = candidates.slice(0, POOL_SIZE);
     }
     pool = rows.filter(sound => typeof sound?.id === 'string');
     try {
@@ -68,6 +96,11 @@ export async function warmDefaultSounds(): Promise<void> {
     } catch {
       /* the in-memory pool remains available if session storage is disabled */
     }
+    pool.forEach(sound => {
+      if (!sound.source_video_url) return;
+      if (sound.preview_url) void warmPreviewClip(sound.preview_url, 131072);
+      else warmAudioCache(sound.source_video_url, 65536);
+    });
   } catch {
     /* التسخين اختياري — الفشل يعيد المسار الاحتياطي غير المتزامن */
   } finally {

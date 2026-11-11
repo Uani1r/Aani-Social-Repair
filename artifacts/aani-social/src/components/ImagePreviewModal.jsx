@@ -179,10 +179,14 @@ export default function ImagePreviewModal({
   }, [activeIndex]);
 
   // رابط الصوت المرفق بالمعاينة (مع زمني الاقتصاص إن وُجدت)
-  const soundPreviewUrl = music?.sourceVideoUrl
-    ? (music.soundTrim && music.soundTrim.end > music.soundTrim.start
-      ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
-      : music.sourceVideoUrl)
+  const hasSoundTrim = Boolean(music?.soundTrim && music.soundTrim.end > music.soundTrim.start);
+  const previewBaseUrl = hasSoundTrim
+    ? music?.sourceVideoUrl || music?.previewUrl
+    : music?.previewUrl || music?.sourceVideoUrl;
+  const soundPreviewUrl = previewBaseUrl
+    ? (hasSoundTrim && music?.soundTrim
+      ? appendVideoTrimFragment(previewBaseUrl, music.soundTrim)
+      : previewBaseUrl)
     : null;
 
   // التشغيل التلقائي الفوري للصوت المقترح/المختار أثناء معاينة الصورة (قبل أي زر)

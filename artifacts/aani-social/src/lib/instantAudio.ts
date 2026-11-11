@@ -325,21 +325,56 @@ export async function resumeInstant(): Promise<boolean> {
 }
 
 /**
- * Light cache warming (32 KB only) of the first chunk of a sound via an HTTP
- * Range request (206 Partial Content): opens the connection so the next tap
- * starts instantly. No ArrayBuffer and no full download: one small request
- * that aborts itself after 5 seconds.
+ * Warm a bounded prefix of a sound via HTTP Range so the next tap needs less
+ * network work. This is best-effort; native streaming remains the fallback.
  */
-export function warmAudioCache(url: string, bytes = 32768): void {
+const warmedAudioOrigins = new Set<string>();
+const warmingAudioUrls = new Set<string>();
+
+/** Warm the connection and a bounded prefix so playback does less network work after a tap. */
+export function warmAudioCache(url: string, bytes = 65536): void {
   if (!url || typeof window === 'undefined') return;
+  const mediaUrl = url.replace(/#.*$/, '');
+  if (warmingAudioUrls.has(mediaUrl)) return;
+  warmingAudioUrls.add(mediaUrl);
+  const maxBytes = Math.max(16384, Math.min(131072, Math.floor(bytes)));
+  try {
+    const origin = new URL(mediaUrl, window.location.href).origin;
+    if (origin !== window.location.origin && !warmedAudioOrigins.has(origin)) {
+      warmedAudioOrigins.add(origin);
+      const link = document.createElement('link');
+      link.rel = 'preconnect';
+      link.href = origin;
+      document.head.appendChild(link);
+    }
+  } catch {
+    /* malformed URL: the optional preconnect is skipped */
+  }
   try {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 5000);
-    void fetch(url, { headers: { Range: `bytes=0-${bytes - 1}` }, signal: controller.signal })
-      .catch(() => undefined)
-      .finally(() => window.clearTimeout(timer));
+    const timer = window.setTimeout(() => controller.abort(), 4000);
+    void fetch(mediaUrl, {
+      headers: { Range: `bytes=0-${maxBytes - 1}` },
+      signal: controller.signal,
+    }).then(async response => {
+      const reader = response.body?.getReader();
+      if (!reader) return;
+      let received = 0;
+      while (received < maxBytes) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        received += value.byteLength;
+        if (received >= maxBytes) {
+          await reader.cancel();
+          return;
+        }
+      }
+      await reader.cancel();
+    }).catch(() => {
+      warmingAudioUrls.delete(mediaUrl);
+    }).finally(() => window.clearTimeout(timer));
   } catch {
-    /* warming is optional; ignore any failure silently */
+    warmingAudioUrls.delete(mediaUrl);
   }
 }
 
@@ -417,24 +452,49 @@ function ensureMediaContext(): AudioContext | null {
 /** Fetch + decode a short head clip into RAM (idempotent per URL). Resolves null on failure. */
 export function warmPreviewClip(url: string, bytes = 61440): Promise<AudioBuffer | null> {
   if (!url || typeof window === 'undefined') return Promise.resolve(null);
+  const maxBytes = Math.max(16384, Math.min(131072, Math.floor(bytes)));
   const cached = previewClipCache.get(url);
   if (cached) return Promise.resolve(cached);
   const pending = previewClipPending.get(url);
   if (pending) return pending;
   const job = (async (): Promise<AudioBuffer | null> => {
     const epoch = clipCacheEpoch;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), 8000);
-      const response = await fetch(url, {
-        headers: { Range: `bytes=0-${bytes - 1}` },
+      const response = await fetch(url.replace(/#.*$/, ''), {
+        headers: { Range: `bytes=0-${maxBytes - 1}` },
         signal: controller.signal,
       });
-      window.clearTimeout(timer);
-      const raw = await response.arrayBuffer();
+      if (response.status !== 206) {
+        await response.body?.cancel();
+        return null;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) return null;
+      const chunks: Uint8Array[] = [];
+      let byteLength = 0;
+      while (byteLength <= maxBytes) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        byteLength += value.byteLength;
+        if (byteLength > maxBytes) {
+          await reader.cancel();
+          return null;
+        }
+        chunks.push(value);
+      }
+      const raw = new Uint8Array(byteLength);
+      let offset = 0;
+      chunks.forEach(chunk => {
+        raw.set(chunk, offset);
+        offset += chunk.byteLength;
+      });
       const context = ensureMediaContext();
       if (!context) return null;
-      const decoded = await context.decodeAudioData(raw);
+      // decodeAudioData requires an ArrayBuffer, not a Uint8Array view.
+      const audioData = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
+      const decoded = await context.decodeAudioData(audioData);
       if (epoch !== clipCacheEpoch) return null; // disposed mid-flight — discard
       // Bound RAM: keep only the head seconds of the decoded buffer.
       let clip = decoded;
@@ -454,6 +514,7 @@ export function warmPreviewClip(url: string, bytes = 61440): Promise<AudioBuffer
     } catch {
       return null;
     } finally {
+      window.clearTimeout(timer);
       previewClipPending.delete(url);
     }
   })();
@@ -487,23 +548,15 @@ function stopClipPlayback(): void {
 export type PreviewClipOptions = {
   onPlaying?: () => void;
   onEnded?: () => void;
-  onError?: () => void;
+  onError?: (error?: unknown) => void;
 };
 
-/**
- * Sound-library list preview, three tiers:
- * 1. RAM hit -> AudioBufferSourceNode from RAM in <10ms (sample-accurate
- *    looping via loopStart/loopEnd, no rAF, no timeupdate, no gaps).
- * 2. Miss -> native streaming starts instantly while the clip is decoded in
- *    the background for the next tap.
- * 3. No AudioContext -> plain native streaming.
- */
+/** Play a decoded preview from RAM when available; otherwise use native streaming. */
 export function playSoundPreview(url: string, options: PreviewClipOptions = {}): void {
   const cached = previewClipCache.get(url);
   const context = ensureMediaContext();
-  if (!cached || !context) {
-    // Tier 2/3: instant native streaming; warm the RAM clip for next time.
-    void warmPreviewClip(url);
+  if (!cached || !context || context.state !== 'running') {
+    // Native streaming avoids silence when Web Audio is unavailable or suspended.
     playInstant(url, {
       loop: true,
       onPlaying: options.onPlaying,
@@ -512,33 +565,36 @@ export function playSoundPreview(url: string, options: PreviewClipOptions = {}):
     });
     return;
   }
-  // Tier 1: RAM playback. stopInstant() first so the media element and any
-  // previous node are fully released, then this node owns the channel.
+
   stopInstant();
   const generation = ++playGeneration;
-  const source = context.createBufferSource();
-  source.buffer = cached;
-  source.loop = true;
-  source.loopStart = 0;
-  source.loopEnd = Math.min(cached.duration, PREVIEW_CLIP_SECONDS);
-  source.connect(context.destination);
-  activeClipSource = source;
-  activeClipBuffer = cached;
-  activeClipLoopStart = 0;
-  activeClipLoopLength = source.loopEnd - source.loopStart;
-  activeClipPausedOffset = 0;
-  activeClipStartedAt = context.currentTime;
-  source.onended = () => {
-    if (generation !== playGeneration) return;
-    options.onEnded?.();
-  };
+  let source: AudioBufferSourceNode | null = null;
   try {
+    source = context.createBufferSource();
+    source.buffer = cached;
+    source.loop = true;
+    source.loopStart = 0;
+    source.loopEnd = Math.min(cached.duration, PREVIEW_CLIP_SECONDS);
+    source.connect(context.destination);
+    source.onended = () => {
+      if (generation === playGeneration) options.onEnded?.();
+    };
     source.start(0, 0);
-    // RAM playback starts on the same tick: report playing immediately.
+    activeClipSource = source;
+    activeClipBuffer = cached;
+    activeClipLoopStart = 0;
+    activeClipLoopLength = source.loopEnd - source.loopStart;
+    activeClipPausedOffset = 0;
+    activeClipStartedAt = context.currentTime;
     if (generation === playGeneration) options.onPlaying?.();
-  } catch (err) {
-    console.log('Autoplay handled cleanly:', err);
-    if (generation === playGeneration) options.onError?.();
+  } catch (error) {
+    if (source) {
+      try { source.disconnect(); } catch { /* ignore */ }
+    }
+    activeClipSource = null;
+    activeClipBuffer = null;
+    console.log('Autoplay handled cleanly:', error);
+    if (generation === playGeneration) options.onError?.(error);
   }
 }
 

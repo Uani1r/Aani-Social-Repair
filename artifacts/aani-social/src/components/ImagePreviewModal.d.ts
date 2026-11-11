@@ -10,6 +10,7 @@ type SelectedLibrarySound = {
   id: string;
   title: string;
   sourceVideoUrl?: string | null;
+  previewUrl?: string | null;
 };
 
 type ImagePreviewModalProps = {

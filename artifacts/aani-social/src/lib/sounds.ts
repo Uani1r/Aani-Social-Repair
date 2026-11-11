@@ -16,6 +16,8 @@ export type UseSoundDetail = {
   soundId: string;
   title?: string | null;
   sourceVideoUrl?: string | null;
+  /** رابط معاينة صوتي خفيف إن كان متاحاً */
+  previewUrl?: string | null;
   /** زمني اقتصاص الصوت المختار (بالثواني) — يُحفظ مع المنشور في sound_trim_start/sound_trim_end */
   soundTrim?: SoundTrimRange | null;
   /** اسم صاحب الصوت الأصلي (يُستخدم في الخلفية التلقائية المولدة) */

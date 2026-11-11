@@ -8,7 +8,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, consumeSoundPickerTarget, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
-import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
+import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
 import { setSoundLibraryState } from '@/audio/SoundLibraryStore';
 import { useSoundPicker } from '@/hooks/useSoundPicker';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -152,6 +152,12 @@ export default function SoundPickerSheet() {
         // Show playable rows as soon as the sounds request returns; creator
         // profiles are decorative and must not hold the audio list behind a second query.
         setSounds(rows);
+        rows.slice(0, 6).forEach(sound => {
+          const clipUrl = sound.preview_url || sound.source_video_url;
+          if (!clipUrl) return;
+          if (sound.preview_url) void warmPreviewClip(clipUrl, 131072);
+          else warmAudioCache(clipUrl, 65536);
+        });
         const creatorIds = Array.from(new Set(rows
           .map(sound => sound.creator_id)
           .filter((id): id is string => typeof id === 'string' && Boolean(id))));
@@ -332,6 +338,7 @@ export default function SoundPickerSheet() {
       soundId: trimTarget.id,
       title: trimTarget.title,
       sourceVideoUrl: trimTarget.source_video_url || null,
+      previewUrl: trimTarget.preview_url || null,
       soundTrim: trimDraft.end > trimDraft.start
         ? { start: trimDraft.start, end: trimDraft.end }
         : null,
@@ -349,6 +356,7 @@ export default function SoundPickerSheet() {
       soundId: sound.id,
       title: sound.title,
       sourceVideoUrl: sound.source_video_url || null,
+      previewUrl: sound.preview_url || null,
       soundTrim: null,
       creatorName: displayName(sound.creator || null),
       source: consumeSoundPickerTarget() === 'story' ? 'story' : 'picker',

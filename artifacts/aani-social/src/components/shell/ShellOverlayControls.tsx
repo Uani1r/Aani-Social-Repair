@@ -48,7 +48,7 @@ type ShellOverlayControlsProps = {
   createError: string;
   initialCreateTags: PostMetadataTag[];
   /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title + أوقات الاقتصاص) */
-  music: { id: string; title: string; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
+  music: { id: string; title: string; sourceVideoUrl?: string | null; previewUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
   onClearMusic: () => void;
   /** هل الوسائط الحالية خلفية تلقائية مولدة من الصوت؟ */
   autoSoundMedia: boolean;

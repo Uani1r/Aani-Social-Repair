@@ -189,6 +189,7 @@ export default function Shell({
     id: string;
     title: string;
     sourceVideoUrl?: string | null;
+    previewUrl?: string | null;
     soundTrim?: { start: number; end: number } | null;
     creatorName?: string | null;
     /** مصدر الصوت: 'user' = اختاره المستخدم يدوياً من المكتبة (لا يُستبدل)، 'auto' = اقتراح تلقائي (يُستبدل في كل دخول) */
@@ -222,6 +223,7 @@ export default function Shell({
         soundId?: string;
         title?: string | null;
         sourceVideoUrl?: string | null;
+        previewUrl?: string | null;
         soundTrim?: { start: number; end: number } | null;
         creatorName?: string | null;
         source?: 'picker' | 'post';
@@ -233,6 +235,7 @@ export default function Shell({
         id: detail.soundId,
         title: detail.title || 'الصوت المختار',
         sourceVideoUrl: detail.sourceVideoUrl ?? null,
+        previewUrl: detail.previewUrl ?? null,
         soundTrim: detail.soundTrim ?? null,
         creatorName: detail.creatorName ?? null,
         origin: 'user',
@@ -1227,7 +1230,12 @@ export default function Shell({
     if (!chosen?.source_video_url) {
       const fallback = pendingSoundRef.current;
       if (fallback?.origin === 'auto' && fallback.sourceVideoUrl) {
-        previewAudio({ id: fallback.id, url: fallback.sourceVideoUrl });
+        const url = fallback.previewUrl || fallback.sourceVideoUrl;
+        previewAudio({
+          id: fallback.id,
+          url,
+          ...(fallback.previewUrl ? { fallbackUrl: fallback.sourceVideoUrl } : {}),
+        });
         return fallback.id;
       }
       return null;
@@ -1237,13 +1245,18 @@ export default function Shell({
       id: chosen.id,
       title: chosen.title,
       sourceVideoUrl: chosen.source_video_url,
+      previewUrl: chosen.preview_url || null,
       soundTrim: null,
       origin: 'auto' as const,
     };
     rememberSuggestedSoundId(chosen.id);
     pendingSoundRef.current = nextSound;
     setPendingSound(nextSound);
-    previewAudio({ id: chosen.id, url: chosen.source_video_url });
+    previewAudio({
+      id: chosen.id,
+      url: nextSound.previewUrl || chosen.source_video_url,
+      ...(nextSound.previewUrl ? { fallbackUrl: chosen.source_video_url } : {}),
+    });
     return chosen.id;
   };
 

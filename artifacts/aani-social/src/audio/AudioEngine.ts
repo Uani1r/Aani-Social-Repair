@@ -12,7 +12,9 @@
  */
 import {
   disposePreviewClips,
+  hasPreviewClip,
   installAudioUnlock,
+  playSoundPreview,
   pauseInstant,
   playInstant,
   resumeInstant,
@@ -119,17 +121,27 @@ export function preview(
     if (isBlocked) callbacks.onBlocked?.();
     else callbacks.onError?.(error);
   };
-  const startDirect = (url: string, allowFallback: boolean) => {
+  const onPlaying = () => {
+    engineActive = true;
+    console.log('[AudioEngine] Play status:', 'success');
+    callbacks.onPlaying?.();
+  };
+  let startDirect: (url: string, allowFallback: boolean) => void;
+  const handlePlaybackError = (error?: unknown) => {
+    if (sound.fallbackUrl && sound.fallbackUrl !== sound.url && !isBlockedError(error)) {
+      console.log('[AudioEngine] Preview source failed; trying direct fallback.');
+      startDirect(sound.fallbackUrl, false);
+      return;
+    }
+    reportFailure(error);
+  };
+  startDirect = (url: string, allowFallback: boolean) => {
     // Start native HTMLAudio streaming in this stack. Never wait for a Range
     // fetch or decodeAudioData; direct media URLs do not use CORS mode.
     playInstant(url, {
       loop: true,
       ...(hasTrim ? { trim: { start: startSec, end: endSec as number } } : {}),
-      onPlaying: () => {
-        engineActive = true;
-        console.log('[AudioEngine] Play status:', 'success');
-        callbacks.onPlaying?.();
-      },
+      onPlaying,
       onError: error => {
         if (allowFallback && sound.fallbackUrl && sound.fallbackUrl !== url && !isBlockedError(error)) {
           console.log('[AudioEngine] Preview source failed; trying direct fallback.');
@@ -140,7 +152,11 @@ export function preview(
       },
     });
   };
-  startDirect(sound.url, true);
+  if (hasPreviewClip(sound.url)) {
+    playSoundPreview(sound.url, { onPlaying, onError: handlePlaybackError });
+  } else {
+    startDirect(sound.url, true);
+  }
 }
 
 /**
