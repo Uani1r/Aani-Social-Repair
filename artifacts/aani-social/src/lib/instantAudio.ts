@@ -371,6 +371,9 @@ const MAX_CACHED_CLIPS = 6;        // oldest clips are evicted beyond this
 
 const previewClipCache = new Map<string, AudioBuffer>();
 const previewClipPending = new Map<string, Promise<AudioBuffer | null>>();
+// Cache epoch: bumped on dispose so in-flight clip fetches are discarded
+// (their AbortController also self-terminates after the 8s bound).
+let clipCacheEpoch = 0;
 
 function ensureMediaContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -394,6 +397,7 @@ export function warmPreviewClip(url: string): Promise<AudioBuffer | null> {
   const pending = previewClipPending.get(url);
   if (pending) return pending;
   const job = (async (): Promise<AudioBuffer | null> => {
+    const epoch = clipCacheEpoch;
     try {
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 8000);
@@ -406,6 +410,7 @@ export function warmPreviewClip(url: string): Promise<AudioBuffer | null> {
       const context = ensureMediaContext();
       if (!context) return null;
       const decoded = await context.decodeAudioData(raw);
+      if (epoch !== clipCacheEpoch) return null; // disposed mid-flight — discard
       // Bound RAM: keep only the head seconds of the decoded buffer.
       let clip = decoded;
       const headLength = Math.min(decoded.length, Math.ceil(PREVIEW_CLIP_SECONDS * decoded.sampleRate));
@@ -510,4 +515,53 @@ export function playSoundPreview(url: string, options: PreviewClipOptions = {}):
     console.log('Autoplay handled cleanly:', err);
     if (generation === playGeneration) options.onError?.();
   }
+}
+
+// Lazy waveform peaks (default 256 buckets, normalized 0..1) computed from a
+// cached clip — no OfflineAudioContext needed since the AudioBuffer is
+// already decoded; results are memoized per URL.
+const clipPeaksCache = new Map<string, number[]>();
+
+export async function getClipPeaks(url: string, buckets = 256): Promise<number[] | null> {
+  const hit = clipPeaksCache.get(url);
+  if (hit) return hit;
+  const buffer = previewClipCache.get(url) ?? await warmPreviewClip(url);
+  if (!buffer || buffer.length === 0) return null;
+  const data = buffer.getChannelData(0);
+  const block = Math.max(1, Math.floor(data.length / buckets));
+  const peaks: number[] = [];
+  let max = 0;
+  for (let index = 0; index < buckets; index++) {
+    const start = index * block;
+    let peak = 0;
+    for (let j = start; j < start + block && j < data.length; j++) {
+      const value = Math.abs(data[j]);
+      if (value > peak) peak = value;
+    }
+    peaks.push(peak);
+    if (peak > max) max = peak;
+  }
+  const normalized = max > 0 ? peaks.map(peak => peak / max) : peaks.map(() => 0);
+  clipPeaksCache.set(url, normalized);
+  return normalized;
+}
+
+/** Duration of a cached preview clip in seconds (null when not cached). */
+export function getClipDuration(url: string): number | null {
+  const buffer = previewClipCache.get(url);
+  return buffer ? buffer.duration : null;
+}
+
+/**
+ * Session disposal for screen teardown: stops playback, releases the RAM
+ * clip cache and peaks, and discards all in-flight clip fetches (cache
+ * epoch). Never touches sounds playing in other screens — the global
+ * singleton only owns the preview channel.
+ */
+export function disposePreviewClips(): void {
+  clipCacheEpoch += 1;
+  previewClipCache.clear();
+  previewClipPending.clear();
+  clipPeaksCache.clear();
+  stopClipPlayback();
 }

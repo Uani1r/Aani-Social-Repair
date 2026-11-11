@@ -125,6 +125,22 @@ export type Sound = {
   title: string;
   /** رابط الفيديو الأصلي الذي يُشغَّل صوته — بلا مساحة Storage إضافية */
   source_video_url?: string | null;
+  /** رابط مقطع معاينة صوتي مستخرج (اختياري — يُفكَّك في RAM للمعاينة الفورية <10ms) */
+  preview_url?: string | null;
+  /** المدة الكاملة بالثواني (اختيارية — تُستنتج من الوسيط عند الغياب) */
+  duration?: number | null;
+  /** قمم الموجة الصوتية (256 نقطة normalized 0..1) — تُحسب lazily عند الغياب */
+  peaks?: number[] | null;
+  /** زمنا الاقتصاص الافتراضيان (بالثواني) — يُستخدمان عند فتح أداة الاقتصاص */
+  trim_start_sec?: number | null;
+  trim_end_sec?: number | null;
+  /** مزج Dual Audio: مستوى الصوت الأصلي ومستوى الموسيقى (0..1) */
+  original_vol?: number | null;
+  music_vol?: number | null;
+  /** المنشور المصدر الذي وُلّد الصوت منه (خيار "استخدام هذا الصوت") */
+  source_post_id?: string | null;
+  /** تصنيف الصوت: 'trending' = مقترح تلقائياً، 'mine' = مستخرج من فيديوهات المستخدم */
+  category?: 'trending' | 'mine' | string | null;
   creator_id?: string | null;
   creator?: Profile | null;
   created_at?: string | null;

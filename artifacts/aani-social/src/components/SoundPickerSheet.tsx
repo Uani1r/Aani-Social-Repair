@@ -8,7 +8,9 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, consumeSoundPickerTarget, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
-import { pauseInstant, playInstant, playSoundPreview, seekInstant, stopInstant, warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
+import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
+import { setSoundLibraryState } from '@/audio/SoundLibraryStore';
+import { useSoundPicker } from '@/hooks/useSoundPicker';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
 
@@ -20,6 +22,32 @@ const formatSeconds = (value: number): string => {
   const safe = Math.max(0, Math.floor(value));
   return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, '0')}`;
 };
+
+/** رسم موجة الصوت (256 نقطة Peaks) داخل شريط الاقتصاص — يُرسم مرة واحدة بلا re-renders */
+function TrimWaveform({ peaks }: { peaks: number[] }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const width = canvas.clientWidth || 320;
+    const height = canvas.clientHeight || 32;
+    const ratio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    canvas.width = Math.round(width * ratio);
+    canvas.height = Math.round(height * ratio);
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.scale(ratio, ratio);
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = 'rgba(255, 255, 255, 0.55)';
+    const step = width / peaks.length;
+    const barWidth = Math.max(1, step - 1);
+    peaks.forEach((peak, index) => {
+      const barHeight = Math.max(2, peak * (height - 6));
+      context.fillRect(index * step, (height - barHeight) / 2, barWidth, barHeight);
+    });
+  }, [peaks]);
+  return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden="true" />;
+}
 
 /**
  * مكتبة أصوات التطبيق (نظام الأصوات بنمط TikTok):
@@ -34,11 +62,10 @@ export default function SoundPickerSheet() {
   const [sounds, setSounds] = useState<LibrarySound[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  // الصوت قيد الجلب: الزر يتحول فوراً لمؤشر تحميل حتى يبدأ الصوت فعلياً
-  const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
-  const playingIdRef = useRef<string | null>(null);
-  playingIdRef.current = playingId;
+  // حالة المعاينة (Playing / Loading / Blocked) تُدار عبر طبقة المحرك الموحدة
+  // (useSoundPicker + SoundLibraryStore) خارج دورة الـ render الداخلية —
+  // بلا موضع تشغيل في الـ State فلا re-renders زائدة، مع زر "اضغط للتشغيل" عند الحظر
+  const { playingId, loadingId: loadingPreviewId, blockedId, togglePreview, stopPreview } = useSoundPicker();
   // المشغّل الموحّد الفوري: عنصر Audio عالمي واحد يُعاد استخدامه لجميع الأصوات
   // (Single Audio Instance — من '@/lib/instantAudio' مع preload='auto' وcrossOrigin
   // لطلبات HTTP Range/206): يُستبدل src فقط عند التنقل بين الأصوات فيُجهَض طلب
@@ -69,14 +96,13 @@ export default function SoundPickerSheet() {
   useEffect(() => {
     if (!open || !sounds) return;
     sounds.slice(0, 8).forEach(sound => {
-      if (sound.source_video_url) void warmPreviewClip(sound.source_video_url);
+      const clipUrl = sound.preview_url || sound.source_video_url;
+      if (clipUrl) void warmPreviewClip(clipUrl);
     });
   }, [open, sounds]);
 
   const stopEverything = () => {
-    stopInstant();
-    setPlayingId(null);
-    setLoadingPreviewId(null);
+    stopPreview();
     setTrimPlaying(false);
     setDraggingHandle(null);
   };
@@ -96,8 +122,7 @@ export default function SoundPickerSheet() {
     const onOpenPicker = () => {
       setOpen(true);
       setQuery('');
-      setPlayingId(null);
-      setLoadingPreviewId(null);
+      setSoundLibraryState({ playingId: null, loadingId: null, blockedId: null });
       setSounds(null);
       setLoadError(false);
       setTrimTarget(null);
@@ -161,37 +186,8 @@ export default function SoundPickerSheet() {
     return title.includes(normalizedQuery) || creatorName.includes(normalizedQuery) || username.includes(normalizedQuery);
   });
 
-  const togglePreview = (sound: LibrarySound) => {
-    const url = sound.source_video_url;
-    if (!url) return;
-    if (playingIdRef.current === sound.id) {
-      // Pause: the RAM clip (or stream) pauses in place and the button
-      // returns to the play triangle automatically.
-      pauseInstant();
-      setPlayingId(null);
-      return;
-    }
-    if (loadingPreviewId === sound.id) return;
-    // Only one sound plays in the library (the unified player): any previous
-    // preview stops instantly along with its pending requests
-    setTrimPlaying(false);
-    setPlayingId(null);
-    // Instant response (Optimistic UI): Spinner in the same millisecond then
-    // Pause as soon as the first audible sample is emitted
-    setLoadingPreviewId(sound.id);
-    playSoundPreview(url, {
-      onPlaying: () => {
-        setLoadingPreviewId(current => (current === sound.id ? null : current));
-        setPlayingId(sound.id);
-      },
-      onEnded: () => {
-        if (playingIdRef.current === sound.id) setPlayingId(null);
-      },
-      onError: () => {
-        setLoadingPreviewId(current => (current === sound.id ? null : current));
-      },
-    });
-  };
+  /** رابط مقطع المعاينة المفضّل: الصوت المستخرج (preview_url) إن وُجد وإلا رابط الفيديو الأصلي */
+  const clipUrlFor = (sound: LibrarySound): string | null => sound.preview_url || sound.source_video_url || null;
 
   // فتح أداة الاقتصاص: عنصر صوت مخفي منفصل يقرأ مدة الصوت الكاملة + تجهيز مشغل المعاينة الفوري
   const beginTrim = (sound: LibrarySound) => {
@@ -209,8 +205,7 @@ export default function SoundPickerSheet() {
   // — عبر مشغل الصوت المباشر المحمّل استباقياً: حلقة محصورة ضمن زمني الاقتصاص
   const beginLivePreview = () => {
     if (!trimTarget?.source_video_url) return;
-    setPlayingId(null);
-    setLoadingPreviewId(null);
+    setSoundLibraryState({ playingId: null, loadingId: null, blockedId: null });
     // Spinner فوراً ثم Pause عند أول نغمة — .play() يبدأ فوراً بالتوازي مع
     // الجلب (بلا انتظار المدة أو الميتاداتا)
     setTrimLoading(true);
@@ -295,6 +290,26 @@ export default function SoundPickerSheet() {
       window.removeEventListener('pointercancel', onUp);
     };
   }, [draggingHandle, soundDuration]);
+
+  // موجات الصوت (Peaks): تُحسب lazily من المقطع المخزن في RAM (256 نقطة
+  // normalized 0..1) وتُعرض فقط عندما يغطي المقطع المفكوك المدة كاملة
+  // كي لا يُمثَّل جزء من الأغنية على أنه الكل
+  const [trimPeaks, setTrimPeaks] = useState<number[] | null>(null);
+  const [trimClipDuration, setTrimClipDuration] = useState(0);
+  useEffect(() => {
+    const clipUrl = trimTarget?.preview_url || trimTarget?.source_video_url || '';
+    setTrimPeaks(null);
+    setTrimClipDuration(0);
+    if (!clipUrl) return;
+    let active = true;
+    void (async () => {
+      const peaks = await getClipPeaks(clipUrl);
+      if (!active) return;
+      setTrimPeaks(peaks);
+      setTrimClipDuration(getClipDuration(clipUrl) ?? 0);
+    })();
+    return () => { active = false; };
+  }, [trimTarget?.preview_url, trimTarget?.source_video_url]);
 
   // تطبيق الصوت المقتص على المنشور الجاري إنشاؤه
   const applyTrimmedSound = () => {
@@ -413,6 +428,10 @@ export default function SoundPickerSheet() {
               >
                 {/* المسار الكامل رمادي خفيف */}
                 <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/15" />
+                {/* موجة الصوت المفكوكة (Peaks): تُعرض فقط عندما يغطي المقطع المفكوك المدة كاملة */}
+                {trimPeaks && trimClipDuration > 0 && soundDuration > 0 && trimClipDuration + 0.25 >= soundDuration && (
+                  <TrimWaveform peaks={trimPeaks} />
+                )}
                 {/* الأطراف الخارجية خارج المقبضين أدكن قليلاً */}
                 <div
                   className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-black/50"
@@ -566,20 +585,23 @@ export default function SoundPickerSheet() {
                     <li key={sound.id}>
                       <div className="flex min-h-[68px] items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white/[0.05]">
                         {/* زر المعاينة: دائرة 56×56 والأيقونة ممركزة تماماً في المنتصف */}
-                        {/* Interaction starts on pointerdown for an instant response, with keyboard parity via Enter/Space */}
+                        {/* Interaction starts on pointerdown for an instant response, with keyboard parity via Enter/Space.
+                            عند حظر التشغيل التلقائي يعود الزر بوضع "اضغط للتشغيل" (Blocked) فيصبح النقر نفسه هو الإيماءة */}
                         <button
                           type="button"
                           onPointerDown={event => {
                             event.preventDefault();
-                            togglePreview(sound);
+                            const clipUrl = clipUrlFor(sound);
+                            if (clipUrl) togglePreview(sound.id, clipUrl);
                           }}
                           onKeyDown={event => {
                             if (event.key !== 'Enter' && event.key !== ' ') return;
                             event.preventDefault();
-                            togglePreview(sound);
+                            const clipUrl = clipUrlFor(sound);
+                            if (clipUrl) togglePreview(sound.id, clipUrl);
                           }}
-                          disabled={!sound.source_video_url}
-                          aria-label={loadingPreviewId === sound.id ? 'جارٍ تحميل الصوت' : playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
+                          disabled={!clipUrlFor(sound)}
+                          aria-label={loadingPreviewId === sound.id ? 'جارٍ تحميل الصوت' : blockedId === sound.id ? 'اضغط للتشغيل' : playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
                           className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-md transition disabled:opacity-40 hover:brightness-105 active:scale-95"
                         >
                           {loadingPreviewId === sound.id
