@@ -15,7 +15,7 @@ import {
   subscribeSoundLibrary,
   type SoundLibraryState,
 } from '@/audio/SoundLibraryStore';
-import { pauseInstant, playSoundPreview, stopInstant } from '@/lib/instantAudio';
+import { hasPreviewClip, pauseInstant, playSoundPreview, stopInstant } from '@/lib/instantAudio';
 import { openSoundPicker } from '@/lib/sounds';
 
 function useSoundLibraryValue<T>(selector: (state: SoundLibraryState) => T): T {
@@ -36,7 +36,12 @@ export function useSoundPicker() {
       return;
     }
     if (current.loadingId === soundId) return;
-    setSoundLibraryState({ loadingId: soundId, playingId: null, blockedId: null });
+    // RAM cache hit: playback starts from memory in <16ms — no spinner at
+    // all, the icon flips straight to Pause. Miss: non-blocking streaming
+    // hint while the clip decodes in the background for the next tap.
+    if (!hasPreviewClip(clipUrl)) {
+      setSoundLibraryState({ loadingId: soundId, playingId: null, blockedId: null });
+    }
     playSoundPreview(clipUrl, {
       onPlaying: () => setSoundLibraryState({ loadingId: null, playingId: soundId }),
       onEnded: () => {

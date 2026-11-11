@@ -60,6 +60,10 @@ function TrimWaveform({ peaks }: { peaks: number[] }) {
 export default function SoundPickerSheet() {
   const [open, setOpen] = useState(false);
   const [sounds, setSounds] = useState<LibrarySound[] | null>(null);
+  // مرآة القائمة المخزنة: تبقى معروضة بين الفتح والإغلاق (stale-while-revalidate)
+  // كي لا يرى المستخدم شاشة تحميل متكررة عند كل فتح للمكتبة
+  const soundsRef = useRef<LibrarySound[] | null>(null);
+  soundsRef.current = sounds;
   const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
   // حالة المعاينة (Playing / Loading / Blocked) تُدار عبر طبقة المحرك الموحدة
@@ -123,7 +127,6 @@ export default function SoundPickerSheet() {
       setOpen(true);
       setQuery('');
       setSoundLibraryState({ playingId: null, loadingId: null, blockedId: null });
-      setSounds(null);
       setLoadError(false);
       setTrimTarget(null);
       setTrimPlaying(false);
@@ -167,8 +170,8 @@ export default function SoundPickerSheet() {
         if (!active) return;
         setSounds(rows);
       } catch {
-        if (active) {
-          setSounds([]);
+        if (active && !soundsRef.current?.length) {
+          // فشل عابر: أبقِ القائمة المخزنة من فتح سابق بدل تفريغها في كل مرة
           setLoadError(true);
         }
       }

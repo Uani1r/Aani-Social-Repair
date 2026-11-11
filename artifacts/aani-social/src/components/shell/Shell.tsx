@@ -14,7 +14,7 @@ import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSou
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
-import { playInstant, stopInstant, warmAudioContext } from '@/lib/instantAudio';
+import { isPlaybackActive, playInstant, playSoundPreview, stopInstant, warmAudioContext, warmPreviewClip } from '@/lib/instantAudio';
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
@@ -1003,6 +1003,8 @@ export default function Shell({
       void unlockNotificationAudio();
       // تنشيط صامت لسياق الصوت (Silent Web Audio Warm-up): فتح سياسة التشغيل التلقائي
       warmAudioContext();
+      // تجهيز وساط المقترح + فك رؤوسها في RAM من أول لمسة في التطبيق
+      void warmDefaultSounds();
       window.removeEventListener('pointerdown', unlockAudio);
       window.removeEventListener('keydown', unlockAudio);
     };
@@ -1233,8 +1235,9 @@ export default function Shell({
       soundTrim: null,
       origin: 'auto',
     });
-    // التشغيل في نفس الملي ثانية داخل سياق إيماءة المستخدم
-    playInstant(chosen.source_video_url, { loop: true });
+    // التشغيل في نفس الملي ثانية داخل سياق إيماءة المستخدم — عبر طبقة RAM
+    // (AudioBufferSourceNode) عند إصابة الكاش، وبث أصلي متزامن عند الغياب
+    playSoundPreview(chosen.source_video_url);
     return true;
   };
 
@@ -1396,8 +1399,27 @@ export default function Shell({
         soundTrim: null,
         origin: 'auto',
       });
-      // التشغيل الفوري لحظة وصول الصوت (بالتوازي مع ظهور الصورة بالواجهة) — بلا أي انتظار
-      if (chosen.source_video_url) playInstant(chosen.source_video_url, { loop: true });
+      // التشغيل الفوري لحظة وصول الصوت: أولاً عبر البث الأصلي إن ما زال
+      // سياق الإيماءة صالحاً، وعند رفض المتصفح (الاستدعاء غير المتزامن بعد
+      // الـ await) يُفكُّ رأس المقطع في RAM ويُشغَّل عبر AudioBufferSourceNode
+      // من خلال AudioContext المفتوح مسبقاً — فالاقتراح يعمل دائماً بلا حظر
+      if (chosen.source_video_url) {
+        const suggestedUrl = chosen.source_video_url;
+        const suggestedId = chosen.id;
+        let started = false;
+        playInstant(suggestedUrl, {
+          loop: true,
+          onPlaying: () => { started = true; },
+          onError: () => undefined,
+        });
+        void warmPreviewClip(suggestedUrl).then(buffer => {
+          if (!buffer) return;
+          if (started) return; // البث الأصلي نجح — لا داعي للعقدة
+          if (pendingSoundRef.current?.id !== suggestedId) return; // اقتراح أُلغي
+          if (isPlaybackActive()) return; // شيء آخر يعمل بالفعل
+          playSoundPreview(suggestedUrl);
+        }).catch(() => undefined);
+      }
       toast.success(`صوت مقترح تلقائياً: ${chosen.title}`);
     } catch {
       // فشل الاقتراح لا يعطل مسار النشر

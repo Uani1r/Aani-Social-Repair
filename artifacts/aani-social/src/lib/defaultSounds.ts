@@ -6,7 +6,7 @@
  * وتختلف الأوساط المتاحة بين الدخول والخروج فلا يتكرر الصوت المقترح.
  */
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { warmAudioCache } from '@/lib/instantAudio';
+import { warmPreviewClip } from '@/lib/instantAudio';
 
 export type DefaultSound = {
   id: string;
@@ -44,7 +44,9 @@ export async function warmDefaultSounds(): Promise<void> {
       rows = candidates.slice(0, POOL_SIZE);
     }
     pool = rows.filter(sound => typeof sound?.id === 'string');
-    pool.forEach(sound => { if (sound.source_video_url) warmAudioCache(sound.source_video_url); });
+    // فك ترميز رأس كل صوت في الـ RAM Clip Cache فور التسخين: المسار
+    // المتزامن عند اختيار الصورة يشغّل عبر AudioBufferSourceNode (<10ms)
+    pool.forEach(sound => { if (sound.source_video_url) void warmPreviewClip(sound.source_video_url); });
   } catch {
     /* التسخين اختياري — الفشل يعيد المسار الاحتياطي غير المتزامن */
   } finally {

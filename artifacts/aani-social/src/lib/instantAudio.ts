@@ -365,7 +365,6 @@ export const installAudioUnlock = warmAudioContext;
 // Range) and decoded; full-length playback everywhere else in the app keeps
 // using native streaming so RAM stays bounded.
 
-const PREVIEW_CLIP_BYTES = 786432; // ~768 KB head request per clip
 const PREVIEW_CLIP_SECONDS = 15;   // head seconds kept in RAM per clip
 const MAX_CACHED_CLIPS = 6;        // oldest clips are evicted beyond this
 
@@ -390,7 +389,7 @@ function ensureMediaContext(): AudioContext | null {
 }
 
 /** Fetch + decode a short head clip into RAM (idempotent per URL). Resolves null on failure. */
-export function warmPreviewClip(url: string): Promise<AudioBuffer | null> {
+export function warmPreviewClip(url: string, bytes = 61440): Promise<AudioBuffer | null> {
   if (!url || typeof window === 'undefined') return Promise.resolve(null);
   const cached = previewClipCache.get(url);
   if (cached) return Promise.resolve(cached);
@@ -402,7 +401,7 @@ export function warmPreviewClip(url: string): Promise<AudioBuffer | null> {
       const controller = new AbortController();
       const timer = window.setTimeout(() => controller.abort(), 8000);
       const response = await fetch(url, {
-        headers: { Range: `bytes=0-${PREVIEW_CLIP_BYTES - 1}` },
+        headers: { Range: `bytes=0-${bytes - 1}` },
         signal: controller.signal,
       });
       window.clearTimeout(timer);
@@ -515,6 +514,17 @@ export function playSoundPreview(url: string, options: PreviewClipOptions = {}):
     console.log('Autoplay handled cleanly:', err);
     if (generation === playGeneration) options.onError?.();
   }
+}
+
+/** True when a decoded RAM clip exists for this URL — playback can start from memory in <16ms. */
+export function hasPreviewClip(url: string): boolean {
+  return previewClipCache.has(url);
+}
+
+/** True while anything (media element or RAM clip node) is actively playing. */
+export function isPlaybackActive(): boolean {
+  if (activeClipSource) return true;
+  return Boolean(audio && !audio.paused);
 }
 
 // Lazy waveform peaks (default 256 buckets, normalized 0..1) computed from a
