@@ -10,6 +10,7 @@ import PushNotificationsControl from '@/components/PushNotificationsControl';
 import { NotificationsSkeleton } from '@/components/Skeletons';
 import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
+import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
 import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
@@ -582,14 +583,21 @@ export default function NotificationsModal({
     }
   };
 
+  // فتح ملف شخصي من داخل الإشعارات: حرر مدخل حرس الرجوع الخاص بالنافذة أولاً
+  // (وإلا استهلكه إلغاء تسجيل النافذة عبر history.back() عند الإغلاق فأبطل التنقل
+  // وأعاد المستخدم للشاشة السابقة)، ثم ابدأ التنقل، ثم أغلق النافذة.
+  const navigateToProfile = (userId: string) => {
+    if (!userId) return;
+    releaseOverlayBackForNavigation();
+    setLocation(`/profile/${encodeURIComponent(userId)}`);
+    onClose();
+  };
+
   const activateNotification = (item: NotificationEntry) => {
     void markNotificationRead(item);
-    // إشعارات المتابعة: أغلق نافذة الإشعارات وانتقل مباشرة إلى ملف
-    // الشخص الذي قام بالمتابعة (actor_id) بنفس سلوك إنستغرام
+    // إشعارات المتابعة: توجيه مباشر إلى ملف الشخص الذي قام بالمتابعة (actor_id)
     if (['follow', 'followed', 'new_follower', 'started_following'].includes(item.type)) {
-      onClose();
-      const actorId = item.actor_id || item.reference_id || item.entity_id || '';
-      if (actorId) setLocation(`/profile/${encodeURIComponent(actorId)}`);
+      navigateToProfile(item.actor_id || item.reference_id || item.entity_id || '');
       return;
     }
     const target = getNotificationTarget(item, currentUserId);
@@ -600,6 +608,12 @@ export default function NotificationsModal({
       return;
     }
 
+    if (target.kind === 'profile') {
+      navigateToProfile(target.userId);
+      return;
+    }
+
+    releaseOverlayBackForNavigation();
     onClose();
     if (target.kind === 'post') {
       // فتح المحتوى الحقيقي: الريلز في مشغّل الريلز الخاص بها،
@@ -631,8 +645,6 @@ export default function NotificationsModal({
         ? `commentId=${encodeURIComponent(target.commentId)}`
         : 'showComments=1';
       setLocation(`/post/${encodeURIComponent(target.postId)}?${query}`);
-    } else if (target.kind === 'profile') {
-      setLocation(`/profile/${encodeURIComponent(target.userId)}`);
     } else if (target.kind === 'story') {
       onOpenStory(target.storyId, target.ownerId);
       setLocation('/feed');
@@ -681,8 +693,17 @@ export default function NotificationsModal({
           <Link
             href={profileHref}
             onClick={event => {
+              event.preventDefault();
               event.stopPropagation();
+              // الصورة أيضاً تفتح الملف الشخصي بنفس تسلسل البطاقة:
+              // تحرير حرس الرجوع ← التوجيه ← إغلاق النافذة
+              if (['follow', 'followed', 'new_follower', 'started_following'].includes(item.type)) {
+                activateNotification(item);
+                return;
+              }
               void markNotificationRead(item);
+              releaseOverlayBackForNavigation();
+              setLocation(profileHref);
               onClose();
             }}
             aria-label={`الانتقال إلى ملف ${actorName}`}
