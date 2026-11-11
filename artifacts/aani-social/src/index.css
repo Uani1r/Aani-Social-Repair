@@ -7902,32 +7902,30 @@ select,
 
 
 /* ===== زر «الأشخاص القريبون» في الشريط العلوي — الشاشة الرئيسية فقط =====
-   مثبت بأقصى اليمين (position: absolute + right) بلا تعارض مع باقي أيقونات الهيدر:
-   زر الإعدادات يظهر على صفحة الملف الشخصي فقط، وهذا الزر على الشاشة الرئيسية فقط. */
+   أول عنصر في صف الهيدر (flex) = أقصى اليمين في RTL، مصفوف على نفس خط الوسط
+   مع الشعار وأزرار (+ وجرس) عبر align-items: center — أيقونة شفافة بلا فقاعة. */
 .unified-nearby-button {
-  position: absolute;
-  top: 50%;
-  right: 20px;
   display: flex;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.09);
+  border: none;
+  background: transparent;
+  color: #fff;
   cursor: pointer;
-  transition: background-color 160ms ease, transform 120ms ease, opacity 120ms ease;
+  transition: opacity 120ms ease, transform 120ms ease;
 }
 
 .unified-nearby-button:hover {
-  background: rgba(255, 255, 255, 0.15);
+  opacity: 0.85;
 }
 
 .unified-nearby-button:active {
-  transform: translateY(-50%) scale(0.94);
-  opacity: 0.85;
+  opacity: 0.7;
+  transform: scale(0.94);
 }
 
 .unified-nearby-button:focus-visible {

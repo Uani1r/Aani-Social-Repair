@@ -171,7 +171,8 @@ export default function UnifiedTopBar({
           </div>
         )}
         <header className="unified-top-header">
-          {/* زر الأشخاص القريبون: مثبت بأقصى اليمين (مطلق) — الشاشة الرئيسية فقط */}
+          {/* زر الأشخاص القريبون: أول عنصر في الصف = أقصى اليمين في RTL،
+              مصفوف على نفس خط الوسط مع الشعار وأزرار (+ وجرس) — أيقونة شفافة بلا خلفية */}
           {showNearbyButton && (
             <button
               type="button"
@@ -193,7 +194,6 @@ export default function UnifiedTopBar({
                   d="M50 10 C30 10 15 25 15 45 C15 68 50 90 50 90 C50 90 85 68 85 45 C85 25 70 10 50 10 Z"
                   fill="#FFFFFF"
                 />
-                <ellipse cx="50" cy="90" rx="20" ry="5" fill="#FFFFFF" opacity="0.3" />
                 {/* مجموعة الأشخاص السوداء داخل الدبوس */}
                 <circle cx="50" cy="36" r="6" fill="#000000" />
                 <path
