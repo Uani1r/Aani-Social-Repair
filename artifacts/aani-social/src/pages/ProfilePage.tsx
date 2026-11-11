@@ -2177,7 +2177,7 @@ export default function ProfilePage({
                 <span className="absolute inset-0 flex items-center justify-center text-center">{followButtonLabel}</span>
                 {isFollowing && (
                   <span className="absolute left-2 top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center" aria-hidden="true">
-                    <svg className="profile-follow-check is-visible" viewBox="0 0 20 20" aria-hidden="true">
+                    <svg className={`profile-follow-check${showFollowCheckmark ? ' is-visible' : ''}`} viewBox="0 0 20 20" aria-hidden="true">
                       <path d="M3 10.5 7.4 15 17 5.5" fill="none" stroke="#000" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} />
                     </svg>
                   </span>
