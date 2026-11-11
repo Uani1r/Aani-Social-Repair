@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Music2, Pause, Play } from 'lucide-react';
+import { ArrowRight, Loader2, Music2, Pause, Play } from 'lucide-react';
 import { useLocation } from 'wouter';
 
 import Avatar from '@/components/Avatar';
@@ -10,6 +10,7 @@ import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
 import { OPEN_SOUND_EVENT, defaultSoundTitle, useExistingSound, type OpenSoundDetail } from '@/lib/sounds';
+import { playInstant, stopInstant } from '@/lib/instantAudio';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, normalizePostMetadata, type Post, type Profile, type Sound } from '@/lib/types';
 
@@ -25,10 +26,20 @@ export default function SoundDetailSheet() {
   const [posts, setPosts] = useState<Post[] | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [previewPlaying, setPreviewPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  // مؤشر التحميل الفوري: Spinner في نفس المللي ثانية ثم Pause عند أول نغمة صوتية
+  const [previewLoading, setPreviewLoading] = useState(false);
+
+  // إغلاق الصفحة: أوقف التشغيل الفوري وأفرغ المشغّل الموحّد
+  // (يُعرَّف قبل استخدامه في useOverlayBack أسفله)
+  const closeDetail = () => {
+    stopInstant();
+    setPreviewPlaying(false);
+    setPreviewLoading(false);
+    setDetail(null);
+  };
 
   // زر الرجوع (الهاتف/المتصفح) يغلق صفحة الصوت ويعيدك لنفس المكان
-  useOverlayBack(Boolean(detail), () => setDetail(null));
+  useOverlayBack(Boolean(detail), closeDetail);
   const [, navigate] = useLocation();
 
   // الاستماع لطلب فتح الصوت من مشغلات الريلز/المنشورات
@@ -36,11 +47,13 @@ export default function SoundDetailSheet() {
     const onOpenSound = (event: Event) => {
       const next = (event as CustomEvent<OpenSoundDetail>).detail;
       if (!next?.soundId) return;
+      stopInstant();
       setDetail(next);
       setSound(null);
       setPosts(null);
       setLoadError(false);
       setPreviewPlaying(false);
+      setPreviewLoading(false);
     };
     window.addEventListener(OPEN_SOUND_EVENT, onOpenSound);
     return () => window.removeEventListener(OPEN_SOUND_EVENT, onOpenSound);
@@ -144,14 +157,31 @@ export default function SoundDetailSheet() {
   }, [detail]);
 
   const togglePreview = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (audio.paused) {
-      void audio.play().then(() => setPreviewPlaying(true)).catch(() => setPreviewPlaying(false));
-    } else {
-      audio.pause();
+    const url = sound?.source_video_url || detail?.sourceVideoUrl || '';
+    if (!url) return;
+    if (previewPlaying) {
+      stopInstant();
       setPreviewPlaying(false);
+      return;
     }
+    if (previewLoading) return;
+    // Optimistic UI عبر المشغّل العالمي الموحّد: Spinner فوراً ثم Pause عند صدور أول نغمة
+    setPreviewLoading(true);
+    playInstant(url, {
+      loop: true,
+      onPlaying: () => {
+        setPreviewLoading(false);
+        setPreviewPlaying(true);
+      },
+      onEnded: () => {
+        setPreviewLoading(false);
+        setPreviewPlaying(false);
+      },
+      onError: () => {
+        setPreviewLoading(false);
+        setPreviewPlaying(false);
+      },
+    });
   };
 
   const handleUseSound = () => {
@@ -161,13 +191,13 @@ export default function SoundDetailSheet() {
       title: sound?.title || detail.title || defaultSoundTitle(detail.creatorName),
       sourceVideoUrl: sound?.source_video_url || detail.sourceVideoUrl || null,
     });
-    setDetail(null);
+    closeDetail();
   };
 
   const openPost = (postId: string) => {
     // حرر مدخل حرس الرجوع ثم أغلق الصفحة ثم انتقل
     releaseOverlayBackForNavigation();
-    setDetail(null);
+    closeDetail();
     navigate(`/post/${encodeURIComponent(postId)}`);
   };
 
@@ -188,7 +218,7 @@ export default function SoundDetailSheet() {
       <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-4 pb-3 pt-[calc(10px+env(safe-area-inset-top))]">
         <button
           type="button"
-          onClick={() => setDetail(null)}
+          onClick={closeDetail}
           aria-label="رجوع"
           className="grid h-10 w-10 place-items-center rounded-full transition hover:bg-white/10"
         >
@@ -204,10 +234,12 @@ export default function SoundDetailSheet() {
             type="button"
             onClick={togglePreview}
             disabled={!sourceUrl}
-            aria-label={previewPlaying ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
+            aria-label={previewLoading ? 'جارٍ تحميل الصوت' : previewPlaying ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
             className="grid h-24 w-24 place-items-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-lg transition disabled:opacity-40 hover:brightness-105"
           >
-            {previewPlaying ? <Pause size={30} /> : <Play size={30} className="translate-x-0.5" />}
+            {previewLoading
+              ? <Loader2 size={30} className="animate-spin" />
+              : previewPlaying ? <Pause size={30} /> : <Play size={30} className="translate-x-0.5" />}
           </button>
           <div className="min-w-0">
             <p className="break-words text-lg font-bold leading-6">{title}</p>
@@ -259,10 +291,6 @@ export default function SoundDetailSheet() {
           )}
         </section>
       </div>
-
-      {sourceUrl && (
-        <audio ref={audioRef} src={sourceUrl} loop preload="none" className="hidden" />
-      )}
     </div>,
     document.body,
   );

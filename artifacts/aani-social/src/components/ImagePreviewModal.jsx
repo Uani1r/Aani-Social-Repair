@@ -6,6 +6,7 @@ import PostMetadataChips from '@/components/PostMetadataChips';
 import UserIdentity from '@/components/UserIdentity';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, openSoundPicker } from '@/lib/sounds';
+import { playInstant, stopInstant } from '@/lib/instantAudio';
 import { appendVideoTrimFragment, DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
 import { supabase } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
@@ -184,16 +185,23 @@ export default function ImagePreviewModal({
     : null;
 
   // التشغيل التلقائي الفوري للصوت المقترح/المختار أثناء معاينة الصورة (قبل أي زر)
-  const soundPreviewRef = useRef(null);
+  // — عبر المشغّل العالمي الموحّد (عنصر Audio واحد يُعاد استخدامه مع preload='auto')
   useEffect(() => {
-    if (!soundPreviewUrl || !soundPreviewRef.current) return;
-    void soundPreviewRef.current.play().catch(() => undefined);
-  }, [soundPreviewUrl]);
+    if (!open || !soundPreviewUrl) {
+      stopInstant();
+      return undefined;
+    }
+    playInstant(soundPreviewUrl, {
+      trim: music?.soundTrim || null,
+      loop: true,
+    });
+    return undefined;
+  }, [open, soundPreviewUrl, music?.soundTrim?.start, music?.soundTrim?.end]);
 
   // إيقاف معاينة الصوت المرفق عند فتح مكتبة الأصوات (منع تداخل الأصوات)
   useEffect(() => {
     const onOpenPicker = () => {
-      try { soundPreviewRef.current?.pause(); } catch { /* العنصر قد يكون غير جاهز */ }
+      stopInstant();
     };
     window.addEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
     return () => window.removeEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
@@ -609,10 +617,7 @@ export default function ImagePreviewModal({
           />
         )}
 
-        {/* الصوت المختار يظهر كبسولة أعلى المعاينة ويُدار من هناك — مع تشغيل مباشر متزامن هنا */}
-        {soundPreviewUrl && (
-          <audio ref={soundPreviewRef} src={soundPreviewUrl} loop autoPlay preload="auto" className="hidden" />
-        )}
+        {/* الصوت المختار يظهر كبسولة أعلى المعاينة ويُدار من هناك — تشغيله عبر المشغّل الموحّد في الأعلى */}
 
         {/* شريط الأزرار والخدمات */}
         <div className="flex items-center gap-2 overflow-x-auto no-scrollbar" dir="rtl">

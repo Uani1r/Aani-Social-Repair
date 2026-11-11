@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Loader2, Pause, Play, Search, Scissors, X } from 'lucide-react';
 
@@ -8,6 +8,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
+import { playInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
 
@@ -38,12 +39,16 @@ export default function SoundPickerSheet() {
   const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
   const playingIdRef = useRef<string | null>(null);
   playingIdRef.current = playingId;
-  // مشغل المعاينة الفوري: عنصر HTML5 Audio مخصص لكل صوت مع تحميل استباقي
-  // (Streaming / HTTP Range) — الاستدعاء لـ .play() فوري بلا انتظار التنزيل الكامل
-  const previewPoolRef = useRef(new Map<string, HTMLAudioElement>());
+  // المشغّل الموحّد الفوري: عنصر Audio عالمي واحد يُعاد استخدامه لجميع الأصوات
+  // (Single Audio Instance — من '@/lib/instantAudio' مع preload='auto' وcrossOrigin
+  // لطلبات HTTP Range/206): يُستبدل src فقط عند التنقل بين الأصوات فيُجهَض طلب
+  // الشبكة السابق تلقائياً بلا طلبات معلقة متراكمة وبلا ضغط ذاكرة
   // أداة الاقتصاص: الصوت المختار + مسودة زمني البداية/النهاية (بالثواني)
   const [trimTarget, setTrimTarget] = useState<LibrarySound | null>(null);
   const [trimDraft, setTrimDraft] = useState<SoundTrimRange>({ start: 0, end: MAX_TRIM_SECONDS });
+  // مرآة مسودة الاقتصاص: يقرأها المشغّل الموحّد في كل نبضة timeupdate (تحديث حي أثناء السحب)
+  const trimDraftRef = useRef<SoundTrimRange>(trimDraft);
+  trimDraftRef.current = trimDraft;
   const [soundDuration, setSoundDuration] = useState(0);
   const [trimPlaying, setTrimPlaying] = useState(false);
   const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null);
@@ -51,33 +56,17 @@ export default function SoundPickerSheet() {
   const trimProbeRef = useRef<HTMLAudioElement>(null);
   const trimTrackRef = useRef<HTMLDivElement>(null);
 
-  // عنصر صوت دافئ (محضّر) لكل صوت: يُنشأ مرة واحدة مع preload='auto'
-  const getWarmPreview = useCallback((sound: LibrarySound): HTMLAudioElement | null => {
-    if (!sound.source_video_url) return null;
-    let audio = previewPoolRef.current.get(sound.id);
-    if (!audio) {
-      audio = new Audio(sound.source_video_url);
-      audio.preload = 'auto';
-      audio.loop = true;
-      // عند انتهاء الصوت طبيعياً يعود الزر تلقائياً لرمز المثلث
-      audio.onended = () => {
-        if (playingIdRef.current === sound.id) setPlayingId(null);
-      };
-      previewPoolRef.current.set(sound.id, audio);
-    }
-    return audio;
-  }, []);
-
-  // تهيئة التحميل الاستباقي لأول 10 أصوات عند فتح المكتبة (استجابة فورية عند النقر)
+  // تهيئة التحميل الاستباقي لأول 10 أصوات عند فتح المكتبة: طلب Range صغير
+  // (HTTP 206 Partial Content) يسخّن ذاكرة المتصفح والاتصال فيبدأ الصوت فوراً عند النقر
   useEffect(() => {
     if (!open || !sounds) return;
     sounds.slice(0, 10).forEach(sound => {
-      getWarmPreview(sound);
+      if (sound.source_video_url) warmAudioCache(sound.source_video_url);
     });
-  }, [open, sounds, getWarmPreview]);
+  }, [open, sounds]);
 
   const stopEverything = () => {
-    previewPoolRef.current.forEach(audio => audio.pause());
+    stopInstant();
     setPlayingId(null);
     setLoadingPreviewId(null);
     setTrimPlaying(false);
@@ -165,40 +154,32 @@ export default function SoundPickerSheet() {
   });
 
   const togglePreview = (sound: LibrarySound) => {
-    const audio = getWarmPreview(sound);
-    if (!audio) return;
-    if (playingIdRef.current === sound.id && !audio.paused) {
+    const url = sound.source_video_url;
+    if (!url) return;
+    if (playingIdRef.current === sound.id) {
       // إيقاف مؤقت: يعود الزر تلقائياً لرمز المثلث
-      audio.pause();
-      audio.ontimeupdate = null;
-      audio.loop = true;
+      stopInstant();
       setPlayingId(null);
       return;
     }
-    // صوت واحد فقط يعمل في المكتبة: أوقف أي معاينة أخرى (بما فيها معاينة الاقتصاص)
-    previewPoolRef.current.forEach(other => {
-      if (other !== audio) other.pause();
-    });
-    if (trimTarget) {
-      const trimAudio = getWarmPreview(trimTarget);
-      if (trimAudio && trimAudio !== audio) trimAudio.pause();
-    }
+    if (loadingPreviewId === sound.id) return;
+    // صوت واحد فقط في المكتبة (المشغّل الموحّد): أي معاينة سابقة تُوقف فوراً مع إلغاء طلباتها المعلقة
     setTrimPlaying(false);
     setPlayingId(null);
-    // مؤشر التحميل فوراً في نفس المللي ثانية، ثم يتحول للإيقاف عند بدء الصوت الفعلي (onplaying)
+    // الاستجابة اللحظية (Optimistic UI): Spinner في نفس المللي ثانية ثم Pause فور صدور أول نغمة صوتية
     setLoadingPreviewId(sound.id);
-    audio.ontimeupdate = null;
-    audio.loop = true;
-    // استعادة معالج الانتهاء الافتراضي (قد يكون استُبدل بمعالج شاشة الاقتصاص)
-    audio.onended = () => {
-      if (playingIdRef.current === sound.id) setPlayingId(null);
-    };
-    try { audio.currentTime = 0; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-    void audio.play().then(() => {
-      setLoadingPreviewId(current => (current === sound.id ? null : current));
-      setPlayingId(sound.id);
-    }).catch(() => {
-      setLoadingPreviewId(current => (current === sound.id ? null : current));
+    playInstant(url, {
+      loop: true,
+      onPlaying: () => {
+        setLoadingPreviewId(current => (current === sound.id ? null : current));
+        setPlayingId(sound.id);
+      },
+      onEnded: () => {
+        if (playingIdRef.current === sound.id) setPlayingId(null);
+      },
+      onError: () => {
+        setLoadingPreviewId(current => (current === sound.id ? null : current));
+      },
     });
   };
 
@@ -209,7 +190,7 @@ export default function SoundPickerSheet() {
     setSoundDuration(0);
     setTrimDraft({ start: 0, end: MAX_TRIM_SECONDS });
     trimDurationLoadedRef.current = false;
-    getWarmPreview(sound);
+    if (sound.source_video_url) warmAudioCache(sound.source_video_url);
     const probe = trimProbeRef.current;
     if (probe) {
       probe.src = sound.source_video_url || '';
@@ -221,29 +202,20 @@ export default function SoundPickerSheet() {
   // — عبر مشغل الصوت المباشر المحمّل استباقياً: حلقة محصورة ضمن زمني الاقتصاص
   const beginLivePreview = () => {
     if (!trimTarget?.source_video_url) return;
-    const audio = getWarmPreview(trimTarget);
-    if (!audio) return;
-    // صوت واحد فقط: أوقف أي معاينة أخرى
-    previewPoolRef.current.forEach(other => {
-      if (other !== audio) other.pause();
-    });
     setPlayingId(null);
     setLoadingPreviewId(null);
-    audio.loop = false;
-    audio.ontimeupdate = () => {
-      if (audio.currentTime >= trimDraft.end - 0.04 || audio.currentTime < trimDraft.start - 0.05) {
-        try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-      }
-    };
-    audio.onended = () => setTrimPlaying(false);
-    try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-    void audio.play().then(() => setTrimPlaying(true)).catch(() => setTrimPlaying(false));
+    playInstant(trimTarget.source_video_url, {
+      loop: false,
+      // يقرأ المسودة في كل نبضة timeupdate: يبدأ الاستماع من زمن البداية لحظة السحب ويعود إليه تلقائياً
+      getTrim: () => trimDraftRef.current,
+      onPlaying: () => setTrimPlaying(true),
+      onEnded: () => setTrimPlaying(false),
+      onError: () => setTrimPlaying(false),
+    });
   };
 
   const stopTrimPreview = () => {
-    if (!trimTarget) return;
-    const audio = getWarmPreview(trimTarget);
-    if (audio) audio.pause();
+    stopInstant();
     setTrimPlaying(false);
   };
 
