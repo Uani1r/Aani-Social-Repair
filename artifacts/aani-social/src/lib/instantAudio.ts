@@ -114,14 +114,14 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
     el.onplaying = reportPlaying;
     // The play() promise is always caught: an autoplay rejection is logged,
     // never thrown, so the app can never freeze on it.
-    void el.play().then(reportPlaying).catch((error: unknown) => {
-      console.log('Autoplay handled:', error);
+    void el.play().then(reportPlaying).catch((err: unknown) => {
+      console.log('Autoplay handled cleanly:', err);
       if (generation !== playGeneration) return;
       options.onError?.();
     });
   } else {
-    void el.play().catch((error: unknown) => {
-      console.log('Autoplay handled:', error);
+    void el.play().catch((err: unknown) => {
+      console.log('Autoplay handled cleanly:', err);
       if (generation !== playGeneration) return;
       options.onError?.();
     });
