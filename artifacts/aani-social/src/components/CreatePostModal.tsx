@@ -580,7 +580,7 @@ export default function CreatePostModal({
               {isSubmitting ? 'جاري النشر...' : 'نشر'}
             </button>
           </div>
-          {createError && <p role="alert" className="mt-3 text-sm text-red-400">{createError}</p>}
+          {createError && <p role="alert" data-video-test-visible="true" className="mt-3 text-sm text-red-400">{createError}</p>}
         </footer>
       </section>
     </div>

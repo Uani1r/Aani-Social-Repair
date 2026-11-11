@@ -18,7 +18,10 @@ const PROCESSING_BUCKET = process.env["SUPABASE_STORAGE_BUCKET"]
 type MediaAsset = {
   id: string;
   user_id: string;
-  original_path: string;
+  original_path: string | null;
+  storage_path: string | null;
+  processed_path: string | null;
+  status: string | null;
   video_url: string | null;
   processing_status: string | null;
   error_message: string | null;
@@ -82,7 +85,7 @@ async function restRequest<T>(config: SupabaseAdminConfig, url: URL, init: Reque
 
 async function loadMediaAsset(config: SupabaseAdminConfig, mediaAssetId: string): Promise<MediaAsset | null> {
   const rows = await restRequest<MediaAsset[]>(config, restUrl(config, "media_assets", {
-    select: "id,user_id,original_path,video_url,processing_status,error_message",
+    select: "id,user_id,original_path,storage_path,processed_path,status,video_url,processing_status,error_message",
     id: `eq.${mediaAssetId}`,
     limit: "1",
   }));
@@ -403,19 +406,21 @@ async function processClaimedMediaAsset(
 ): Promise<ProcessedMedia> {
   let tempDirectory: string | null = null;
   try {
+    const originalPath = asset.storage_path || asset.original_path;
+    if (!originalPath) throw new MediaProcessingError(400, "The media asset has no original storage path.");
     tempDirectory = await mkdtemp(path.join(tmpdir(), `aani-media-${mediaAssetId}-`));
     const inputPath = path.join(tempDirectory, "input-video");
     const outputPath = path.join(tempDirectory, "output.mp4");
     const processedPath = `processed/${userId}/${mediaAssetId}.mp4`;
     const processedUrl = publicStorageUrl(config, processedPath);
 
-    validateOriginalPath(asset.original_path, userId);
-    const originalUrl = asset.video_url || publicStorageUrl(config, asset.original_path);
-    const originalVideoUrls = new Set([stripFragment(originalUrl), publicStorageUrl(config, asset.original_path)]);
+    validateOriginalPath(originalPath, userId);
+    const originalUrl = asset.video_url || publicStorageUrl(config, originalPath);
+    const originalVideoUrls = new Set([stripFragment(originalUrl), publicStorageUrl(config, originalPath)]);
     const relatedPosts = await loadRelatedPosts(config, mediaAssetId);
     const stripAudio = await shouldStripOriginalAudio(config, relatedPosts, originalVideoUrls);
 
-    await downloadOriginal(config, asset.original_path, userId, inputPath);
+    await downloadOriginal(config, originalPath, userId, inputPath);
     await runFfmpeg(inputPath, outputPath, stripAudio);
     const metadata = await probeOutput(outputPath);
     await uploadProcessedVideo(config, processedPath, outputPath);
@@ -423,9 +428,11 @@ async function processClaimedMediaAsset(
 
     const updated = await patchMediaAsset(config, mediaAssetId, userId, {
       video_url: processedUrl,
+      processed_path: processedPath,
       duration: metadata.duration,
       width: metadata.width,
       height: metadata.height,
+      status: "ready",
       processing_status: "ready",
       error_message: null,
     });
@@ -436,6 +443,7 @@ async function processClaimedMediaAsset(
     const message = errorText(error);
     try {
       await patchMediaAsset(config, mediaAssetId, userId, {
+        status: "failed",
         processing_status: "failed",
         error_message: message,
       });
@@ -456,20 +464,25 @@ export async function processMediaAsset(
   const asset = await loadMediaAsset(config, mediaAssetId);
   if (!asset) throw new MediaProcessingError(404, "Media asset was not found.");
   if (asset.user_id !== userId) throw new MediaProcessingError(403, "You cannot process this media asset.");
-  if (asset.processing_status === "ready" && asset.video_url) {
+  const assetStatus = asset.status || asset.processing_status;
+  if (assetStatus === "ready" && asset.video_url) {
     return { success: true, status: "ready", video_url: asset.video_url };
   }
 
+  const processedPath = `processed/${userId}/${mediaAssetId}.mp4`;
   const claimed = await patchMediaAsset(config, mediaAssetId, userId, {
+    status: "processing",
     processing_status: "processing",
+    processed_path: processedPath,
     error_message: null,
   }, "in.(uploading,failed)");
   if (!claimed.length) {
     const latest = await loadMediaAsset(config, mediaAssetId);
-    if (latest?.processing_status === "ready" && latest.video_url) {
+    const latestStatus = latest?.status || latest?.processing_status;
+    if (latestStatus === "ready" && latest?.video_url) {
       return { success: true, status: "ready", video_url: latest.video_url };
     }
-    if (latest?.processing_status === "processing") {
+    if (latestStatus === "processing") {
       return { success: true, status: "processing" };
     }
     throw new MediaProcessingError(409, "The media asset is not ready to be processed.");
@@ -492,7 +505,7 @@ export async function getMediaAssetProcessingStatus(
   if (!asset) throw new MediaProcessingError(404, "Media asset was not found.");
   if (asset.user_id !== userId) throw new MediaProcessingError(403, "You cannot access this media asset.");
   return {
-    status: asset.processing_status,
+    status: asset.status || asset.processing_status,
     video_url: asset.video_url,
     error_message: asset.error_message,
   };

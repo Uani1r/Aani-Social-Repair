@@ -263,7 +263,7 @@ export default function FeedPage({
       {loading && <FeedSkeleton count={3} />}
 
       {!loading && error && (
-        <div role="alert" className="empty-state card border border-rose-500/30 rounded-2xl bg-zinc-900/70 p-6 text-center">
+        <div role="alert" data-video-test-visible="true" className="empty-state card border border-rose-500/30 rounded-2xl bg-zinc-900/70 p-6 text-center">
           <h2 className="text-white font-bold text-base mb-2">تعذر تحميل المنشورات</h2>
           <p className="text-zinc-400 text-xs mb-4">{error}</p>
           <button type="button" onClick={() => void refresh()} className="rounded-full bg-pink-600 px-4 py-2 text-xs font-semibold text-white">

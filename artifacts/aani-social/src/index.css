@@ -8085,3 +8085,9 @@ select,
 .nearby-users-switch > span {
   background-color: #ffffff;
 }
+
+/* Temporary video-test mode: suppress noisy nonessential fetch fallbacks. */
+html[data-video-test-mode='true'] [role='alert']:not([data-video-test-visible]),
+html[data-video-test-mode='true'] .status-box:not([data-video-test-visible]) {
+  display: none !important;
+}

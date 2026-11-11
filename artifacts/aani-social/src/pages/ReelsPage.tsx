@@ -113,7 +113,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
     >
       {loading && <ReelsSkeleton />}
       {!loading && error && (
-        <div role="alert" className="status-box flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-white">
+        <div role="alert" data-video-test-visible="true" className="status-box flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-white">
           <p className="text-sm text-zinc-300">{error}</p>
           <button type="button" onClick={() => void refresh()} className="rounded-full bg-pink-600 px-4 py-2 text-xs font-semibold text-white">
             إعادة المحاولة

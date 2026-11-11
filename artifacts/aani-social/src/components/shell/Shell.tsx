@@ -1648,9 +1648,12 @@ export default function Shell({
               id: mediaAssetId,
               user_id: authenticatedUserId,
               original_path: assetPaths.originalPath,
+              storage_path: assetPaths.originalPath,
+              processed_path: null,
               video_url: assetPaths.videoUrl,
               poster_url: assetPaths.posterUrl,
               processing_status: 'uploading',
+              status: 'uploading',
             });
             if (mediaAssetError) throw new Error(`تعذر إنشاء سجل الوسائط: ${mediaAssetError.message}`);
           }

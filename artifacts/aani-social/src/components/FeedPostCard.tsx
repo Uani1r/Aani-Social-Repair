@@ -527,7 +527,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
           {pendingState.stage === 'failed' && (
             <>
-              <p role="alert" className="text-xs leading-5 text-rose-300">{pendingState.error || 'حدث خطأ غير متوقع أثناء النشر.'}</p>
+              <p role="alert" data-video-test-visible="true" className="text-xs leading-5 text-rose-300">{pendingState.error || 'حدث خطأ غير متوقع أثناء النشر.'}</p>
               <div className="mt-2 flex items-center gap-2">
                 <button type="button" onClick={onRetryPending} className="flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white hover:bg-white/15">
                   <RotateCcw size={13} /> إعادة المحاولة

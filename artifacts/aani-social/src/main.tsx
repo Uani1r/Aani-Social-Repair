@@ -7,6 +7,10 @@ import { installGlobalUnlockListener } from '@/audio/AudioEngine';
 
 import './index.css';
 
+// Temporary video-test mode hides nonessential fetch alerts while keeping
+// feed/reel load failures, upload failures, and the fatal ErrorBoundary visible.
+document.documentElement.dataset.videoTestMode = 'true';
+
 // Aani Media Engine: capture-phase audio unlock on the root + visibility
 // auto-pause/resume. Installed once, synchronously, before the first render.
 installGlobalUnlockListener();
