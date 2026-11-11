@@ -120,6 +120,8 @@ export default function Shell({
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   // نظام الأصوات: الصوت المستعار المختار من صفحة الصوت — يُربط بالفيديو الجديد عند النشر
   const [pendingSound, setPendingSound] = useState<{ id: string; title: string; sourceVideoUrl?: string | null } | null>(null);
+  // الصوت المختار في شاشات المعاينة (نظام الأصوات) — يُبذر في نافذة النشر ويُرفع معه
+  const [previewMusic, setPreviewMusic] = useState<{ file: File; title: string; previewUrl: string } | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
   const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
@@ -1061,6 +1063,7 @@ export default function Shell({
     setVideoCrop(null);
     setDestination('feed');
     setCreateError('');
+    setPreviewMusic(null);
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
       setSelectedFiles(previews.map(preview => preview.file));
@@ -1084,6 +1087,7 @@ export default function Shell({
     setImagePreviewImages([]);
     setSelectedFiles([]);
     setFileType(null);
+    setPreviewMusic(null);
   };
 
   const continueToPostCaption = () => {
@@ -1105,6 +1109,7 @@ export default function Shell({
     setVideoTrim(null);
     setVideoCrop(null);
     setCreateError('');
+    setPreviewMusic(null);
     clearVideoCover();
     setVideoMentions([]);
     setShowVideoPreviewModal(true);
@@ -1140,6 +1145,7 @@ export default function Shell({
     clearVideoCover();
     setVideoMentions([]);
     setPendingSound(null);
+    setPreviewMusic(null);
   };
 
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
@@ -1279,6 +1285,26 @@ export default function Shell({
           }
         }
 
+        // نظام الأصوات: أنشئ سجل صوت للصوت المرفوع ليتمكن الآخرون من «استخدام هذا الصوت»
+        // (source_video_url يشير للصوت المرفوع نفسه — بلا Storage إضافية؛ فشلها لا يعطل النشر)
+        let attachedSoundId: string | null = null;
+        if (audioUrl && !pendingSound) {
+          try {
+            const { data: soundRow } = await supabase
+              .from('sounds')
+              .insert({
+                title: (audioUpload?.title || '').trim() || `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
+                source_video_url: audioUrl,
+                creator_id: authenticatedUserId,
+              })
+              .select('id')
+              .single();
+            attachedSoundId = soundRow?.id ?? null;
+          } catch {
+            attachedSoundId = null;
+          }
+        }
+
         // الوسوم المخزنة: وسوم المحرر + وسام tagged_users + وسام الغلاف إن وُجد
         const storedMetadata = [
           ...metadata,
@@ -1302,6 +1328,9 @@ export default function Shell({
               trim_end: Number(trim.end.toFixed(3)),
             }
           : {};
+        // معرّف الصوت المرتبط بالمنشور: صوت مستعار (فيديو جديد بنفس الصوت)
+        // أو سجل الصوت المُنشأ للصوت المرفوع (صور وفيديو بموسيقى مختارة)
+        const effectiveSoundId = pendingSound && mediaType === 'video' ? pendingSound.id : attachedSoundId;
         const postPayload = {
           id: postId,
           user_id: authenticatedUserId,
@@ -1317,7 +1346,7 @@ export default function Shell({
           ...(audioUrl ? { audio_url: audioUrl, audio_title: audioUpload?.title ?? null } : {}),
           // الصوت المستعار (نظام الأصوات): ربط الفيديو الجديد بنفس sound_id
           // وبإشارة الصوت (audio_url يشير لرابط الفيديو الأصلي لتشغيل صوته بلا Storage جديدة)
-          ...(pendingSound && mediaType === 'video' ? { sound_id: pendingSound.id } : {}),
+          ...(effectiveSoundId ? { sound_id: effectiveSoundId } : {}),
           ...(pendingSound && mediaType === 'video' && !audioUrl && pendingSound.sourceVideoUrl
             ? { audio_url: pendingSound.sourceVideoUrl, audio_title: pendingSound.title }
             : {}),
@@ -1433,7 +1462,7 @@ export default function Shell({
           progress: 100,
           error: null,
           retry: null,
-          post: { ...publishedPost, audio_url: audioUrl ?? publishedPost.audio_url ?? null },
+          post: { ...publishedPost, audio_url: audioUrl ?? publishedPost.audio_url ?? null, sound_id: effectiveSoundId ?? publishedPost.sound_id ?? null },
         });
         window.dispatchEvent(new Event('aani:post-created'));
         window.setTimeout(() => {
@@ -1478,6 +1507,7 @@ export default function Shell({
     setIsSubmitting(false);
     setCreateError('');
     setPendingSound(null);
+    setPreviewMusic(null);
     // لا إعادة توجيه تلقائية للرئيسية: ابقَ في الشاشة التي كنت عليها،
     // والانتقال فقط عند تغيّر السياق الفعلي (نشر ريلز من غير شاشة الريلز،
     // أو مغادرة شاشة الريلز بعد نشر منشور تغذية)
@@ -1549,6 +1579,8 @@ export default function Shell({
         isSubmitting={isSubmitting}
         createError={createError}
         initialCreateTags={initialCreateTags}
+        previewMusic={previewMusic}
+        onPreviewMusicChange={setPreviewMusic}
         onPostTextChange={setPostText}
         onRemoveFile={index => {
           setSelectedFiles(files => files.filter((_, idx) => idx !== index));
@@ -1564,6 +1596,7 @@ export default function Shell({
           setShowCreateModal(false);
           setVideoMentions([]);
           setPendingSound(null);
+          setPreviewMusic(null);
           if (fileType === 'video') {
             setSelectedFiles([]);
             setVideoTrim(null);

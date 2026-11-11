@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
 import { AtSign, Check, Crop, Image as ImageIcon, Music2, Scissors, Search, Volume2, VolumeX, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
@@ -38,6 +38,10 @@ type VideoPreviewModalProps = {
   onMentionDeselect?: (personId: string) => void;
   /** إشارات محفوظة مسبقاً لاستعادتها عند إعادة الفتح */
   initialMentions?: VideoMentionPerson[];
+  /** الصوت المختار من شاشة المعاينة (نظام الأصوات) لاستعادته */
+  music?: { file: File; title: string; previewUrl: string } | null;
+  /** يُستدعى عند اختيار/إزالة صوت من شاشة المعاينة */
+  onMusicChange?: (music: { file: File; title: string; previewUrl: string } | null) => void;
   onClose: () => void;
   onNext: (range: VideoTrimRange, crop: VideoCropTransform) => void;
 };
@@ -86,6 +90,8 @@ export default function VideoPreviewModal({
   onMentionSelect,
   onMentionDeselect,
   initialMentions = [],
+  music,
+  onMusicChange,
   onClose,
   onNext,
 }: VideoPreviewModalProps) {
@@ -115,7 +121,16 @@ export default function VideoPreviewModal({
   const [thumbnails, setThumbnails] = useState<string[]>([]);
   const [isTrimming, setIsTrimming] = useState(false);
   const [isCropping, setIsCropping] = useState(false);
-  const [musicNotice, setMusicNotice] = useState(false);
+  // نظام الأصوات: اختيار ملف صوتي لإرفاقه بالفيديو عند النشر — بلا أي تقييد
+  const musicInputRef = useRef<HTMLInputElement | null>(null);
+  const handleMusicFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || !onMusicChange) return;
+    const looksAudio = file.type.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|flac)$/i.test(file.name);
+    if (!looksAudio) return;
+    onMusicChange({ file, title: file.name.replace(/\.[^.]+$/, '') || file.name });
+  };
   const [stageSize, setStageSize] = useState({ width: 0, height: 0 });
   // الغلاف: مسودة داخل الشاشة، تُحوَّل إلى الحاوية الأب عند الحفظ فقط
   const [isCoverEditing, setIsCoverEditing] = useState(false);
@@ -1029,9 +1044,9 @@ export default function VideoPreviewModal({
 
       {!isTrimming && !isCropping && !isCoverEditing && !isMentionPicking && (
         <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 grid w-[min(94vw,430px)] -translate-x-1/2 grid-cols-5 gap-1 rounded-2xl border border-white/10 bg-[#242326]/95 px-2 py-2 shadow-2xl backdrop-blur-xl">
-          <button type="button" onClick={() => setMusicNotice(true)} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-[#f1a17f] transition hover:bg-white/5">
+          <button type="button" onClick={() => musicInputRef.current?.click()} aria-label={music ? 'تغيير الصوت المرفق' : 'اختيار صوت للفيديو'} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-[#f1a17f] transition hover:bg-white/5">
             <Music2 size={22} />
-            <span className="text-[11px] font-medium">موسيقى</span>
+            <span className="text-[11px] font-medium">{music ? 'الصوت مرفق' : 'موسيقى'}</span>
           </button>
           <button type="button" onClick={beginTrimming} disabled={!duration} className="flex min-w-0 flex-col items-center justify-center gap-1 rounded-full px-1 py-1 text-white/85 transition hover:bg-white/5 disabled:opacity-50">
             <Scissors size={22} />
@@ -1052,11 +1067,20 @@ export default function VideoPreviewModal({
         </div>
       )}
 
-      {musicNotice && !isTrimming && !isCropping && !isCoverEditing && !isMentionPicking && (
-        <p role="status" className="absolute left-1/2 -translate-x-1/2 rounded-full bg-zinc-800 px-4 py-2 text-xs whitespace-nowrap text-white shadow-lg" style={{ bottom: 'calc(6.5rem + env(safe-area-inset-bottom))' }}>
-          إضافة الموسيقى غير متاحة حالياً للمنشورات.
-        </p>
+      {/* الصوت المختار: معاينة + إزالة — يُرفق بالفيديو عند النشر */}
+      {music && !isTrimming && !isCropping && !isCoverEditing && !isMentionPicking && (
+        <div className="absolute bottom-[calc(6.5rem+env(safe-area-inset-bottom))] left-1/2 flex w-[min(94vw,420px)] -translate-x-1/2 items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#1a1b22]/95 px-3 py-2 shadow-2xl backdrop-blur-xl" dir="rtl">
+          <span className="min-w-0 flex-1 truncate text-xs text-white">♫ {music.title}</span>
+          <audio src={music.previewUrl} controls preload="metadata" className="h-8 max-w-[130px]" />
+          {onMusicChange && (
+            <button type="button" aria-label="إزالة الصوت" onClick={() => onMusicChange(null)} className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+              <X size={14} />
+            </button>
+          )}
+        </div>
       )}
+
+      <input ref={musicInputRef} type="file" accept="audio/*" className="hidden" onChange={handleMusicFileChange} />
 
       {mentionNotice && !isTrimming && !isCropping && !isCoverEditing && (
         <p role="status" className="absolute left-1/2 -translate-x-1/2 rounded-full bg-zinc-800 px-4 py-2 text-xs whitespace-nowrap text-white shadow-lg" style={{ bottom: 'calc(6.5rem + env(safe-area-inset-bottom))' }}>

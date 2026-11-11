@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Music2, Repeat, RotateCcw, Send, ThumbsUp, X,
+  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Music2, Pause, Play, Repeat, RotateCcw, Send, ThumbsUp, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { createPortal } from 'react-dom';
@@ -24,7 +24,7 @@ import { uploadMedia } from '@/lib/storyUpload';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
-import { defaultSoundTitle, openSoundDetail } from '@/lib/sounds';
+import { defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
 import type { PendingPost } from '@/lib/pendingPosts';
 
 /** عنوان الصوت المعروض للمنشور: الموسيقى المرفقة أو الصوت الأصلي باسم صاحبه */
@@ -107,6 +107,11 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [replacementFile, setReplacementFile] = useState<File | null>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const trackRef = useRef<HTMLDivElement>(null);
+  // نظام الأصوات: مشغل صوتي خلفي لمنشورات الصور (ريل بصري) يعمل تلقائياً عند ظهور الصورة
+  const photoMediaRef = useRef<HTMLDivElement>(null);
+  const photoAudioRef = useRef<HTMLAudioElement>(null);
+  const photoAudioBlockedRef = useRef(false);
+  const [photoAudioPlaying, setPhotoAudioPlaying] = useState(false);
   const interactions = usePostInteractions(post, currentUserId);
   const liked = interactions.liked;
   const likesCount = interactions.likes;
@@ -177,6 +182,58 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     setFeedback(post.feedback_by_me || null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id, post.feedback_by_me]);
+
+  // نظام الأصوات: تشغيل الصوت تلقائياً في الخلفية عند ظهور صورة المنشور (نسبة 60% مثل الريلز).
+  // المتصفح قد يرفض التشغيل التلقائي الصامت-بلا-كتم قبل تفاعل المستخدم — أول تفاعل يشغّله.
+  useEffect(() => {
+    if (post.type !== 'photo' || !post.audio_url) return undefined;
+    const audio = photoAudioRef.current;
+    const container = photoMediaRef.current;
+    if (!audio || !container || typeof IntersectionObserver === 'undefined') return undefined;
+
+    const tryPlay = () => {
+      void audio.play().then(() => {
+        photoAudioBlockedRef.current = false;
+        setPhotoAudioPlaying(true);
+      }).catch(() => {
+        photoAudioBlockedRef.current = true;
+        setPhotoAudioPlaying(false);
+      });
+    };
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) tryPlay();
+        else {
+          audio.pause();
+          setPhotoAudioPlaying(false);
+        }
+      });
+    }, { threshold: 0.6 });
+    observer.observe(container);
+
+    const resumeOnInteraction = () => {
+      if (!photoAudioBlockedRef.current) return;
+      tryPlay();
+    };
+    window.addEventListener('pointerdown', resumeOnInteraction);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('pointerdown', resumeOnInteraction);
+      audio.pause();
+    };
+  }, [post.type, post.audio_url, post.id]);
+
+  const togglePhotoAudio = () => {
+    const audio = photoAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      void audio.play().then(() => setPhotoAudioPlaying(true)).catch(() => undefined);
+    } else {
+      audio.pause();
+      setPhotoAudioPlaying(false);
+      photoAudioBlockedRef.current = false;
+    }
+  };
 
   // Keep the non-like counters synchronized with the post data.
   useEffect(() => {
@@ -455,6 +512,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       {/* معرض الصور التمريري (Carousel Slider) */}
       {urls.length > 0 && (
         <div
+          ref={photoMediaRef}
           className={isMainFeedImage
             ? 'post-image-container relative mt-3 w-full'
             : isMainFeedVideo
@@ -511,24 +569,54 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
         </div>
       )}
 
-      {/* الصوت المرفق بمنشور الصور (ريل بصري) */}
+      {/* الصوت المرفق بمنشور الصور (ريل بصري) — شريط الصوت مثل الريلز */}
       {post.type === 'photo' && post.audio_url && (
         <div className={`flex items-center gap-2 text-xs text-zinc-400 ${isMainFeedImage ? 'mx-4' : ''} mt-2.5`} aria-label="الصوت المرفق">
-          <Music2 size={14} aria-hidden="true" />
-          {postSoundLabel(post) ? (
-            post.sound_id ? (
-              <button
-                type="button"
-                onClick={() => openPostSound(post)}
-                className="max-w-[45%] truncate transition hover:text-white"
-              >
-                ♫ {postSoundLabel(post)}
-              </button>
-            ) : (
-              <span className="max-w-[45%] truncate">♫ {postSoundLabel(post)}</span>
-            )
-          ) : null}
-          <audio src={post.audio_url} controls preload="none" loop className="min-w-0 flex-1" />
+          {post.sound_id ? (
+            <button
+              type="button"
+              onClick={() => openPostSound(post)}
+              className="flex min-w-0 items-center gap-1.5 text-zinc-300 transition hover:text-white"
+            >
+              <Music2 size={14} aria-hidden="true" />
+              <span className="max-w-[140px] truncate">{postSoundLabel(post) || 'الصوت الأصلي'}</span>
+            </button>
+          ) : (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <Music2 size={14} aria-hidden="true" />
+              <span className="max-w-[140px] truncate">{postSoundLabel(post) || 'الصوت المرفق'}</span>
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={togglePhotoAudio}
+            aria-label={photoAudioPlaying ? 'إيقاف الصوت' : 'تشغيل الصوت'}
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-white/10 text-white transition hover:bg-white/15"
+          >
+            {photoAudioPlaying ? <Pause size={14} /> : <Play size={14} />}
+          </button>
+          {post.sound_id && (
+            <button
+              type="button"
+              onClick={() => useExistingSound({
+                soundId: post.sound_id!,
+                title: postSoundLabel(post),
+                sourceVideoUrl: post.audio_url || undefined,
+              })}
+              className="flex shrink-0 items-center gap-1 rounded-full bg-[#f1a17f] px-2.5 py-1.5 text-[11px] font-bold text-black transition hover:brightness-110"
+            >
+              <Music2 size={11} />
+              استخدام هذا الصوت
+            </button>
+          )}
+          <audio
+            ref={photoAudioRef}
+            src={post.audio_url}
+            loop
+            preload="none"
+            aria-hidden="true"
+            className="hidden"
+          />
         </div>
       )}
 

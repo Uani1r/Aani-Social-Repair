@@ -46,6 +46,9 @@ type ShellOverlayControlsProps = {
   isSubmitting: boolean;
   createError: string;
   initialCreateTags: PostMetadataTag[];
+  /** الصوت المختار في شاشات المعاينة (نظام الأصوات) — يُبذر في نافذة النشر */
+  previewMusic: { file: File; title: string; previewUrl: string } | null;
+  onPreviewMusicChange: (music: { file: File; title: string; previewUrl: string } | null) => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination, audio?: ComposerAudio | null) => void;
@@ -106,6 +109,8 @@ export default function ShellOverlayControls({
   isSubmitting,
   createError,
   initialCreateTags,
+  previewMusic,
+  onPreviewMusicChange,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -145,6 +150,8 @@ export default function ShellOverlayControls({
         open={showImagePreviewModal}
         images={imagePreviewImages}
         onImagesChange={onImagePreviewImagesChange}
+        music={previewMusic}
+        onMusicChange={onPreviewMusicChange}
         onClose={onCloseImagePreview}
         onNext={onNextImagePreview}
       />
@@ -162,6 +169,8 @@ export default function ShellOverlayControls({
         onMentionSelect={onVideoMentionSelect}
         onMentionDeselect={onVideoMentionDeselect}
         initialMentions={initialVideoMentions}
+        music={previewMusic}
+        onMusicChange={onPreviewMusicChange}
         onClose={onCloseVideoPreview}
         onNext={onNextVideoPreview}
       />
@@ -181,6 +190,7 @@ export default function ShellOverlayControls({
           isSubmitting={isSubmitting}
           createError={createError}
           initialTags={initialCreateTags}
+          initialMusic={previewMusic ? { file: previewMusic.file, title: previewMusic.title } : null}
           onPostTextChange={onPostTextChange}
           onRemoveFile={onRemoveFile}
           onPublish={onPublish}

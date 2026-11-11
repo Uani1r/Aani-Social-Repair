@@ -42,6 +42,8 @@ type CreatePostModalProps = {
   createError: string;
   /** وسوم محفوظة مسبقاً (مثل إشارة اختيرت من شاشة معاينة الفيديو) */
   initialTags?: PostMetadataTag[];
+  /** الصوت المختار في شاشة المعاينة (نظام الأصوات) — يُبذر كأي موسيقى مختارة */
+  initialMusic?: { file: File; title: string } | null;
   /** الصوت المستعار من نظام الأصوات — يُربط بالفيديو الجديد عند النشر */
   pendingSound?: { id: string; title: string; sourceVideoUrl?: string | null } | null;
   onPostTextChange: (text: string) => void;
@@ -68,6 +70,7 @@ export default function CreatePostModal({
   isSubmitting,
   createError,
   initialTags,
+  initialMusic,
   pendingSound,
   onPostTextChange,
   onRemoveFile,
@@ -101,6 +104,17 @@ export default function CreatePostModal({
   const [musicTitle, setMusicTitle] = useState('');
   const [musicPreviewUrl, setMusicPreviewUrl] = useState<string | null>(null);
   const [musicPickerOpen, setMusicPickerOpen] = useState(false);
+
+  // بذر الصوت المختار من شاشة المعاينة (نظام الأصوات): يظهر كأي موسيقى مختارة
+  // داخل النافذة ويمكن استبداله أو إزالته قبل النشر
+  useEffect(() => {
+    if (!initialMusic) return;
+    if (musicPreviewUrl) URL.revokeObjectURL(musicPreviewUrl);
+    setMusicFile(initialMusic.file);
+    setMusicTitle(initialMusic.title);
+    setMusicPreviewUrl(URL.createObjectURL(initialMusic.file));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMusic]);
 
   const closeTagEditor = () => {
     setActiveTool(null);
