@@ -100,6 +100,8 @@ export default function Shell({
   // ذاكرة موضع التمرير لكل مسار: العودة لمسار سبق زيارته تستعيد موضع التمرير
   useRouteScrollMemory(path);
   const isProfilePath = path === '/profile' || path.startsWith('/profile/');
+  // ملف شخصي فرعي (ليس تبويب البروفايل الرئيسي): تُعطَّل سحبة التبويبات وتُستبدل بإيماءة رجوع
+  const isProfileSubView = path !== '/profile' && path.startsWith('/profile/');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showPublishOptionsSheet, setShowPublishOptionsSheet] = useState(false);
   const [pendingStoryComposerRequest, setPendingStoryComposerRequest] = useState(false);
@@ -466,7 +468,7 @@ export default function Shell({
   // السحب الأفقي للتنقل بين الصفحات الرئيسية (حركة بصرية فقط)
   const [swipeDirection, setSwipeDirection] = useState<'forward' | 'backward' | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
-  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number; dy: number; pullCandidate: boolean } | null>(null);
+  const swipeStartRef = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y'; dx: number; dy: number; pullCandidate: boolean; backEdge?: boolean } | null>(null);
   const swipeTimerRef = useRef<number | null>(null);
   const swipeAnimationFrameRef = useRef<number | null>(null);
 
@@ -509,6 +511,20 @@ export default function Shell({
     if (document.body.classList.contains('aani-immersive') || hasOpenModal()) {
       swipeStartRef.current = null;
       setMainOffset(0, true);
+      return;
+    }
+
+    const touch = event.touches[0];
+    if (!touch) return;
+
+    // في الملفات الشخصية الفرعية: لا سحبة تبويبات إطلاقاً، ولا يُسلح إلا
+    // إيماءة الرجوع من الحافة اليمنى (تُقرر عند الإفلات وتستهدف سجل الصفحات)
+    if (isProfileSubView) {
+      if (touch.clientX >= window.innerWidth - 56) {
+        swipeStartRef.current = { x: touch.clientX, y: touch.clientY, axis: 'none', dx: 0, dy: 0, pullCandidate: false, backEdge: true };
+      } else {
+        swipeStartRef.current = null;
+      }
       return;
     }
 
@@ -586,6 +602,12 @@ export default function Shell({
       return;
     }
 
+    // إيماءة الرجوع في الشاشات الفرعية: تُتتبع بلا سحب بصري وتُقرر عند الإفلات
+    if (start.backEdge) {
+      setMainOffset(0, false);
+      return;
+    }
+
     // مقاومة عند الحدود: السحب من اليسار إلى اليمين يقدّم، ومن اليمين إلى اليسار يرجع
     const index = getRouteIndex(path);
     const atForwardLimit = index >= swipeRoutes.length - 1 && deltaX > 0;
@@ -600,6 +622,13 @@ export default function Shell({
 
     if (document.body.classList.contains('aani-immersive') || hasOpenModal()) {
       setMainOffset(0, true);
+      return;
+    }
+
+    // إيماءة السحب للرجوع في الشاشات الفرعية: تستهدف سجل الصفحات حصراً
+    // (يغلق أية شاشة كاملة مفتوحة عبر الرصة، أو يعود للمسار السابق) دون تغيير تبويب
+    if (start?.backEdge) {
+      if (start.dx <= -70 && Math.abs(start.dx) > Math.abs(start.dy)) window.history.back();
       return;
     }
 

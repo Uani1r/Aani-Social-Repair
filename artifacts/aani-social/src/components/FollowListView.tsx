@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type TouchEvent as ReactTouchEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -59,6 +59,28 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
   const [busyId, setBusyId] = useState<string | null>(null);
   const [, navigate] = useLocation();
   const listScrollRef = useRef<HTMLDivElement | null>(null);
+  const backGestureRef = useRef<{ x: number; y: number } | null>(null);
+
+  // إيماءة السحب للرجوع داخل القائمة: من الحافة اليمنى نحو اليسار →
+  // تستهدف سجل الصفحات حصراً فيغلق السجل الكامل الأعلى (هذه الشاشة) ويعود للخلف
+  const handleBackTouchStart = (event: ReactTouchEvent) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    backGestureRef.current = touch.clientX >= window.innerWidth - 56
+      ? { x: touch.clientX, y: touch.clientY }
+      : null;
+  };
+
+  const handleBackTouchEnd = (event: ReactTouchEvent) => {
+    const start = backGestureRef.current;
+    backGestureRef.current = null;
+    if (!start) return;
+    const last = event.changedTouches[0];
+    if (!last) return;
+    const deltaX = last.clientX - start.x;
+    const deltaY = last.clientY - start.y;
+    if (deltaX <= -70 && Math.abs(deltaX) > Math.abs(deltaY)) window.history.back();
+  };
 
   useOverlayBack(true, onClose, {
     restoreData: { type: 'follow-list', kind, targetUserId },
@@ -201,7 +223,14 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[1100] flex flex-col bg-black text-white" role="dialog" aria-modal="true" dir="rtl">
+    <div
+      className="fixed inset-0 z-[1100] flex flex-col bg-black text-white"
+      role="dialog"
+      aria-modal="true"
+      dir="rtl"
+      onTouchStart={handleBackTouchStart}
+      onTouchEnd={handleBackTouchEnd}
+    >
       <header className="shrink-0 border-b border-white/10 px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <div className="flex items-center gap-3 py-2.5">
           <button
