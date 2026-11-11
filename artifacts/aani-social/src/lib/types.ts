@@ -169,6 +169,9 @@ export type Post = {
   /** نظام الأصوات (TikTok): معرّف الصوت المرتبط بالمنشور وسجله */
   sound_id?: string | null;
   sound?: Sound | null;
+  /** أوقات اقتصاص الصوت المختار (بالثواني) — نفس الجزء يُشغَّل للجميع بعد النشر */
+  sound_trim_start?: number | null;
+  sound_trim_end?: number | null;
   /** Viewer feedback used by the "مهتم / غير مهتم" menu. */
   feedback?: PostFeedback | null;
 
@@ -232,6 +235,8 @@ export type PostRow = Pick<
   audio_url?: string | null;
   audio_title?: string | null;
   sound_id?: string | null;
+  sound_trim_start?: number | null;
+  sound_trim_end?: number | null;
   reposter_id?: string | null;
 };
 

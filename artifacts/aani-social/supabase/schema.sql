@@ -104,6 +104,9 @@ create table if not exists public.posts (
   destination text not null default 'feed',
   visibility text not null default 'public',
   display_order integer not null default 0,
+  sound_id uuid,
+  sound_trim_start real,
+  sound_trim_end real,
   created_at timestamptz not null default now()
 );
 
@@ -113,6 +116,9 @@ alter table public.posts add column if not exists post_metadata jsonb not null d
 alter table public.posts add column if not exists type text not null default 'text';
 alter table public.posts add column if not exists destination text not null default 'feed';
 alter table public.posts add column if not exists display_order integer not null default 0;
+alter table public.posts add column if not exists sound_id uuid;
+alter table public.posts add column if not exists sound_trim_start real;
+alter table public.posts add column if not exists sound_trim_end real;
 update public.posts
 set destination = 'reels'
 where type = 'reel' and destination = 'feed';
@@ -1271,6 +1277,7 @@ revoke select on table public.posts from public, anon, authenticated;
 grant select (
   id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at,
   likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title,
+  sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end,
   hide_likes, hide_comments, comment_privacy
 ) on table public.posts to authenticated;
 grant select on table public.posts to service_role;

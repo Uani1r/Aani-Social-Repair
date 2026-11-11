@@ -11,7 +11,7 @@ import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { openSoundPicker } from '@/lib/sounds';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type PostDestination, type PostMetadataTag, type Profile, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
-import { buildVideoMediaUrl } from '@/lib/videoMedia';
+import { appendVideoTrimFragment, buildVideoMediaUrl } from '@/lib/videoMedia';
 
 type ComposerTagKind = PostMetadataTag['kind'];
 type TagTool = ComposerTagKind | null;
@@ -40,8 +40,8 @@ type CreatePostModalProps = {
   createError: string;
   /** وسوم محفوظة مسبقاً (مثل إشارة اختيرت من شاشة معاينة الفيديو) */
   initialTags?: PostMetadataTag[];
-  /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title) */
-  pendingSound?: { id: string; title: string; sourceVideoUrl?: string | null } | null;
+  /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title + أوقات الاقتصاص) */
+  pendingSound?: { id: string; title: string; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
   /** إزالة الصوت المختار من داخل نافذة النشر */
   onClearMusic?: () => void;
   onPostTextChange: (text: string) => void;
@@ -477,6 +477,19 @@ export default function CreatePostModal({
               </button>
             )}
           </div>
+        )}
+        {/* التشغيل المباشر قبل النشر: الصوت المختار يعمل تلقائياً ومتزامناً مع المعاينة */}
+        {pendingSound?.sourceVideoUrl && (
+          <audio
+            src={pendingSound.soundTrim && pendingSound.soundTrim.end > pendingSound.soundTrim.start
+              ? appendVideoTrimFragment(pendingSound.sourceVideoUrl, pendingSound.soundTrim)
+              : pendingSound.sourceVideoUrl}
+            loop
+            autoPlay
+            preload="auto"
+            aria-hidden="true"
+            className="hidden"
+          />
         )}
 
         <footer className="border-t border-white/10 px-6 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">

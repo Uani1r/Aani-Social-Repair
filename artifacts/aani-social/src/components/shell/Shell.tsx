@@ -20,7 +20,7 @@ import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
-import { appendImageMediaAspect, buildVideoMediaUrl } from '@/lib/videoMedia';
+import { appendImageMediaAspect, appendVideoTrimFragment, buildVideoMediaUrl } from '@/lib/videoMedia';
 import { displayName, type Post, type PostDestination, type PostMetadataTag, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
 import { requestContentRefresh } from '@/lib/contentRefresh';
@@ -119,7 +119,13 @@ export default function Shell({
   const [openFollowRequestsOnOpen, setOpenFollowRequestsOnOpen] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
   // نظام الأصوات: الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور الجاري إنشاؤه عند النشر
-  const [pendingSound, setPendingSound] = useState<{ id: string; title: string; sourceVideoUrl?: string | null } | null>(null);
+  // مع زمني اقتصاص الصوت (بالثواني) فيسمع الجميع نفس الجزء
+  const [pendingSound, setPendingSound] = useState<{
+    id: string;
+    title: string;
+    sourceVideoUrl?: string | null;
+    soundTrim?: { start: number; end: number } | null;
+  } | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
   const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
@@ -140,12 +146,19 @@ export default function Shell({
   // يفتح مسار إنشاء فيديو جديد ويُربط الفيديو الجديد بنفس sound_id عند النشر
   useEffect(() => {
     const onUseSound = (event: Event) => {
-      const detail = (event as CustomEvent<{ soundId?: string; title?: string | null; sourceVideoUrl?: string | null; source?: 'picker' | 'post' }>).detail;
+      const detail = (event as CustomEvent<{
+        soundId?: string;
+        title?: string | null;
+        sourceVideoUrl?: string | null;
+        soundTrim?: { start: number; end: number } | null;
+        source?: 'picker' | 'post';
+      }>).detail;
       if (!detail?.soundId) return;
       setPendingSound({
         id: detail.soundId,
         title: detail.title || 'الصوت المختار',
         sourceVideoUrl: detail.sourceVideoUrl ?? null,
+        soundTrim: detail.soundTrim ?? null,
       });
       // من مكتبة الأصوات: يُطبق فوراً على المنشور الجاري إنشاؤه
       // من شريط الصوت في منشور آخر: يفتح مسار إنشاء فيديو جديد بنفس الصوت
@@ -1178,6 +1191,13 @@ export default function Shell({
       : null;
     // غلاف الفيديو المختار في المعاينة (يُرفع فقط عند نشر فيديو)
     const coverFile = mediaType === 'video' ? videoCoverFile : null;
+    // الصوت المختار من مكتبة الأصوات مع ترميز HTML5 (#t=start,end) لزمني الاقتصاص
+    // — فيبدأ التشغيل عند البداية وينتهي عند النهاية مباشرة في المشغلات
+    const borrowedAudioUrl = pendingSound?.sourceVideoUrl
+      ? (pendingSound.soundTrim && pendingSound.soundTrim.end > pendingSound.soundTrim.start
+        ? appendVideoTrimFragment(pendingSound.sourceVideoUrl, pendingSound.soundTrim)
+        : pendingSound.sourceVideoUrl)
+      : null;
     if (!content && files.length === 0 && metadata.length === 0) return;
     if (Array.from(content).length > 2000) {
       setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
@@ -1202,7 +1222,7 @@ export default function Shell({
       content,
       post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
       tagged_user_ids: taggedUserIds,
-      audio_url: pendingSound?.sourceVideoUrl ?? null,
+      audio_url: borrowedAudioUrl ?? null,
       audio_title: pendingSound?.title ?? null,
       sound_id: pendingSound?.id ?? null,
       media_url: localMediaUrls[0] || null,
@@ -1325,10 +1345,17 @@ export default function Shell({
           // العمود الصريح لمصفوفة معرفات المشار إليهم (ترحيل 20270102000000)
           ...(taggedUserIds.length > 0 ? { tagged_user_ids: taggedUserIds } : {}),
           // نظام الأصوات: الصوت المختار من مكتبة الأصوات أو الصوت الأصلي للفيديو
-          // (sound_id + audio_url يشير لرابط المصدر لتشغيل صوته بلا Storage جديدة + audio_title)
+          // (sound_id + audio_url بترميز #t= لزمني الاقتصاص + audio_title)
           ...(effectiveSoundId ? { sound_id: effectiveSoundId } : {}),
-          ...(pendingSound?.sourceVideoUrl
-            ? { audio_url: pendingSound.sourceVideoUrl, audio_title: pendingSound.title }
+          ...(borrowedAudioUrl
+            ? { audio_url: borrowedAudioUrl, audio_title: pendingSound?.title ?? null }
+            : {}),
+          // أوقات اقتصاص الصوت (بالثواني): يقرأها المشغل فيشغّل نفس الجزء للجميع
+          ...(pendingSound?.soundTrim && pendingSound.soundTrim.end > pendingSound.soundTrim.start
+            ? {
+                sound_trim_start: Number(pendingSound.soundTrim.start.toFixed(3)),
+                sound_trim_end: Number(pendingSound.soundTrim.end.toFixed(3)),
+              }
             : {}),
           ...trimColumns,
         };
@@ -1361,7 +1388,7 @@ export default function Shell({
         // قاعدة بيانات لم يُطبَّق عليها عمودا الصوت بعد → أعد المحاولة بدونهما حتى لا يتعطل النشر
         if (
           postError
-          && pendingSound?.sourceVideoUrl
+          && borrowedAudioUrl
           && (postError.code === '42703' || postError.code === 'PGRST204')
           && postError.message.includes('audio_url')
         ) {
@@ -1381,6 +1408,19 @@ export default function Shell({
           const payloadWithoutSound = { ...postPayload } as Record<string, unknown>;
           delete payloadWithoutSound.sound_id;
           postError = (await supabase.from('posts').upsert(payloadWithoutSound, { onConflict: 'id' })).error;
+        }
+
+        // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
+        if (
+          postError
+          && pendingSound?.soundTrim
+          && (postError.code === '42703' || postError.code === 'PGRST204')
+          && postError.message.includes('sound_trim')
+        ) {
+          const payloadWithoutSoundTrim = { ...postPayload } as Record<string, unknown>;
+          delete payloadWithoutSoundTrim.sound_trim_start;
+          delete payloadWithoutSoundTrim.sound_trim_end;
+          postError = (await supabase.from('posts').upsert(payloadWithoutSoundTrim, { onConflict: 'id' })).error;
         }
 
         // قاعدة بيانات لم يُطبَّق عليها عمودا القص بعد → أعد المحاولة بدونهما

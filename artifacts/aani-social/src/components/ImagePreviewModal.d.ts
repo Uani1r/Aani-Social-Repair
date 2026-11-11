@@ -16,7 +16,7 @@ type ImagePreviewModalProps = {
   images: ImagePreviewItem[];
   onImagesChange: (images: ImagePreviewItem[]) => void;
   /** الصوت المختار من مكتبة أصوات التطبيق (نظام الأصوات) */
-  music?: SelectedLibrarySound | null;
+  music?: SelectedLibrarySound & { soundTrim?: { start: number; end: number } | null } | null;
   /** إزالة الصوت المختار من داخل المعاينة */
   onClearMusic?: () => void;
   onClose: () => void;

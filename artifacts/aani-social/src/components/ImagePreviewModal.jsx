@@ -3,7 +3,7 @@ import { Minus, Music2, Plus, X } from 'lucide-react';
 
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { openSoundPicker } from '@/lib/sounds';
-import { DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
+import { appendVideoTrimFragment, DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
@@ -439,6 +439,18 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
               </button>
             )}
           </div>
+        )}
+        {/* التشغيل المباشر: الصوت المختار يعمل تلقائياً ومتزامناً مع المعاينة */}
+        {music && music.sourceVideoUrl && (
+          <audio
+            src={music.soundTrim && music.soundTrim.end > music.soundTrim.start
+              ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
+              : music.sourceVideoUrl}
+            loop
+            autoPlay
+            preload="auto"
+            className="hidden"
+          />
         )}
       </div>
     </div>

@@ -63,6 +63,8 @@ function normalizePostRow(value: unknown): PostRow | null {
     ...(typeof value.audio_url === 'string' || value.audio_url === null ? { audio_url: value.audio_url } : {}),
     ...(typeof value.audio_title === 'string' || value.audio_title === null ? { audio_title: value.audio_title } : {}),
     ...(typeof value.sound_id === 'string' || value.sound_id === null ? { sound_id: value.sound_id } : {}),
+    ...(typeof value.sound_trim_start === 'number' || value.sound_trim_start === null ? { sound_trim_start: value.sound_trim_start } : {}),
+    ...(typeof value.sound_trim_end === 'number' || value.sound_trim_end === null ? { sound_trim_end: value.sound_trim_end } : {}),
     ...(typeof value.reposter_id === 'string' || value.reposter_id === null
       ? { reposter_id: value.reposter_id }
       : {}),
@@ -167,10 +169,18 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     if (repostRows.length === 0) return [];
 
     const postIds = Array.from(new Set(repostRows.map(row => row.post_id)));
-    const { data: postData, error: postsError } = await supabase
+    const repostColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end, hide_likes, hide_comments, comment_privacy';
+    let { data: postData, error: postsError } = await supabase
       .from('posts')
-      .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, trim_start, trim_end, hide_likes, hide_comments, comment_privacy')
+      .select(repostColumns)
       .in('id', postIds);
+    // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
+    if (postsError && (postsError.code === '42703' || postsError.code === 'PGRST204') && /sound_trim/i.test(postsError.message || '')) {
+      ({ data: postData, error: postsError } = await supabase
+        .from('posts')
+        .select(repostColumns.replace('sound_trim_start, sound_trim_end, ', ''))
+        .in('id', postIds));
+    }
     if (postsError) return [];
 
     const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
@@ -249,22 +259,37 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         postIds?: string[],
         includeProfileOrder = true,
       ) => {
-        const selectColumns = kind === 'profile' && includeProfileOrder
-          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, trim_start, trim_end, hide_likes, hide_comments, comment_privacy'
-          : 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, trim_start, trim_end, hide_likes, hide_comments, comment_privacy';
-        const request = supabase.from('posts').select(selectColumns);
-        if (kind === 'profile' && postIds) {
-          return request.in('id', postIds).order('created_at', { ascending: false });
+        const buildColumns = (includeSoundTrim: boolean) => {
+          const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
+          return kind === 'profile' && includeProfileOrder
+            ? `id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`
+            : `id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`;
+        };
+        const buildQuery = (columns: string) => {
+          const request = supabase.from('posts').select(columns);
+          if (kind === 'profile' && postIds) {
+            return request.in('id', postIds).order('created_at', { ascending: false });
+          }
+          if (kind === 'profile' && includeProfileOrder) {
+            return request.eq('user_id', profileId || '')
+              .order('display_order', { ascending: true })
+              .order('created_at', { ascending: false });
+          }
+          if (kind === 'profile') {
+            return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
+          }
+          return request.order('created_at', { ascending: false });
+        };
+        let result = await buildQuery(buildColumns(true));
+        // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
+        if (
+          result.error
+          && (result.error.code === '42703' || result.error.code === 'PGRST204')
+          && /sound_trim/i.test(result.error.message || '')
+        ) {
+          result = await buildQuery(buildColumns(false));
         }
-        if (kind === 'profile' && includeProfileOrder) {
-          return request.eq('user_id', profileId || '')
-            .order('display_order', { ascending: true })
-            .order('created_at', { ascending: false });
-        }
-        if (kind === 'profile') {
-          return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
-        }
-        return request.order('created_at', { ascending: false });
+        return result;
       };
 
       if (query === 'feed') {

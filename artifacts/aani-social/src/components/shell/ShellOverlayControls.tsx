@@ -46,8 +46,8 @@ type ShellOverlayControlsProps = {
   isSubmitting: boolean;
   createError: string;
   initialCreateTags: PostMetadataTag[];
-  /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title) */
-  music: { id: string; title: string; sourceVideoUrl?: string | null } | null;
+  /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title + أوقات الاقتصاص) */
+  music: { id: string; title: string; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
   onClearMusic: () => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;

@@ -94,6 +94,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     ? post.audio_url
     : null;
   const backgroundAudioRef = useRef<HTMLAudioElement>(null);
+  // زمنيا اقتصاص الصوت (بالثواني): الأعمدة الصريحة أولاً ثم ترميز #t= في audio_url
+  const soundTrimRange: VideoTimeRange | null =
+    typeof post.sound_trim_start === 'number' && typeof post.sound_trim_end === 'number' && post.sound_trim_end > post.sound_trim_start
+      ? { start: post.sound_trim_start, end: post.sound_trim_end }
+      : parseVideoTimeRange(post.audio_url || '');
+  const backgroundSoundSrc = backgroundSoundUrl && soundTrimRange
+    ? appendVideoTrimFragment(backgroundSoundUrl, soundTrimRange)
+    : backgroundSoundUrl;
   const interactions = usePostInteractions(post, currentUserId);
   const liked = interactions.liked;
   const likesCount = interactions.likes;
@@ -389,7 +397,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     const backgroundAudio = backgroundAudioRef.current;
     if (backgroundSoundUrl && backgroundAudio) {
       try {
-        backgroundAudio.currentTime = Math.max(0, video.currentTime - (videoTimeRange?.start ?? 0));
+        backgroundAudio.currentTime = soundTrimRange
+          ? soundTrimRange.start
+          : Math.max(0, video.currentTime - (videoTimeRange?.start ?? 0));
       } catch {
         /* قد يرفض المتصفح الضبط قبل جهوزية المقطع */
       }
@@ -404,6 +414,15 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     const video = event.currentTarget;
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) return;
     backgroundAudio.pause();
+  };
+
+  // اقتصاص الصوت الخلفي: يبقى ضمن زمني البداية/النهاية المختارَين (نفس الجزء للجميع)
+  const handleBackgroundTimeUpdate = () => {
+    const audio = backgroundAudioRef.current;
+    if (!audio || !soundTrimRange) return;
+    if (audio.currentTime >= soundTrimRange.end - 0.04 || audio.currentTime < soundTrimRange.start - 0.05) {
+      try { audio.currentTime = soundTrimRange.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+    }
   };
 
   const handleVideoEnded = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -614,11 +633,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       {backgroundSoundUrl && (
         <audio
           ref={backgroundAudioRef}
-          src={backgroundSoundUrl}
+          src={backgroundSoundSrc}
           loop
           preload="auto"
           aria-hidden="true"
           className="hidden"
+          onTimeUpdate={handleBackgroundTimeUpdate}
         />
       )}
       <div className="reel-gradient-bottom" aria-hidden="true" />

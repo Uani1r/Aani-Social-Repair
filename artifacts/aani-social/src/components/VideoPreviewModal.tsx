@@ -8,7 +8,7 @@ import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type VideoAspectRatio, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
-import { DEFAULT_VIDEO_CROP, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
+import { DEFAULT_VIDEO_CROP, appendVideoTrimFragment, getVideoAspectRatio, getVideoCropTransform, normalizeVideoCrop } from '@/lib/videoMedia';
 import { openSoundPicker } from '@/lib/sounds';
 
 /** شخص اختير للإشارة إليه من شاشة معاينة الفيديو */
@@ -40,7 +40,7 @@ type VideoPreviewModalProps = {
   /** إشارات محفوظة مسبقاً لاستعادتها عند إعادة الفتح */
   initialMentions?: VideoMentionPerson[];
   /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالفيديو عند النشر */
-  music?: { id: string; title: string; sourceVideoUrl?: string | null } | null;
+  music?: { id: string; title: string; sourceVideoUrl?: string | null; soundTrim?: { start: number; end: number } | null } | null;
   /** إزالة الصوت المختار من داخل المعاينة */
   onClearMusic?: () => void;
   onClose: () => void;
@@ -1063,6 +1063,19 @@ export default function VideoPreviewModal({
             </button>
           )}
         </div>
+      )}
+      {/* التشغيل المباشر: الصوت المختار يعمل تلقائياً ومتزامناً مع المعاينة */}
+      {music?.sourceVideoUrl && (
+        <audio
+          src={music.soundTrim && music.soundTrim.end > music.soundTrim.start
+            ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
+            : music.sourceVideoUrl}
+          loop
+          autoPlay
+          preload="auto"
+          aria-hidden="true"
+          className="hidden"
+        />
       )}
 
       {mentionNotice && !isTrimming && !isCropping && !isCoverEditing && (

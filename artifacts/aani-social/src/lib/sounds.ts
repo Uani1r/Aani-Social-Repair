@@ -10,10 +10,14 @@ export type OpenSoundDetail = {
   sourceVideoUrl?: string | null;
 };
 
+export type SoundTrimRange = { start: number; end: number };
+
 export type UseSoundDetail = {
   soundId: string;
   title?: string | null;
   sourceVideoUrl?: string | null;
+  /** زمني اقتصاص الصوت المختار (بالثواني) — يُحفظ مع المنشور في sound_trim_start/sound_trim_end */
+  soundTrim?: SoundTrimRange | null;
   /** مصدر الطلب: 'picker' = مكتبة الأصوات داخل مسار النشر، غير ذلك = شريط الصوت في المنشور */
   source?: 'picker' | 'post';
 };

@@ -21,7 +21,7 @@ import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
+import { appendVideoTrimFragment, getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop, parseVideoTimeRange, type VideoTimeRange } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
 import { defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
@@ -147,6 +147,14 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const postCoverUrl = getPostCoverUrl(post);
   // نسبة أبعاد الصورة المخزنة مع الرابط عند النشر (4:5 / 3:4 / 9:16)
   const imageMediaAspect = getImageMediaAspectRatio(urls[currentImageIndex] || '');
+  // زمنيا اقتصاص الصوت المرفق (بالثواني): الأعمدة الصريحة أولاً ثم ترميز #t= في audio_url
+  const photoSoundTrimRange: VideoTimeRange | null =
+    typeof post.sound_trim_start === 'number' && typeof post.sound_trim_end === 'number' && post.sound_trim_end > post.sound_trim_start
+      ? { start: post.sound_trim_start, end: post.sound_trim_end }
+      : parseVideoTimeRange(post.audio_url || '');
+  const photoAudioSrc = post.audio_url
+    ? (photoSoundTrimRange ? appendVideoTrimFragment(post.audio_url, photoSoundTrimRange) : post.audio_url)
+    : undefined;
   const fullScreenPost = useMemo(() => ({
     ...post,
     media_url: activeVideoUrl,
@@ -232,6 +240,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       audio.pause();
       setPhotoAudioPlaying(false);
       photoAudioBlockedRef.current = false;
+    }
+  };
+
+  // اقتصاص الصوت المرفق: يبقى ضمن زمني البداية/النهاية المختارَين (نفس الجزء للجميع)
+  const handlePhotoAudioTimeUpdate = () => {
+    const audio = photoAudioRef.current;
+    if (!audio || !photoSoundTrimRange) return;
+    if (audio.currentTime >= photoSoundTrimRange.end - 0.04 || audio.currentTime < photoSoundTrimRange.start - 0.05) {
+      try { audio.currentTime = photoSoundTrimRange.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
     }
   };
 
@@ -611,11 +628,12 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
           <audio
             ref={photoAudioRef}
-            src={post.audio_url}
+            src={photoAudioSrc}
             loop
             preload="none"
             aria-hidden="true"
             className="hidden"
+            onTimeUpdate={handlePhotoAudioTimeUpdate}
           />
         </div>
       )}

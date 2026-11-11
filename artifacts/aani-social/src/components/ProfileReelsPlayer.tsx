@@ -66,13 +66,24 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
     let active = true;
     void (async () => {
       try {
-        const { data: rows, error } = await supabase
+        const profileReelColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end';
+        let { data: rows, error } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, sound_id, trim_start, trim_end')
+          .select(profileReelColumns)
           .eq('user_id', profileUserId)
           .eq('type', 'reel')
           .order('created_at', { ascending: false })
           .limit(60);
+        // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
+        if (error && (error.code === '42703' || error.code === 'PGRST204') && /sound_trim/i.test(error.message || '')) {
+          ({ data: rows, error } = await supabase
+            .from('posts')
+            .select(profileReelColumns.replace('sound_trim_start, sound_trim_end, ', ''))
+            .eq('user_id', profileUserId)
+            .eq('type', 'reel')
+            .order('created_at', { ascending: false })
+            .limit(60));
+        }
         const safeRows = (!error && Array.isArray(rows) ? rows : []) as unknown[];
         const authorIds = Array.from(new Set(safeRows
           .map(row => (row as Record<string, unknown>).user_id)
