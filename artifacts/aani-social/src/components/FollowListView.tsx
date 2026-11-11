@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight } from 'lucide-react';
-import { Link } from 'wouter';
+import { useLocation } from 'wouter';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
@@ -39,6 +39,7 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
   });
   const [viewerFollowingIds, setViewerFollowingIds] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [, navigate] = useLocation();
 
   useOverlayBack(true, onClose);
   useModalBodyScrollLock();
@@ -191,24 +192,38 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
             {activeList.map(person => {
               const following = viewerFollowingIds.has(person.id);
               return (
-                <li key={person.id} className="flex items-center gap-3 px-4 py-2.5 transition hover:bg-white/[0.03]">
-                  <Link href={`/profile/${encodeURIComponent(person.id)}`} onClick={onClose} className="flex min-w-0 flex-1 items-center gap-3">
-                    <Avatar profile={person} large />
-                    <UserIdentity
-                      name={displayName(person)}
-                      username={person.username}
-                      className="min-w-0 flex-1"
-                      nameClassName="text-sm font-semibold text-white"
-                      usernameClassName="text-xs text-zinc-400"
-                    />
-                  </Link>
+                // البطاقة كاملة قابلة للنقر: الصورة والاسم واليوزر وأي فراغ ينقل لملف الشخص
+                // — النقل يتم دون إغلاق الشاشة حتى يعود المستخدم إليها بالضغط على الرجوع.
+                <li
+                  key={person.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/profile/${encodeURIComponent(person.id)}`)}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    navigate(`/profile/${encodeURIComponent(person.id)}`);
+                  }}
+                  className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition hover:bg-white/[0.03]"
+                >
+                  <Avatar profile={person} large />
+                  <UserIdentity
+                    name={displayName(person)}
+                    username={person.username}
+                    className="min-w-0 flex-1"
+                    nameClassName="text-sm font-semibold text-white"
+                    usernameClassName="text-xs text-zinc-400"
+                  />
                   {person.id !== currentUserId && (
                     <button
                       type="button"
-                      onClick={() => void toggleFollow(person)}
+                      onClick={event => {
+                        event.stopPropagation();
+                        void toggleFollow(person);
+                      }}
                       disabled={busyId === person.id}
                       aria-pressed={following}
-                      className={`shrink-0 rounded-full px-4 py-1.5 text-[13px] font-semibold transition disabled:opacity-50 ${
+                      className={`relative z-10 shrink-0 rounded-full px-4 py-1.5 text-[13px] font-semibold transition disabled:opacity-50 ${
                         following
                           ? 'border border-[#53575B] bg-transparent text-white hover:bg-white/10'
                           : 'bg-white text-black hover:bg-neutral-200'

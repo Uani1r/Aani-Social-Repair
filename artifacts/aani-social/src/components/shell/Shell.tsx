@@ -5,6 +5,7 @@ import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
 import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEventDetail } from '@/components/CallManager';
+import FollowListView, { type FollowListKind } from '@/components/FollowListView';
 import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
@@ -666,6 +667,19 @@ export default function Shell({
   const [videoCoverPreview, setVideoCoverPreview] = useState<string | null>(null);
   // حسابات الإشارة المختارة من شاشة معاينة الفيديو (إشارة متعددة)
   const [videoMentions, setVideoMentions] = useState<VideoMentionPerson[]>([]);
+  // شاشة المتابعين/المتابَعين كاملة الشاشة — مستضافة في Shell حتى تبقى حية
+  // عبر التنقل بين الملفات الشخصية (الضغط على حساب في القائمة يفتح ملفه دون إغلاقها)
+  const [followListView, setFollowListView] = useState<{ kind: FollowListKind; targetUserId: string } | null>(null);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ kind: FollowListKind; targetUserId: string }>).detail;
+      if (!detail?.kind || !detail?.targetUserId) return;
+      setFollowListView({ kind: detail.kind, targetUserId: detail.targetUserId });
+    };
+    window.addEventListener('aani:open-follow-list', handler);
+    return () => window.removeEventListener('aani:open-follow-list', handler);
+  }, []);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1273,6 +1287,14 @@ export default function Shell({
         onCloseAssistant={() => setShowAssistantModal(false)}
       />
       <CallManager currentUserId={userId} currentProfile={profile} contact={null} />
+      {followListView && (
+        <FollowListView
+          kind={followListView.kind}
+          targetUserId={followListView.targetUserId}
+          currentUserId={userId}
+          onClose={() => setFollowListView(null)}
+        />
+      )}
 
       <div className="content-shell" style={{ paddingBottom: isMessageThread ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main

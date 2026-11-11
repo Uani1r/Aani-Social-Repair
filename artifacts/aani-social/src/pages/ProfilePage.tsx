@@ -12,7 +12,6 @@ import ProfileFeedViewer from '@/components/ProfileFeedViewer';
 import ProfileReelsPlayer from '@/components/ProfileReelsPlayer';
 import { ListSkeleton, ProfileSkeleton, GridSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
-import FollowListView, { type FollowListKind } from '@/components/FollowListView';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -299,8 +298,6 @@ export default function ProfilePage({
   const [taggedPosts, setTaggedPosts] = useState<Post[]>(() => []);
   const [taggedLoading, setTaggedLoading] = useState(false);
   const [taggedError, setTaggedError] = useState<string | null>(null);
-  // شاشة المتابعين/المتابَعين كاملة الشاشة
-  const [followListView, setFollowListView] = useState<FollowListKind | null>(null);
 
   // تحميل مسبق (Preload/Prebuffer) لأول 9 وسائط في القائمة المعروضة
   // حتى يفتح النقر على البطاقة من ذاكرة المتصفح بلا انتظار شبكة.
@@ -2190,8 +2187,20 @@ export default function ProfilePage({
           )}
           <div dir="rtl" className="flex items-center gap-2 text-xs sm:gap-3 sm:text-sm">
             <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedPostCount}</span> <span className="text-[#71767B]">المنشورات</span></div>
-            <button type="button" onClick={() => setFollowListView('following')} className="cursor-pointer whitespace-nowrap transition hover:opacity-80"><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span></button>
-            <button type="button" onClick={() => setFollowListView('followers')} className="cursor-pointer whitespace-nowrap transition hover:opacity-80"><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></button>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('aani:open-follow-list', { detail: { kind: 'following', targetUserId: activeUserId } }))}
+              className="cursor-pointer whitespace-nowrap transition hover:opacity-80"
+            >
+              <span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => window.dispatchEvent(new CustomEvent('aani:open-follow-list', { detail: { kind: 'followers', targetUserId: activeUserId } }))}
+              className="cursor-pointer whitespace-nowrap transition hover:opacity-80"
+            >
+              <span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span>
+            </button>
           </div>
         </div>
 
@@ -2462,14 +2471,6 @@ export default function ProfilePage({
               {isFollowing ? 'أتابع' : followRequestSent ? 'طلب مرسل' : 'متابعة'}
             </button>
           )}
-        />
-      )}
-      {followListView && (
-        <FollowListView
-          kind={followListView}
-          targetUserId={activeUserId}
-          currentUserId={currentUserId}
-          onClose={() => setFollowListView(null)}
         />
       )}
       <ProfileHighlightsManager
