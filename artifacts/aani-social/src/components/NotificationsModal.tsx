@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import {
-  Bell, CheckCheck, Heart, MessageSquare, Phone, Repeat2, UserRound, X,
+  Bell, Heart, MessageSquare, Phone, Repeat2, UserRound, X,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -56,7 +56,7 @@ type NotificationTarget =
   | { kind: 'conversation'; userId: string }
   | { kind: 'call'; callerId: string; callId: string | null };
 
-type NotificationFilter = 'all' | 'likes' | 'comments' | 'other';
+type NotificationFilter = 'all' | 'likes' | 'comments' | 'follows' | 'none';
 
 const PAGE_SIZE = 20;
 const DEFAULT_NOTIFICATION_SETTINGS: ProfileNotificationSettings = {
@@ -70,7 +70,7 @@ const FILTER_TABS: Array<{ id: NotificationFilter; label: string }> = [
   { id: 'all', label: 'الكل' },
   { id: 'likes', label: 'الإعجابات' },
   { id: 'comments', label: 'التعليقات' },
-  { id: 'other', label: 'التفاعلات والقصص' },
+  { id: 'follows', label: 'المتابعات' },
 ];
 
 const isStoryNotification = (item: NotificationEntry) => {
@@ -192,11 +192,15 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
   return null;
 };
 
-const getFilterForNotification = (item: NotificationEntry): Exclude<NotificationFilter, 'all'> => {
-  if (isStoryNotification(item)) return 'other';
+const getFilterForNotification = (item: NotificationEntry): NotificationFilter => {
+  // الإعجابات تشمل: المنشورات بأنواعها والريلز والتعليقات والقصص
   if (item.type === 'like') return 'likes';
+  // التعليقات تشمل: التعليقات والردود عليها
   if (item.type === 'comment' || item.type === 'reply') return 'comments';
-  return 'other';
+  // المتابعات تشمل: إشعارات المتابعة الجديدة
+  if (['follow', 'followed', 'new_follower'].includes(item.type)) return 'follows';
+  // بقية الأنواع (الإعادات، الإشارات، ...) تظهر في تبويب «الكل» فقط
+  return 'none';
 };
 
 const getPreferenceCategory = (item: NotificationEntry): keyof ProfileNotificationSettings => {
@@ -259,11 +263,16 @@ function ActionBadge({ item }: { item: NotificationEntry }) {
 
 function NotificationAvatar({ item }: { item: NotificationEntry }) {
   return (
-    <span className="relative mt-0.5 grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
+    <span className="relative mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
       {item.actor?.avatar_url ? (
-        <img src={item.actor.avatar_url} alt="" className="h-full w-full rounded-full object-cover" />
+        <img
+          src={item.actor.avatar_url}
+          alt=""
+          className="w-11 h-11 rounded-full object-cover shrink-0"
+          draggable={false}
+        />
       ) : (
-        <UserRound size={23} strokeWidth={2.5} />
+        <UserRound size={22} strokeWidth={2.5} />
       )}
       <ActionBadge item={item} />
     </span>
@@ -291,12 +300,12 @@ export default function NotificationsModal({
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState('');
   const [readError, setReadError] = useState('');
-  const [markingAllRead, setMarkingAllRead] = useState(false);
   const [activeFilter, setActiveFilter] = useState<NotificationFilter>('all');
   const listRef = useRef<HTMLDivElement | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<(() => void) | null>(null);
   const cleanupAttemptedUsersRef = useRef(new Set<string>());
+  const autoMarkedRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen) return undefined;
@@ -483,6 +492,9 @@ export default function NotificationsModal({
       }, payload => {
         const updated = payload.new as { id?: unknown; is_read?: unknown };
         if (typeof updated.id !== 'string' || typeof updated.is_read !== 'boolean') return;
+        // أثناء جلسة القراءة التلقائية: لا تُمحَ نقاط التمييز من أحداث القاعدة
+        // — تختفي عند الإغلاق وإعادة الفتح كما هو مطلوب
+        if (autoMarkedRef.current) return;
         setItems(current => current.map(item => item.id === updated.id ? { ...item, is_read: updated.is_read as boolean } : item));
       })
       .subscribe();
@@ -515,6 +527,37 @@ export default function NotificationsModal({
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
+  // القراءة التلقائية: عند فتح الشاشة تُعلَّم كل الإشعارات كمقروءة في القاعدة
+  // عبر RPC (mark_all_notifications_as_read) — فتتصفر شارة الجرس الخارجية،
+  // بينما تبقى نقاط التمييز ظاهرة في هذه الجلسة وتختفي عند الإغلاق وإعادة الفتح.
+  useEffect(() => {
+    if (!isOpen || !supabaseConfigured || !currentUserId) return undefined;
+    let active = true;
+    autoMarkedRef.current = false;
+    void (async () => {
+      try {
+        const { error: rpcError } = await supabase.rpc('mark_all_notifications_as_read');
+        if (rpcError) throw rpcError;
+        if (active) autoMarkedRef.current = true;
+      } catch {
+        // احتياط إن لم يُطبَّق ترحيل الدالة: تحديث مباشر بنطاق المستخدم
+        try {
+          const { error: updateError } = await supabase
+            .from('notifications')
+            .update({ is_read: true })
+            .eq('user_id', currentUserId)
+            .eq('is_read', false);
+          if (updateError) throw updateError;
+          if (active) autoMarkedRef.current = true;
+        } catch {
+          return; // فشل صامت: النقاط تبقى حتى إغلاق الشاشة
+        }
+      }
+      if (active) setReadError('');
+    })();
+    return () => { active = false; autoMarkedRef.current = false; };
+  }, [isOpen, currentUserId]);
+
   const visibleItems = useMemo(() => {
     const aggregated = aggregateNotifications(items)
       .filter(item => !isSuppressedLegacyNotification(item))
@@ -536,30 +579,6 @@ export default function NotificationsModal({
     if (updateError) {
       setItems(current => current.map(existing => existing.id === item.id ? { ...existing, is_read: false } : existing));
       setReadError('تعذر حفظ حالة الإشعار كمقروء. حاول مرة أخرى.');
-    }
-  };
-
-  const markAllNotificationsRead = async () => {
-    if (!supabaseConfigured || markingAllRead) return;
-    const previousReadStates = new Map(items.map(item => [item.id, item.is_read]));
-    setMarkingAllRead(true);
-    setReadError('');
-    setItems(current => current.map(item => ({ ...item, is_read: true })));
-    try {
-      const { error: updateError } = await supabase
-        .from('notifications')
-        .update({ is_read: true })
-        .eq('user_id', currentUserId)
-        .eq('is_read', false);
-      if (updateError) throw updateError;
-    } catch {
-      setItems(current => current.map(item => ({
-        ...item,
-        is_read: previousReadStates.get(item.id) ?? item.is_read,
-      })));
-      setReadError('تعذر تحديد الإشعارات كمقروءة. حاول مرة أخرى.');
-    } finally {
-      setMarkingAllRead(false);
     }
   };
 
@@ -702,16 +721,6 @@ export default function NotificationsModal({
             <Bell size={20} className="text-[#c98d73]" />
             <span>الإشعارات</span>
           </h1>
-          <button
-            type="button"
-            onClick={() => { void markAllNotificationsRead(); }}
-            disabled={markingAllRead}
-            className="absolute left-3 top-1/2 flex -translate-y-1/2 items-center gap-1 rounded-lg px-2 py-2 text-[11px] font-semibold text-[#c98d73] transition hover:bg-white/[0.05] disabled:opacity-50 sm:left-4 sm:text-xs"
-            aria-label="تحديد كل الإشعارات كمقروءة"
-          >
-            <CheckCheck size={16} />
-            <span>قراءة الكل</span>
-          </button>
           <button type="button" onClick={onClose} className="absolute right-4 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl text-[#8e8e93] transition hover:bg-white/[0.05] hover:text-white" aria-label="إغلاق الإشعارات">
             <X size={22} />
           </button>
