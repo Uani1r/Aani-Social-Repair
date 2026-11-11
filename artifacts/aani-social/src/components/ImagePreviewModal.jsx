@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Minus, Music2, Plus, X } from 'lucide-react';
 
 import { useOverlayBack } from '@/hooks/useOverlayBack';
+import { openSoundPicker } from '@/lib/sounds';
 import { DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
 
 const MIN_ZOOM = 1;
@@ -78,7 +79,7 @@ async function cropImage(image, view, frameBounds, aspectValue, aspectLabel) {
 // شاشة المعاينة الأولى: القص والتكبير والسحب مدموجان داخلها —
 // 3 قوالب قياسية فقط (4:5 الافتراضي، 3:4، 9:16) بلا قص حر،
 // وعند «التالي» تُجهَّز جميع الصور بنسبها المختارة دون أي شاشة قص إضافية.
-export default function ImagePreviewModal({ open, images, onImagesChange, music, onMusicChange, onClose, onNext }) {
+export default function ImagePreviewModal({ open, images, onImagesChange, music, onClearMusic, onClose, onNext }) {
   useOverlayBack(open, onClose);
   const trackRef = useRef(null);
   const cropFrameRef = useRef(null);
@@ -93,7 +94,6 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
   const [cropModes, setCropModes] = useState({});
   const [cropError, setCropError] = useState('');
   const [isFinishing, setIsFinishing] = useState(false);
-  const musicInputRef = useRef(null);
   const activeImage = images[activeIndex];
   const activeMode = cropModes[activeIndex] || DEFAULT_IMAGE_ASPECT_LABEL;
 
@@ -142,15 +142,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
     setCropError('');
   }, [activeIndex]);
 
-  // نظام الأصوات: اختيار ملف صوتي لإرفاقه بالصور عند النشر — بلا أي تقييد
-  const handleMusicFileChange = event => {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = '';
-    if (!file || !onMusicChange) return;
-    const looksAudio = file.type.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|flac)$/i.test(file.name);
-    if (!looksAudio) return;
-    onMusicChange({ file, title: file.name.replace(/\.[^.]+$/, '') || file.name });
-  };
+  // نظام الأصوات: زر الموسيقى يفتح مكتبة أصوات التطبيق (public.sounds) بدل ملفات الجهاز
 
   if (!open || images.length === 0 || !activeImage) return null;
 
@@ -398,7 +390,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
 
       <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 flex w-[min(94vw,390px)] -translate-x-1/2 flex-col gap-3 rounded-2xl border border-white/10 bg-[#242326]/95 px-3 py-3 shadow-2xl backdrop-blur-xl">
         <div className="flex items-center justify-between gap-2" dir="rtl">
-          <button type="button" onClick={() => musicInputRef.current?.click()} aria-label={music ? 'تغيير الصوت المرفق' : 'اختيار صوت للصور'} className="flex min-w-16 flex-col items-center gap-1 rounded-full px-3 py-1 text-[#f1a17f] transition hover:bg-white/5">
+          <button type="button" onClick={() => openSoundPicker()} aria-label={music ? 'تغيير الصوت من مكتبة الأصوات' : 'اختيار صوت من مكتبة الأصوات'} className="flex min-w-16 flex-col items-center gap-1 rounded-full px-3 py-1 text-[#f1a17f] transition hover:bg-white/5">
             <Music2 size={22} />
             <span className="text-[11px] font-medium">{music ? 'الصوت مرفق' : 'موسيقى'}</span>
           </button>
@@ -436,21 +428,19 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
           </button>
         </div>
 
-        {/* الصوت المختار: معاينة + إزالة — يُرفق بالصور عند النشر */}
+        {/* الصوت المختار من مكتبة أصوات التطبيق: يظهر قبل «التالي» ويمكن إزالته */}
         {music && (
           <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2" dir="rtl">
             <span className="min-w-0 flex-1 truncate text-xs text-white">♫ {music.title}</span>
-            <audio src={music.previewUrl} controls preload="metadata" className="h-8 max-w-[130px]" />
-            {onMusicChange && (
-              <button type="button" aria-label="إزالة الصوت" onClick={() => onMusicChange(null)} className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+            <span className="shrink-0 text-[10px] text-white/45">صوت من المكتبة</span>
+            {onClearMusic && (
+              <button type="button" aria-label="إزالة الصوت" onClick={onClearMusic} className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
                 <X size={14} />
               </button>
             )}
           </div>
         )}
       </div>
-
-      <input ref={musicInputRef} type="file" accept="audio/*" style={{ display: 'none' }} onChange={handleMusicFileChange} />
     </div>
   );
 }

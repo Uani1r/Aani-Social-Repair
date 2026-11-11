@@ -5,20 +5,20 @@ type ImagePreviewItem = {
   dataUrl: string;
 };
 
-type PreviewMusic = {
-  file: File;
+type SelectedLibrarySound = {
+  id: string;
   title: string;
-  previewUrl: string;
+  sourceVideoUrl?: string | null;
 };
 
 type ImagePreviewModalProps = {
   open: boolean;
   images: ImagePreviewItem[];
   onImagesChange: (images: ImagePreviewItem[]) => void;
-  /** الصوت المختار من شاشة المعاينة (نظام الأصوات) لاستعادته */
-  music?: PreviewMusic | null;
-  /** يُستدعى عند اختيار/إزالة صوت من شاشة المعاينة */
-  onMusicChange?: (music: PreviewMusic | null) => void;
+  /** الصوت المختار من مكتبة أصوات التطبيق (نظام الأصوات) */
+  music?: SelectedLibrarySound | null;
+  /** إزالة الصوت المختار من داخل المعاينة */
+  onClearMusic?: () => void;
   onClose: () => void;
   onNext: () => void;
 };

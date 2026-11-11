@@ -2,7 +2,7 @@ import type { ComponentType } from 'react';
 import { Bot } from 'lucide-react';
 
 import AIAssistantModal from '@/components/AIAssistantModal';
-import CreatePostModal, { type ComposerAudio } from '@/components/CreatePostModal';
+import CreatePostModal from '@/components/CreatePostModal';
 import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import VideoPreviewModal, { type VideoMentionPerson } from '@/components/VideoPreviewModal';
@@ -46,12 +46,12 @@ type ShellOverlayControlsProps = {
   isSubmitting: boolean;
   createError: string;
   initialCreateTags: PostMetadataTag[];
-  /** الصوت المختار في شاشات المعاينة (نظام الأصوات) — يُبذر في نافذة النشر */
-  previewMusic: { file: File; title: string; previewUrl: string } | null;
-  onPreviewMusicChange: (music: { file: File; title: string; previewUrl: string } | null) => void;
+  /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title) */
+  music: { id: string; title: string; sourceVideoUrl?: string | null } | null;
+  onClearMusic: () => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tags: PostMetadataTag[], destination: PostDestination, audio?: ComposerAudio | null) => void;
+  onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
   onCloseCreatePost: () => void;
   showSettingsModal: boolean;
   onCloseSettings: () => void;
@@ -109,8 +109,8 @@ export default function ShellOverlayControls({
   isSubmitting,
   createError,
   initialCreateTags,
-  previewMusic,
-  onPreviewMusicChange,
+  music,
+  onClearMusic,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -150,8 +150,8 @@ export default function ShellOverlayControls({
         open={showImagePreviewModal}
         images={imagePreviewImages}
         onImagesChange={onImagePreviewImagesChange}
-        music={previewMusic}
-        onMusicChange={onPreviewMusicChange}
+        music={music}
+        onClearMusic={onClearMusic}
         onClose={onCloseImagePreview}
         onNext={onNextImagePreview}
       />
@@ -169,8 +169,8 @@ export default function ShellOverlayControls({
         onMentionSelect={onVideoMentionSelect}
         onMentionDeselect={onVideoMentionDeselect}
         initialMentions={initialVideoMentions}
-        music={previewMusic}
-        onMusicChange={onPreviewMusicChange}
+        music={music}
+        onClearMusic={onClearMusic}
         onClose={onCloseVideoPreview}
         onNext={onNextVideoPreview}
       />
@@ -190,7 +190,8 @@ export default function ShellOverlayControls({
           isSubmitting={isSubmitting}
           createError={createError}
           initialTags={initialCreateTags}
-          initialMusic={previewMusic ? { file: previewMusic.file, title: previewMusic.title } : null}
+          pendingSound={music}
+          onClearMusic={onClearMusic}
           onPostTextChange={onPostTextChange}
           onRemoveFile={onRemoveFile}
           onPublish={onPublish}

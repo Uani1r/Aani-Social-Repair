@@ -14,10 +14,13 @@ export type UseSoundDetail = {
   soundId: string;
   title?: string | null;
   sourceVideoUrl?: string | null;
+  /** مصدر الطلب: 'picker' = مكتبة الأصوات داخل مسار النشر، غير ذلك = شريط الصوت في المنشور */
+  source?: 'picker' | 'post';
 };
 
 export const OPEN_SOUND_EVENT = 'aani:open-sound';
 export const USE_SOUND_EVENT = 'aani:use-sound';
+export const OPEN_SOUND_PICKER_EVENT = 'aani:open-sound-picker';
 
 /** فتح صفحة/قائمة الصوت: تُعرض كل الفيديوهات المرتبطة بنفس sound_id */
 export function openSoundDetail(detail: OpenSoundDetail): void {
@@ -27,6 +30,11 @@ export function openSoundDetail(detail: OpenSoundDetail): void {
 /** استخدام هذا الصوت: يُمرَّر sound_id إلى مسار إنشاء فيديو جديد */
 export function useExistingSound(detail: UseSoundDetail): void {
   window.dispatchEvent(new CustomEvent<UseSoundDetail>(USE_SOUND_EVENT, { detail }));
+}
+
+/** فتح مكتبة أصوات التطبيق (public.sounds) لاختيار صوت للمنشور الجاري إنشاؤه */
+export function openSoundPicker(): void {
+  window.dispatchEvent(new CustomEvent(OPEN_SOUND_PICKER_EVENT));
 }
 
 /** الاسم المعروض للصوت الأصلي المرتبط بمنشور */

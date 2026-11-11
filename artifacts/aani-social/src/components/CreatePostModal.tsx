@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AtSign, ChevronUp, Link2, Loader2, MapPin, Music2, Search, Trash2, X } from 'lucide-react';
 
 import Avatar from './Avatar';
@@ -8,6 +8,7 @@ import PostVideoPreview from './PostVideoPreview';
 import { ListSkeleton } from './Skeletons';
 import EmptyState from './EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
+import { openSoundPicker } from '@/lib/sounds';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type PostDestination, type PostMetadataTag, type Profile, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import { buildVideoMediaUrl } from '@/lib/videoMedia';
@@ -15,9 +16,6 @@ import { buildVideoMediaUrl } from '@/lib/videoMedia';
 type ComposerTagKind = PostMetadataTag['kind'];
 type TagTool = ComposerTagKind | null;
 type ComposerTag = PostMetadataTag & { id: string };
-
-/** مقطع صوتي اختير لربطه بالمنشور */
-export type ComposerAudio = { file: File; title: string };
 
 type MentionCandidate = {
   id: string;
@@ -42,13 +40,13 @@ type CreatePostModalProps = {
   createError: string;
   /** وسوم محفوظة مسبقاً (مثل إشارة اختيرت من شاشة معاينة الفيديو) */
   initialTags?: PostMetadataTag[];
-  /** الصوت المختار في شاشة المعاينة (نظام الأصوات) — يُبذر كأي موسيقى مختارة */
-  initialMusic?: { file: File; title: string } | null;
-  /** الصوت المستعار من نظام الأصوات — يُربط بالفيديو الجديد عند النشر */
+  /** الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور عند النشر (sound_id/audio_url/audio_title) */
   pendingSound?: { id: string; title: string; sourceVideoUrl?: string | null } | null;
+  /** إزالة الصوت المختار من داخل نافذة النشر */
+  onClearMusic?: () => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tags: PostMetadataTag[], destination: PostDestination, audio?: ComposerAudio | null) => void;
+  onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
   onClose: () => void;
 };
 
@@ -70,8 +68,8 @@ export default function CreatePostModal({
   isSubmitting,
   createError,
   initialTags,
-  initialMusic,
   pendingSound,
+  onClearMusic,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -99,22 +97,6 @@ export default function CreatePostModal({
   const [isLocating, setIsLocating] = useState(false);
   const [mentionLoading, setMentionLoading] = useState(false);
   const [mentionCandidates, setMentionCandidates] = useState<MentionCandidate[]>([]);
-  // الموسيقى: ملف صوتي مرتبط بالمنشور (يُرفع عند النشر)
-  const [musicFile, setMusicFile] = useState<File | null>(null);
-  const [musicTitle, setMusicTitle] = useState('');
-  const [musicPreviewUrl, setMusicPreviewUrl] = useState<string | null>(null);
-  const [musicPickerOpen, setMusicPickerOpen] = useState(false);
-
-  // بذر الصوت المختار من شاشة المعاينة (نظام الأصوات): يظهر كأي موسيقى مختارة
-  // داخل النافذة ويمكن استبداله أو إزالته قبل النشر
-  useEffect(() => {
-    if (!initialMusic) return;
-    if (musicPreviewUrl) URL.revokeObjectURL(musicPreviewUrl);
-    setMusicFile(initialMusic.file);
-    setMusicTitle(initialMusic.title);
-    setMusicPreviewUrl(URL.createObjectURL(initialMusic.file));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMusic]);
 
   const closeTagEditor = () => {
     setActiveTool(null);
@@ -263,36 +245,6 @@ export default function CreatePostModal({
     );
   };
 
-  const handleMusicFileChange = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0];
-    event.currentTarget.value = '';
-    if (!file) return;
-    const looksAudio = file.type.startsWith('audio/') || /\.(mp3|m4a|wav|ogg|aac|flac)$/i.test(file.name);
-    if (!looksAudio) {
-      setTagError('اختر ملفاً صوتياً صالحاً (mp3 / m4a / wav / ogg).');
-      return;
-    }
-    if (musicPreviewUrl) URL.revokeObjectURL(musicPreviewUrl);
-    setMusicFile(file);
-    setMusicTitle(file.name.replace(/\.[^.]+$/, ''));
-    setMusicPreviewUrl(URL.createObjectURL(file));
-    setTagError('');
-  };
-
-  const clearMusic = () => {
-    if (musicPreviewUrl) URL.revokeObjectURL(musicPreviewUrl);
-    setMusicFile(null);
-    setMusicTitle('');
-    setMusicPreviewUrl(null);
-    setMusicPickerOpen(false);
-  };
-
-  // تنظيف رابط المعاينة المحلي عند إغلاق النافذة
-  useEffect(() => () => {
-    if (musicPreviewUrl) URL.revokeObjectURL(musicPreviewUrl);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const handlePublish = () => onPublish(
     tags.map(tag => ({
       kind: tag.kind,
@@ -302,7 +254,6 @@ export default function CreatePostModal({
       ...(tag.displayName ? { displayName: tag.displayName } : {}),
     })),
     destination,
-    musicFile ? { file: musicFile, title: musicTitle || musicFile.name } : null,
   );
 
   return (
@@ -509,53 +460,22 @@ export default function CreatePostModal({
           </div>
         )}
 
-        {musicPickerOpen && (
-          <div className="mx-6 rounded-2xl border border-white/10 bg-white/[0.06] p-3 backdrop-blur-xl">
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-xs font-semibold text-white/80">إضافة موسيقى إلى المنشور</span>
-              <button type="button" aria-label="طي أداة الموسيقى" onClick={() => setMusicPickerOpen(false)} className="rounded-full p-1 text-white/60 hover:bg-white/10 hover:text-white">
-                <ChevronUp size={15} />
-              </button>
-            </div>
-
-            {musicFile && musicPreviewUrl ? (
-              <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                <span className="min-w-0 flex-1 truncate text-xs text-white">♫ {musicTitle}</span>
-                <audio src={musicPreviewUrl} controls preload="metadata" className="h-8 max-w-[150px]" />
-                <button
-                  type="button"
-                  aria-label="إزالة الموسيقى"
-                  onClick={clearMusic}
-                  className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ) : (
-              <p className="mb-2 text-right text-[11px] text-white/50">اختر مقطعاً صوتياً من جهازك ليرافق المنشور.</p>
-            )}
-
-            <label
-              className="flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-white/[0.06] px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/10"
-            >
-              <Music2 size={14} />
-              {musicFile ? 'استبدال الملف الصوتي' : 'اختيار ملف صوتي'}
-              <input
-                type="file"
-                accept="audio/*"
-                className="hidden"
-                onChange={handleMusicFileChange}
-              />
-            </label>
-            {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
-          </div>
-        )}
-
-        {pendingSound && !musicFile && (
+        {/* الصوت المختار من مكتبة أصوات التطبيق: يظهر قبل النشر ويمكن إزالته */}
+        {pendingSound && (
           <div className="mx-6 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/80">
             <Music2 size={14} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">♫ {pendingSound.title}</span>
-            <span className="shrink-0 text-[10px] text-white/45">صوت مستعار من الفيديو الأصلي</span>
+            <span className="shrink-0 text-[10px] text-white/45">صوت من المكتبة</span>
+            {onClearMusic && (
+              <button
+                type="button"
+                aria-label="إزالة الصوت"
+                onClick={onClearMusic}
+                className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
         )}
 
@@ -591,10 +511,10 @@ export default function CreatePostModal({
               </button>
               <button
                 type="button"
-                aria-label="إضافة موسيقى"
+                aria-label="اختيار صوت من مكتبة الأصوات"
                 title="موسيقى"
-                onClick={() => { setTagError(''); setMusicPickerOpen(open => !open); }}
-                className={`grid h-[52px] w-[52px] place-items-center rounded-full transition ${musicPickerOpen || musicFile ? 'bg-[#f1a17f]/25 text-[#f1a17f]' : 'bg-white/[0.07] text-zinc-300 hover:bg-white/[0.12]'}`}
+                onClick={() => { setTagError(''); openSoundPicker(); }}
+                className={`grid h-[52px] w-[52px] place-items-center rounded-full transition ${pendingSound ? 'bg-[#f1a17f]/25 text-[#f1a17f]' : 'bg-white/[0.07] text-zinc-300 hover:bg-white/[0.12]'}`}
               >
                 <Music2 size={22} />
               </button>

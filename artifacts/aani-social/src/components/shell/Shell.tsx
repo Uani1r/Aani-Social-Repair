@@ -8,7 +8,7 @@ import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEven
 import FollowListView, { type FollowListKind } from '@/components/FollowListView';
 import NearbyUsersSheet from '@/components/NearbyUsersSheet';
 import SoundDetailSheet from '@/components/SoundDetailSheet';
-import type { ComposerAudio } from '@/components/CreatePostModal';
+import SoundPickerSheet from '@/components/SoundPickerSheet';
 import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
@@ -118,10 +118,8 @@ export default function Shell({
   const [showNotifsModal, setShowNotifsModal] = useState(false);
   const [openFollowRequestsOnOpen, setOpenFollowRequestsOnOpen] = useState(false);
   const [showAssistantModal, setShowAssistantModal] = useState(false);
-  // نظام الأصوات: الصوت المستعار المختار من صفحة الصوت — يُربط بالفيديو الجديد عند النشر
+  // نظام الأصوات: الصوت المختار من مكتبة أصوات التطبيق — يُربط بالمنشور الجاري إنشاؤه عند النشر
   const [pendingSound, setPendingSound] = useState<{ id: string; title: string; sourceVideoUrl?: string | null } | null>(null);
-  // الصوت المختار في شاشات المعاينة (نظام الأصوات) — يُبذر في نافذة النشر ويُرفع معه
-  const [previewMusic, setPreviewMusic] = useState<{ file: File; title: string; previewUrl: string } | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
   // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
   const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
@@ -142,13 +140,19 @@ export default function Shell({
   // يفتح مسار إنشاء فيديو جديد ويُربط الفيديو الجديد بنفس sound_id عند النشر
   useEffect(() => {
     const onUseSound = (event: Event) => {
-      const detail = (event as CustomEvent<{ soundId?: string; title?: string | null; sourceVideoUrl?: string | null }>).detail;
+      const detail = (event as CustomEvent<{ soundId?: string; title?: string | null; sourceVideoUrl?: string | null; source?: 'picker' | 'post' }>).detail;
       if (!detail?.soundId) return;
       setPendingSound({
         id: detail.soundId,
         title: detail.title || 'الصوت المختار',
         sourceVideoUrl: detail.sourceVideoUrl ?? null,
       });
+      // من مكتبة الأصوات: يُطبق فوراً على المنشور الجاري إنشاؤه
+      // من شريط الصوت في منشور آخر: يفتح مسار إنشاء فيديو جديد بنفس الصوت
+      if (detail.source === 'picker') {
+        toast.success(`تم اختيار الصوت: ${detail.title || 'الصوت المختار'}`);
+        return;
+      }
       setShowPublishOptionsSheet(true);
       toast.success('تم اختيار الصوت. اختر فيديو ثم انشر ليُربط بنفس الصوت.');
     };
@@ -1063,7 +1067,6 @@ export default function Shell({
     setVideoCrop(null);
     setDestination('feed');
     setCreateError('');
-    setPreviewMusic(null);
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
       setSelectedFiles(previews.map(preview => preview.file));
@@ -1087,7 +1090,6 @@ export default function Shell({
     setImagePreviewImages([]);
     setSelectedFiles([]);
     setFileType(null);
-    setPreviewMusic(null);
   };
 
   const continueToPostCaption = () => {
@@ -1109,7 +1111,6 @@ export default function Shell({
     setVideoTrim(null);
     setVideoCrop(null);
     setCreateError('');
-    setPreviewMusic(null);
     clearVideoCover();
     setVideoMentions([]);
     setShowVideoPreviewModal(true);
@@ -1145,7 +1146,6 @@ export default function Shell({
     clearVideoCover();
     setVideoMentions([]);
     setPendingSound(null);
-    setPreviewMusic(null);
   };
 
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
@@ -1155,7 +1155,7 @@ export default function Shell({
     setShowCreateModal(true);
   };
 
-  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, audio?: ComposerAudio | null) => {
+  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
@@ -1178,8 +1178,6 @@ export default function Shell({
       : null;
     // غلاف الفيديو المختار في المعاينة (يُرفع فقط عند نشر فيديو)
     const coverFile = mediaType === 'video' ? videoCoverFile : null;
-    // الموسيقى المختارة من نافذة النشر (تُرفع مع المنشور وتُخزن في audio_url/audio_title)
-    const audioUpload = audio ?? null;
     if (!content && files.length === 0 && metadata.length === 0) return;
     if (Array.from(content).length > 2000) {
       setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
@@ -1190,9 +1188,6 @@ export default function Shell({
     const createdAt = new Date().toISOString();
     const objectUrls = files.map(file => URL.createObjectURL(file));
     const localMediaUrls = objectUrls.map((url, index) => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : appendImageMediaAspect(url, files[index].name));
-    // معاينة الصوت المحلي (تُبطل مع بقية روابط المعاينة عبر نظام النشر المعلق)
-    const audioPreviewUrl = audioUpload ? URL.createObjectURL(audioUpload.file) : null;
-    if (audioPreviewUrl) objectUrls.push(audioPreviewUrl);
     const type: Post['type'] = files.length === 0 ? 'text' : mediaType === 'image' ? 'photo' : 'reel';
     const author = profile || {
       id: userId,
@@ -1207,9 +1202,9 @@ export default function Shell({
       content,
       post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
       tagged_user_ids: taggedUserIds,
-      audio_url: audioPreviewUrl || (mediaType === 'video' ? pendingSound?.sourceVideoUrl : null) || null,
-      audio_title: audioUpload?.title ?? (mediaType === 'video' ? pendingSound?.title : null) ?? null,
-      sound_id: (mediaType === 'video' ? pendingSound?.id : null) ?? null,
+      audio_url: pendingSound?.sourceVideoUrl ?? null,
+      audio_title: pendingSound?.title ?? null,
+      sound_id: pendingSound?.id ?? null,
       media_url: localMediaUrls[0] || null,
       media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
       type,
@@ -1272,29 +1267,16 @@ export default function Shell({
           }
         }
 
-        // رفع الموسيقى المختارة إن وُجدت — فشلها لا يعطل نشر المنشور
-        let audioUrl: string | null = null;
-        if (audioUpload) {
-          try {
-            const audioSafeName = audioUpload.file.name.replace(/[^a-zA-Z0-9._-]/g, '-') || 'audio';
-            const audioPath = `${authenticatedUserId}/${postId}/audio-${Date.now()}-${audioSafeName}`;
-            await uploadMedia({ file: audioUpload.file, path: audioPath });
-            audioUrl = supabase.storage.from(storageBucket).getPublicUrl(audioPath).data.publicUrl;
-          } catch {
-            audioUrl = null;
-          }
-        }
-
-        // نظام الأصوات: أنشئ سجل صوت للصوت المرفوع ليتمكن الآخرون من «استخدام هذا الصوت»
-        // (source_video_url يشير للصوت المرفوع نفسه — بلا Storage إضافية؛ فشلها لا يعطل النشر)
+        // نظام الأصوات: كل فيديو جديد يُنشئ صوته الأصلي تلقائياً ليتمكن الآخرون من «استخدام هذا الصوت»
+        // (source_video_url يشير للفيديو المرفوع نفسه — بلا Storage إضافية؛ فشلها لا يعطل النشر)
         let attachedSoundId: string | null = null;
-        if (audioUrl && !pendingSound) {
+        if (mediaType === 'video' && !pendingSound && uploadedUrls[0]) {
           try {
             const { data: soundRow } = await supabase
               .from('sounds')
               .insert({
-                title: (audioUpload?.title || '').trim() || `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
-                source_video_url: audioUrl,
+                title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
+                source_video_url: uploadedUrls[0].replace(/#.*$/, ''),
                 creator_id: authenticatedUserId,
               })
               .select('id')
@@ -1328,9 +1310,9 @@ export default function Shell({
               trim_end: Number(trim.end.toFixed(3)),
             }
           : {};
-        // معرّف الصوت المرتبط بالمنشور: صوت مستعار (فيديو جديد بنفس الصوت)
-        // أو سجل الصوت المُنشأ للصوت المرفوع (صور وفيديو بموسيقى مختارة)
-        const effectiveSoundId = pendingSound && mediaType === 'video' ? pendingSound.id : attachedSoundId;
+        // معرّف الصوت المرتبط بالمنشور: صوت مختار من مكتبة الأصوات
+        // أو صوت الفيديو الأصلي المُنشأ تلقائياً عند النشر
+        const effectiveSoundId = pendingSound?.id ?? attachedSoundId;
         const postPayload = {
           id: postId,
           user_id: authenticatedUserId,
@@ -1342,12 +1324,10 @@ export default function Shell({
           created_at: createdAt,
           // العمود الصريح لمصفوفة معرفات المشار إليهم (ترحيل 20270102000000)
           ...(taggedUserIds.length > 0 ? { tagged_user_ids: taggedUserIds } : {}),
-          // الصوت المرفق (audio_url / audio_title من ترحيل post_controls)
-          ...(audioUrl ? { audio_url: audioUrl, audio_title: audioUpload?.title ?? null } : {}),
-          // الصوت المستعار (نظام الأصوات): ربط الفيديو الجديد بنفس sound_id
-          // وبإشارة الصوت (audio_url يشير لرابط الفيديو الأصلي لتشغيل صوته بلا Storage جديدة)
+          // نظام الأصوات: الصوت المختار من مكتبة الأصوات أو الصوت الأصلي للفيديو
+          // (sound_id + audio_url يشير لرابط المصدر لتشغيل صوته بلا Storage جديدة + audio_title)
           ...(effectiveSoundId ? { sound_id: effectiveSoundId } : {}),
-          ...(pendingSound && mediaType === 'video' && !audioUrl && pendingSound.sourceVideoUrl
+          ...(pendingSound?.sourceVideoUrl
             ? { audio_url: pendingSound.sourceVideoUrl, audio_title: pendingSound.title }
             : {}),
           ...trimColumns,
@@ -1381,7 +1361,7 @@ export default function Shell({
         // قاعدة بيانات لم يُطبَّق عليها عمودا الصوت بعد → أعد المحاولة بدونهما حتى لا يتعطل النشر
         if (
           postError
-          && audioUrl
+          && pendingSound?.sourceVideoUrl
           && (postError.code === '42703' || postError.code === 'PGRST204')
           && postError.message.includes('audio_url')
         ) {
@@ -1394,8 +1374,7 @@ export default function Shell({
         // قاعدة بيانات لم يُطبَّق عليها جدول الأصوات/عمود sound_id بعد → أعد المحاولة بدونه
         if (
           postError
-          && pendingSound
-          && mediaType === 'video'
+          && effectiveSoundId
           && (postError.code === '42703' || postError.code === 'PGRST204')
           && postError.message.includes('sound_id')
         ) {
@@ -1462,7 +1441,7 @@ export default function Shell({
           progress: 100,
           error: null,
           retry: null,
-          post: { ...publishedPost, audio_url: audioUrl ?? publishedPost.audio_url ?? null, sound_id: effectiveSoundId ?? publishedPost.sound_id ?? null },
+          post: { ...publishedPost, sound_id: effectiveSoundId ?? publishedPost.sound_id ?? null },
         });
         window.dispatchEvent(new Event('aani:post-created'));
         window.setTimeout(() => {
@@ -1507,7 +1486,6 @@ export default function Shell({
     setIsSubmitting(false);
     setCreateError('');
     setPendingSound(null);
-    setPreviewMusic(null);
     // لا إعادة توجيه تلقائية للرئيسية: ابقَ في الشاشة التي كنت عليها،
     // والانتقال فقط عند تغيّر السياق الفعلي (نشر ريلز من غير شاشة الريلز،
     // أو مغادرة شاشة الريلز بعد نشر منشور تغذية)
@@ -1569,7 +1547,6 @@ export default function Shell({
         onCloseVideoPreview={closeVideoPreview}
         onNextVideoPreview={continueToVideoCaption}
         showCreateModal={showCreateModal}
-        pendingSound={pendingSound}
         postText={postText}
         selectedFiles={selectedFiles}
         fileType={fileType}
@@ -1579,8 +1556,8 @@ export default function Shell({
         isSubmitting={isSubmitting}
         createError={createError}
         initialCreateTags={initialCreateTags}
-        previewMusic={previewMusic}
-        onPreviewMusicChange={setPreviewMusic}
+        music={pendingSound}
+        onClearMusic={() => setPendingSound(null)}
         onPostTextChange={setPostText}
         onRemoveFile={index => {
           setSelectedFiles(files => files.filter((_, idx) => idx !== index));
@@ -1591,12 +1568,11 @@ export default function Shell({
             setDestination('feed');
           }
         }}
-        onPublish={(tagContent, postDestination, audio) => void handlePublish(tagContent, postDestination, audio)}
+        onPublish={(tagContent, postDestination) => void handlePublish(tagContent, postDestination)}
         onCloseCreatePost={() => {
           setShowCreateModal(false);
           setVideoMentions([]);
           setPendingSound(null);
-          setPreviewMusic(null);
           if (fileType === 'video') {
             setSelectedFiles([]);
             setVideoTrim(null);
@@ -1647,6 +1623,7 @@ export default function Shell({
         />
       )}
       <SoundDetailSheet />
+      <SoundPickerSheet />
 
       <div className="content-shell" style={{ paddingBottom: isMessageThread ? 0 : 'calc(6rem + env(safe-area-inset-bottom))' }}>
         <main
