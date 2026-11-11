@@ -118,3 +118,20 @@ export function releaseOverlayBackForNavigation(): void {
   top.closedByBack = true;
   overlayStack.pop();
 }
+
+/**
+ * رجوع آمن بلا شاشة بيضاء: تحقق من وجود سجل سابق أولاً،
+ * وإن لم يوجد انتقل إلى مسار احتياطي عبر حدث التنقل الذي يعالجه Shell.
+ */
+export function goBackOrPush(fallbackPath: string = '/profile'): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+  } catch {
+    /* تجاهل فشل الوصول للتاريخ */
+  }
+  window.dispatchEvent(new CustomEvent('aani:navigate', { detail: fallbackPath }));
+}

@@ -18,6 +18,7 @@ import { displayName, type Post, type PostDestination, type PostMetadataTag, typ
 import type { ShellProps } from './types';
 import { requestContentRefresh } from '@/lib/contentRefresh';
 import { useRouteScrollMemory } from '@/hooks/useRouteScrollMemory';
+import { goBackOrPush } from '@/lib/overlayBack';
 
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -628,7 +629,7 @@ export default function Shell({
     // إيماءة السحب للرجوع في الشاشات الفرعية: تستهدف سجل الصفحات حصراً
     // (يغلق أية شاشة كاملة مفتوحة عبر الرصة، أو يعود للمسار السابق) دون تغيير تبويب
     if (start?.backEdge) {
-      if (start.dx <= -70 && Math.abs(start.dx) > Math.abs(start.dy)) window.history.back();
+      if (start.dx <= -70 && Math.abs(start.dx) > Math.abs(start.dy)) goBackOrPush('/profile');
       return;
     }
 
@@ -720,6 +721,47 @@ export default function Shell({
     window.addEventListener('aani:restore-overlay', handler);
     return () => window.removeEventListener('aani:restore-overlay', handler);
   }, []);
+
+  // وجهة احتياطية لرجوع آمن (goBackOrPush) عندما لا يوجد سجل سابق
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const target = (event as CustomEvent<string>).detail;
+      if (typeof target === 'string' && target) setLocation(target);
+    };
+    window.addEventListener('aani:navigate', handler);
+    return () => window.removeEventListener('aani:navigate', handler);
+  }, [setLocation]);
+
+  // تنظيف عند مغادرة أي شاشة فرعية: أزل أي قفل تمرير أو طبقة تغطية متبقية
+  // وصفّر حالة السحب حتى لا تبقى تحريكات أو حواجز تحجب الواجهة
+  useEffect(() => {
+    return () => {
+      if (!isProfileSubView) return;
+      window.requestAnimationFrame(() => {
+        const remainingDialog = Boolean(document.querySelector(
+          '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
+        ));
+        if (remainingDialog) return;
+        document.body.style.overflow = 'unset';
+        document.body.style.position = 'static';
+        document.body.style.overscrollBehavior = '';
+        document.body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
+        swipeStartRef.current = null;
+        setMainOffset(0, true);
+        if (mainRef.current) {
+          mainRef.current.style.transition = 'none';
+          mainRef.current.style.transform = '';
+        }
+      });
+    };
+  }, [isProfileSubView]);
+
+  // صفّر حالة السحب عند كل تغيير مسار حتى لا تُركَ تحريكة معلقة
+  useEffect(() => {
+    swipeStartRef.current = null;
+    setMainOffset(0, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path]);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1348,6 +1390,7 @@ export default function Shell({
                 ? 'page-slide-backward'
                 : ''
           }`}
+          style={{ touchAction: isProfileSubView ? 'pan-y' : undefined }}
           onTouchStart={path === '/search' || isMessagesPath ? undefined : handleSwipeStart}
           onTouchMove={path === '/search' || isMessagesPath ? undefined : handleSwipeMove}
           onTouchEnd={path === '/search' || isMessagesPath ? undefined : handleSwipeEnd}

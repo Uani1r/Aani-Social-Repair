@@ -9,7 +9,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
-import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
+import { releaseOverlayBackForNavigation, goBackOrPush } from '@/lib/overlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -79,7 +79,7 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
     if (!last) return;
     const deltaX = last.clientX - start.x;
     const deltaY = last.clientY - start.y;
-    if (deltaX <= -70 && Math.abs(deltaX) > Math.abs(deltaY)) window.history.back();
+    if (deltaX <= -70 && Math.abs(deltaX) > Math.abs(deltaY)) goBackOrPush('/profile');
   };
 
   useOverlayBack(true, onClose, {
