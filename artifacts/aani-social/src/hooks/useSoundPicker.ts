@@ -15,8 +15,7 @@ import {
   subscribeSoundLibrary,
   type SoundLibraryState,
 } from '@/audio/SoundLibraryStore';
-import { preview } from '@/audio/AudioEngine';
-import { pauseInstant, stopInstant } from '@/lib/instantAudio';
+import { pause as pauseAudioEngine, preview, stop as stopAudioEngine } from '@/audio/AudioEngine';
 import { openSoundPicker } from '@/lib/sounds';
 
 function useSoundLibraryValue<T>(selector: (state: SoundLibraryState) => T): T {
@@ -31,7 +30,7 @@ export function useSoundPicker() {
   const togglePreview = useCallback((soundId: string, clipUrl: string, fallbackUrl?: string) => {
     const current = getSoundLibraryState();
     if (current.playingId === soundId) {
-      pauseInstant();
+      pauseAudioEngine();
       setSoundLibraryState({ playingId: null, loadingId: null });
       return;
     }
@@ -47,7 +46,7 @@ export function useSoundPicker() {
   }, []);
 
   const stopPreview = useCallback(() => {
-    stopInstant();
+    stopAudioEngine();
     setSoundLibraryState({ playingId: null, loadingId: null, blockedId: null });
   }, []);
 

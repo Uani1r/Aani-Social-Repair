@@ -30,6 +30,8 @@ export type EnginePreviewCallbacks = {
 let unlockInstalled = false;
 let resumeAfterVisible = false;
 let engineActive = false;
+let activeSoundId: string | null = null;
+let visibilityResumeGeneration = 0;
 
 /** Synchronous unlock — safe to call from any gesture handler, repeatedly. */
 export function unlock(): void {
@@ -60,10 +62,17 @@ export function installGlobalUnlockListener(): void {
       pauseInstant();
     } else if (resumeAfterVisible) {
       resumeAfterVisible = false;
-      if (!resumeInstant()) {
-        const wasPlaying = getSoundLibraryState().playingId;
-        setSoundLibraryState({ playingId: null, ...(wasPlaying ? { blockedId: wasPlaying } : {}) });
-      }
+      const generation = ++visibilityResumeGeneration;
+      const soundId = getSoundLibraryState().playingId || activeSoundId;
+      const markResumeBlocked = () => {
+        if (generation !== visibilityResumeGeneration) return;
+        engineActive = false;
+        activeSoundId = null;
+        setSoundLibraryState({ playingId: null, loadingId: null, ...(soundId ? { blockedId: soundId } : {}) });
+      };
+      void resumeInstant().then(resumed => {
+        if (generation === visibilityResumeGeneration && !resumed) markResumeBlocked();
+      }).catch(markResumeBlocked);
     }
   });
 }
@@ -86,7 +95,9 @@ export function preview(
   }
 
   unlock();
+  visibilityResumeGeneration += 1;
   engineActive = true;
+  activeSoundId = sound.id || null;
   setSoundLibraryState({ blockedId: null });
   const hasTrim = Number.isFinite(startSec)
     && typeof endSec === 'number'
@@ -140,7 +151,9 @@ export function preview(
  */
 export function loop(sound: EngineSoundRef, startSec: number, endSec: number): void {
   unlock();
+  visibilityResumeGeneration += 1;
   engineActive = true;
+  activeSoundId = sound.id || null;
   playInstant(sound.url, {
     trim: { start: Math.max(0, startSec), end: Math.max(0, endSec) },
     loop: true,
@@ -148,9 +161,20 @@ export function loop(sound: EngineSoundRef, startSec: number, endSec: number): v
 }
 
 /** Stop playback and clear the library playback state. */
+export function pause(): void {
+  visibilityResumeGeneration += 1;
+  resumeAfterVisible = false;
+  pauseInstant();
+  engineActive = false;
+  activeSoundId = null;
+}
+
 export function stop(): void {
+  visibilityResumeGeneration += 1;
+  resumeAfterVisible = false;
   stopInstant();
   engineActive = false;
+  activeSoundId = null;
   setSoundLibraryState({ playingId: null, loadingId: null, blockedId: null });
 }
 

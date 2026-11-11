@@ -1675,7 +1675,7 @@ export default function StoriesBar({
   useEffect(() => {
     if (!storySoundUrl) return;
     if (isPaused) pauseInstant();
-    else resumeInstant();
+    else void resumeInstant();
   }, [isPaused, storySoundUrl]);
 
   const handleNextStory = () => {

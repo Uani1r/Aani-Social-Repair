@@ -257,6 +257,7 @@ export function seekInstant(time: number): boolean {
 
 /** Pause the unified player without dropping the position; resume with resumeInstant. */
 export function pauseInstant(): void {
+  playGeneration += 1;
   if (activeClipSource && audioContext && activeClipLoopLength > 0) {
     // RAM clip tier: remember the exact position inside the loop so
     // resumeInstant continues from the same sample (no restart, no gap).
@@ -270,40 +271,57 @@ export function pauseInstant(): void {
     activeClipSource = null;
     return;
   }
-  if (audio && !audio.paused) audio.pause();
+  if (audio) audio.pause();
 }
 
-/** Resume playback on the unified player from the current position. */
-export function resumeInstant(): boolean {
+/** Resume playback on the unified player from the current position. Resolves false when the browser blocks the resume. */
+export async function resumeInstant(): Promise<boolean> {
   if (activeClipBuffer && audioContext && !activeClipSource && activeClipLoopLength > 0) {
     // RAM clip tier: rebuild the source node and continue from the paused sample.
+    const context = audioContext;
+    const buffer = activeClipBuffer;
     const generation = ++playGeneration;
-    const source = audioContext.createBufferSource();
-    source.buffer = activeClipBuffer;
-    source.loop = true;
-    source.loopStart = activeClipLoopStart;
-    source.loopEnd = activeClipLoopStart + activeClipLoopLength;
-    source.connect(audioContext.destination);
-    const offset = Math.min(Math.max(activeClipPausedOffset, activeClipLoopStart), activeClipLoopStart + activeClipLoopLength - 0.01);
-    activeClipSource = source;
-    activeClipStartedAt = audioContext.currentTime - (offset - activeClipLoopStart);
+    if (context.state === 'suspended') {
+      try {
+        await context.resume();
+      } catch {
+        return false;
+      }
+    }
+    if (context.state !== 'running' || generation !== playGeneration || activeClipBuffer !== buffer || activeClipSource) {
+      return false;
+    }
+    let source: AudioBufferSourceNode | undefined;
     try {
+      source = context.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+      source.loopStart = activeClipLoopStart;
+      source.loopEnd = activeClipLoopStart + activeClipLoopLength;
+      source.connect(context.destination);
+      const offset = Math.min(Math.max(activeClipPausedOffset, activeClipLoopStart), activeClipLoopStart + activeClipLoopLength - 0.01);
       source.start(0, offset);
+      activeClipSource = source;
+      activeClipStartedAt = context.currentTime - (offset - activeClipLoopStart);
       return true;
     } catch (err) {
+      if (source) {
+        try { source.disconnect(); } catch { /* ignore */ }
+      }
       console.log('Autoplay handled cleanly:', err);
-      void generation;
       return false;
     }
   }
   if (!audio) return false;
   if (!audio.paused) return true;
+  const element = audio;
   const generation = ++playGeneration;
-  void audio.play().catch(() => {
-    if (generation !== playGeneration) return;
-    /* a failed resume is silently ignored */
-  });
-  return true;
+  try {
+    await element.play();
+    return generation === playGeneration && !element.paused;
+  } catch {
+    return false;
+  }
 }
 
 /**

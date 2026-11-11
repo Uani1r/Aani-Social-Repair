@@ -5,6 +5,7 @@ import ShellBottomNav from './ShellBottomNav';
 import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
 import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEventDetail } from '@/components/CallManager';
+import { preview as previewAudio, stop as stopAudioEngine } from '@/audio/AudioEngine';
 import FollowListView, { type FollowListKind } from '@/components/FollowListView';
 import NearbyUsersSheet from '@/components/NearbyUsersSheet';
 import SoundDetailSheet from '@/components/SoundDetailSheet';
@@ -14,7 +15,7 @@ import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSou
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
-import { isPlaybackActive, playInstant, playSoundPreview, stopInstant, warmAudioContext, warmPreviewClip } from '@/lib/instantAudio';
+import { isPlaybackActive, playInstant, playSoundPreview, warmAudioContext, warmPreviewClip } from '@/lib/instantAudio';
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
@@ -997,6 +998,7 @@ export default function Shell({
   };
   const pendingSoundRef = useRef(pendingSound);
   pendingSoundRef.current = pendingSound;
+  const imagePickerPreparedSoundIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     // ابدأ تجهيز قائمة الصوت مبكراً؛ اختيار الصورة يستهلك هذه القائمة محلياً.
@@ -1217,36 +1219,52 @@ export default function Shell({
     });
   }, [userId]);
 
-  // ربط الصوت بحدث اختيار الصورة المباشر (Direct User Gesture Audio Trigger):
-  // يُستدعى تزامنياً من onChange لاختيار الملفات (بلا أي await قبله) — يختار
-  // صوتاً من الوساط المجهزة مسبقاً ويستدعي playInstant() داخل نفس سياق
-  // الإيماءة لتجاوز قيود Autoplay Policy نهائياً. يعيد true عند النجاح
-  // (فيُتخطى الاقتراح غير المتزامن) وfalse إن لم توجد أوساط مجهزة بعد.
-  const attachWarmedSound = (): boolean => {
-    // صوت اختاره المستخدم يدوياً من مكتبة الأصوات لا يُستبدل — أما المقترح
-    // التلقائي فيُستبدل بصوت جديد عشوائي في كل اختيار/دخول (بلا تكرار نهائياً)
-    if (pendingSoundRef.current?.origin === 'user') return true;
+  // Select and start the cached suggestion during the trusted tap that opens
+  // the native file picker, before the OS dialog can consume transient activation.
+  const prepareSuggestedSound = (): string | null => {
+    if (pendingSoundRef.current?.origin === 'user') return null;
     const chosen = pickDefaultSound(readRecentSuggestedSoundIds());
     if (!chosen?.source_video_url) {
-      // إذا كانت القائمة تُحمّل الآن، أعد تشغيل آخر مقترح معروف فوراً بينما
-      // يجلب الطلب الخلفي بيانات الصوت الجديد؛ لا ننتظر قاعدة البيانات قبل الصوت.
       const fallback = pendingSoundRef.current;
       if (fallback?.origin === 'auto' && fallback.sourceVideoUrl) {
-        playInstant(fallback.sourceVideoUrl, { loop: true });
+        previewAudio({ id: fallback.id, url: fallback.sourceVideoUrl });
+        return fallback.id;
       }
-      return false;
+      return null;
     }
-    rememberSuggestedSoundId(chosen.id);
-    setPendingSound({
+
+    const nextSound = {
       id: chosen.id,
       title: chosen.title,
       sourceVideoUrl: chosen.source_video_url,
       soundTrim: null,
-      origin: 'auto',
-    });
-    // استدعاء HTMLAudioElement.play() فوراً داخل نفس إيماءة اختيار الصورة.
-    playInstant(chosen.source_video_url, { loop: true });
-    return true;
+      origin: 'auto' as const,
+    };
+    rememberSuggestedSoundId(chosen.id);
+    pendingSoundRef.current = nextSound;
+    setPendingSound(nextSound);
+    previewAudio({ id: chosen.id, url: chosen.source_video_url });
+    return chosen.id;
+  };
+
+  const attachWarmedSound = (): boolean => {
+    if (pendingSoundRef.current?.origin === 'user') return true;
+    return Boolean(prepareSuggestedSound());
+  };
+
+  const handleImagePickerStart = () => {
+    imagePickerPreparedSoundIdRef.current = prepareSuggestedSound();
+  };
+
+  const handleImagePickerCancel = () => {
+    const preparedId = imagePickerPreparedSoundIdRef.current;
+    imagePickerPreparedSoundIdRef.current = null;
+    if (!preparedId) return;
+    const current = pendingSoundRef.current;
+    if (current?.origin !== 'auto' || current.id !== preparedId) return;
+    stopAudioEngine();
+    pendingSoundRef.current = null;
+    setPendingSound(null);
   };
 
   const handleSelectPublishImages = async (files: File[]) => {
@@ -1257,10 +1275,11 @@ export default function Shell({
     setDestination('feed');
     setCreateError('');
     setAutoSoundMedia(false);
-    // التشغيل الفوري داخل نفس سياق إيماءة المستخدم (onChange): صوت مجهّز مسبقاً
-    // يبدأ فور اختيار الصورة بلا أي انتظار — وإن لم توجد أوساط مجهزة بعد
-    // استُكمل بالاقتراح الذكي غير المتزامن (يبدأ التشغيل لحظة وصول الصوت)
-    if (!attachWarmedSound()) void suggestTrendingSound();
+    // The picker tap normally started the sound before opening the OS dialog.
+    // If no cached URL existed then, retry synchronously here and fetch only as fallback.
+    const preparedSoundId = imagePickerPreparedSoundIdRef.current;
+    imagePickerPreparedSoundIdRef.current = null;
+    if (!preparedSoundId && !attachWarmedSound()) void suggestTrendingSound();
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
       setSelectedFiles(previews.map(preview => preview.file));
@@ -1287,7 +1306,7 @@ export default function Shell({
     setImagePostTags([]);
     // الخروج من شاشة النشر يوقف الصوت ويفرغ المقترح —
     // فالدخول التالي يقترح صوتاً مختلفاً عشوائياً (بلا تكرار)
-    stopInstant();
+    stopAudioEngine();
     setPendingSound(null);
   };
 
@@ -1340,7 +1359,7 @@ export default function Shell({
     clearVideoCover();
     setVideoMentions([]);
     setAutoSoundMedia(false);
-    stopInstant();
+    stopAudioEngine();
     setPendingSound(null);
   };
 
@@ -1442,7 +1461,7 @@ export default function Shell({
 
   const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, filesOverride?: File[], fileTypeOverride?: 'image' | 'video' | null) => {
     // إيقاف معاينة الصوت فوراً لحظة النقر على النشر
-    stopInstant();
+    stopAudioEngine();
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
@@ -1800,7 +1819,7 @@ export default function Shell({
     setShowCreateModal(false);
     setIsSubmitting(false);
     setCreateError('');
-    stopInstant();
+    stopAudioEngine();
     setPendingSound(null);
     setAutoSoundMedia(false);
     setImagePostTags([]);
@@ -1843,6 +1862,8 @@ export default function Shell({
           setVideoMentions([]);
           setShowCreateModal(true);
         }}
+        onImagePickerStart={handleImagePickerStart}
+        onImagePickerCancel={handleImagePickerCancel}
         onSelectPublishImages={handleSelectPublishImages}
         onSelectPublishVideo={handleSelectPublishVideo}
         onOpenMorePublishOptions={requestStoryComposer}
@@ -1882,7 +1903,7 @@ export default function Shell({
         initialCreateTags={initialCreateTags}
         music={pendingSound}
         // زر الإلغاء (X): يوقف المشغّل الموحّد فوراً ويفرغ الصوت المختار
-        onClearMusic={() => { stopInstant(); setPendingSound(null); }}
+        onClearMusic={() => { stopAudioEngine(); setPendingSound(null); }}
         autoSoundMedia={autoSoundMedia}
         onReplaceAutoMedia={replaceAutoSoundMedia}
         onClearAutoMedia={clearAutoSoundMedia}
@@ -1901,7 +1922,7 @@ export default function Shell({
           setShowCreateModal(false);
           setVideoMentions([]);
           setAutoSoundMedia(false);
-          stopInstant();
+          stopAudioEngine();
           setPendingSound(null);
           if (fileType === 'video') {
             setSelectedFiles([]);

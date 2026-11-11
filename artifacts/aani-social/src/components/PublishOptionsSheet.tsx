@@ -7,6 +7,8 @@ type PublishOptionsSheetProps = {
   open: boolean;
   onClose: () => void;
   onCreateTextPost: () => void;
+  onImagePickerStart: () => void;
+  onImagePickerCancel: () => void;
   onImagesSelected: (files: File[]) => void;
   onVideoSelected: (file: File) => void;
   onOpenMore: () => void;
@@ -23,6 +25,8 @@ export default function PublishOptionsSheet({
   open,
   onClose,
   onCreateTextPost,
+  onImagePickerStart,
+  onImagePickerCancel,
   onImagesSelected,
   onVideoSelected,
   onOpenMore,
@@ -37,12 +41,14 @@ export default function PublishOptionsSheet({
   const hasDraggedRef = useRef(false);
   const suppressNextClickRef = useRef(false);
   const onCloseRef = useRef(onClose);
+  const onImagePickerCancelRef = useRef(onImagePickerCancel);
   const [dragOffset, setDragOffset] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     onCloseRef.current = onClose;
-  }, [onClose]);
+    onImagePickerCancelRef.current = onImagePickerCancel;
+  }, [onClose, onImagePickerCancel]);
 
   const handleOption = (key: (typeof options)[number]['key']) => {
     if (key === 'text') {
@@ -52,7 +58,12 @@ export default function PublishOptionsSheet({
     }
 
     if (key === 'image') {
-      document.getElementById('native-image-input')?.click();
+      const input = document.getElementById('native-image-input');
+      if (input instanceof HTMLInputElement) {
+        // Start the cached preview inside the trusted tap before the OS picker opens.
+        onImagePickerStart();
+        input.click();
+      }
       return;
     }
 
@@ -69,7 +80,10 @@ export default function PublishOptionsSheet({
     const files = Array.from(event.currentTarget.files || []).filter(file => file.type.startsWith('image/'));
     event.currentTarget.value = '';
     if (files.length) onImagesSelected(files);
-    else onCloseRef.current();
+    else {
+      onImagePickerCancelRef.current();
+      onCloseRef.current();
+    }
   };
 
   const handleVideoChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -91,14 +105,18 @@ export default function PublishOptionsSheet({
   };
 
   useEffect(() => {
-    const closeOnPickerCancel = () => onCloseRef.current();
+    const closeOnImagePickerCancel = () => {
+      onImagePickerCancelRef.current();
+      onCloseRef.current();
+    };
+    const closeOnVideoPickerCancel = () => onCloseRef.current();
     const imageInput = document.getElementById('native-image-input');
     const videoInput = videoInputRef.current;
-    imageInput?.addEventListener('cancel', closeOnPickerCancel);
-    videoInput?.addEventListener('cancel', closeOnPickerCancel);
+    imageInput?.addEventListener('cancel', closeOnImagePickerCancel);
+    videoInput?.addEventListener('cancel', closeOnVideoPickerCancel);
     return () => {
-      imageInput?.removeEventListener('cancel', closeOnPickerCancel);
-      videoInput?.removeEventListener('cancel', closeOnPickerCancel);
+      imageInput?.removeEventListener('cancel', closeOnImagePickerCancel);
+      videoInput?.removeEventListener('cancel', closeOnVideoPickerCancel);
     };
   }, []);
 

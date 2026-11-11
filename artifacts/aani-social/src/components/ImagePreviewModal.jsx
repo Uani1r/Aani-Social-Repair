@@ -6,7 +6,8 @@ import PostMetadataChips from '@/components/PostMetadataChips';
 import UserIdentity from '@/components/UserIdentity';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, openSoundPicker } from '@/lib/sounds';
-import { playInstant, resumeInstantIfSame, stopInstant } from '@/lib/instantAudio';
+import { preview as previewAudio, stop as stopAudioEngine } from '@/audio/AudioEngine';
+import { resumeInstantIfSame } from '@/lib/instantAudio';
 import { appendVideoTrimFragment, DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
 import { supabase } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
@@ -188,16 +189,17 @@ export default function ImagePreviewModal({
   // — عبر المشغّل العالمي الموحّد (عنصر Audio واحد يُعاد استخدامه مع preload='auto')
   useEffect(() => {
     if (!open || !soundPreviewUrl) {
-      stopInstant();
+      stopAudioEngine();
       return undefined;
     }
     // إن كان المشغّل الموحّد يشغّل هذا الصوت أصلاً (مقترح تلقائياً لحظة اختيار
     // الصورة) فاستأنفه كما هو بدل إعادة سحبه من الصفر — صفر تأخير وبلا انقطاع
     if (!resumeInstantIfSame(soundPreviewUrl)) {
-      playInstant(soundPreviewUrl, {
-        trim: music?.soundTrim || null,
-        loop: true,
-      });
+      previewAudio(
+        { id: music?.id, url: soundPreviewUrl },
+        music?.soundTrim?.start || 0,
+        music?.soundTrim?.end,
+      );
     }
     return undefined;
   }, [open, soundPreviewUrl, music?.soundTrim?.start, music?.soundTrim?.end]);
@@ -205,7 +207,7 @@ export default function ImagePreviewModal({
   // إيقاف معاينة الصوت المرفق عند فتح مكتبة الأصوات (منع تداخل الأصوات)
   useEffect(() => {
     const onOpenPicker = () => {
-      stopInstant();
+      stopAudioEngine();
     };
     window.addEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
     return () => window.removeEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);

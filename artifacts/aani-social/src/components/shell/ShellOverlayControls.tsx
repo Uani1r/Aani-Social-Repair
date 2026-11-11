@@ -15,6 +15,8 @@ type ShellOverlayControlsProps = {
   showPublishOptionsSheet: boolean;
   onClosePublishOptionsSheet: () => void;
   onCreateTextPost: () => void;
+  onImagePickerStart: () => void;
+  onImagePickerCancel: () => void;
   onSelectPublishImages: (files: File[]) => void;
   onSelectPublishVideo: (file: File) => void;
   onOpenMorePublishOptions: () => void;
@@ -89,6 +91,8 @@ export default function ShellOverlayControls({
   showPublishOptionsSheet,
   onClosePublishOptionsSheet,
   onCreateTextPost,
+  onImagePickerStart,
+  onImagePickerCancel,
   onSelectPublishImages,
   onSelectPublishVideo,
   onOpenMorePublishOptions,
@@ -161,6 +165,8 @@ export default function ShellOverlayControls({
         open={showPublishOptionsSheet}
         onClose={onClosePublishOptionsSheet}
         onCreateTextPost={onCreateTextPost}
+        onImagePickerStart={onImagePickerStart}
+        onImagePickerCancel={onImagePickerCancel}
         onImagesSelected={onSelectPublishImages}
         onVideoSelected={onSelectPublishVideo}
         onOpenMore={onOpenMorePublishOptions}
