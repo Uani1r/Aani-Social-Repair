@@ -167,19 +167,31 @@ export function MessagesSkeleton({ count = 6, className }: { count?: number; cla
   );
 }
 
-/** هيكل الإشعارات: بطاقات صفوف (دائرة + سطران + مربع وسائط) */
+/** هيكل الإشعارات: نسخة طبق الأصل من بطاقة الإشعار الحقيقية —
+ *  نفس min-h وpadding وborder-radius، دائرة الصورة w-11 h-11 في الجهة اليمنى (RTL)،
+ *  وسطر الاسم/الفعل ثم صف يحتوي شارة العدد (يميناً) والوقت (يساراً) بلا أي قفزة تخطيط */
 export function NotificationsSkeleton({ count = 5, className }: { count?: number; className?: string }) {
   return (
-    <div className={cn('space-y-2.5 px-4', className)} role="status" aria-label="جارٍ تحميل الإشعارات">
+    <div className={cn('flex flex-col gap-2.5', className)} role="status" aria-label="جارٍ تحميل الإشعارات">
       {Array.from({ length: count }, (_, index) => (
-        <div key={index} className="flex items-start gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-3">
-          <SkeletonCircle className="h-10 w-10 shrink-0" />
-          <div className="min-w-0 flex-1 space-y-2 pt-1">
-            <SkeletonLine width="w-3/4" />
-            <SkeletonLine width="w-1/2" className="h-2.5 opacity-60" />
+        <article
+          key={index}
+          aria-hidden="true"
+          className="flex min-h-[80px] w-full select-none items-center gap-3 rounded-[20px] border border-white/[0.04] bg-[#141414] px-3 py-3 text-right"
+        >
+          {/* صورة المستخدم: دائرة كاملة في الجهة اليمنى (نفس مقاس الكرت الحقيقي) */}
+          <SkeletonCircle className="mt-0.5 h-11 w-11 shrink-0" />
+          {/* نص الإشعار: سطر الاسم + الفعل بمقاس slot مطابق، ثم شارة العدد والوقت */}
+          <div className="min-w-0 flex-1 pl-4">
+            <div className="h-6">
+              <SkeletonLine width="w-3/4" className="mt-2.5 h-3.5" />
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <SkeletonLine width="w-9" className="h-4 rounded-full opacity-60" />
+              <SkeletonLine width="w-12" className="h-2.5 opacity-40" />
+            </div>
           </div>
-          <SkeletonBlock className="h-10 w-10 shrink-0 rounded-xl" />
-        </div>
+        </article>
       ))}
     </div>
   );
