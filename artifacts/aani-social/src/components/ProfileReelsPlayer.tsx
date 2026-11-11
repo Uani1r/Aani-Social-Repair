@@ -82,7 +82,7 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
         if (authorIds.length > 0) {
           const { data: profileRows } = await supabase
             .from('profiles')
-            .select('id, username, full_name, display_name, avatar_url, bio')
+            .select('id, username, full_name, display_name, avatar_url, gender, bio')
             .in('id', authorIds);
           (Array.isArray(profileRows) ? profileRows : []).forEach(profile => {
             const row = profile as unknown as Record<string, unknown>;

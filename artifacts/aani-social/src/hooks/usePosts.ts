@@ -184,7 +184,7 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     ]));
     const { data: profileData } = await supabase
       .from('profiles')
-      .select('id, username, full_name, display_name, avatar_url')
+      .select('id, username, full_name, display_name, avatar_url, gender')
       .in('id', profileIds);
     const profiles = profileMap(profileData);
 
@@ -273,7 +273,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
-          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', uIds);
+          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url, gender').in('id', uIds);
           const profMap = profileMap(profileData);
 
           formatted = rawPosts.map(post => ({
@@ -331,11 +331,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           const authorIds = [...new Set(allRaw.map(post => post.user_id))];
           const { data: profileData } = await supabase
             .from('profiles')
-            .select('id, username, full_name, display_name, avatar_url')
+            .select('id, username, full_name, display_name, avatar_url, gender')
             .in('id', authorIds);
           const { data: reposterProfileData } = await supabase
             .from('profiles')
-            .select('id, username, full_name, display_name, avatar_url')
+            .select('id, username, full_name, display_name, avatar_url, gender')
             .eq('id', targetUserId)
             .maybeSingle();
 
@@ -381,7 +381,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
-          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url').in('id', uIds);
+          const { data: profileData } = await supabase.from('profiles').select('id, username, full_name, display_name, avatar_url, gender').in('id', uIds);
           const profMap = profileMap(profileData);
 
           formatted = rawPosts.map(post => ({

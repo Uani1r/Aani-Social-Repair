@@ -1325,7 +1325,7 @@ export default function StoriesBar({
 
         const { data: author, error: authorError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .eq('id', originalStory.user_id)
           .maybeSingle();
         if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة الأصلية:', authorError);

@@ -43,7 +43,7 @@ export function useShareRecipients(currentUserId: string, term: string) {
 
         const { data } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .in('id', Array.from(ids))
           .limit(500);
 

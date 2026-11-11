@@ -54,7 +54,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
 
         const { data: author, error: authorError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .eq('id', data.user_id)
           .maybeSingle();
         if (authorError) console.warn('[story DM card] تعذر تحميل ملف صاحب القصة:', authorError);

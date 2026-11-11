@@ -155,7 +155,7 @@ export default function SearchPage({ userId }: { userId: string }) {
       );
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url, bio')
+        .select('id, username, full_name, display_name, avatar_url, gender, bio')
         .or(filters.join(','))
         .limit(100);
 

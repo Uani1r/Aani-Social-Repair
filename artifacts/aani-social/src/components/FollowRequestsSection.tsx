@@ -163,7 +163,7 @@ export default function FollowRequestsSection({
       const { data: profiles, error: profilesError } = requesterIds.length
         ? await supabase
           .from('profiles')
-          .select('id,username,full_name,display_name,avatar_url,bio,is_private')
+          .select('id,username,full_name,display_name,avatar_url,gender,bio,is_private')
           .in('id', requesterIds)
         : { data: [], error: null };
       if (!active) return;

@@ -559,6 +559,7 @@ as $$
 declare
   requested_username text;
   requested_full_name text;
+  requested_gender text;
 begin
   requested_username := lower(regexp_replace(
     coalesce(new.raw_user_meta_data ->> 'username', ''),
@@ -577,13 +578,19 @@ begin
     'Member'
   );
 
-  insert into public.profiles (id, username, full_name)
+  requested_gender := coalesce(new.raw_user_meta_data ->> 'gender', 'male');
+  if requested_gender not in ('male', 'female') then
+    requested_gender := 'male';
+  end if;
+
+  insert into public.profiles (id, username, full_name, gender)
   values (
     new.id,
     left(requested_username, 32),
-    left(requested_full_name, 120)
+    left(requested_full_name, 120),
+    requested_gender
   )
-  on conflict (id) do nothing;
+  on conflict (id) do update set gender = excluded.gender;
 
   return new;
 end;

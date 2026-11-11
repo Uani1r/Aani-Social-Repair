@@ -399,7 +399,7 @@ export default function NotificationsModal({
           if (actorIds.length) {
             const { data: profiles } = await supabase
               .from('profiles')
-              .select('id,username,full_name,display_name,avatar_url')
+              .select('id,username,full_name,display_name,avatar_url,gender')
               .in('id', actorIds);
             if (!active) return;
             const profileMap = new Map(((profiles || []) as Profile[]).map(person => [person.id, person]));

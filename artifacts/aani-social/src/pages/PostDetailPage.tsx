@@ -42,7 +42,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
         return;
       }
       const { data: author } = await supabase.from('profiles')
-        .select('id, username, full_name, display_name, avatar_url')
+        .select('id, username, full_name, display_name, avatar_url, gender')
         .eq('id', data.user_id)
         .maybeSingle();
       let postSettings: Pick<Post, 'visibility' | 'hide_likes' | 'hide_comments' | 'comment_privacy'> = {

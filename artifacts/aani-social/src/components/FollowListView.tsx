@@ -128,7 +128,7 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
 
         const { data: profileRows, error: profileError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url, is_private, is_deactivated')
+          .select('id, username, full_name, display_name, avatar_url, gender, is_private, is_deactivated')
           .in('id', ids);
         if (profileError) throw profileError;
 

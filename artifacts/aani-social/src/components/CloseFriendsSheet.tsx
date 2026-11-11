@@ -68,7 +68,7 @@ export default function CloseFriendsSheet({ open, currentUserId, onClose }: Clos
       const { data: profiles, error: profileError } = mutualIds.length
         ? await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .in('id', mutualIds)
           .order('full_name', { ascending: true, nullsFirst: false })
           .limit(2000)

@@ -217,7 +217,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
 
         const { data } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .in('id', Array.from(ids))
           .limit(500);
 
@@ -425,7 +425,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     void (async () => {
       const { data, error } = await supabase
         .from('profiles')
-        .select('full_name, display_name, username, avatar_url')
+        .select('full_name, display_name, username, avatar_url, gender')
         .eq('id', currentUserId)
         .maybeSingle();
 

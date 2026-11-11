@@ -80,7 +80,7 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
       const term = query.trim();
       let request = supabase
         .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url')
+        .select('id, username, full_name, display_name, avatar_url, gender')
         .in('id', allowedIds)
         .order('full_name', { ascending: true, nullsFirst: false })
         .range(nextOffset, nextOffset + PAGE_SIZE - 1);

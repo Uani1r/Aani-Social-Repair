@@ -253,12 +253,12 @@ export default function VideoPreviewModal({
         try {
           const [usernameResult, nameResult] = await Promise.all([
             supabase.from('profiles')
-              .select('id, username, full_name, display_name, avatar_url')
+              .select('id, username, full_name, display_name, avatar_url, gender')
               .neq('id', userId)
               .ilike('username', `%${term}%`)
               .limit(8),
             supabase.from('profiles')
-              .select('id, username, full_name, display_name, avatar_url')
+              .select('id, username, full_name, display_name, avatar_url, gender')
               .neq('id', userId)
               .or(`full_name.ilike.%${term}%,display_name.ilike.%${term}%`)
               .limit(8),

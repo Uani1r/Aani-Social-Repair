@@ -24,6 +24,8 @@ export type Profile = {
   show_birth_date?: boolean | null;
   website?: string | null;
   bio: string;
+  /** جنس صاحب الملف — يحدد شكل الأيقونة الافتراضية عند غياب صورة شخصية */
+  gender?: 'male' | 'female' | null;
   is_private?: boolean;
   is_deactivated?: boolean;
   notification_settings?: ProfileNotificationSettings | null;

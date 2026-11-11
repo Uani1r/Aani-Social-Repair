@@ -2,6 +2,7 @@ import { useState, type CSSProperties, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
 
 // --- صفحة تسجيل الدخول وإنشاء الحساب ---
 export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterAuth: () => void }) {
@@ -14,6 +15,8 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  // الجنس المختار عند إنشاء الحساب — يحدد الأيقونة الشخصية الافتراضية
+  const [gender, setGender] = useState<'male' | 'female'>('male');
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -24,7 +27,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         const { data, error: authError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { username: username.trim().toLowerCase(), full_name: fullName.trim() } },
+          options: { data: { username: username.trim().toLowerCase(), full_name: fullName.trim(), gender } },
         });
 
         if (authError) throw authError;
@@ -167,6 +170,27 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                     onChange={event => setUsername(event.target.value)}
                     style={styles.input}
                   />
+                </div>
+                <div style={styles.formGroup}>
+                  <span style={styles.label}>الجنس — يحدد صورتك الافتراضية</span>
+                  <div style={styles.genderRow}>
+                    <button
+                      type="button"
+                      onClick={() => setGender('male')}
+                      style={{ ...styles.genderCard, borderColor: gender === 'male' ? '#6266C7' : '#d8dfdb' }}
+                    >
+                      <MaleDefaultAvatar className="h-20 w-20" />
+                      <span style={styles.genderLabel}>ذكر</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGender('female')}
+                      style={{ ...styles.genderCard, borderColor: gender === 'female' ? '#6266C7' : '#d8dfdb' }}
+                    >
+                      <FemaleDefaultAvatar className="h-20 w-20" />
+                      <span style={styles.genderLabel}>أنثى</span>
+                    </button>
+                  </div>
                 </div>
               </>
             )}
@@ -364,6 +388,27 @@ const styles: Record<string, CSSProperties> = {
     cursor: 'pointer',
     marginTop: '8px',
     fontFamily: "'Tajawal', sans-serif",
+  },
+  genderRow: {
+    display: 'flex',
+    gap: '12px',
+  },
+  genderCard: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '16px 8px',
+    border: '2px solid #d8dfdb',
+    borderRadius: '12px',
+    backgroundColor: '#ffffff',
+    cursor: 'pointer',
+  },
+  genderLabel: {
+    fontSize: '14px',
+    fontWeight: 700,
+    color: '#243b35',
   },
   btnDisabled: { cursor: 'wait', opacity: 0.65 },
   signupLink: {

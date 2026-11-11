@@ -103,7 +103,7 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
         const profileIds = likerIds.slice(offset, offset + 200);
         const { data: profiles, error: profilesError } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url, is_private')
+          .select('id, username, full_name, display_name, avatar_url, gender, is_private')
           .in('id', profileIds);
         if (profilesError) throw profilesError;
         (profiles ?? []).forEach((profile: Record<string, unknown>) => {

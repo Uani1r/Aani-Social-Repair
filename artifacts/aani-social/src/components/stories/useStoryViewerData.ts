@@ -57,7 +57,7 @@ export function useStoryViewerData({
     if (likeOnlyIds.length > 0) {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url, is_private')
+        .select('id, username, full_name, display_name, avatar_url, gender, is_private')
         .in('id', likeOnlyIds);
       if (error) {
         console.warn('[story views] تعذر تحميل ملفات من أعجبوا بالقصة:', error);
@@ -171,7 +171,7 @@ export function useStoryViewerData({
     if (session?.profileIds.length) {
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url')
+        .select('id, username, full_name, display_name, avatar_url, gender')
         .in('id', session.profileIds);
       if (error) throw error;
       const profileById = new Map<string, StoryViewerProfile>(
@@ -187,7 +187,7 @@ export function useStoryViewerData({
       while (profileRows.length < STORY_VIEWER_PREVIEW_LIMIT) {
         const { data, error } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .neq('id', userId)
           .order('created_at', { ascending: true })
           .range(offset, offset + pageSize - 1);

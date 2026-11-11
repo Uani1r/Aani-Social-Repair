@@ -411,7 +411,7 @@ export default function ProfilePage({
         if (authorIds.length > 0) {
           const { data: profileRows } = await supabase
             .from('profiles')
-            .select('id, username, full_name, display_name, avatar_url')
+            .select('id, username, full_name, display_name, avatar_url, gender')
             .in('id', authorIds);
           (profileRows || []).forEach(profileRow => {
             const row = profileRow as Record<string, unknown>;
@@ -624,7 +624,7 @@ export default function ProfilePage({
       }
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url, bio, is_private')
+        .select('id, username, full_name, display_name, avatar_url, gender, bio, is_private')
         .in('id', [...ids]);
       if (!active) return;
       if (error) {
@@ -686,7 +686,7 @@ export default function ProfilePage({
       };
 
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
-        supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', activeUserId).maybeSingle(),
+        supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,gender,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),

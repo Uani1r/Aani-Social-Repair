@@ -58,7 +58,7 @@ export default function SharedPostPreview({
 
         const { data: a } = await supabase
           .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url')
+          .select('id, username, full_name, display_name, avatar_url, gender')
           .eq('id', p.user_id)
           .maybeSingle();
 
