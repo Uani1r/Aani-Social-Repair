@@ -8056,3 +8056,32 @@ select,
   font-size: 14px;
   text-align: center;
 }
+
+/* مفتاح الظهور في قائمة الأشخاص القريبين — بجانب عنوان الشاشة */
+.nearby-users-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  margin-inline-start: 4px;
+  color: #c9c9cf;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.nearby-users-switch {
+  border: 0;
+}
+
+.nearby-users-switch[data-state="checked"] {
+  background-color: #34d399;
+}
+
+.nearby-users-switch[data-state="unchecked"] {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+.nearby-users-switch > span {
+  background-color: #ffffff;
+}

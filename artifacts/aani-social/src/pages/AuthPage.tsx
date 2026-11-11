@@ -4,6 +4,50 @@ import { Link, useLocation } from 'wouter';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
 
+type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
+
+/**
+ * التحديد الإجباري التلقائي للموقع عند التسجيل:
+ * يطلب إذن الموقع من الجهاز (HTML5 Geolocation API) ويستخرج اسم المدينة/المحافظة
+ * منه عبر خدمة ترميز جغرافي عكسي مجانية. لا يمكن تخطيها — يفشل إنشاء الحساب
+ * بدون إذن الموقع أو عند تعذر استخراج المدينة.
+ */
+const resolveCityFromDevice = (): Promise<CityLookupResult> => new Promise(resolve => {
+  if (!('geolocation' in navigator) || !navigator.geolocation) {
+    resolve({ ok: false, message: 'متصفحك لا يدعم تحديد الموقع تلقائياً. افتح التسجيل من متصفح حديث يسمح بالوصول إلى الموقع.' });
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    async position => {
+      try {
+        const { latitude, longitude } = position.coords;
+        const response = await fetch(
+          `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=ar`,
+        );
+        if (!response.ok) throw new Error('reverse-geocode-failed');
+        const details = await response.json() as {
+          city?: unknown;
+          principalSubdivision?: unknown;
+          locality?: unknown;
+          countryName?: unknown;
+        };
+        const city = [details.city, details.principalSubdivision, details.locality, details.countryName]
+          .map(value => (typeof value === 'string' ? value.trim() : ''))
+          .find(value => Boolean(value)) || '';
+        if (!city) {
+          resolve({ ok: false, message: 'تعذر استخراج اسم المدينة من موقعك. تأكد من اتصال الإنترنت ثم أعد المحاولة.' });
+          return;
+        }
+        resolve({ ok: true, city: city.slice(0, 100) });
+      } catch {
+        resolve({ ok: false, message: 'تعذر استخراج اسم المدينة من موقعك. تأكد من اتصال الإنترنت ثم أعد المحاولة.' });
+      }
+    },
+    () => resolve({ ok: false, message: 'لا يمكن إنشاء الحساب دون السماح بتحديد الموقع. اسمح بالوصول إلى الموقع في المتصفح ثم أعد المحاولة.' }),
+    { enableHighAccuracy: false, timeout: 20000, maximumAge: 600000 },
+  );
+});
+
 // --- صفحة تسجيل الدخول وإنشاء الحساب ---
 export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterAuth: () => void }) {
   const signUp = mode === 'signup';
@@ -15,6 +59,8 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  // حالة رسالة أثناء تحديد الموقع الإجباري عند التسجيل
+  const [statusNotice, setStatusNotice] = useState('');
   // الجنس المختار عند إنشاء الحساب — يحدد الأيقونة الشخصية الافتراضية
   const [gender, setGender] = useState<'male' | 'female'>('male');
 
@@ -24,13 +70,33 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     setBusy(true); setError(''); setSuccess('');
     try {
       if (signUp) {
+        // التحديد الإجباري التلقائي للموقع: لا يكتمل إنشاء الحساب بدون إذن الموقع ومدينة مستخرجة
+        setStatusNotice('نحدد موقعك تلقائياً الآن لضبط مدينتك — اسمح بالوصول إلى الموقع عند طلب المتصفح لإكمال التسجيل.');
+        const geo = await resolveCityFromDevice();
+        setStatusNotice('');
+        if (!geo.ok) {
+          setError(geo.message);
+          return;
+        }
+        const city = geo.city;
+
         const { data, error: authError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { username: username.trim().toLowerCase(), full_name: fullName.trim(), gender } },
+          options: { data: { username: username.trim().toLowerCase(), full_name: fullName.trim(), gender, city } },
         });
 
         if (authError) throw authError;
+
+        // اكتب المدينة مباشرة في الملف أيضاً (احتياط إن لم يكن مشغّل إنشاء الملف محدثاً بعد)
+        const signedUpUserId = data.session?.user?.id;
+        if (signedUpUserId) {
+          const { error: cityError } = await supabase
+            .from('profiles')
+            .update({ city, location: city })
+            .eq('id', signedUpUserId);
+          if (cityError) console.error('تعذر حفظ المدينة المستخرجة من الموقع:', cityError);
+        }
 
         if (data.session) {
           afterAuth();
@@ -135,6 +201,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
         <main style={styles.formSection}>
           {!supabaseConfigured && <div style={styles.noticeError} role="alert">أضف إعدادات Supabase للاتصال.</div>}
+          {statusNotice && <div style={styles.noticeInfo} role="status">{statusNotice}</div>}
           {error && <div style={styles.noticeError} role="alert">{error}</div>}
           {success && <div style={styles.noticeSuccess} role="status">{success}</div>}
 
@@ -430,6 +497,17 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: '8px',
     backgroundColor: '#fff5eb',
     color: '#74442e',
+    fontSize: '14px',
+    lineHeight: 1.7,
+    overflowWrap: 'anywhere',
+  },
+  noticeInfo: {
+    marginBlock: '12px',
+    padding: '11px 13px',
+    border: '1px solid #b9c9e8',
+    borderRadius: '8px',
+    backgroundColor: '#eef3fc',
+    color: '#2c4a7c',
     fontSize: '14px',
     lineHeight: 1.7,
     overflowWrap: 'anywhere',

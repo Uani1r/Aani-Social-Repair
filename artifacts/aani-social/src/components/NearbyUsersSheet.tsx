@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, MapPin } from 'lucide-react';
 import { useLocation } from 'wouter';
+import { toast } from 'sonner';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
+import { Switch } from '@/components/ui/switch';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -18,6 +20,10 @@ type NearbyUsersSheetProps = {
   currentUserId: string;
   /** مدينة المستخدم الحالي (profiles.city) — أساس فلترة الأشخاص القريبين */
   currentCity: string | null;
+  /** ملف المستخدم الحالي — منه يُقرأ مفتاح الظهور في القائمة */
+  currentProfile: Profile | null;
+  /** مزامنة ملف المستخدم بعد تغيير مفتاح الظهور */
+  onProfileUpdate: (next: Profile) => void;
 };
 
 type NearbyUser = Pick<
@@ -32,14 +38,32 @@ type NearbyUsersState =
   | { status: 'error'; people: NearbyUser[]; errorText: string };
 
 /**
- * شاشة «الأشخاص القريبون»: تعرض مستخدمي نفس المدينة المسجلة في
- * الملف الشخصي (profiles.city). تفتح من زر الدبوس في أعلى الشاشة الرئيسية.
+ * شاشة «الأشخاص القريبون»: تعرض مستخدمي نفس المدينة المسجلة في الملف الشخصي
+ * (profiles.city) الذين يسمحون بالظهور في القائمة (is_nearby_visible = true).
+ * تفتح من زر الدبوس في أعلى الشاشة الرئيسية، ويظهر بجانب عنوانها مفتاح
+ * تشغيل/إيقاف يتحكم بظهور المستخدم الحالي في قائمة الآخرين.
  */
-export default function NearbyUsersSheet({ open, onClose, currentUserId, currentCity }: NearbyUsersSheetProps) {
+export default function NearbyUsersSheet({
+  open,
+  onClose,
+  currentUserId,
+  currentCity,
+  currentProfile,
+  onProfileUpdate,
+}: NearbyUsersSheetProps) {
   // زر الرجوع (الهاتف/المتصفح) يغلق الشاشة ويعيدك لنفس المكان
   useOverlayBack(open, onClose);
   const [, navigate] = useLocation();
   const [state, setState] = useState<NearbyUsersState>({ status: 'loading', people: [], errorText: '' });
+  // مفتاح الظهور في قائمة الأشخاص القريبين (profiles.is_nearby_visible)
+  const [nearbyVisible, setNearbyVisible] = useState(() => currentProfile?.is_nearby_visible !== false);
+  const [togglingVisible, setTogglingVisible] = useState(false);
+
+  // مزامنة المفتاح مع الملف الشخصي إذا تغيّر من مكان آخر
+  useEffect(() => {
+    if (togglingVisible) return;
+    setNearbyVisible(currentProfile?.is_nearby_visible !== false);
+  }, [currentProfile?.is_nearby_visible, togglingVisible]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -65,22 +89,23 @@ export default function NearbyUsersSheet({ open, onClose, currentUserId, current
         .eq('city', city)
         .neq('id', currentUserId)
         .eq('is_deactivated', false)
+        .eq('is_nearby_visible', true)
         .order('created_at', { ascending: false })
         .limit(60);
 
-      // قاعدة بيانات بلا عمود is_deactivated بعد → أعد المحاولة بدونه
-      if (
-        result.error
-        && (result.error.code === '42703' || result.error.code === 'PGRST204')
-        && /is_deactivated/i.test(result.error.message || '')
-      ) {
-        result = await supabase
+      // قاعدة بيانات بلا عمود is_deactivated أو is_nearby_visible بعد → أعد المحاولة بلا الأعمدة الناقصة
+      if (result.error && (result.error.code === '42703' || result.error.code === 'PGRST204')) {
+        const missing = result.error.message || '';
+        let retry = supabase
           .from('profiles')
           .select('id, username, full_name, display_name, avatar_url, city')
           .eq('city', city)
           .neq('id', currentUserId)
           .order('created_at', { ascending: false })
           .limit(60);
+        if (!/is_deactivated/i.test(missing)) retry = retry.eq('is_deactivated', false);
+        if (!/is_nearby_visible/i.test(missing)) retry = retry.eq('is_nearby_visible', true);
+        result = await retry;
       }
       return result;
     };
@@ -103,6 +128,39 @@ export default function NearbyUsersSheet({ open, onClose, currentUserId, current
       active = false;
     };
   }, [open, currentCity, currentUserId]);
+
+  // مفتاح الظهور: إيقافه يخفي ملف المستخدم من قائمة الأشخاص القريبين عند الجميع
+  const handleToggleNearbyVisible = async (next: boolean) => {
+    if (togglingVisible || !supabaseConfigured || !currentProfile) return;
+    const previous = nearbyVisible;
+
+    // تتفاؤلي: نحدّث الواجهة فوراً ونتراجع عند الفشل
+    setNearbyVisible(next);
+    setTogglingVisible(true);
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ is_nearby_visible: next })
+      .eq('id', currentUserId);
+    setTogglingVisible(false);
+
+    if (error) {
+      setNearbyVisible(previous);
+      toast.error(
+        next
+          ? 'تعذر تشغيل الظهور في الأشخاص القريبين. حاول مرة أخرى.'
+          : 'تعذر إيقاف الظهور في الأشخاص القريبين. حاول مرة أخرى.',
+      );
+      return;
+    }
+
+    onProfileUpdate({ ...currentProfile, is_nearby_visible: next });
+    toast.success(
+      next
+        ? 'أصبح ملفك ظاهراً في قائمة الأشخاص القريبين في مدينتك.'
+        : 'تم إخفاء ملفك من قائمة الأشخاص القريبين عند الجميع.',
+    );
+  };
 
   // فتح الملف الشخصي: حرر مدخل حرس الرجوع ثم أغلق الشاشة ثم انتقل
   const openProfile = (personId: string) => {
@@ -131,6 +189,16 @@ export default function NearbyUsersSheet({ open, onClose, currentUserId, current
           <ArrowRight size={24} />
         </button>
         <h1 className="nearby-users-title">الأشخاص القريبون</h1>
+        <label className="nearby-users-toggle">
+          <span>ظهورك في القائمة</span>
+          <Switch
+            className="nearby-users-switch"
+            checked={nearbyVisible}
+            disabled={togglingVisible || !supabaseConfigured}
+            onCheckedChange={value => void handleToggleNearbyVisible(value)}
+            aria-label="الظهور في قائمة الأشخاص القريبين"
+          />
+        </label>
         {currentCity?.trim() ? (
           <span className="nearby-users-city">
             <MapPin size={13} />

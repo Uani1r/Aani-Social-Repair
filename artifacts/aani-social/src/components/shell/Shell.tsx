@@ -1564,6 +1564,8 @@ export default function Shell({
           onClose={() => setShowNearbyUsers(false)}
           currentUserId={userId}
           currentCity={profile?.city ?? null}
+          currentProfile={profile}
+          onProfileUpdate={onProfileUpdate}
         />
       )}
 

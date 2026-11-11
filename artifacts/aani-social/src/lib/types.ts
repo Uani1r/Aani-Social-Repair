@@ -28,6 +28,8 @@ export type Profile = {
   gender?: 'male' | 'female' | null;
   is_private?: boolean;
   is_deactivated?: boolean;
+  /** مفتاح الظهور في قائمة الأشخاص القريبين (profiles.is_nearby_visible) */
+  is_nearby_visible?: boolean | null;
   notification_settings?: ProfileNotificationSettings | null;
   appearance_preference?: 'dark' | 'light' | 'system' | null;
   language_preference?: 'ar' | 'en' | null;

@@ -26,6 +26,8 @@ create table if not exists public.profiles (
   hd_uploads boolean not null default true,
   data_saver boolean not null default false,
   font_preference text not null default 'alexandria' check (font_preference in ('alexandria', 'ibm-plex-sans-arabic', 'tajawal', 'cairo', 'noto-sans-arabic')),
+  gender text not null default 'male' check (gender in ('male', 'female')),
+  is_nearby_visible boolean not null default true,
   is_private boolean not null default false,
   is_deactivated boolean not null default false,
   fcm_token text,
@@ -36,6 +38,8 @@ create table if not exists public.profiles (
 alter table public.profiles add column if not exists username text;
 alter table public.profiles add column if not exists is_private boolean not null default false;
 alter table public.profiles add column if not exists is_deactivated boolean not null default false;
+alter table public.profiles add column if not exists gender text not null default 'male' check (gender in ('male', 'female'));
+alter table public.profiles add column if not exists is_nearby_visible boolean not null default true;
 alter table public.profiles add column if not exists full_name text;
 alter table public.profiles add column if not exists avatar_url text;
 alter table public.profiles add column if not exists cover_url text;
@@ -486,7 +490,7 @@ grant select (
   id, username, full_name, avatar_url, cover_url, cover_position_x, cover_position_y,
   location, city, job, birth_date, show_city, show_job, show_birth_date, website,
   bio, display_name, notification_settings, appearance_preference, language_preference,
-  hd_uploads, data_saver, font_preference, is_private, is_deactivated, created_at, updated_at
+  hd_uploads, data_saver, font_preference, is_private, is_deactivated, is_nearby_visible, created_at, updated_at
 ) on table public.profiles to authenticated;
 grant insert, update on public.profiles to authenticated;
 grant select, insert, update, delete on public.posts to authenticated;
@@ -560,6 +564,8 @@ declare
   requested_username text;
   requested_full_name text;
   requested_gender text;
+  -- مدينة التسجيل المستخرجة تلقائياً من موقع الجهاز (إجبارية عند التسجيل)
+  requested_city text;
 begin
   requested_username := lower(regexp_replace(
     coalesce(new.raw_user_meta_data ->> 'username', ''),
@@ -583,14 +589,22 @@ begin
     requested_gender := 'male';
   end if;
 
-  insert into public.profiles (id, username, full_name, gender)
+  -- مدينة التسجيل المستخرجة تلقائياً من موقع الجهاز (إجبارية عند التسجيل)
+  requested_city := nullif(btrim(coalesce(new.raw_user_meta_data ->> 'city', '')), '');
+
+  insert into public.profiles (id, username, full_name, gender, city, location)
   values (
     new.id,
     left(requested_username, 32),
     left(requested_full_name, 120),
-    requested_gender
+    requested_gender,
+    requested_city,
+    requested_city
   )
-  on conflict (id) do update set gender = excluded.gender;
+  on conflict (id) do update set
+    gender = excluded.gender,
+    city = coalesce(excluded.city, public.profiles.city),
+    location = coalesce(excluded.location, public.profiles.location);
 
   return new;
 end;
