@@ -1,20 +1,23 @@
 /**
- * مشغّل الصوت الفوري العالمي (Single Audio Instance & Preload).
+ * مشغّل الصوت الفوري العالمي (Single Audio Instance & Direct HTML5 Audio Mode).
  *
  * عنصر HTMLAudioElement واحد فقط يُعاد استخدامه لجميع المعاينات الصوتية في
  * التطبيق (مكتبة الأصوات، شاشة المعاينة، صفحة الصوت): عند التنقل بين الأصوات
  * يُستبدل src على الكائن نفسه بدل إنشاء كائن جديد، فيُجهَض طلب التنزيل السابق
  * فوراً (إلغاء الاستدعاءات المعلقة) ويُتفادى ضغط الذاكرة وGarbage Collection.
  *
- * الضبط:
- * - preload='auto' + crossOrigin='anonymous' (لمصادر Supabase Storage التي تدعم
- *   CORS وطلبات HTTP Range/206 Partial Content) فيقرأ المشغّل أوتار البداية فقط
- *   كمقطع صغير جداً بدل انتظار الملف كاملاً.
- * - يُستدعى playInstant داخل معالج الحدث المباشر (بدون أي await قبله) لتفادي
- *   قيود سياسة التشغيل التلقائي (Autoplay Policy) في المتصفح.
+ * الضبط (Direct Mode بلا حظر شبكة أو CORS):
+ * - بلا crossOrigin إطلاقاً: لا مصافحة CORS ولا حظر موارد — المتصفح يبثّ
+ *   الأوتار مباشرة عبر HTTP Range/206 دون انتظار.
+ * - preload='metadata' فقط: طول الشريط دون استهلاك ذاكرة أو بان
+دويث ثقيل،
+ *   والتشغيل يبثّ فور استدعاء play() بالتوازي مع الجلب (لا انتظار
+ *   canplaythrough ولا جلب كامل ولا ArrayBuffer).
+ * - playInstant يُستدعى داخل معالج الحدث المباشر (بدون أي await قبله):
+ *   src + play() في نفس الملي ثانية لتفادي سياسة التشغيل التلقائي،
+ *   وسلسلة play() ملتقطة دائماً فلا Uncaught Audio Promises في الكونسول.
  * - onPlaying يُستدعى فور صدور أول نغمة صوتية (التحول من Spinner إلى Pause).
  */
-import { supabaseUrl } from '@/lib/supabase';
 
 export type InstantTrimRange = { start: number; end: number };
 
@@ -35,34 +38,20 @@ export type InstantPlayOptions = {
   onLoadedMetadata?: (duration: number) => void;
 };
 
-const storageOrigin = (() => {
-  try {
-    return new URL(supabaseUrl, window.location.href).origin;
-  } catch {
-    return '';
-  }
-})();
-
 let audio: HTMLAudioElement | null = null;
 let currentSrc = '';
 let playingReported = false;
 // جيل الطلب الحالي: يُبطِل أي .play() أو رد نداء معلّق من محاولة سابقة عند التنقل السريع
 let playGeneration = 0;
 
-/** المصادر الموثوقة فقط تحصل على crossOrigin (تدعم CORS)؛ غيرها بلا الرأس كي لا يُكسر التشغيل */
-function isTrustedMediaOrigin(url: string): boolean {
-  try {
-    return new URL(url, window.location.href).origin === storageOrigin;
-  } catch {
-    return false;
-  }
-}
-
 function ensureAudio(): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
   if (!audio) {
     audio = new Audio();
-    audio.preload = 'auto';
+    // metadata فقط: يقرأ طول الشريط بلا استهلاك ذاكرة/بان
+دويث ثقيل،
+    // والتشغيل يبثّ فور .play() عبر HTTP Range بلا أي انتظار
+    audio.preload = 'metadata';
     audio.loop = true;
   }
   return audio;
@@ -90,10 +79,10 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
   clearHandlers();
 
   // استبدال المصدر على الكائن نفسه (لا new Audio): يُجهَض طلب الشبكة السابق تلقائياً
+  // بلا crossOrigin إطلاقاً — بلا مصافحة CORS ولا حظر موارد، والبث يبدأ فوراً
   if (currentSrc !== url) {
     el.removeAttribute('src');
-    if (isTrustedMediaOrigin(url)) el.crossOrigin = 'anonymous';
-    else el.removeAttribute('crossorigin');
+    el.removeAttribute('crossorigin');
     el.src = url;
     currentSrc = url;
   }
@@ -117,12 +106,15 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
       options.onPlaying?.();
     };
     el.onplaying = reportPlaying;
-    void el.play().then(reportPlaying).catch(() => {
+    // سلسلة play() ملتقطة دائماً: رفض Autoplay يُسجَّل ولا يُجمّد التطبيق
+    void el.play().then(reportPlaying).catch((error: unknown) => {
+      console.log('Autoplay handled:', error);
       if (generation !== playGeneration) return;
       options.onError?.();
     });
   } else {
-    void el.play().catch(() => {
+    void el.play().catch((error: unknown) => {
+      console.log('Autoplay handled:', error);
       if (generation !== playGeneration) return;
       options.onError?.();
     });
@@ -219,10 +211,11 @@ export function resumeInstant(): boolean {
 }
 
 /**
- * تسخين ذاكرة المتصفح لأول جزء من الصوت عبر طلب HTTP Range (206 Partial Content)
- * — النقر اللاحق على الصوت يبدأ فوراً لأن الأوتار الأولى حاضرة في الكاش والاتصال مفتوح.
+ * تسخين خفيف جداً (32 كيلوبايت فقط) لأول جزء من الصوت عبر طلب HTTP Range
+ * (206 Partial Content) — يفتح الاتصال ويجعل النقر اللاحق يبدأ فوراً.
+ * لا ArrayBuffer ولا جلب كامل: طلب صغير واحد يُجهَض تلقائياً بعد 5 ثوانٍ.
  */
-export function warmAudioCache(url: string, bytes = 131072): void {
+export function warmAudioCache(url: string, bytes = 32768): void {
   if (!url || typeof window === 'undefined') return;
   try {
     const controller = new AbortController();
