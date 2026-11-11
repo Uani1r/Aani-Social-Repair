@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight } from 'lucide-react';
 import { useLocation } from 'wouter';
@@ -9,6 +9,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
+import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -21,28 +22,60 @@ export type FollowListKind = 'followers' | 'following';
 
 type ListState = Profile[] | null | 'failed';
 
+type SessionCache = {
+  lists: Record<FollowListKind, ListState>;
+  activeKind: FollowListKind;
+  scrollTop: number;
+};
+
 const TAB_LABELS: Record<FollowListKind, string> = {
   following: 'أتابع',
   followers: 'المتابعون',
 };
 
-export default function FollowListView({ kind, targetUserId, currentUserId, onClose }: {
+// جلسة القائمة لكل ملف شخصي: تبويب نشط + قوائم + موضع تمرير، لتستعاد عند الرجوع
+const sessionCacheByTarget = new Map<string, SessionCache>();
+
+export default function FollowListView({ kind, targetUserId, currentUserId, onClose, onDismiss, restoreSession = false }: {
   kind: FollowListKind;
   targetUserId: string;
   currentUserId: string;
   onClose: () => void;
+  /** يُستدعى قبل الانتقال لملف من القائمة: يغلق الشاشة نظيفة مع الإبقاء على مدخل السجل */
+  onDismiss: () => void;
+  /** افتح من سياق محفوظ (رجوع من ملف مزار): نفس التبويب والقوائم وموضع التمرير */
+  restoreSession?: boolean;
 }) {
-  const [activeKind, setActiveKind] = useState<FollowListKind>(kind);
-  const [lists, setLists] = useState<Record<FollowListKind, ListState>>({
-    followers: null,
-    following: null,
-  });
+  const cachedSession = sessionCacheByTarget.get(targetUserId);
+  const [activeKind, setActiveKind] = useState<FollowListKind>(
+    restoreSession ? cachedSession?.activeKind ?? kind : kind,
+  );
+  const [lists, setLists] = useState<Record<FollowListKind, ListState>>(() =>
+    restoreSession && cachedSession
+      ? cachedSession.lists
+      : { followers: null, following: null },
+  );
   const [viewerFollowingIds, setViewerFollowingIds] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
   const [, navigate] = useLocation();
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
 
-  useOverlayBack(true, onClose);
+  useOverlayBack(true, onClose, {
+    restoreData: { type: 'follow-list', kind, targetUserId },
+    replaceHistory: restoreSession,
+  });
   useModalBodyScrollLock();
+
+  // استعادة موضع التمرير المحفوظ عند الفتح من سياق محفوظ (رجوع من ملف مزار)
+  useEffect(() => {
+    if (!restoreSession) return undefined;
+    const savedScrollTop = sessionCacheByTarget.get(targetUserId)?.scrollTop ?? 0;
+    const frame = window.requestAnimationFrame(() => {
+      if (listScrollRef.current) listScrollRef.current.scrollTop = savedScrollTop;
+    });
+    return () => window.cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // جلب كسول لكل تبويب مع تخزين القائمة في الذاكرة للتنقل السريع بينهما
   useEffect(() => {
@@ -142,6 +175,31 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
 
   const activeList = lists[activeKind];
 
+  // النقر على بطاقة: احفظ سياق القائمة في مدخل السجل الخاص بها، أغلق الشاشة
+  // نظيفة (بدون قفل تمرير أو خلفية)، ثم انتقل للملف الشخصي
+  const openProfileFromCard = (personId: string) => {
+    const scrollTop = listScrollRef.current?.scrollTop ?? 0;
+    sessionCacheByTarget.set(targetUserId, { lists, activeKind, scrollTop });
+    try {
+      window.history.replaceState(
+        { ...window.history.state, aaniOverlayRestore: { type: 'follow-list', kind: activeKind, targetUserId } },
+        '',
+      );
+    } catch {
+      /* تجاهل فشل التاريخ */
+    }
+    releaseOverlayBackForNavigation();
+    onDismiss();
+    navigate(`/profile/${encodeURIComponent(personId)}`);
+  };
+
+  // حفظ موضع التمرير باستمرار في جلسة القائمة
+  const handleListScroll = () => {
+    const cached = sessionCacheByTarget.get(targetUserId)
+      ?? sessionCacheByTarget.set(targetUserId, { lists, activeKind, scrollTop: 0 }).get(targetUserId);
+    if (cached) cached.scrollTop = listScrollRef.current?.scrollTop ?? 0;
+  };
+
   return createPortal(
     <div className="fixed inset-0 z-[1100] flex flex-col bg-black text-white" role="dialog" aria-modal="true" dir="rtl">
       <header className="shrink-0 border-b border-white/10 px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
@@ -183,7 +241,7 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={listScrollRef} onScroll={handleListScroll} className="min-h-0 flex-1 overflow-y-auto">
         {activeList === null && <ListSkeleton count={6} avatarClass="h-12 w-12" className="px-4 py-2" />}
         {activeList === 'failed' && <EmptyState className="min-h-64" />}
         {Array.isArray(activeList) && activeList.length === 0 && <EmptyState className="min-h-64" />}
@@ -198,11 +256,11 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
                   key={person.id}
                   role="button"
                   tabIndex={0}
-                  onClick={() => navigate(`/profile/${encodeURIComponent(person.id)}`)}
+                  onClick={() => openProfileFromCard(person.id)}
                   onKeyDown={event => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
                     event.preventDefault();
-                    navigate(`/profile/${encodeURIComponent(person.id)}`);
+                    openProfileFromCard(person.id);
                   }}
                   className="flex cursor-pointer items-center gap-3 px-4 py-2.5 transition hover:bg-white/[0.03]"
                 >

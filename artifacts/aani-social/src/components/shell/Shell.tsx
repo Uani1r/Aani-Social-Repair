@@ -668,8 +668,8 @@ export default function Shell({
   // حسابات الإشارة المختارة من شاشة معاينة الفيديو (إشارة متعددة)
   const [videoMentions, setVideoMentions] = useState<VideoMentionPerson[]>([]);
   // شاشة المتابعين/المتابَعين كاملة الشاشة — مستضافة في Shell حتى تبقى حية
-  // عبر التنقل بين الملفات الشخصية (الضغط على حساب في القائمة يفتح ملفه دون إغلاقها)
-  const [followListView, setFollowListView] = useState<{ kind: FollowListKind; targetUserId: string } | null>(null);
+  // عبر التنقل بين الملفات الشخصية، وتُعاد فتحها من سياقها المحفوظ عند الرجوع
+  const [followListView, setFollowListView] = useState<{ kind: FollowListKind; targetUserId: string; restoreSession?: boolean } | null>(null);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -679,6 +679,17 @@ export default function Shell({
     };
     window.addEventListener('aani:open-follow-list', handler);
     return () => window.removeEventListener('aani:open-follow-list', handler);
+  }, []);
+
+  // الرجوع من ملف شخصي مزار إلى مدخل قائمة المتابعين المحفوظ → أعِد فتحها بنفس الحالة
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ type?: string; kind?: FollowListKind; targetUserId?: string }>).detail;
+      if (detail?.type !== 'follow-list' || !detail.kind || !detail.targetUserId) return;
+      setFollowListView({ kind: detail.kind, targetUserId: detail.targetUserId, restoreSession: true });
+    };
+    window.addEventListener('aani:restore-overlay', handler);
+    return () => window.removeEventListener('aani:restore-overlay', handler);
   }, []);
   const [fileType, setFileType] = useState<'image' | 'video' | null>(null);
   const [destination, setDestination] = useState<PostDestination>('feed');
@@ -1292,7 +1303,9 @@ export default function Shell({
           kind={followListView.kind}
           targetUserId={followListView.targetUserId}
           currentUserId={userId}
+          restoreSession={followListView.restoreSession}
           onClose={() => setFollowListView(null)}
+          onDismiss={() => setFollowListView(null)}
         />
       )}
 

@@ -37,7 +37,7 @@ function releaseBodyScrollSafely() {
   });
 }
 
-function handlePopstate() {
+function handlePopstate(event: PopStateEvent) {
   // popstate ناتج عن history.back() برمجي أثناء إغلاق نافذة → تجاهله
   if (selfBackDepth > 0) {
     selfBackDepth -= 1;
@@ -45,8 +45,15 @@ function handlePopstate() {
   }
 
   const top = overlayStack[overlayStack.length - 1];
-  // لا نوافذ مفتوحة → هذا رجوع حقيقي بين الصفحات، لا تتدخل
-  if (!top) return;
+  // لا نوافذ مفتوحة → رجوع حقيقي بين الصفحات؛ لكن إن عدنا إلى مدخل حرس
+  // يحمل سياق شاشة قابلة للاستعادة (مثل قائمة المتابعين) أعِد فتحها بنفس الحالة
+  if (!top) {
+    const restoreData = (event.state as { aaniOverlayRestore?: unknown } | null)?.aaniOverlayRestore;
+    if (restoreData) {
+      window.dispatchEvent(new CustomEvent('aani:restore-overlay', { detail: restoreData }));
+    }
+    return;
+  }
 
   top.closedByBack = true;
   overlayStack.pop();
@@ -64,17 +71,29 @@ function ensureOverlayBackListener() {
   window.addEventListener('popstate', handlePopstate);
 }
 
+export type OverlayBackOptions = {
+  /** سياق الشاشة المحفوظ في مدخل السجل لاستعادته عند الرجوع إليه */
+  restoreData?: unknown;
+  /** استبدل المدخل الحالي بدل دفع مدخل جديد (تُستخدم عند إعادة الفتح من سياق محفوظ) */
+  replaceHistory?: boolean;
+};
+
 /**
  * سجّل نافذة مفتوحة في رصة الرجوع المركزية وادفع مدخلاً في التاريخ.
  * يعيد دالة إلغاء التسجيل تُستدعى في cleanup الخاص بـ useEffect.
  */
-export function registerOverlayBack(onClose: OverlayCloseHandler): () => void {
+export function registerOverlayBack(onClose: OverlayCloseHandler, options?: OverlayBackOptions): () => void {
   if (typeof window === 'undefined') return () => {};
   ensureOverlayBackListener();
 
   const entry: OverlayEntry = { close: onClose, closedByBack: false };
   overlayStack.push(entry);
-  window.history.pushState({ aaniOverlayId: nextOverlayId }, '');
+  const historyState = { aaniOverlayId: nextOverlayId, aaniOverlayRestore: options?.restoreData ?? null };
+  if (options?.replaceHistory) {
+    window.history.replaceState(historyState, '');
+  } else {
+    window.history.pushState(historyState, '');
+  }
   nextOverlayId += 1;
 
   return () => {
@@ -87,4 +106,15 @@ export function registerOverlayBack(onClose: OverlayCloseHandler): () => void {
       window.history.back();
     }
   };
+}
+
+/**
+ * حرّر أعلى نافذة من رصة الرجوع قبل تنقل مقصود (إغلاق ثم فتح شاشة أخرى):
+ * مدخل الحرس يبقى في التاريخ ليُستعاد عبر الرجوع، ولن يستهلكه إلغاء التسجيل.
+ */
+export function releaseOverlayBackForNavigation(): void {
+  const top = overlayStack[overlayStack.length - 1];
+  if (!top) return;
+  top.closedByBack = true;
+  overlayStack.pop();
 }
