@@ -24,6 +24,7 @@ import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
+import { createVideoPoster } from '@/lib/videoPoster';
 import { appendImageMediaAspect, appendVideoTrimFragment, buildVideoMediaUrl } from '@/lib/videoMedia';
 import { displayName, type Post, type PostDestination, type PostMetadataTag, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
 import type { ShellProps } from './types';
@@ -841,9 +842,11 @@ export default function Shell({
   const [showVideoPreviewModal, setShowVideoPreviewModal] = useState(false);
   const [videoTrim, setVideoTrim] = useState<VideoTrimRange | null>(null);
   const [videoCrop, setVideoCrop] = useState<VideoCropTransform | null>(null);
-  // غلاف الفيديو المختار من شاشة المعاينة (يُرفع ويُحفظ كوسام cover في post_metadata)
+  // غلاف الفيديو الملتقط تلقائياً أو المختار من شاشة المعاينة.
   const [videoCoverFile, setVideoCoverFile] = useState<File | null>(null);
   const [videoCoverPreview, setVideoCoverPreview] = useState<string | null>(null);
+  const videoPosterGenerationRef = useRef(0);
+  const videoPosterPromiseRef = useRef<Promise<File> | null>(null);
   // حسابات الإشارة المختارة من شاشة معاينة الفيديو (إشارة متعددة)
   const [videoMentions, setVideoMentions] = useState<VideoMentionPerson[]>([]);
   // شاشة المتابعين/المتابَعين كاملة الشاشة — مستضافة في Shell حتى تبقى حية
@@ -1344,15 +1347,33 @@ export default function Shell({
     clearVideoCover();
     setVideoMentions([]);
     setShowVideoPreviewModal(true);
+
+    const generation = ++videoPosterGenerationRef.current;
+    const posterPromise = createVideoPoster(file);
+    videoPosterPromiseRef.current = posterPromise;
+    void posterPromise.then(poster => {
+      if (generation !== videoPosterGenerationRef.current) return;
+      const previewUrl = URL.createObjectURL(poster);
+      setVideoCoverFile(poster);
+      setVideoCoverPreview(previewUrl);
+    }).catch(error => {
+      if (generation === videoPosterGenerationRef.current) {
+        console.warn('[media] تعذر إنشاء غلاف تلقائي للفيديو:', error);
+      }
+    });
   };
 
   const clearVideoCover = () => {
+    videoPosterGenerationRef.current += 1;
+    videoPosterPromiseRef.current = null;
     if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview);
     setVideoCoverFile(null);
     setVideoCoverPreview(null);
   };
 
   const handleVideoCoverChange = (cover: File | null, previewUrl: string | null) => {
+    videoPosterGenerationRef.current += 1;
+    videoPosterPromiseRef.current = cover ? Promise.resolve(cover) : null;
     if (videoCoverPreview && videoCoverPreview !== previewUrl) URL.revokeObjectURL(videoCoverPreview);
     setVideoCoverFile(cover);
     setVideoCoverPreview(previewUrl);
@@ -1503,9 +1524,15 @@ export default function Shell({
     }
 
     const postId = createPostId();
+    const mediaAssetId = mediaType === 'video' && files.length > 0 ? createPostId() : null;
+    const pendingPosterPromise = mediaType === 'video'
+      ? videoPosterPromiseRef.current?.catch(() => null) ?? null
+      : null;
     const createdAt = new Date().toISOString();
-    const objectUrls = files.map(file => URL.createObjectURL(file));
-    const localMediaUrls = objectUrls.map((url, index) => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : appendImageMediaAspect(url, files[index].name));
+    const mediaObjectUrls = files.map(file => URL.createObjectURL(file));
+    const localPosterUrl = coverFile ? URL.createObjectURL(coverFile) : null;
+    const objectUrls = [...mediaObjectUrls, ...(localPosterUrl ? [localPosterUrl] : [])];
+    const localMediaUrls = mediaObjectUrls.map((url, index) => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : appendImageMediaAspect(url, files[index].name));
     const type: Post['type'] = files.length === 0 ? 'text' : mediaType === 'image' ? 'photo' : 'reel';
     const author = profile || {
       id: userId,
@@ -1518,13 +1545,18 @@ export default function Shell({
       id: postId,
       user_id: userId,
       content,
-      post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
+      post_metadata: [
+        ...metadata,
+        ...(taggedUsersTag ? [taggedUsersTag] : []),
+        ...(localPosterUrl ? [{ kind: 'cover' as const, label: 'غلاف', href: localPosterUrl }] : []),
+      ],
       tagged_user_ids: taggedUserIds,
       audio_url: borrowedAudioUrl ?? null,
       audio_title: pendingSound?.title ?? null,
       sound_id: pendingSound?.id ?? null,
       media_url: localMediaUrls[0] || null,
       media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
+      media_asset_id: mediaAssetId,
       type,
       destination: postDestination,
       created_at: createdAt,
@@ -1537,6 +1569,8 @@ export default function Shell({
     };
 
     let attemptInProgress = false;
+    let mediaAssetRecordCreated = false;
+    let mediaAssetPaths: { originalPath: string; videoUrl: string; posterPath: string | null; posterUrl: string | null } | null = null;
     const attemptPublish = async () => {
       if (attemptInProgress) return;
       attemptInProgress = true;
@@ -1548,41 +1582,87 @@ export default function Shell({
         if (!authenticatedUserId) throw new Error('يجب تسجيل الدخول قبل نشر المحتوى.');
         if (authenticatedUserId !== userId) throw new Error('تغيّر الحساب النشط. حدّث الصفحة ثم أعد المحاولة.');
 
+        const effectiveCoverFile = mediaType === 'video'
+          ? coverFile || (pendingPosterPromise ? await pendingPosterPromise : null)
+          : null;
         const uploadedUrls = new Array<string>(files.length);
-        const fileProgress = files.map(() => 0);
-        const totalBytes = files.reduce((sum, file) => sum + Math.max(1, file.size), 0);
+        let coverTag: PostMetadataTag | null = null;
 
-        await Promise.all(files.map(async (file, index) => {
+        if (mediaType === 'video' && mediaAssetId && !mediaAssetPaths) {
+          const sourceFile = files[0];
+          if (!sourceFile) throw new Error('لم يتم تحديد ملف الفيديو للرفع.');
+          const safeName = sourceFile.name.replace(/[^a-zA-Z0-9._-]/g, '-') || 'video';
+          const originalPath = `${authenticatedUserId}/${postId}/0-${safeName}`;
+          const posterPath = effectiveCoverFile ? `${authenticatedUserId}/${postId}/poster-${mediaAssetId}` : null;
+          const videoUrl = supabase.storage.from(storageBucket).getPublicUrl(originalPath).data.publicUrl;
+          const posterUrl = posterPath
+            ? supabase.storage.from(storageBucket).getPublicUrl(posterPath).data.publicUrl
+            : null;
+          mediaAssetPaths = { originalPath, videoUrl, posterPath, posterUrl };
+        }
+
+        const assetPaths = mediaAssetPaths;
+        if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
+          const { data: existingAsset, error: existingAssetError } = await supabase
+            .from('media_assets')
+            .select('id')
+            .eq('id', mediaAssetId)
+            .eq('user_id', authenticatedUserId)
+            .maybeSingle();
+          if (existingAssetError) throw new Error(`تعذر التحقق من سجل الوسائط: ${existingAssetError.message}`);
+          if (!existingAsset) {
+            // سياسة الجدول الحالية تسمح للعميل بالإدراج والقراءة فقط؛ تبدأ الحالة uploading.
+            const { error: mediaAssetError } = await supabase.from('media_assets').insert({
+              id: mediaAssetId,
+              user_id: authenticatedUserId,
+              original_path: assetPaths.originalPath,
+              video_url: assetPaths.videoUrl,
+              poster_url: assetPaths.posterUrl,
+              processing_status: 'uploading',
+            });
+            if (mediaAssetError) throw new Error(`تعذر إنشاء سجل الوسائط: ${mediaAssetError.message}`);
+          }
+          mediaAssetRecordCreated = true;
+        }
+
+        const uploadJobs: { file: File; path: string; kind: 'media' | 'poster'; mediaIndex?: number }[] = files.map((file, index) => {
           const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-') || `media-${index}`;
-          const uploadedPath = `${authenticatedUserId}/${postId}/${index}-${safeName}`;
+          return { file, path: `${authenticatedUserId}/${postId}/${index}-${safeName}`, kind: 'media', mediaIndex: index };
+        });
+        const posterUploadPath = assetPaths?.posterPath;
+        if (mediaType === 'video' && effectiveCoverFile && posterUploadPath) {
+          uploadJobs.push({ file: effectiveCoverFile, path: posterUploadPath, kind: 'poster' });
+        }
+        const jobProgress = uploadJobs.map(() => 0);
+        const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
+
+        await Promise.all(uploadJobs.map(async (job, jobIndex) => {
           await uploadMedia({
-            file,
-            path: uploadedPath,
+            file: job.file,
+            path: job.path,
             onProgress: percent => {
-              fileProgress[index] = percent;
-              const uploadedBytes = files.reduce((sum, currentFile, currentIndex) => (
-                sum + Math.max(1, currentFile.size) * (fileProgress[currentIndex] / 100)
+              jobProgress[jobIndex] = percent;
+              const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
+                sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)
               ), 0);
               updatePendingPost(postId, {
-                progress: Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)),
+                progress: totalBytes > 0 ? Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)) : 0,
               });
             },
           });
-          const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
-          uploadedUrls[index] = mediaType === 'video' ? buildVideoMediaUrl(publicUrl, trim, crop) : appendImageMediaAspect(publicUrl, file.name);
+          const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(job.path).data.publicUrl;
+          if (job.kind === 'poster') {
+            coverTag = { kind: 'cover', label: 'غلاف', href: publicUrl };
+          } else if (job.mediaIndex !== undefined) {
+            const file = files[job.mediaIndex];
+            uploadedUrls[job.mediaIndex] = mediaType === 'video'
+              ? buildVideoMediaUrl(publicUrl, trim, crop)
+              : appendImageMediaAspect(publicUrl, file.name);
+          }
         }));
 
-        // رفع صورة الغلاف إن اختيرت — فشلها لا يعطل نشر المنشور
-        let coverTag: PostMetadataTag | null = null;
-        if (coverFile) {
-          try {
-            const coverPath = `${authenticatedUserId}/${postId}/cover-${Date.now()}.jpg`;
-            await uploadMedia({ file: coverFile, path: coverPath });
-            const coverPublicUrl = supabase.storage.from(storageBucket).getPublicUrl(coverPath).data.publicUrl;
-            coverTag = { kind: 'cover', label: 'غلاف', href: coverPublicUrl };
-          } catch {
-            coverTag = null;
-          }
+        if (mediaType === 'video') {
+          updatePendingPost(postId, { stage: 'processing', progress: 95, error: null });
         }
 
         // نظام الأصوات: كل فيديو جديد يُنشئ صوته الأصلي تلقائياً ليتمكن الآخرون من «استخدام هذا الصوت»
@@ -1616,9 +1696,10 @@ export default function Shell({
           ...optimisticPost,
           media_url: uploadedUrls[0] || null,
           media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
+          media_asset_id: mediaAssetId,
           post_metadata: storedMetadata,
         };
-        updatePendingPost(postId, { post: publishedPost, stage: 'publishing', progress: 96, error: null });
+        updatePendingPost(postId, { post: publishedPost, stage: 'publishing', progress: 97, error: null });
 
         // حدود القص المخزنة كأعمدة صريحة (trim_start/trim_end) بجانب ترميز #t=
         // في العنوان — يضمن التزامن حتى لو فُقد الرمز من عنوان الوسائط
@@ -1638,6 +1719,7 @@ export default function Shell({
           post_metadata: storedMetadata,
           media_url: uploadedUrls[0] || null,
           media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
+          ...(mediaAssetId ? { media_asset_id: mediaAssetId } : {}),
           type,
           created_at: createdAt,
           // العمود الصريح لمصفوفة معرفات المشار إليهم (ترحيل 20270102000000)
@@ -1775,7 +1857,7 @@ export default function Shell({
         }
 
         updatePendingPost(postId, {
-          stage: 'success',
+          stage: mediaType === 'video' && mediaAssetId ? 'ready' : 'success',
           progress: 100,
           error: null,
           retry: null,
@@ -1915,6 +1997,7 @@ export default function Shell({
         onRemoveFile={index => {
           setSelectedFiles(files => files.filter((_, idx) => idx !== index));
           if (fileType === 'video') {
+            clearVideoCover();
             setVideoTrim(null);
             setVideoCrop(null);
             setFileType(null);
@@ -1930,6 +2013,7 @@ export default function Shell({
           setPendingSound(null);
           if (fileType === 'video') {
             setSelectedFiles([]);
+            clearVideoCover();
             setVideoTrim(null);
             setVideoCrop(null);
             setFileType(null);

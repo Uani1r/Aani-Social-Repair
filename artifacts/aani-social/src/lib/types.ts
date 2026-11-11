@@ -153,6 +153,7 @@ export type Post = {
   post_metadata?: PostMetadataTag[];
   media_url: string | null;
   media_urls?: string[] | null;
+  media_asset_id?: string | null;
   type: "text" | "photo" | "reel";
   destination?: PostDestination;
   visibility?: PostVisibility;

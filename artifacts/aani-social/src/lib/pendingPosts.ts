@@ -1,6 +1,6 @@
 import type { Post } from '@/lib/types';
 
-export type PendingPostStage = 'uploading' | 'publishing' | 'success' | 'failed';
+export type PendingPostStage = 'uploading' | 'processing' | 'publishing' | 'ready' | 'success' | 'failed';
 
 export type PendingPost = {
   id: string;

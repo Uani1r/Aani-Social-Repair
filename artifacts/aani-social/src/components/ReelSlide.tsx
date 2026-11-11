@@ -647,14 +647,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         <div className="absolute inset-x-0 top-0 z-40 bg-black/70 px-4 pb-4 pt-[max(4rem,calc(1rem+env(safe-area-inset-top)))] text-white backdrop-blur-sm">
           <div className="mb-2 flex items-center justify-between gap-3 text-xs">
             <span className="flex items-center gap-2">
-              {pendingState.stage === 'success' ? <CheckCircle2 size={15} className="text-emerald-400" /> : pendingState.stage === 'failed' ? <X size={15} className="text-rose-400" /> : <Loader2 size={15} className="animate-spin text-[#f1a17f]" />}
-              {pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل'}
+              {pendingState.stage === 'success' || pendingState.stage === 'ready' ? <CheckCircle2 size={15} className="text-emerald-400" /> : pendingState.stage === 'failed' ? <X size={15} className="text-rose-400" /> : <Loader2 size={15} className="animate-spin text-[#f1a17f]" />}
+              {pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'processing' ? 'جارٍ إرفاق الفيديو بالريل' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'ready' ? 'تم رفع الريل ونشره' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل'}
             </span>
             {pendingState.stage !== 'failed' && <span>{pendingState.progress}%</span>}
           </div>
           {pendingState.stage !== 'failed' ? (
             <div className="h-1.5 overflow-hidden rounded-full bg-white/15" role="progressbar" aria-label="تقدم نشر الريل" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
-              <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
+              <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' || pendingState.stage === 'ready' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
             </div>
           ) : (
             <>
