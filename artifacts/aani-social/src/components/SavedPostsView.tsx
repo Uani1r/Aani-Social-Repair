@@ -6,6 +6,7 @@ import {
 
 import FeedPostCard from './FeedPostCard';
 import { GridSkeleton } from './Skeletons';
+import EmptyState from './EmptyState';
 import { useSavedPosts } from '../lib/interactions';
 import { displayName, type Post } from '../lib/types';
 import { stripVideoEditFragment } from '../lib/videoMedia';
@@ -168,19 +169,7 @@ export default function SavedPostsView({
       {loading && posts.length === 0 ? (
         <GridSkeleton count={6} />
       ) : filteredPosts.length === 0 ? (
-        <div className="flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-6 py-10 text-center">
-          <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-[#f1a17f]/15 bg-[#f1a17f]/[0.08] text-[#f1a17f]">
-            <Bookmark size={24} aria-hidden="true" />
-          </span>
-          <h3 className="text-base font-bold text-zinc-200">
-            {posts.length === 0 ? 'لا توجد عناصر محفوظة بعد' : 'لا توجد عناصر في هذا التصنيف'}
-          </h3>
-          <p className="mt-2 max-w-xs text-xs leading-6 text-zinc-500">
-            {posts.length === 0
-              ? 'احفظ المنشورات التي تهمك لتجدها هنا بسهولة.'
-              : 'ستظهر هنا العناصر المحفوظة من هذا النوع.'}
-          </p>
-        </div>
+        <EmptyState className="min-h-56 rounded-2xl" />
       ) : (
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2 content-fade-in" aria-label="شبكة العناصر المحفوظة">
           {filteredPosts.map(post => (

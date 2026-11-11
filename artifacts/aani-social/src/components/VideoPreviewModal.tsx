@@ -4,6 +4,7 @@ import { AtSign, Check, Crop, Image as ImageIcon, Music2, Scissors, Search, Volu
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type VideoAspectRatio, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
@@ -1019,7 +1020,7 @@ export default function VideoPreviewModal({
               );
             })}
             {!mentionSearching && mentionQuery.trim() && mentionResults.length === 0 && !mentionError && (
-              <p className="py-3 text-center text-xs text-white/45">لا توجد حسابات مطابقة</p>
+              <EmptyState />
             )}
             {mentionError && <p role="alert" className="mt-1 text-xs text-rose-300">{mentionError}</p>}
           </div>

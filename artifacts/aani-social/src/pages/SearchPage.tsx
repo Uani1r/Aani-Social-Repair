@@ -5,6 +5,7 @@ import { Search, X } from 'lucide-react';
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -299,10 +300,7 @@ export default function SearchPage({ userId }: { userId: string }) {
       )}
 
       {!loading && !searchError && normalizeSearchQuery(term) && profiles.length === 0 && (
-        <div className="empty-state card">
-          <h2>لا توجد نتائج مطابقة</h2>
-          <p className="text-xs text-zinc-400">تأكد من كتابة اسم المستخدم أو الاسم الصحيح.</p>
-        </div>
+        <EmptyState className="card rounded-2xl" />
       )}
     </section>
   );

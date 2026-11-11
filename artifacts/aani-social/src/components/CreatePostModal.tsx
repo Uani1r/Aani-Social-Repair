@@ -6,6 +6,7 @@ import UserIdentity from './UserIdentity';
 import PostMetadataChips from './PostMetadataChips';
 import PostVideoPreview from './PostVideoPreview';
 import { ListSkeleton } from './Skeletons';
+import EmptyState from './EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type PostDestination, type PostMetadataTag, type Profile, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
@@ -417,7 +418,7 @@ export default function CreatePostModal({
                     </button>
                   ))}
                   {!mentionLoading && tagInput.trim() && mentionCandidates.length === 0 && !tagError && (
-                    <p className="py-3 text-center text-xs text-white/45">لا توجد حسابات مطابقة</p>
+                    <EmptyState />
                   )}
                 </div>
               </>

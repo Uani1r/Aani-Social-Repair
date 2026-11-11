@@ -1,5 +1,6 @@
 import { Check } from 'lucide-react';
 
+import EmptyState from '../EmptyState';
 import { displayName, type Profile } from '../../lib/types';
 
 const ShareRecipientList = ({
@@ -72,11 +73,7 @@ const ShareRecipientList = ({
           </button>
         ))
       ) : (
-        <p className="py-4 text-[11px] text-zinc-500">
-          {term.trim()
-            ? 'لا توجد نتائج مطابقة بين أصدقائك'
-            : 'لا يوجد أصدقاء أو متابَعون بعد — تابع أشخاصاً ليظهروا هنا'}
-        </p>
+        <EmptyState className="py-4" />
       )}
     </div>
   </div>

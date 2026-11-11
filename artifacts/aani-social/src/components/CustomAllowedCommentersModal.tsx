@@ -3,6 +3,7 @@ import { Check, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
 
@@ -150,9 +151,7 @@ export default function CustomAllowedCommentersModal({
           {loading && <ListSkeleton count={5} compact className="px-2" />}
           {!loading && failed && <p role="alert" className="py-8 text-center text-xs text-rose-300">تعذر تحميل الأصدقاء المتبادلين. تحقق من الاتصال ثم حاول مرة أخرى.</p>}
           {!loading && !failed && visiblePeople.length === 0 && (
-            <p className="py-8 text-center text-xs text-white/50">
-              {people.length ? 'لا توجد نتائج مطابقة' : 'لا توجد حسابات بمتابعة متبادلة بعد'}
-            </p>
+            <EmptyState className="py-8" />
           )}
           {!loading && !failed && visiblePeople.map(person => {
             const checked = selection.has(person.id);

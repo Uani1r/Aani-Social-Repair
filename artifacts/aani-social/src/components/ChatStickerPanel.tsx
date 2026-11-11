@@ -4,6 +4,7 @@ import { ArrowRight, Clock, ImagePlus, Plus, Store } from 'lucide-react';
 import { toast } from 'sonner';
 
 import StickerStudio from '@/components/StickerStudio';
+import EmptyState from '@/components/EmptyState';
 import emojiCatalog from '@/data/emoji-catalog.json';
 import { EMOJI_CATEGORY_LABELS, normalizeEmojiCatalog, TwemojiEmoji, type EmojiChoice } from '@/components/TwemojiText';
 import type { ChatStickerPayload } from '@/components/ChatStickerMessage';
@@ -352,9 +353,9 @@ export default function ChatStickerPanel({
                     ))}
                   </div>
                 ) : selectedCategory === 'recent' ? (
-                  <div className="messages-sticker-empty">لم تُستخدم إيموجيات مؤخراً بعد.</div>
+                  <EmptyState className="py-6" />
                 ) : (
-                  <div className="messages-sticker-empty">لا توجد إيموجيات في هذه الفئة.</div>
+                  <EmptyState className="py-6" />
                 )}
               </>
             )}

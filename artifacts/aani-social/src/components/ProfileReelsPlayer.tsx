@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 
 import ReelSlide from '@/components/ReelSlide';
 import { ReelsSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -130,7 +131,7 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
         <ReelsSkeleton />
       ) : reelsList.length === 0 ? (
         <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white">
-          <p className="text-lg font-bold">لا توجد مقاطع ريلز لعرضها</p>
+          <EmptyState />
           <button
             type="button"
             onClick={onClose}

@@ -8,6 +8,7 @@ import Avatar from './Avatar';
 import { ListSkeleton } from './Skeletons';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
+import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
 
@@ -299,7 +300,7 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
           ) : error ? (
             <p className="py-8 text-center text-xs text-zinc-400">تعذر تحميل قائمة الإعجابات.</p>
           ) : users.length === 0 ? (
-            <p className="py-8 text-center text-xs text-zinc-400">لا توجد إعجابات بعد.</p>
+            <EmptyState />
           ) : (
             <ul className="space-y-1">
               {sortedUsers.map(user => {

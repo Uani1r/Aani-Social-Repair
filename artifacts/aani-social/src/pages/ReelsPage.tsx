@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'wouter';
-import { Film as FilmIcon } from 'lucide-react';
 
 import ReelSlide from '@/components/ReelSlide';
 import { ReelsSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
 import { getPostDestination } from '@/lib/types';
@@ -84,10 +84,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
         </div>
       )}
       {!loading && !error && !visiblePosts.length && (
-        <div className="empty-state flex h-full flex-col items-center justify-center text-center text-white">
-          <FilmIcon size={36} className="mb-2 text-pink-500" />
-          <h2 className="text-lg font-bold">لا يوجد ريلز منشور حالياً</h2>
-        </div>
+        <EmptyState className="h-full" />
       )}
       {visiblePosts.map(post => {
         const pending = pendingById.get(post.id);

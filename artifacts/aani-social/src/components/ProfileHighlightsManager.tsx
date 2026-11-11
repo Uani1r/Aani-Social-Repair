@@ -6,6 +6,7 @@ import { Check, ChevronLeft, Heart, ImagePlus, Loader2, MoreVertical, Pencil, Pl
 import Avatar from '@/components/Avatar';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import { GridSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -587,9 +588,7 @@ export default function ProfileHighlightsManager({
           ) : archiveError ? (
             <div role="alert" className="rounded-2xl border border-red-900/70 bg-red-950/30 p-4 text-sm text-red-200">تعذر تحميل الأرشيف: {archiveError}</div>
           ) : archiveStories.length === 0 ? (
-            <div className="grid min-h-56 place-items-center rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-6 text-center">
-              <div><p className="font-bold">لا توجد قصص منتهية في الأرشيف بعد</p><p className="mt-2 text-sm text-zinc-400">يمكنك اختيار الاستوديو لإضافة صورة أو فيديو مباشرة إلى أبرز القصص.</p></div>
-            </div>
+            <EmptyState className="min-h-56 rounded-2xl border border-dashed border-white/15 bg-white/[0.03] p-6" />
           ) : (
             <>
               <p className="mb-3 text-xs text-zinc-400">اختر قصة منتهية لمعاينتها ثم أضفها إلى مجموعة.</p>

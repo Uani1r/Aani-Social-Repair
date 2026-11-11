@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Loader2, MessageCircle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 import FeedPostCard from '../components/FeedPostCard';
 import { FeedSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { firstMediaUrlOfPost, preloadMediaList } from '@/lib/mediaPreload';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { usePosts } from '@/hooks/usePosts';
@@ -272,13 +273,7 @@ export default function FeedPage({
       )}
 
       {!loading && !error && visiblePosts.length === 0 && (
-        <div className="empty-state card text-center p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50">
-          <div className="w-12 h-12 bg-pink-500/10 text-pink-500 rounded-full flex items-center justify-center mx-auto mb-3">
-            <MessageCircle size={22} />
-          </div>
-          <h2 className="text-white font-bold text-base mb-1">لا يوجد محتوى منشور حالياً</h2>
-          <p className="text-zinc-400 text-xs">انقر على علامة (+) في الأعلى لنشر أول منشور لك!</p>
-        </div>
+        <EmptyState className="card rounded-2xl p-8" />
       )}
 
       {visiblePosts.length > 0 && (

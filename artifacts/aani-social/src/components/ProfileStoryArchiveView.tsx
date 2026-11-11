@@ -10,6 +10,7 @@ import type { ProfileHighlight, ProfileHighlightCollectionSummary } from '@/comp
 import { decodeStoryFilterKey, getStoryFilterOverlay } from '@/lib/storyFilters';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { GridSkeleton, ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 
 type HighlightCollectionOption = Pick<ProfileHighlightCollectionSummary, 'id' | 'title'>;
 
@@ -240,11 +241,7 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
       ) : loading && stories.length === 0 ? (
         <GridSkeleton count={9} className="px-2 py-6" />
       ) : stories.length === 0 ? (
-        <div className="flex flex-col items-center rounded-2xl border border-[#242424] bg-[#0a0a0a] px-5 py-12 text-center">
-          <Archive size={30} className="text-zinc-600" />
-          <p className="mt-3 text-sm font-semibold text-zinc-300">لا توجد قصص مؤرشفة بعد</p>
-          <p className="mt-2 text-xs leading-6 text-zinc-500">ستظهر القصص هنا بعد انتهاء مدة عرضها.</p>
-        </div>
+        <EmptyState className="rounded-2xl border border-[#242424] bg-[#0a0a0a] px-5 py-12" />
       ) : (
         <div className="grid grid-cols-3 gap-2">
           {stories.map(story => (

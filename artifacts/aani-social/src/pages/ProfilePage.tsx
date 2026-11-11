@@ -11,6 +11,7 @@ import FeedPostCard from '@/components/FeedPostCard';
 import ProfileFeedViewer from '@/components/ProfileFeedViewer';
 import ProfileReelsPlayer from '@/components/ProfileReelsPlayer';
 import { ListSkeleton, ProfileSkeleton, GridSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -1585,7 +1586,7 @@ export default function ProfilePage({
                           <span className="profile-reorder-copy"><strong>{collection.title}</strong><small>{collection.stories.length} قصص</small></span>
                         </button>
                       );
-                    }) : <p className="profile-reorder-empty">لا توجد قصص مميزة لترتيبها.</p>}
+                    }) : <EmptyState className="py-6" />}
                   </div>
                   <h3>المنشورات</h3>
                   <div className="profile-reorder-list" role="list">
@@ -1612,7 +1613,7 @@ export default function ProfilePage({
                           <span className="profile-reorder-copy"><strong>{post.content || 'منشور وسائط'}</strong><small>{new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(post.created_at))}</small></span>
                         </button>
                       );
-                    }) : <p className="profile-reorder-empty">لا توجد منشورات قابلة لإعادة الترتيب.</p>}
+                    }) : <EmptyState className="py-6" />}
                   </div>
                   {profileReorderSaving && <p className="profile-reorder-saving" role="status">جارٍ حفظ الترتيب…</p>}
                 </section>
@@ -1960,7 +1961,7 @@ export default function ProfilePage({
                       </div>
                     ))
                   ) : (
-                    <p className="profile-settings-empty">{settingsScreen === 'blocked' ? 'لا توجد حسابات محظورة.' : 'لا توجد حسابات مكتومة أو مخفية.'}</p>
+                    <EmptyState className="py-6" />
                   )}
                 </>
               ) : settingsScreen === 'subscriptions' ? (
@@ -1976,8 +1977,7 @@ export default function ProfilePage({
                   <section>
                     <p className="profile-settings-section-title">الباقات والعروض المتاحة</p>
                     <div className="profile-settings-subscription-empty">
-                      <p className="profile-settings-subscription-plan">لا توجد باقات مدفوعة متاحة حالياً</p>
-                      <p className="profile-settings-note">ستظهر الباقات والعروض هنا عند تفعيل خدمة الاشتراكات.</p>
+                      <EmptyState className="py-6" />
                     </div>
                   </section>
                   <div className="profile-settings-subscription-actions">
@@ -1989,8 +1989,7 @@ export default function ProfilePage({
               ) : settingsScreen === 'billing' ? (
                 <div className="profile-settings-subscription-screen">
                   <div className="profile-settings-subscription-empty">
-                    <p className="profile-settings-subscription-plan">لا توجد فواتير أو معاملات مالية سابقة.</p>
-                    <p className="profile-settings-note">سيظهر سجل الفواتير والمدفوعات هنا بعد تفعيل خدمة الاشتراكات والدفع.</p>
+                    <EmptyState className="py-6" />
                   </div>
                 </div>
               ) : settingsScreen === 'archive' ? (
@@ -2293,17 +2292,11 @@ export default function ProfilePage({
               ? taggedPosts
               : displayProfilePosts.filter(post => post.type !== 'text');
         if (!mediaPosts.length) {
-          const emptyMessage = profileContentTab === 'videos'
-            ? 'لا توجد فيديوهات منشورة.'
-            : profileContentTab === 'reposts'
-              ? 'لا توجد إعادات نشر بعد.'
-              : profileContentTab === 'tagged'
-                ? 'لا توجد منشورات تمت الإشارة إليك فيها بعد'
-                : 'لا توجد صور أو فيديوهات منشورة.';
+          // الحالة الفارغة الموحدة: الشعار وكلمة «لا يوجد» فقط
           if (profileContentTab === 'tagged' && taggedError) {
             return <p role="alert" className="mt-6 text-center text-sm text-rose-300">{taggedError}</p>;
           }
-          return <p className="mt-6 text-center text-sm text-zinc-400">{emptyMessage}</p>;
+          return <EmptyState className="min-h-64" />;
         }
         return (
           <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black content-fade-in">

@@ -17,6 +17,7 @@ import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, type Profile } from '@/lib/types';
@@ -2920,13 +2921,11 @@ export default function MessagesPage({
               );
             })}
             {(!contactsError || conversations.length > 0) && tabConversations.length > 0 && matchingConversationCount === 0 && (
-              <div className="messages-list-status">لا توجد محادثات مطابقة.</div>
+              <EmptyState className="py-6" />
             )}
             {(!contactsError || conversations.length > 0) && tabConversations.length === 0 && (
               <div className="messages-list-empty">
-                <MessageCircle size={26} />
-                <span>{activeTab === 'requests' ? 'لا توجد طلبات مراسلة' : 'لا توجد محادثات بعد'}</span>
-                <small>{activeTab === 'requests' ? 'ستظهر هنا الرسائل الواردة من حسابات غير متصلة بك.' : 'ابدأ محادثة جديدة مع أحد الحسابات.'}</small>
+                <EmptyState className="py-6" />
                 {activeTab === 'messages' && <button type="button" onClick={openNewMessage}>إرسال رسالة</button>}
               </div>
             )}
@@ -3700,7 +3699,7 @@ export default function MessagesPage({
             <div className="messages-gallery-scroll">
               {galleryView === 'media' ? (
                 mediaGalleryItems.length === 0 ? (
-                  <div className="messages-gallery-empty">لا توجد صور أو فيديوهات في هذه المحادثة.</div>
+                  <EmptyState className="py-10" />
                 ) : (
                   <div className="messages-gallery-grid">
                     {mediaGalleryItems.map(({ message, url, index, caption }) => (
@@ -3724,7 +3723,7 @@ export default function MessagesPage({
                   </div>
                 )
               ) : sharedMessages.length === 0 ? (
-                <div className="messages-gallery-empty">لا توجد منشورات أو ريلز متبادلة في هذه المحادثة.</div>
+                <EmptyState className="py-10" />
               ) : (
                 <div className="messages-gallery-grid">
                   {sharedMessages.map(message => {
@@ -3771,7 +3770,7 @@ export default function MessagesPage({
                 </header>
                 <div className="messages-gallery-forward-list">
                   {forwardableConversations.length === 0 ? (
-                    <p>لا توجد محادثات أخرى لإعادة الإرسال إليها.</p>
+                    <EmptyState className="py-6" />
                   ) : forwardableConversations.map(conversation => (
                     <button
                       type="button"
@@ -4051,7 +4050,7 @@ export default function MessagesPage({
                 </button>
               ))}
               {!newMessageLoading && !newMessageError && newMessageProfiles.length === 0 && (
-                <div className="messages-list-status">لا توجد حسابات مطابقة.</div>
+                <EmptyState className="py-6" />
               )}
             </div>
           </section>
@@ -4129,7 +4128,7 @@ export default function MessagesPage({
             <div className="messages-broadcast-list">
               {mutualFollowersLoading && <MessagesSkeleton count={5} />}
               {!mutualFollowersLoading && mutualFollowers.length === 0 && (
-                <div className="messages-list-empty"><span>لا يوجد متابعون متبادلون</span><small>ستظهر هنا الحسابات التي تتابعها وتتابعك.</small></div>
+                <div className="messages-list-empty"><EmptyState className="py-6" /></div>
               )}
               {!mutualFollowersLoading && mutualFollowers.map(person => (
                 <label key={person.id} className="messages-broadcast-person">
@@ -4233,7 +4232,7 @@ export default function MessagesPage({
             <p className="messages-archive-note">تبقى المحادثات هنا بهدوء حتى عند وصول رسائل جديدة.</p>
             <div className="messages-archive-list">
               {archivedConversations.length === 0 ? (
-                <div className="messages-list-empty"><Archive size={26} /><span>لا توجد محادثات مؤرشفة</span><small>ستظهر هنا المحادثات التي أرشفتها.</small></div>
+                <div className="messages-list-empty"><EmptyState className="py-6" /></div>
               ) : archivedConversations.map(conversation => (
                 <div className="messages-archive-item" key={conversation.profile.id}>
                   <Link

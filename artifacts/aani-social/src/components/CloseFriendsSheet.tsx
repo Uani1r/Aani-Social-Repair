@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
 
@@ -197,9 +198,7 @@ export default function CloseFriendsSheet({ open, currentUserId, onClose }: Clos
           )}
           {!loading && failed && <p className="py-8 text-center text-[11px] text-red-300">تعذر تحميل القائمة. حاول مرة أخرى.</p>}
           {!loading && !failed && visiblePeople.length === 0 && (
-            <p className="py-8 text-center text-[11px] text-white/50">
-              {people.length ? 'لا توجد نتائج مطابقة' : 'لا يوجد أصدقاء بمتابعة متبادلة بعد'}
-            </p>
+            <EmptyState className="py-8" />
           )}
           {!loading && !failed && visiblePeople.map(person => {
             const selected = selectedIds.has(person.id);

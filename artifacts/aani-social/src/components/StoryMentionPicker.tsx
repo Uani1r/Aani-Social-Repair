@@ -3,6 +3,7 @@ import { Check, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
 
@@ -185,9 +186,7 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
           )}
 
           {!loading && !failed && people.length === 0 && (
-            <p className="py-8 text-center text-[11px] text-white/50">
-              {allowedIds && allowedIds.length === 0 ? 'لا يوجد أشخاص متاحون للإشارة' : 'لا توجد نتائج مطابقة'}
-            </p>
+            <EmptyState className="py-8" />
           )}
 
           {people.map(person => {

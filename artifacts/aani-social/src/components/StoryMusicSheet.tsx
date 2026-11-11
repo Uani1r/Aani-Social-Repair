@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Music2, Search, X } from 'lucide-react';
 
 import { MusicTracksSkeleton } from '@/components/Skeletons';
+import EmptyState from '@/components/EmptyState';
 
 import {
   MUSIC_FEATURE_ENABLED,
@@ -108,7 +109,7 @@ export default function StoryMusicSheet({ open, onClose, onSelect }: StoryMusicS
               <p className="py-4 text-center text-[11px] text-white/50">تعذّر تحميل المكتبة</p>
             )}
             {!loading && !failed && tracks.length === 0 && (
-              <p className="py-4 text-center text-[11px] text-white/50">لا توجد نتائج</p>
+              <EmptyState />
             )}
             {!loading &&
               !failed &&
