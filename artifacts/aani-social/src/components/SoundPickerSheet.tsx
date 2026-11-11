@@ -54,6 +54,8 @@ export default function SoundPickerSheet() {
   const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null);
   const trimPlayingRef = useRef(false);
   trimPlayingRef.current = trimPlaying;
+  // مؤشر تحميل المعاينة الحية في شاشة الاقتصاص: Spinner فوراً ثم Pause عند أول نغمة
+  const [trimLoading, setTrimLoading] = useState(false);
   // رابط قياس المدة يُصيَّر مع شاشة الاقتصاص (state): العنصر غير موجود في
   // شجرة DOM لحظة فتح الشاشة فلا تُقرأ المدة أبداً ويتداخل المقبضان عند 0:00
   const [probeSrc, setProbeSrc] = useState('');
@@ -205,18 +207,45 @@ export default function SoundPickerSheet() {
     if (!trimTarget?.source_video_url) return;
     setPlayingId(null);
     setLoadingPreviewId(null);
+    // Spinner فوراً ثم Pause عند أول نغمة — .play() يبدأ فوراً بالتوازي مع
+    // الجلب (بلا انتظار المدة أو الميتاداتا)
+    setTrimLoading(true);
     playInstant(trimTarget.source_video_url, {
       loop: false,
       // يقرأ المسودة في كل نبضة timeupdate: يبدأ الاستماع من زمن البداية لحظة السحب ويعود إليه تلقائياً
       getTrim: () => trimDraftRef.current,
-      onPlaying: () => setTrimPlaying(true),
-      onEnded: () => setTrimPlaying(false),
-      onError: () => setTrimPlaying(false),
+      onPlaying: () => {
+        setTrimLoading(false);
+        setTrimPlaying(true);
+      },
+      onEnded: () => {
+        setTrimLoading(false);
+        setTrimPlaying(false);
+      },
+      onError: () => {
+        setTrimLoading(false);
+        setTrimPlaying(false);
+      },
+      // iOS يمنع قراءة المدة قبل إيماءة مستخدم — تُقرأ هنا لحظة بدء التشغيل الفعلي
+      onLoadedMetadata: duration => {
+        if (trimDurationLoadedRef.current) {
+          setSoundDuration(current => (current > 0 ? current : duration));
+          return;
+        }
+        trimDurationLoadedRef.current = true;
+        setSoundDuration(duration);
+        // المقبض الأيمن يقرأ المدة الكلية تلقائياً (بحد 15 ثانية)
+        setTrimDraft(prev => ({
+          start: Math.min(prev.start, Math.max(0, duration - 0.5)),
+          end: Math.min(Math.max(prev.end, 0.5), Math.min(MAX_TRIM_SECONDS, duration)),
+        }));
+      },
     });
   };
 
   const stopTrimPreview = () => {
     stopInstant();
+    setTrimLoading(false);
     setTrimPlaying(false);
   };
 
@@ -230,10 +259,11 @@ export default function SoundPickerSheet() {
     if (!draggingHandle) return undefined;
     const valueFromPointer = (clientX: number): number | null => {
       const track = trimTrackRef.current;
-      if (!track || soundDuration <= 0) return null;
+      if (!track) return null;
       const rect = track.getBoundingClientRect();
       const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(rect.width, 1)));
-      return ratio * soundDuration;
+      // قبل وصول المدة الحقيقية (iOS) يُحتسب السحب على الحد الأقصى 15 ثانية
+      return ratio * (soundDuration > 0 ? soundDuration : MAX_TRIM_SECONDS);
     };
     const onMove = (event: PointerEvent) => {
       const value = valueFromPointer(event.clientX);
@@ -296,8 +326,11 @@ export default function SoundPickerSheet() {
 
   if (!open) return null;
 
-  const startPercent = soundDuration > 0 ? (trimDraft.start / soundDuration) * 100 : 0;
-  const endPercent = soundDuration > 0 ? (trimDraft.end / soundDuration) * 100 : 0;
+  // مدة الشريط الفعلية: قبل وصول المدة الحقيقية (iOS يمنع قراءتها قبل إيماءة
+  // مستخدم) يُعرض الحد الأقصى 15 ثانية — فيمتد المقبضان من 0% إلى 100% بلا تداخل
+  const trackDuration = soundDuration > 0 ? soundDuration : MAX_TRIM_SECONDS;
+  const startPercent = (trimDraft.start / trackDuration) * 100;
+  const endPercent = (trimDraft.end / trackDuration) * 100;
 
   return createPortal(
     <div
@@ -346,14 +379,16 @@ export default function SoundPickerSheet() {
                   type="button"
                   onClick={toggleTrimPreview}
                   disabled={!trimTarget.source_video_url}
-                  aria-label={trimPlaying ? 'إيقاف معاينة الجزء المختار' : 'معاينة الجزء المختار'}
+                  aria-label={trimLoading ? 'جارٍ تحميل المعاينة' : trimPlaying ? 'إيقاف معاينة الجزء المختار' : 'معاينة الجزء المختار'}
                   className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-lg transition disabled:opacity-40 hover:brightness-105 active:scale-95"
                 >
-                  {trimPlaying ? <Pause size={22} /> : <Play size={22} />}
+                  {trimLoading
+                    ? <Loader2 size={22} className="animate-spin" />
+                    : trimPlaying ? <Pause size={22} /> : <Play size={22} />}
                 </button>
                 <div className="text-xs tabular-nums text-zinc-400">
                   <div>{formatSeconds(trimDraft.start)} — {formatSeconds(trimDraft.end)}</div>
-                  <div className="mt-0.5 text-[10px] text-zinc-600">المدة {formatSeconds(soundDuration)}</div>
+                  <div className="mt-0.5 text-[10px] text-zinc-600">المدة {formatSeconds(trackDuration)}</div>
                 </div>
               </div>
 
@@ -382,7 +417,7 @@ export default function SoundPickerSheet() {
                 />
                 {(['start', 'end'] as const).map(handle => {
                   const value = handle === 'start' ? trimDraft.start : trimDraft.end;
-                  const percent = soundDuration > 0 ? (value / soundDuration) * 100 : 0;
+                  const percent = (value / trackDuration) * 100;
                   return (
                     <button
                       key={handle}
@@ -412,7 +447,7 @@ export default function SoundPickerSheet() {
               </div>
               <div className="flex justify-between px-1 text-[10px] tabular-nums text-zinc-500" dir="ltr">
                 <span>0:00</span>
-                <span>{formatSeconds(soundDuration)}</span>
+                <span>{formatSeconds(trackDuration)}</span>
               </div>
               <p className="mt-2 text-center text-[11px] text-white/40">
                 اسحب المقبضين لتحديد الجزء — الحد الأقصى {MAX_TRIM_SECONDS} ثانية، والجميع سيسمع نفس الجزء بعد النشر.

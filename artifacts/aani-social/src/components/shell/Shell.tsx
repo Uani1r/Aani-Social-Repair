@@ -14,7 +14,7 @@ import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSou
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
-import { playInstant, stopInstant } from '@/lib/instantAudio';
+import { playInstant, stopInstant, warmAudioContext } from '@/lib/instantAudio';
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
@@ -931,6 +931,9 @@ export default function Shell({
   // لحظة اختيار الصورة (أقل من 50ms) دون أي استعلام في المسار الحرج
   useEffect(() => {
     if (!isPublishFlowOpen) return;
+    // تنشيط صامت لسياق الصوت فور فتح واجهة النشر (داخل إيماءة المستخدم):
+    // جعل الجلسة موثوقة للتشغيل الفوري التلقائي بلمح البصر بلا حظر
+    warmAudioContext();
     void warmDefaultSounds();
   }, [isPublishFlowOpen]);
 
@@ -996,6 +999,8 @@ export default function Shell({
   useEffect(() => {
     const unlockAudio = () => {
       void unlockNotificationAudio();
+      // تنشيط صامت لسياق الصوت (Silent Web Audio Warm-up): فتح سياسة التشغيل التلقائي
+      warmAudioContext();
       window.removeEventListener('pointerdown', unlockAudio);
       window.removeEventListener('keydown', unlockAudio);
     };

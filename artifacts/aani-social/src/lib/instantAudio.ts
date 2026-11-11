@@ -31,6 +31,8 @@ export type InstantPlayOptions = {
   onEnded?: () => void;
   /** عند فشل التشغيل (رابط مفقود أو رفض المتصفح) */
   onError?: () => void;
+  /** لحظة توفر المدة الكاملة (iOS يمنع قراءتها قبل إيماءة المستخدم — تُقرأ من عنصر التشغيل الفعلي) */
+  onLoadedMetadata?: (duration: number) => void;
 };
 
 const storageOrigin = (() => {
@@ -71,6 +73,7 @@ function clearHandlers(): void {
   audio.onplaying = null;
   audio.onended = null;
   audio.ontimeupdate = null;
+  audio.onloadedmetadata = null;
   playingReported = false;
 }
 
@@ -129,6 +132,14 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
     el.onended = () => {
       if (generation !== playGeneration) return;
       options.onEnded?.();
+    };
+  }
+
+  if (options.onLoadedMetadata) {
+    el.onloadedmetadata = () => {
+      if (generation !== playGeneration) return;
+      const duration = el.duration;
+      if (Number.isFinite(duration) && duration > 0) options.onLoadedMetadata?.(duration);
     };
   }
 
@@ -204,5 +215,37 @@ export function warmAudioCache(url: string, bytes = 131072): void {
       .finally(() => window.clearTimeout(timer));
   } catch {
     /* الجلب الاستباقي اختياري — تجاهل أي فشل بصمت */
+  }
+}
+
+let audioContext: AudioContext | null = null;
+
+/**
+ * تنشيط صامت لسياق الصوت (Silent Web Audio Warm-up):
+ * ينشئ AudioContext ويشغّل نغمة صامتة قصيرة جداً (مخزن مؤقت فارغ) لجعل
+ * المتصفح يعتبر الجلسة موثوقة (user-gesture unlocked) فيسمح بالتشغيل
+ * الفوري التلقائي بلمح البصر دون حظر. يُستدعى داخل إيماءة مستخدم
+ * (فتح واجهة النشر / أول لمسة) ويُستأنف عند كل استدعاء لاحق.
+ */
+export function warmAudioContext(): void {
+  if (typeof window === 'undefined') return;
+  if (audioContext) {
+    if (audioContext.state === 'suspended') void audioContext.resume().catch(() => undefined);
+    return;
+  }
+  try {
+    const Context = window.AudioContext
+      || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Context) return;
+    audioContext = new Context();
+    // مخزن مؤقت فارغ (عينة واحدة صامتة): إشارة تشغيل بلا صوت مسموع
+    const silentBuffer = audioContext.createBuffer(1, 1, audioContext.sampleRate);
+    const source = audioContext.createBufferSource();
+    source.buffer = silentBuffer;
+    source.connect(audioContext.destination);
+    source.start(0);
+    if (audioContext.state === 'suspended') void audioContext.resume().catch(() => undefined);
+  } catch {
+    /* سياق الصوت غير مدعوم في هذا السياق — التشغيل العادي يبقى يعمل */
   }
 }
