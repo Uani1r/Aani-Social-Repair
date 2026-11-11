@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Minus, Music2, Plus, X } from 'lucide-react';
+import { AtSign, Crop, Loader2, MapPin, Minus, Music2, Plus, Search, X } from 'lucide-react';
 
+import Avatar from '@/components/Avatar';
+import PostMetadataChips from '@/components/PostMetadataChips';
+import UserIdentity from '@/components/UserIdentity';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { openSoundPicker } from '@/lib/sounds';
 import { appendVideoTrimFragment, DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
+import { supabase } from '@/lib/supabase';
+import { displayName } from '@/lib/types';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 4;
@@ -11,6 +16,8 @@ const MAX_ZOOM = 4;
 const OUTPUT_WIDTH = 1080;
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 const distanceBetween = (first, second) => Math.hypot(second.x - first.x, second.y - first.y);
+
+const mapsUrl = query => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
 
 const blobToDataUrl = blob => new Promise((resolve, reject) => {
   const reader = new FileReader();
@@ -76,10 +83,24 @@ async function cropImage(image, view, frameBounds, aspectValue, aspectLabel) {
   return { file, dataUrl: await blobToDataUrl(blob) };
 }
 
-// شاشة المعاينة الأولى: القص والتكبير والسحب مدموجان داخلها —
-// 3 قوالب قياسية فقط (4:5 الافتراضي، 3:4، 9:16) بلا قص حر،
-// وعند «التالي» تُجهَّز جميع الصور بنسبها المختارة دون أي شاشة قص إضافية.
-export default function ImagePreviewModal({ open, images, onImagesChange, music, onClearMusic, onClose, onNext }) {
+// الشاشة الموحدة لإنشاء منشور الصور: معاينة الوسائط + الوصف + الأدوات كنوافذ سفلية
+// (القص، الموسيقى، الإشارة إلى حساب، الموقع) + زر «نشر» مباشر في الهيدر.
+export default function ImagePreviewModal({
+  open,
+  images,
+  onImagesChange,
+  music,
+  onClearMusic,
+  caption,
+  onCaptionChange,
+  tags,
+  onTagsChange,
+  destination,
+  onDestinationChange,
+  userId,
+  onPublish,
+  onClose,
+}) {
   useOverlayBack(open, onClose);
   const trackRef = useRef(null);
   const cropFrameRef = useRef(null);
@@ -96,6 +117,15 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
   const [isFinishing, setIsFinishing] = useState(false);
   const activeImage = images[activeIndex];
   const activeMode = cropModes[activeIndex] || DEFAULT_IMAGE_ASPECT_LABEL;
+
+  // النوافذ السفلية: 'crop' | 'mention' | 'location' — تفتح فوق الشاشة الموحدة وتغلق للعودة إليها
+  const [toolPanel, setToolPanel] = useState(null);
+  const [mentionInput, setMentionInput] = useState('');
+  const [mentionResults, setMentionResults] = useState([]);
+  const [mentionLoading, setMentionLoading] = useState(false);
+  const [locationInput, setLocationInput] = useState('');
+  const [isLocating, setIsLocating] = useState(false);
+  const [tagError, setTagError] = useState('');
 
   const aspectFor = index => {
     const label = cropModes[index] || DEFAULT_IMAGE_ASPECT_LABEL;
@@ -133,6 +163,10 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
       setCropModes({});
       setCropView({ scale: MIN_ZOOM, x: 0, y: 0 });
       setCropError('');
+      setToolPanel(null);
+      setMentionInput('');
+      setLocationInput('');
+      setTagError('');
     }
   }, [open, images.length]);
 
@@ -141,8 +175,6 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
     setCropView(cropViewsRef.current.get(activeIndex) || { scale: MIN_ZOOM, x: 0, y: 0 });
     setCropError('');
   }, [activeIndex]);
-
-  // نظام الأصوات: زر الموسيقى يفتح مكتبة أصوات التطبيق (public.sounds) بدل ملفات الجهاز
 
   if (!open || images.length === 0 || !activeImage) return null;
 
@@ -272,8 +304,8 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
     });
   };
 
-  // «التالي»: تجهيز جميع الصور وفق قوالبها المختارة دون شاشة قص إضافية
-  const finishAndNext = async () => {
+  // «نشر»: تجهيز جميع الصور وفق قوالبها ثم جمعها مع الوصف والوسوم والصوت في طلب واحد
+  const publishNow = async () => {
     if (!activeImage || isFinishing) return;
     setIsFinishing(true);
     setCropError('');
@@ -288,7 +320,7 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
         croppedImages.push(await cropImage(images[index], view, bounds, aspectFor(index), label));
       }
       onImagesChange(croppedImages);
-      onNext();
+      onPublish(croppedImages);
     } catch (error) {
       setCropError(error instanceof Error ? error.message : 'تعذر تجهيز الصور. حاول مرة أخرى.');
     } finally {
@@ -296,19 +328,145 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
     }
   };
 
+  const toggleToolPanel = panel => {
+    setTagError('');
+    setToolPanel(current => current === panel ? null : panel);
+  };
+
+  // الوسوم: إضافة وإزالة (إشارة إلى حساب / موقع)
+  const addTag = tag => {
+    if (!onTagsChange) return;
+    onTagsChange([...(tags || []), tag]);
+  };
+  const removeTag = index => {
+    if (!onTagsChange || !tags) return;
+    onTagsChange(tags.filter((_, tagIndex) => tagIndex !== index));
+  };
+  const handleMentionSelect = person => {
+    addTag({
+      kind: 'mention',
+      label: person.username,
+      href: `/profile/${person.id}`,
+      profileId: person.id,
+      displayName: displayName(person),
+    });
+    setMentionInput('');
+    setMentionResults([]);
+    setToolPanel(null);
+  };
+
+  // بحث سريع عن حسابات للإشارة إليها (منشِّد بقصير)
+  useEffect(() => {
+    if (toolPanel !== 'mention') return undefined;
+    const term = mentionInput.trim().replace(/^@+/, '').replace(/[%_(),]/g, ' ').trim();
+    if (!term) {
+      setMentionResults([]);
+      setMentionLoading(false);
+      setMentionError('');
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setMentionLoading(true);
+      setMentionError('');
+      void (async () => {
+        try {
+          const [usernameResult, nameResult] = await Promise.all([
+            supabase.from('profiles')
+              .select('id, username, full_name, display_name, avatar_url, gender')
+              .neq('id', userId || '')
+              .ilike('username', `%${term}%`)
+              .limit(8),
+            supabase.from('profiles')
+              .select('id, username, full_name, display_name, avatar_url, gender')
+              .neq('id', userId || '')
+              .or(`full_name.ilike.%${term}%,display_name.ilike.%${term}%`)
+              .limit(8),
+          ]);
+          if (cancelled) return;
+          if (usernameResult.error && nameResult.error) {
+            setTagError('تعذر تحميل الحسابات. حاول مرة أخرى.');
+            setMentionResults([]);
+            return;
+          }
+          const seen = new Set();
+          const candidates = [...(usernameResult.data || []), ...(nameResult.data || [])]
+            .filter(person => person.id !== userId && !seen.has(person.id) && Boolean(seen.add(person.id)))
+            .slice(0, 8);
+          setMentionResults(candidates);
+        } catch {
+          if (!cancelled) {
+            setTagError('تعذر تحميل الحسابات. حاول مرة أخرى.');
+            setMentionResults([]);
+          }
+        } finally {
+          if (!cancelled) setMentionLoading(false);
+        }
+      })();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [toolPanel, mentionInput, userId]);
+
+  const handleLocationSubmit = () => {
+    const value = locationInput.trim();
+    if (!value) {
+      setTagError('أدخل اسم المكان أو عنوانه.');
+      return;
+    }
+    addTag({ kind: 'location', label: value, href: mapsUrl(value) });
+    setLocationInput('');
+    setTagError('');
+    setToolPanel(null);
+  };
+
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setTagError('الموقع غير متاح على هذا الجهاز. أدخل المكان يدوياً.');
+      return;
+    }
+    setIsLocating(true);
+    setTagError('');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const query = `${coords.latitude.toFixed(6)},${coords.longitude.toFixed(6)}`;
+        addTag({ kind: 'location', label: 'موقعي الحالي', href: mapsUrl(query) });
+        setIsLocating(false);
+        setToolPanel(null);
+      },
+      () => {
+        setIsLocating(false);
+        setTagError('تعذر تحديد موقعك. أدخل اسم المكان يدوياً.');
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 },
+    );
+  };
+
+  const soundPreviewUrl = music?.sourceVideoUrl
+    ? (music.soundTrim && music.soundTrim.end > music.soundTrim.start
+      ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
+      : music.sourceVideoUrl)
+    : null;
+
   return (
-    <div className="fixed inset-0 z-[140] flex flex-col bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label="معاينة الصور المختارة">
-      <header className="flex shrink-0 items-center justify-between px-5 pb-3 pt-[max(1rem,env(safe-area-inset-top))]">
-        <button type="button" onClick={onClose} aria-label="إغلاق معاينة الصور" className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-white/5 text-white transition hover:bg-white/10">
+    <div className="fixed inset-0 z-[140] flex flex-col bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label="إنشاء منشور">
+      {/* الهيدر: إلغاء (X) مقابل زر نشر مباشر */}
+      <header className="flex shrink-0 items-center justify-between px-5 py-3">
+        <button type="button" onClick={onClose} aria-label="إلغاء إنشاء المنشور" className="flex h-11 w-11 items-center justify-center rounded-full border border-white/15 bg-white/5 text-white transition hover:bg-white/10">
           <X size={23} />
         </button>
-        <span className="text-sm font-semibold text-white/70">{images.length > 1 ? `${activeIndex + 1} من ${images.length}` : 'معاينة الصور'}</span>
-        <button type="button" onClick={() => void finishAndNext()} disabled={isFinishing} className="flex min-w-24 items-center justify-center rounded-full bg-[#f1a17f] px-6 py-2.5 text-base font-bold text-black transition active:scale-95 disabled:opacity-60">
-          {isFinishing ? 'جارٍ التجهيز...' : 'التالي'}
+        <span className="text-sm font-semibold text-white/70">{images.length > 1 ? `${activeIndex + 1} من ${images.length}` : 'إنشاء منشور'}</span>
+        <button type="button" onClick={() => void publishNow()} disabled={isFinishing} className="flex min-w-24 items-center justify-center rounded-full bg-[#f1a17f] px-6 py-2.5 text-base font-bold text-black transition active:scale-95 disabled:opacity-60">
+          {isFinishing ? 'جارٍ النشر...' : 'نشر'}
         </button>
       </header>
 
-      <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center pb-44">
+      {/* قسم معاينة الوسائط */}
+      <div className="relative min-h-0 flex-1">
         <div
           ref={trackRef}
           onScroll={handleScroll}
@@ -370,10 +528,10 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
           ))}
         </div>
 
-        {cropError && <p role="alert" className="absolute bottom-3 left-4 right-4 text-center text-sm text-rose-300">{cropError}</p>}
+        {cropError && <p role="alert" className="absolute left-4 right-4 top-3 rounded-lg bg-black/70 px-3 py-1.5 text-center text-xs text-rose-300">{cropError}</p>}
 
         {images.length > 1 && (
-          <div className="absolute bottom-36 flex items-center justify-center gap-2" dir="ltr" aria-label="التنقل بين الصور">
+          <div className="absolute bottom-3 flex items-center justify-center gap-2" dir="ltr" aria-label="التنقل بين الصور" style={{ left: '50%', transform: 'translateX(-50%)' }}>
             {images.map((_, index) => (
               <button
                 key={index}
@@ -388,49 +546,31 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
         )}
       </div>
 
-      <div className="absolute bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 flex w-[min(94vw,390px)] -translate-x-1/2 flex-col gap-3 rounded-2xl border border-white/10 bg-[#242326]/95 px-3 py-3 shadow-2xl backdrop-blur-xl">
-        <div className="flex items-center justify-between gap-2" dir="rtl">
-          <button type="button" onClick={() => openSoundPicker()} aria-label={music ? 'تغيير الصوت من مكتبة الأصوات' : 'اختيار صوت من مكتبة الأصوات'} className="flex min-w-16 flex-col items-center gap-1 rounded-full px-3 py-1 text-[#f1a17f] transition hover:bg-white/5">
-            <Music2 size={22} />
-            <span className="text-[11px] font-medium">{music ? 'الصوت مرفق' : 'موسيقى'}</span>
-          </button>
-          <div role="group" aria-label="قالب القص" className="flex items-center gap-1 rounded-full bg-white/5 p-1">
-            {IMAGE_ASPECT_OPTIONS.map(option => (
-              <button
-                key={option.label}
-                type="button"
-                aria-pressed={activeMode === option.label}
-                onClick={() => selectCropMode(option.label)}
-                className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold transition ${activeMode === option.label ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <p className="text-center text-[10px] text-white/45">القالب الافتراضي 4:5 — 3:4 أطول، 9:16 يملأ طول الشاشة</p>
-        <div className="flex items-center gap-3" dir="ltr">
-          <button type="button" onClick={() => updateZoom(cropView.scale - 0.2)} aria-label="تصغير الصورة" disabled={cropView.scale <= MIN_ZOOM} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-40">
-            <Minus size={18} />
-          </button>
-          <input
-            type="range"
-            aria-label="تكبير الصورة داخل إطار القص"
-            min={MIN_ZOOM}
-            max={MAX_ZOOM}
-            step="0.01"
-            value={cropView.scale}
-            onChange={event => updateZoom(event.currentTarget.value)}
-            className="min-w-0 flex-1 accent-[#f1a17f]"
-          />
-          <button type="button" onClick={() => updateZoom(cropView.scale + 0.2)} aria-label="تكبير الصورة" disabled={cropView.scale >= MAX_ZOOM} className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-white disabled:opacity-40">
-            <Plus size={18} />
-          </button>
-        </div>
+      {/* القسم السفلي: الوصف + الوسوم + شريط الأدوات + النوافذ السفلية */}
+      <section className="shrink-0 space-y-3 border-t border-white/10 bg-[#141418] px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3">
+        {/* حقل الوصف: يدعم الهاشتاغات والإشارات كنص حر */}
+        <textarea
+          value={caption || ''}
+          onChange={event => onCaptionChange?.(event.currentTarget.value)}
+          maxLength={2000}
+          rows={2}
+          placeholder="اكتب وصفاً للمنشور... #هاشتاغ @إشارة"
+          aria-label="اكتب وصفاً للمنشور"
+          className="max-h-[120px] min-h-[56px] w-full resize-none overflow-y-auto rounded-xl border border-white/10 bg-white/[0.05] p-3 text-right text-sm leading-relaxed text-white outline-none transition placeholder:text-white/40 focus:border-[#f1a17f]/50"
+        />
 
-        {/* الصوت المختار من مكتبة أصوات التطبيق: يظهر قبل «التالي» ويمكن إزالته */}
+        {/* الوسوم المضافة (موقع/إشارة) */}
+        {tags && tags.length > 0 && (
+          <PostMetadataChips
+            tags={tags}
+            onRemove={index => removeTag(index)}
+            onMentionClick={() => setToolPanel(null)}
+          />
+        )}
+
+        {/* الصوت المختار من مكتبة الأصوات + التشغيل المباشر */}
         {music && (
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2" dir="rtl">
+          <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
             <span className="min-w-0 flex-1 truncate text-xs text-white">♫ {music.title}</span>
             <span className="shrink-0 text-[10px] text-white/45">صوت من المكتبة</span>
             {onClearMusic && (
@@ -440,19 +580,196 @@ export default function ImagePreviewModal({ open, images, onImagesChange, music,
             )}
           </div>
         )}
-        {/* التشغيل المباشر: الصوت المختار يعمل تلقائياً ومتزامناً مع المعاينة */}
-        {music && music.sourceVideoUrl && (
-          <audio
-            src={music.soundTrim && music.soundTrim.end > music.soundTrim.start
-              ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
-              : music.sourceVideoUrl}
-            loop
-            autoPlay
-            preload="auto"
-            className="hidden"
-          />
+        {soundPreviewUrl && (
+          <audio src={soundPreviewUrl} loop autoPlay preload="auto" className="hidden" />
         )}
-      </div>
+
+        {/* شريط الأزرار والخدمات */}
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar" dir="rtl">
+          <div className="flex items-center gap-1 rounded-full bg-white/5 p-1" role="group" aria-label="مكان ظهور المنشور">
+            <button
+              type="button"
+              aria-pressed={destination === 'feed'}
+              onClick={() => onDestinationChange?.('feed')}
+              className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold transition ${destination === 'feed' ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
+            >
+              الواجهة
+            </button>
+            <button
+              type="button"
+              aria-pressed={destination === 'reels'}
+              onClick={() => onDestinationChange?.('reels')}
+              className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold transition ${destination === 'reels' ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
+            >
+              الريلز
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => toggleToolPanel('crop')}
+            aria-pressed={toolPanel === 'crop'}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.07] px-3 py-2 text-[11px] font-semibold text-white/85 transition hover:bg-white/[0.12]"
+          >
+            <Crop size={14} />
+            قص
+          </button>
+          <button
+            type="button"
+            onClick={() => { setToolPanel(null); openSoundPicker(); }}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.07] px-3 py-2 text-[11px] font-semibold text-[#f1a17f] transition hover:bg-[#f1a17f]/15"
+          >
+            <Music2 size={14} />
+            موسيقى
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleToolPanel('mention')}
+            aria-pressed={toolPanel === 'mention'}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.07] px-3 py-2 text-[11px] font-semibold text-white/85 transition hover:bg-white/[0.12]"
+          >
+            <AtSign size={14} />
+            إشارة
+          </button>
+          <button
+            type="button"
+            onClick={() => toggleToolPanel('location')}
+            aria-pressed={toolPanel === 'location'}
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-white/[0.07] px-3 py-2 text-[11px] font-semibold text-white/85 transition hover:bg-white/[0.12]"
+          >
+            <MapPin size={14} />
+            موقع
+          </button>
+        </div>
+
+        {/* نافذة القص السفلية: قوالب الأبعاد + التكبير */}
+        {toolPanel === 'crop' && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-white/80">قص وتعديل الصورة</span>
+              <button type="button" aria-label="طي أداة القص" onClick={() => setToolPanel(null)} className="rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="mt-2 flex items-center gap-1" role="group" aria-label="قالب القص">
+              {IMAGE_ASPECT_OPTIONS.map(option => (
+                <button
+                  key={option.label}
+                  type="button"
+                  aria-pressed={activeMode === option.label}
+                  onClick={() => selectCropMode(option.label)}
+                  className={`rounded-full px-2.5 py-1.5 text-[11px] font-semibold transition ${activeMode === option.label ? 'bg-[#f1a17f] text-black' : 'text-white/75 hover:bg-white/10'}`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-3 flex items-center gap-3" dir="ltr">
+              <button type="button" onClick={() => updateZoom(cropView.scale - 0.2)} aria-label="تصغير الصورة" disabled={cropView.scale <= MIN_ZOOM} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white disabled:opacity-40">
+                <Minus size={18} />
+              </button>
+              <input
+                type="range"
+                aria-label="تكبير الصورة داخل إطار القص"
+                min={MIN_ZOOM}
+                max={MAX_ZOOM}
+                step="0.01"
+                value={cropView.scale}
+                onChange={event => updateZoom(event.currentTarget.value)}
+                className="min-w-0 flex-1 accent-[#f1a17f]"
+              />
+              <button type="button" onClick={() => updateZoom(cropView.scale + 0.2)} aria-label="تكبير الصورة" disabled={cropView.scale >= MAX_ZOOM} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/10 text-white disabled:opacity-40">
+                <Plus size={18} />
+              </button>
+            </div>
+            <p className="mt-2 text-center text-[10px] text-white/40">القالب الافتراضي 4:5 — اسحب الصورة داخل الإطار أو استخدم الزوايا</p>
+          </div>
+        )}
+
+        {/* نافذة الإشارة إلى حساب */}
+        {toolPanel === 'mention' && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-white/80">الإشارة إلى حساب</span>
+              <button type="button" aria-label="طي أداة الإشارة" onClick={() => toggleToolPanel('mention')} className="rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+                <X size={15} />
+              </button>
+            </div>
+            <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2">
+              <Search size={15} className="shrink-0 text-white/50" />
+              <input
+                type="search"
+                value={mentionInput}
+                onChange={event => { setMentionInput(event.currentTarget.value); setTagError(''); }}
+                placeholder="ابحث بالاسم أو اسم المستخدم"
+                className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/40"
+              />
+            </div>
+            <div className="mt-2 max-h-36 overflow-y-auto">
+              {mentionLoading && (
+                <p className="py-2 text-center text-xs text-white/50">جارٍ البحث...</p>
+              )}
+              {!mentionLoading && mentionResults.map(person => (
+                <button
+                  key={person.id}
+                  type="button"
+                  onClick={() => handleMentionSelect(person)}
+                  className="flex w-full items-center gap-3 rounded-xl px-2 py-2 text-right transition hover:bg-white/10"
+                >
+                  <Avatar profile={person} />
+                  <UserIdentity
+                    name={displayName(person)}
+                    username={person.username}
+                    className="min-w-0 flex-1"
+                    nameClassName="text-xs font-semibold text-white"
+                    usernameClassName="text-[10px] text-white/50"
+                  />
+                </button>
+              ))}
+              {!mentionLoading && mentionInput.trim() && mentionResults.length === 0 && !tagError && (
+                <p className="py-2 text-center text-xs text-white/40">لا نتائج مطابقة.</p>
+              )}
+            </div>
+            {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
+          </div>
+        )}
+
+        {/* نافذة إضافة الموقع */}
+        {toolPanel === 'location' && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-white/80">إضافة موقع</span>
+              <button type="button" aria-label="طي أداة الموقع" onClick={() => toggleToolPanel('location')} className="rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
+                <X size={15} />
+              </button>
+            </div>
+            <form
+              onSubmit={event => { event.preventDefault(); handleLocationSubmit(); }}
+              className="flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={locationInput}
+                onChange={event => { setLocationInput(event.currentTarget.value); setTagError(''); }}
+                placeholder="اسم المكان أو عنوانه"
+                className="min-w-0 flex-1 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none placeholder:text-white/40 focus:border-[#f1a17f]/40"
+              />
+              <button type="submit" className="rounded-xl bg-white px-3 py-2 text-xs font-bold text-zinc-900 transition hover:bg-zinc-200">
+                إضافة
+              </button>
+            </form>
+            <button
+              type="button"
+              onClick={handleUseCurrentLocation}
+              disabled={isLocating}
+              className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-white/[0.06] px-3 py-2 text-xs text-white/75 transition hover:bg-white/10 disabled:opacity-50"
+            >
+              {isLocating ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />}
+              {isLocating ? 'جارٍ تحديد الموقع...' : 'استخدم موقعي الحالي'}
+            </button>
+            {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -191,6 +191,8 @@ export default function Shell({
   } | null>(null);
   // التوليد التلقائي للوسائط: هل الوسائط الحالية خلفية مولّدة من الصوت؟
   const [autoSoundMedia, setAutoSoundMedia] = useState(false);
+  // وسوم منشور الصور من الشاشة الموحدة (موقع/إشارة)
+  const [imagePostTags, setImagePostTags] = useState<PostMetadataTag[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
   const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
@@ -1195,12 +1197,7 @@ export default function Shell({
     setImagePreviewImages([]);
     setSelectedFiles([]);
     setFileType(null);
-  };
-
-  const continueToPostCaption = () => {
-    setShowImagePreviewModal(false);
-    setImagePreviewImages([]);
-    setShowCreateModal(true);
+    setImagePostTags([]);
   };
 
   const handleSelectPublishVideo = (file: File) => {
@@ -1268,6 +1265,14 @@ export default function Shell({
     setShowPublishOptionsSheet(true);
   };
 
+  // النشر المباشر من الشاشة الموحدة لمنشورات الصور:
+  // يجمع الوسائط المقصوصة + الوصف + الوسوم + الصوت (sound_id وأوقات الاقتصاص) في طلب واحد
+  const handleImagePublishDirect = (croppedImages: { file: File; dataUrl: string }[]) => {
+    setShowImagePreviewModal(false);
+    setImagePreviewImages([]);
+    handlePublish(imagePostTags, destination, croppedImages.map(image => image.file), 'image');
+  };
+
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {
     setVideoTrim(range);
     setVideoCrop(crop);
@@ -1275,15 +1280,16 @@ export default function Shell({
     setShowCreateModal(true);
   };
 
-  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination) => {
+  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, filesOverride?: File[], fileTypeOverride?: 'image' | 'video' | null) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
     }
 
     const content = postText.trim();
-    const files = [...selectedFiles];
-    const mediaType = fileType;
+    // الوسائط قد تأتي مباشرة من الشاشة الموحدة (الصور المقصوصة) أو من حالة النافذة
+    const files = filesOverride ?? [...selectedFiles];
+    const mediaType = fileTypeOverride !== undefined ? fileTypeOverride : fileType;
     const trim = videoTrim;
     const crop = videoCrop;
     const metadata = [...postMetadata];
@@ -1634,6 +1640,7 @@ export default function Shell({
     setCreateError('');
     setPendingSound(null);
     setAutoSoundMedia(false);
+    setImagePostTags([]);
     // لا إعادة توجيه تلقائية للرئيسية: ابقَ في الشاشة التي كنت عليها،
     // والانتقال فقط عند تغيّر السياق الفعلي (نشر ريلز من غير شاشة الريلز،
     // أو مغادرة شاشة الريلز بعد نشر منشور تغذية)
@@ -1680,7 +1687,13 @@ export default function Shell({
         imagePreviewImages={imagePreviewImages}
         onImagePreviewImagesChange={handleImagePreviewChange}
         onCloseImagePreview={closeImagePreview}
-        onNextImagePreview={continueToPostCaption}
+        caption={postText}
+        onCaptionChange={setPostText}
+        imageTags={imagePostTags}
+        onImageTagsChange={setImagePostTags}
+        imageDestination={destination}
+        onImageDestinationChange={setDestination}
+        onImagePublish={handleImagePublishDirect}
         showVideoPreviewModal={showVideoPreviewModal}
         videoPreviewUrl={fileType === 'video' ? filePreviews[0]?.url || null : null}
         videoTrim={videoTrim}

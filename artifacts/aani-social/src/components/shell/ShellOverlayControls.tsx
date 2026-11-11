@@ -22,7 +22,6 @@ type ShellOverlayControlsProps = {
   imagePreviewImages: { file: File; dataUrl: string }[];
   onImagePreviewImagesChange: (images: { file: File; dataUrl: string }[]) => void;
   onCloseImagePreview: () => void;
-  onNextImagePreview: () => void;
   showVideoPreviewModal: boolean;
   videoPreviewUrl: string | null;
   videoTrim: VideoTrimRange | null;
@@ -53,6 +52,14 @@ type ShellOverlayControlsProps = {
   autoSoundMedia: boolean;
   onReplaceAutoMedia: () => void;
   onClearAutoMedia: () => void;
+  /** الشاشة الموحدة لمنشورات الصور: الوصف + الوسوم + الوجهة + النشر المباشر */
+  caption: string;
+  onCaptionChange: (caption: string) => void;
+  imageTags: PostMetadataTag[];
+  onImageTagsChange: (tags: PostMetadataTag[]) => void;
+  imageDestination: PostDestination;
+  onImageDestinationChange: (destination: PostDestination) => void;
+  onImagePublish: (images: { file: File; dataUrl: string }[]) => void;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
@@ -89,7 +96,6 @@ export default function ShellOverlayControls({
   imagePreviewImages,
   onImagePreviewImagesChange,
   onCloseImagePreview,
-  onNextImagePreview,
   showVideoPreviewModal,
   videoPreviewUrl,
   videoTrim,
@@ -118,6 +124,13 @@ export default function ShellOverlayControls({
   autoSoundMedia,
   onReplaceAutoMedia,
   onClearAutoMedia,
+  caption,
+  onCaptionChange,
+  imageTags,
+  onImageTagsChange,
+  imageDestination,
+  onImageDestinationChange,
+  onImagePublish,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -159,8 +172,15 @@ export default function ShellOverlayControls({
         onImagesChange={onImagePreviewImagesChange}
         music={music}
         onClearMusic={onClearMusic}
+        caption={caption}
+        onCaptionChange={onCaptionChange}
+        tags={imageTags}
+        onTagsChange={onImageTagsChange}
+        destination={imageDestination}
+        onDestinationChange={onImageDestinationChange}
+        userId={userId}
+        onPublish={onImagePublish}
         onClose={onCloseImagePreview}
-        onNext={onNextImagePreview}
       />
 
       <VideoPreviewModal

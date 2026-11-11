@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { PostMetadataTag } from '../lib/types';
 
 type ImagePreviewItem = {
   file: File;
@@ -17,10 +18,21 @@ type ImagePreviewModalProps = {
   onImagesChange: (images: ImagePreviewItem[]) => void;
   /** الصوت المختار من مكتبة أصوات التطبيق (نظام الأصوات) */
   music?: SelectedLibrarySound & { soundTrim?: { start: number; end: number } | null } | null;
-  /** إزالة الصوت المختار من داخل المعاينة */
+  /** إزالة الصوت المختار من داخل الشاشة */
   onClearMusic?: () => void;
+  /** نص الوصف/الكابشن (يُربط بحالة postText في Shell) */
+  caption?: string;
+  onCaptionChange?: (caption: string) => void;
+  /** وسوم المنشور (موقع/إشارة) */
+  tags?: PostMetadataTag[];
+  onTagsChange?: (tags: PostMetadataTag[]) => void;
+  /** وجهة النشر: feed أو reels */
+  destination?: string;
+  onDestinationChange?: (destination: string) => void;
+  userId?: string;
+  /** النشر المباشر من الشاشة الموحدة: يجمع الوسائط المقصوصة + الوصف + الوسوم + الصوت في طلب واحد */
+  onPublish?: (images: ImagePreviewItem[]) => void;
   onClose: () => void;
-  onNext: () => void;
 };
 
 declare const ImagePreviewModal: ComponentType<ImagePreviewModalProps>;
