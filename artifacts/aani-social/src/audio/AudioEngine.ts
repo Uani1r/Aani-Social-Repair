@@ -15,14 +15,17 @@ import {
   installAudioUnlock,
   pauseInstant,
   playInstant,
-  playSoundPreview,
   resumeInstant,
   stopInstant,
 } from '@/lib/instantAudio';
 import { getSoundLibraryState, setSoundLibraryState } from './SoundLibraryStore';
-import { USE_NEW_AUDIO_ENGINE } from './flags';
 
-export type EngineSoundRef = { url: string };
+export type EngineSoundRef = { url: string; id?: string; fallbackUrl?: string };
+export type EnginePreviewCallbacks = {
+  onPlaying?: () => void;
+  onBlocked?: () => void;
+  onError?: (error?: unknown) => void;
+};
 
 let unlockInstalled = false;
 let resumeAfterVisible = false;
@@ -66,11 +69,22 @@ export function installGlobalUnlockListener(): void {
 }
 
 /**
- * Instant preview in real seconds. With start/end the clip loops inside the
- * bounds (media-element engine with the rAF trim watch); without them the
- * tiered engine runs (RAM AudioBuffer hit < 10ms, else native streaming).
+ * Instant preview in real seconds. Always starts through the shared native
+ * HTMLAudioElement immediately; optional trim bounds use the rAF trim watch.
  */
-export function preview(sound: EngineSoundRef, startSec = 0, endSec?: number): void {
+export function preview(
+  sound: EngineSoundRef,
+  startSec = 0,
+  endSec?: number,
+  callbacks: EnginePreviewCallbacks = {},
+): void {
+  console.log('[AudioEngine] Play requested for:', sound.id || sound.url);
+  if (!sound.url) {
+    console.log('[AudioEngine] Play status:', 'error');
+    callbacks.onError?.(new Error('Missing audio URL'));
+    return;
+  }
+
   unlock();
   engineActive = true;
   setSoundLibraryState({ blockedId: null });
@@ -78,21 +92,44 @@ export function preview(sound: EngineSoundRef, startSec = 0, endSec?: number): v
     && typeof endSec === 'number'
     && Number.isFinite(endSec)
     && endSec > startSec;
-  if (USE_NEW_AUDIO_ENGINE() && !hasTrim) {
-    playSoundPreview(sound.url, {
+  let failureReported = false;
+  const isBlockedError = (error?: unknown) => Boolean(
+    error
+    && typeof error === 'object'
+    && 'name' in error
+    && (error as { name?: unknown }).name === 'NotAllowedError',
+  );
+  const reportFailure = (error?: unknown) => {
+    if (failureReported) return;
+    failureReported = true;
+    engineActive = false;
+    const isBlocked = isBlockedError(error);
+    console.log('[AudioEngine] Play status:', isBlocked ? 'blocked' : 'error');
+    if (isBlocked) callbacks.onBlocked?.();
+    else callbacks.onError?.(error);
+  };
+  const startDirect = (url: string, allowFallback: boolean) => {
+    // Start native HTMLAudio streaming in this stack. Never wait for a Range
+    // fetch or decodeAudioData; direct media URLs do not use CORS mode.
+    playInstant(url, {
+      loop: true,
+      ...(hasTrim ? { trim: { start: startSec, end: endSec as number } } : {}),
       onPlaying: () => {
         engineActive = true;
+        console.log('[AudioEngine] Play status:', 'success');
+        callbacks.onPlaying?.();
       },
-      onError: () => {
-        engineActive = false;
+      onError: error => {
+        if (allowFallback && sound.fallbackUrl && sound.fallbackUrl !== url && !isBlockedError(error)) {
+          console.log('[AudioEngine] Preview source failed; trying direct fallback.');
+          startDirect(sound.fallbackUrl, false);
+          return;
+        }
+        reportFailure(error);
       },
     });
-    return;
-  }
-  playInstant(sound.url, {
-    loop: true,
-    ...(hasTrim ? { trim: { start: startSec, end: endSec as number } } : {}),
-  });
+  };
+  startDirect(sound.url, true);
 }
 
 /**

@@ -15,7 +15,8 @@ import {
   subscribeSoundLibrary,
   type SoundLibraryState,
 } from '@/audio/SoundLibraryStore';
-import { hasPreviewClip, pauseInstant, playSoundPreview, stopInstant } from '@/lib/instantAudio';
+import { preview } from '@/audio/AudioEngine';
+import { pauseInstant, stopInstant } from '@/lib/instantAudio';
 import { openSoundPicker } from '@/lib/sounds';
 
 function useSoundLibraryValue<T>(selector: (state: SoundLibraryState) => T): T {
@@ -27,27 +28,21 @@ export function useSoundPicker() {
   const loadingId = useSoundLibraryValue(state => state.loadingId);
   const blockedId = useSoundLibraryValue(state => state.blockedId);
 
-  const togglePreview = useCallback((soundId: string, clipUrl: string) => {
+  const togglePreview = useCallback((soundId: string, clipUrl: string, fallbackUrl?: string) => {
     const current = getSoundLibraryState();
     if (current.playingId === soundId) {
-      // In-place pause: RAM clips resume from the same sample on the next tap.
       pauseInstant();
-      setSoundLibraryState({ playingId: null });
+      setSoundLibraryState({ playingId: null, loadingId: null });
       return;
     }
-    if (current.loadingId === soundId) return;
-    // RAM cache hit: playback starts from memory in <16ms — no spinner at
-    // all, the icon flips straight to Pause. Miss: non-blocking streaming
-    // hint while the clip decodes in the background for the next tap.
-    if (!hasPreviewClip(clipUrl)) {
-      setSoundLibraryState({ loadingId: soundId, playingId: null, blockedId: null });
-    }
-    playSoundPreview(clipUrl, {
-      onPlaying: () => setSoundLibraryState({ loadingId: null, playingId: soundId }),
-      onEnded: () => {
-        if (getSoundLibraryState().playingId === soundId) setSoundLibraryState({ playingId: null });
-      },
-      onError: () => setSoundLibraryState({ loadingId: null, blockedId: soundId }),
+
+    // Optimistically leave the loading state before starting the native audio
+    // element. Network buffering never holds the UI on a spinner.
+    setSoundLibraryState({ playingId: soundId, loadingId: null, blockedId: null });
+    preview({ id: soundId, url: clipUrl, fallbackUrl }, 0, undefined, {
+      onPlaying: () => setSoundLibraryState({ loadingId: null, playingId: soundId, blockedId: null }),
+      onBlocked: () => setSoundLibraryState({ loadingId: null, playingId: null, blockedId: soundId }),
+      onError: () => setSoundLibraryState({ loadingId: null, playingId: null, blockedId: soundId }),
     });
   }, []);
 

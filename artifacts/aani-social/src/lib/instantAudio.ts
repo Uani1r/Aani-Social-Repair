@@ -35,8 +35,8 @@ export type InstantPlayOptions = {
   onPlaying?: () => void;
   /** Fired when the clip ends naturally. */
   onEnded?: () => void;
-  /** Fired when playback fails (missing URL or browser rejection). */
-  onError?: () => void;
+  /** Fired when playback fails (missing URL, media error, or browser rejection). */
+  onError?: (error?: unknown) => void;
   /** Fired once the full duration is known (iOS blocks metadata reads before a user gesture, so it is read from the actual playback element). */
   onLoadedMetadata?: (duration: number) => void;
 };
@@ -101,6 +101,7 @@ function clearHandlers(): void {
   audio.onended = null;
   audio.ontimeupdate = null;
   audio.onloadedmetadata = null;
+  audio.onerror = null;
   audio.onplay = null;
   audio.onpause = null;
   playingReported = false;
@@ -123,7 +124,7 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
   // Swap the source on the same object (never new Audio): the previous
   // network request is aborted automatically. No crossOrigin at all, so
   // there is no CORS handshake and streaming starts instantly.
-  if (currentSrc !== url) {
+  if (currentSrc !== url || el.error) {
     el.removeAttribute('src');
     el.removeAttribute('crossorigin');
     el.src = url;
@@ -141,6 +142,13 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
       ? () => fixedTrim
       : null;
 
+  if (options.onError) {
+    el.onerror = () => {
+      if (generation !== playGeneration) return;
+      options.onError?.(el.error || new Error('Audio playback failed'));
+    };
+  }
+
   if (options.onPlaying) {
     // Instant response: the first audible sample (the playing event or the
     // resolved .play() promise) flips the button immediately.
@@ -155,13 +163,13 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
     void el.play().then(reportPlaying).catch((err: unknown) => {
       console.log('Autoplay handled cleanly:', err);
       if (generation !== playGeneration) return;
-      options.onError?.();
+      options.onError?.(err);
     });
   } else {
     void el.play().catch((err: unknown) => {
       console.log('Autoplay handled cleanly:', err);
       if (generation !== playGeneration) return;
-      options.onError?.();
+      options.onError?.(err);
     });
   }
 

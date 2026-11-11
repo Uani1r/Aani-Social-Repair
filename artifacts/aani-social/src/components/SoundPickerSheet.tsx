@@ -8,7 +8,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, consumeSoundPickerTarget, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
-import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
+import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
 import { setSoundLibraryState } from '@/audio/SoundLibraryStore';
 import { useSoundPicker } from '@/hooks/useSoundPicker';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -70,10 +70,8 @@ export default function SoundPickerSheet() {
   // (useSoundPicker + SoundLibraryStore) خارج دورة الـ render الداخلية —
   // بلا موضع تشغيل في الـ State فلا re-renders زائدة، مع زر "اضغط للتشغيل" عند الحظر
   const { playingId, loadingId: loadingPreviewId, blockedId, togglePreview, stopPreview } = useSoundPicker();
-  // المشغّل الموحّد الفوري: عنصر Audio عالمي واحد يُعاد استخدامه لجميع الأصوات
-  // (Single Audio Instance — من '@/lib/instantAudio' مع preload='auto' وcrossOrigin
-  // لطلبات HTTP Range/206): يُستبدل src فقط عند التنقل بين الأصوات فيُجهَض طلب
-  // الشبكة السابق تلقائياً بلا طلبات معلقة متراكمة وبلا ضغط ذاكرة
+  // مشغل HTMLAudioElement واحد بروابط مباشرة، بلا crossOrigin أو انتظار لفك الترميز.
+  // يتغير src عند الانتقال بين الأصوات فتُجهض الشبكة السابقة تلقائياً.
   // أداة الاقتصاص: الصوت المختار + مسودة زمني البداية/النهاية (بالثواني)
   const [trimTarget, setTrimTarget] = useState<LibrarySound | null>(null);
   const [trimDraft, setTrimDraft] = useState<SoundTrimRange>({ start: 0, end: MAX_TRIM_SECONDS });
@@ -92,18 +90,6 @@ export default function SoundPickerSheet() {
   const [probeSrc, setProbeSrc] = useState('');
   const trimDurationLoadedRef = useRef(false);
   const trimTrackRef = useRef<HTMLDivElement>(null);
-
-  // Pre-warm the first 8 sounds when the library opens: short head clips are
-  // fetched (HTTP 206 Range) and decoded into a RAM AudioBuffer cache so the
-  // tap plays through AudioBufferSourceNode in under 10ms with zero network
-  // wait. Songs are never fully downloaded — only the preview head is cached.
-  useEffect(() => {
-    if (!open || !sounds) return;
-    sounds.slice(0, 8).forEach(sound => {
-      const clipUrl = sound.preview_url || sound.source_video_url;
-      if (clipUrl) void warmPreviewClip(clipUrl);
-    });
-  }, [open, sounds]);
 
   const stopEverything = () => {
     stopPreview();
@@ -142,14 +128,30 @@ export default function SoundPickerSheet() {
     let active = true;
     void (async () => {
       try {
-        const { data: soundRows, error } = await supabase
+        let soundRows: unknown[] | null = null;
+        let queryError: { message: string } | null = null;
+        const extendedQuery = await supabase
           .from('sounds')
-          .select('id, title, source_video_url, creator_id, created_at')
+          .select('id, title, source_video_url, preview_url, creator_id, created_at')
           .order('created_at', { ascending: false })
           .limit(100);
+        soundRows = extendedQuery.data as unknown[] | null;
+        queryError = extendedQuery.error;
+        if (queryError && /preview_url/i.test(queryError.message)) {
+          const fallbackQuery = await supabase
+            .from('sounds')
+            .select('id, title, source_video_url, creator_id, created_at')
+            .order('created_at', { ascending: false })
+            .limit(100);
+          soundRows = fallbackQuery.data as unknown[] | null;
+          queryError = fallbackQuery.error;
+        }
         if (!active) return;
-        if (error) throw error;
+        if (queryError) throw queryError;
         const rows = (soundRows || []) as unknown as LibrarySound[];
+        // Show playable rows as soon as the sounds request returns; creator
+        // profiles are decorative and must not hold the audio list behind a second query.
+        setSounds(rows);
         const creatorIds = Array.from(new Set(rows
           .map(sound => sound.creator_id)
           .filter((id): id is string => typeof id === 'string' && Boolean(id))));
@@ -158,6 +160,7 @@ export default function SoundPickerSheet() {
             .from('profiles')
             .select('id, username, full_name, display_name, avatar_url, gender')
             .in('id', creatorIds);
+          if (!active) return;
           const profiles = new Map<string, Profile>();
           (Array.isArray(profileRows) ? profileRows : []).forEach(profile => {
             const row = profile as unknown as Record<string, unknown>;
@@ -166,9 +169,8 @@ export default function SoundPickerSheet() {
           rows.forEach(sound => {
             if (sound.creator_id) sound.creator = profiles.get(sound.creator_id) || null;
           });
+          setSounds([...rows]);
         }
-        if (!active) return;
-        setSounds(rows);
       } catch {
         if (active && !soundsRef.current?.length) {
           // فشل عابر: أبقِ القائمة المخزنة من فتح سابق بدل تفريغها في كل مرة
@@ -191,6 +193,14 @@ export default function SoundPickerSheet() {
 
   /** رابط مقطع المعاينة المفضّل: الصوت المستخرج (preview_url) إن وُجد وإلا رابط الفيديو الأصلي */
   const clipUrlFor = (sound: LibrarySound): string | null => sound.preview_url || sound.source_video_url || null;
+  const requestPreview = (sound: LibrarySound) => {
+    const clipUrl = clipUrlFor(sound);
+    if (!clipUrl) return;
+    const fallbackUrl = sound.preview_url && sound.source_video_url !== sound.preview_url
+      ? sound.source_video_url || undefined
+      : undefined;
+    togglePreview(sound.id, clipUrl, fallbackUrl);
+  };
 
   // فتح أداة الاقتصاص: عنصر صوت مخفي منفصل يقرأ مدة الصوت الكاملة + تجهيز مشغل المعاينة الفوري
   const beginTrim = (sound: LibrarySound) => {
@@ -594,14 +604,12 @@ export default function SoundPickerSheet() {
                           type="button"
                           onPointerDown={event => {
                             event.preventDefault();
-                            const clipUrl = clipUrlFor(sound);
-                            if (clipUrl) togglePreview(sound.id, clipUrl);
+                            requestPreview(sound);
                           }}
                           onKeyDown={event => {
                             if (event.key !== 'Enter' && event.key !== ' ') return;
                             event.preventDefault();
-                            const clipUrl = clipUrlFor(sound);
-                            if (clipUrl) togglePreview(sound.id, clipUrl);
+                            requestPreview(sound);
                           }}
                           disabled={!clipUrlFor(sound)}
                           aria-label={loadingPreviewId === sound.id ? 'جارٍ تحميل الصوت' : blockedId === sound.id ? 'اضغط للتشغيل' : playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
@@ -619,6 +627,15 @@ export default function SoundPickerSheet() {
                               {displayName(sound.creator || null) || 'مستخدم'}
                             </span>
                           </div>
+                          {blockedId === sound.id && (
+                            <button
+                              type="button"
+                              onClick={() => requestPreview(sound)}
+                              className="mt-1 rounded-full bg-[#f1a17f]/15 px-2.5 py-1 text-[11px] font-semibold text-[#f1a17f]"
+                            >
+                              اضغط لسماع الصوت
+                            </button>
+                          )}
                         </div>
                         <button
                           type="button"

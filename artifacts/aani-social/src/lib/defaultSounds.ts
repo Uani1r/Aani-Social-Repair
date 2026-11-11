@@ -1,12 +1,11 @@
 /**
  * الوساط الافتراضية المجهزة مسبقاً (Pre-Warmed Default Sounds Pool):
- * قائمة مصغرة (أعلى 3 أصوات عشوائية) تُجلب من جديد في كل فتح لواجهة إنشاء
- * المنشورات وتُخزن في الذاكرة مع تسخين كاش الشبكة لروابطها (HTTP Range/206)،
- * فيبدأ التشغيل لحظة اختيار الصورة (أقل من 50ms) داخل سياق إيماءة المستخدم،
+ * قائمة صغيرة من بيانات الأصوات تُخزن في الذاكرة وsessionStorage، حتى يبدأ
+ * رابط الصوت المتاح محلياً في نفس إيماءة اختيار الصورة بلا انتظار لطلب الشبكة.
+ * تُحدّث القائمة عشوائياً بالخلفية وتُستبعد الأصوات المقترحة مؤخراً.
  * وتختلف الأوساط المتاحة بين الدخول والخروج فلا يتكرر الصوت المقترح.
  */
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { warmPreviewClip } from '@/lib/instantAudio';
 
 export type DefaultSound = {
   id: string;
@@ -15,7 +14,27 @@ export type DefaultSound = {
 };
 
 const POOL_SIZE = 3;
-let pool: DefaultSound[] = [];
+const POOL_STORAGE_KEY = 'aani:default-sound-pool';
+
+function readCachedPool(): DefaultSound[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const value = window.sessionStorage.getItem(POOL_STORAGE_KEY);
+    const parsed = value ? JSON.parse(value) as unknown : null;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is DefaultSound => Boolean(
+      item
+      && typeof item === 'object'
+      && typeof (item as DefaultSound).id === 'string'
+      && typeof (item as DefaultSound).title === 'string'
+      && (typeof (item as DefaultSound).source_video_url === 'string' || (item as DefaultSound).source_video_url === null),
+    ));
+  } catch {
+    return [];
+  }
+}
+
+let pool: DefaultSound[] = readCachedPool();
 let warming = false;
 
 /** جلب وتسخين الوساط الافتراضية — تُستدعى فور كل فتح لواجهة النشر (جلب جديد في كل مرة) */
@@ -44,9 +63,11 @@ export async function warmDefaultSounds(): Promise<void> {
       rows = candidates.slice(0, POOL_SIZE);
     }
     pool = rows.filter(sound => typeof sound?.id === 'string');
-    // فك ترميز رأس كل صوت في الـ RAM Clip Cache فور التسخين: المسار
-    // المتزامن عند اختيار الصورة يشغّل عبر AudioBufferSourceNode (<10ms)
-    pool.forEach(sound => { if (sound.source_video_url) void warmPreviewClip(sound.source_video_url); });
+    try {
+      window.sessionStorage.setItem(POOL_STORAGE_KEY, JSON.stringify(pool));
+    } catch {
+      /* the in-memory pool remains available if session storage is disabled */
+    }
   } catch {
     /* التسخين اختياري — الفشل يعيد المسار الاحتياطي غير المتزامن */
   } finally {

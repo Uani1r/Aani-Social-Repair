@@ -999,11 +999,13 @@ export default function Shell({
   pendingSoundRef.current = pendingSound;
 
   useEffect(() => {
+    // ابدأ تجهيز قائمة الصوت مبكراً؛ اختيار الصورة يستهلك هذه القائمة محلياً.
+    void warmDefaultSounds();
     const unlockAudio = () => {
       void unlockNotificationAudio();
       // تنشيط صامت لسياق الصوت (Silent Web Audio Warm-up): فتح سياسة التشغيل التلقائي
       warmAudioContext();
-      // تجهيز وساط المقترح + فك رؤوسها في RAM من أول لمسة في التطبيق
+      // تحديث قائمة الأصوات المقترحة من أول لمسة في التطبيق
       void warmDefaultSounds();
       window.removeEventListener('pointerdown', unlockAudio);
       window.removeEventListener('keydown', unlockAudio);
@@ -1221,23 +1223,29 @@ export default function Shell({
   // الإيماءة لتجاوز قيود Autoplay Policy نهائياً. يعيد true عند النجاح
   // (فيُتخطى الاقتراح غير المتزامن) وfalse إن لم توجد أوساط مجهزة بعد.
   const attachWarmedSound = (): boolean => {
-    if (!supabaseConfigured) return false;
     // صوت اختاره المستخدم يدوياً من مكتبة الأصوات لا يُستبدل — أما المقترح
     // التلقائي فيُستبدل بصوت جديد عشوائي في كل اختيار/دخول (بلا تكرار نهائياً)
     if (pendingSoundRef.current?.origin === 'user') return true;
     const chosen = pickDefaultSound(readRecentSuggestedSoundIds());
-    if (!chosen || !chosen.source_video_url) return false;
+    if (!chosen?.source_video_url) {
+      // إذا كانت القائمة تُحمّل الآن، أعد تشغيل آخر مقترح معروف فوراً بينما
+      // يجلب الطلب الخلفي بيانات الصوت الجديد؛ لا ننتظر قاعدة البيانات قبل الصوت.
+      const fallback = pendingSoundRef.current;
+      if (fallback?.origin === 'auto' && fallback.sourceVideoUrl) {
+        playInstant(fallback.sourceVideoUrl, { loop: true });
+      }
+      return false;
+    }
     rememberSuggestedSoundId(chosen.id);
     setPendingSound({
       id: chosen.id,
       title: chosen.title,
-      sourceVideoUrl: chosen.source_video_url || null,
+      sourceVideoUrl: chosen.source_video_url,
       soundTrim: null,
       origin: 'auto',
     });
-    // التشغيل في نفس الملي ثانية داخل سياق إيماءة المستخدم — عبر طبقة RAM
-    // (AudioBufferSourceNode) عند إصابة الكاش، وبث أصلي متزامن عند الغياب
-    playSoundPreview(chosen.source_video_url);
+    // استدعاء HTMLAudioElement.play() فوراً داخل نفس إيماءة اختيار الصورة.
+    playInstant(chosen.source_video_url, { loop: true });
     return true;
   };
 
@@ -1420,7 +1428,6 @@ export default function Shell({
           playSoundPreview(suggestedUrl);
         }).catch(() => undefined);
       }
-      toast.success(`صوت مقترح تلقائياً: ${chosen.title}`);
     } catch {
       // فشل الاقتراح لا يعطل مسار النشر
     }
