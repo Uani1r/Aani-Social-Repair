@@ -176,6 +176,63 @@ export default function ImagePreviewModal({
     setCropError('');
   }, [activeIndex]);
 
+  // بحث سريع عن حسابات للإشارة إليها (منشِّد بقصير)
+  // — يُعرَّف قبل أي return مبكر حتى يظل عدد الخطافات ثابتاً بين العروض
+  useEffect(() => {
+    if (toolPanel !== 'mention') return undefined;
+    const term = mentionInput.trim().replace(/^@+/, '').replace(/[%_(),]/g, ' ').trim();
+    if (!term) {
+      setMentionResults([]);
+      setMentionLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setMentionLoading(true);
+      setMentionError('');
+      void (async () => {
+        try {
+          const [usernameResult, nameResult] = await Promise.all([
+            supabase.from('profiles')
+              .select('id, username, full_name, display_name, avatar_url, gender')
+              .neq('id', userId || '')
+              .ilike('username', `%${term}%`)
+              .limit(8),
+            supabase.from('profiles')
+              .select('id, username, full_name, display_name, avatar_url, gender')
+              .neq('id', userId || '')
+              .or(`full_name.ilike.%${term}%,display_name.ilike.%${term}%`)
+              .limit(8),
+          ]);
+          if (cancelled) return;
+          if (usernameResult.error && nameResult.error) {
+            setTagError('تعذر تحميل الحسابات. حاول مرة أخرى.');
+            setMentionResults([]);
+            return;
+          }
+          const seen = new Set();
+          const candidates = [...(usernameResult.data || []), ...(nameResult.data || [])]
+            .filter(person => person.id !== userId && !seen.has(person.id) && Boolean(seen.add(person.id)))
+            .slice(0, 8);
+          setMentionResults(candidates);
+        } catch {
+          if (!cancelled) {
+            setTagError('تعذر تحميل الحسابات. حاول مرة أخرى.');
+            setMentionResults([]);
+          }
+        } finally {
+          if (!cancelled) setMentionLoading(false);
+        }
+      })();
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [toolPanel, mentionInput, userId]);
+
   if (!open || images.length === 0 || !activeImage) return null;
 
   const handleScroll = () => {
@@ -354,63 +411,6 @@ export default function ImagePreviewModal({
     setMentionResults([]);
     setToolPanel(null);
   };
-
-  // بحث سريع عن حسابات للإشارة إليها (منشِّد بقصير)
-  useEffect(() => {
-    if (toolPanel !== 'mention') return undefined;
-    const term = mentionInput.trim().replace(/^@+/, '').replace(/[%_(),]/g, ' ').trim();
-    if (!term) {
-      setMentionResults([]);
-      setMentionLoading(false);
-      setMentionError('');
-      return undefined;
-    }
-
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      setMentionLoading(true);
-      setMentionError('');
-      void (async () => {
-        try {
-          const [usernameResult, nameResult] = await Promise.all([
-            supabase.from('profiles')
-              .select('id, username, full_name, display_name, avatar_url, gender')
-              .neq('id', userId || '')
-              .ilike('username', `%${term}%`)
-              .limit(8),
-            supabase.from('profiles')
-              .select('id, username, full_name, display_name, avatar_url, gender')
-              .neq('id', userId || '')
-              .or(`full_name.ilike.%${term}%,display_name.ilike.%${term}%`)
-              .limit(8),
-          ]);
-          if (cancelled) return;
-          if (usernameResult.error && nameResult.error) {
-            setTagError('تعذر تحميل الحسابات. حاول مرة أخرى.');
-            setMentionResults([]);
-            return;
-          }
-          const seen = new Set();
-          const candidates = [...(usernameResult.data || []), ...(nameResult.data || [])]
-            .filter(person => person.id !== userId && !seen.has(person.id) && Boolean(seen.add(person.id)))
-            .slice(0, 8);
-          setMentionResults(candidates);
-        } catch {
-          if (!cancelled) {
-            setTagError('تعذر تحميل الحسابات. حاول مرة أخرى.');
-            setMentionResults([]);
-          }
-        } finally {
-          if (!cancelled) setMentionLoading(false);
-        }
-      })();
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [toolPanel, mentionInput, userId]);
 
   const handleLocationSubmit = () => {
     const value = locationInput.trim();
