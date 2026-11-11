@@ -7,6 +7,7 @@ import EmptyState from '@/components/EmptyState';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
 import { normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 
 // مشغل الريلز الكامل لملف شخصي واحد: يفتح من الريل المختار مباشرة
@@ -26,6 +27,8 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
   const scrollRef = useRef<HTMLDivElement>(null);
   const savedProfileScrollTopRef = useRef(0);
   const [fetchedReels, setFetchedReels] = useState<Post[] | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const activeIndexRef = useRef(0);
 
   useModalBodyScrollLock();
   // زر الرجوع (الهاتف/المتصفح) يغلق المشغل ويعيدك للبروفايل مباشرة
@@ -57,6 +60,15 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
   const useProvided = providedReels.length > 0;
   const reelsList = useProvided ? providedReels : (fetchedReels || []);
   const isLoading = !useProvided && fetchedReels === null;
+  const nextPost = reelsList[activeIndex + 1];
+  const nextMediaUrl = nextPost?.media_url || nextPost?.media_urls?.[0] || null;
+  const currentPostId = reelsList[activeIndex]?.id || 'start';
+
+  useEffect(() => {
+    const candidateId = `profile-reels:${currentPostId}`;
+    setVideoPreloadCandidate(candidateId, nextMediaUrl, 1, 1);
+    return () => releaseVideoPreloadCandidate(candidateId);
+  }, [currentPostId, nextMediaUrl]);
 
   useEffect(() => {
     if (useProvided || !profileUserId || !supabaseConfigured) {
@@ -125,7 +137,10 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
     const foundIndex = reelsList.findIndex(reel => reel?.id === initialReelId);
     const index = foundIndex >= 0 ? foundIndex : 0;
     const lastIndex = Math.max(0, container.children.length - 1);
-    container.scrollTop = Math.min(lastIndex, index) * container.clientHeight;
+    const nextIndex = Math.min(lastIndex, index);
+    container.scrollTop = nextIndex * container.clientHeight;
+    activeIndexRef.current = nextIndex;
+    setActiveIndex(nextIndex);
   }, [reelsList, initialReelId]);
 
   return createPortal(
@@ -136,7 +151,15 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
       aria-label="مشغل ريلز الملف الشخصي"
       className="reels-container feed-reel-viewer profile-reels-player"
       onWheel={event => event.stopPropagation()}
-      onScroll={event => event.stopPropagation()}
+      onScroll={event => {
+        const container = event.currentTarget;
+        const index = Math.min(reelsList.length - 1, Math.max(0, Math.round(container.scrollTop / Math.max(1, container.clientHeight))));
+        if (index !== activeIndexRef.current) {
+          activeIndexRef.current = index;
+          setActiveIndex(index);
+        }
+        event.stopPropagation();
+      }}
     >
       {isLoading ? (
         <ReelsSkeleton />
@@ -152,19 +175,24 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
           </button>
         </div>
       ) : (
-        reelsList.map(reel => (
-          <ReelSlide
-            key={reel?.id || Math.random()}
-            post={reel}
-            currentUserId={currentUserId}
-            onOpenComments={onOpenComments}
-            onRefresh={onRefresh}
-            onClose={onClose}
-            trailingAccountControl={trailingAccountControl}
-            showCreatedAt
-            captionSheet
-          />
-        ))
+        reelsList.map((reel, index) => {
+          const key = reel?.id || `profile-reel-${index}`;
+          return Math.abs(index - activeIndex) <= 1 ? (
+            <ReelSlide
+              key={key}
+              post={reel}
+              currentUserId={currentUserId}
+              onOpenComments={onOpenComments}
+              onRefresh={onRefresh}
+              onClose={onClose}
+              trailingAccountControl={trailingAccountControl}
+              showCreatedAt
+              captionSheet
+            />
+          ) : (
+            <div key={key} className="reel-slide" aria-hidden="true" />
+          );
+        })
       )}
     </div>,
     document.body,

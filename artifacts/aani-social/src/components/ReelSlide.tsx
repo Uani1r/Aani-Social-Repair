@@ -68,6 +68,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const captionRef = useRef<HTMLParagraphElement>(null);
   const isOverlayOpen = Boolean(onClose);
   const [isVisible, setIsVisible] = useState(false);
+  const [hasVideoFrame, setHasVideoFrame] = useState(false);
   // نظام الأصوات: عند وجود صوت مستعار (من فيديو آخر) يبقى صوت الفيديو مكتوماً
   // ويعمل الصوت المستعار بدلاً منه — زر الكتم يتحكم بالصوت المستعار.
   const [muted, setMuted] = useState(() => Boolean(
@@ -96,6 +97,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const videoSrc = videoTimeRange
     ? appendVideoTrimFragment(mediaUrl, videoTimeRange)
     : stripVideoEditFragment(mediaUrl);
+  useEffect(() => setHasVideoFrame(false), [backgroundMediaSuspended, videoSrc]);
   // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
   const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
   // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
@@ -105,6 +107,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     ? post.audio_url
     : null;
   const backgroundAudioRef = useRef<HTMLAudioElement>(null);
+  const attachedAudioRef = useRef<HTMLAudioElement>(null);
   // زمنيا اقتصاص الصوت (بالثواني): الأعمدة الصريحة أولاً ثم ترميز #t= في audio_url
   const soundTrimRange: VideoTimeRange | null =
     typeof post.sound_trim_start === 'number' && typeof post.sound_trim_end === 'number' && post.sound_trim_end > post.sound_trim_start
@@ -216,12 +219,16 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   // إن بقي مرجعاً في JS — يجب الإيقاف الصريح وتفريغ المصدر.
   useEffect(() => () => {
     const video = videoRef.current;
+    const backgroundAudio = backgroundAudioRef.current;
+    const attachedAudio = attachedAudioRef.current;
     releaseActiveVideo(post.id);
-    if (!video) return;
     try {
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
+      [video, backgroundAudio, attachedAudio].forEach(media => {
+        if (!media) return;
+        media.pause();
+        media.src = '';
+        media.load();
+      });
     } catch {
       /* العنصر قد يكون أفلت مرجعه بالفعل */
     }
@@ -536,27 +543,45 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
               style={{ transform: videoCropTransform, transformOrigin: 'center' }}
             />
           ) : (
-            <video
-              ref={videoRef}
-              src={backgroundMediaSuspended ? undefined : videoSrc}
-              data-aani-background-media=""
-              data-aani-video-id={post.id}
-              poster={postCoverUrl || undefined}
-              loop={!videoTimeRange}
-              autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
-              muted={Boolean(backgroundSoundUrl) || muted}
-              playsInline
-              preload="none"
-              onLoadedMetadata={handleVideoLoadedMetadata}
-              onSeeking={handleVideoSeeking}
-              onTimeUpdate={handleVideoTimeUpdate}
-              onPlay={handleVideoPlay}
-              onPause={handleVideoPause}
-              onEnded={handleVideoEnded}
-              onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-              className="w-full h-full object-cover cursor-pointer"
-              style={{ transform: videoCropTransform, transformOrigin: 'center' }}
-            />
+            <>
+              {postCoverUrl && (
+                <img
+                  src={postCoverUrl}
+                  alt=""
+                  aria-hidden="true"
+                  draggable={false}
+                  className="pointer-events-none absolute inset-0 z-[1] h-full w-full object-cover transition-opacity duration-200"
+                  style={{ filter: 'blur(20px)', transform: 'scale(1.06)', opacity: hasVideoFrame ? 0 : 1 }}
+                />
+              )}
+              <video
+                ref={videoRef}
+                src={backgroundMediaSuspended ? undefined : videoSrc}
+                data-aani-background-media=""
+                data-aani-video-id={post.id}
+                poster={postCoverUrl || undefined}
+                loop={!videoTimeRange}
+                autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
+                muted={Boolean(backgroundSoundUrl) || muted}
+                playsInline
+                preload="none"
+                onLoadedMetadata={handleVideoLoadedMetadata}
+                onLoadedData={() => setHasVideoFrame(true)}
+                onVolumeChange={event => {
+                  if (!backgroundSoundUrl) return;
+                  event.currentTarget.muted = true;
+                  event.currentTarget.volume = 0;
+                }}
+                onSeeking={handleVideoSeeking}
+                onTimeUpdate={handleVideoTimeUpdate}
+                onPlay={handleVideoPlay}
+                onPause={handleVideoPause}
+                onEnded={handleVideoEnded}
+                onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+                className="relative z-0 h-full w-full cursor-pointer object-cover"
+                style={{ transform: videoCropTransform, transformOrigin: 'center' }}
+              />
+            </>
           )}
         </div>
       </div>
@@ -742,6 +767,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         )}
         {post.audio_url && !backgroundSoundUrl && (
           <audio
+            ref={attachedAudioRef}
             src={backgroundMediaSuspended ? undefined : post.audio_url}
             data-aani-background-media=""
             controls

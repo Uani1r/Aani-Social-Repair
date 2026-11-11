@@ -1,23 +1,15 @@
-// تسريع الميديا في كامل التطبيق:
-// - تحميل مسبق (Preload) للصور وتهيئة (Prebuffer) للفيديوهات في
-//   الخلفية قبل أن يقرر المستخدم النقر عليها.
-// - عناوين مصغّرات للصور (Thumbnails) عند توفر تحويلات Supabase
-//   Storage، مع بقاء الرابط الأصلي احتياطاً عند فشل التحويل.
-// - منع الطلبات المكررة: كل رابط يُحمَّل مرة واحدة فقط، والمتصفح
-//   يحتفظ به في HTTP cache فلا يُعاد تنزيله عند الفتح للمرة الثانية.
+// Priority-aware media warm-up: real visible videos load through their P0
+// player; a single nearest P1 video receives a bounded 200KB Range request.
+import { isBackgroundMediaSuspended, subscribeBackgroundMediaSuspension } from '@/lib/activeVideo';
 
-const preloadedMedia = new Set<string>();
+const preloadedImages = new Set<string>();
 const inFlightImages = new Set<string>();
 
 function isSupabaseStoragePublicUrl(url: string): boolean {
   return url.includes('/storage/v1/object/public/');
 }
 
-/**
- * عنوان مصغّرة للصور: يستفيد من تحويلات Supabase Storage
- * (width/quality) لتقليل حجم النقل في الشبكات والقوائم.
- * الرابط الأصلي يبقى المستخدم احتياطياً عند فشل التحويل.
- */
+/** URL صغير للصور المرفوعة إلى Supabase Storage مع الرجوع للرابط الأصلي عند الحاجة. */
 export function thumbnailUrl(url: string | null | undefined, width = 480): string {
   const source = typeof url === 'string' ? url : '';
   if (!source || !isSupabaseStoragePublicUrl(source)) return source;
@@ -25,81 +17,162 @@ export function thumbnailUrl(url: string | null | undefined, width = 480): strin
   return `${source}${separator}width=${width}&quality=80`;
 }
 
-/** تحميل صورة مسبقاً (Preload) مع منع الطلبات المكررة */
+/** تحميل صورة مسبقاً مع منع الطلبات المكررة. */
 export function preloadImage(url: string | null | undefined): void {
   const source = typeof url === 'string' ? url : '';
-  if (!source || preloadedMedia.has(source) || inFlightImages.has(source)) return;
+  if (!source || preloadedImages.has(source) || inFlightImages.has(source) || typeof window === 'undefined') return;
 
   inFlightImages.add(source);
   const image = new Image();
   image.onload = () => {
     inFlightImages.delete(source);
-    preloadedMedia.add(source);
+    preloadedImages.add(source);
   };
-  image.onerror = () => {
-    inFlightImages.delete(source);
-  };
+  image.onerror = () => inFlightImages.delete(source);
   image.src = source;
 }
 
-/**
- * تهيئة فيديو مسبقاً (Prebuffer): عنصر وهمي يجلب البيانات الوصفية
- * والثواني الأولى ثم يُفرَّغ — المتصفح يحتفظ بما حمّله في ذاكرة
- * HTTP فيبدأ الفتح الحقيقي من الذاكرة بدل الشبكة.
- */
-export function prebufferVideo(url: string | null | undefined): void {
-  const source = typeof url === 'string' ? url : '';
-  if (!source || preloadedMedia.has(source) || typeof document === 'undefined') return;
+type VideoPreloadCandidate = {
+  url: string;
+  priority: 0 | 1;
+  distance: number;
+  attempted: boolean;
+};
 
-  preloadedMedia.add(source);
-  const video = document.createElement('video');
-  video.preload = 'metadata';
-  video.muted = true;
-  video.setAttribute('playsInline', 'true');
+type VideoRangeRequest = {
+  id: string;
+  url: string;
+  controller: AbortController;
+};
 
-  let released = false;
-  const cleanup = () => {
-    if (released) return;
-    released = true;
+const VIDEO_PREFETCH_BYTES = 200 * 1024;
+const videoCandidates = new Map<string, VideoPreloadCandidate>();
+let activeVideoRangeRequest: VideoRangeRequest | null = null;
+
+function abortActiveVideoRangeRequest(): void {
+  if (!activeVideoRangeRequest) return;
+  activeVideoRangeRequest.controller.abort();
+  activeVideoRangeRequest = null;
+}
+
+function startNextVideoRangeRequest(): void {
+  if (isBackgroundMediaSuspended()) {
+    abortActiveVideoRangeRequest();
+    return;
+  }
+  const next = Array.from(videoCandidates.entries())
+    .filter(([, candidate]) => candidate.priority === 1 && !candidate.attempted)
+    .sort((first, second) => first[1].distance - second[1].distance)[0];
+
+  if (!next) {
+    abortActiveVideoRangeRequest();
+    return;
+  }
+
+  const [id, candidate] = next;
+  const url = candidate.url.replace(/#.*$/, '');
+  if (activeVideoRangeRequest?.id === id && activeVideoRangeRequest.url === url) return;
+
+  abortActiveVideoRangeRequest();
+  const controller = new AbortController();
+  const request: VideoRangeRequest = { id, url, controller };
+  activeVideoRangeRequest = request;
+
+  void (async () => {
     try {
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
+      const init: RequestInit & { priority?: 'low' } = {
+        headers: { Range: `bytes=0-${VIDEO_PREFETCH_BYTES - 1}` },
+        signal: controller.signal,
+        priority: 'low',
+      };
+      const response = await fetch(url, init);
+      if (response.status !== 206) {
+        await response.body?.cancel();
+        return;
+      }
+      const reader = response.body?.getReader();
+      if (!reader) return;
+      let received = 0;
+      while (received < VIDEO_PREFETCH_BYTES) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        received += value.byteLength;
+        if (received >= VIDEO_PREFETCH_BYTES) {
+          await reader.cancel();
+          return;
+        }
+      }
+      await reader.cancel();
     } catch {
-      /* العنصر قد يكون أفلت مرجعه بالفعل */
+      // Prefetch is optional; native playback remains the P0 fallback.
+    } finally {
+      if (!controller.signal.aborted) {
+        const latestCandidate = videoCandidates.get(id);
+        if (latestCandidate?.url.replace(/#.*$/, '') === url) {
+          videoCandidates.set(id, { ...latestCandidate, attempted: true });
+        }
+      }
+      if (activeVideoRangeRequest === request) {
+        activeVideoRangeRequest = null;
+        startNextVideoRangeRequest();
+      }
     }
-  };
-
-  video.onloadedmetadata = cleanup;
-  video.onerror = cleanup;
-  // مهلة أمان: تفريغ العنصر إن تعطلت الأحداث
-  window.setTimeout(cleanup, 12000);
-  video.src = source;
+  })();
 }
 
-/** تهيئة الرابط المناسب حسب النوع: فيديو → Prebuffer، صورة → Preload */
-export function preloadMedia(url: string | null | undefined): void {
-  const source = typeof url === 'string' ? url : '';
-  if (!source) return;
-  const isVideo = /\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(source);
-  if (isVideo) prebufferVideo(source);
-  else preloadImage(source);
+subscribeBackgroundMediaSuspension(() => startNextVideoRangeRequest());
+
+/** Update a visible/nearby video candidate. P0 uses its live player, never a duplicate fetch. */
+export function setVideoPreloadCandidate(
+  id: string,
+  url: string | null | undefined,
+  priority: 0 | 1,
+  distance = 0,
+): void {
+  if (!id) return;
+  if (!url) videoCandidates.delete(id);
+  else {
+    const previous = videoCandidates.get(id);
+    const sameUrl = previous?.url.replace(/#.*$/, '') === url.replace(/#.*$/, '');
+    videoCandidates.set(id, {
+      url,
+      priority,
+      distance: Math.max(0, distance),
+      attempted: Boolean(sameUrl && previous?.attempted),
+    });
+  }
+  startNextVideoRangeRequest();
 }
 
-/**
- * تهيئة دفعة روابط بلا ازدحام: عنصران تقريباً متزامنان مع تأخير
- * متدرج حتى لا تنافس التحميلات المسبقة الشبكة أثناء التصفح.
- */
+export function releaseVideoPreloadCandidate(id: string): void {
+  if (!id || !videoCandidates.delete(id)) return;
+  startNextVideoRangeRequest();
+}
+
+/** Legacy one-off warm-up path, now bounded and abortable. */
+export function prebufferVideo(url: string | null | undefined, id = 'manual-video-preload'): void {
+  setVideoPreloadCandidate(id, url, 1, 0);
+}
+
+/** Load images in a batch; video warm-up is owned by the visibility-aware P1 scheduler. */
 export function preloadMediaList(urls: Array<string | null | undefined>, limit = 6): void {
   urls
     .filter((url): url is string => typeof url === 'string' && Boolean(url))
     .slice(0, limit)
-    .forEach((url, index) => {
-      window.setTimeout(() => preloadMedia(url), index * 120);
+    .forEach(url => {
+      if (!/\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(url)) preloadImage(url);
     });
 }
 
-/** أول رابط وسائط لمنشور (أول صورة أو الفيديو نفسه) */
+/** تهيئة الرابط حسب النوع؛ الفيديو عبر طلب Range محدود لا عبر عنصر فيديو وهمي. */
+export function preloadMedia(url: string | null | undefined): void {
+  const source = typeof url === 'string' ? url : '';
+  if (!source) return;
+  if (/\.(mp4|webm|mov|m4v|avi|mkv)(\?|#|$)/i.test(source)) prebufferVideo(source);
+  else preloadImage(source);
+}
+
+/** أول رابط وسائط لمنشور. */
 export function firstMediaUrlOfPost(post: { media_url?: string | null; media_urls?: string[] | null } | null | undefined): string | null {
   if (!post) return null;
   if (Array.isArray(post.media_urls) && post.media_urls.length > 0) return post.media_urls[0];

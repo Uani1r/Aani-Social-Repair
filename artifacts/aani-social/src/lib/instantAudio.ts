@@ -451,6 +451,7 @@ const MAX_CACHED_CLIPS = 6;        // oldest clips are evicted beyond this
 
 const previewClipCache = new Map<string, AudioBuffer>();
 const previewClipPending = new Map<string, Promise<AudioBuffer | null>>();
+const previewClipControllers = new Map<string, AbortController>();
 // Cache epoch: bumped on dispose so in-flight clip fetches are discarded
 // (their AbortController also self-terminates after the 8s bound).
 let clipCacheEpoch = 0;
@@ -480,12 +481,13 @@ export function warmPreviewClip(url: string, bytes = MAX_PREVIEW_CLIP_BYTES): Pr
   const job = (async (): Promise<AudioBuffer | null> => {
     const epoch = clipCacheEpoch;
     const controller = new AbortController();
+    previewClipControllers.set(url, controller);
     const timer = window.setTimeout(() => controller.abort(), 8000);
     try {
-      const request: RequestInit & { priority?: 'high' } = {
+      const request: RequestInit & { priority?: 'low' } = {
         headers: { Range: `bytes=0-${maxBytes - 1}` },
         signal: controller.signal,
-        priority: 'high',
+        priority: 'low',
       };
       const response = await fetch(url.replace(/#.*$/, ''), request);
       if (response.status !== 206) {
@@ -542,7 +544,10 @@ export function warmPreviewClip(url: string, bytes = MAX_PREVIEW_CLIP_BYTES): Pr
       return null;
     } finally {
       window.clearTimeout(timer);
-      previewClipPending.delete(url);
+      if (previewClipControllers.get(url) === controller) {
+        previewClipControllers.delete(url);
+        previewClipPending.delete(url);
+      }
     }
   })();
   previewClipPending.set(url, job);
@@ -679,6 +684,8 @@ export function getClipDuration(url: string): number | null {
  */
 export function disposePreviewClips(): void {
   clipCacheEpoch += 1;
+  previewClipControllers.forEach(controller => controller.abort());
+  previewClipControllers.clear();
   previewClipCache.clear();
   previewClipPending.clear();
   clipPeaksCache.clear();

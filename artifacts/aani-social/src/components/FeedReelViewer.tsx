@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
 import ReelSlide from '@/components/ReelSlide';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
+import { releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
 import type { Post } from '@/lib/types';
 
 type FeedReelViewerProps = {
@@ -32,12 +33,14 @@ export default function FeedReelViewer({ posts, initialIndex, initialPostId, ini
   const scrollRef = useRef<HTMLDivElement>(null);
   const matchingInitialIndex = posts.findIndex(post => post.id === initialPostId);
   const initialIndexRef = useRef(matchingInitialIndex >= 0 ? matchingInitialIndex : initialIndex);
+  const [activeIndex, setActiveIndex] = useState(initialIndexRef.current);
+  const activeIndexRef = useRef(activeIndex);
   const playbackTimeRef = useRef(initialPlaybackTime);
   const gestureRef = useRef<HorizontalDismissGesture | null>(null);
   const closeTimerRef = useRef<number | null>(null);
   const resetTimerRef = useRef<number | null>(null);
   const closeViewer = () => {
-    const video = scrollRef.current?.children[initialIndexRef.current]?.querySelector('video');
+    const video = scrollRef.current?.children[activeIndexRef.current]?.querySelector('video');
     if (video && video.readyState >= 1 && Number.isFinite(video.currentTime)) {
       playbackTimeRef.current = video.currentTime;
     }
@@ -53,7 +56,18 @@ export default function FeedReelViewer({ posts, initialIndex, initialPostId, ini
     const lastIndex = Math.max(0, container.children.length - 1);
     const index = Math.min(lastIndex, Math.max(0, Math.trunc(initialIndexRef.current)));
     container.scrollTop = index * container.clientHeight;
+    activeIndexRef.current = index;
+    setActiveIndex(index);
   }, []);
+
+  const nextPost = posts[activeIndex + 1];
+  const nextMediaUrl = nextPost?.media_url || nextPost?.media_urls?.[0] || null;
+  const currentPostId = posts[activeIndex]?.id || 'start';
+  useEffect(() => {
+    const candidateId = `feed-reel-viewer:${currentPostId}`;
+    setVideoPreloadCandidate(candidateId, nextMediaUrl, 1, 1);
+    return () => releaseVideoPreloadCandidate(candidateId);
+  }, [currentPostId, nextMediaUrl]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if ((event.pointerType === 'mouse' && event.button !== 0) || gestureRef.current) return;
@@ -158,9 +172,17 @@ export default function FeedReelViewer({ posts, initialIndex, initialPostId, ini
       onTouchEnd={event => event.stopPropagation()}
       onTouchCancel={event => event.stopPropagation()}
       onWheel={event => event.stopPropagation()}
-      onScroll={event => event.stopPropagation()}
+      onScroll={event => {
+        const container = event.currentTarget;
+        const nextIndex = Math.min(posts.length - 1, Math.max(0, Math.round(container.scrollTop / Math.max(1, container.clientHeight))));
+        if (nextIndex !== activeIndexRef.current) {
+          activeIndexRef.current = nextIndex;
+          setActiveIndex(nextIndex);
+        }
+        event.stopPropagation();
+      }}
     >
-      {posts.map(post => (
+      {posts.map((post, index) => Math.abs(index - activeIndex) <= 1 ? (
         <ReelSlide
           key={post.id}
           post={post}
@@ -175,6 +197,8 @@ export default function FeedReelViewer({ posts, initialIndex, initialPostId, ini
           showCreatedAt
           captionSheet
         />
+      ) : (
+        <div key={post.id} className="reel-slide" aria-hidden="true" />
       ))}
     </div>
   );

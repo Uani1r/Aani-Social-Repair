@@ -9,6 +9,8 @@ import {
   subscribeBackgroundMediaSuspension,
 } from '@/lib/activeVideo';
 import { appendVideoTrimFragment, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
+import { isFeedVideoSelected, subscribeFeedVideoPool, updateFeedVideoCandidate } from '@/lib/feedVideoPool';
+import { releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
 
 type PostVideoPreviewProps = {
   src: string;
@@ -43,6 +45,8 @@ const hasOpenFeedDialog = () => typeof document !== 'undefined' && Boolean(docum
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
 ));
 
+let nextFeedVideoPoolId = 0;
+
 export default function PostVideoPreview({
   src,
   className = '',
@@ -62,7 +66,16 @@ export default function PostVideoPreview({
   onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const replacementAudioRef = useRef<HTMLAudioElement>(null);
+  const poolIdRef = useRef('');
+  if (!poolIdRef.current) poolIdRef.current = `feed-video-pool-${++nextFeedVideoPoolId}`;
+  const poolId = poolIdRef.current;
+  const hasPoolLease = useSyncExternalStore(
+    subscribeFeedVideoPool,
+    () => isFeedVideoSelected(poolId),
+    () => false,
+  );
   const backgroundMediaSuspended = useSyncExternalStore(
     subscribeBackgroundMediaSuspension,
     isBackgroundMediaSuspended,
@@ -81,6 +94,7 @@ export default function PostVideoPreview({
     : stripVideoEditFragment(src);
   const gestureEnabled = feedVideo && Boolean(onExpand);
   const [videoMuted, setVideoMuted] = useState(feedVideo ? false : muted);
+  const [hasVideoFrame, setHasVideoFrame] = useState(false);
   const [currentTime, setCurrentTime] = useState(timeRange?.start ?? 0);
   const [videoDuration, setVideoDuration] = useState(0);
   const rangeStart = timeRange?.start ?? 0;
@@ -145,11 +159,70 @@ export default function PostVideoPreview({
     const nextTime = Math.min(maxTime, Math.max(start, restoreTime));
     video.currentTime = nextTime;
     setCurrentTime(nextTime);
-  }, [restoreTime, src]);
+  }, [hasPoolLease, restoreTime, src]);
 
   useEffect(() => {
     if (!feedVideo) setVideoMuted(muted);
   }, [feedVideo, muted]);
+
+  useEffect(() => {
+    setHasVideoFrame(false);
+  }, [backgroundMediaSuspended, hasPoolLease, mediaSrc]);
+
+  useEffect(() => {
+    if (!feedVideo || backgroundMediaSuspended) {
+      updateFeedVideoCandidate(poolId, null);
+      releaseVideoPreloadCandidate(poolId);
+      return;
+    }
+
+    const container = containerRef.current;
+    if (!container) return;
+    let isNearViewport = false;
+    let frame: number | null = null;
+    const updateCandidate = () => {
+      frame = null;
+      if (!isNearViewport) {
+        updateFeedVideoCandidate(poolId, null);
+        releaseVideoPreloadCandidate(poolId);
+        return;
+      }
+      const rect = container.getBoundingClientRect();
+      const height = Math.max(1, rect.height);
+      const visibleHeight = Math.max(0, Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0));
+      const visibleRatio = visibleHeight / height;
+      const distance = Math.abs((rect.top + rect.bottom) / 2 - window.innerHeight / 2);
+      const priority: 0 | 1 = visibleRatio >= 0.6 ? 0 : 1;
+      updateFeedVideoCandidate(poolId, { priority, distance });
+      setVideoPreloadCandidate(poolId, mediaSrc, priority, distance);
+    };
+    const scheduleCandidateUpdate = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(updateCandidate);
+    };
+    const observer = typeof IntersectionObserver === 'undefined'
+      ? null
+      : new IntersectionObserver(entries => {
+          isNearViewport = Boolean(entries[0]?.isIntersecting);
+          scheduleCandidateUpdate();
+        }, { rootMargin: '100% 0px 100% 0px', threshold: 0 });
+
+    if (observer) observer.observe(container);
+    else {
+      isNearViewport = true;
+      scheduleCandidateUpdate();
+    }
+    window.addEventListener('scroll', scheduleCandidateUpdate, true);
+    window.addEventListener('resize', scheduleCandidateUpdate);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('scroll', scheduleCandidateUpdate, true);
+      window.removeEventListener('resize', scheduleCandidateUpdate);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      updateFeedVideoCandidate(poolId, null);
+      releaseVideoPreloadCandidate(poolId);
+    };
+  }, [backgroundMediaSuspended, feedVideo, mediaSrc, poolId]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -164,7 +237,27 @@ export default function PostVideoPreview({
       video.volume = video.muted ? 0 : 1;
       audio?.pause();
     }
-  }, [backgroundMediaSuspended, hasReplacementAudio, muted, replacementAudioSrc, showMuteToggle, videoMuted]);
+  }, [backgroundMediaSuspended, hasPoolLease, hasReplacementAudio, muted, replacementAudioSrc, showMuteToggle, videoMuted]);
+
+  useEffect(() => {
+    if (!feedVideo || !hasPoolLease) return;
+    const video = videoRef.current;
+    const audio = replacementAudioRef.current;
+    if (!video) return;
+    return () => {
+      video.pause();
+      audio?.pause();
+      try {
+        video.src = '';
+        video.load();
+        if (audio) {
+          audio.src = '';
+          audio.load();
+        }
+      } catch { /* detached media can reject */ }
+      if (videoId) releaseActiveVideo(videoId);
+    };
+  }, [feedVideo, hasPoolLease, videoId]);
 
   useEffect(() => {
     if (!feedVideo) return;
@@ -174,7 +267,7 @@ export default function PostVideoPreview({
       if (!modalPlaybackStateRef.current) {
         modalPlaybackStateRef.current = {
           wasPlaying: !video.paused,
-          wasMuted: video.muted,
+          wasMuted: hasReplacementAudio ? videoMuted : video.muted,
           wasManuallyPaused: manuallyPausedRef.current,
         };
       }
@@ -186,7 +279,8 @@ export default function PostVideoPreview({
       const previousState = modalPlaybackStateRef.current;
       if (!video || !previousState) return;
       modalPlaybackStateRef.current = null;
-      video.muted = previousState.wasMuted;
+      video.muted = hasReplacementAudio || previousState.wasMuted;
+      video.volume = video.muted ? 0 : 1;
       setVideoMuted(previousState.wasMuted);
       manuallyPausedRef.current = previousState.wasManuallyPaused;
       if (previousState.wasPlaying && !isBackgroundMediaSuspended()) playExclusive(videoId, video);
@@ -198,10 +292,10 @@ export default function PostVideoPreview({
       window.removeEventListener('aani:pause-feed-videos', pauseForModal);
       window.removeEventListener('aani:resume-feed-videos', resumeAfterModal);
     };
-  }, [feedVideo]);
+  }, [feedVideo, hasReplacementAudio, videoId, videoMuted]);
 
   useEffect(() => {
-    if (!autoPlayWhenVisible) return;
+    if (!autoPlayWhenVisible || (feedVideo && !hasPoolLease)) return;
     const video = videoRef.current;
     if (!video) return;
 
@@ -229,7 +323,7 @@ export default function PostVideoPreview({
       video.pause();
       if (videoId) releaseActiveVideo(videoId);
     };
-  }, [autoPlayWhenVisible, backgroundMediaSuspended, mediaSrc, videoId]);
+  }, [autoPlayWhenVisible, backgroundMediaSuspended, feedVideo, hasPoolLease, mediaSrc, videoId]);
 
   // تنظيف نهائي عند إزالة المكوّن: إيقاف صريح وتفريغ المصدر
   // — Safari/WebKit قد يواصل تشغيل صوت عنصر منزوع من الشجرة إن بقي مرجعاً
@@ -239,12 +333,12 @@ export default function PostVideoPreview({
     audio?.pause();
     try {
       if (audio) {
-        audio.removeAttribute('src');
+        audio.src = '';
         audio.load();
       }
       if (!video) return;
       video.pause();
-      video.removeAttribute('src');
+      video.src = '';
       video.load();
     } catch {
       /* العنصر قد يكون أفلت مرجعه بالفعل */
@@ -286,10 +380,12 @@ export default function PostVideoPreview({
     event.preventDefault();
     revealControlsBriefly();
   };
+  const hasVideoPlayer = !feedVideo || (hasPoolLease && !backgroundMediaSuspended);
 
   return (
     <div
-      className={showCustomControls ? 'relative h-full w-full' : undefined}
+      ref={containerRef}
+      className={showCustomControls || feedVideo ? 'relative h-full w-full' : undefined}
       style={feedVideo ? { touchAction: 'pan-y' } : undefined}
       onClick={showCustomControls && !gestureEnabled ? revealControlsBriefly : undefined}
       onPointerDown={gestureEnabled ? onPointerDown : undefined}
@@ -301,71 +397,96 @@ export default function PostVideoPreview({
       tabIndex={showCustomControls ? 0 : undefined}
       aria-label={showCustomControls ? 'الفيديو وعناصر التحكم' : undefined}
     >
-      <video
-        ref={videoRef}
-        src={feedVideo && backgroundMediaSuspended ? undefined : mediaSrc}
-        data-aani-background-media={feedVideo ? '' : undefined}
-        data-aani-video-id={feedVideo ? videoId : undefined}
-        poster={poster || undefined}
-        controls={!showCustomControls && controls}
-        muted={hasReplacementAudio || (showMuteToggle ? videoMuted : muted)}
-        autoPlay={autoPlay && !autoPlayWhenVisible && !backgroundMediaSuspended}
-        playsInline
-        preload={feedVideo ? 'none' : 'auto'}
-        onLoadedMetadata={seekToStart}
-        onSeeking={event => {
-          const video = event.currentTarget;
-          if (timeRange) {
+      {poster && (feedVideo || showCustomControls) && (
+        <img
+          src={poster}
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          className="pointer-events-none absolute inset-0 z-[1] h-full w-full object-cover transition-opacity duration-200"
+          style={{ filter: 'blur(18px)', transform: 'scale(1.06)', opacity: hasVideoFrame ? 0 : 1 }}
+        />
+      )}
+      {hasVideoPlayer ? (
+        <video
+          ref={videoRef}
+          src={feedVideo && backgroundMediaSuspended ? undefined : mediaSrc}
+          data-aani-background-media={feedVideo ? '' : undefined}
+          data-aani-video-id={feedVideo ? videoId : undefined}
+          poster={poster || undefined}
+          controls={!showCustomControls && controls}
+          muted={hasReplacementAudio || (showMuteToggle ? videoMuted : muted)}
+          autoPlay={autoPlay && !autoPlayWhenVisible && !backgroundMediaSuspended}
+          playsInline
+          preload={feedVideo ? 'none' : 'auto'}
+          onLoadedMetadata={seekToStart}
+          onLoadedData={() => setHasVideoFrame(true)}
+          onSeeking={event => {
+            const video = event.currentTarget;
+            if (timeRange) {
+              const end = Math.min(timeRange.end, video.duration || timeRange.end);
+              if (video.currentTime < timeRange.start || video.currentTime > end) {
+                video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
+              }
+            }
+            if (hasReplacementAudio) syncReplacementAudio(video, true);
+          }}
+          onVolumeChange={event => {
+            if (!hasReplacementAudio) return;
+            const video = event.currentTarget;
+            video.muted = true;
+            video.volume = 0;
+          }}
+          onTimeUpdate={event => {
+            enforceEnd(event);
+            const video = event.currentTarget;
+            const audio = replacementAudioRef.current;
+            if (hasReplacementAudio && audio && !audio.paused && !replacementAudioRange) {
+              syncReplacementAudio(video);
+            }
+          }}
+          onPlay={event => {
+            const video = event.currentTarget;
+            if (hasReplacementAudio) syncReplacementAudio(video, true, true);
+            if (!timeRange) return;
             const end = Math.min(timeRange.end, video.duration || timeRange.end);
-            if (video.currentTime < timeRange.start || video.currentTime > end) {
+            if (video.currentTime >= end - 0.04) {
               video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
             }
-          }
-          if (hasReplacementAudio) syncReplacementAudio(video, true);
-        }}
-        onVolumeChange={event => {
-          if (!hasReplacementAudio) return;
-          const video = event.currentTarget;
-          video.muted = true;
-          video.volume = 0;
-        }}
-        onTimeUpdate={event => {
-          enforceEnd(event);
-          const video = event.currentTarget;
-          const audio = replacementAudioRef.current;
-          if (hasReplacementAudio && audio && !audio.paused && !replacementAudioRange) {
-            syncReplacementAudio(video);
-          }
-        }}
-        onPlay={event => {
-          const video = event.currentTarget;
-          if (hasReplacementAudio) syncReplacementAudio(video, true, true);
-          if (!timeRange) return;
-          const end = Math.min(timeRange.end, video.duration || timeRange.end);
-          if (video.currentTime >= end - 0.04) {
-            video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
-          }
-        }}
-        onDurationChange={event => {
-          const duration = event.currentTarget.duration;
-          setVideoDuration(Number.isFinite(duration) ? duration : 0);
-        }}
-        onPause={() => replacementAudioRef.current?.pause()}
-        onEnded={event => {
-          if (!loop) return;
-          const video = event.currentTarget;
-          if (timeRange) {
-            const end = Math.min(timeRange.end, video.duration || timeRange.end);
-            video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
-          } else {
-            video.currentTime = 0;
-          }
-          playExclusive(videoId, video);
-        }}
-        className={className}
-        style={{ transform: cropTransform, transformOrigin: 'center', touchAction: feedVideo ? 'pan-y' : undefined }}
-      />
-      {hasReplacementAudio && (
+          }}
+          onDurationChange={event => {
+            const duration = event.currentTarget.duration;
+            setVideoDuration(Number.isFinite(duration) ? duration : 0);
+          }}
+          onPause={() => replacementAudioRef.current?.pause()}
+          onEnded={event => {
+            if (!loop) return;
+            const video = event.currentTarget;
+            if (timeRange) {
+              const end = Math.min(timeRange.end, video.duration || timeRange.end);
+              video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
+            } else {
+              video.currentTime = 0;
+            }
+            playExclusive(videoId, video);
+          }}
+          className={className}
+          style={{
+            transform: cropTransform,
+            transformOrigin: 'center',
+            touchAction: feedVideo ? 'pan-y' : undefined,
+            position: poster && (feedVideo || showCustomControls) ? 'relative' : undefined,
+            zIndex: poster && (feedVideo || showCustomControls) ? 0 : undefined,
+          }}
+        />
+      ) : (
+        <div
+          className={className}
+          aria-hidden="true"
+          style={{ backgroundColor: '#101014', backgroundImage: poster ? `url("${poster}")` : undefined, backgroundPosition: 'center', backgroundSize: 'cover' }}
+        />
+      )}
+      {hasReplacementAudio && hasVideoPlayer && (
         <audio
           ref={replacementAudioRef}
           src={backgroundMediaSuspended ? undefined : replacementAudioSrc || undefined}

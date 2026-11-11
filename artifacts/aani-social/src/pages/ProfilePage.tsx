@@ -1523,7 +1523,7 @@ export default function ProfilePage({
                         >
                           <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
                           <span className="profile-reorder-thumb">
-                            {collection.cover_url ? <img src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <video src={cover.media_url} muted playsInline preload="metadata" /> : cover?.media_url ? <img src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
+                            {collection.cover_url ? <img src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <span aria-hidden="true"><Play size={18} /></span> : cover?.media_url ? <img src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
                           </span>
                           <span className="profile-reorder-copy"><strong>{collection.title}</strong><small>{collection.stories.length} قصص</small></span>
                         </button>
@@ -1550,7 +1550,7 @@ export default function ProfilePage({
                         >
                           <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
                           <span className="profile-reorder-thumb">
-                            {post.media_url ? post.type === 'reel' ? <video src={post.media_url} muted playsInline preload="metadata" /> : <img src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
+                            {post.type === 'reel' ? getPostCoverUrl(post) ? <img src={getPostCoverUrl(post) || undefined} alt="" /> : <span aria-hidden="true"><Play size={18} /></span> : post.media_url ? <img src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
                           </span>
                           <span className="profile-reorder-copy"><strong>{post.content || 'منشور وسائط'}</strong><small>{new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(post.created_at))}</small></span>
                         </button>
@@ -2189,7 +2189,7 @@ export default function ProfilePage({
                       {collection.cover_url ? (
                         <img src={collection.cover_url} className="h-full w-full object-cover" alt="" />
                       ) : cover?.media_url && cover.media_type === 'video' ? (
-                        <video src={cover.media_url} className="h-full w-full object-cover" muted playsInline preload="metadata" />
+                        <span className="grid h-full w-full place-items-center text-neutral-400" aria-hidden="true"><Play size={18} /></span>
                       ) : cover?.media_url ? (
                         <img src={cover.media_url} className="h-full w-full object-cover" alt="" />
                       ) : (
@@ -2308,7 +2308,7 @@ export default function ProfilePage({
                         }}
                       />
                     ) : cover ? (
-                      <video src={cover} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                      <span className="grid h-full w-full place-items-center text-neutral-400"><Play size={28} aria-hidden="true" /></span>
                     ) : (
                       <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>
                     )

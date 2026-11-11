@@ -8,8 +8,7 @@ import FeedPostCard from './FeedPostCard';
 import { GridSkeleton } from './Skeletons';
 import EmptyState from './EmptyState';
 import { useSavedPosts } from '../lib/interactions';
-import { displayName, type Post } from '../lib/types';
-import { stripVideoEditFragment } from '../lib/videoMedia';
+import { displayName, getPostCoverUrl, type Post } from '../lib/types';
 
 interface SavedPostsViewProps {
   currentUserId: string;
@@ -66,14 +65,19 @@ function SavedPostTile({ post, onOpen }: { post: Post; onOpen: (post: Post) => v
         />
       ) : mediaUrl && post.type === 'reel' ? (
         <>
-          <video
-            src={stripVideoEditFragment(mediaUrl)}
-            muted
-            playsInline
-            preload="metadata"
-            aria-label="معاينة ريل محفوظ"
-            className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-          />
+          {getPostCoverUrl(post) ? (
+            <img
+              src={getPostCoverUrl(post) || undefined}
+              alt=""
+              loading="lazy"
+              decoding="async"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          ) : (
+            <span className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-zinc-800 to-zinc-950 text-zinc-400" aria-hidden="true">
+              <Clapperboard size={23} />
+            </span>
+          )}
           <span className="absolute left-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-black/45 text-white backdrop-blur-sm">
             <Clapperboard size={15} aria-hidden="true" />
           </span>
