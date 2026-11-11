@@ -232,12 +232,6 @@ export default function VideoPreviewModal({
   }, [open, isCropping, isTrimming]);
 
   useEffect(() => {
-    if (!musicNotice) return undefined;
-    const timer = window.setTimeout(() => setMusicNotice(false), 2400);
-    return () => window.clearTimeout(timer);
-  }, [musicNotice]);
-
-  useEffect(() => {
     if (!mentionNotice) return undefined;
     const timer = window.setTimeout(() => setMentionNotice(''), 2400);
     return () => window.clearTimeout(timer);
