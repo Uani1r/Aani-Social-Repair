@@ -40,7 +40,7 @@ const formatReelTime = (value: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'none' }: {
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'metadata' }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;

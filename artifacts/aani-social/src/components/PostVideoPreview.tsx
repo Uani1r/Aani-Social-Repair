@@ -422,7 +422,7 @@ export default function PostVideoPreview({
           muted={hasReplacementAudio || (showMuteToggle ? videoMuted : muted)}
           autoPlay={autoPlay && !autoPlayWhenVisible && !backgroundMediaSuspended}
           playsInline
-          preload={feedVideo ? 'none' : 'auto'}
+          preload={feedVideo && !hasPoolLease ? 'none' : 'metadata'}
           onLoadedMetadata={seekToStart}
           onLoadedData={() => setHasVideoFrame(true)}
           onSeeking={event => {

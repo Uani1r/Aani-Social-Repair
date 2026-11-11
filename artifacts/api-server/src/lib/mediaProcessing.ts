@@ -236,6 +236,7 @@ function runFfmpeg(inputPath: string, outputPath: string, stripAudio: boolean): 
     "-y",
     "-i", inputPath,
     "-c:v", "libx264",
+    "-preset", "ultrafast",
     "-profile:v", "high",
     "-pix_fmt", "yuv420p",
     "-crf", "23",
@@ -394,33 +395,12 @@ function errorText(error: unknown): string {
   return message.slice(0, 2000);
 }
 
-export async function processMediaAsset(
+async function processClaimedMediaAsset(
   config: SupabaseAdminConfig,
   userId: string,
   mediaAssetId: string,
+  asset: MediaAsset,
 ): Promise<ProcessedMedia> {
-  const asset = await loadMediaAsset(config, mediaAssetId);
-  if (!asset) throw new MediaProcessingError(404, "Media asset was not found.");
-  if (asset.user_id !== userId) throw new MediaProcessingError(403, "You cannot process this media asset.");
-  if (asset.processing_status === "ready" && asset.video_url) {
-    return { success: true, status: "ready", video_url: asset.video_url };
-  }
-
-  const claimed = await patchMediaAsset(config, mediaAssetId, userId, {
-    processing_status: "processing",
-    error_message: null,
-  }, "in.(uploading,failed)");
-  if (!claimed.length) {
-    const latest = await loadMediaAsset(config, mediaAssetId);
-    if (latest?.processing_status === "ready" && latest.video_url) {
-      return { success: true, status: "ready", video_url: latest.video_url };
-    }
-    if (latest?.processing_status === "processing") {
-      return { success: true, status: "processing" };
-    }
-    throw new MediaProcessingError(409, "The media asset is not ready to be processed.");
-  }
-
   let tempDirectory: string | null = null;
   try {
     tempDirectory = await mkdtemp(path.join(tmpdir(), `aani-media-${mediaAssetId}-`));
@@ -466,6 +446,41 @@ export async function processMediaAsset(
   } finally {
     if (tempDirectory) await rm(tempDirectory, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+export async function processMediaAsset(
+  config: SupabaseAdminConfig,
+  userId: string,
+  mediaAssetId: string,
+): Promise<ProcessedMedia> {
+  const asset = await loadMediaAsset(config, mediaAssetId);
+  if (!asset) throw new MediaProcessingError(404, "Media asset was not found.");
+  if (asset.user_id !== userId) throw new MediaProcessingError(403, "You cannot process this media asset.");
+  if (asset.processing_status === "ready" && asset.video_url) {
+    return { success: true, status: "ready", video_url: asset.video_url };
+  }
+
+  const claimed = await patchMediaAsset(config, mediaAssetId, userId, {
+    processing_status: "processing",
+    error_message: null,
+  }, "in.(uploading,failed)");
+  if (!claimed.length) {
+    const latest = await loadMediaAsset(config, mediaAssetId);
+    if (latest?.processing_status === "ready" && latest.video_url) {
+      return { success: true, status: "ready", video_url: latest.video_url };
+    }
+    if (latest?.processing_status === "processing") {
+      return { success: true, status: "processing" };
+    }
+    throw new MediaProcessingError(409, "The media asset is not ready to be processed.");
+  }
+
+  setImmediate(() => {
+    void processClaimedMediaAsset(config, userId, mediaAssetId, asset).catch(error => {
+      console.error("[media-processing] Background video processing failed:", error);
+    });
+  });
+  return { success: true, status: "processing" };
 }
 
 export async function getMediaAssetProcessingStatus(

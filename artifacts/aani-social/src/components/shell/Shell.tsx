@@ -47,7 +47,7 @@ type MediaProcessingStatusResponse = {
   error?: unknown;
 };
 
-const waitForMediaProcessing = async (accessToken: string, mediaAssetId: string): Promise<string> => {
+const waitForMediaProcessing = async (accessToken: string, mediaAssetId: string): Promise<void> => {
   const deadline = Date.now() + 10 * 60 * 1000;
   while (Date.now() < deadline) {
     const response = await fetch(`/api/media/${encodeURIComponent(mediaAssetId)}/status`, {
@@ -57,7 +57,7 @@ const waitForMediaProcessing = async (accessToken: string, mediaAssetId: string)
     if (!response.ok || result?.success !== true) {
       throw new Error(typeof result?.error === 'string' ? result.error : 'تعذر التحقق من حالة تجهيز الفيديو.');
     }
-    if (result.status === 'ready' && typeof result.video_url === 'string' && result.video_url) return result.video_url;
+    if (result.status === 'ready') return;
     if (result.status === 'failed') {
       throw new Error(typeof result.error_message === 'string' && result.error_message
         ? result.error_message
@@ -1909,25 +1909,24 @@ export default function Shell({
               const message = typeof processingResult?.error === 'string' ? processingResult.error : 'تعذر تجهيز نسخة الفيديو المعالجة.';
               throw new Error(message);
             }
-            const processedVideoUrl = processingResult.status === 'ready'
-              && typeof processingResult.video_url === 'string'
-              ? processingResult.video_url
-              : processingResult.status === 'processing'
-                ? await waitForMediaProcessing(accessToken, mediaAssetId)
-                : null;
-            if (!processedVideoUrl) {
+            if (processingResult.status === 'processing') {
+              void waitForMediaProcessing(accessToken, mediaAssetId)
+                .then(() => window.dispatchEvent(new Event('aani:post-created')))
+                .catch(error => console.warn('[media] Background video processing did not finish:', error));
+            } else if (processingResult.status === 'ready' && typeof processingResult.video_url === 'string') {
+              const trimFragment = publishedPost.media_url?.match(/#.*$/)?.[0] || '';
+              const processedMediaUrl = `${processingResult.video_url}${trimFragment}`;
+              completedPost = {
+                ...publishedPost,
+                media_url: processedMediaUrl,
+                media_urls: [processedMediaUrl],
+              };
+            } else {
               const message = typeof processingResult.error_message === 'string'
                 ? processingResult.error_message
                 : 'تعذر تجهيز نسخة الفيديو المعالجة.';
               throw new Error(message);
             }
-            const trimFragment = publishedPost.media_url?.match(/#.*$/)?.[0] || '';
-            const processedMediaUrl = `${processedVideoUrl}${trimFragment}`;
-            completedPost = {
-              ...publishedPost,
-              media_url: processedMediaUrl,
-              media_urls: [processedMediaUrl],
-            };
           } catch (processingError) {
             console.warn('[media] تعذرت معالجة الفيديو بعد نشر الأصل:', processingError);
             toast.error('تم نشر الفيديو الأصلي، لكن تعذرت معالجة نسخة التشغيل. الأصل محفوظ ويمكن تشغيله.');

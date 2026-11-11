@@ -138,7 +138,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
             pendingState={pending}
             onRetryPending={() => retryPendingPost(post.id)}
             onDismissPending={() => removePendingPost(post.id)}
-            videoPreload={index === activeIndex ? 'auto' : index === activeIndex + 1 ? 'metadata' : 'none'}
+            videoPreload={index === activeIndex || index === activeIndex + 1 ? 'metadata' : 'none'}
             showCreatedAt
             captionSheet
           />
