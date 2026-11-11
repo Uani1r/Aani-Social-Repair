@@ -21,7 +21,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
-import { getVideoAspectRatio, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
+import { getVideoAspectRatio, getVideoCropTransform, appendVideoTrimFragment, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -65,11 +65,20 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const repostNoticeTimerRef = useRef<number | null>(null);
   const shownRepostNoticeRef = useRef<string | null>(null);
   const mediaUrl = post.media_url || '';
-  const videoTimeRange = parseVideoTimeRange(mediaUrl);
+  // حدود القص: الأعمدة الصريحة (trim_start/trim_end) أولاً ثم ترميز #t= في العنوان
+  const videoTimeRange: VideoTimeRange | null =
+    typeof post.trim_start === 'number' && typeof post.trim_end === 'number' && post.trim_end > post.trim_start
+      ? { start: post.trim_start, end: post.trim_end }
+      : parseVideoTimeRange(mediaUrl);
   const videoCrop = parseVideoCrop(mediaUrl);
   const videoCropTransform = getVideoCropTransform(videoCrop);
   const videoAspectRatio = getVideoAspectRatio(videoCrop);
-  const videoSrc = stripVideoEditFragment(mediaUrl);
+  // تمرير المقطع المحدد للمتصفح بترميز HTML5 (#t=start,end) —
+  // يبدأ التشغيل عند trim_start وينتهي عند trim_end مباشرة من المتصفح،
+  // وبقية القَصم البرمجي (timeupdate) يضمن العودة لبداية المقطع عند تجاوزها
+  const videoSrc = videoTimeRange
+    ? appendVideoTrimFragment(mediaUrl, videoTimeRange)
+    : stripVideoEditFragment(mediaUrl);
   // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
   const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
   const interactions = usePostInteractions(post, currentUserId);

@@ -68,7 +68,7 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
       try {
         const { data: rows, error } = await supabase
           .from('posts')
-          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title')
+          .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, trim_start, trim_end')
           .eq('user_id', profileUserId)
           .eq('type', 'reel')
           .order('created_at', { ascending: false })

@@ -117,6 +117,10 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     return [];
   }, [post.media_urls, post.media_url]);
   const activeVideoUrl = urls[currentImageIndex] || post.media_url;
+  // حدود قص الفيديو من أعمدة المنشور الصريحة (احتياط إن خلا العنوان من ترميز #t=)
+  const postTrimRange = typeof post.trim_start === 'number' && typeof post.trim_end === 'number' && post.trim_end > post.trim_start
+    ? { start: post.trim_start, end: post.trim_end }
+    : null;
   const activeVideoAspectRatio = post.type === 'reel' ? getVideoAspectRatio(parseVideoCrop(activeVideoUrl || '')) : undefined;
   // رابط غلاف الفيديو المختار عند النشر (يظهر في الشبكة وكصورة poster قبل التشغيل)
   const postCoverUrl = getPostCoverUrl(post);
@@ -445,6 +449,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     feedVideo
                     loop
                     videoId={`${post.id}:${i}`}
+                    trimRange={postTrimRange}
                     restoreTime={i === currentImageIndex ? feedResumeTime : undefined}
                     onExpand={isMainFeedVideo && i === currentImageIndex ? openMainFeedReel : undefined}
                     controls={false}

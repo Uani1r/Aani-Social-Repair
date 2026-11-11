@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type 
 
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
 import { playExclusive, releaseActiveVideo } from '@/lib/activeVideo';
-import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
+import { appendVideoTrimFragment, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
 
 type PostVideoPreviewProps = {
   src: string;
@@ -21,6 +21,8 @@ type PostVideoPreviewProps = {
   restoreTime?: number;
   /** معرّف فريد لهذا الفيديو — يُستخدم في مدير الفيديو النشط الموحد */
   videoId?: string;
+  /** حدود قص بديلة من أعمدة المنشور (تُستخدم إن خلا العنوان من ترميز #t=) */
+  trimRange?: VideoTimeRange | null;
   onExpand?: (currentTime: number) => void;
 };
 
@@ -48,14 +50,19 @@ export default function PostVideoPreview({
   loop = false,
   restoreTime,
   videoId,
+  trimRange,
   onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const manuallyPausedRef = useRef(false);
   const modalPlaybackStateRef = useRef<{ wasPlaying: boolean; wasMuted: boolean; wasManuallyPaused: boolean } | null>(null);
-  const timeRange = parseVideoTimeRange(src);
+  // حدود القص: ترميز #t= في العنوان أولاً ثم عمودا المنشور trim_start/trim_end
+  const timeRange = parseVideoTimeRange(src) ?? trimRange ?? null;
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
-  const mediaSrc = stripVideoEditFragment(src);
+  // تمرير المقطع للمتصفح بترميز HTML5 (#t=start,end) — يقيّد التشغيل للمقطع المختار
+  const mediaSrc = timeRange
+    ? appendVideoTrimFragment(src, timeRange)
+    : stripVideoEditFragment(src);
   const gestureEnabled = feedVideo && Boolean(onExpand);
   const [videoMuted, setVideoMuted] = useState(feedVideo ? false : muted);
   const [currentTime, setCurrentTime] = useState(timeRange?.start ?? 0);

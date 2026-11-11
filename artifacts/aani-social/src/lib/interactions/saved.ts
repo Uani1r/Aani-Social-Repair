@@ -48,7 +48,7 @@ export const fetchSavedPosts = async (userId: string): Promise<Post[]> => {
 
     const { data: rows, error: postsError } = await supabase
       .from("posts")
-      .select("id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, hide_likes, hide_comments, comment_privacy")
+      .select("id, user_id, content, post_metadata, media_url, media_urls, type, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, trim_start, trim_end, hide_likes, hide_comments, comment_privacy")
       .in("id", ids);
 
     if (postsError || !rows) return [];

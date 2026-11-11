@@ -146,6 +146,9 @@ export type Post = {
   hide_likes?: boolean;
   hide_comments?: boolean;
   comment_privacy?: CommentPrivacy;
+  /** حدود قص الفيديو الصريحة (عمودا trim_start/trim_end بجانب ترميز #t= في media_url) */
+  trim_start?: number | null;
+  trim_end?: number | null;
   /** Optional audio / music attached to the post. */
   audio_url?: string | null;
   audio_title?: string | null;

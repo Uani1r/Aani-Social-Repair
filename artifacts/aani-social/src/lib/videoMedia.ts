@@ -63,6 +63,19 @@ export function stripVideoEditFragment(src: string): string {
   return src.replace(/#.*$/, '');
 }
 
+/**
+ * ألحق حدود القص بروابط الفيديو بترميز HTML5 Media Fragments
+ * (#t=start,end) فيقتصر التشغيل التلقائي للمتصفح على المقطع المختار،
+ * مع بقاء القَصم البرمجي في المشغّل كطبقة ضمان.
+ */
+export function appendVideoTrimFragment(src: string, range: VideoTimeRange): string {
+  const base = stripVideoEditFragment(src);
+  if (!Number.isFinite(range.start) || !Number.isFinite(range.end) || range.end <= range.start) {
+    return base;
+  }
+  return `${base}#t=${range.start.toFixed(2)},${range.end.toFixed(2)}`;
+}
+
 export function getVideoCropTransform(crop: VideoCropTransform | null | undefined): string | undefined {
   const normalized = normalizeVideoCrop(crop);
   if (normalized.zoom <= 1.001) return undefined;

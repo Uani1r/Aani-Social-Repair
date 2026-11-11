@@ -28,7 +28,7 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     try {
       const loadPost = (includeDestination: boolean) => supabase.from('posts')
         .select(includeDestination
-          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at'
+          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at, trim_start, trim_end'
           : '*')
         .eq('id', postId)
         .maybeSingle();

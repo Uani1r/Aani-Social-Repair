@@ -1268,6 +1268,14 @@ export default function Shell({
         };
         updatePendingPost(postId, { post: publishedPost, stage: 'publishing', progress: 96, error: null });
 
+        // حدود القص المخزنة كأعمدة صريحة (trim_start/trim_end) بجانب ترميز #t=
+        // في العنوان — يضمن التزامن حتى لو فُقد الرمز من عنوان الوسائط
+        const trimColumns = mediaType === 'video' && trim && trim.end > trim.start
+          ? {
+              trim_start: Number(trim.start.toFixed(3)),
+              trim_end: Number(trim.end.toFixed(3)),
+            }
+          : {};
         const postPayload = {
           id: postId,
           user_id: authenticatedUserId,
@@ -1281,6 +1289,7 @@ export default function Shell({
           ...(taggedUserIds.length > 0 ? { tagged_user_ids: taggedUserIds } : {}),
           // الصوت المرفق (audio_url / audio_title من ترحيل post_controls)
           ...(audioUrl ? { audio_url: audioUrl, audio_title: audioUpload?.title ?? null } : {}),
+          ...trimColumns,
         };
         let postError = (await supabase.from('posts').upsert({
           ...postPayload,
@@ -1319,6 +1328,20 @@ export default function Shell({
           delete payloadWithoutAudio.audio_url;
           delete payloadWithoutAudio.audio_title;
           postError = (await supabase.from('posts').upsert(payloadWithoutAudio, { onConflict: 'id' })).error;
+        }
+
+        // قاعدة بيانات لم يُطبَّق عليها عمودا القص بعد → أعد المحاولة بدونهما
+        // (القص يبقى محفوظاً داخل ترميز #t= في عنوان الوسائط)
+        if (
+          postError
+          && 'trim_start' in postPayload
+          && (postError.code === '42703' || postError.code === 'PGRST204')
+          && postError.message.includes('trim_start')
+        ) {
+          const payloadWithoutTrim = { ...postPayload } as Record<string, unknown>;
+          delete payloadWithoutTrim.trim_start;
+          delete payloadWithoutTrim.trim_end;
+          postError = (await supabase.from('posts').upsert(payloadWithoutTrim, { onConflict: 'id' })).error;
         }
 
         // قاعدة بيانات لا تقبل وسام الغلاف بعد → أعد المحاولة بدونه حتى لا يتعطل النشر
