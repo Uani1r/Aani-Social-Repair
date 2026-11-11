@@ -1,56 +1,59 @@
 /**
- * مشغّل الصوت الفوري العالمي (Single Audio Instance & Direct HTML5 Audio Mode).
+ * Global instant audio player (Single Audio Instance, Direct HTML5 Audio Mode).
  *
- * عنصر HTMLAudioElement واحد فقط يُعاد استخدامه لجميع المعاينات الصوتية في
- * التطبيق (مكتبة الأصوات، شاشة المعاينة، صفحة الصوت): عند التنقل بين الأصوات
- * يُستبدل src على الكائن نفسه بدل إنشاء كائن جديد، فيُجهَض طلب التنزيل السابق
- * فوراً (إلغاء الاستدعاءات المعلقة) ويُتفادى ضغط الذاكرة وGarbage Collection.
+ * One HTMLAudioElement is reused for every sound preview in the app
+ * (sound library, preview screen, sound page): switching sounds swaps `src`
+ * on the same object instead of creating a new one, which aborts the pending
+ * network request instantly (no stacked pending requests) and avoids memory
+ * pressure / garbage collection churn.
  *
- * الضبط (Direct Mode بلا حظر شبكة أو CORS):
- * - بلا crossOrigin إطلاقاً: لا مصافحة CORS ولا حظر موارد — المتصفح يبثّ
- *   الأوتار مباشرة عبر HTTP Range/206 دون انتظار.
- * - preload='metadata' فقط: طول الشريط دون استهلاك ذاكرة أو بان
-دويث ثقيل،
- *   والتشغيل يبثّ فور استدعاء play() بالتوازي مع الجلب (لا انتظار
- *   canplaythrough ولا جلب كامل ولا ArrayBuffer).
- * - playInstant يُستدعى داخل معالج الحدث المباشر (بدون أي await قبله):
- *   src + play() في نفس الملي ثانية لتفادي سياسة التشغيل التلقائي،
- *   وسلسلة play() ملتقطة دائماً فلا Uncaught Audio Promises في الكونسول.
- * - onPlaying يُستدعى فور صدور أول نغمة صوتية (التحول من Spinner إلى Pause).
+ * Configuration (Direct Mode: no network stall, no CORS lock):
+ * - No crossOrigin at all: no CORS handshake, no resource blocking. The
+ *   browser streams bytes directly over HTTP Range/206 without waiting.
+ * - preload='metadata' only: reads the duration without heavy memory or
+ *   bandwidth use. Playback starts the moment play() is called, in parallel
+ *   with the download (no waiting on canplaythrough, no full fetch, no
+ *   ArrayBuffer).
+ * - playInstant must be called inside the direct event handler (no await
+ *   before it): src + play() happen in the same millisecond to bypass the
+ *   browser autoplay policy, and the play() promise is always caught so no
+ *   uncaught audio promises ever reach the console.
+ * - onPlaying fires as soon as the first audible sample is emitted
+ *   (Spinner -> Pause transition).
  */
 
 export type InstantTrimRange = { start: number; end: number };
 
 export type InstantPlayOptions = {
-  /** حدود اقتصاص الصوت (بالثواني) — تُحصر الحلقة ضمنها كطبقة ضمان فوق ترميز #t= */
+  /** Sound trim bounds in seconds; the loop is clamped inside them as a safety net over the #t= fragment. */
   trim?: InstantTrimRange | null;
-  /** تكرار التشغيل (الافتراضي true) */
+  /** Loop playback (default true). */
   loop?: boolean;
-  /** قراءة المسودة في كل نبضة timeupdate (تحديث حي أثناء سحب مقابض الاقتصاص) */
+  /** Re-read the draft on every timeupdate tick (live updates while dragging trim handles). */
   getTrim?: () => InstantTrimRange | null;
-  /** فور صدور أول نغمة صوتية: التحويل من مؤشر التحميل إلى إيقاف مؤقت */
+  /** Fired on the first audible sample: switch the button from Spinner to Pause. */
   onPlaying?: () => void;
-  /** عند انتهاء المقطع طبيعياً */
+  /** Fired when the clip ends naturally. */
   onEnded?: () => void;
-  /** عند فشل التشغيل (رابط مفقود أو رفض المتصفح) */
+  /** Fired when playback fails (missing URL or browser rejection). */
   onError?: () => void;
-  /** لحظة توفر المدة الكاملة (iOS يمنع قراءتها قبل إيماءة المستخدم — تُقرأ من عنصر التشغيل الفعلي) */
+  /** Fired once the full duration is known (iOS blocks metadata reads before a user gesture, so it is read from the actual playback element). */
   onLoadedMetadata?: (duration: number) => void;
 };
 
 let audio: HTMLAudioElement | null = null;
 let currentSrc = '';
 let playingReported = false;
-// جيل الطلب الحالي: يُبطِل أي .play() أو رد نداء معلّق من محاولة سابقة عند التنقل السريع
+// Current request generation: invalidates any pending .play() promise or
+// callback from a previous attempt when the user switches sounds quickly.
 let playGeneration = 0;
 
 function ensureAudio(): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
   if (!audio) {
     audio = new Audio();
-    // metadata فقط: يقرأ طول الشريط بلا استهلاك ذاكرة/بان
-دويث ثقيل،
-    // والتشغيل يبثّ فور .play() عبر HTTP Range بلا أي انتظار
+    // metadata only: reads the duration without heavy memory/bandwidth use,
+    // while playback streams immediately over HTTP Range on .play().
     audio.preload = 'metadata';
     audio.loop = true;
   }
@@ -67,19 +70,21 @@ function clearHandlers(): void {
 }
 
 /**
- * تشغيل فوري على المشغّل الموحّد: يُستدعى مباشرة داخل معالج الحدث (نقرة المستخدم)
- * بلا أي انتظار — يوقف ما سبق، يبدّل src عند الحاجة، ثم يستدعي .play() فوراً.
+ * Instant playback on the unified player. Call it directly inside the event
+ * handler (user tap) with zero waiting: pauses whatever was playing, swaps
+ * src when needed, then calls .play() synchronously in the same tick.
  */
 export function playInstant(url: string, options: InstantPlayOptions = {}): void {
   const el = ensureAudio();
   if (!el || !url) return;
   const generation = ++playGeneration;
-  // إلغاء الاستدعاءات المعلقة: إيقاف فوري وتفريغ معالجات المقطع السابق
+  // Cancel pending work: stop immediately and drop the previous clip's handlers.
   if (!el.paused) el.pause();
   clearHandlers();
 
-  // استبدال المصدر على الكائن نفسه (لا new Audio): يُجهَض طلب الشبكة السابق تلقائياً
-  // بلا crossOrigin إطلاقاً — بلا مصافحة CORS ولا حظر موارد، والبث يبدأ فوراً
+  // Swap the source on the same object (never new Audio): the previous
+  // network request is aborted automatically. No crossOrigin at all, so
+  // there is no CORS handshake and streaming starts instantly.
   if (currentSrc !== url) {
     el.removeAttribute('src');
     el.removeAttribute('crossorigin');
@@ -99,14 +104,16 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
       : null;
 
   if (options.onPlaying) {
-    // الاستجابة اللحظية: أول نغمة صوتية (الحدث playing أو وعد .play()) تحوّل الزر فوراً
+    // Instant response: the first audible sample (the playing event or the
+    // resolved .play() promise) flips the button immediately.
     const reportPlaying = () => {
       if (playingReported || generation !== playGeneration) return;
       playingReported = true;
       options.onPlaying?.();
     };
     el.onplaying = reportPlaying;
-    // سلسلة play() ملتقطة دائماً: رفض Autoplay يُسجَّل ولا يُجمّد التطبيق
+    // The play() promise is always caught: an autoplay rejection is logged,
+    // never thrown, so the app can never freeze on it.
     void el.play().then(reportPlaying).catch((error: unknown) => {
       console.log('Autoplay handled:', error);
       if (generation !== playGeneration) return;
@@ -135,51 +142,54 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
     };
   }
 
-  // قَصم برمجي كضمان ثانٍ فوق ترميز #t=: يعود لبداية المقطع عند تجاوز نهايته
+  // Software clamp as a second safety net over the #t= fragment: jump back to
+  // the start of the clip whenever playback passes its end (smooth loop).
   if (readTrim) {
     el.ontimeupdate = () => {
       const range = readTrim();
       if (!range) return;
       if (el.currentTime >= range.end - 0.04 || el.currentTime < range.start - 0.05) {
-        try { el.currentTime = range.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+        try { el.currentTime = range.start; } catch { /* the browser may refuse seeking before readiness */ }
       }
     };
   }
 
   const initialTrim = readTrim?.() ?? null;
-  try { el.currentTime = initialTrim ? Math.max(0, initialTrim.start) : 0; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+  try { el.currentTime = initialTrim ? Math.max(0, initialTrim.start) : 0; } catch { /* the browser may refuse seeking before readiness */ }
 }
 
-/** إيقاف فوري وتفريغ الموارد: يُستدعى عند فتح مكتبة الأصوات أو إغلاق الشاشات أو إزالة الصوت */
+/** Instant stop and resource release: opening the sound library, closing screens, or removing the sound. */
 export function stopInstant(): void {
   if (!audio) return;
-  playGeneration += 1; // أبطل أي .play() أو رد نداء معلّق
+  playGeneration += 1; // invalidate any pending .play() promise or callback
   clearHandlers();
   if (!audio.paused) audio.pause();
-  try { audio.currentTime = 0; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+  try { audio.currentTime = 0; } catch { /* the browser may refuse seeking before readiness */ }
 }
 
 /**
- * استئناف المشغّل الموحّد إن كان هو نفسه يشغّل هذا الرابط أصلاً (بلا إعادة سحب
- * من الصفر): يعيد التشغيل من الموضع الحالي لحظياً — يُستخدم في شاشة المعاينة
- * حين يكون الصوت المقترح قد بدأ فور اختيار الصورة فلا تُقاطع المعاينة إعادة تشغيل.
- * يعيد true إن كفل بالاستئناف بنفسه، وfalse إن لزم تشغيل جديد عبر playInstant.
+ * Resume the unified player only when it is already playing this exact URL
+ * (no re-download from scratch): playback continues from the current position
+ * instantly. Used by the preview screen so an auto-suggested sound that
+ * started on image selection is not interrupted by a restart.
+ * Returns true when it handled the resume itself; false when a fresh
+ * playInstant call is required.
  */
 export function resumeInstantIfSame(url: string): boolean {
   if (!audio || !url || currentSrc !== url) return false;
-  if (!audio.paused) return true; // يعمل أصلاً على نفس الصوت — لا شيء يُفعل
+  if (!audio.paused) return true; // already playing this sound, nothing to do
   const generation = ++playGeneration;
   void audio.play().catch(() => {
     if (generation !== playGeneration) return;
-    /* فشل الاستئناف يُتجاهل بصمت — الشاشة تستطيع التشغيل عبر playInstant لاحقاً */
+    /* a failed resume is silently ignored; the screen can call playInstant later */
   });
   return true;
 }
 
 /**
- * قفزة فورية في زمن التشغيل على المشغّل الموحّد (تزامن حي مع سحب مقبض
- * البداية في أداة الاقتصاص): تنقل موضع التشغيل إلى الزمن المطلوب بلا
- * إعادة تحميل ولا انقطاع. يعيد true عند التنفيذ.
+ * Instant seek on the unified player (live sync while dragging the trim start
+ * handle): moves the playhead to the requested time with no reload and no
+ * interruption. Returns true when applied.
  */
 export function seekInstant(time: number): boolean {
   if (!audio) return false;
@@ -188,32 +198,33 @@ export function seekInstant(time: number): boolean {
     audio.currentTime = target;
     return true;
   } catch {
-    /* قد يرفض المتصفح الضبط قبل الجهوزية */
+    /* the browser may refuse seeking before readiness */
     return false;
   }
 }
 
-/** إيقاف مؤقت للمشغّل الموحّد (بلا تفريغ الموضع) — يعود التشغيل عبر resumeInstant */
+/** Pause the unified player without dropping the position; resume with resumeInstant. */
 export function pauseInstant(): void {
   if (audio && !audio.paused) audio.pause();
 }
 
-/** استئناف التشغيل على المشغّل الموحّد من موضعه الحالي */
+/** Resume playback on the unified player from the current position. */
 export function resumeInstant(): boolean {
   if (!audio) return false;
   if (!audio.paused) return true;
   const generation = ++playGeneration;
   void audio.play().catch(() => {
     if (generation !== playGeneration) return;
-    /* فشل الاستئناف يُتجاهل بصمت */
+    /* a failed resume is silently ignored */
   });
   return true;
 }
 
 /**
- * تسخين خفيف جداً (32 كيلوبايت فقط) لأول جزء من الصوت عبر طلب HTTP Range
- * (206 Partial Content) — يفتح الاتصال ويجعل النقر اللاحق يبدأ فوراً.
- * لا ArrayBuffer ولا جلب كامل: طلب صغير واحد يُجهَض تلقائياً بعد 5 ثوانٍ.
+ * Light cache warming (32 KB only) of the first chunk of a sound via an HTTP
+ * Range request (206 Partial Content): opens the connection so the next tap
+ * starts instantly. No ArrayBuffer and no full download: one small request
+ * that aborts itself after 5 seconds.
  */
 export function warmAudioCache(url: string, bytes = 32768): void {
   if (!url || typeof window === 'undefined') return;
@@ -224,18 +235,18 @@ export function warmAudioCache(url: string, bytes = 32768): void {
       .catch(() => undefined)
       .finally(() => window.clearTimeout(timer));
   } catch {
-    /* الجلب الاستباقي اختياري — تجاهل أي فشل بصمت */
+    /* warming is optional; ignore any failure silently */
   }
 }
 
 let audioContext: AudioContext | null = null;
 
 /**
- * تنشيط صامت لسياق الصوت (Silent Web Audio Warm-up):
- * ينشئ AudioContext ويشغّل نغمة صامتة قصيرة جداً (مخزن مؤقت فارغ) لجعل
- * المتصفح يعتبر الجلسة موثوقة (user-gesture unlocked) فيسمح بالتشغيل
- * الفوري التلقائي بلمح البصر دون حظر. يُستدعى داخل إيماءة مستخدم
- * (فتح واجهة النشر / أول لمسة) ويُستأنف عند كل استدعاء لاحق.
+ * Silent Web Audio warm-up: creates an AudioContext and plays a very short
+ * silent buffer (one empty sample) so the browser treats the session as
+ * user-gesture unlocked, allowing instant auto-play without blocking.
+ * Call it inside a user gesture (publish flow opening / first tap); later
+ * calls just resume a suspended context.
  */
 export function warmAudioContext(): void {
   if (typeof window === 'undefined') return;
@@ -248,7 +259,7 @@ export function warmAudioContext(): void {
       || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Context) return;
     audioContext = new Context();
-    // مخزن مؤقت فارغ (عينة واحدة صامتة): إشارة تشغيل بلا صوت مسموع
+    // Empty buffer (one silent sample): a playback signal with no audible sound.
     const silentBuffer = audioContext.createBuffer(1, 1, audioContext.sampleRate);
     const source = audioContext.createBufferSource();
     source.buffer = silentBuffer;
@@ -256,6 +267,6 @@ export function warmAudioContext(): void {
     source.start(0);
     if (audioContext.state === 'suspended') void audioContext.resume().catch(() => undefined);
   } catch {
-    /* سياق الصوت غير مدعوم في هذا السياق — التشغيل العادي يبقى يعمل */
+    /* AudioContext unsupported in this context; normal playback still works */
   }
 }
