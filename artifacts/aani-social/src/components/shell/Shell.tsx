@@ -539,9 +539,6 @@ export default function Shell({
       return;
     }
 
-    const touch = event.touches[0];
-    if (!touch) return;
-
     const scrollTop = Math.max(
       0,
       window.scrollY || 0,
