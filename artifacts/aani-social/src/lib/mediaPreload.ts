@@ -43,14 +43,17 @@ type VideoRangeRequest = {
   id: string;
   url: string;
   controller: AbortController;
+  timeout: number;
 };
 
 const VIDEO_PREFETCH_BYTES = 200 * 1024;
+const VIDEO_PREFETCH_TIMEOUT_MS = 5000;
 const videoCandidates = new Map<string, VideoPreloadCandidate>();
 let activeVideoRangeRequest: VideoRangeRequest | null = null;
 
 function abortActiveVideoRangeRequest(): void {
   if (!activeVideoRangeRequest) return;
+  window.clearTimeout(activeVideoRangeRequest.timeout);
   activeVideoRangeRequest.controller.abort();
   activeVideoRangeRequest = null;
 }
@@ -75,8 +78,17 @@ function startNextVideoRangeRequest(): void {
 
   abortActiveVideoRangeRequest();
   const controller = new AbortController();
-  const request: VideoRangeRequest = { id, url, controller };
+  const request: VideoRangeRequest = { id, url, controller, timeout: 0 };
   activeVideoRangeRequest = request;
+  let timedOut = false;
+  request.timeout = window.setTimeout(() => {
+    timedOut = true;
+    const latestCandidate = videoCandidates.get(id);
+    if (latestCandidate?.url.replace(/#.*$/, '') === url) {
+      videoCandidates.set(id, { ...latestCandidate, attempted: true });
+    }
+    controller.abort();
+  }, VIDEO_PREFETCH_TIMEOUT_MS);
 
   void (async () => {
     try {
@@ -106,7 +118,8 @@ function startNextVideoRangeRequest(): void {
     } catch {
       // Prefetch is optional; native playback remains the P0 fallback.
     } finally {
-      if (!controller.signal.aborted) {
+      window.clearTimeout(request.timeout);
+      if (!controller.signal.aborted || timedOut) {
         const latestCandidate = videoCandidates.get(id);
         if (latestCandidate?.url.replace(/#.*$/, '') === url) {
           videoCandidates.set(id, { ...latestCandidate, attempted: true });

@@ -348,19 +348,43 @@ export async function resumeInstant(): Promise<boolean> {
  * network work. This is best-effort; native streaming remains the fallback.
  */
 const warmedAudioOrigins = new Set<string>();
+const warmedAudioUrls = new Map<string, true>();
 const warmingAudioUrls = new Set<string>();
+const MAX_WARMED_AUDIO_ORIGINS = 16;
+const MAX_WARMED_AUDIO_URLS = 64;
+
+function rememberWarmedAudioOrigin(origin: string): void {
+  warmedAudioOrigins.add(origin);
+  if (warmedAudioOrigins.size > MAX_WARMED_AUDIO_ORIGINS) {
+    const oldest = warmedAudioOrigins.values().next().value;
+    if (oldest !== undefined) warmedAudioOrigins.delete(oldest);
+  }
+}
+
+function rememberWarmedAudioUrl(url: string): void {
+  warmedAudioUrls.delete(url);
+  warmedAudioUrls.set(url, true);
+  if (warmedAudioUrls.size > MAX_WARMED_AUDIO_URLS) {
+    const oldest = warmedAudioUrls.keys().next().value;
+    if (oldest !== undefined) warmedAudioUrls.delete(oldest);
+  }
+}
 
 /** Warm the connection and a bounded prefix so playback does less network work after a tap. */
 export function warmAudioCache(url: string, bytes = 65536): void {
   if (!url || typeof window === 'undefined') return;
   const mediaUrl = url.replace(/#.*$/, '');
   if (warmingAudioUrls.has(mediaUrl)) return;
+  if (warmedAudioUrls.has(mediaUrl)) {
+    rememberWarmedAudioUrl(mediaUrl);
+    return;
+  }
   warmingAudioUrls.add(mediaUrl);
   const maxBytes = Math.max(16384, Math.min(131072, Math.floor(bytes)));
   try {
     const origin = new URL(mediaUrl, window.location.href).origin;
     if (origin !== window.location.origin && !warmedAudioOrigins.has(origin)) {
-      warmedAudioOrigins.add(origin);
+      rememberWarmedAudioOrigin(origin);
       const link = document.createElement('link');
       link.rel = 'preconnect';
       link.href = origin;
@@ -376,22 +400,37 @@ export function warmAudioCache(url: string, bytes = 65536): void {
       headers: { Range: `bytes=0-${maxBytes - 1}` },
       signal: controller.signal,
     }).then(async response => {
+      if (!response.ok) {
+        await response.body?.cancel();
+        return;
+      }
       const reader = response.body?.getReader();
       if (!reader) return;
       let received = 0;
-      while (received < maxBytes) {
-        const { done, value } = await reader.read();
-        if (done) return;
-        received += value.byteLength;
-        if (received >= maxBytes) {
-          await reader.cancel();
-          return;
+      let completed = false;
+      try {
+        while (received < maxBytes) {
+          const { done, value } = await reader.read();
+          if (done) {
+            completed = true;
+            break;
+          }
+          received += value.byteLength;
+          if (received >= maxBytes) {
+            completed = true;
+            await reader.cancel();
+            break;
+          }
         }
+      } finally {
+        if (completed && received > 0) rememberWarmedAudioUrl(mediaUrl);
       }
-      await reader.cancel();
     }).catch(() => {
+      // Warm-up is optional; playback uses the native streaming path.
+    }).finally(() => {
       warmingAudioUrls.delete(mediaUrl);
-    }).finally(() => window.clearTimeout(timer));
+      window.clearTimeout(timer);
+    });
   } catch {
     warmingAudioUrls.delete(mediaUrl);
   }
@@ -645,17 +684,24 @@ export function isPlaybackActive(): boolean {
 // cached clip — no OfflineAudioContext needed since the AudioBuffer is
 // already decoded; results are memoized per URL.
 const clipPeaksCache = new Map<string, number[]>();
+const MAX_CACHED_CLIP_PEAKS = 12;
 
 export async function getClipPeaks(url: string, buckets = 256): Promise<number[] | null> {
-  const hit = clipPeaksCache.get(url);
-  if (hit) return hit;
+  const bucketCount = Math.max(1, Math.min(1024, Math.floor(Number.isFinite(buckets) && buckets > 0 ? buckets : 256)));
+  const cacheKey = `${url}\u0000${bucketCount}`;
+  const hit = clipPeaksCache.get(cacheKey);
+  if (hit) {
+    clipPeaksCache.delete(cacheKey);
+    clipPeaksCache.set(cacheKey, hit);
+    return hit;
+  }
   const buffer = previewClipCache.get(url) ?? await warmPreviewClip(url);
   if (!buffer || buffer.length === 0) return null;
   const data = buffer.getChannelData(0);
-  const block = Math.max(1, Math.floor(data.length / buckets));
+  const block = Math.max(1, Math.floor(data.length / bucketCount));
   const peaks: number[] = [];
   let max = 0;
-  for (let index = 0; index < buckets; index++) {
+  for (let index = 0; index < bucketCount; index++) {
     const start = index * block;
     let peak = 0;
     for (let j = start; j < start + block && j < data.length; j++) {
@@ -666,7 +712,11 @@ export async function getClipPeaks(url: string, buckets = 256): Promise<number[]
     if (peak > max) max = peak;
   }
   const normalized = max > 0 ? peaks.map(peak => peak / max) : peaks.map(() => 0);
-  clipPeaksCache.set(url, normalized);
+  clipPeaksCache.set(cacheKey, normalized);
+  if (clipPeaksCache.size > MAX_CACHED_CLIP_PEAKS) {
+    const oldest = clipPeaksCache.keys().next().value;
+    if (oldest !== undefined) clipPeaksCache.delete(oldest);
+  }
   return normalized;
 }
 

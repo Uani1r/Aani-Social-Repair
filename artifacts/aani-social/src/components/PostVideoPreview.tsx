@@ -106,7 +106,7 @@ export default function PostVideoPreview({
   const displayCurrentTime = Math.max(0, safeCurrentTime - rangeStart);
   const progressPercent = displayDuration > 0 ? Math.min(100, (displayCurrentTime / displayDuration) * 100) : 0;
 
-  const syncReplacementAudio = (video: HTMLVideoElement, restart = false, shouldPlay = false) => {
+  const syncReplacementAudio = (video: HTMLVideoElement, forceSeek = false, shouldPlay = false) => {
     if (!hasReplacementAudio) return;
     video.muted = true;
     video.volume = 0;
@@ -114,12 +114,14 @@ export default function PostVideoPreview({
     if (!audio) return;
     audio.muted = videoMuted;
     audio.volume = videoMuted ? 0 : 1;
+    const elapsed = Math.max(0, video.currentTime - rangeStart);
+    const audioRangeDuration = replacementAudioRange
+      ? replacementAudioRange.end - replacementAudioRange.start
+      : 0;
     const targetTime = replacementAudioRange
-      ? (restart || audio.currentTime < replacementAudioRange.start || audio.currentTime >= replacementAudioRange.end
-        ? replacementAudioRange.start
-        : audio.currentTime)
-      : Math.max(0, video.currentTime - rangeStart);
-    if (restart || Math.abs(audio.currentTime - targetTime) > 0.5) {
+      ? replacementAudioRange.start + (audioRangeDuration > 0 ? elapsed % audioRangeDuration : 0)
+      : elapsed;
+    if (forceSeek || Math.abs(audio.currentTime - targetTime) > 0.5) {
       try { audio.currentTime = targetTime; } catch { /* the audio may not be ready to seek yet */ }
     }
     if (shouldPlay && !backgroundMediaSuspended) void playBackgroundMedia(audio);
@@ -327,22 +329,24 @@ export default function PostVideoPreview({
 
   // تنظيف نهائي عند إزالة المكوّن: إيقاف صريح وتفريغ المصدر
   // — Safari/WebKit قد يواصل تشغيل صوت عنصر منزوع من الشجرة إن بقي مرجعاً
-  useEffect(() => () => {
+  useEffect(() => {
     const video = videoRef.current;
     const audio = replacementAudioRef.current;
-    audio?.pause();
-    try {
-      if (audio) {
-        audio.src = '';
-        audio.load();
+    return () => {
+      audio?.pause();
+      try {
+        if (audio) {
+          audio.src = '';
+          audio.load();
+        }
+        if (!video) return;
+        video.pause();
+        video.src = '';
+        video.load();
+      } catch {
+        /* العنصر قد يكون أفلت مرجعه بالفعل */
       }
-      if (!video) return;
-      video.pause();
-      video.src = '';
-      video.load();
-    } catch {
-      /* العنصر قد يكون أفلت مرجعه بالفعل */
-    }
+    };
   }, []);
 
   const seekToStart = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -441,7 +445,7 @@ export default function PostVideoPreview({
             enforceEnd(event);
             const video = event.currentTarget;
             const audio = replacementAudioRef.current;
-            if (hasReplacementAudio && audio && !audio.paused && !replacementAudioRange) {
+            if (hasReplacementAudio && audio && !audio.paused) {
               syncReplacementAudio(video);
             }
           }}

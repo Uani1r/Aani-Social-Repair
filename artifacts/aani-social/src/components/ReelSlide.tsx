@@ -217,22 +217,24 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   // إيقاف الصوت وإطلاق موارده عند إزالة الشريحة (الخروج من الريلز):
   // Safari/WebKit قد يواصل تشغيل صوت عنصر فيديو منزوع من الشجرة
   // إن بقي مرجعاً في JS — يجب الإيقاف الصريح وتفريغ المصدر.
-  useEffect(() => () => {
+  useEffect(() => {
     const video = videoRef.current;
     const backgroundAudio = backgroundAudioRef.current;
     const attachedAudio = attachedAudioRef.current;
-    releaseActiveVideo(post.id);
-    try {
-      [video, backgroundAudio, attachedAudio].forEach(media => {
-        if (!media) return;
-        media.pause();
-        media.src = '';
-        media.load();
-      });
-    } catch {
-      /* العنصر قد يكون أفلت مرجعه بالفعل */
-    }
-  }, []);
+    return () => {
+      releaseActiveVideo(post.id);
+      try {
+        [video, backgroundAudio, attachedAudio].forEach(media => {
+          if (!media) return;
+          media.pause();
+          media.src = '';
+          media.load();
+        });
+      } catch {
+        /* العنصر قد يكون أفلت مرجعه بالفعل */
+      }
+    };
+  }, [post.id]);
 
   useEffect(() => {
     if (!isOverlayOpen) return;
@@ -393,20 +395,39 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     seekToTrimStart(video);
   };
 
+  const syncBackgroundAudio = (video: HTMLVideoElement, forceSeek = false, shouldPlay = false) => {
+    const audio = backgroundAudioRef.current;
+    if (!backgroundSoundUrl || !audio) return;
+    const elapsed = Math.max(0, video.currentTime - (videoTimeRange?.start ?? 0));
+    const audioRangeDuration = soundTrimRange ? soundTrimRange.end - soundTrimRange.start : 0;
+    const targetTime = soundTrimRange
+      ? soundTrimRange.start + (audioRangeDuration > 0 ? elapsed % audioRangeDuration : 0)
+      : elapsed;
+    if (forceSeek || Math.abs(audio.currentTime - targetTime) > 0.5) {
+      try { audio.currentTime = targetTime; } catch { /* wait for media readiness */ }
+    }
+    if (shouldPlay && !backgroundMediaSuspended) void playBackgroundMedia(audio);
+  };
+
   const handleVideoSeeking = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
-    if (!videoTimeRange) return;
-    const end = getTrimEnd(video);
-    if (video.currentTime < videoTimeRange.start || video.currentTime > end) {
-      seekToTrimStart(video);
+    if (videoTimeRange) {
+      const end = getTrimEnd(video);
+      if (video.currentTime < videoTimeRange.start || video.currentTime > end) {
+        seekToTrimStart(video);
+      }
     }
+    syncBackgroundAudio(video, true, !video.paused);
   };
 
   const handleVideoTimeUpdate = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
     reportPlaybackTime(video.currentTime);
-    if (!videoTimeRange || video.currentTime < getTrimEnd(video) - 0.04) return;
-    seekToTrimStart(video);
+    if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
+      seekToTrimStart(video);
+      return;
+    }
+    if (backgroundAudioRef.current && !backgroundAudioRef.current.paused) syncBackgroundAudio(video);
   };
 
   const handleVideoPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -425,17 +446,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       seekToTrimStart(video);
     }
     // مزامنة الصوت الخلفي المستعار مع موضع الفيديو
-    const backgroundAudio = backgroundAudioRef.current;
-    if (backgroundSoundUrl && backgroundAudio) {
-      try {
-        backgroundAudio.currentTime = soundTrimRange
-          ? soundTrimRange.start
-          : Math.max(0, video.currentTime - (videoTimeRange?.start ?? 0));
-      } catch {
-        /* قد يرفض المتصفح الضبط قبل جهوزية المقطع */
-      }
-      void playBackgroundMedia(backgroundAudio);
-    }
+    syncBackgroundAudio(video, true, true);
   };
 
   const handleVideoPause = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -696,6 +707,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           preload="none"
           aria-hidden="true"
           className="hidden"
+          onLoadedMetadata={() => {
+            const video = videoRef.current;
+            if (video && !video.paused) syncBackgroundAudio(video, true, true);
+          }}
           onTimeUpdate={handleBackgroundTimeUpdate}
         />
       )}
