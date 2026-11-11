@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
+import { fetchProfileRow } from '@/lib/profileQuery';
 import type { Profile } from '@/lib/types';
 
 export default function useAppSession() {
@@ -67,7 +68,7 @@ export default function useAppSession() {
     };
     const metadataName = validName(user.user_metadata?.full_name) || validName(user.user_metadata?.name);
 
-    void supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,gender,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', user.id).maybeSingle().then(({ data }) => {
+    void fetchProfileRow(user.id).then(({ data }) => {
       if (!active) return;
       const row = data as Profile | null;
       const username = validName(row?.username) || validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'user';
