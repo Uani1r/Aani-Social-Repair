@@ -516,7 +516,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               ) : (
                 <Loader2 size={15} className="animate-spin text-[#f1a17f]" />
               )}
-              {pendingState.stage === 'uploading' ? 'جارٍ رفع الوسائط' : pendingState.stage === 'processing' ? 'جارٍ إرفاق الوسائط بالمنشور' : pendingState.stage === 'publishing' ? 'جارٍ حفظ المنشور' : pendingState.stage === 'ready' ? 'تم رفع الفيديو ونشره' : pendingState.stage === 'success' ? 'تم نشر المنشور' : 'تعذر نشر المنشور'}
+              {pendingState.stage === 'uploading' ? 'جارٍ رفع الوسائط' : pendingState.stage === 'processing' ? 'جارٍ ضغط الفيديو وتجهيزه' : pendingState.stage === 'publishing' ? 'جارٍ حفظ المنشور' : pendingState.stage === 'ready' ? 'تم رفع الفيديو ونشره' : pendingState.stage === 'success' ? 'تم نشر المنشور' : 'تعذر نشر المنشور'}
             </span>
             {pendingState.stage !== 'failed' && <span className="text-zinc-400">{pendingState.progress}%</span>}
           </div>

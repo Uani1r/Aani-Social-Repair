@@ -40,7 +40,7 @@ const formatReelTime = (value: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl }: {
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'none' }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
@@ -54,6 +54,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   showCreatedAt?: boolean;
   captionSheet?: boolean;
   trailingAccountControl?: ReactNode;
+  videoPreload?: 'none' | 'metadata' | 'auto';
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const backgroundMediaSuspended = useSyncExternalStore(
@@ -395,6 +396,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     seekToTrimStart(video);
   };
 
+  const handleVideoCanPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const video = event.currentTarget;
+    if (!isVisible || backgroundMediaSuspended || manuallyPausedRef.current || hasOpenFeedDialog()) return;
+    playExclusive(post.id, video);
+  };
+
   const syncBackgroundAudio = (video: HTMLVideoElement, forceSeek = false, shouldPlay = false) => {
     const audio = backgroundAudioRef.current;
     if (!backgroundSoundUrl || !audio) return;
@@ -562,7 +569,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                   aria-hidden="true"
                   draggable={false}
                   className="pointer-events-none absolute inset-0 z-[1] h-full w-full object-cover transition-opacity duration-200"
-                  style={{ filter: 'blur(20px)', transform: 'scale(1.06)', opacity: hasVideoFrame ? 0 : 1 }}
+                  style={{ opacity: hasVideoFrame ? 0 : 1 }}
                 />
               )}
               <video
@@ -575,9 +582,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
                 muted={Boolean(backgroundSoundUrl) || muted}
                 playsInline
-                preload="none"
+                preload={videoPreload}
                 onLoadedMetadata={handleVideoLoadedMetadata}
-                onLoadedData={() => setHasVideoFrame(true)}
+                onCanPlay={handleVideoCanPlay}
+                onPlaying={() => setHasVideoFrame(true)}
                 onVolumeChange={event => {
                   if (!backgroundSoundUrl) return;
                   event.currentTarget.muted = true;
@@ -648,7 +656,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           <div className="mb-2 flex items-center justify-between gap-3 text-xs">
             <span className="flex items-center gap-2">
               {pendingState.stage === 'success' || pendingState.stage === 'ready' ? <CheckCircle2 size={15} className="text-emerald-400" /> : pendingState.stage === 'failed' ? <X size={15} className="text-rose-400" /> : <Loader2 size={15} className="animate-spin text-[#f1a17f]" />}
-              {pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'processing' ? 'جارٍ إرفاق الفيديو بالريل' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'ready' ? 'تم رفع الريل ونشره' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل'}
+              {pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'processing' ? 'جارٍ ضغط الفيديو وتجهيزه' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'ready' ? 'تم رفع الريل ونشره' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل'}
             </span>
             {pendingState.stage !== 'failed' && <span>{pendingState.progress}%</span>}
           </div>

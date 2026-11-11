@@ -6,8 +6,8 @@ import { ReelsSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
-import { getPostDestination } from '@/lib/types';
-import { releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
+import { getPostCoverUrl, getPostDestination } from '@/lib/types';
+import { preloadImage, releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
 
 const savedReelsScrollPositions = new Map<string, number>();
 
@@ -61,10 +61,19 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
     ...userPendingPosts.map(item => item.post),
     ...posts.filter(post => !userPendingPosts.some(item => item.id === post.id)),
   ];
+  const currentPost = visiblePosts[activeIndex];
   const nextPost = visiblePosts[activeIndex + 1];
+  const currentPosterUrl = currentPost ? getPostCoverUrl(currentPost) : null;
+  const nextPosterUrl = nextPost ? getPostCoverUrl(nextPost) : null;
   const nextMediaUrl = nextPost?.media_url || nextPost?.media_urls?.[0] || null;
-  const currentPostId = visiblePosts[activeIndex]?.id || 'start';
+  const currentPostId = currentPost?.id || 'start';
   const visiblePostsSignature = visiblePosts.map(post => post.id).join(',');
+
+  useEffect(() => {
+    if (loading) return;
+    preloadImage(currentPosterUrl);
+    preloadImage(nextPosterUrl);
+  }, [currentPosterUrl, loading, nextPosterUrl]);
 
   useEffect(() => {
     const candidateId = `reels-page:${currentPostId}`;
@@ -129,6 +138,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
             pendingState={pending}
             onRetryPending={() => retryPendingPost(post.id)}
             onDismissPending={() => removePendingPost(post.id)}
+            videoPreload={index === activeIndex ? 'auto' : index === activeIndex + 1 ? 'metadata' : 'none'}
             showCreatedAt
             captionSheet
           />
