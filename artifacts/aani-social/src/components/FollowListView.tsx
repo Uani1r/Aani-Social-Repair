@@ -13,12 +13,18 @@ import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
 /**
- * شاشة كاملة لقائمة المتابعين أو المُتابَعين:
- * شريط علوي بزر رجوع وعنوان، وقائمة حسابات (صورة + اسم + يوزر)
- * مع زر متابعة/إلغاء متابعة، والانتقال للملف بالنقر على أي حساب.
+ * شاشة كاملة بتبويبين: «أتابع» (من يتابعهم صاحب الملف) و«المتابعون» (من يتابعونه)،
+ * تفتح على التبويب المطلوب وتنتقل بينهما بسلاسة مع حفظ كل قائمة في الذاكرة.
  * كل الاستعلامات تمر حصراً عبر جدول public.follows.
  */
 export type FollowListKind = 'followers' | 'following';
+
+type ListState = Profile[] | null | 'failed';
+
+const TAB_LABELS: Record<FollowListKind, string> = {
+  following: 'أتابع',
+  followers: 'المتابعون',
+};
 
 export default function FollowListView({ kind, targetUserId, currentUserId, onClose }: {
   kind: FollowListKind;
@@ -26,22 +32,26 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
   currentUserId: string;
   onClose: () => void;
 }) {
-  const [people, setPeople] = useState<Profile[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [activeKind, setActiveKind] = useState<FollowListKind>(kind);
+  const [lists, setLists] = useState<Record<FollowListKind, ListState>>({
+    followers: null,
+    following: null,
+  });
   const [viewerFollowingIds, setViewerFollowingIds] = useState<Set<string>>(new Set());
   const [busyId, setBusyId] = useState<string | null>(null);
 
   useOverlayBack(true, onClose);
   useModalBodyScrollLock();
 
-  // القائمة: علاقات المتابعة من جدول follows ثم بيانات الحسابات من profiles
+  // جلب كسول لكل تبويب مع تخزين القائمة في الذاكرة للتنقل السريع بينهما
   useEffect(() => {
+    if (lists[activeKind] !== null) return undefined;
     let active = true;
     void (async () => {
       try {
         if (!supabaseConfigured || !targetUserId) throw new Error('unconfigured');
-        const relationColumn = kind === 'followers' ? 'follower_id' : 'following_id';
-        const ownerColumn = kind === 'followers' ? 'following_id' : 'follower_id';
+        const relationColumn = activeKind === 'followers' ? 'follower_id' : 'following_id';
+        const ownerColumn = activeKind === 'followers' ? 'following_id' : 'follower_id';
 
         const { data: relationRows, error: relationError } = await supabase
           .from('follows')
@@ -55,7 +65,7 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
           .map((row: Record<string, unknown>) => row[relationColumn])
           .filter((id): id is string => typeof id === 'string' && Boolean(id));
         if (ids.length === 0) {
-          if (active) setPeople([]);
+          if (active) setLists(current => ({ ...current, [activeKind]: [] }));
           return;
         }
 
@@ -66,13 +76,18 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
         if (profileError) throw profileError;
 
         const byId = new Map<string, Profile>((profileRows || []).map(profile => [profile.id, profile as Profile]));
-        if (active) setPeople(ids.map(id => byId.get(id)).filter((person): person is Profile => Boolean(person)));
+        if (active) {
+          setLists(current => ({
+            ...current,
+            [activeKind]: ids.map(id => byId.get(id)).filter((person): person is Profile => Boolean(person)),
+          }));
+        }
       } catch {
-        if (active) setFailed(true);
+        if (active) setLists(current => ({ ...current, [activeKind]: 'failed' }));
       }
     })();
     return () => { active = false; };
-  }, [kind, targetUserId]);
+  }, [activeKind, lists, targetUserId]);
 
   // حالات متابعة المستخدم الحالي (لزر المتابعة/إلغاء المتابعة)
   useEffect(() => {
@@ -124,29 +139,56 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
     }
   };
 
+  const activeList = lists[activeKind];
+
   return createPortal(
     <div className="fixed inset-0 z-[1100] flex flex-col bg-black text-white" role="dialog" aria-modal="true" dir="rtl">
-      <header className="flex shrink-0 items-center gap-3 border-b border-white/10 px-3 py-2.5 pt-[max(0.75rem,env(safe-area-inset-top))]">
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="رجوع"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:bg-white/10"
-        >
-          <ArrowRight size={24} />
-        </button>
-        <h1 className="text-base font-bold">
-          {kind === 'followers' ? 'المتابعون' : 'المتابَعون'}
-        </h1>
+      <header className="shrink-0 border-b border-white/10 px-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+        <div className="flex items-center gap-3 py-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="رجوع"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition hover:bg-white/10"
+          >
+            <ArrowRight size={24} />
+          </button>
+          <h1 className="text-base font-bold">{TAB_LABELS[activeKind]}</h1>
+        </div>
+        <div className="grid grid-cols-2" role="tablist" aria-label="قوائم المتابعة">
+          {(Object.keys(TAB_LABELS) as FollowListKind[]).map(tabKind => {
+            const selected = tabKind === activeKind;
+            return (
+              <button
+                key={tabKind}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setActiveKind(tabKind)}
+                className={`relative pb-2.5 pt-1 text-center text-sm font-semibold transition ${
+                  selected ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {TAB_LABELS[tabKind]}
+                <span
+                  aria-hidden="true"
+                  className={`absolute inset-x-6 bottom-0 h-0.5 rounded-full bg-white transition-opacity ${
+                    selected ? 'opacity-100' : 'opacity-0'
+                  }`}
+                />
+              </button>
+            );
+          })}
+        </div>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {people === null && !failed && <ListSkeleton count={6} avatarClass="h-12 w-12" className="px-4 py-2" />}
-        {failed && <EmptyState className="min-h-64" />}
-        {people !== null && !failed && people.length === 0 && <EmptyState className="min-h-64" />}
-        {people !== null && !failed && people.length > 0 && (
+        {activeList === null && <ListSkeleton count={6} avatarClass="h-12 w-12" className="px-4 py-2" />}
+        {activeList === 'failed' && <EmptyState className="min-h-64" />}
+        {Array.isArray(activeList) && activeList.length === 0 && <EmptyState className="min-h-64" />}
+        {Array.isArray(activeList) && activeList.length > 0 && (
           <ul>
-            {people.map(person => {
+            {activeList.map(person => {
               const following = viewerFollowingIds.has(person.id);
               return (
                 <li key={person.id} className="flex items-center gap-3 px-4 py-2.5 transition hover:bg-white/[0.03]">
