@@ -2,6 +2,7 @@ import { Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type SyntheticEvent } from 'react';
 
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
+import { playExclusive, releaseActiveVideo } from '@/lib/activeVideo';
 import { getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment } from '@/lib/videoMedia';
 
 type PostVideoPreviewProps = {
@@ -18,6 +19,8 @@ type PostVideoPreviewProps = {
   feedVideo?: boolean;
   loop?: boolean;
   restoreTime?: number;
+  /** معرّف فريد لهذا الفيديو — يُستخدم في مدير الفيديو النشط الموحد */
+  videoId?: string;
   onExpand?: (currentTime: number) => void;
 };
 
@@ -44,6 +47,7 @@ export default function PostVideoPreview({
   feedVideo = false,
   loop = false,
   restoreTime,
+  videoId,
   onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -127,7 +131,7 @@ export default function PostVideoPreview({
       video.muted = previousState.wasMuted;
       setVideoMuted(previousState.wasMuted);
       manuallyPausedRef.current = previousState.wasManuallyPaused;
-      if (previousState.wasPlaying) void video.play().catch(() => undefined);
+      if (previousState.wasPlaying) playExclusive(videoId, video);
     };
     window.addEventListener('aani:pause-feed-videos', pauseForModal);
     window.addEventListener('aani:resume-feed-videos', resumeAfterModal);
@@ -144,26 +148,44 @@ export default function PostVideoPreview({
     if (!video) return;
 
     if (typeof IntersectionObserver === 'undefined') {
-      if (!manuallyPausedRef.current && !hasOpenFeedDialog()) void video.play().catch(() => undefined);
+      if (!manuallyPausedRef.current && !hasOpenFeedDialog()) playExclusive(videoId, video);
       return () => video.pause();
     }
 
+    // مراقبة الظهور: لا تشغيل إلا عند ظهور 60% على الأقل،
+    // وخروجه من الظهور يوقف الفيديو فوراً (توقف الصوت معه)
     const observer = new IntersectionObserver(([entry]) => {
       if (!entry) return;
-      if (entry.isIntersecting && entry.intersectionRatio >= 0.45) {
-        if (!manuallyPausedRef.current && !hasOpenFeedDialog()) void video.play().catch(() => undefined);
+      if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
+        if (!manuallyPausedRef.current && !hasOpenFeedDialog()) playExclusive(videoId, video);
       } else {
         video.pause();
+        if (videoId) releaseActiveVideo(videoId);
         if (!hasOpenFeedDialog()) manuallyPausedRef.current = false;
       }
-    }, { threshold: [0, 0.45] });
+    }, { threshold: [0, 0.6] });
 
     observer.observe(video);
     return () => {
       observer.disconnect();
       video.pause();
+      if (videoId) releaseActiveVideo(videoId);
     };
-  }, [autoPlayWhenVisible, mediaSrc]);
+  }, [autoPlayWhenVisible, mediaSrc, videoId]);
+
+  // تنظيف نهائي عند إزالة المكوّن: إيقاف صريح وتفريغ المصدر
+  // — Safari/WebKit قد يواصل تشغيل صوت عنصر منزوع من الشجرة إن بقي مرجعاً
+  useEffect(() => () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    } catch {
+      /* العنصر قد يكون أفلت مرجعه بالفعل */
+    }
+  }, []);
 
   const seekToStart = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
@@ -253,7 +275,7 @@ export default function PostVideoPreview({
           } else {
             video.currentTime = 0;
           }
-          void video.play().catch(() => undefined);
+          playExclusive(videoId, video);
         }}
         className={className}
         style={{ transform: cropTransform, transformOrigin: 'center', touchAction: feedVideo ? 'pan-y' : undefined }}

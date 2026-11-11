@@ -16,6 +16,7 @@ import LikesListSheet from '@/components/LikesListSheet';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import ExpandablePostText from '@/components/ExpandablePostText';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
+import { playExclusive, releaseActiveVideo } from '@/lib/activeVideo';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
@@ -117,9 +118,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.6;
           setIsVisible(isVisible);
           if (isVisible && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
-            void video.play().catch(() => undefined);
+            // تشغيل مع حصرية المدير الموحد: يوقف أي فيديو آخر يعمل في التطبيق
+            playExclusive(post.id, video);
           } else if (!isVisible) {
             video.pause();
+            releaseActiveVideo(post.id);
             if (!hasOpenFeedDialog()) manuallyPausedRef.current = false;
           }
         });
@@ -128,7 +131,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     );
 
     observer.observe(container);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      video.pause();
+      releaseActiveVideo(post.id);
+    };
   }, [videoSrc]);
 
   useEffect(() => {
@@ -154,6 +161,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   // إن بقي مرجعاً في JS — يجب الإيقاف الصريح وتفريغ المصدر.
   useEffect(() => () => {
     const video = videoRef.current;
+    releaseActiveVideo(post.id);
     if (!video) return;
     try {
       video.pause();
@@ -175,9 +183,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     if (visibleHeight < bounds.height * 0.6) return;
 
     video.muted = muted;
-    void video.play().catch(error => {
-      console.log('Autoplay issue handled:', error);
-    });
+    playExclusive(post.id, video);
   }, [isOverlayOpen, muted, videoSrc]);
 
   useEffect(() => {
@@ -200,7 +206,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       if (!video || !previousState) return;
       modalPlaybackStateRef.current = null;
       manuallyPausedRef.current = previousState.wasManuallyPaused;
-      if (previousState.wasPlaying) void video.play().catch(() => undefined);
+      if (previousState.wasPlaying) playExclusive(post.id, video);
     };
 
     window.addEventListener('aani:pause-feed-videos', pauseForModal);
@@ -236,7 +242,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     const video = videoRef.current;
     if (!video || !video.paused) return;
     manuallyPausedRef.current = false;
-    void video.play().catch(() => undefined);
+    playExclusive(post.id, video);
   };
 
   const playbackGestures = useFeedVideoGestures(videoRef, true, startPlayback);
@@ -351,7 +357,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const handleVideoEnded = (event: SyntheticEvent<HTMLVideoElement>) => {
     if (!videoTimeRange) return;
     seekToTrimStart(event.currentTarget);
-    void event.currentTarget.play().catch(() => undefined);
+    playExclusive(post.id, event.currentTarget);
   };
 
   const timelineStart = videoTimeRange?.start ?? 0;

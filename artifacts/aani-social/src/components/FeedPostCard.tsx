@@ -444,6 +444,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                     showMuteToggle
                     feedVideo
                     loop
+                    videoId={`${post.id}:${i}`}
                     restoreTime={i === currentImageIndex ? feedResumeTime : undefined}
                     onExpand={isMainFeedVideo && i === currentImageIndex ? openMainFeedReel : undefined}
                     controls={false}
