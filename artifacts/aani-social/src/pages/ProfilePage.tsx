@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Flag, MapPin, MessageCircle, Play, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
+import FollowButton from '@/components/FollowButton';
+import { setFollowState } from '@/lib/followState';
 
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
@@ -199,12 +201,9 @@ export default function ProfilePage({
   const [followers, setFollowers] = useState(0);
   const [following, setFollowing] = useState(0);
   const [isFollowing, setIsFollowing] = useState(false);
-  const [showFollowCheckmark, setShowFollowCheckmark] = useState(false);
   const [followRequestSent, setFollowRequestSent] = useState(false);
   // هل الشخص الذي أزور ملفه يتابعني؟ يُستخدم لإظهار زر «رد المتابعة»
   const [followsMe, setFollowsMe] = useState(false);
-  const followCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const followActionPendingRef = useRef(false);
   const [profileHighlights, setProfileHighlights] = useState<ProfileHighlightCollection[]>([]);
   const [showProfileReorder, setShowProfileReorder] = useState(false);
   const [profilePostOrder, setProfilePostOrder] = useState<string[]>([]);
@@ -456,7 +455,6 @@ export default function ProfilePage({
   const showPublicBirthDate = Boolean(person?.show_birth_date && formattedBirthDate);
   const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
   const authProviderLabel = authProvider === 'google' ? 'Google' : authProvider === 'apple' ? 'Apple' : authProvider === 'phone' ? 'الهاتف' : 'البريد الإلكتروني';
-  const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : followsMe ? 'رد المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
@@ -643,16 +641,9 @@ export default function ProfilePage({
     return () => { active = false; };
   }, [showSettingsOverlay, settingsScreen, currentUserId]);
 
-  useEffect(() => {
-    setShowFollowCheckmark(false);
-    if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
-    followCheckTimerRef.current = null;
-  }, [activeUserId]);
-
   useEffect(() => () => {
     temporaryPreviewUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
     temporaryPreviewUrlsRef.current.clear();
-    if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
     const reorderGesture = profileReorderGestureRef.current;
     if (reorderGesture?.timer !== null && reorderGesture?.timer !== undefined) window.clearTimeout(reorderGesture.timer);
     profileReorderGestureRef.current = null;
@@ -722,6 +713,13 @@ export default function ProfilePage({
       setIsFollowing(Boolean(checkFollow));
       setFollowsMe(Boolean(checkFollowsMe));
       setFollowRequestSent(Boolean(checkRequest));
+      // زرع حالة المتابعة في المخزن الموحد ليتزامن الزر عبر كل الشاشات
+      if (!own) {
+        setFollowState(activeUserId, {
+          following: Boolean(checkFollow),
+          requestSent: Boolean(checkRequest),
+        });
+      }
       const storiesByCollection = new Map<string, ProfileHighlight[]>();
       ((highlightRows || []) as ProfileHighlight[]).forEach(story => {
         const stories = storiesByCollection.get(story.collection_id) || [];
@@ -737,69 +735,8 @@ export default function ProfilePage({
     return () => { active = false; };
   }, [activeUserId, currentUserId, own]);
 
-  const toggleFollow = async () => {
-    if (!supabaseConfigured || own || !person || followActionPendingRef.current) return;
-    followActionPendingRef.current = true;
-
-    try {
-      if (isFollowing) {
-        const { error } = await supabase.from('follows').delete().eq('follower_id', currentUserId).eq('following_id', activeUserId);
-        if (error) {
-          toast.error('تعذرت إزالة المتابعة');
-          return;
-        }
-        setFollowers(prev => Math.max(0, prev - 1));
-        setIsFollowing(false);
-        setShowFollowCheckmark(false);
-        if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
-        followCheckTimerRef.current = null;
-        return;
-      }
-
-      if (followRequestSent) {
-        const { error } = await supabase.from('follow_requests').delete().eq('requester_id', currentUserId).eq('recipient_id', activeUserId);
-        if (error) {
-          toast.error('تعذر إلغاء طلب المتابعة');
-          return;
-        }
-        setFollowRequestSent(false);
-        toast.success('تم إلغاء طلب المتابعة');
-        return;
-      }
-
-      if (person.is_private) {
-        const { error } = await supabase.from('follow_requests').insert({ requester_id: currentUserId, recipient_id: activeUserId });
-        if (error) {
-          toast.error('تعذر إرسال طلب المتابعة');
-          return;
-        }
-        setFollowRequestSent(true);
-        toast.success('تم إرسال طلب المتابعة');
-        return;
-      }
-
-      setIsFollowing(true);
-      setShowFollowCheckmark(true);
-      if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
-      followCheckTimerRef.current = setTimeout(() => {
-        setShowFollowCheckmark(false);
-        followCheckTimerRef.current = null;
-      }, 1500);
-
-      const { error } = await supabase.from('follows').insert({ follower_id: currentUserId, following_id: activeUserId });
-      if (error && error.code !== '23505') {
-        setIsFollowing(false);
-        setShowFollowCheckmark(false);
-        if (followCheckTimerRef.current) clearTimeout(followCheckTimerRef.current);
-        followCheckTimerRef.current = null;
-        toast.error('تعذرت متابعة هذا الحساب');
-        return;
-      }
-      setFollowers(prev => prev + (error ? 0 : 1));
-    } finally {
-      followActionPendingRef.current = false;
-    }
-  };
+  // زر المتابعة الموحد FollowButton يدير عمليات المتابعة والطلب
+  // والمزامنة عبر مخزن الحالة المشترك (src/lib/followState.ts)
 
   const toggleStoryVisibilityForProfile = async () => {
     if (!supabaseConfigured || own || !currentUserId || profileActionBusy) return;
@@ -2164,25 +2101,18 @@ export default function ProfilePage({
         <div className="mb-4 flex items-center justify-between">
           {!own && (
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void toggleFollow()}
-                aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : followsMe ? 'رد المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
-                className={`relative inline-flex h-9 min-w-[85px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
-              >
-                <span className="invisible inline-flex items-center gap-1.5" aria-hidden="true">
-                  <span>{followButtonLabel}</span>
-                  {isFollowing && <span className="h-3.5 w-3.5 shrink-0" />}
-                </span>
-                <span className="absolute inset-0 flex items-center justify-center text-center">{followButtonLabel}</span>
-                {isFollowing && (
-                  <span className="absolute left-2 top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center" aria-hidden="true">
-                    <svg className={`profile-follow-check${showFollowCheckmark ? ' is-visible' : ''}`} viewBox="0 0 20 20" aria-hidden="true">
-                      <path d="M3 10.5 7.4 15 17 5.5" fill="none" stroke="#000" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} />
-                    </svg>
-                  </span>
-                )}
-              </button>
+              <FollowButton
+                targetUserId={activeUserId}
+                currentUserId={currentUserId}
+                isPrivate={person.is_private}
+                followsMe={followsMe}
+                initialFollowing={isFollowing}
+                initialRequestSent={followRequestSent}
+                onFollowingChange={next => {
+                  setFollowers(prev => Math.max(0, prev + (next ? 1 : -1)));
+                  setIsFollowing(next);
+                }}
+              />
               <Link href={`/messages/${activeUserId}`} aria-label="إرسال رسالة" className="flex h-9 w-9 items-center justify-center rounded-full border border-[#53575B] text-white transition hover:bg-white/10">
                 <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -2467,14 +2397,20 @@ export default function ProfilePage({
           onRefresh={() => void refresh()}
           onClose={() => setReelsPlayerPostId(null)}
           trailingAccountControl={own ? undefined : (
-            <button
-              type="button"
-              onClick={() => void toggleFollow()}
+            <FollowButton
+              targetUserId={activeUserId}
+              currentUserId={currentUserId}
+              isPrivate={person.is_private}
+              followsMe={followsMe}
+              initialFollowing={isFollowing}
+              initialRequestSent={followRequestSent}
               disabled={profileActionBusy}
-              className="ms-auto shrink-0 rounded-full border border-white/50 px-3 py-1 text-[11px] font-bold text-white transition hover:bg-white/20 disabled:opacity-50"
-            >
-              {isFollowing ? 'أتابع' : followRequestSent ? 'طلب مرسل' : followsMe ? 'رد المتابعة' : 'متابعة'}
-            </button>
+              className="ms-auto"
+              onFollowingChange={next => {
+                setFollowers(prev => Math.max(0, prev + (next ? 1 : -1)));
+                setIsFollowing(next);
+              }}
+            />
           )}
         />
       )}

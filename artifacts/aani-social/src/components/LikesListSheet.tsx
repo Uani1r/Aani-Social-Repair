@@ -2,13 +2,14 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { Link } from 'wouter';
-import { toast } from 'sonner';
 
 import Avatar from './Avatar';
 import { ListSkeleton } from './Skeletons';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import EmptyState from '@/components/EmptyState';
+import FollowButton from '@/components/FollowButton';
+import { setFollowState } from '@/lib/followState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { cleanUsername, displayName, type Profile } from '@/lib/types';
 
@@ -51,7 +52,6 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
   const [users, setUsers] = useState<LikeUser[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
-  const [pendingFollowId, setPendingFollowId] = useState<string | null>(null);
   const {
     dragOffset,
     dragging,
@@ -145,13 +145,19 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
       }
 
       if (!active) return;
-      setUsers(likerIds.map(id => ({
+      const loadedUsers = likerIds.map(id => ({
         id,
         profile: profilesById.get(id) ?? { id, full_name: 'مستخدم' },
         isFollowing: followingIds.has(id),
         isFollower: followerIds.has(id),
         requestPending: pendingRequestIds.has(id),
-      })));
+      }));
+      setUsers(loadedUsers);
+      // زرع حالة المتابعة في المخزن الموحد ليتزامن الزر عبر كل الشاشات
+      loadedUsers.forEach(user => setFollowState(user.id, {
+        following: user.isFollowing,
+        requestSent: user.requestPending,
+      }));
     })().catch(loadError => {
       console.error('[likes] تعذر تحميل قائمة الإعجابات:', loadError);
       if (active) setError(true);
@@ -168,62 +174,6 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
     const priority = (user: LikeUser) => user.isFollowing ? 0 : user.isFollower ? 1 : 2;
     return priority(first) - priority(second);
   });
-
-  const toggleFollow = async (user: LikeUser) => {
-    if (!supabaseConfigured || !currentUserId || user.id === currentUserId || pendingFollowId) return;
-    setPendingFollowId(user.id);
-
-    try {
-      if (user.isFollowing) {
-        const { error: followError } = await supabase
-          .from('follows')
-          .delete()
-          .eq('follower_id', currentUserId)
-          .eq('following_id', user.id);
-        if (followError) throw followError;
-        setUsers(current => current.map(item => item.id === user.id
-          ? { ...item, isFollowing: false }
-          : item));
-        toast.success('تم إلغاء المتابعة');
-      } else if (user.requestPending) {
-        const { error: requestError } = await supabase
-          .from('follow_requests')
-          .delete()
-          .eq('requester_id', currentUserId)
-          .eq('recipient_id', user.id);
-        if (requestError) throw requestError;
-        setUsers(current => current.map(item => item.id === user.id
-          ? { ...item, requestPending: false }
-          : item));
-        toast.success('تم إلغاء طلب المتابعة');
-      } else if (user.profile.is_private) {
-        const { error: requestError } = await supabase.from('follow_requests').insert({
-          requester_id: currentUserId,
-          recipient_id: user.id,
-        });
-        if (requestError && requestError.code !== '23505') throw requestError;
-        setUsers(current => current.map(item => item.id === user.id
-          ? { ...item, requestPending: true }
-          : item));
-        toast.success(requestError ? 'سبق إرسال طلب المتابعة' : 'تم إرسال طلب المتابعة');
-      } else {
-        const { error: followError } = await supabase.from('follows').insert({
-          follower_id: currentUserId,
-          following_id: user.id,
-        });
-        if (followError && followError.code !== '23505') throw followError;
-        setUsers(current => current.map(item => item.id === user.id
-          ? { ...item, isFollowing: true }
-          : item));
-        toast.success(followError ? 'الحساب متابَع بالفعل' : 'تمت متابعة الحساب');
-      }
-    } catch (followError) {
-      console.error('[likes] تعذر تحديث المتابعة:', followError);
-      toast.error('تعذر تحديث حالة المتابعة. حاول مرة أخرى.');
-    } finally {
-      setPendingFollowId(null);
-    }
-  };
 
   if (!open) return null;
 
@@ -332,22 +282,14 @@ export default function LikesListSheet({ postId, currentUserId, open, onClose }:
                       </div>
                     </Link>
                     {user.id !== currentUserId && currentUserId && (
-                      <button
-                        type="button"
-                        onClick={() => void toggleFollow(user)}
-                        disabled={pendingFollowId !== null}
-                        className={`shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition disabled:opacity-50 ${user.isFollowing || user.requestPending
-                          ? 'border-white/15 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]'
-                          : 'border-pink-400/40 bg-pink-500/15 text-pink-200 hover:bg-pink-500/25'
-                        }`}
-                        aria-label={user.isFollowing
-                          ? `إلغاء متابعة ${displayName(user.profile)}`
-                          : user.requestPending
-                            ? `إلغاء طلب متابعة ${displayName(user.profile)}`
-                            : `متابعة ${displayName(user.profile)}`}
-                      >
-                        {user.isFollowing ? 'إلغاء المتابعة' : user.requestPending ? 'إلغاء الطلب' : 'متابعة'}
-                      </button>
+                      <FollowButton
+                        targetUserId={user.id}
+                        currentUserId={currentUserId}
+                        isPrivate={user.profile.is_private}
+                        followsMe={user.isFollower}
+                        initialFollowing={user.isFollowing}
+                        initialRequestSent={user.requestPending}
+                      />
                     )}
                   </li>
                 );

@@ -7849,3 +7849,53 @@ select,
     animation: none;
   }
 }
+
+
+/* ===== زر المتابعة الموحد (FollowButton) — علامة الصح التأكيدية المؤقتة =====
+   تُرسم لمدة 1.5 ثانية بعد المتابعة ثم تتلاشى ليستقر الزر على نص «أتابع». */
+.profile-follow-check {
+  display: block;
+  width: 14px;
+  height: 14px;
+  overflow: visible;
+}
+
+.profile-follow-check path {
+  stroke-dasharray: 22;
+  stroke-dashoffset: 22;
+  opacity: 0;
+  transform: scale(0.9);
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 300ms ease, transform 300ms ease;
+}
+
+.profile-follow-check.is-visible path {
+  animation: drawCheck 1.5s ease-out forwards;
+}
+
+@keyframes drawCheck {
+  0% {
+    stroke-dashoffset: 22;
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  26.6667% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  80% {
+    stroke-dashoffset: 0;
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    stroke-dashoffset: 0;
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}

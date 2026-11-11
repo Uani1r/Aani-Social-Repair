@@ -198,52 +198,7 @@
   }
 }
 
-.profile-follow-check {
-  display: block;
-  width: 14px;
-  height: 14px;
-  overflow: visible;
-}
-
-.profile-follow-check path {
-  stroke-dasharray: 22;
-  stroke-dashoffset: 22;
-  opacity: 0;
-  transform: scale(0.9);
-  transform-box: fill-box;
-  transform-origin: center;
-  transition: opacity 300ms ease, transform 300ms ease;
-}
-
-.profile-follow-check.is-visible path {
-  animation: drawCheck 1.5s ease-out forwards;
-}
-
-@keyframes drawCheck {
-  0% {
-    stroke-dashoffset: 22;
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  26.6667% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  80% {
-    stroke-dashoffset: 0;
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  100% {
-    stroke-dashoffset: 0;
-    opacity: 0;
-    transform: scale(0.9);
-  }
-}
+/* علامة الصح لزر المتابعة انتقلت إلى index.css لتخدم مكوّن FollowButton الموحد */
 
 
 

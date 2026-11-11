@@ -7,6 +7,8 @@ import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
 import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
+import FollowButton from '@/components/FollowButton';
+import { setFollowState } from '@/lib/followState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { releaseOverlayBackForNavigation, goBackOrPush } from '@/lib/overlayBack';
@@ -56,7 +58,6 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
       : { followers: null, following: null },
   );
   const [viewerFollowingIds, setViewerFollowingIds] = useState<Set<string>>(new Set());
-  const [busyId, setBusyId] = useState<string | null>(null);
   const [, navigate] = useLocation();
   const listScrollRef = useRef<HTMLDivElement | null>(null);
   const backGestureRef = useRef<{ x: number; y: number } | null>(null);
@@ -156,44 +157,15 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
       .limit(2000)
       .then(({ data }) => {
         if (!active) return;
-        setViewerFollowingIds(new Set((data || []).map(row => row.following_id)));
+        const followedIds = (data || []).map((row: { following_id: string }) => row.following_id);
+        setViewerFollowingIds(new Set(followedIds));
+        // زرع حالة المتابعة في المخزن الموحد ليتزامن الزر عبر كل الشاشات
+        followedIds.forEach(id => setFollowState(id, { following: true }));
       });
     return () => { active = false; };
   }, [currentUserId]);
 
-  const toggleFollow = async (person: Profile) => {
-    const isFollowing = viewerFollowingIds.has(person.id);
-    setBusyId(person.id);
-    setViewerFollowingIds(current => {
-      const next = new Set(current);
-      if (isFollowing) next.delete(person.id);
-      else next.add(person.id);
-      return next;
-    });
-    try {
-      if (isFollowing) {
-        await supabase.from('follows').delete()
-          .eq('follower_id', currentUserId)
-          .eq('following_id', person.id);
-      } else {
-        const { error } = await supabase.from('follows').insert({
-          follower_id: currentUserId,
-          following_id: person.id,
-        });
-        if (error) throw error;
-      }
-    } catch {
-      // تراجع عن التغيير المتفائل عند الفشل
-      setViewerFollowingIds(current => {
-        const next = new Set(current);
-        if (isFollowing) next.add(person.id);
-        else next.delete(person.id);
-        return next;
-      });
-    } finally {
-      setBusyId(null);
-    }
-  };
+  // عمليات المتابعة تديرها أزرار FollowButton الموحدة عبر مخزن followState
 
   const activeList = lists[activeKind];
 
@@ -277,7 +249,6 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
         {Array.isArray(activeList) && activeList.length > 0 && (
           <ul>
             {activeList.map(person => {
-              const following = viewerFollowingIds.has(person.id);
               return (
                 // البطاقة كاملة قابلة للنقر: الصورة والاسم واليوزر وأي فراغ ينقل لملف الشخص
                 // — النقل يتم دون إغلاق الشاشة حتى يعود المستخدم إليها بالضغط على الرجوع.
@@ -302,22 +273,13 @@ export default function FollowListView({ kind, targetUserId, currentUserId, onCl
                     usernameClassName="text-xs text-zinc-400"
                   />
                   {person.id !== currentUserId && (
-                    <button
-                      type="button"
-                      onClick={event => {
-                        event.stopPropagation();
-                        void toggleFollow(person);
-                      }}
-                      disabled={busyId === person.id}
-                      aria-pressed={following}
-                      className={`relative z-10 shrink-0 rounded-full px-4 py-1.5 text-[13px] font-semibold transition disabled:opacity-50 ${
-                        following
-                          ? 'border border-[#53575B] bg-transparent text-white hover:bg-white/10'
-                          : 'bg-white text-black hover:bg-neutral-200'
-                      }`}
-                    >
-                      {following ? 'متابَع' : 'متابعة'}
-                    </button>
+                    <FollowButton
+                      targetUserId={person.id}
+                      currentUserId={currentUserId}
+                      isPrivate={person.is_private}
+                      initialFollowing={viewerFollowingIds.has(person.id)}
+                      className="relative z-10"
+                    />
                   )}
                 </li>
               );
