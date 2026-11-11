@@ -2,7 +2,7 @@ import type { ComponentType } from 'react';
 import { Bot } from 'lucide-react';
 
 import AIAssistantModal from '@/components/AIAssistantModal';
-import CreatePostModal from '@/components/CreatePostModal';
+import CreatePostModal, { type ComposerAudio } from '@/components/CreatePostModal';
 import ImagePreviewModal from '@/components/ImagePreviewModal';
 import PublishOptionsSheet from '@/components/PublishOptionsSheet';
 import VideoPreviewModal, { type VideoMentionPerson } from '@/components/VideoPreviewModal';
@@ -48,7 +48,7 @@ type ShellOverlayControlsProps = {
   initialCreateTags: PostMetadataTag[];
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
-  onPublish: (tags: PostMetadataTag[], destination: PostDestination) => void;
+  onPublish: (tags: PostMetadataTag[], destination: PostDestination, audio?: ComposerAudio | null) => void;
   onCloseCreatePost: () => void;
   showSettingsModal: boolean;
   onCloseSettings: () => void;

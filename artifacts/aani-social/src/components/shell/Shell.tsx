@@ -6,6 +6,7 @@ import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
 import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEventDetail } from '@/components/CallManager';
 import FollowListView, { type FollowListKind } from '@/components/FollowListView';
+import type { ComposerAudio } from '@/components/CreatePostModal';
 import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
@@ -1007,7 +1008,7 @@ export default function Shell({
     setShowCreateModal(true);
   };
 
-  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination) => {
+  const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, audio?: ComposerAudio | null) => {
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;
@@ -1030,10 +1031,8 @@ export default function Shell({
       : null;
     // غلاف الفيديو المختار في المعاينة (يُرفع فقط عند نشر فيديو)
     const coverFile = mediaType === 'video' ? videoCoverFile : null;
-    if (postDestination === 'reels' && mediaType !== 'video') {
-      setCreateError('يجب اختيار مقطع فيديو للنشر في الريلز.');
-      return;
-    }
+    // الموسيقى المختارة من نافذة النشر (تُرفع مع المنشور وتُخزن في audio_url/audio_title)
+    const audioUpload = audio ?? null;
     if (!content && files.length === 0 && metadata.length === 0) return;
     if (Array.from(content).length > 2000) {
       setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
@@ -1044,6 +1043,9 @@ export default function Shell({
     const createdAt = new Date().toISOString();
     const objectUrls = files.map(file => URL.createObjectURL(file));
     const localMediaUrls = objectUrls.map((url, index) => mediaType === 'video' ? buildVideoMediaUrl(url, trim, crop) : appendImageMediaAspect(url, files[index].name));
+    // معاينة الصوت المحلي (تُبطل مع بقية روابط المعاينة عبر نظام النشر المعلق)
+    const audioPreviewUrl = audioUpload ? URL.createObjectURL(audioUpload.file) : null;
+    if (audioPreviewUrl) objectUrls.push(audioPreviewUrl);
     const type: Post['type'] = files.length === 0 ? 'text' : mediaType === 'image' ? 'photo' : 'reel';
     const author = profile || {
       id: userId,
@@ -1058,6 +1060,8 @@ export default function Shell({
       content,
       post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
       tagged_user_ids: taggedUserIds,
+      audio_url: audioPreviewUrl,
+      audio_title: audioUpload?.title ?? null,
       media_url: localMediaUrls[0] || null,
       media_urls: localMediaUrls.length > 0 ? localMediaUrls : null,
       type,
@@ -1120,6 +1124,19 @@ export default function Shell({
           }
         }
 
+        // رفع الموسيقى المختارة إن وُجدت — فشلها لا يعطل نشر المنشور
+        let audioUrl: string | null = null;
+        if (audioUpload) {
+          try {
+            const audioSafeName = audioUpload.file.name.replace(/[^a-zA-Z0-9._-]/g, '-') || 'audio';
+            const audioPath = `${authenticatedUserId}/${postId}/audio-${Date.now()}-${audioSafeName}`;
+            await uploadMedia({ file: audioUpload.file, path: audioPath });
+            audioUrl = supabase.storage.from(storageBucket).getPublicUrl(audioPath).data.publicUrl;
+          } catch {
+            audioUrl = null;
+          }
+        }
+
         // الوسوم المخزنة: وسوم المحرر + وسام tagged_users + وسام الغلاف إن وُجد
         const storedMetadata = [
           ...metadata,
@@ -1146,6 +1163,8 @@ export default function Shell({
           created_at: createdAt,
           // العمود الصريح لمصفوفة معرفات المشار إليهم (ترحيل 20270102000000)
           ...(taggedUserIds.length > 0 ? { tagged_user_ids: taggedUserIds } : {}),
+          // الصوت المرفق (audio_url / audio_title من ترحيل post_controls)
+          ...(audioUrl ? { audio_url: audioUrl, audio_title: audioUpload?.title ?? null } : {}),
         };
         let postError = (await supabase.from('posts').upsert({
           ...postPayload,
@@ -1171,6 +1190,19 @@ export default function Shell({
           const payloadWithoutColumn = { ...postPayload } as Record<string, unknown>;
           delete payloadWithoutColumn.tagged_user_ids;
           postError = (await supabase.from('posts').upsert(payloadWithoutColumn, { onConflict: 'id' })).error;
+        }
+
+        // قاعدة بيانات لم يُطبَّق عليها عمودا الصوت بعد → أعد المحاولة بدونهما حتى لا يتعطل النشر
+        if (
+          postError
+          && audioUrl
+          && (postError.code === '42703' || postError.code === 'PGRST204')
+          && postError.message.includes('audio_url')
+        ) {
+          const payloadWithoutAudio = { ...postPayload } as Record<string, unknown>;
+          delete payloadWithoutAudio.audio_url;
+          delete payloadWithoutAudio.audio_title;
+          postError = (await supabase.from('posts').upsert(payloadWithoutAudio, { onConflict: 'id' })).error;
         }
 
         // قاعدة بيانات لا تقبل وسام الغلاف بعد → أعد المحاولة بدونه حتى لا يتعطل النشر
@@ -1212,7 +1244,13 @@ export default function Shell({
           throw publishError;
         }
 
-        updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
+        updatePendingPost(postId, {
+          stage: 'success',
+          progress: 100,
+          error: null,
+          retry: null,
+          post: { ...publishedPost, audio_url: audioUrl ?? publishedPost.audio_url ?? null },
+        });
         window.dispatchEvent(new Event('aani:post-created'));
         window.setTimeout(() => {
           removePendingPost(postId);
@@ -1333,7 +1371,7 @@ export default function Shell({
             setDestination('feed');
           }
         }}
-        onPublish={(tagContent, postDestination) => void handlePublish(tagContent, postDestination)}
+        onPublish={(tagContent, postDestination, audio) => void handlePublish(tagContent, postDestination, audio)}
         onCloseCreatePost={() => {
           setShowCreateModal(false);
           setVideoMentions([]);

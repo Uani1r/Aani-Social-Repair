@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Repeat, RotateCcw, Send, ThumbsUp, X,
+  Bookmark, CheckCircle2, EyeOff, Flag, Heart, Loader2, MessageSquare, Music2, Repeat, RotateCcw, Send, ThumbsUp, X,
 } from 'lucide-react';
 import { Link } from 'wouter';
 import { createPortal } from 'react-dom';
@@ -474,6 +474,15 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               </div>
             </>
           )}
+        </div>
+      )}
+
+      {/* الصوت المرفق بمنشور الصور (ريل بصري) */}
+      {post.type === 'photo' && post.audio_url && (
+        <div className={`flex items-center gap-2 text-xs text-zinc-400 ${isMainFeedImage ? 'mx-4' : ''} mt-2.5`} aria-label="الصوت المرفق">
+          <Music2 size={14} aria-hidden="true" />
+          {post.audio_title && <span className="max-w-[45%] truncate">♫ {post.audio_title}</span>}
+          <audio src={post.audio_url} controls preload="none" loop className="min-w-0 flex-1" />
         </div>
       )}
 

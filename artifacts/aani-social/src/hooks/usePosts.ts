@@ -172,7 +172,7 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
       post.visibility === 'public'
       && post.destination === destination
-      && (destination !== 'reels' || post.type === 'reel'),
+      && (destination !== 'reels' || post.type === 'reel' || post.type === 'photo'),
     );
     const postsById = new Map(originalPosts.map(post => [post.id, post] as const));
     const visibleReposts = repostRows.filter(row => postsById.has(row.post_id));
@@ -377,7 +377,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         if (postsErr) throw postsErr;
 
         const rawPosts = (await normalizePostRowsWithVisibility(postData))
-          .filter(post => post.type === 'reel' && post.destination === 'reels');
+          .filter(post => (post.type === 'reel' || post.type === 'photo') && post.destination === 'reels');
         let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];

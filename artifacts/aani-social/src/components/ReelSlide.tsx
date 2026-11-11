@@ -69,6 +69,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const videoCropTransform = getVideoCropTransform(videoCrop);
   const videoAspectRatio = getVideoAspectRatio(videoCrop);
   const videoSrc = stripVideoEditFragment(mediaUrl);
+  // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
+  const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
   const interactions = usePostInteractions(post, currentUserId);
   const liked = interactions.liked;
   const likesCount = interactions.likes;
@@ -424,24 +426,34 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             height: `min(100dvh, ${100 / videoAspectRatio}vw)`,
           } : { width: '100%', height: '100%' }}
         >
-          <video
-            ref={videoRef}
-            src={videoSrc}
-            poster={postCoverUrl || undefined}
-            loop={!videoTimeRange}
-            autoPlay={isOverlayOpen && isVisible}
-            muted={muted}
-            playsInline
-            preload="auto"
-            onLoadedMetadata={handleVideoLoadedMetadata}
-            onSeeking={handleVideoSeeking}
-            onTimeUpdate={handleVideoTimeUpdate}
-            onPlay={handleVideoPlay}
-            onEnded={handleVideoEnded}
-            onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
-            className="w-full h-full object-cover cursor-pointer"
-            style={{ transform: videoCropTransform, transformOrigin: 'center' }}
-          />
+          {isImageMedia ? (
+            <img
+              src={videoSrc}
+              alt=""
+              draggable={false}
+              className="w-full h-full object-cover"
+              style={{ transform: videoCropTransform, transformOrigin: 'center' }}
+            />
+          ) : (
+            <video
+              ref={videoRef}
+              src={videoSrc}
+              poster={postCoverUrl || undefined}
+              loop={!videoTimeRange}
+              autoPlay={isOverlayOpen && isVisible}
+              muted={muted}
+              playsInline
+              preload="auto"
+              onLoadedMetadata={handleVideoLoadedMetadata}
+              onSeeking={handleVideoSeeking}
+              onTimeUpdate={handleVideoTimeUpdate}
+              onPlay={handleVideoPlay}
+              onEnded={handleVideoEnded}
+              onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
+              className="w-full h-full object-cover cursor-pointer"
+              style={{ transform: videoCropTransform, transformOrigin: 'center' }}
+            />
+          )}
         </div>
       </div>
 
@@ -565,6 +577,16 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           <ExpandablePostText text={post.content} className="reel-description" />
         ))}
         <PostMetadataChips tags={post.post_metadata || []} hideMentions className="mt-2" />
+        {post.audio_url && (
+          <audio
+            src={post.audio_url}
+            controls
+            loop
+            preload="none"
+            aria-label="الصوت المرفق بالريل"
+            className="mt-2 w-full max-w-[280px]"
+          />
+        )}
       </div>
 
       {captionSheet && showCaptionSheet && (
