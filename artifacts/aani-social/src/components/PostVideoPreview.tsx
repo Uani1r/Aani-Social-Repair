@@ -26,6 +26,8 @@ type PostVideoPreviewProps = {
   restoreTime?: number;
   /** معرّف فريد لهذا الفيديو — يُستخدم في مدير الفيديو النشط الموحد */
   videoId?: string;
+  /** مسار صوت بديل للمنشور؛ عند وجوده يُكتم المسار الصوتي الأصلي للفيديو */
+  replacementAudioSrc?: string | null;
   /** حدود قص بديلة من أعمدة المنشور (تُستخدم إن خلا العنوان من ترميز #t=) */
   trimRange?: VideoTimeRange | null;
   onExpand?: (currentTime: number) => void;
@@ -55,10 +57,12 @@ export default function PostVideoPreview({
   loop = false,
   restoreTime,
   videoId,
+  replacementAudioSrc,
   trimRange,
   onExpand,
 }: PostVideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const replacementAudioRef = useRef<HTMLAudioElement>(null);
   const backgroundMediaSuspended = useSyncExternalStore(
     subscribeBackgroundMediaSuspension,
     isBackgroundMediaSuspended,
@@ -69,6 +73,8 @@ export default function PostVideoPreview({
   // حدود القص: ترميز #t= في العنوان أولاً ثم عمودا المنشور trim_start/trim_end
   const timeRange = parseVideoTimeRange(src) ?? trimRange ?? null;
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
+  const hasReplacementAudio = Boolean(replacementAudioSrc);
+  const replacementAudioRange = replacementAudioSrc ? parseVideoTimeRange(replacementAudioSrc) : null;
   // تمرير المقطع للمتصفح بترميز HTML5 (#t=start,end) — يقيّد التشغيل للمقطع المختار
   const mediaSrc = timeRange
     ? appendVideoTrimFragment(src, timeRange)
@@ -86,12 +92,32 @@ export default function PostVideoPreview({
   const displayCurrentTime = Math.max(0, safeCurrentTime - rangeStart);
   const progressPercent = displayDuration > 0 ? Math.min(100, (displayCurrentTime / displayDuration) * 100) : 0;
 
+  const syncReplacementAudio = (video: HTMLVideoElement, restart = false, shouldPlay = false) => {
+    if (!hasReplacementAudio) return;
+    video.muted = true;
+    video.volume = 0;
+    const audio = replacementAudioRef.current;
+    if (!audio) return;
+    audio.muted = videoMuted;
+    audio.volume = videoMuted ? 0 : 1;
+    const targetTime = replacementAudioRange
+      ? (restart || audio.currentTime < replacementAudioRange.start || audio.currentTime >= replacementAudioRange.end
+        ? replacementAudioRange.start
+        : audio.currentTime)
+      : Math.max(0, video.currentTime - rangeStart);
+    if (restart || Math.abs(audio.currentTime - targetTime) > 0.5) {
+      try { audio.currentTime = targetTime; } catch { /* the audio may not be ready to seek yet */ }
+    }
+    if (shouldPlay && !backgroundMediaSuspended) void playBackgroundMedia(audio);
+  };
+
   const expandVideo = () => {
     const video = videoRef.current;
     if (!video) return;
-    video.muted = false;
-    video.volume = 1;
-    setVideoMuted(false);
+    video.muted = hasReplacementAudio;
+    video.volume = hasReplacementAudio ? 0 : 1;
+    setVideoMuted(hasReplacementAudio ? videoMuted : false);
+    if (hasReplacementAudio) replacementAudioRef.current?.pause();
     onExpand?.(video.currentTime);
   };
 
@@ -124,6 +150,21 @@ export default function PostVideoPreview({
   useEffect(() => {
     if (!feedVideo) setVideoMuted(muted);
   }, [feedVideo, muted]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    const audio = replacementAudioRef.current;
+    if (!video) return;
+    if (hasReplacementAudio) {
+      video.muted = true;
+      video.volume = 0;
+      if (!video.paused) syncReplacementAudio(video, false, true);
+    } else {
+      video.muted = showMuteToggle ? videoMuted : muted;
+      video.volume = video.muted ? 0 : 1;
+      audio?.pause();
+    }
+  }, [backgroundMediaSuspended, hasReplacementAudio, muted, replacementAudioSrc, showMuteToggle, videoMuted]);
 
   useEffect(() => {
     if (!feedVideo) return;
@@ -194,8 +235,14 @@ export default function PostVideoPreview({
   // — Safari/WebKit قد يواصل تشغيل صوت عنصر منزوع من الشجرة إن بقي مرجعاً
   useEffect(() => () => {
     const video = videoRef.current;
-    if (!video) return;
+    const audio = replacementAudioRef.current;
+    audio?.pause();
     try {
+      if (audio) {
+        audio.removeAttribute('src');
+        audio.load();
+      }
+      if (!video) return;
       video.pause();
       video.removeAttribute('src');
       video.load();
@@ -206,6 +253,8 @@ export default function PostVideoPreview({
 
   const seekToStart = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
+    video.muted = hasReplacementAudio || (showMuteToggle ? videoMuted : muted);
+    video.volume = video.muted ? 0 : 1;
     const duration = Number.isFinite(video.duration) ? video.duration : 0;
     setVideoDuration(duration);
     if (!timeRange) {
@@ -259,22 +308,38 @@ export default function PostVideoPreview({
         data-aani-video-id={feedVideo ? videoId : undefined}
         poster={poster || undefined}
         controls={!showCustomControls && controls}
-        muted={showMuteToggle ? videoMuted : muted}
+        muted={hasReplacementAudio || (showMuteToggle ? videoMuted : muted)}
         autoPlay={autoPlay && !autoPlayWhenVisible && !backgroundMediaSuspended}
         playsInline
         preload={feedVideo ? 'none' : 'auto'}
         onLoadedMetadata={seekToStart}
         onSeeking={event => {
           const video = event.currentTarget;
-          if (!timeRange) return;
-          const end = Math.min(timeRange.end, video.duration || timeRange.end);
-          if (video.currentTime < timeRange.start || video.currentTime > end) {
-            video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
+          if (timeRange) {
+            const end = Math.min(timeRange.end, video.duration || timeRange.end);
+            if (video.currentTime < timeRange.start || video.currentTime > end) {
+              video.currentTime = Math.min(timeRange.start, Math.max(0, end - 0.05));
+            }
+          }
+          if (hasReplacementAudio) syncReplacementAudio(video, true);
+        }}
+        onVolumeChange={event => {
+          if (!hasReplacementAudio) return;
+          const video = event.currentTarget;
+          video.muted = true;
+          video.volume = 0;
+        }}
+        onTimeUpdate={event => {
+          enforceEnd(event);
+          const video = event.currentTarget;
+          const audio = replacementAudioRef.current;
+          if (hasReplacementAudio && audio && !audio.paused && !replacementAudioRange) {
+            syncReplacementAudio(video);
           }
         }}
-        onTimeUpdate={enforceEnd}
         onPlay={event => {
           const video = event.currentTarget;
+          if (hasReplacementAudio) syncReplacementAudio(video, true, true);
           if (!timeRange) return;
           const end = Math.min(timeRange.end, video.duration || timeRange.end);
           if (video.currentTime >= end - 0.04) {
@@ -285,6 +350,7 @@ export default function PostVideoPreview({
           const duration = event.currentTarget.duration;
           setVideoDuration(Number.isFinite(duration) ? duration : 0);
         }}
+        onPause={() => replacementAudioRef.current?.pause()}
         onEnded={event => {
           if (!loop) return;
           const video = event.currentTarget;
@@ -299,6 +365,26 @@ export default function PostVideoPreview({
         className={className}
         style={{ transform: cropTransform, transformOrigin: 'center', touchAction: feedVideo ? 'pan-y' : undefined }}
       />
+      {hasReplacementAudio && (
+        <audio
+          ref={replacementAudioRef}
+          src={backgroundMediaSuspended ? undefined : replacementAudioSrc || undefined}
+          data-aani-background-media=""
+          loop={!replacementAudioRange}
+          preload="none"
+          aria-hidden="true"
+          className="hidden"
+          onTimeUpdate={event => {
+            const audio = event.currentTarget;
+            if (!replacementAudioRange || audio.currentTime < replacementAudioRange.end - 0.04) return;
+            try { audio.currentTime = replacementAudioRange.start; } catch { /* wait for metadata */ }
+          }}
+          onLoadedMetadata={() => {
+            const video = videoRef.current;
+            if (video && !video.paused) syncReplacementAudio(video, true, true);
+          }}
+        />
+      )}
 
       {showMuteToggle && (
         <button
@@ -307,7 +393,20 @@ export default function PostVideoPreview({
             revealControlsBriefly();
             const nextMuted = !videoMuted;
             setVideoMuted(nextMuted);
-            if (videoRef.current) videoRef.current.muted = nextMuted;
+            if (hasReplacementAudio) {
+              const audio = replacementAudioRef.current;
+              if (audio) {
+                audio.muted = nextMuted;
+                audio.volume = nextMuted ? 0 : 1;
+              }
+              if (videoRef.current) {
+                videoRef.current.muted = true;
+                videoRef.current.volume = 0;
+              }
+            } else if (videoRef.current) {
+              videoRef.current.muted = nextMuted;
+              videoRef.current.volume = nextMuted ? 0 : 1;
+            }
           }}
           className="absolute bottom-3 left-3 z-20 flex h-7 w-7 items-center justify-center rounded-full bg-black/65 text-white backdrop-blur transition hover:bg-black/80"
           aria-label={videoMuted ? 'تشغيل الصوت' : 'كتم الصوت'}

@@ -204,7 +204,11 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     const backgroundAudio = backgroundAudioRef.current;
     if (!video) return;
     video.muted = backgroundSoundUrl ? true : muted;
-    if (backgroundAudio) backgroundAudio.muted = muted;
+    video.volume = backgroundSoundUrl || muted ? 0 : 1;
+    if (backgroundAudio) {
+      backgroundAudio.muted = muted;
+      backgroundAudio.volume = muted ? 0 : 1;
+    }
   }, [muted, backgroundSoundUrl]);
 
   // إيقاف الصوت وإطلاق موارده عند إزالة الشريحة (الخروج من الريلز):
@@ -373,8 +377,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     if (!initialPlaybackAppliedRef.current && typeof initialPlaybackTime === 'number' && Number.isFinite(initialPlaybackTime)) {
       initialPlaybackAppliedRef.current = true;
       // مع صوت مستعار يبقى صوت الفيديو مكتوماً — الصوت المستعار هو المسموع
-      video.muted = backgroundSoundUrl ? true : false;
-      video.volume = 1;
+      video.muted = Boolean(backgroundSoundUrl);
+      video.volume = backgroundSoundUrl ? 0 : 1;
       setMuted(Boolean(backgroundSoundUrl));
       seekToTime(video, initialPlaybackTime);
       return;
@@ -404,6 +408,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
       video.pause();
       backgroundAudioRef.current?.pause();
       return;
+    }
+    if (backgroundSoundUrl) {
+      video.muted = true;
+      video.volume = 0;
     }
     reportPlaybackTime(video.currentTime);
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
@@ -536,7 +544,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
               poster={postCoverUrl || undefined}
               loop={!videoTimeRange}
               autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
-              muted={muted}
+              muted={Boolean(backgroundSoundUrl) || muted}
               playsInline
               preload="none"
               onLoadedMetadata={handleVideoLoadedMetadata}
@@ -569,8 +577,14 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             const nextMuted = !muted;
             setMuted(nextMuted);
             // مع صوت مستعار يبقى صوت الفيديو مكتوماً ويُكتم الصوت الخلفي بدلاً منه
-            if (videoRef.current) videoRef.current.muted = backgroundSoundUrl ? true : nextMuted;
-            if (backgroundAudioRef.current) backgroundAudioRef.current.muted = nextMuted;
+            if (videoRef.current) {
+              videoRef.current.muted = backgroundSoundUrl ? true : nextMuted;
+              videoRef.current.volume = backgroundSoundUrl || nextMuted ? 0 : 1;
+            }
+            if (backgroundAudioRef.current) {
+              backgroundAudioRef.current.muted = nextMuted;
+              backgroundAudioRef.current.volume = nextMuted ? 0 : 1;
+            }
           }}
           className="reel-top-button"
         >

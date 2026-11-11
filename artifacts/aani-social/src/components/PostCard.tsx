@@ -11,6 +11,7 @@ import PostImagePreview from './PostImagePreview';
 import PostVideoPreview from './PostVideoPreview';
 import LikesListSheet from './LikesListSheet';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '../lib/videoMedia';
+import { baseVideoUrl } from '../lib/sounds';
 
 export interface PostCardProps {
   post: Post;
@@ -109,7 +110,13 @@ export default function PostCard({
           {postImages.map((url, index) => (
             <div key={`${url}-${index}`} className="relative h-full min-w-full shrink-0 overflow-hidden rounded-xl border border-zinc-800">
               {post.type === 'reel' ? (
-                <PostVideoPreview src={url} poster={postCoverUrl || undefined} controls className="block h-full w-full object-cover" />
+                <PostVideoPreview
+                  src={url}
+                  poster={postCoverUrl || undefined}
+                  replacementAudioSrc={post.sound_id && post.audio_url && baseVideoUrl(post.audio_url) !== baseVideoUrl(url) ? post.audio_url : undefined}
+                  controls
+                  className="block h-full w-full object-cover"
+                />
               ) : (
                 <PostImagePreview
                   src={url}

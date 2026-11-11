@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
 import { AtSign, Check, Crop, Image as ImageIcon, Music2, Scissors, Search, Volume2, VolumeX, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
@@ -136,6 +136,7 @@ export default function VideoPreviewModal({
   const [mentionError, setMentionError] = useState('');
   const [mentionNotice, setMentionNotice] = useState('');
   const [pickedMentions, setPickedMentions] = useState<VideoMentionPerson[]>([]);
+  const hasReplacementAudio = Boolean(music);
 
   // زر الرجوع (الهاتف/المتصفح) يغلق المعاينة ويعيدك لنفس المكان
   useOverlayBack(open, onClose);
@@ -164,10 +165,10 @@ export default function VideoPreviewModal({
 
   useEffect(() => {
     if (!open) return;
-    setIsMuted(false);
+    setIsMuted(hasReplacementAudio);
     if (videoRef.current) {
-      videoRef.current.muted = false;
-      videoRef.current.volume = 1;
+      videoRef.current.muted = hasReplacementAudio;
+      videoRef.current.volume = hasReplacementAudio ? 0 : 1;
     }
     setDuration(0);
     setSavedRange(null);
@@ -198,6 +199,16 @@ export default function VideoPreviewModal({
     setMentionNotice('');
     setPickedMentions(initialMentionsRef.current);
   }, [open, src]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    setIsMuted(hasReplacementAudio);
+    if (video) {
+      video.muted = hasReplacementAudio;
+      video.volume = hasReplacementAudio ? 0 : 1;
+    }
+  }, [hasReplacementAudio, open]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -406,7 +417,8 @@ export default function VideoPreviewModal({
       setSavedCrop(current => normalizeVideoCrop({ ...current, sourceAspectRatio }));
       setDraftCrop(current => normalizeVideoCrop({ ...current, sourceAspectRatio }));
     }
-    if (!isMuted) video.volume = 1;
+    video.muted = hasReplacementAudio || isMuted;
+    video.volume = hasReplacementAudio || isMuted ? 0 : 1;
     video.currentTime = initialRange.start;
     void video.play().catch(() => undefined);
   };
@@ -775,7 +787,7 @@ export default function VideoPreviewModal({
             ref={videoRef}
             src={src}
             autoPlay
-            muted={isMuted}
+            muted={hasReplacementAudio || isMuted}
             playsInline
             controls={!isCropping}
             preload="metadata"
@@ -789,8 +801,16 @@ export default function VideoPreviewModal({
                 video.currentTime = range.start;
               }
             }}
+            onVolumeChange={event => {
+              if (!hasReplacementAudio) return;
+              const video = event.currentTarget;
+              video.muted = true;
+              video.volume = 0;
+            }}
             onPlay={event => {
               const video = event.currentTarget;
+              video.muted = hasReplacementAudio || isMuted;
+              video.volume = hasReplacementAudio || isMuted ? 0 : 1;
               const range = activeRangeRef.current;
               if (range && (video.currentTime < range.start || video.currentTime >= range.end)) {
                 video.currentTime = range.start;
@@ -807,19 +827,19 @@ export default function VideoPreviewModal({
           />
           <button
             type="button"
-            aria-label={isMuted ? 'تشغيل الصوت' : 'كتم الصوت'}
-            aria-pressed={!isMuted}
+            aria-label={hasReplacementAudio ? 'الصوت الأصلي مكتوم عند إرفاق موسيقى' : isMuted ? 'تشغيل الصوت' : 'كتم الصوت'}
+            aria-pressed={!hasReplacementAudio && !isMuted}
+            disabled={hasReplacementAudio}
             onPointerDown={event => event.stopPropagation()}
             onClick={() => {
+              if (hasReplacementAudio) return;
               const nextMuted = !isMuted;
               setIsMuted(nextMuted);
               const video = videoRef.current;
               if (!video) return;
               video.muted = nextMuted;
-              if (!nextMuted) {
-                video.volume = 1;
-                void video.play().catch(() => undefined);
-              }
+              video.volume = nextMuted ? 0 : 1;
+              if (!nextMuted) void video.play().catch(() => undefined);
             }}
             className="absolute right-3 top-3 z-20 grid h-10 w-10 place-items-center rounded-full bg-black/65 text-white shadow-lg backdrop-blur"
           >

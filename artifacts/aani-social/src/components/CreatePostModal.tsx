@@ -311,7 +311,7 @@ export default function CreatePostModal({
                   ) : (
                     <PostVideoPreview
                       src={buildVideoMediaUrl(preview.url, videoTrim, videoCrop)}
-                      muted
+                      muted={Boolean(pendingSound)}
                       autoPlay
                       loop
                       controls={false}

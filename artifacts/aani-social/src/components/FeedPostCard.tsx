@@ -24,7 +24,7 @@ import { uploadMedia } from '@/lib/storyUpload';
 import { appendVideoTrimFragment, getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop, parseVideoTimeRange, type VideoTimeRange } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
-import { defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
+import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
 import type { PendingPost } from '@/lib/pendingPosts';
 import {
   isBackgroundMediaSuspended,
@@ -559,6 +559,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
                   <PostVideoPreview
                     src={url}
                     poster={postCoverUrl || undefined}
+                    replacementAudioSrc={post.sound_id && post.audio_url && baseVideoUrl(post.audio_url) !== baseVideoUrl(url) ? post.audio_url : undefined}
                     autoPlayWhenVisible
                     showCustomControls
                     showMuteToggle
