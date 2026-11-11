@@ -101,6 +101,11 @@ export interface StoryRow {
   filter_key: string | null;
   original_story_id: string | null;
   share_type?: string;
+  sound_id?: string | null;
+  sound_trim_start?: number | null;
+  sound_trim_end?: number | null;
+  /** رابط الصوت المرفق (مضمّن من جدول sounds عند الجلب) */
+  sound?: { source_video_url: string } | null;
   author: StoryAuthor | null;
 }
 
@@ -275,6 +280,18 @@ export function normalizeStoryRow(value: unknown): StoryRow | null {
     filter_key: optionalString(value.filter_key),
     original_story_id: optionalString(value.original_story_id),
     ...(typeof value.share_type === 'string' ? { share_type: value.share_type } : {}),
+    ...(typeof value.sound_id === 'string' ? {
+      sound_id: value.sound_id,
+      sound_trim_start: typeof value.sound_trim_start === 'number' && Number.isFinite(value.sound_trim_start)
+        ? value.sound_trim_start
+        : null,
+      sound_trim_end: typeof value.sound_trim_end === 'number' && Number.isFinite(value.sound_trim_end)
+        ? value.sound_trim_end
+        : null,
+      sound: isRecord(value.sounds) && typeof (value.sounds as Record<string, unknown>).source_video_url === 'string'
+        ? { source_video_url: ((value.sounds as Record<string, unknown>).source_video_url as string) }
+        : null,
+    } : {}),
     author: null,
   };
 }

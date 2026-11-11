@@ -1412,6 +1412,8 @@ export default function Shell({
   };
 
   const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, filesOverride?: File[], fileTypeOverride?: 'image' | 'video' | null) => {
+    // إيقاف معاينة الصوت فوراً لحظة النقر على النشر
+    stopInstant();
     if (!supabaseConfigured) {
       setCreateError('إعدادات الاتصال بقاعدة البيانات غير مكتملة في Secrets.');
       return;

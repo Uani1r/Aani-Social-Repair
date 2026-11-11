@@ -57,11 +57,20 @@ export function useStoriesData({
     const allowedUserIds = [userId, ...followedIds];
 
     // RLS يتحقق من صلاحية القصة وانتهائها ويستبعد أيضاً القصص التي أخفاها صاحبها عن هذا المستخدم.
-    const { data, error } = await supabase
+    // (يُضمَّن رابط الصوت المرفق من جدول sounds ليُشغَّل تزامناً مع عرض القصة)
+    let { data, error } = await supabase
       .from('stories')
-      .select('*')
+      .select('*, sounds ( source_video_url )')
       .in('user_id', allowedUserIds)
       .order('created_at', { ascending: true });
+    if (error && /PGRST200|relation|sounds/i.test(error.message || '')) {
+      // ترحيل أعمدة صوت القصص غير مطبق بعد — اجلب بلا تضمين الصوت
+      ({ data, error } = await supabase
+        .from('stories')
+        .select('*')
+        .in('user_id', allowedUserIds)
+        .order('created_at', { ascending: true }));
+    }
 
     if (error) {
       console.error('[stories] تعذر جلب القصص:', error);
@@ -169,11 +178,19 @@ export function useStoriesData({
     let active = true;
     void (async () => {
       try {
-        const { data, error } = await supabase
+        let { data, error } = await supabase
           .from('stories')
-          .select('*')
+          .select('*, sounds ( source_video_url )')
           .eq('user_id', pendingProfileStoryOwnerId)
           .order('created_at', { ascending: true });
+        if (error && /PGRST200|relation|sounds/i.test(error.message || '')) {
+          // ترحيل أعمدة صوت القصص غير مطبق بعد — اجلب بلا تضمين الصوت
+          ({ data, error } = await supabase
+            .from('stories')
+            .select('*')
+            .eq('user_id', pendingProfileStoryOwnerId)
+            .order('created_at', { ascending: true }));
+        }
         if (!active) return;
         if (error) {
           console.error('[stories] تعذر تحميل قصص الملف الشخصي:', error);

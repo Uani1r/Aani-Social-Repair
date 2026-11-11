@@ -201,6 +201,23 @@ export function seekInstant(time: number): boolean {
   }
 }
 
+/** إيقاف مؤقت للمشغّل الموحّد (بلا تفريغ الموضع) — يعود التشغيل عبر resumeInstant */
+export function pauseInstant(): void {
+  if (audio && !audio.paused) audio.pause();
+}
+
+/** استئناف التشغيل على المشغّل الموحّد من موضعه الحالي */
+export function resumeInstant(): boolean {
+  if (!audio) return false;
+  if (!audio.paused) return true;
+  const generation = ++playGeneration;
+  void audio.play().catch(() => {
+    if (generation !== playGeneration) return;
+    /* فشل الاستئناف يُتجاهل بصمت */
+  });
+  return true;
+}
+
 /**
  * تسخين ذاكرة المتصفح لأول جزء من الصوت عبر طلب HTTP Range (206 Partial Content)
  * — النقر اللاحق على الصوت يبدأ فوراً لأن الأوتار الأولى حاضرة في الكاش والاتصال مفتوح.

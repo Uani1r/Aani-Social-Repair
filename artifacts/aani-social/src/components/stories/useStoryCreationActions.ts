@@ -207,6 +207,8 @@ export function useStoryCreationActions({
   };
 
   const handleUploadStory = async () => {
+    // إيقاف معاينة الصوت فوراً لحظة النقر على نشر
+    stopInstant();
     if (!supabaseConfigured) return;
     const sourceStory = storyFile ? null : reshareStory;
     const originalStoryId = liveReshareStoryId(sourceStory);
@@ -273,6 +275,8 @@ export function useStoryCreationActions({
   };
 
   const handleQuickPublishStory = (closeFriends: boolean) => {
+    // إيقاف معاينة الصوت فوراً لحظة النقر على «قصتك» أو «الأصدقاء المقربون»
+    stopInstant();
     const mediaFile = storyFile;
     const sourceStory = mediaFile ? null : reshareStory;
     const originalStoryId = liveReshareStoryId(sourceStory);
@@ -372,6 +376,8 @@ export function useStoryCreationActions({
     textLayers: TimedText[],
     closeFriends = isCloseFriendsOnly,
   ): Promise<boolean> => {
+    // إيقاف معاينة الصوت فوراً لحظة النقر على نشر
+    stopInstant();
     const layerText = textLayers
       .filter((layer): layer is StoryTextOverlay => layer.type === undefined || layer.type === 'text')
       .map(layer => layer.text.trim())

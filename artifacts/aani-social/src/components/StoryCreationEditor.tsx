@@ -283,6 +283,8 @@ export default function StoryCreationEditor({
                 autoPlay
                 loop
                 playsInline
+                // كتم صوت الفيديو الأصلي عند وجود صوت مختار كي يُسمع الصوت المختار فقط
+                muted={Boolean(storyMusicTrack)}
                 onLoadedMetadata={event => onVideoMetadata(Number(event.currentTarget.duration))}
                 data-story-media="true"
                 className="h-full w-full object-cover"

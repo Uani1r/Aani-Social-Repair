@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { USE_SOUND_EVENT, type StorySound } from '@/lib/sounds';
-import { playInstant, stopInstant } from '@/lib/instantAudio';
+import { pauseInstant, playInstant, resumeInstant, stopInstant } from '@/lib/instantAudio';
 import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import {
@@ -1106,6 +1106,7 @@ export default function StoriesBar({
   };
 
   const closeTextOnlyStory = () => {
+    stopInstant();
     setShowTextOnlyStoryCanvas(false);
     setStoryTextEditorOpen(false);
     setStoryText('');
@@ -1650,6 +1651,32 @@ export default function StoriesBar({
       window.clearTimeout(storyTimeout);
     };
   }, [activeStoryIndex, activeUserGroup, archiveViewerOpen, currentStory?.id, currentStory?.media_type, currentStory?.media_url, currentVideoDuration, isPaused, storyDisplayDuration, storyViewsOpen]);
+
+  // تشغيل صوت القصة المختار تزامناً مع عرضها وإيقافه عند الانتقال للقصة التالية أو الإغلاق
+  // + كتم صوت الفيديو الأصلي عند وجود صوت مختار وإعادته طبيعياً عند غيابه
+  const storySoundUrl = currentStory?.sound?.source_video_url ?? null;
+  useEffect(() => {
+    if (!currentStory) {
+      stopInstant();
+      return undefined;
+    }
+    const video = storyVideoRef.current;
+    if (video) video.muted = Boolean(storySoundUrl);
+    if (!storySoundUrl) return undefined;
+    const trim = currentStory.sound_trim_start != null && currentStory.sound_trim_end != null
+      && currentStory.sound_trim_end > currentStory.sound_trim_start
+      ? { start: currentStory.sound_trim_start, end: currentStory.sound_trim_end }
+      : null;
+    playInstant(storySoundUrl, { trim, loop: true });
+    return () => stopInstant();
+  }, [currentStory, storySoundUrl]);
+
+  // الإيقاف المؤقت للمشاهد (ضغط مطول/لوحات مفتوحة) يوقف الصوت المختار مؤقتاً ثم يستأنفه
+  useEffect(() => {
+    if (!storySoundUrl) return;
+    if (isPaused) pauseInstant();
+    else resumeInstant();
+  }, [isPaused, storySoundUrl]);
 
   const handleNextStory = () => {
     if (currentStory?.id) markStorySeen(String(currentStory.id));
@@ -2271,6 +2298,7 @@ export default function StoriesBar({
           }}
           onCloseCloseFriends={() => setCloseFriendsOpen(false)}
           onClose={() => {
+            stopInstant();
             setShowUploadModal(false);
             closeStoryPanels();
             setActiveStoryStickerId(null);
