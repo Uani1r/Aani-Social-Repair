@@ -1,7 +1,7 @@
 modules = ["nodejs-24", "python-base-3.13"]
 
-# زر Run في المعاينة يشغّل خادم Vite التطويري على منفذ 5000 المعرَّف أدناه.
-run = "PORT=5000 pnpm --filter @workspace/aani-social run dev"
+# يشغّل API على 8080 وVite على 5000؛ يمرر Vite طلبات /api إلى API المحلي.
+run = "bash scripts/dev-local.sh"
 
 [[ports]]
 localPort = 5000
