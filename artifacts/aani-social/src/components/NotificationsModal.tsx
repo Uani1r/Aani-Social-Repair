@@ -584,6 +584,14 @@ export default function NotificationsModal({
 
   const activateNotification = (item: NotificationEntry) => {
     void markNotificationRead(item);
+    // إشعارات المتابعة: أغلق نافذة الإشعارات وانتقل مباشرة إلى ملف
+    // الشخص الذي قام بالمتابعة (actor_id) بنفس سلوك إنستغرام
+    if (['follow', 'followed', 'new_follower', 'started_following'].includes(item.type)) {
+      onClose();
+      const actorId = item.actor_id || item.reference_id || item.entity_id || '';
+      if (actorId) setLocation(`/profile/${encodeURIComponent(actorId)}`);
+      return;
+    }
     const target = getNotificationTarget(item, currentUserId);
     if (!target) return;
 

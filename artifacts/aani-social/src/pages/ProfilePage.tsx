@@ -201,6 +201,8 @@ export default function ProfilePage({
   const [isFollowing, setIsFollowing] = useState(false);
   const [showFollowCheckmark, setShowFollowCheckmark] = useState(false);
   const [followRequestSent, setFollowRequestSent] = useState(false);
+  // هل الشخص الذي أزور ملفه يتابعني؟ يُستخدم لإظهار زر «رد المتابعة»
+  const [followsMe, setFollowsMe] = useState(false);
   const followCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const followActionPendingRef = useRef(false);
   const [profileHighlights, setProfileHighlights] = useState<ProfileHighlightCollection[]>([]);
@@ -454,7 +456,7 @@ export default function ProfilePage({
   const showPublicBirthDate = Boolean(person?.show_birth_date && formattedBirthDate);
   const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
   const authProviderLabel = authProvider === 'google' ? 'Google' : authProvider === 'apple' ? 'Apple' : authProvider === 'phone' ? 'الهاتف' : 'البريد الإلكتروني';
-  const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
+  const followButtonLabel = isFollowing ? 'أتابع' : followRequestSent ? 'إلغاء طلب المتابعة' : followsMe ? 'رد المتابعة' : person?.is_private ? 'طلب متابعة' : 'متابعة';
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
@@ -692,11 +694,13 @@ export default function ProfilePage({
           .limit(100);
       };
 
-      const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
+      const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
         supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
+        // هل الشخص يتابعني؟ (follower_id = صاحب الملف، following_id = أنا) — لزر «رد المتابعة»
+        own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', activeUserId).eq('following_id', currentUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
         loadHighlightCollections(),
         supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
@@ -716,6 +720,7 @@ export default function ProfilePage({
       setFollowers(fCount || 0);
       setFollowing(fingCount || 0);
       setIsFollowing(Boolean(checkFollow));
+      setFollowsMe(Boolean(checkFollowsMe));
       setFollowRequestSent(Boolean(checkRequest));
       const storiesByCollection = new Map<string, ProfileHighlight[]>();
       ((highlightRows || []) as ProfileHighlight[]).forEach(story => {
@@ -2162,7 +2167,7 @@ export default function ProfilePage({
               <button
                 type="button"
                 onClick={() => void toggleFollow()}
-                aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
+                aria-label={isFollowing ? 'إلغاء المتابعة' : followRequestSent ? 'إلغاء طلب المتابعة' : followsMe ? 'رد المتابعة' : person.is_private ? 'طلب متابعة' : 'متابعة'}
                 className={`relative inline-flex h-9 min-w-[85px] shrink-0 items-center whitespace-nowrap rounded-full px-4 text-[13px] font-semibold transition ${followRequestSent ? 'bg-zinc-800 text-white' : 'bg-white text-black hover:bg-neutral-200'}`}
               >
                 <span className="invisible inline-flex items-center gap-1.5" aria-hidden="true">
@@ -2172,7 +2177,7 @@ export default function ProfilePage({
                 <span className="absolute inset-0 flex items-center justify-center text-center">{followButtonLabel}</span>
                 {isFollowing && (
                   <span className="absolute left-2 top-1/2 inline-flex h-3.5 w-3.5 -translate-y-1/2 items-center justify-center" aria-hidden="true">
-                    <svg className={`profile-follow-check${showFollowCheckmark ? ' is-visible' : ''}`} viewBox="0 0 20 20" aria-hidden="true">
+                    <svg className="profile-follow-check is-visible" viewBox="0 0 20 20" aria-hidden="true">
                       <path d="M3 10.5 7.4 15 17 5.5" fill="none" stroke="#000" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} />
                     </svg>
                   </span>
@@ -2468,7 +2473,7 @@ export default function ProfilePage({
               disabled={profileActionBusy}
               className="ms-auto shrink-0 rounded-full border border-white/50 px-3 py-1 text-[11px] font-bold text-white transition hover:bg-white/20 disabled:opacity-50"
             >
-              {isFollowing ? 'أتابع' : followRequestSent ? 'طلب مرسل' : 'متابعة'}
+              {isFollowing ? 'أتابع' : followRequestSent ? 'طلب مرسل' : followsMe ? 'رد المتابعة' : 'متابعة'}
             </button>
           )}
         />
