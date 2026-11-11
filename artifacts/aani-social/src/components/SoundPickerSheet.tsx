@@ -8,7 +8,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
-import { playInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
+import { playInstant, seekInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
 
@@ -52,8 +52,12 @@ export default function SoundPickerSheet() {
   const [soundDuration, setSoundDuration] = useState(0);
   const [trimPlaying, setTrimPlaying] = useState(false);
   const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null);
+  const trimPlayingRef = useRef(false);
+  trimPlayingRef.current = trimPlaying;
+  // رابط قياس المدة يُصيَّر مع شاشة الاقتصاص (state): العنصر غير موجود في
+  // شجرة DOM لحظة فتح الشاشة فلا تُقرأ المدة أبداً ويتداخل المقبضان عند 0:00
+  const [probeSrc, setProbeSrc] = useState('');
   const trimDurationLoadedRef = useRef(false);
-  const trimProbeRef = useRef<HTMLAudioElement>(null);
   const trimTrackRef = useRef<HTMLDivElement>(null);
 
   // تهيئة التحميل الاستباقي لأول 10 أصوات عند فتح المكتبة: طلب Range صغير
@@ -191,11 +195,8 @@ export default function SoundPickerSheet() {
     setTrimDraft({ start: 0, end: MAX_TRIM_SECONDS });
     trimDurationLoadedRef.current = false;
     if (sound.source_video_url) warmAudioCache(sound.source_video_url);
-    const probe = trimProbeRef.current;
-    if (probe) {
-      probe.src = sound.source_video_url || '';
-      probe.load();
-    }
+    // عنصر قياس المدة يُصيَّر مع شاشة الاقتصاص عبر probeSrc (state)
+    setProbeSrc(sound.source_video_url || '');
   };
 
   // يبدأ الاستماع فوراً من زمن البداية المحدد بالمقبض (يُستدعى لحظة بدء السحب أيضاً)
@@ -237,6 +238,8 @@ export default function SoundPickerSheet() {
     const onMove = (event: PointerEvent) => {
       const value = valueFromPointer(event.clientX);
       if (value === null) return;
+      // تزامن حي 100% مع التشغيل: قفزة فورية إلى زمن البداية الجديد أثناء سحب المقبض الأيسر
+      if (draggingHandle === 'start' && trimPlayingRef.current) seekInstant(value);
       setTrimDraft(current => {
         if (draggingHandle === 'start') {
           const start = Math.min(Math.max(0, value), Math.max(0, current.end - 0.5));
@@ -354,14 +357,25 @@ export default function SoundPickerSheet() {
                 </div>
               </div>
 
-              {/* الشريط الزمني الموحد بمقبضين: يسار البداية ويمين النهاية */}
+              {/* الشريط الزمني الموحد بمقبضين أصغر وأنيقين (32px): الأيسر للبداية والأيمن للنهاية */}
               <div
                 ref={trimTrackRef}
                 dir="ltr"
-                className="relative mx-1 h-12 select-none"
+                className="relative mx-1 h-8 select-none"
                 style={{ touchAction: 'none' }}
               >
+                {/* المسار الكامل رمادي خفيف */}
                 <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-white/15" />
+                {/* الأطراف الخارجية خارج المقبضين أدكن قليلاً */}
+                <div
+                  className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-black/50"
+                  style={{ left: 0, width: `${Math.max(0, startPercent)}%` }}
+                />
+                <div
+                  className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-black/50"
+                  style={{ left: `${endPercent}%`, width: `${Math.max(0, 100 - endPercent)}%` }}
+                />
+                {/* الجزء المحصور بين المقبضين أورانج بارز */}
                 <div
                   className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-[#f1a17f]"
                   style={{ left: `${startPercent}%`, width: `${Math.max(0, endPercent - startPercent)}%` }}
@@ -373,25 +387,25 @@ export default function SoundPickerSheet() {
                     <button
                       key={handle}
                       type="button"
-                      aria-label={handle === 'start' ? 'مقبض زمن البداية' : 'مقبض زمن النهاية'}
+                      aria-label={handle === 'start' ? 'مقبض زمن البداية sound_trim_start' : 'مقبض زمن النهاية sound_trim_end'}
                       onPointerDown={event => {
                         event.preventDefault();
                         // استماع حي لحظة السحب: يبدأ الصوت من زمن البداية المحدد
                         beginLivePreview();
                         setDraggingHandle(handle);
                       }}
-                      className={`absolute top-1/2 z-10 flex h-12 w-5 -translate-y-1/2 flex-col items-center justify-center gap-[3px] rounded-full border border-black/40 bg-white shadow-[0_2px_12px_rgba(0,0,0,0.5)] transition-transform ${draggingHandle === handle ? 'scale-110' : ''} active:scale-95`}
-                      style={{ left: `calc(${percent}% - 10px)` }}
+                      className={`absolute top-1/2 z-10 flex h-8 w-4 -translate-y-1/2 flex-col items-center justify-center gap-[3px] rounded-full border shadow-[0_2px_10px_rgba(0,0,0,0.5)] transition-transform ${draggingHandle === handle ? 'border-[#f1a17f] bg-[#f1a17f] scale-110' : 'border-black/40 bg-white'} active:scale-95`}
+                      style={{ left: `calc(${percent}% - 8px)` }}
                     >
                       {/* فقاعة الوقت الحي فوق المقبض أثناء السحب */}
                       {draggingHandle === handle && (
-                        <span className="absolute -top-8 left-1/2 -translate-x-1/2 rounded-md bg-black/85 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white">
+                        <span className="absolute -top-7 left-1/2 -translate-x-1/2 rounded-md bg-black/85 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-white">
                           {formatSeconds(value)}
                         </span>
                       )}
-                      <span className="h-[2px] w-2 rounded-full bg-zinc-400" />
-                      <span className="h-[2px] w-2 rounded-full bg-zinc-400" />
-                      <span className="h-[2px] w-2 rounded-full bg-zinc-400" />
+                      <span className={`h-[2px] w-1.5 rounded-full ${draggingHandle === handle ? 'bg-black/60' : 'bg-[#f1a17f]'}`} />
+                      <span className={`h-[2px] w-1.5 rounded-full ${draggingHandle === handle ? 'bg-black/60' : 'bg-[#f1a17f]'}`} />
+                      <span className={`h-[2px] w-1.5 rounded-full ${draggingHandle === handle ? 'bg-black/60' : 'bg-[#f1a17f]'}`} />
                     </button>
                   );
                 })}
@@ -424,19 +438,31 @@ export default function SoundPickerSheet() {
             </div>
 
             {/* عنصر قياس المدة الكاملة (منفصل عن المعاينة حتى لا يفسدها ترميز #t=) */}
-            <audio
-              ref={trimProbeRef}
-              preload="metadata"
-              className="hidden"
-              onLoadedMetadata={event => {
-                const duration = Math.max(1, event.currentTarget.duration || 0);
-                setSoundDuration(duration);
-                if (!trimDurationLoadedRef.current) {
-                  trimDurationLoadedRef.current = true;
-                  setTrimDraft({ start: 0, end: Math.min(MAX_TRIM_SECONDS, duration) });
-                }
-              }}
-            />
+            {probeSrc && (
+              <audio
+                key={probeSrc}
+                src={probeSrc}
+                preload="metadata"
+                className="hidden"
+                onLoadedMetadata={event => {
+                  const duration = Math.max(1, event.currentTarget.duration || 0);
+                  setSoundDuration(duration);
+                  if (!trimDurationLoadedRef.current) {
+                    trimDurationLoadedRef.current = true;
+                    setTrimDraft({ start: 0, end: Math.min(MAX_TRIM_SECONDS, duration) });
+                  }
+                }}
+                onError={() => {
+                  // تعذر قراءة المدة (رابط أو ترميز): افترض الحد الأقصى 15 ثانية
+                  // كي يظهر المقبضان منفصلين ويعمل الاقتصاص بدل تداخلهما عند 0:00
+                  setSoundDuration(current => (current > 0 ? current : MAX_TRIM_SECONDS));
+                  if (!trimDurationLoadedRef.current) {
+                    trimDurationLoadedRef.current = true;
+                    setTrimDraft({ start: 0, end: MAX_TRIM_SECONDS });
+                  }
+                }}
+              />
+            )}
           </>
         ) : (
           <>

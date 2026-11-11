@@ -174,6 +174,23 @@ export function resumeInstantIfSame(url: string): boolean {
 }
 
 /**
+ * قفزة فورية في زمن التشغيل على المشغّل الموحّد (تزامن حي مع سحب مقبض
+ * البداية في أداة الاقتصاص): تنقل موضع التشغيل إلى الزمن المطلوب بلا
+ * إعادة تحميل ولا انقطاع. يعيد true عند التنفيذ.
+ */
+export function seekInstant(time: number): boolean {
+  if (!audio) return false;
+  const target = Math.max(0, Number.isFinite(time) ? time : 0);
+  try {
+    audio.currentTime = target;
+    return true;
+  } catch {
+    /* قد يرفض المتصفح الضبط قبل الجهوزية */
+    return false;
+  }
+}
+
+/**
  * تسخين ذاكرة المتصفح لأول جزء من الصوت عبر طلب HTTP Range (206 Partial Content)
  * — النقر اللاحق على الصوت يبدأ فوراً لأن الأوتار الأولى حاضرة في الكاش والاتصال مفتوح.
  */
