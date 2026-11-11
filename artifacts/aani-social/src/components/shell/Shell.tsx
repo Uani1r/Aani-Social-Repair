@@ -190,6 +190,8 @@ export default function Shell({
     sourceVideoUrl?: string | null;
     soundTrim?: { start: number; end: number } | null;
     creatorName?: string | null;
+    /** مصدر الصوت: 'user' = اختاره المستخدم يدوياً من المكتبة (لا يُستبدل)، 'auto' = اقتراح تلقائي (يُستبدل في كل دخول) */
+    origin?: 'auto' | 'user';
   } | null>(null);
   // التوليد التلقائي للوسائط: هل الوسائط الحالية خلفية مولّدة من الصوت؟
   const [autoSoundMedia, setAutoSoundMedia] = useState(false);
@@ -230,6 +232,7 @@ export default function Shell({
         sourceVideoUrl: detail.sourceVideoUrl ?? null,
         soundTrim: detail.soundTrim ?? null,
         creatorName: detail.creatorName ?? null,
+        origin: 'user',
       });
       // من مكتبة الأصوات: يُطبق فوراً على المنشور الجاري إنشاؤه
       // من شريط الصوت في منشور آخر: يفتح مسار إنشاء فيديو جديد بنفس الصوت
@@ -962,24 +965,29 @@ export default function Shell({
   // مرجع لملفات المنشور الجاري إنشاؤه (يُستخدم في أحداث نظام الأصوات)
   const selectedFilesRef = useRef(selectedFiles);
   selectedFilesRef.current = selectedFiles;
-  // آخر صوت مقترح تلقائياً — يُحفظ في الذاكرة والجلسة (sessionStorage)
-  // كي لا يتكرر الصوت نفسه في محاولتين متتاليتين حتى بعد إعادة فتح الواجهة
-  const lastSuggestedSoundIdRef = useRef<string | null>(null);
-  const readLastSuggestedSoundId = (): string | null => {
-    if (lastSuggestedSoundIdRef.current) return lastSuggestedSoundIdRef.current;
+  // سجل الأصوات المقترحة تلقائياً (الأحدث أولاً) — يُحفظ في الذاكرة والجلسة
+  // (sessionStorage) ويُستبعد كله عند الاقتراح التالي: لا تكرار نهائياً
+  // بين المتتاليات ولا عند الخروج والدخول المتكرر من شاشة النشر
+  const RECENT_SUGGESTED_LIMIT = 6;
+  const recentSuggestedSoundIdsRef = useRef<string[]>([]);
+  const readRecentSuggestedSoundIds = (): string[] => {
+    if (recentSuggestedSoundIdsRef.current.length > 0) return recentSuggestedSoundIdsRef.current;
     try {
-      const stored = window.sessionStorage.getItem('aani:last-suggested-sound-id');
+      const stored = window.sessionStorage.getItem('aani:recent-suggested-sound-ids');
       if (stored) {
-        lastSuggestedSoundIdRef.current = stored;
-        return stored;
+        const parsed = JSON.parse(stored) as unknown;
+        if (Array.isArray(parsed)) {
+          recentSuggestedSoundIdsRef.current = parsed.filter((id): id is string => typeof id === 'string');
+        }
       }
     } catch { /* قد يكون التخزين معطلاً في هذا السياق */ }
-    return null;
+    return recentSuggestedSoundIdsRef.current;
   };
   const rememberSuggestedSoundId = (soundId: string) => {
-    lastSuggestedSoundIdRef.current = soundId;
+    const next = [soundId, ...readRecentSuggestedSoundIds().filter(id => id !== soundId)].slice(0, RECENT_SUGGESTED_LIMIT);
+    recentSuggestedSoundIdsRef.current = next;
     try {
-      window.sessionStorage.setItem('aani:last-suggested-sound-id', soundId);
+      window.sessionStorage.setItem('aani:recent-suggested-sound-ids', JSON.stringify(next));
     } catch { /* قد يكون التخزين معطلاً في هذا السياق */ }
   };
   const pendingSoundRef = useRef(pendingSound);
@@ -1205,9 +1213,10 @@ export default function Shell({
   // (فيُتخطى الاقتراح غير المتزامن) وfalse إن لم توجد أوساط مجهزة بعد.
   const attachWarmedSound = (): boolean => {
     if (!supabaseConfigured) return false;
-    // صوت اختاره المستخدم بالفعل (يدوياً أو من اقتراح سابق) لا يُستبدل
-    if (pendingSoundRef.current) return true;
-    const chosen = pickDefaultSound(readLastSuggestedSoundId());
+    // صوت اختاره المستخدم يدوياً من مكتبة الأصوات لا يُستبدل — أما المقترح
+    // التلقائي فيُستبدل بصوت جديد عشوائي في كل اختيار/دخول (بلا تكرار نهائياً)
+    if (pendingSoundRef.current?.origin === 'user') return true;
+    const chosen = pickDefaultSound(readRecentSuggestedSoundIds());
     if (!chosen || !chosen.source_video_url) return false;
     rememberSuggestedSoundId(chosen.id);
     setPendingSound({
@@ -1215,6 +1224,7 @@ export default function Shell({
       title: chosen.title,
       sourceVideoUrl: chosen.source_video_url || null,
       soundTrim: null,
+      origin: 'auto',
     });
     // التشغيل في نفس الملي ثانية داخل سياق إيماءة المستخدم
     playInstant(chosen.source_video_url, { loop: true });
@@ -1257,6 +1267,10 @@ export default function Shell({
     setSelectedFiles([]);
     setFileType(null);
     setImagePostTags([]);
+    // الخروج من شاشة النشر يوقف الصوت ويفرغ المقترح —
+    // فالدخول التالي يقترح صوتاً مختلفاً عشوائياً (بلا تكرار)
+    stopInstant();
+    setPendingSound(null);
   };
 
   const handleSelectPublishVideo = (file: File) => {
@@ -1308,6 +1322,7 @@ export default function Shell({
     clearVideoCover();
     setVideoMentions([]);
     setAutoSoundMedia(false);
+    stopInstant();
     setPendingSound(null);
   };
 
@@ -1337,8 +1352,8 @@ export default function Shell({
   // ترحيل 20270112000000، مع احتياط خلط محلي إن لم تُطبَّق الدالة بعد)
   const suggestTrendingSound = async () => {
     if (!supabaseConfigured) return;
-    // لا تقترح فوق صوت اختاره المستخدم (يدوياً أو من ريل آخر) — الإلغاء (X) يعيد الاقتراح في المرة القادمة
-    if (pendingSoundRef.current) return;
+    // لا تقترح فوق صوت اختاره المستخدم يدوياً من مكتبة الأصوات — الإلغاء (X) يعيد الاقتراح في المرة القادمة
+    if (pendingSoundRef.current?.origin === 'user') return;
     try {
       let soundRows: { id: string; title: string; source_video_url: string | null }[] = [];
       // ترتيب عشوائي في SQL (ORDER BY random() LIMIT 10) — أسرع وأكثر عشوائية
@@ -1361,9 +1376,9 @@ export default function Shell({
         soundRows = pool.slice(0, 10);
       }
       if (soundRows.length === 0) return;
-      // منع التكرار التام في محاولتين متتاليتين: استبعد آخر صوت مُقترح (من الذاكرة والجلسة)
-      const lastSuggested = readLastSuggestedSoundId();
-      const fresh = soundRows.filter(sound => sound.id !== lastSuggested);
+      // استبعد كل الأصوات المقترحة مؤخراً (سجل الجلسة: الأحدث أولاً) — لا تكرار نهائياً
+      const recentIds = readRecentSuggestedSoundIds();
+      const fresh = recentIds.length > 0 ? soundRows.filter(sound => !recentIds.includes(sound.id)) : soundRows;
       const candidates = fresh.length > 0 ? fresh : soundRows;
       const chosen = candidates[Math.floor(Math.random() * candidates.length)];
       rememberSuggestedSoundId(chosen.id);
@@ -1372,6 +1387,7 @@ export default function Shell({
         title: chosen.title,
         sourceVideoUrl: chosen.source_video_url || null,
         soundTrim: null,
+        origin: 'auto',
       });
       // التشغيل الفوري لحظة وصول الصوت (بالتوازي مع ظهور الصورة بالواجهة) — بلا أي انتظار
       if (chosen.source_video_url) playInstant(chosen.source_video_url, { loop: true });
@@ -1746,6 +1762,7 @@ export default function Shell({
     setShowCreateModal(false);
     setIsSubmitting(false);
     setCreateError('');
+    stopInstant();
     setPendingSound(null);
     setAutoSoundMedia(false);
     setImagePostTags([]);
@@ -1846,6 +1863,7 @@ export default function Shell({
           setShowCreateModal(false);
           setVideoMentions([]);
           setAutoSoundMedia(false);
+          stopInstant();
           setPendingSound(null);
           if (fileType === 'video') {
             setSelectedFiles([]);
