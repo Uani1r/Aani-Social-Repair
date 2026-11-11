@@ -952,6 +952,10 @@ export default function Shell({
   // مرجع لملفات المنشور الجاري إنشاؤه (يُستخدم في أحداث نظام الأصوات)
   const selectedFilesRef = useRef(selectedFiles);
   selectedFilesRef.current = selectedFiles;
+  // آخر صوت مقترح تلقائياً (لضمان صوت مختلف في كل مرة) + حالة الصوت الحالي
+  const lastSuggestedSoundIdRef = useRef<string | null>(null);
+  const pendingSoundRef = useRef(pendingSound);
+  pendingSoundRef.current = pendingSound;
 
   useEffect(() => {
     const unlockAudio = () => {
@@ -1181,6 +1185,8 @@ export default function Shell({
       setImagePreviewImages(previews);
       setShowPublishOptionsSheet(false);
       setShowImagePreviewModal(true);
+      // الاقتراح الذكي: صوت رائج مختلف في كل اختيار/تغيير للصورة
+      void suggestTrendingSound();
     } catch {
       setShowPublishOptionsSheet(false);
       setCreateError('تعذر تجهيز الصور المختارة. حاول اختيارها مرة أخرى.');
@@ -1271,6 +1277,54 @@ export default function Shell({
     setShowImagePreviewModal(false);
     setImagePreviewImages([]);
     handlePublish(imagePostTags, destination, croppedImages.map(image => image.file), 'image');
+  };
+
+  // الاقتراح الذكي: صوت رائج مختلف في كل مرة تتغير فيها الصورة
+  // (أكثر 10 أصوات استخداماً من جدول sounds مع ترتيب عشوائي في كل اختيار)
+  const suggestTrendingSound = async () => {
+    if (!supabaseConfigured) return;
+    // لا تقترح فوق صوت اختاره المستخدم (يدوياً أو من ريل آخر) — الإلغاء (X) يعيد الاقتراح في المرة القادمة
+    if (pendingSoundRef.current) return;
+    try {
+      const [{ data: soundRows, error: soundsError }, { data: postRows, error: postsError }] = await Promise.all([
+        supabase.from('sounds')
+          .select('id, title, source_video_url')
+          .order('created_at', { ascending: false })
+          .limit(30),
+        supabase.from('posts')
+          .select('sound_id')
+          .not('sound_id', 'is', null)
+          .order('created_at', { ascending: false })
+          .limit(500),
+      ]);
+      if (soundsError || !soundRows?.length) return;
+      // الأكثر شيوعاً: ترتيب حسب عدد الاستخدامات في المنشورات
+      const usageCounts = new Map<string, number>();
+      (postsError ? [] : (postRows || [])).forEach(row => {
+        const record = row as Record<string, unknown>;
+        const soundId = typeof record?.sound_id === 'string' ? record.sound_id : null;
+        if (soundId) usageCounts.set(soundId, (usageCounts.get(soundId) || 0) + 1);
+      });
+      const ranked = soundRows
+        .map(sound => ({ sound, usage: usageCounts.get(sound.id) || 0 }))
+        .sort((first, second) => second.usage - first.usage)
+        .slice(0, 10);
+      if (!ranked.length) return;
+      // صوت مختلف في كل مرة: يستبعد آخر اقتراح لضمان التنوع وعدم التكرار
+      const fresh = ranked.filter(item => item.sound.id !== lastSuggestedSoundIdRef.current);
+      const pool = fresh.length > 0 ? fresh : ranked;
+      const chosen = pool[Math.floor(Math.random() * pool.length)].sound;
+      lastSuggestedSoundIdRef.current = chosen.id;
+      setPendingSound({
+        id: chosen.id,
+        title: chosen.title,
+        sourceVideoUrl: chosen.source_video_url || null,
+        soundTrim: null,
+      });
+      toast.success(`صوت مقترح تلقائياً: ${chosen.title}`);
+    } catch {
+      // فشل الاقتراح لا يعطل مسار النشر
+    }
   };
 
   const continueToVideoCaption = (range: VideoTrimRange, crop: VideoCropTransform) => {

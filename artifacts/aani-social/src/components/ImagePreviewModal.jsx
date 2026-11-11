@@ -467,6 +467,31 @@ export default function ImagePreviewModal({
 
       {/* قسم معاينة الوسائط */}
       <div className="relative min-h-0 flex-1">
+        {/* كبسولة الصوت أعلى المعاينة: [أيقونة الموسيقى + اسم الصوت + X] — الضغط عليها يفتح مكتبة الأصوات للاستبدال */}
+        {music && (
+          <div className="absolute left-3 right-3 top-3 z-20 flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 backdrop-blur">
+            <button
+              type="button"
+              onClick={() => openSoundPicker()}
+              aria-label="تغيير الصوت من مكتبة الأصوات"
+              className="flex min-w-0 flex-1 items-center gap-2 text-right"
+            >
+              <Music2 size={14} className="shrink-0 text-[#f1a17f]" />
+              <span className="min-w-0 truncate text-xs font-semibold text-white">{music.title}</span>
+              <span className="shrink-0 text-[10px] text-white/45">اضغط للتغيير</span>
+            </button>
+            {onClearMusic && (
+              <button
+                type="button"
+                aria-label="إزالة الصوت"
+                onClick={onClearMusic}
+                className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
         <div
           ref={trackRef}
           onScroll={handleScroll}
@@ -568,18 +593,7 @@ export default function ImagePreviewModal({
           />
         )}
 
-        {/* الصوت المختار من مكتبة الأصوات + التشغيل المباشر */}
-        {music && (
-          <div className="flex items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
-            <span className="min-w-0 flex-1 truncate text-xs text-white">♫ {music.title}</span>
-            <span className="shrink-0 text-[10px] text-white/45">صوت من المكتبة</span>
-            {onClearMusic && (
-              <button type="button" aria-label="إزالة الصوت" onClick={onClearMusic} className="shrink-0 rounded-full p-1 text-white/60 transition hover:bg-white/10 hover:text-white">
-                <X size={14} />
-              </button>
-            )}
-          </div>
-        )}
+        {/* الصوت المختار يظهر كبسولة أعلى المعاينة ويُدار من هناك — مع تشغيل مباشر متزامن هنا */}
         {soundPreviewUrl && (
           <audio src={soundPreviewUrl} loop autoPlay preload="auto" className="hidden" />
         )}

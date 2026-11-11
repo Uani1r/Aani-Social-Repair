@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Pause, Play, Search, Scissors, X } from 'lucide-react';
 
@@ -8,7 +8,6 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
-import { appendVideoTrimFragment } from '@/lib/videoMedia';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
 
@@ -35,7 +34,9 @@ export default function SoundPickerSheet() {
   const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
   const [playingId, setPlayingId] = useState<string | null>(null);
-  const previewAudioRef = useRef<HTMLAudioElement>(null);
+  // مشغل المعاينة الفوري: عنصر HTML5 Audio مخصص لكل صوت مع تحميل استباقي
+  // (Streaming / HTTP Range) — الاستدعاء لـ .play() فوري بلا انتظار التنزيل الكامل
+  const previewPoolRef = useRef(new Map<string, HTMLAudioElement>());
   // أداة الاقتصاص: الصوت المختار + مسودة زمني البداية/النهاية (بالثواني)
   const [trimTarget, setTrimTarget] = useState<LibrarySound | null>(null);
   const [trimDraft, setTrimDraft] = useState<SoundTrimRange>({ start: 0, end: MAX_TRIM_SECONDS });
@@ -44,15 +45,32 @@ export default function SoundPickerSheet() {
   const [draggingHandle, setDraggingHandle] = useState<'start' | 'end' | null>(null);
   const trimDurationLoadedRef = useRef(false);
   const trimProbeRef = useRef<HTMLAudioElement>(null);
-  const trimPreviewRef = useRef<HTMLAudioElement>(null);
   const trimTrackRef = useRef<HTMLDivElement>(null);
 
+  // عنصر صوت دافئ (محضّر) لكل صوت: يُنشأ مرة واحدة مع preload='auto'
+  const getWarmPreview = useCallback((sound: LibrarySound): HTMLAudioElement | null => {
+    if (!sound.source_video_url) return null;
+    let audio = previewPoolRef.current.get(sound.id);
+    if (!audio) {
+      audio = new Audio(sound.source_video_url);
+      audio.preload = 'auto';
+      audio.loop = true;
+      previewPoolRef.current.set(sound.id, audio);
+    }
+    return audio;
+  }, []);
+
+  // تهيئة التحميل الاستباقي لأول 10 أصوات عند فتح المكتبة (استجابة فورية عند النقر)
+  useEffect(() => {
+    if (!open || !sounds) return;
+    sounds.slice(0, 10).forEach(sound => {
+      getWarmPreview(sound);
+    });
+  }, [open, sounds, getWarmPreview]);
+
   const stopEverything = () => {
-    const previewAudio = previewAudioRef.current;
-    if (previewAudio) previewAudio.pause();
+    previewPoolRef.current.forEach(audio => audio.pause());
     setPlayingId(null);
-    const trimPreview = trimPreviewRef.current;
-    if (trimPreview) trimPreview.pause();
     setTrimPlaying(false);
     setDraggingHandle(null);
   };
@@ -137,28 +155,38 @@ export default function SoundPickerSheet() {
   });
 
   const togglePreview = (sound: LibrarySound) => {
-    const audio = previewAudioRef.current;
-    if (!audio || !sound.source_video_url) return;
+    const audio = getWarmPreview(sound);
+    if (!audio) return;
     if (playingId === sound.id && !audio.paused) {
       audio.pause();
+      audio.ontimeupdate = null;
+      audio.loop = true;
       setPlayingId(null);
       return;
     }
-    // صوت واحد فقط يعمل في المكتبة: أوقف أي معاينة أخرى
-    const trimPreview = trimPreviewRef.current;
-    if (trimPreview) trimPreview.pause();
+    // صوت واحد فقط يعمل في المكتبة: أوقف أي معاينة أخرى (بما فيها معاينة الاقتصاص)
+    previewPoolRef.current.forEach(other => {
+      if (other !== audio) other.pause();
+    });
+    if (trimTarget) {
+      const trimAudio = getWarmPreview(trimTarget);
+      if (trimAudio && trimAudio !== audio) trimAudio.pause();
+    }
     setTrimPlaying(false);
-    audio.src = sound.source_video_url;
+    audio.ontimeupdate = null;
+    audio.loop = true;
+    try { audio.currentTime = 0; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
     void audio.play().then(() => setPlayingId(sound.id)).catch(() => setPlayingId(null));
   };
 
-  // فتح أداة الاقتصاص: عنصر صوت مخفي منفصل يقرأ مدة الصوت الكاملة
+  // فتح أداة الاقتصاص: عنصر صوت مخفي منفصل يقرأ مدة الصوت الكاملة + تجهيز مشغل المعاينة الفوري
   const beginTrim = (sound: LibrarySound) => {
     stopEverything();
     setTrimTarget(sound);
     setSoundDuration(0);
     setTrimDraft({ start: 0, end: MAX_TRIM_SECONDS });
     trimDurationLoadedRef.current = false;
+    getWarmPreview(sound);
     const probe = trimProbeRef.current;
     if (probe) {
       probe.src = sound.source_video_url || '';
@@ -166,28 +194,38 @@ export default function SoundPickerSheet() {
     }
   };
 
-  // يبدأ/يستأنف الاستماع من زمن البداية المحدد بالمقبض (يُستدعى لحظة بدء السحب أيضاً)
+  // يبدأ الاستماع فوراً من زمن البداية المحدد بالمقبض (يُستدعى لحظة بدء السحب أيضاً)
+  // — عبر مشغل الصوت المباشر المحمّل استباقياً: حلقة محصورة ضمن زمني الاقتصاص
   const beginLivePreview = () => {
-    const audio = trimPreviewRef.current;
-    if (!audio || !trimTarget?.source_video_url) return;
-    if (audio.paused) {
-      audio.src = appendVideoTrimFragment(trimTarget.source_video_url, trimDraft);
-      try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-      void audio.play().then(() => setTrimPlaying(true)).catch(() => setTrimPlaying(false));
-    } else {
-      try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-    }
+    if (!trimTarget?.source_video_url) return;
+    const audio = getWarmPreview(trimTarget);
+    if (!audio) return;
+    // صوت واحد فقط: أوقف أي معاينة أخرى
+    previewPoolRef.current.forEach(other => {
+      if (other !== audio) other.pause();
+    });
+    setPlayingId(null);
+    audio.loop = false;
+    audio.ontimeupdate = () => {
+      if (audio.currentTime >= trimDraft.end - 0.04 || audio.currentTime < trimDraft.start - 0.05) {
+        try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+      }
+    };
+    audio.onended = () => setTrimPlaying(false);
+    try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
+    void audio.play().then(() => setTrimPlaying(true)).catch(() => setTrimPlaying(false));
+  };
+
+  const stopTrimPreview = () => {
+    if (!trimTarget) return;
+    const audio = getWarmPreview(trimTarget);
+    if (audio) audio.pause();
+    setTrimPlaying(false);
   };
 
   const toggleTrimPreview = () => {
-    const audio = trimPreviewRef.current;
-    if (!audio || !trimTarget?.source_video_url) return;
-    if (audio.paused) {
-      beginLivePreview();
-    } else {
-      audio.pause();
-      setTrimPlaying(false);
-    }
+    if (trimPlaying) stopTrimPreview();
+    else beginLivePreview();
   };
 
   // سحب المقبضين على الشريط الزمني الموحد (بحد أقصى 15 ثانية للمقتطف)
@@ -403,20 +441,6 @@ export default function SoundPickerSheet() {
                 }
               }}
             />
-            {/* عنصر معاينة الجزء المقتص */}
-            <audio
-              ref={trimPreviewRef}
-              preload="auto"
-              className="hidden"
-              onTimeUpdate={() => {
-                const audio = trimPreviewRef.current;
-                if (!audio || !trimPlaying) return;
-                if (audio.currentTime >= trimDraft.end - 0.04 || audio.currentTime < trimDraft.start - 0.05) {
-                  try { audio.currentTime = trimDraft.start; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-                }
-              }}
-              onEnded={() => setTrimPlaying(false)}
-            />
           </>
         ) : (
           <>
@@ -506,7 +530,6 @@ export default function SoundPickerSheet() {
               )}
             </div>
 
-            <audio ref={previewAudioRef} preload="none" className="hidden" />
           </>
         )}
       </section>
