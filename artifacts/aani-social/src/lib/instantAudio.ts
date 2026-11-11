@@ -47,6 +47,40 @@ let playingReported = false;
 // Current request generation: invalidates any pending .play() promise or
 // callback from a previous attempt when the user switches sounds quickly.
 let playGeneration = 0;
+// High-frequency trim watch: a requestAnimationFrame loop that clamps the
+// playhead inside the trim range every frame (~16ms) instead of relying only
+// on timeupdate (~4Hz, up to ~250ms of overshoot). Sample-accurate-perceptual
+// looping with zero memory cost: no AudioBuffer decoding of full-length songs.
+let trimWatchFrame: number | null = null;
+let trimWatchEl: HTMLAudioElement | null = null;
+
+function stopTrimWatch(): void {
+  if (typeof window !== 'undefined' && trimWatchFrame !== null) {
+    window.cancelAnimationFrame(trimWatchFrame);
+  }
+  trimWatchFrame = null;
+  trimWatchEl = null;
+}
+
+function startTrimWatch(el: HTMLAudioElement, read: () => InstantTrimRange | null): void {
+  stopTrimWatch();
+  trimWatchEl = el;
+  const tick = () => {
+    trimWatchFrame = null;
+    if (trimWatchEl !== el) return;
+    const range = read();
+    if (!range) return;
+    const t = el.currentTime;
+    if (t >= range.end - 0.02 || t < range.start - 0.03) {
+      try { el.currentTime = range.start; } catch { /* the browser may refuse seeking before readiness */ }
+    }
+    // Keep ticking only while actually playing; the play event restarts the loop.
+    if (!el.paused) {
+      trimWatchFrame = window.requestAnimationFrame(tick);
+    }
+  };
+  trimWatchFrame = window.requestAnimationFrame(tick);
+}
 
 function ensureAudio(): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
@@ -66,6 +100,9 @@ function clearHandlers(): void {
   audio.onended = null;
   audio.ontimeupdate = null;
   audio.onloadedmetadata = null;
+  audio.onplay = null;
+  audio.onpause = null;
+  stopTrimWatch();
   playingReported = false;
 }
 
@@ -142,8 +179,10 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
     };
   }
 
-  // Software clamp as a second safety net over the #t= fragment: jump back to
-  // the start of the clip whenever playback passes its end (smooth loop).
+  // Loop engine, two layers over the #t= fragment:
+  // 1. rAF trim watch: clamps the playhead every frame (~16ms) while playing,
+  //    restarted by the play event and halted by the pause event.
+  // 2. timeupdate clamp: fallback for browsers that throttle rAF in background.
   if (readTrim) {
     el.ontimeupdate = () => {
       const range = readTrim();
@@ -152,6 +191,9 @@ export function playInstant(url: string, options: InstantPlayOptions = {}): void
         try { el.currentTime = range.start; } catch { /* the browser may refuse seeking before readiness */ }
       }
     };
+    el.onplay = () => startTrimWatch(el, readTrim);
+    el.onpause = () => stopTrimWatch();
+    startTrimWatch(el, readTrim); // .play() is called right below
   }
 
   const initialTrim = readTrim?.() ?? null;
@@ -258,7 +300,7 @@ export function warmAudioContext(): void {
     const Context = window.AudioContext
       || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Context) return;
-    audioContext = new Context();
+    audioContext = new Context({ latencyHint: 'interactive' });
     // Empty buffer (one silent sample): a playback signal with no audible sound.
     const silentBuffer = audioContext.createBuffer(1, 1, audioContext.sampleRate);
     const source = audioContext.createBufferSource();
@@ -270,3 +312,11 @@ export function warmAudioContext(): void {
     /* AudioContext unsupported in this context; normal playback still works */
   }
 }
+
+/**
+ * Canonical name for the synchronous unlock routine: call it inside the first
+ * user gesture (media-picker tap, publish-flow open, first pointerdown) to
+ * resume the AudioContext, emit the silent buffer, and arm the global audio
+ * element — defeating the autoplay block on Safari/iOS.
+ */
+export const installAudioUnlock = warmAudioContext;

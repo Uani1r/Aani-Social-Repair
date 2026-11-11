@@ -377,7 +377,15 @@ export default function SoundPickerSheet() {
                 {/* زر المعاينة: دائرة 56×56 والأيقونة ممركزة تماماً في المنتصف */}
                 <button
                   type="button"
-                  onClick={toggleTrimPreview}
+                  onPointerDown={event => {
+                    event.preventDefault();
+                    toggleTrimPreview();
+                  }}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault();
+                    toggleTrimPreview();
+                  }}
                   disabled={!trimTarget.source_video_url}
                   aria-label={trimLoading ? 'جارٍ تحميل المعاينة' : trimPlaying ? 'إيقاف معاينة الجزء المختار' : 'معاينة الجزء المختار'}
                   className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-lg transition disabled:opacity-40 hover:brightness-105 active:scale-95"
@@ -554,9 +562,18 @@ export default function SoundPickerSheet() {
                     <li key={sound.id}>
                       <div className="flex min-h-[68px] items-center gap-3 rounded-2xl px-2 py-2 transition hover:bg-white/[0.05]">
                         {/* زر المعاينة: دائرة 56×56 والأيقونة ممركزة تماماً في المنتصف */}
+                        {/* Interaction starts on pointerdown for an instant response, with keyboard parity via Enter/Space */}
                         <button
                           type="button"
-                          onClick={() => togglePreview(sound)}
+                          onPointerDown={event => {
+                            event.preventDefault();
+                            togglePreview(sound);
+                          }}
+                          onKeyDown={event => {
+                            if (event.key !== 'Enter' && event.key !== ' ') return;
+                            event.preventDefault();
+                            togglePreview(sound);
+                          }}
                           disabled={!sound.source_video_url}
                           aria-label={loadingPreviewId === sound.id ? 'جارٍ تحميل الصوت' : playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
                           className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-md transition disabled:opacity-40 hover:brightness-105 active:scale-95"
