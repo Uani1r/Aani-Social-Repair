@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Pause, Play, Search, Scissors, X } from 'lucide-react';
+import { ArrowRight, Loader2, Pause, Play, Search, Scissors, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
@@ -34,6 +34,10 @@ export default function SoundPickerSheet() {
   const [loadError, setLoadError] = useState(false);
   const [query, setQuery] = useState('');
   const [playingId, setPlayingId] = useState<string | null>(null);
+  // الصوت قيد الجلب: الزر يتحول فوراً لمؤشر تحميل حتى يبدأ الصوت فعلياً
+  const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
+  const playingIdRef = useRef<string | null>(null);
+  playingIdRef.current = playingId;
   // مشغل المعاينة الفوري: عنصر HTML5 Audio مخصص لكل صوت مع تحميل استباقي
   // (Streaming / HTTP Range) — الاستدعاء لـ .play() فوري بلا انتظار التنزيل الكامل
   const previewPoolRef = useRef(new Map<string, HTMLAudioElement>());
@@ -55,6 +59,10 @@ export default function SoundPickerSheet() {
       audio = new Audio(sound.source_video_url);
       audio.preload = 'auto';
       audio.loop = true;
+      // عند انتهاء الصوت طبيعياً يعود الزر تلقائياً لرمز المثلث
+      audio.onended = () => {
+        if (playingIdRef.current === sound.id) setPlayingId(null);
+      };
       previewPoolRef.current.set(sound.id, audio);
     }
     return audio;
@@ -71,6 +79,7 @@ export default function SoundPickerSheet() {
   const stopEverything = () => {
     previewPoolRef.current.forEach(audio => audio.pause());
     setPlayingId(null);
+    setLoadingPreviewId(null);
     setTrimPlaying(false);
     setDraggingHandle(null);
   };
@@ -91,6 +100,7 @@ export default function SoundPickerSheet() {
       setOpen(true);
       setQuery('');
       setPlayingId(null);
+      setLoadingPreviewId(null);
       setSounds(null);
       setLoadError(false);
       setTrimTarget(null);
@@ -157,7 +167,8 @@ export default function SoundPickerSheet() {
   const togglePreview = (sound: LibrarySound) => {
     const audio = getWarmPreview(sound);
     if (!audio) return;
-    if (playingId === sound.id && !audio.paused) {
+    if (playingIdRef.current === sound.id && !audio.paused) {
+      // إيقاف مؤقت: يعود الزر تلقائياً لرمز المثلث
       audio.pause();
       audio.ontimeupdate = null;
       audio.loop = true;
@@ -173,10 +184,22 @@ export default function SoundPickerSheet() {
       if (trimAudio && trimAudio !== audio) trimAudio.pause();
     }
     setTrimPlaying(false);
+    setPlayingId(null);
+    // مؤشر التحميل فوراً في نفس المللي ثانية، ثم يتحول للإيقاف عند بدء الصوت الفعلي (onplaying)
+    setLoadingPreviewId(sound.id);
     audio.ontimeupdate = null;
     audio.loop = true;
+    // استعادة معالج الانتهاء الافتراضي (قد يكون استُبدل بمعالج شاشة الاقتصاص)
+    audio.onended = () => {
+      if (playingIdRef.current === sound.id) setPlayingId(null);
+    };
     try { audio.currentTime = 0; } catch { /* قد يرفض المتصفح الضبط قبل الجهوزية */ }
-    void audio.play().then(() => setPlayingId(sound.id)).catch(() => setPlayingId(null));
+    void audio.play().then(() => {
+      setLoadingPreviewId(current => (current === sound.id ? null : current));
+      setPlayingId(sound.id);
+    }).catch(() => {
+      setLoadingPreviewId(current => (current === sound.id ? null : current));
+    });
   };
 
   // فتح أداة الاقتصاص: عنصر صوت مخفي منفصل يقرأ مدة الصوت الكاملة + تجهيز مشغل المعاينة الفوري
@@ -205,6 +228,7 @@ export default function SoundPickerSheet() {
       if (other !== audio) other.pause();
     });
     setPlayingId(null);
+    setLoadingPreviewId(null);
     audio.loop = false;
     audio.ontimeupdate = () => {
       if (audio.currentTime >= trimDraft.end - 0.04 || audio.currentTime < trimDraft.start - 0.05) {
@@ -501,10 +525,12 @@ export default function SoundPickerSheet() {
                           type="button"
                           onClick={() => togglePreview(sound)}
                           disabled={!sound.source_video_url}
-                          aria-label={playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
+                          aria-label={loadingPreviewId === sound.id ? 'جارٍ تحميل الصوت' : playingId === sound.id ? 'إيقاف المعاينة' : 'تشغيل المعاينة'}
                           className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#f1a17f] to-[#e58b66] text-black shadow-md transition disabled:opacity-40 hover:brightness-105 active:scale-95"
                         >
-                          {playingId === sound.id ? <Pause size={20} /> : <Play size={20} />}
+                          {loadingPreviewId === sound.id
+                            ? <Loader2 size={20} className="animate-spin" />
+                            : playingId === sound.id ? <Pause size={20} /> : <Play size={20} />}
                         </button>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold text-white">{sound.title}</p>

@@ -5,7 +5,7 @@ import Avatar from '@/components/Avatar';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import UserIdentity from '@/components/UserIdentity';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
-import { openSoundPicker } from '@/lib/sounds';
+import { OPEN_SOUND_PICKER_EVENT, openSoundPicker } from '@/lib/sounds';
 import { appendVideoTrimFragment, DEFAULT_IMAGE_ASPECT_LABEL, IMAGE_ASPECT_OPTIONS } from '@/lib/videoMedia';
 import { supabase } from '@/lib/supabase';
 import { displayName } from '@/lib/types';
@@ -175,6 +175,29 @@ export default function ImagePreviewModal({
     setCropView(cropViewsRef.current.get(activeIndex) || { scale: MIN_ZOOM, x: 0, y: 0 });
     setCropError('');
   }, [activeIndex]);
+
+  // رابط الصوت المرفق بالمعاينة (مع زمني الاقتصاص إن وُجدت)
+  const soundPreviewUrl = music?.sourceVideoUrl
+    ? (music.soundTrim && music.soundTrim.end > music.soundTrim.start
+      ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
+      : music.sourceVideoUrl)
+    : null;
+
+  // التشغيل التلقائي الفوري للصوت المقترح/المختار أثناء معاينة الصورة (قبل أي زر)
+  const soundPreviewRef = useRef(null);
+  useEffect(() => {
+    if (!soundPreviewUrl || !soundPreviewRef.current) return;
+    void soundPreviewRef.current.play().catch(() => undefined);
+  }, [soundPreviewUrl]);
+
+  // إيقاف معاينة الصوت المرفق عند فتح مكتبة الأصوات (منع تداخل الأصوات)
+  useEffect(() => {
+    const onOpenPicker = () => {
+      try { soundPreviewRef.current?.pause(); } catch { /* العنصر قد يكون غير جاهز */ }
+    };
+    window.addEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
+    return () => window.removeEventListener(OPEN_SOUND_PICKER_EVENT, onOpenPicker);
+  }, []);
 
   // بحث سريع عن حسابات للإشارة إليها (منشِّد بقصير)
   // — يُعرَّف قبل أي return مبكر حتى يظل عدد الخطافات ثابتاً بين العروض
@@ -446,12 +469,6 @@ export default function ImagePreviewModal({
     );
   };
 
-  const soundPreviewUrl = music?.sourceVideoUrl
-    ? (music.soundTrim && music.soundTrim.end > music.soundTrim.start
-      ? appendVideoTrimFragment(music.sourceVideoUrl, music.soundTrim)
-      : music.sourceVideoUrl)
-    : null;
-
   return (
     <div className="fixed inset-0 z-[140] flex flex-col bg-black text-white" dir="rtl" role="dialog" aria-modal="true" aria-label="إنشاء منشور">
       {/* الهيدر: إلغاء (X) مقابل زر نشر مباشر */}
@@ -467,18 +484,17 @@ export default function ImagePreviewModal({
 
       {/* قسم معاينة الوسائط */}
       <div className="relative min-h-0 flex-1">
-        {/* كبسولة الصوت أعلى المعاينة: [أيقونة الموسيقى + اسم الصوت + X] — الضغط عليها يفتح مكتبة الأصوات للاستبدال */}
+        {/* كبسولة الصوت أعلى المعاينة: [أيقونة الموسيقى + اسم الصوت + X] — ملمومة بحسب طول الاسم، والضغط عليها يفتح مكتبة الأصوات للاستبدال */}
         {music && (
-          <div className="absolute left-3 right-3 top-3 z-20 flex items-center gap-2 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 backdrop-blur">
+          <div className="absolute right-3 top-3 z-20 flex w-fit max-w-[80%] items-center justify-center gap-2 rounded-full border border-white/15 bg-black/70 px-3 py-1.5 backdrop-blur">
             <button
               type="button"
               onClick={() => openSoundPicker()}
               aria-label="تغيير الصوت من مكتبة الأصوات"
-              className="flex min-w-0 flex-1 items-center gap-2 text-right"
+              className="flex min-w-0 items-center gap-2 text-right"
             >
               <Music2 size={14} className="shrink-0 text-[#f1a17f]" />
               <span className="min-w-0 truncate text-xs font-semibold text-white">{music.title}</span>
-              <span className="shrink-0 text-[10px] text-white/45">اضغط للتغيير</span>
             </button>
             {onClearMusic && (
               <button
@@ -595,7 +611,7 @@ export default function ImagePreviewModal({
 
         {/* الصوت المختار يظهر كبسولة أعلى المعاينة ويُدار من هناك — مع تشغيل مباشر متزامن هنا */}
         {soundPreviewUrl && (
-          <audio src={soundPreviewUrl} loop autoPlay preload="auto" className="hidden" />
+          <audio ref={soundPreviewRef} src={soundPreviewUrl} loop autoPlay preload="auto" className="hidden" />
         )}
 
         {/* شريط الأزرار والخدمات */}
