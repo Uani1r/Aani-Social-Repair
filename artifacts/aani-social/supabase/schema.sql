@@ -1530,3 +1530,25 @@ end;
 $$;
 revoke all on function public.aani_cleanup_old_notifications() from public, anon;
 grant execute on function public.aani_cleanup_old_notifications() to authenticated;
+
+revoke all on function public.aani_cleanup_old_notifications() from public, anon;
+grant execute on function public.aani_cleanup_old_notifications() to authenticated;
+
+-- الاقتراح الذكي للأصوات (نظام الأصوات بنمط TikTok):
+-- أصوات عشوائية تماماً (ORDER BY random()) ليعرض الاقتراح التلقائي صوتاً مختلفاً
+-- في كل اختيار/تغيير للصورة — الدالة security invoker فتنطبق سياسات RLS على
+-- public.sounds على المستدعي، والمكملة بترحيل 20270112000000_random_trending_sounds.sql
+create or replace function public.random_trending_sounds(pool_size integer default 10)
+returns table (id uuid, title text, source_video_url text)
+language sql
+stable
+security invoker
+set search_path = public, pg_temp
+as $$
+  select s.id, s.title, s.source_video_url
+  from public.sounds s
+  order by random()
+  limit greatest(1, least(coalesce(pool_size, 10), 50));
+$$;
+revoke all on function public.random_trending_sounds(integer) from public, anon;
+grant execute on function public.random_trending_sounds(integer) to authenticated;

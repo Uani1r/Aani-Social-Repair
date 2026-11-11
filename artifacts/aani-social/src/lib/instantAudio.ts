@@ -157,6 +157,23 @@ export function stopInstant(): void {
 }
 
 /**
+ * استئناف المشغّل الموحّد إن كان هو نفسه يشغّل هذا الرابط أصلاً (بلا إعادة سحب
+ * من الصفر): يعيد التشغيل من الموضع الحالي لحظياً — يُستخدم في شاشة المعاينة
+ * حين يكون الصوت المقترح قد بدأ فور اختيار الصورة فلا تُقاطع المعاينة إعادة تشغيل.
+ * يعيد true إن كفل بالاستئناف بنفسه، وfalse إن لزم تشغيل جديد عبر playInstant.
+ */
+export function resumeInstantIfSame(url: string): boolean {
+  if (!audio || !url || currentSrc !== url) return false;
+  if (!audio.paused) return true; // يعمل أصلاً على نفس الصوت — لا شيء يُفعل
+  const generation = ++playGeneration;
+  void audio.play().catch(() => {
+    if (generation !== playGeneration) return;
+    /* فشل الاستئناف يُتجاهل بصمت — الشاشة تستطيع التشغيل عبر playInstant لاحقاً */
+  });
+  return true;
+}
+
+/**
  * تسخين ذاكرة المتصفح لأول جزء من الصوت عبر طلب HTTP Range (206 Partial Content)
  * — النقر اللاحق على الصوت يبدأ فوراً لأن الأوتار الأولى حاضرة في الكاش والاتصال مفتوح.
  */

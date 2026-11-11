@@ -14,6 +14,7 @@ import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSou
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
+import { playInstant } from '@/lib/instantAudio';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
@@ -952,8 +953,26 @@ export default function Shell({
   // مرجع لملفات المنشور الجاري إنشاؤه (يُستخدم في أحداث نظام الأصوات)
   const selectedFilesRef = useRef(selectedFiles);
   selectedFilesRef.current = selectedFiles;
-  // آخر صوت مقترح تلقائياً (لضمان صوت مختلف في كل مرة) + حالة الصوت الحالي
+  // آخر صوت مقترح تلقائياً — يُحفظ في الذاكرة والجلسة (sessionStorage)
+  // كي لا يتكرر الصوت نفسه في محاولتين متتاليتين حتى بعد إعادة فتح الواجهة
   const lastSuggestedSoundIdRef = useRef<string | null>(null);
+  const readLastSuggestedSoundId = (): string | null => {
+    if (lastSuggestedSoundIdRef.current) return lastSuggestedSoundIdRef.current;
+    try {
+      const stored = window.sessionStorage.getItem('aani:last-suggested-sound-id');
+      if (stored) {
+        lastSuggestedSoundIdRef.current = stored;
+        return stored;
+      }
+    } catch { /* قد يكون التخزين معطلاً في هذا السياق */ }
+    return null;
+  };
+  const rememberSuggestedSoundId = (soundId: string) => {
+    lastSuggestedSoundIdRef.current = soundId;
+    try {
+      window.sessionStorage.setItem('aani:last-suggested-sound-id', soundId);
+    } catch { /* قد يكون التخزين معطلاً في هذا السياق */ }
+  };
   const pendingSoundRef = useRef(pendingSound);
   pendingSoundRef.current = pendingSound;
 
@@ -1178,6 +1197,9 @@ export default function Shell({
     setDestination('feed');
     setCreateError('');
     setAutoSoundMedia(false);
+    // الاقتراح الذكي يبدأ فوراً (بالتوازي مع تجهيز المعاينات) — التشغيل الفوري
+    // للصوت يبدأ لحظة وصوله دون انتظار أي عملية جانبية (Non-blocking Async)
+    void suggestTrendingSound();
     try {
       const previews = await Promise.all(files.map(async file => ({ file, dataUrl: await fileAsDataUrl(file) })));
       setSelectedFiles(previews.map(preview => preview.file));
@@ -1185,8 +1207,6 @@ export default function Shell({
       setImagePreviewImages(previews);
       setShowPublishOptionsSheet(false);
       setShowImagePreviewModal(true);
-      // الاقتراح الذكي: صوت رائج مختلف في كل اختيار/تغيير للصورة
-      void suggestTrendingSound();
     } catch {
       setShowPublishOptionsSheet(false);
       setCreateError('تعذر تجهيز الصور المختارة. حاول اختيارها مرة أخرى.');
@@ -1279,48 +1299,49 @@ export default function Shell({
     handlePublish(imagePostTags, destination, croppedImages.map(image => image.file), 'image');
   };
 
-  // الاقتراح الذكي: صوت رائج مختلف في كل مرة تتغير فيها الصورة
-  // (أكثر 10 أصوات استخداماً من جدول sounds مع ترتيب عشوائي في كل اختيار)
+  // الاقتراح الذكي: صوت عشوائي مختلف في كل مرة تتغير فيها الصورة
+  // (ترتيب عشوائي على مستوى قاعدة البيانات ORDER BY random() عبر دالة
+  // ترحيل 20270112000000، مع احتياط خلط محلي إن لم تُطبَّق الدالة بعد)
   const suggestTrendingSound = async () => {
     if (!supabaseConfigured) return;
     // لا تقترح فوق صوت اختاره المستخدم (يدوياً أو من ريل آخر) — الإلغاء (X) يعيد الاقتراح في المرة القادمة
     if (pendingSoundRef.current) return;
     try {
-      const [{ data: soundRows, error: soundsError }, { data: postRows, error: postsError }] = await Promise.all([
-        supabase.from('sounds')
+      let soundRows: { id: string; title: string; source_video_url: string | null }[] = [];
+      // ترتيب عشوائي في SQL (ORDER BY random() LIMIT 10) — أسرع وأكثر عشوائية
+      const randomized = await supabase.rpc('random_trending_sounds', { pool_size: 10 });
+      if (!randomized.error && Array.isArray(randomized.data) && randomized.data.length > 0) {
+        soundRows = randomized.data as typeof soundRows;
+      } else {
+        // الاحتياط: قاعدة بيانات بلا دالة الترتيب العشوائي بعد → استعلام عادي + خلط محلي
+        const { data: fallbackRows, error: fallbackError } = await supabase
+          .from('sounds')
           .select('id, title, source_video_url')
           .order('created_at', { ascending: false })
-          .limit(30),
-        supabase.from('posts')
-          .select('sound_id')
-          .not('sound_id', 'is', null)
-          .order('created_at', { ascending: false })
-          .limit(500),
-      ]);
-      if (soundsError || !soundRows?.length) return;
-      // الأكثر شيوعاً: ترتيب حسب عدد الاستخدامات في المنشورات
-      const usageCounts = new Map<string, number>();
-      (postsError ? [] : (postRows || [])).forEach(row => {
-        const record = row as Record<string, unknown>;
-        const soundId = typeof record?.sound_id === 'string' ? record.sound_id : null;
-        if (soundId) usageCounts.set(soundId, (usageCounts.get(soundId) || 0) + 1);
-      });
-      const ranked = soundRows
-        .map(sound => ({ sound, usage: usageCounts.get(sound.id) || 0 }))
-        .sort((first, second) => second.usage - first.usage)
-        .slice(0, 10);
-      if (!ranked.length) return;
-      // صوت مختلف في كل مرة: يستبعد آخر اقتراح لضمان التنوع وعدم التكرار
-      const fresh = ranked.filter(item => item.sound.id !== lastSuggestedSoundIdRef.current);
-      const pool = fresh.length > 0 ? fresh : ranked;
-      const chosen = pool[Math.floor(Math.random() * pool.length)].sound;
-      lastSuggestedSoundIdRef.current = chosen.id;
+          .limit(30);
+        if (fallbackError) return;
+        const pool = (fallbackRows || []) as typeof soundRows;
+        for (let index = pool.length - 1; index > 0; index--) {
+          const swap = Math.floor(Math.random() * (index + 1));
+          [pool[index], pool[swap]] = [pool[swap], pool[index]];
+        }
+        soundRows = pool.slice(0, 10);
+      }
+      if (soundRows.length === 0) return;
+      // منع التكرار التام في محاولتين متتاليتين: استبعد آخر صوت مُقترح (من الذاكرة والجلسة)
+      const lastSuggested = readLastSuggestedSoundId();
+      const fresh = soundRows.filter(sound => sound.id !== lastSuggested);
+      const candidates = fresh.length > 0 ? fresh : soundRows;
+      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      rememberSuggestedSoundId(chosen.id);
       setPendingSound({
         id: chosen.id,
         title: chosen.title,
         sourceVideoUrl: chosen.source_video_url || null,
         soundTrim: null,
       });
+      // التشغيل الفوري لحظة وصول الصوت (بالتوازي مع ظهور الصورة بالواجهة) — بلا أي انتظار
+      if (chosen.source_video_url) playInstant(chosen.source_video_url, { loop: true });
       toast.success(`صوت مقترح تلقائياً: ${chosen.title}`);
     } catch {
       // فشل الاقتراح لا يعطل مسار النشر
