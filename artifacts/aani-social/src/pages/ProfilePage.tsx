@@ -12,6 +12,7 @@ import ProfileFeedViewer from '@/components/ProfileFeedViewer';
 import ProfileReelsPlayer from '@/components/ProfileReelsPlayer';
 import { ListSkeleton, ProfileSkeleton, GridSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
+import FollowListView, { type FollowListKind } from '@/components/FollowListView';
 import ProfileStoryArchiveView from '@/components/ProfileStoryArchiveView';
 import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from '@/components/ProfileSettingsPreferences';
 import SavedPostsView from '@/components/SavedPostsView';
@@ -298,6 +299,8 @@ export default function ProfilePage({
   const [taggedPosts, setTaggedPosts] = useState<Post[]>(() => []);
   const [taggedLoading, setTaggedLoading] = useState(false);
   const [taggedError, setTaggedError] = useState<string | null>(null);
+  // شاشة المتابعين/المتابَعين كاملة الشاشة
+  const [followListView, setFollowListView] = useState<FollowListKind | null>(null);
 
   // تحميل مسبق (Preload/Prebuffer) لأول 9 وسائط في القائمة المعروضة
   // حتى يفتح النقر على البطاقة من ذاكرة المتصفح بلا انتظار شبكة.
@@ -2187,8 +2190,8 @@ export default function ProfilePage({
           )}
           <div dir="rtl" className="flex items-center gap-2 text-xs sm:gap-3 sm:text-sm">
             <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedPostCount}</span> <span className="text-[#71767B]">المنشورات</span></div>
-            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span></div>
-            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></div>
+            <button type="button" onClick={() => setFollowListView('following')} className="cursor-pointer whitespace-nowrap transition hover:opacity-80"><span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span></button>
+            <button type="button" onClick={() => setFollowListView('followers')} className="cursor-pointer whitespace-nowrap transition hover:opacity-80"><span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span></button>
           </div>
         </div>
 
@@ -2275,9 +2278,7 @@ export default function ProfilePage({
         </div>
       )}
       {!loading && !error && posts.length === 0 && profileContentTab !== 'tagged' && (
-        <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black">
-          {Array.from({ length: 9 }, (_, index) => <div key={`empty-${index}`} className="aspect-[4/5] bg-neutral-900" />)}
-        </div>
+        <EmptyState className="mt-4 min-h-64" />
       )}
       {!loading && !error && (posts.length > 0 || profileContentTab === 'tagged') && (() => {
         // شبكة إنستغرام: 3 أعمدة — الصور والفيديوهات والريلز فقط،
@@ -2292,10 +2293,7 @@ export default function ProfilePage({
               ? taggedPosts
               : displayProfilePosts.filter(post => post.type !== 'text');
         if (!mediaPosts.length) {
-          // الحالة الفارغة الموحدة: الشعار وكلمة «لا يوجد» فقط
-          if (profileContentTab === 'tagged' && taggedError) {
-            return <p role="alert" className="mt-6 text-center text-sm text-rose-300">{taggedError}</p>;
-          }
+          // الحالة الفارغة الموحدة: الشعار وكلمة «لا يوجد» فقط بلا حدود حمراء
           return <EmptyState className="min-h-64" />;
         }
         return (
@@ -2464,6 +2462,14 @@ export default function ProfilePage({
               {isFollowing ? 'أتابع' : followRequestSent ? 'طلب مرسل' : 'متابعة'}
             </button>
           )}
+        />
+      )}
+      {followListView && (
+        <FollowListView
+          kind={followListView}
+          targetUserId={activeUserId}
+          currentUserId={currentUserId}
+          onClose={() => setFollowListView(null)}
         />
       )}
       <ProfileHighlightsManager
