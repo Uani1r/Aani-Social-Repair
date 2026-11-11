@@ -8,7 +8,7 @@ import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { OPEN_SOUND_PICKER_EVENT, consumeSoundPickerTarget, useExistingSound, type SoundTrimRange } from '@/lib/sounds';
-import { playInstant, seekInstant, stopInstant, warmAudioCache } from '@/lib/instantAudio';
+import { pauseInstant, playInstant, playSoundPreview, seekInstant, stopInstant, warmAudioCache, warmPreviewClip } from '@/lib/instantAudio';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
 
@@ -62,12 +62,14 @@ export default function SoundPickerSheet() {
   const trimDurationLoadedRef = useRef(false);
   const trimTrackRef = useRef<HTMLDivElement>(null);
 
-  // تهيئة التحميل الاستباقي لأول 10 أصوات عند فتح المكتبة: طلب Range صغير
-  // (HTTP 206 Partial Content) يسخّن ذاكرة المتصفح والاتصال فيبدأ الصوت فوراً عند النقر
+  // Pre-warm the first 8 sounds when the library opens: short head clips are
+  // fetched (HTTP 206 Range) and decoded into a RAM AudioBuffer cache so the
+  // tap plays through AudioBufferSourceNode in under 10ms with zero network
+  // wait. Songs are never fully downloaded — only the preview head is cached.
   useEffect(() => {
     if (!open || !sounds) return;
-    sounds.slice(0, 10).forEach(sound => {
-      if (sound.source_video_url) warmAudioCache(sound.source_video_url);
+    sounds.slice(0, 8).forEach(sound => {
+      if (sound.source_video_url) void warmPreviewClip(sound.source_video_url);
     });
   }, [open, sounds]);
 
@@ -163,19 +165,21 @@ export default function SoundPickerSheet() {
     const url = sound.source_video_url;
     if (!url) return;
     if (playingIdRef.current === sound.id) {
-      // إيقاف مؤقت: يعود الزر تلقائياً لرمز المثلث
-      stopInstant();
+      // Pause: the RAM clip (or stream) pauses in place and the button
+      // returns to the play triangle automatically.
+      pauseInstant();
       setPlayingId(null);
       return;
     }
     if (loadingPreviewId === sound.id) return;
-    // صوت واحد فقط في المكتبة (المشغّل الموحّد): أي معاينة سابقة تُوقف فوراً مع إلغاء طلباتها المعلقة
+    // Only one sound plays in the library (the unified player): any previous
+    // preview stops instantly along with its pending requests
     setTrimPlaying(false);
     setPlayingId(null);
-    // الاستجابة اللحظية (Optimistic UI): Spinner في نفس المللي ثانية ثم Pause فور صدور أول نغمة صوتية
+    // Instant response (Optimistic UI): Spinner in the same millisecond then
+    // Pause as soon as the first audible sample is emitted
     setLoadingPreviewId(sound.id);
-    playInstant(url, {
-      loop: true,
+    playSoundPreview(url, {
       onPlaying: () => {
         setLoadingPreviewId(current => (current === sound.id ? null : current));
         setPlayingId(sound.id);
