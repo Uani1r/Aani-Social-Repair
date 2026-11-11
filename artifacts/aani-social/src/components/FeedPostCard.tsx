@@ -24,7 +24,23 @@ import { uploadMedia } from '@/lib/storyUpload';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
+import { defaultSoundTitle, openSoundDetail } from '@/lib/sounds';
 import type { PendingPost } from '@/lib/pendingPosts';
+
+/** عنوان الصوت المعروض للمنشور: الموسيقى المرفقة أو الصوت الأصلي باسم صاحبه */
+const postSoundLabel = (post: Post): string =>
+  post.audio_title || (post.sound_id ? defaultSoundTitle(displayName(post.author)) : '');
+
+/** فتح صفحة الصوت عند توفر sound_id */
+const openPostSound = (post: Post): void => {
+  if (!post.sound_id) return;
+  openSoundDetail({
+    soundId: post.sound_id,
+    title: postSoundLabel(post),
+    creatorName: displayName(post.author),
+    sourceVideoUrl: post.audio_url || undefined,
+  });
+};
 
 type FeedPostComment = {
   id: string;
@@ -365,7 +381,19 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           {isMainFeedVideo ? (
             <div className="video-post-top-meta">
               <time>{formatDate(post.created_at)}</time>
-              {post.audio_title && <span>♫ {post.audio_title}</span>}
+              {postSoundLabel(post) ? (
+                post.sound_id ? (
+                  <button
+                    type="button"
+                    onClick={() => openPostSound(post)}
+                    className="transition hover:text-white"
+                  >
+                    ♫ {postSoundLabel(post)}
+                  </button>
+                ) : (
+                  <span>♫ {postSoundLabel(post)}</span>
+                )
+              ) : null}
             </div>
           ) : (
             <time className="shrink-0 translate-x-2 whitespace-nowrap text-xs text-zinc-500">{formatDate(post.created_at)}</time>
@@ -487,7 +515,19 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
       {post.type === 'photo' && post.audio_url && (
         <div className={`flex items-center gap-2 text-xs text-zinc-400 ${isMainFeedImage ? 'mx-4' : ''} mt-2.5`} aria-label="الصوت المرفق">
           <Music2 size={14} aria-hidden="true" />
-          {post.audio_title && <span className="max-w-[45%] truncate">♫ {post.audio_title}</span>}
+          {postSoundLabel(post) ? (
+            post.sound_id ? (
+              <button
+                type="button"
+                onClick={() => openPostSound(post)}
+                className="max-w-[45%] truncate transition hover:text-white"
+              >
+                ♫ {postSoundLabel(post)}
+              </button>
+            ) : (
+              <span className="max-w-[45%] truncate">♫ {postSoundLabel(post)}</span>
+            )
+          ) : null}
           <audio src={post.audio_url} controls preload="none" loop className="min-w-0 flex-1" />
         </div>
       )}

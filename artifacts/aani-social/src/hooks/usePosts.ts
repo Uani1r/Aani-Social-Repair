@@ -59,6 +59,10 @@ function normalizePostRow(value: unknown): PostRow | null {
       ? value.comment_privacy
       : 'public',
     created_at: value.created_at,
+    // حقول الصوت: تُحمل من الصف لأن عناصر الواجهة (شريط الصوت) تعتمد عليها
+    ...(typeof value.audio_url === 'string' || value.audio_url === null ? { audio_url: value.audio_url } : {}),
+    ...(typeof value.audio_title === 'string' || value.audio_title === null ? { audio_title: value.audio_title } : {}),
+    ...(typeof value.sound_id === 'string' || value.sound_id === null ? { sound_id: value.sound_id } : {}),
     ...(typeof value.reposter_id === 'string' || value.reposter_id === null
       ? { reposter_id: value.reposter_id }
       : {}),
@@ -165,7 +169,7 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     const postIds = Array.from(new Set(repostRows.map(row => row.post_id)));
     const { data: postData, error: postsError } = await supabase
       .from('posts')
-      .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, trim_start, trim_end, hide_likes, hide_comments, comment_privacy')
+      .select('id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, trim_start, trim_end, hide_likes, hide_comments, comment_privacy')
       .in('id', postIds);
     if (postsError) return [];
 
@@ -246,8 +250,8 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         includeProfileOrder = true,
       ) => {
         const selectColumns = kind === 'profile' && includeProfileOrder
-          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, trim_start, trim_end, hide_likes, hide_comments, comment_privacy'
-          : 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, trim_start, trim_end, hide_likes, hide_comments, comment_privacy';
+          ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, trim_start, trim_end, hide_likes, hide_comments, comment_privacy'
+          : 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, trim_start, trim_end, hide_likes, hide_comments, comment_privacy';
         const request = supabase.from('posts').select(selectColumns);
         if (kind === 'profile' && postIds) {
           return request.in('id', postIds).order('created_at', { ascending: false });

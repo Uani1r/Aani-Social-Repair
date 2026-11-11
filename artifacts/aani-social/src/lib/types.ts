@@ -120,6 +120,16 @@ export type PostVisibility = 'public' | 'private';
 export type CommentPrivacy = 'public' | 'followers' | 'custom';
 export type PostDestination = 'feed' | 'reels';
 
+export type Sound = {
+  id: string;
+  title: string;
+  /** رابط الفيديو الأصلي الذي يُشغَّل صوته — بلا مساحة Storage إضافية */
+  source_video_url?: string | null;
+  creator_id?: string | null;
+  creator?: Profile | null;
+  created_at?: string | null;
+};
+
 export type Post = {
   id: string;
   user_id: string;
@@ -156,6 +166,9 @@ export type Post = {
   /** Optional audio / music attached to the post. */
   audio_url?: string | null;
   audio_title?: string | null;
+  /** نظام الأصوات (TikTok): معرّف الصوت المرتبط بالمنشور وسجله */
+  sound_id?: string | null;
+  sound?: Sound | null;
   /** Viewer feedback used by the "مهتم / غير مهتم" menu. */
   feedback?: PostFeedback | null;
 
@@ -216,6 +229,9 @@ export type PostRow = Pick<
   hide_likes?: boolean;
   hide_comments?: boolean;
   comment_privacy?: CommentPrivacy;
+  audio_url?: string | null;
+  audio_title?: string | null;
+  sound_id?: string | null;
   reposter_id?: string | null;
 };
 

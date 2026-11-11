@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode, type SyntheticEvent } from 'react';
 import {
-  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
+  Bookmark, CheckCircle2, Heart, Loader2, MessageCircle, Music2, Repeat, RotateCcw, Send, Volume2, VolumeX, X,
 } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
@@ -22,6 +22,7 @@ import { uploadMedia } from '@/lib/storyUpload';
 import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, appendVideoTrimFragment, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
+import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -56,7 +57,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const captionRef = useRef<HTMLParagraphElement>(null);
   const isOverlayOpen = Boolean(onClose);
   const [isVisible, setIsVisible] = useState(false);
-  const [muted, setMuted] = useState(false);
+  // نظام الأصوات: عند وجود صوت مستعار (من فيديو آخر) يبقى صوت الفيديو مكتوماً
+  // ويعمل الصوت المستعار بدلاً منه — زر الكتم يتحكم بالصوت المستعار.
+  const [muted, setMuted] = useState(() => Boolean(
+    post.sound_id && post.audio_url && post.media_url
+    && post.media_url.replace(/#.*$/, '') !== post.audio_url.replace(/#.*$/, ''),
+  ));
   const [playbackTime, setPlaybackTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
   const [captionHasMore, setCaptionHasMore] = useState(false);
@@ -81,6 +87,13 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     : stripVideoEditFragment(mediaUrl);
   // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
   const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
+  // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
+  const soundLabel = post.audio_title || (post.sound_id ? defaultSoundTitle(displayName(post.author)) : '');
+  const backgroundSoundUrl = post.sound_id && post.audio_url && mediaUrl
+    && baseVideoUrl(mediaUrl) !== baseVideoUrl(post.audio_url)
+    ? post.audio_url
+    : null;
+  const backgroundAudioRef = useRef<HTMLAudioElement>(null);
   const interactions = usePostInteractions(post, currentUserId);
   const liked = interactions.liked;
   const likesCount = interactions.likes;
@@ -164,6 +177,16 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   useEffect(() => () => {
     if (repostNoticeTimerRef.current !== null) window.clearTimeout(repostNoticeTimerRef.current);
   }, []);
+
+  // مزامنة الكتم: مع وجود صوت مستعار يبقى صوت الفيديو مكتوماً
+  // وزر الكتم يتحكم بالصوت المستعار بدلاً منه
+  useEffect(() => {
+    const video = videoRef.current;
+    const backgroundAudio = backgroundAudioRef.current;
+    if (!video) return;
+    video.muted = backgroundSoundUrl ? true : muted;
+    if (backgroundAudio) backgroundAudio.muted = muted;
+  }, [muted, backgroundSoundUrl]);
 
   // إيقاف الصوت وإطلاق موارده عند إزالة الشريحة (الخروج من الريلز):
   // Safari/WebKit قد يواصل تشغيل صوت عنصر فيديو منزوع من الشجرة
@@ -330,9 +353,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     setVideoDuration(Number.isFinite(video.duration) ? video.duration : 0);
     if (!initialPlaybackAppliedRef.current && typeof initialPlaybackTime === 'number' && Number.isFinite(initialPlaybackTime)) {
       initialPlaybackAppliedRef.current = true;
-      video.muted = false;
+      // مع صوت مستعار يبقى صوت الفيديو مكتوماً — الصوت المستعار هو المسموع
+      video.muted = backgroundSoundUrl ? true : false;
       video.volume = 1;
-      setMuted(false);
+      setMuted(Boolean(backgroundSoundUrl));
       seekToTime(video, initialPlaybackTime);
       return;
     }
@@ -361,6 +385,25 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) {
       seekToTrimStart(video);
     }
+    // مزامنة الصوت الخلفي المستعار مع موضع الفيديو
+    const backgroundAudio = backgroundAudioRef.current;
+    if (backgroundSoundUrl && backgroundAudio) {
+      try {
+        backgroundAudio.currentTime = Math.max(0, video.currentTime - (videoTimeRange?.start ?? 0));
+      } catch {
+        /* قد يرفض المتصفح الضبط قبل جهوزية المقطع */
+      }
+      void backgroundAudio.play().catch(() => undefined);
+    }
+  };
+
+  const handleVideoPause = (event: SyntheticEvent<HTMLVideoElement>) => {
+    const backgroundAudio = backgroundAudioRef.current;
+    if (!backgroundSoundUrl || !backgroundAudio) return;
+    // نهاية المقطع القصّ المُدار يدوياً تعيد التشغيل فوراً — لا توقف الصوت الخلفي
+    const video = event.currentTarget;
+    if (videoTimeRange && video.currentTime >= getTrimEnd(video) - 0.04) return;
+    backgroundAudio.pause();
   };
 
   const handleVideoEnded = (event: SyntheticEvent<HTMLVideoElement>) => {
@@ -463,6 +506,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
               onSeeking={handleVideoSeeking}
               onTimeUpdate={handleVideoTimeUpdate}
               onPlay={handleVideoPlay}
+              onPause={handleVideoPause}
               onEnded={handleVideoEnded}
               onDurationChange={event => setVideoDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}
               className="w-full h-full object-cover cursor-pointer"
@@ -487,7 +531,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             playbackGestures.revealControlsBriefly();
             const nextMuted = !muted;
             setMuted(nextMuted);
-            if (videoRef.current) videoRef.current.muted = nextMuted;
+            // مع صوت مستعار يبقى صوت الفيديو مكتوماً ويُكتم الصوت الخلفي بدلاً منه
+            if (videoRef.current) videoRef.current.muted = backgroundSoundUrl ? true : nextMuted;
+            if (backgroundAudioRef.current) backgroundAudioRef.current.muted = nextMuted;
           }}
           className="reel-top-button"
         >
@@ -565,6 +611,16 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
         </>
       )}
 
+      {backgroundSoundUrl && (
+        <audio
+          ref={backgroundAudioRef}
+          src={backgroundSoundUrl}
+          loop
+          preload="auto"
+          aria-hidden="true"
+          className="hidden"
+        />
+      )}
       <div className="reel-gradient-bottom" aria-hidden="true" />
       {/* معلومات الريل والوصف بمحاذاة أسفل الشاشة */}
       <div className="reel-bottom-info" dir="rtl">
@@ -592,7 +648,46 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           <ExpandablePostText text={post.content} className="reel-description" />
         ))}
         <PostMetadataChips tags={post.post_metadata || []} hideMentions className="mt-2" />
-        {post.audio_url && (
+        {/* شريط الصوت بنمط TikTok: اسم الصوت يفتح صفحة الصوت + زر استخدام الصوت */}
+        {(post.sound_id || soundLabel) && (
+          <div className="mt-2 flex items-center gap-2">
+            {post.sound_id ? (
+              <button
+                type="button"
+                onClick={() => openSoundDetail({
+                  soundId: post.sound_id!,
+                  title: soundLabel || defaultSoundTitle(displayName(post.author)),
+                  creatorName: displayName(post.author),
+                  sourceVideoUrl: post.audio_url || undefined,
+                })}
+                className="flex min-w-0 items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white transition hover:bg-white/15"
+              >
+                <Music2 size={13} className="shrink-0" />
+                <span className="max-w-[180px] truncate">{soundLabel || 'الصوت الأصلي'}</span>
+              </button>
+            ) : (
+              <span className="flex min-w-0 items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white">
+                <Music2 size={13} className="shrink-0" />
+                <span className="max-w-[180px] truncate">{soundLabel}</span>
+              </span>
+            )}
+            {post.sound_id && (
+              <button
+                type="button"
+                onClick={() => useExistingSound({
+                  soundId: post.sound_id!,
+                  title: soundLabel || defaultSoundTitle(displayName(post.author)),
+                  sourceVideoUrl: post.audio_url || undefined,
+                })}
+                className="flex shrink-0 items-center gap-1.5 rounded-full bg-[#f1a17f] px-3 py-1.5 text-xs font-bold text-black transition hover:brightness-110"
+              >
+                <Music2 size={12} />
+                استخدام هذا الصوت
+              </button>
+            )}
+          </div>
+        )}
+        {post.audio_url && !backgroundSoundUrl && (
           <audio
             src={post.audio_url}
             controls

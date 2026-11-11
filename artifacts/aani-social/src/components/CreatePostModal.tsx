@@ -42,6 +42,8 @@ type CreatePostModalProps = {
   createError: string;
   /** وسوم محفوظة مسبقاً (مثل إشارة اختيرت من شاشة معاينة الفيديو) */
   initialTags?: PostMetadataTag[];
+  /** الصوت المستعار من نظام الأصوات — يُربط بالفيديو الجديد عند النشر */
+  pendingSound?: { id: string; title: string; sourceVideoUrl?: string | null } | null;
   onPostTextChange: (text: string) => void;
   onRemoveFile: (index: number) => void;
   onPublish: (tags: PostMetadataTag[], destination: PostDestination, audio?: ComposerAudio | null) => void;
@@ -66,6 +68,7 @@ export default function CreatePostModal({
   isSubmitting,
   createError,
   initialTags,
+  pendingSound,
   onPostTextChange,
   onRemoveFile,
   onPublish,
@@ -531,6 +534,14 @@ export default function CreatePostModal({
               />
             </label>
             {tagError && <p role="alert" className="mt-2 text-xs text-rose-300">{tagError}</p>}
+          </div>
+        )}
+
+        {pendingSound && !musicFile && (
+          <div className="mx-6 flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/80">
+            <Music2 size={14} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">♫ {pendingSound.title}</span>
+            <span className="shrink-0 text-[10px] text-white/45">صوت مستعار من الفيديو الأصلي</span>
           </div>
         )}
 
