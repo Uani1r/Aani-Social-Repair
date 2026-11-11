@@ -6,6 +6,7 @@ import ShellOverlayControls from './ShellOverlayControls';
 import UnifiedTopBar from './UnifiedTopBar';
 import CallManager, { CALL_LOG_EVENT, OPEN_INCOMING_CALL_EVENT, type CallLogEventDetail } from '@/components/CallManager';
 import FollowListView, { type FollowListKind } from '@/components/FollowListView';
+import NearbyUsersSheet from '@/components/NearbyUsersSheet';
 import type { ComposerAudio } from '@/components/CreatePostModal';
 import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
@@ -707,6 +708,8 @@ export default function Shell({
   // شاشة المتابعين/المتابَعين كاملة الشاشة — مستضافة في Shell حتى تبقى حية
   // عبر التنقل بين الملفات الشخصية، وتُعاد فتحها من سياقها المحفوظ عند الرجوع
   const [followListView, setFollowListView] = useState<{ kind: FollowListKind; targetUserId: string; restoreSession?: boolean } | null>(null);
+  // شاشة الأشخاص القريبين — تُفتح من زر الدبوس في أعلى الشاشة الرئيسية فقط
+  const [showNearbyUsers, setShowNearbyUsers] = useState(false);
 
   useEffect(() => {
     const handler = (event: Event) => {
@@ -1452,6 +1455,8 @@ export default function Shell({
         <UnifiedTopBar
           hidden={isFeedPath ? unifiedTopBarHidden : chromeHidden}
           unreadCount={unreadCount}
+          showNearbyButton={path === '/' || path === '/feed'}
+          onOpenNearby={() => setShowNearbyUsers(true)}
           stories={isFeedPath ? headerStories : undefined}
           showSettingsButton={path === '/profile'}
           onOpenSettings={() => setShowSettingsModal(true)}
@@ -1551,6 +1556,14 @@ export default function Shell({
           restoreSession={followListView.restoreSession}
           onClose={() => setFollowListView(null)}
           onDismiss={() => setFollowListView(null)}
+        />
+      )}
+      {showNearbyUsers && (
+        <NearbyUsersSheet
+          open={showNearbyUsers}
+          onClose={() => setShowNearbyUsers(false)}
+          currentUserId={userId}
+          currentCity={profile?.city ?? null}
         />
       )}
 

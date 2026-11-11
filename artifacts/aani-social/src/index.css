@@ -7899,3 +7899,162 @@ select,
     transform: scale(0.9);
   }
 }
+
+
+/* ===== زر «الأشخاص القريبون» في الشريط العلوي — الشاشة الرئيسية فقط =====
+   مثبت بأقصى اليمين (position: absolute + right) بلا تعارض مع باقي أيقونات الهيدر:
+   زر الإعدادات يظهر على صفحة الملف الشخصي فقط، وهذا الزر على الشاشة الرئيسية فقط. */
+.unified-nearby-button {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  display: flex;
+  width: 38px;
+  height: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.09);
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 120ms ease, opacity 120ms ease;
+}
+
+.unified-nearby-button:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.unified-nearby-button:active {
+  transform: translateY(-50%) scale(0.94);
+  opacity: 0.85;
+}
+
+.unified-nearby-button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+/* ===== شاشة الأشخاص القريبون (Nearby Users) ===== */
+.nearby-users-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+  color: #fff;
+}
+
+.nearby-users-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+}
+
+.nearby-users-back {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #fff;
+  background: transparent;
+  cursor: pointer;
+}
+
+.nearby-users-back:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.nearby-users-title {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.nearby-users-city {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 4px 10px;
+  color: #c9c9cf;
+  font-size: 12px;
+}
+
+.nearby-users-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.nearby-users-row {
+  display: flex;
+  width: 100%;
+  min-height: 68px;
+  align-items: center;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  padding: 8px 16px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: right;
+  transition: background-color 140ms ease, opacity 140ms ease;
+}
+
+.nearby-users-row:hover,
+.nearby-users-row:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nearby-users-row:active {
+  opacity: 0.85;
+}
+
+.nearby-users-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #a1a1aa;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 10px;
+}
+
+.nearby-users-note {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 24px;
+  color: #a1a1aa;
+  text-align: center;
+}
+
+.nearby-users-note p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.nearby-users-error {
+  padding: 24px 16px;
+  color: #fda4af;
+  font-size: 14px;
+  text-align: center;
+}

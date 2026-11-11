@@ -5,6 +5,9 @@ import { Bell, Plus, Settings } from 'lucide-react';
 type UnifiedTopBarProps = {
   hidden: boolean;
   unreadCount: number;
+  /** إظهار زر «الأشخاص القريبون» — الشاشة الرئيسية فقط */
+  showNearbyButton: boolean;
+  onOpenNearby: () => void;
   stories?: ReactNode;
   showSettingsButton: boolean;
   onOpenSettings: () => void;
@@ -42,6 +45,8 @@ function AaniLogo({ className }: { className: string }) {
 export default function UnifiedTopBar({
   hidden,
   unreadCount,
+  showNearbyButton,
+  onOpenNearby,
   stories,
   showSettingsButton,
   onOpenSettings,
@@ -166,6 +171,48 @@ export default function UnifiedTopBar({
           </div>
         )}
         <header className="unified-top-header">
+          {/* زر الأشخاص القريبون: مثبت بأقصى اليمين (مطلق) — الشاشة الرئيسية فقط */}
+          {showNearbyButton && (
+            <button
+              type="button"
+              aria-label="الأشخاص القريبون"
+              aria-haspopup="dialog"
+              className="unified-nearby-button"
+              onClick={onOpenNearby}
+            >
+              <svg
+                width="24"
+                height="24"
+                viewBox="0 0 100 100"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                {/* دبوس الموقع الأبيض */}
+                <path
+                  d="M50 10 C30 10 15 25 15 45 C15 68 50 90 50 90 C50 90 85 68 85 45 C85 25 70 10 50 10 Z"
+                  fill="#FFFFFF"
+                />
+                <ellipse cx="50" cy="90" rx="20" ry="5" fill="#FFFFFF" opacity="0.3" />
+                {/* مجموعة الأشخاص السوداء داخل الدبوس */}
+                <circle cx="50" cy="36" r="6" fill="#000000" />
+                <path
+                  d="M40 50 C40 44 44 42 50 42 C56 42 60 44 60 50 L60 53 L40 53 Z"
+                  fill="#000000"
+                />
+                <circle cx="36" cy="40" r="4.5" fill="#000000" />
+                <path
+                  d="M29 51 C29 46 32 45 36 45 C38 45 40 46 41 47 L38 52 L29 52 Z"
+                  fill="#000000"
+                />
+                <circle cx="64" cy="40" r="4.5" fill="#000000" />
+                <path
+                  d="M71 51 C71 46 68 45 64 45 C62 45 60 46 59 47 L62 52 L71 52 Z"
+                  fill="#000000"
+                />
+              </svg>
+            </button>
+          )}
           <Link href="/feed" className="unified-profile-section" aria-label="Ani آني">
             <AaniLogo className="unified-brand-logo" />
           </Link>
