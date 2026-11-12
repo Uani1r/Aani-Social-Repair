@@ -52,20 +52,23 @@ begin
   end loop;
 end $ddl$;
 
--- 2) ضمانة توافق: إنشاء Triggers الاستبدال مشروط بوجود الأعمدة نفسها —
---    بيئة تنقصها profiles.cover_url أو profile_highlight_collections
---    (ترحيلات 20261210/20261215 غير مطبقة) لا تفشل هنا؛ يُنشأ كل Trigger
---    فقط عندما تكون أعمدته موجودة فعلاً، مع إشعار صريح لما يُتخطى.
+-- 2) ضمانة توافق: إنشاء Triggers الاستبدال مشروط بوجود الأعمدة والجداول
+--    و existence دوال الـ Trigger نفسها (aani_queue_media_if_replaced) —
+--    مخطط جزئي ناقص أي من الثلاثة لا يفشل؛ يُنشأ كل Trigger فقط عندما
+--    تكتمل مقوماته فعلاً، مع إشعار صريح لما يُتخطى.
 --    (هذا لا يعدّل ترحيلاً مطبقاً — Triggers مطابقة لترحيل 24 عند اكتمال المخطط)
 do $ddl$
 declare
   has_profiles_table boolean := to_regclass('public.profiles') is not null;
   has_collections_table boolean := to_regclass('public.profile_highlight_collections') is not null;
+  has_queue_fn boolean := to_regprocedure('public.aani_queue_media_if_replaced()') is not null;
   has_avatar boolean;
   has_profile_cover boolean;
   has_collection_cover boolean;
 begin
-  if has_profiles_table then
+  if not has_queue_fn then
+    raise notice 'الدالة aani_queue_media_if_replaced غير موجودة — يُتخطى إنشاء Triggers الاستبدال (طبِّق ترحيل 20270124000000 أولاً)';
+  elsif has_profiles_table then
     select
       exists (select 1 from information_schema.columns
               where table_schema = 'public' and table_name = 'profiles' and column_name = 'avatar_url'),
@@ -86,7 +89,7 @@ begin
     raise notice 'public.profiles غير موجود — يُتخطى Trigger الاستبدال';
   end if;
 
-  if has_collections_table then
+  if has_queue_fn and has_collections_table then
     select exists (select 1 from information_schema.columns
                    where table_schema = 'public' and table_name = 'profile_highlight_collections'
                      and column_name = 'cover_url')
@@ -101,7 +104,7 @@ begin
     else
       raise notice 'عمود cover_url غير موجود في profile_highlight_collections — يُتخطى Trigger (طبّق ترحيل 20261215000000 أولاً)';
     end if;
-  else
+  elsif not has_collections_table then
     raise notice 'public.profile_highlight_collections غير موجود — يُتخطى Trigger (طبّق ترحيل 20261212000000 أولاً)';
   end if;
 end $ddl$;

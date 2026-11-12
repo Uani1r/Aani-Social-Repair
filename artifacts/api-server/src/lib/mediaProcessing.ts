@@ -290,15 +290,21 @@ function probeOutput(outputPath: string): Promise<{
   height: number;
   /** ترميز أول مسار فيديو في الناتج (h264 متوقع) — للتحقق لا للعرض. */
   videoCodec: string | null;
-  /** معدل إطارات الناتج من ffprobe (r_frame_rate) — للتحقق لا للعرض. */
-  fps: number | null;
+  /**
+   معدل الإطارات من ffprobe — من مصدرين مستقلين: r_frame_rate (السعر
+   الأساسي) وavg_frame_rate (الفعلي: الإطارات ÷ المدة). الفيديو VFR قد
+   يظهر r_frame_rate مرتفعاً وavg أقل — نتحقق من كليهما حتى لا يمر أي
+   مقطع يتجاوز 30fps فعلياً. null = غير قابل للقراءة → رفض صريح.
+   */
+  rFrameRate: number | null;
+  avgFrameRate: number | null;
   /** عدد مسارات الصوت في الناتج — لإثبات إزالة الصوت الأصلي عند العزل. */
   audioStreamCount: number;
   audioCodec: string | null;
 }> {
   const args = [
     "-v", "error",
-    "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate:format=duration",
+    "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate:format=duration",
     "-of", "json",
     outputPath,
   ];
@@ -327,7 +333,7 @@ function probeOutput(outputPath: string): Promise<{
       }
       try {
         const result = JSON.parse(stdout) as {
-          streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number; r_frame_rate?: string }>;
+          streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number; r_frame_rate?: string; avg_frame_rate?: string }>;
           format?: { duration?: string };
         };
         const streams = Array.isArray(result.streams) ? result.streams : [];
@@ -338,19 +344,20 @@ function probeOutput(outputPath: string): Promise<{
         if (![width, height, duration].every(Number.isFinite) || width <= 0 || height <= 0 || duration <= 0) {
           throw new Error("ffprobe returned invalid video dimensions or duration.");
         }
-        let fps: number | null = null;
-        const frameRate = typeof video?.r_frame_rate === "string" ? video.r_frame_rate : "";
-        const frameRateMatch = frameRate.match(/^(\d+)\/(\d+)$/);
-        if (frameRateMatch && Number(frameRateMatch[2]) > 0) {
-          fps = Number(frameRateMatch[1]) / Number(frameRateMatch[2]);
-        }
+        /** يحلل صيغة "num/den" — ترجع null عند غياب القيمة أو المقام الصفري */
+        const parseRate = (value?: string): number | null => {
+          const match = typeof value === "string" ? value.match(/^(\d+)\/(\d+)$/) : null;
+          if (!match || Number(match[2]) <= 0) return null;
+          return Number(match[1]) / Number(match[2]);
+        };
         const audio = streams.find(stream => stream.codec_type === "audio");
         resolve({
           duration,
           width,
           height,
           videoCodec: typeof video?.codec_name === "string" && video.codec_name ? video.codec_name : null,
-          fps,
+          rFrameRate: parseRate(video?.r_frame_rate),
+          avgFrameRate: parseRate(video?.avg_frame_rate),
           audioStreamCount: streams.filter(stream => stream.codec_type === "audio").length,
           audioCodec: typeof audio?.codec_name === "string" && audio.codec_name ? audio.codec_name : null,
         });
@@ -457,18 +464,26 @@ async function processClaimedMediaAsset(
 
     // إثبات المواصفات على الناتج نفسه (لا ادعاء) — أي اختلال يفشل المعالجة
     // صراحةً قبل الرفع، ولا يُرفع الملف باعتباره مطابقاً للمواصفات أبداً:
-    if (metadata.videoCodec && metadata.videoCodec !== "h264") {
+    if (!metadata.videoCodec) {
+      throw new Error("Could not verify the video codec of the processed output — refusing to mark it as H.264.");
+    }
+    if (metadata.videoCodec !== "h264") {
       throw new Error(`The processed video was encoded as ${metadata.videoCodec} instead of H.264.`);
     }
     const maxSide = Math.max(metadata.width, metadata.height);
     if (maxSide > 1280) {
       throw new Error(`The processed video exceeds the 1280px max side (${maxSide}px).`);
     }
-    if (metadata.fps === null) {
-      throw new Error("Could not verify the frame rate of the processed video.");
+    // معدل الإطارات: كلا المصدرين إلزاميان (r_frame_rate + avg_frame_rate) —
+    // الفيديو VFR قد يتجاوز 30fps فعلياً حتى لو كان أحد المصدرين منخفضاً؛
+    // غياب أي قيمة أو تجاوز الحد في أي منهما → فشل صريح، لا مرور بتحقق جزئي.
+    if (metadata.rFrameRate === null || metadata.avgFrameRate === null) {
+      throw new Error("Could not verify the frame rate of the processed output (r_frame_rate/avg_frame_rate missing).");
     }
-    if (metadata.fps > 30.01) {
-      throw new Error(`The processed video exceeds the 30fps limit (${metadata.fps}).`);
+    if (metadata.rFrameRate > 30.01 || metadata.avgFrameRate > 30.01) {
+      throw new Error(
+        `The processed video exceeds the 30fps limit (r_frame_rate=${metadata.rFrameRate}, avg_frame_rate=${metadata.avgFrameRate}).`,
+      );
     }
     // إثبات العزل فعلياً: عند اختيار صوت بديل يجب ألا يبقى أي مسار صوتي
     // في الفيديو النهائي — إن بقي واحد فالمعالجة تفشل صراحةً بدل تسليم

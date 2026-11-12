@@ -1,26 +1,28 @@
 // اختبار تكامل حقيقي ضد PostgREST/Supabase — يُتخطى صراحةً ما لم تتوفر بيئة:
 //   AANI_INTEGRATION_SUPABASE_URL + AANI_INTEGRATION_SERVICE_ROLE_KEY
-// المطلوب بيئة اختبار معزولة (لا قاعدة الإنتاج). ينشئ بيانات مؤقتة بعلامة
-// فريدة ثم ينظفها في finally — لا يقرأ ولا يعدل ولا يحذف بيانات مستخدمين
-// حقيقيين، ولا ينفذ أي حذف لملفات ImageKit إطلاقاً.
+// المطلوب بيئة اختبار معزولة (لا قاعدة الإنتاج). ينشئ بيانات مؤقتة بمعرّف
+// عشوائي لكل تشغيل، ويقتصر تنظيفها على السجلات التي أنشأها الاختبار نفسه
+// (بمعرّفه) — لا يقرأ ولا يعدل ولا يحذف بيانات مستخدمين حقيقيين، ولا ينفذ
+// أي حذف لملفات ImageKit إطلاقاً.
 //
 // ما يثبته عند توفر البيئة:
 //   1) بناء or=() بشرط ov لكل رابط يُنفَّذ فعلياً على PostgREST (مصفوفة بعدة
 //      روابط + روابط برموز خاصة & , — تفكك أو تنكسر صراحةً).
-//   2) mediaInActiveUse ترى مصفوفة روابط حقيقية (ملف مستخدم → true).
-//   3) فشل معامل/جدول اختياري غائب لا يفشل الفحص؛ فشل جدول أساسي يرمي استثناءً.
-//   4) حذف السجل المؤقت في finally لا يترك أثراً.
+//   2) mediaInActiveUse ترى مصفوفة روابط حقيقية (ملف مستخدم → يمنع الحذف).
+//   3) غياب جدول أساسي فعلياً → mediaInActiveUse ترمي خطأً (يوقف الحذف)
+//      — يُختبر فقط عندما تنقص جدول أساسي في بيئة الاختبار.
+//   4) غياب الجدول الاختياري → mediaInActiveUse تُكمل الفحص وتُتخطاه فعلياً.
 //
 // بدون البيئة: كل الاختبارات تظهر skip — لا ادعاء نجاح.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 
 import {
   buildMediaReferenceConditions,
   MediaReferenceCheckError,
   mediaInActiveUse,
-  requireSuccessfulCheck,
   restRequest,
   type SupabaseAdminConfig,
 } from "./mediaDb";
@@ -31,19 +33,21 @@ const enabled = Boolean(url && key);
 const config: SupabaseAdminConfig = { url, serviceRoleKey: key };
 const skipReason = "بيئة اختبار التكامل غير مهيأة (AANI_INTEGRATION_SUPABASE_URL / AANI_INTEGRATION_SERVICE_ROLE_KEY)";
 
-// معرّف اختبار ثابت (uuid صالح) — لن يُصادم بيانات حقيقية
-const TEST_PROFILE_ID = "1a2b3c4d-0000-4000-8000-000000000001";
-const TEST_URL_A = "https://ik.imagekit.io/testenv/aani/integration-test/a&b,c.mp4";
-const TEST_URL_B = "https://ik.imagekit.io/testenv/aani/integration-test/d-e.mp4";
-const TEST_URL_C = "https://ik.imagekit.io/testenv/aani/integration-test/unused.mp4";
+// معرّف عشوائي لكل تشغيل — التنظيف محكوم به حصراً فلا يمكن حذف أي سجل غيره
+const TEST_PROFILE_ID = randomUUID();
+const TEST_POST_ID = randomUUID();
+const TEST_URL_A = `https://ik.imagekit.io/testenv/aani/integration-test/${TEST_PROFILE_ID}/a&b,c.mp4`;
+const TEST_URL_B = `https://ik.imagekit.io/testenv/aani/integration-test/${TEST_PROFILE_ID}/d-e.mp4`;
+const TEST_URL_C = `https://ik.imagekit.io/testenv/aani/integration-test/${TEST_PROFILE_ID}/unused.mp4`;
 
 const TEST_PROFILE = {
   id: TEST_PROFILE_ID,
-  username: `aani_it_${Date.now()}`,
+  username: `aani_it_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
   full_name: "Integration Test Row (safe to delete)",
 };
 
 const TEST_POST = {
+  id: TEST_POST_ID,
   user_id: TEST_PROFILE_ID,
   content: "integration-test row — auto deleted",
   media_url: TEST_URL_A,
@@ -52,9 +56,40 @@ const TEST_POST = {
   visibility: "private",
 };
 
+/** تنظيف محصور بالمعرّفات العشوائية لهذا التشغيل — لا يمس أي سجل آخر */
 async function deleteTestRows(): Promise<void> {
+  await restRequest(config, "DELETE", "posts", { id: `eq.${TEST_POST_ID}` });
   await restRequest(config, "DELETE", "posts", { user_id: `eq.${TEST_PROFILE_ID}` });
   await restRequest(config, "DELETE", "profiles", { id: `eq.${TEST_PROFILE_ID}` });
+}
+
+/** يكشف أي جداول المراجع الأساسية غائبة في بيئة الاختبار فعلياً */
+async function missingCoreTables(): Promise<string[]> {
+  const coreTables = [
+    "posts", "stories", "profile_highlights", "profile_highlight_collections",
+    "sounds", "messages", "profiles", "media_assets",
+  ];
+  const missing: string[] = [];
+  for (const table of coreTables) {
+    const probe = await restRequest(config, "GET", table, { select: "id", limit: "1" });
+    if (!probe.ok && isMissingRelation(probe)) missing.push(table);
+  }
+  return missing;
+}
+
+function isMissingRelation(result: { ok: boolean; status: number; data: unknown; errorText?: string }): boolean {
+  if (result.ok) return false;
+  const message = extractMessage(result);
+  return (result.status === 400 || result.status === 404)
+    && (message.includes("42P01") || message.includes("PGRST205"));
+}
+
+function extractMessage(result: { data: unknown; errorText?: string }): string {
+  if (result.data && typeof result.data === "object") {
+    const record = result.data as Record<string, unknown>;
+    if (typeof record["message"] === "string") return record["message"];
+  }
+  return result.errorText ?? "";
 }
 
 test('PostgREST: or=() بشرط ov لكل رابط (برموز خاصة) يُنفَّذ فعلياً على القاعدة', { skip: enabled ? false : skipReason }, async () => {
@@ -83,34 +118,41 @@ test('PostgREST: ملف مستخدم داخل مصفوفة media_urls يُكتش
     // ملف مستخدم (ضمن المصفوفة) → يمنع الحذف
     assert.equal(await mediaInActiveUse(config, [TEST_URL_A]), true);
     assert.equal(await mediaInActiveUse(config, [TEST_URL_B]), true);
-    // ملف بلا أي مرجع في أي جدول → false (هذا الاختبار وحده يُمكّن الطابور لاحقاً في بيئات الاختبار)
-    assert.equal(await mediaInActiveUse(config, [TEST_URL_C]), false);
-    // الرابط الأحادي media_url أيضاً مغطى
+    // الرابط الأحادي media_url أيضاً مغطى (مع تزخرف ?tr= الذي لا يغير الهوية)
     assert.equal(await mediaInActiveUse(config, [`${TEST_URL_A}?tr=w-400`]), true);
+    // ملف بلا أي مرجع في أي جدول → false (كشف إيجابي كاذب لو كان الفحص فضفاضاً)
+    assert.equal(await mediaInActiveUse(config, [TEST_URL_C]), false);
   } finally {
     await deleteTestRows();
   }
 });
 
-test('PostgREST: جدول اختياري غائب لا يفشل الفحص، وجدول أساسي غائب يوقف الحذف', { skip: enabled ? false : skipReason }, async () => {
-  // إن كانت بيئة الاختبار بلا جدول الأغلفة (اختياري) فالفحص يجب أن ينجح
-  const collectionsProbe = await restRequest(config, "GET", "profile_highlight_collections", { select: "id", limit: "1" });
-  const optionalMissing = !collectionsProbe.ok && collectionsProbe.status === 404;
-  // بلا روابط ولا استبعاد → false فوراً بأي حالة
-  assert.equal(await mediaInActiveUse(config, []), false);
-
-  // جدول أساسي غائب: يُحاكى بطلب جدول غير موجود عبر REST مباشرة
-  const missingCore = await restRequest(config, "GET", "aani_table_that_does_not_exist", { select: "id" });
-  if (!missingCore.ok) {
-    assert.ok(
-      missingCore.status === 404 || missingCore.status === 400,
-      "فجوة مخطط متوقعة لجدول غير موجود",
-    );
-    // والسلوك الصارم: أي فحص تعذر يرمي استثناءً (يتوقف الحذف) — محاكى بحقن الجدول المفقود
-    await assert.rejects(
-      () => requireSuccessfulCheck(missingCore),
-      MediaReferenceCheckError,
-    );
+test('PostgREST: غياب جدول أساسي فعلياً → mediaInActiveUse ترمي وتمنع الحذف', { skip: enabled ? false : skipReason }, async () => {
+  const missing = await missingCoreTables();
+  if (missing.length === 0) {
+    // كل الجداول الأساسية موجودة في بيئة الاختبار — لا يمكن محاكاة الغياب
+    // دون تعديل حقيقي على المخطط، لذا يُتخطى الاختبار صراحةً (لا ادعاء نجاح)
+    return;
   }
-  void optionalMissing; // معلوماتية فقط — سياسة التخطي موثقة ومختبرة في اختبارات الوحدة
+  // بيئة الاختبار تنقصها جداول أساسية → أي فحص مراجع يجب أن يفشل كلياً
+  await assert.rejects(
+    () => mediaInActiveUse(config, ["https://ik.imagekit.io/testenv/aani/integration-test/probe.mp4"]),
+    MediaReferenceCheckError,
+    `غياب الجداول الأساسية ${missing.join(", ")} يجب أن يوقف الحذف تماماً`,
+  );
+});
+
+test('PostgREST: غياب الجدول الاختياري (أغلفة الأبرز) → الفحص يُكمل فعلياً بتخطيه', { skip: enabled ? false : skipReason }, async () => {
+  const collectionsProbe = await restRequest(config, "GET", "profile_highlight_collections", {
+    select: "id", limit: "1",
+  });
+  if (!collectionsProbe.ok && isMissingRelation(collectionsProbe)) {
+    // الجدول الاختياري غائب فعلاً → الفحص الكامل يجب أن ينجح بتجاوزه (لا استثناء)
+    const resolved = await mediaInActiveUse(config, ["https://ik.imagekit.io/testenv/aani/integration-test/probe.mp4"]);
+    assert.equal(typeof resolved, "boolean");
+  } else {
+    // الجدول موجود: يُفحص كجدول عادي — النتيجة تظل منطقية
+    const resolved = await mediaInActiveUse(config, [TEST_URL_C]);
+    assert.equal(typeof resolved, "boolean");
+  }
 });

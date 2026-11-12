@@ -339,9 +339,6 @@ test('verifyMp4Passthrough: hevc1 مخفي بعد mdat يُرفض', async () => 
   const file = new File([bytes], 'video.mp4', { type: 'video/mp4' });
   assert.equal(await verifyMp4Passthrough(file), false);
 });
-  const file = new File([bytes], 'video.mp4', { type: 'video/mp4' });
-  assert.equal(await verifyMp4Passthrough(file), false);
-});
 
 /* ------------------------------------------------------------------ */
 /* المواصفة الموحدة للفيديو: أقصى ضلع 1280 و30fps كحد نهائي            */
