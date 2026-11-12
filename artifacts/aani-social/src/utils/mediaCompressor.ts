@@ -291,7 +291,12 @@ async function loadMediabunny(): Promise<MediabunnyModule | null> {
   if (mediabunnyModule) return mediabunnyModule;
   if (mediabunnyUnavailable) return null;
   try {
-    mediabunnyModule = (await import('mediabunny')) as unknown as MediabunnyModule;
+    // الاسم الحرفي للحزمة يعيش داخل mediabunnyLoader.ts فقط: إن لم تكن
+    // الحزمة مثبتة يفشل تحميل الوحدة المنفصلة وحدها (import مرفوض يُلتقط
+    // هنا) ولا يمنع إقلاع التطبيق — vite:import-analysis لا يرى الحزمة
+    // في أي وحدة من وحدات الإقلاع الأساسية.
+    const loader = await import('./mediabunnyLoader');
+    mediabunnyModule = (await loader.loadMediabunnyModule()) as MediabunnyModule;
   } catch (error) {
     console.warn('[mediaCompressor] تعذر تحميل mediabunny — سيُستخدم المسار الاحتياطي.', error);
     mediabunnyUnavailable = true;
@@ -307,8 +312,8 @@ async function ensureAacEncoder(mb: MediabunnyModule): Promise<void> {
   aacEncoderReady = true;
   try {
     if (!(await mb.canEncodeAudio('aac'))) {
-      const extension = (await import('@mediabunny/aac-encoder')) as { registerAacEncoder: () => void };
-      extension.registerAacEncoder();
+      const loader = await import('./mediabunnyLoader');
+      (await loader.loadAacEncoderModule()).registerAacEncoder();
     }
   } catch (error) {
     console.warn('[mediaCompressor] تعذر تحميل مُرمِّز AAC الاحتياطي — سيُعتمد ترميز النظام.', error);

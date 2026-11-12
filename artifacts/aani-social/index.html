@@ -32,6 +32,48 @@
         document.documentElement.style.setProperty('--app-font-family', "'Alexandria', sans-serif");
       }
     </script>
+    <script>
+      // مراقب أخطاء الإقلاع: إن تعطل تحميل التطبيق قبل ظهور أي محتوى في
+      // #root يُطبع نص الخطأ على الشاشة مباشرة بدل الشاشة البيضاء الصامتة
+      // (مفيد للمعاينة من iPhone حيث لا يوجد تبويب Console).
+      (function () {
+        function formatReason(reason) {
+          if (reason instanceof Error) return reason.stack || reason.message || String(reason);
+          if (typeof reason === 'string') return reason;
+          try { return JSON.stringify(reason); } catch (error) { return String(reason); }
+        }
+        function show(message) {
+          try { console.error('[aani-boot]', message); } catch (error) { /* تجاهل */ }
+          var root = document.getElementById('root');
+          if (root && root.childElementCount > 0) return; // التطبيق يعمل — الخطأ ليس إقلاعياً
+          var panel = document.getElementById('aani-boot-error');
+          if (!panel) {
+            panel = document.createElement('pre');
+            panel.id = 'aani-boot-error';
+            panel.setAttribute('dir', 'rtl');
+            panel.style.cssText = 'position:fixed;inset:0;z-index:2147483647;margin:0;overflow:auto;background:#18181b;color:#fca5a5;padding:20px;font:13px/1.8 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;';
+            panel.textContent = 'تعذر إقلاع التطبيق (Aani Boot Error):\n\n';
+            (document.body || document.documentElement).appendChild(panel);
+            window.setInterval(function () {
+              var currentRoot = document.getElementById('root');
+              var currentPanel = document.getElementById('aani-boot-error');
+              if (currentRoot && currentRoot.childElementCount > 0 && currentPanel) {
+                currentPanel.remove();
+              }
+            }, 1000);
+          }
+          panel.textContent += message + '\n\n';
+        }
+        window.addEventListener('error', function (event) {
+          var message = String(event.message || 'خطأ غير معروف');
+          if (event.filename) message += '\n' + event.filename + ':' + event.lineno + ':' + event.colno;
+          show(message);
+        });
+        window.addEventListener('unhandledrejection', function (event) {
+          show('Promise rejected: ' + formatReason(event.reason));
+        });
+      })();
+    </script>
   </head>
   <body class="bg-zinc-950 text-white">
     <div id="root"></div>

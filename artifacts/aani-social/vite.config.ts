@@ -89,7 +89,9 @@ export default defineConfig(async ({ mode }) => {
       host: '0.0.0.0',
       allowedHosts: true,
       hmr: {
-        overlay: false,
+        // طبقة أخطاء Vite ظاهرة على الشاشة نفسها بدل شاشة بيضاء صامتة —
+        // ضرورية للمعاينة من iPhone حيث لا يوجد Console مقروء.
+        overlay: true,
       },
       fs: {
         strict: true,
