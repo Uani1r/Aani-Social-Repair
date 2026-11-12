@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Aani — Fresh clean schema for the NEW Supabase project
--- (المصادقة والجداول فقط — بدون Supabase Storage إطلاقاً؛ الوسائط على Cloudflare R2)
+-- (المصادقة والجداول فقط — بدون Supabase Storage إطلاقاً؛ كل الصور والفيديوهات والصور الشخصية عبر ImageKit.io)
 --
 -- التشغيل: Supabase SQL Editor → New query → الصق الملف كاملاً → Run.
 -- مكتوب لمشروع جديد فارغ، بالترتيب الصحيح للعلاقات، بلا خطوات "إصلاح" قديمة.
@@ -808,8 +808,9 @@ grant select, insert on public.story_views to authenticated;
 grant select on public.story_mentions to authenticated;
 grant select, insert, delete on public.user_blocks to authenticated;
 
--- 14) Realtime (الرسائل والتفاعلات المباشرة) ================================
+-- 14) Realtime (الرسائل والإشعارات والتفاعلات المباشرة) ======================
 alter table public.messages replica identity full;
+alter table public.notifications replica identity full;
 alter table public.posts replica identity full;
 alter table public.likes replica identity full;
 alter table public.comments replica identity full;
@@ -821,7 +822,7 @@ do $$
 declare target text;
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
-    foreach target in array array['messages', 'posts', 'likes', 'comments', 'reposts', 'bookmarks', 'post_shares']
+    foreach target in array array['messages', 'notifications', 'posts', 'likes', 'comments', 'reposts', 'bookmarks', 'post_shares']
     loop
       begin
         execute format('alter publication supabase_realtime add table public.%I', target);
@@ -835,8 +836,9 @@ end $$;
 
 -- ============================================================================
 -- ملاحظات نهائية:
--- 1. لا يوجد أي قسم storage.buckets هنا عن قصد: التخزين انتقل إلى Cloudflare R2،
---    وكل روابط الوسائط تُخزَّن كعناوين R2 عامة كاملة في media_url/video_url.
+-- 1. لا يوجد أي قسم storage.buckets هنا عن قصد: الصور والفيديوهات والصور الشخصية
+--    تُرفع وتُعرض عبر ImageKit.io، وكل روابط الوسائط تُخزَّن كعناوين ImageKit
+--    عامة كاملة في media_url/video_url/avatar_url.
 -- 2. قيم أعمدة posts تطابق تماماً ما يطلبه usePosts.ts و ProfileReelsPlayer.tsx،
 --    فلن يعيد PostgREST أي خطأ 42703 (عمود ناقص) أو PGRST204.
 -- 3. التحقق بعد التشغيل:

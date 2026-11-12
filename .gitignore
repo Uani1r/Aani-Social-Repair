@@ -53,3 +53,8 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local env files — server secrets must never be committed
+.env
+*.local
+.env.local

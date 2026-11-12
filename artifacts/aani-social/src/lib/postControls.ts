@@ -15,7 +15,8 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
-import { supabase, supabaseConfigured, storageBucket } from "./supabase";
+import { supabase, supabaseConfigured } from "./supabase";
+import { uploadMedia } from "./storyUpload";
 import type { Post, PostFeedback } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -371,20 +372,17 @@ export async function setPostAudio(
   }
 }
 
-/** Uploads a track to the existing storage bucket and returns its public URL. */
+/** Uploads a track to ImageKit (direct browser upload) and returns its public URL. */
 export async function uploadPostAudio(
   file: File,
   userId: string,
   postId: string,
 ): Promise<PostAudio> {
-  if (!supabaseConfigured) throw new Error("قاعدة البيانات غير مهيأة");
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
   const path = `${userId}/audio-${postId}-${Date.now()}-${safeName}`;
-  const { error } = await supabase.storage
-    .from(storageBucket)
-    .upload(path, file, { upsert: true, contentType: file.type || "audio/mpeg" });
-  if (error) throw error;
-  const url = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+  // الرفع مباشرة إلى ImageKit — يعيد الرابط العام النهائي ويُسجَّل في
+  // سجل روابط supabase.ts فتقرأه أي getPublicUrl لاحقة بشكل صحيح
+  const url = await uploadMedia({ file, path });
   return { url, title: file.name.replace(/\.[^.]+$/, "") };
 }
 
