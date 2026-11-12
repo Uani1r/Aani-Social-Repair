@@ -48,17 +48,19 @@ type ImageKitAuthParams = {
   signature: string;
 };
 
-let cachedAuth: { params: ImageKitAuthParams; expiresAt: number } | null = null;
-
 async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthParams> {
-  if (cachedAuth && Date.now() < cachedAuth.expiresAt) return cachedAuth.params;
-
+  // بلا كاش نهائياً: توكن ImageKit يُقبل مرة واحدة فقط — كل محاولة رفع
+  // (أول مرة، إعادة محاولة، عدة ملفات، أو فيديو ثم صوته) تحصل على توقيع
+  // طازج من الخادم. إعادة استخدام التوكن كانت تجعل ImageKit يرفض الرفع
+  // برسالة "token has been used before" (HTTP 400).
   const { data } = await supabase.auth.getSession();
   const accessToken = data.session?.access_token;
   if (!accessToken) throw new Error('يجب تسجيل الدخول قبل رفع الوسائط.');
 
   const response = await fetch('/api/media/imagekit-auth', {
     headers: { authorization: `Bearer ${accessToken}` },
+    // ترويسات تمنع أي تخزين مؤقت على مستوى الشبكة أيضاً
+    cache: 'no-store',
     signal,
   });
   const result = await response.json().catch(() => null) as
@@ -68,15 +70,13 @@ async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthPara
     throw new Error(typeof result?.error === 'string' ? result.error : 'تعذر تجهيز توقيع رفع الوسائط.');
   }
 
-  const params: ImageKitAuthParams = {
+  return {
     urlEndpoint: result.urlEndpoint,
     publicKey: result.publicKey,
     token: result.token,
     expire: result.expire,
     signature: result.signature,
   };
-  cachedAuth = { params, expiresAt: Date.now() + 25 * 60 * 1000 };
-  return params;
 }
 
 function detectPreset(file: File): MediaPreset | null {

@@ -71,14 +71,24 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
         .update(`${imagekit.privateKey}${token}${expire}`)
         .digest("hex");
 
-      return res.status(200).json({
-        success: true,
-        urlEndpoint: imagekit.urlEndpoint,
-        publicKey: imagekit.publicKey,
-        token,
-        expire,
-        signature,
-      });
+      return res
+        .status(200)
+        // منع التخزين المؤقت على مستوى المتصفح (خاصة Safari): التوكن أحادي
+        // الاستخدام — أي استجابة مخزنة أو معاد استخدامها تعني رفضاً من ImageKit
+        .set({
+          "Cache-Control": "no-store, no-cache, must-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0",
+        })
+        .json({
+          success: true,
+          urlEndpoint: imagekit.urlEndpoint,
+          publicKey: imagekit.publicKey,
+          // UUID v4 جديد داخل معالج الطلب نفسه عند كل استدعاء
+          token: crypto.randomUUID(),
+          expire,
+          signature,
+        });
     } catch (error) {
       logger.error({ err: error }, "ImageKit auth generation failed");
       return res.status(500).json({ success: false, error: "Could not generate ImageKit auth parameters." });
