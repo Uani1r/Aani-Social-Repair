@@ -95,22 +95,28 @@ export function registerUploadedMediaUrl(path: string, url: string): void {
 
 type StorageBucketApiLike = ReturnType<typeof supabase.storage.from>;
 
-const originalStorageFrom = supabase.storage.from.bind(supabase.storage);
+// محمي داخل try/catch: أي فشل في هذه الرقعة لا يجعل التطبيق شاشة بيضاء —
+// يبقى التخزين الأصلي يعمل كما كان.
+try {
+  const originalStorageFrom = supabase.storage.from.bind(supabase.storage);
 
-(supabase.storage as unknown as { from: (bucket: string) => StorageBucketApiLike }).from = (
-  bucket: string,
-): StorageBucketApiLike => {
-  const bucketApi = originalStorageFrom(bucket);
-  const originalGetPublicUrl = bucketApi.getPublicUrl.bind(bucketApi);
-  (bucketApi as unknown as { getPublicUrl: unknown }).getPublicUrl = (
-    path: string,
-    options?: Parameters<typeof originalGetPublicUrl>[1],
-  ): ReturnType<typeof originalGetPublicUrl> => {
-    const registered = uploadedMediaUrlRegistry.get(normalizeMediaPathKey(path));
-    if (registered) {
-      return { data: { publicUrl: registered }, error: null } as ReturnType<typeof originalGetPublicUrl>;
-    }
-    return originalGetPublicUrl(path, options);
+  (supabase.storage as unknown as { from: (bucket: string) => StorageBucketApiLike }).from = (
+    bucket: string,
+  ): StorageBucketApiLike => {
+    const bucketApi = originalStorageFrom(bucket);
+    const originalGetPublicUrl = bucketApi.getPublicUrl.bind(bucketApi);
+    (bucketApi as unknown as { getPublicUrl: unknown }).getPublicUrl = (
+      path: string,
+      options?: Parameters<typeof originalGetPublicUrl>[1],
+    ): ReturnType<typeof originalGetPublicUrl> => {
+      const registered = uploadedMediaUrlRegistry.get(normalizeMediaPathKey(path));
+      if (registered) {
+        return { data: { publicUrl: registered }, error: null } as ReturnType<typeof originalGetPublicUrl>;
+      }
+      return originalGetPublicUrl(path, options);
+    };
+    return bucketApi;
   };
-  return bucketApi;
-};
+} catch (storagePatchError) {
+  console.warn('[supabase] تعذر تفعيل سجل روابط ImageKit — التخزين الأصلي يعمل كما هو', storagePatchError);
+}
