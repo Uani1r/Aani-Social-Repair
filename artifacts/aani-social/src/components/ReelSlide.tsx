@@ -25,7 +25,6 @@ import {
 } from '@/lib/activeVideo';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
-import { requestMediaDeletion } from '@/lib/mediaMaintenance';
 import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types';
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, appendVideoTrimFragment, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
@@ -536,9 +535,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   const deletePost = async () => {
     if (!supabaseConfigured || !window.confirm('هل أنت متأكد من رغبتك في حذف هذا الريل؟')) return;
-    // حذف ملفات الوسائط من ImageKit أولاً (يتحقق الخادم من الملكية ومن عدم
-    // استخدامها في أبرز القصص أو الأصوات) — فشلها لا يمنع حذف الريل.
-    await requestMediaDeletion('post', post.id).catch(() => undefined);
+    // حذف الصف فقط: Trigger جدول media_deletion_jobs يسجّل روابط الوسائط
+    // وWorker الخادم يحذف ملفات ImageKit بعد فحص المراجع الحية.
     const { error } = await supabase.from('posts').delete().eq('id', post.id).eq('user_id', currentUserId);
     if (error) {
       alert('تعذر حذف الريل. حاول مرة أخرى.');

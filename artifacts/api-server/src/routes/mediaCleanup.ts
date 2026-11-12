@@ -1,29 +1,61 @@
-// التنظيف التلقائي للموسائط وقاعدة البيانات ضمن حدود الباقات المجانية
-// (ImageKit: 25 MB للملف و20 GB تخزين، Supabase: 500 MB لقاعدة البيانات).
+// التنظيف التلقائي للموسائط وقاعدة البيانات ضمن حدود الباقات المجانية.
 //
 // POST /api/media/purge-expired
-//   فحص دوري يُستدعى من العميل مرة يومياً. يحذف:
-//   1) ملفات ImageKit للقصص المنتهية (بعد مهلة يومين) غير المستخدمة
-//      في أبرز القصص (غلاف أو عنصر) أو في مكتبة الأصوات النشطة.
-//   2) صفوف القصص المنتهية ومشاهداتها من قاعدة البيانات.
-//   3) الإشعارات الأقدم من 30 يوماً.
+//   نقطة تنظيف داخلية فقط: تُحمى بسر داخلي (x-aani-cleanup-secret) ولا يُسمح
+//   لأي مستخدم عادي بتشغيلها. تستدعي RPC قاعدة البيانات (تنظيف القصص المنتهية
+//   والإشعارات القديمة) — وTriggers جدول media_deletion_jobs يسجلان روابط
+//   الوسائط داخل نفس المعاملة، ثم Worker الخادم يحذف ملفات ImageKit بعد فحص المراجع.
 //
 // POST /api/media/imagekit-delete  { kind: "post" | "story", id }
-//   يُستدعى من العميل قبل حذف صف المنشور/الستوري حتى يتسنى التحقق من
-//   الملكية. يرفض حذف الوسائط إذا كانت مستخدمة في أبرز القصص أو الأصوات.
+//   يُستدعى من جلسة مستخدم للتحقق من الملكية وإضافة روابط الوسائط إلى الطابور.
+//   لا يحذف أي ملف مباشرة — Worker يفحص المراجع الحية قبل الحذف.
 
 import { Router, type Request, type Response } from "express";
+import { timingSafeEqual } from "node:crypto";
 
 import { logger } from "../lib/logger";
 import { readSupabaseAdminConfig, type SupabaseAdminConfig } from "../lib/supabaseAdmin";
-import { baseUrl, deleteImageKitFilesByUrls, imageKitConfigured } from "../lib/imagekitAdmin";
+import {
+  asRows,
+  enqueueMediaDeletionJobs,
+  mediaInActiveUse,
+  normalizeMediaUrl,
+  restRequest,
+  runExpiredRecordsCleanup,
+} from "../lib/mediaDb";
+import { isDeletionWorkerRunning, processDeletionJobs } from "../lib/mediaDeletionWorker";
 
 const router = Router();
 
-// مهلة يومين قبل مسح القصص المنتهية (تسمح بتأخر إضافة أبرز القصص)
-const STORY_GRACE_MS = 2 * 24 * 60 * 60 * 1000;
-// الإشعارات تبقى 30 يوماً ثم تُحذف
-const NOTIFICATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// Rate limiting بسيط داخل العملية: 5 طلبات/دقيقة لكل مسار
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 5;
+const rateBuckets = new Map<string, { count: number; windowStart: number }>();
+
+function rateLimited(bucketKey: string): boolean {
+  const now = Date.now();
+  const bucket = rateBuckets.get(bucketKey);
+  if (!bucket || now - bucket.windowStart > RATE_LIMIT_WINDOW_MS) {
+    rateBuckets.set(bucketKey, { count: 1, windowStart: now });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > RATE_LIMIT_MAX;
+}
+
+/** تحقق بزمن ثابت من السر الداخلي (لا يتسرب عبر توقيت المقارنة). */
+function isValidInternalSecret(provided: string | undefined, expected: string | undefined): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
+function readInternalSecret(): string | undefined {
+  const secret = (process.env["AANI_MEDIA_CLEANUP_SECRET"] || "").trim();
+  return secret || undefined;
+}
 
 function readBearerToken(req: Request): string {
   const authorization = req.header("authorization") || "";
@@ -46,148 +78,49 @@ async function getAuthenticatedUserId(
   return typeof user?.id === "string" && user.id ? user.id : null;
 }
 
-async function restRequest(
-  config: SupabaseAdminConfig,
-  method: string,
-  table: string,
-  searchParams: Record<string, string>,
-): Promise<{ ok: boolean; status: number; data: unknown }> {
-  const url = new URL(`/rest/v1/${table}`, config.url);
-  for (const [key, value] of Object.entries(searchParams)) {
-    url.searchParams.set(key, value);
-  }
-  const response = await fetch(url, {
-    method,
-    headers: {
-      apikey: config.serviceRoleKey,
-      authorization: `Bearer ${config.serviceRoleKey}`,
-      Prefer: "return=representation",
-    },
-  });
-  const data = response.ok ? await response.json().catch(() => null) : null;
-  return { ok: response.ok, status: response.status, data };
-}
-
-function asRows(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
-}
-
-/** هل هذه الوسائط مستخدمة في أبرز القصص (غلاف أو عنصر) أو في مكتبة الأصوات النشطة؟ */
-async function mediaInActiveUse(
-  config: SupabaseAdminConfig,
-  mediaUrls: string[],
-  options: { sourceStoryId?: string } = {},
-): Promise<boolean> {
-  if (mediaUrls.length === 0) return false;
-
-  const highlights = asRows((await restRequest(config, "GET", "profile_highlights", {
-    select: "media_url,source_story_id",
-    limit: "1000",
-  })).data);
-  const highlightUrls = highlights.map((row) => baseUrl(row.media_url)).filter(Boolean);
-  const highlightStoryIds = highlights
-    .map((row) => row.source_story_id)
-    .filter((value): value is string => typeof value === "string");
-  if (options.sourceStoryId && highlightStoryIds.includes(options.sourceStoryId)) return true;
-  if (mediaUrls.some((url) => highlightUrls.includes(url))) return true;
-
-  const sounds = asRows((await restRequest(config, "GET", "sounds", {
-    select: "source_video_url,preview_url",
-    limit: "1000",
-  })).data);
-  const soundUrls = sounds
-    .flatMap((row) => [baseUrl(row.source_video_url), baseUrl(row.preview_url)])
-    .filter(Boolean);
-  return mediaUrls.some((url) => soundUrls.includes(url));
-}
+// قفل يمنع تشغيل عمليتي تنظيف متزامنتين
+let cleanupRunning = false;
 
 router.post("/media/purge-expired", (req: Request, res: Response) => {
   void (async () => {
+    if (!isValidInternalSecret(req.header("x-aani-cleanup-secret"), readInternalSecret())) {
+      return res.status(403).json({ success: false, error: "Internal cleanup secret is required." });
+    }
+    if (rateLimited("purge-expired")) {
+      return res.status(429).json({ success: false, error: "Too many cleanup requests." });
+    }
+    if (cleanupRunning || isDeletionWorkerRunning()) {
+      return res.status(409).json({ success: false, error: "A cleanup cycle is already running." });
+    }
+
     const config = readSupabaseAdminConfig();
     if (!config) {
       return res.status(503).json({ success: false, error: "Database is not configured." });
     }
-    const userId = await getAuthenticatedUserId(config, readBearerToken(req));
-    if (!userId) {
-      return res.status(401).json({ success: false, error: "The session is invalid or expired." });
-    }
 
+    cleanupRunning = true;
     try {
-      const cutoff = new Date(Date.now() - STORY_GRACE_MS).toISOString();
-      const stories = asRows((await restRequest(config, "GET", "stories", {
-        select: "id,media_url",
-        expires_at: `lt.${cutoff}`,
-        limit: "500",
-      })).data).filter((row) => typeof row.id === "string");
+      // RPC ينظف القصص المنتهية (بعد مهلة يومين وشرط عدم الاستخدام في أبرز
+      // القصص/الأصوات) ومشاهداتها والإشعارات الأقدم من 30 يوماً. الحذف الفعلي
+      // للملفات يتم عبر طابور media_deletion_jobs (Trigger داخل نفس المعاملة).
+      const cleanup = await runExpiredRecordsCleanup(config);
 
-      const deletableStories = [] as { id: string; mediaUrl: string }[];
-      if (stories.length > 0) {
-        const highlights = asRows((await restRequest(config, "GET", "profile_highlights", {
-          select: "media_url,source_story_id",
-          limit: "1000",
-        })).data);
-        const highlightUrls = highlights.map((row) => baseUrl(row.media_url)).filter(Boolean);
-        const highlightStoryIds = highlights
-          .map((row) => row.source_story_id)
-          .filter((value): value is string => typeof value === "string");
-
-        const sounds = asRows((await restRequest(config, "GET", "sounds", {
-          select: "source_video_url,preview_url",
-          limit: "1000",
-        })).data);
-        const soundUrls = sounds
-          .flatMap((row) => [baseUrl(row.source_video_url), baseUrl(row.preview_url)])
-          .filter(Boolean);
-
-        for (const story of stories) {
-          const mediaUrl = baseUrl(story.media_url);
-          if (!mediaUrl) {
-            // قصة بلا وسائط — يُحذف الصف فقط
-            deletableStories.push({ id: String(story.id), mediaUrl: "" });
-            continue;
-          }
-          if (highlightStoryIds.includes(String(story.id))) continue;
-          if (highlightUrls.includes(mediaUrl)) continue;
-          if (soundUrls.includes(mediaUrl)) continue;
-          deletableStories.push({ id: String(story.id), mediaUrl });
-        }
-      }
-
-      let mediaDeleted = 0;
-      if (imageKitConfigured() && deletableStories.length > 0) {
-        const result = await deleteImageKitFilesByUrls(
-          deletableStories.map((story) => story.mediaUrl).filter(Boolean),
-        );
-        mediaDeleted = result.deleted;
-      }
-
-      const deletableIds = deletableStories.map((story) => story.id);
-      if (deletableIds.length > 0) {
-        await restRequest(config, "DELETE", "story_views", {
-          story_id: `in.(${deletableIds.join(",")})`,
-        });
-        await restRequest(config, "DELETE", "stories", {
-          id: `in.(${deletableIds.join(",")})`,
-        });
-      }
-
-      const notificationCutoff = new Date(Date.now() - NOTIFICATION_RETENTION_MS).toISOString();
-      const notifications = await restRequest(config, "DELETE", "notifications", {
-        created_at: `lt.${notificationCutoff}`,
+      // دفعة Worker مباشرة بعد التنظيف (قفل Worker يمنع التزامن)
+      const workerStats = await processDeletionJobs(config).catch((error) => {
+        logger.warn({ err: error }, "Post-cleanup deletion worker cycle failed");
+        return null;
       });
 
-      return res.status(200).json({
-        success: true,
-        stories: deletableIds.length,
-        mediaDeleted,
-        notificationsDeleted: Array.isArray(notifications.data) ? notifications.data.length : 0,
-      });
+      logger.info({ cleanup, workerStats }, "Scheduled media cleanup cycle finished");
+      return res.status(200).json({ success: true, cleanup, workerStats });
     } catch (error) {
-      logger.error({ err: error }, "Expired media purge failed");
+      logger.error({ err: error }, "Expired media cleanup failed");
       return res.status(500).json({ success: false, error: "Could not purge expired media." });
+    } finally {
+      cleanupRunning = false;
     }
   })().catch((error) => {
-    logger.error({ err: error }, "Expired media purge crashed unexpectedly");
+    logger.error({ err: error }, "Expired media cleanup crashed unexpectedly");
     if (!res.headersSent) res.status(500).json({ success: false, error: "Could not purge expired media." });
   });
 });
@@ -197,9 +130,6 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
     const config = readSupabaseAdminConfig();
     if (!config) {
       return res.status(503).json({ success: false, error: "Database is not configured." });
-    }
-    if (!imageKitConfigured()) {
-      return res.status(503).json({ success: false, error: "ImageKit is not configured." });
     }
     const userId = await getAuthenticatedUserId(config, readBearerToken(req));
     if (!userId) {
@@ -230,15 +160,15 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
             ? post.media_urls.filter((value): value is string => typeof value === "string")
             : []),
           String(post.media_url || ""),
-        ].map(baseUrl).filter(Boolean);
+        ].map(normalizeMediaUrl).filter(Boolean);
 
-        if (await mediaInActiveUse(config, mediaUrls)) {
-          // الوسائط ما زالت مستخدمة (أبرز القصص/الأصوات) — نحذف الصف فقط ونترك الملفات
-          return res.status(200).json({ success: true, deleted: 0, skipped: true, reason: "media-still-referenced" });
+        // فحص صارم: أي فشل استعلام يمنع الإدخال إلى الطابور (يرمي ويُرجع 500)
+        if (await mediaInActiveUse(config, mediaUrls, { excludePostId: id })) {
+          return res.status(200).json({ success: true, enqueued: 0, skipped: true, reason: "media-still-referenced" });
         }
 
-        const result = await deleteImageKitFilesByUrls(mediaUrls);
-        return res.status(200).json({ success: true, deleted: result.deleted, failed: result.failed });
+        const enqueued = await enqueueMediaDeletionJobs(config, mediaUrls);
+        return res.status(200).json({ success: true, enqueued });
       }
 
       const stories = asRows((await restRequest(config, "GET", "stories", {
@@ -251,23 +181,20 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
         return res.status(404).json({ success: false, error: "Story not found." });
       }
 
-      const mediaUrls = [String(story.media_url || "")].map(baseUrl).filter(Boolean);
-      if (await mediaInActiveUse(config, mediaUrls, { sourceStoryId: id })) {
-        return res.status(200).json({ success: true, deleted: 0, skipped: true, reason: "media-still-referenced" });
+      const mediaUrls = [String(story.media_url || "")].map(normalizeMediaUrl).filter(Boolean);
+      if (await mediaInActiveUse(config, mediaUrls, { excludeStoryId: id })) {
+        return res.status(200).json({ success: true, enqueued: 0, skipped: true, reason: "media-still-referenced" });
       }
 
-      const result = await deleteImageKitFilesByUrls(mediaUrls);
-      if (mediaUrls.length > 0) {
-        await restRequest(config, "DELETE", "story_views", { story_id: `eq.${id}` });
-      }
-      return res.status(200).json({ success: true, deleted: result.deleted, failed: result.failed });
+      const enqueued = await enqueueMediaDeletionJobs(config, mediaUrls);
+      return res.status(200).json({ success: true, enqueued });
     } catch (error) {
-      logger.error({ err: error }, "ImageKit media deletion failed");
-      return res.status(500).json({ success: false, error: "Could not delete media files." });
+      logger.error({ err: error }, "Media deletion enqueue failed");
+      return res.status(500).json({ success: false, error: "Could not schedule media deletion." });
     }
   })().catch((error) => {
-    logger.error({ err: error }, "ImageKit media deletion crashed unexpectedly");
-    if (!res.headersSent) res.status(500).json({ success: false, error: "Could not delete media files." });
+    logger.error({ err: error }, "Media deletion enqueue crashed unexpectedly");
+    if (!res.headersSent) res.status(500).json({ success: false, error: "Could not schedule media deletion." });
   });
 });
 

@@ -15,6 +15,7 @@ import {
   compressImage,
   compressVideo,
   extractAudio,
+  isImagePreset,
   MAX_UPLOAD_BYTES,
   MediaTooLargeError,
   UNCOMPRESSIBLE_IMAGE_MAX_BYTES,
@@ -107,9 +108,28 @@ async function uploadMediaUnsafe({
     throw new MediaTooLargeError('حجم ملف GIF/SVG يتجاوز الحد الأقصى المسموح (2 ميغابايت). اختر ملفاً أصغر.');
   }
 
-  if (effectivePreset === 'avatar' || effectivePreset === 'cover' || effectivePreset === 'feedImage') {
+  // SVG غير موثوق: يُفحص ضد المحتوى النشط (script/embed/object/foreignObject/
+  // معالجات أحداث inline) — يُرفض المشبوه برسالة واضحة بدل تمرييره دون تنقية.
+  // الفحص يغطي أول 64KB (تُوضع العناصر النشطة دائماً في مقدمة الملف عملياً).
+  if (file.type === 'image/svg+xml') {
+    const svgText = await file.slice(0, 64 * 1024).text();
+    if (/<script[\s>]|<\s*embed|<\s*object|foreignObject|<\s*iframe|\son\w+\s*=\s*["'>]/i.test(svgText)) {
+      throw new Error('ملف SVG يحتوي على محتوى غير آمن (برمجيات نشطة) ولا يمكن رفعه.');
+    }
+  }
+
+  // ملف صورة فعلي (GIF/SVG لا يمران عبر ضغط Canvas حفاظاً على الحركة والشفافية)
+  const isImageFile = file.type.startsWith('image/')
+    && file.type !== 'image/gif'
+    && file.type !== 'image/svg+xml';
+
+  if (effectivePreset && isImagePreset(effectivePreset) && isImageFile) {
+    // كل إعدادات الصور (avatar/cover/feedImage/highlightCover/storyImage/chatImage)
+    // تمر إجبارياً عبر الضغط المركزي — لا يُرفع الأصل بصمت عند فشل الضغط.
     uploadFile = await compressImage(file, effectivePreset, percent => onPhase?.('compressing', percent), signal);
-  } else if (effectivePreset === 'video') {
+  } else if (effectivePreset === 'video'
+    || (effectivePreset && isImagePreset(effectivePreset) && file.type.startsWith('video/'))) {
+    // preset صوري مفروض على ملف فيديو (مسار إنشاء القصص مثلاً) — نعامله كفيديو:
     uploadFile = await compressVideo(file, {
       onProgress: percent => onPhase?.('compressing', percent),
       signal,

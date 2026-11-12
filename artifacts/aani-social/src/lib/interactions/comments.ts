@@ -295,7 +295,7 @@ export async function uploadCommentImage(
   const extension = file.name.match(/\.([a-z0-9]{1,8})$/i)?.[1] ?? "jpg";
   const path = `${userId}/comments/${crypto.randomUUID()}.${extension.toLowerCase()}`;
 
-  await uploadMedia({ file, path });
+  await uploadMedia({ file, path, preset: 'chatImage' });
 
   const { data } = supabase.storage.from(storageBucket).getPublicUrl(path);
   return { publicUrl: data.publicUrl, path };

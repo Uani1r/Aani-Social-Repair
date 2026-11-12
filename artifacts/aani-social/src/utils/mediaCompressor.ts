@@ -22,9 +22,34 @@ export type MediaPreset =
   | 'cover'
   | 'feedImage'
   | 'highlightCover'
+  | 'storyImage'
+  | 'chatImage'
   | 'video'
   | 'extractedSound'
   | 'voiceMessage';
+
+/** كل إعدادات ضغط الصور عبر Canvas — يمر عبرها أي preset صوري في المسار المركزي. */
+export const IMAGE_PRESETS = new Set<MediaPreset>([
+  'avatar',
+  'cover',
+  'feedImage',
+  'highlightCover',
+  'storyImage',
+  'chatImage',
+]);
+
+export type ImagePreset =
+  | 'avatar'
+  | 'cover'
+  | 'feedImage'
+  | 'highlightCover'
+  | 'storyImage'
+  | 'chatImage';
+
+/** حارس أنواع: يتيح تمرير الـ preset إلى compressImage بلا cast غير آمن. */
+export function isImagePreset(value: MediaPreset | null | undefined): value is ImagePreset {
+  return value !== null && value !== undefined && IMAGE_PRESETS.has(value);
+}
 
 export class MediaTooLargeError extends Error {
   constructor(message = 'حجم الملف يتجاوز الحد الأقصى المسموح (24 ميغابايت). اختر مقطعاً أقصر أو ملفاً أصغر.') {
@@ -81,6 +106,57 @@ function ensureNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new DOMException('أُلغيت العملية.', 'AbortError');
 }
 
+/**
+ الرابط الأساسي للوسائط بلا معاملات تحويل (?tr=) ولا هاشتاغ تعديل (#t= / #crop=).
+ الرابطان المتفقاان بعد التطبيع يُعدّان الملف نفسه — لا يُعد اختلاف ?tr= أو #t= اختلافاً.
+ */
+export function normalizeMediaUrl(value: unknown): string {
+  if (typeof value !== 'string' || !value) return '';
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return '';
+  }
+}
+
+/**
+ حساب معدل بت الفيديو وفق المدة والميزانية الحجمية:
+ (حجم الهدف × 8) ÷ المدة − مساحة الصوت − هامش الحاوية، ضمن نطاق [500k, 4.5M].
+ هذا حد جودة تشغيل وليس حجماً ثابتاً؛ الحجم الفعلي يُفحص بعد الترميز ويُعاد المحاولة بمعدل أدنى عند التجاوز.
+ */
+export function calculateVideoBitrate(
+  durationSeconds: number,
+  targetBytes: number,
+  audioBitrate = 128_000,
+): number {
+  const safeDuration = Math.max(durationSeconds, 1);
+  const totalBitsPerSecond = (targetBytes * 8) / safeDuration;
+  const containerReserve = 80_000;
+  return Math.max(
+    500_000,
+    Math.min(
+      4_500_000,
+      Math.floor(totalBitsPerSecond - audioBitrate - containerReserve),
+    ),
+  );
+}
+
+/**
+ فحص خفيف للحاوية (بلا mediabunny): MP4 صالح يبدأ بصندوق 'ftyp' بعد حجم الصندوق.
+ يُستخدم فقط في مسار المرور الصغير عندما لا يمكن تحميل mediabunny إطلاقاً.
+ */
+async function looksLikeMp4Container(file: File): Promise<boolean> {
+  try {
+    const head = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer());
+    if (head.length < 12) return false;
+    const boxType = String.fromCharCode(head[4], head[5], head[6], head[7]);
+    return boxType === 'ftyp';
+  } catch {
+    return false;
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* ضغط الصور عبر Canvas                                                */
 /* ------------------------------------------------------------------ */
@@ -90,17 +166,24 @@ type ImagePreset = 'avatar' | 'cover' | 'feedImage' | 'highlightCover';
 const IMAGE_TARGETS: Record<ImagePreset, {
   square?: number;
   maxSide?: number;
+  /** حد أقصى للضلع القصير (مثل 1080×1920 للصور العمودية) */
+  maxShortSide?: number;
   targetBytes: number;
   startQuality: number;
   minQuality: number;
   /** قص المنتصف 1:1 (Center-Crop) بدل مطّ الصورة داخل الإطار المربع */
   centerCrop?: boolean;
 }> = {
-  avatar: { square: 400, targetBytes: 80 * 1024, startQuality: 0.82, minQuality: 0.6, centerCrop: true },
+  avatar: { square: 320, targetBytes: 80 * 1024, startQuality: 0.82, minQuality: 0.6, centerCrop: true },
   // غلاف/خلفية أبرز القصص: قص مركزي 1:1 بمستهدف 100KB (تُعرض داخل دائرة ~208px)
   highlightCover: { square: 512, targetBytes: 100 * 1024, startQuality: 0.8, minQuality: 0.5, centerCrop: true },
   cover: { maxSide: 1200, targetBytes: 200 * 1024, startQuality: 0.82, minQuality: 0.6 },
-  feedImage: { maxSide: 1280, targetBytes: 300 * 1024, startQuality: 0.82, minQuality: 0.6 },
+  // صور القصص: 1080×1920 كحد أقصى (نحفظ الاتجاه العمودي كما هو)
+  storyImage: { maxSide: 1920, maxShortSide: 1080, targetBytes: 350 * 1024, startQuality: 0.82, minQuality: 0.55 },
+  // صور المنشورات: 1440px للضلع الأطول
+  feedImage: { maxSide: 1440, targetBytes: 300 * 1024, startQuality: 0.82, minQuality: 0.6 },
+  // صور الرسائل والتعليقات والملصقات: 1280px للضلع الأطول (الشفافية محفوظة عبر WebP/PNG)
+  chatImage: { maxSide: 1280, targetBytes: 250 * 1024, startQuality: 0.82, minQuality: 0.55 },
 };
 
 let webpEncodeSupported: boolean | null = null;
@@ -180,8 +263,13 @@ export async function compressImage(
       if (target.square) {
         drawWidth = target.square;
         drawHeight = target.square;
-      } else if (target.maxSide) {
-        const scale = Math.min(1, target.maxSide / Math.max(width, height));
+      } else if (target.maxSide || target.maxShortSide) {
+        // نُصغّر فقط — لا نكبّر صورة أصغر من هدفها — مع صون نسبة الأبعاد:
+        const scale = Math.min(
+          1,
+          target.maxSide ? target.maxSide / Math.max(width, height) : 1,
+          target.maxShortSide ? target.maxShortSide / Math.min(width, height) : 1,
+        );
         drawWidth = Math.max(1, Math.round(width * scale));
         drawHeight = Math.max(1, Math.round(height * scale));
       }
@@ -376,10 +464,11 @@ export async function compressVideo(
   const mb = await loadMediabunny();
   if (!mb) {
     // لا نرفع الفيديو الأصلي بصمت إذا تعذر الضغط (Safari قديم بلا WebCodecs):
-    // الملفات الصغيرة (≤6MB) آمنة على باقة ImageKit المجانية فتُرفع كما هي،
-    // وما فوقها يُرفض برسالة واضحة بدل رفعه غير مضغوطاً.
-    if (file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
-      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع الملف الصغير كما هو.');
+    // مسار المرور الصغير يتطلب فحصاً فعلياً للحاوية (MP4 بصندوق ftyp) — لا
+    // تمريروا أعمى لملف لا نعرف صيغته. الفيديو المسجل من iPhone بـ H.264/AAC.
+    if (file.type === 'video/mp4' && await looksLikeMp4Container(file)
+      && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
+      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع ملف MP4 صغير (≤6MB) بعد فحص الحاوية.');
       return file;
     }
     throw new Error('تعذر ضغط الفيديو على متصفحك (يتطلب WebCodecs). لا يمكن رفع الملفات الكبيرة غير المضغوطة؛ جرّب متصفحاً حديثاً أو اختر مقطعاً أقصر.');
@@ -461,14 +550,9 @@ export async function compressVideo(
     targetHeight = Math.max(2, Math.round((sourceHeight * scale) / 2) * 2);
   }
 
-  // معدل بت ذكي: 1.3Mbps للمقاطع القصيرة، وينخفض تلقائياً للطويلة
-  // ليظل الناتج بحدود 10–14MB (نطرح ~160k لنسبة الصوت وحمل الحاوية)
-  const videoBitrateFor = (targetBytes: number) => {
-    const seconds = Math.max(duration, 1);
-    const budgetBps = (targetBytes * 8) / seconds;
-    return Math.min(1_300_000, Math.max(500_000, Math.floor(budgetBps - 160_000)));
-  };
-  const primaryBitrate = duration > 0 ? videoBitrateFor(12 * 1024 * 1024) : 1_300_000;
+  // معدل بت ذكي وفق المدة والميزانية الحجمية (سقف 4.5Mbps) — الحجم الفعلي
+  // يُفحص بعد الترميز وتُعاد المحاولة بمعدل أقسى عند التجاوز:
+  const primaryBitrate = duration > 0 ? calculateVideoBitrate(duration, 12 * 1024 * 1024) : 1_300_000;
 
   await acquireWakeLock();
   try {

@@ -3,6 +3,8 @@ import express from "express";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { PUSH_WEBHOOK_PATHS } from "./routes/pushNotifications";
+import { readAdminConfig, runExpiredRecordsCleanup } from "./lib/mediaDb";
+import { processDeletionJobs } from "./lib/mediaDeletionWorker";
 
 // تحديد مسار الملفات الثابتة الناتجة عن البناء
 const publicPath = path.resolve(process.cwd(), "dist/public");
@@ -65,4 +67,41 @@ app.listen(port, (err) => {
     { primaryWebhookUrl, paths: PUSH_WEBHOOK_PATHS },
     "Push notification webhook endpoints ready",
   );
+
+  startMediaMaintenanceScheduler();
 });
+
+// دورة صيانة مستقلة تماماً عن دخول المستخدمين:
+// 1) RPC تنظيف سجلات قاعدة البيانات (قصص منتهية/مشاهدات/إشعارات قديمة)
+// 2) Worker طابور الحذف المؤجل (ملفات ImageKit بعد فحص المراجع)
+// قفل Worker + قفل استشاري داخل RPC يمنعان التزامن، والدُفعات محدودة.
+const MEDIA_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+function runMaintenanceCycle(): void {
+  void (async () => {
+    const config = readAdminConfig();
+    if (!config) {
+      logger.warn("Media maintenance skipped: Supabase admin config missing");
+      return;
+    }
+    try {
+      const cleanup = await runExpiredRecordsCleanup(config);
+      logger.info({ cleanup }, "Scheduled expired-records cleanup finished");
+    } catch (error) {
+      logger.error({ err: error }, "Scheduled expired-records cleanup failed");
+    }
+    try {
+      const stats = await processDeletionJobs(config);
+      logger.info({ stats }, "Media deletion worker cycle finished");
+    } catch (error) {
+      logger.error({ err: error }, "Media deletion worker cycle failed");
+    }
+  })();
+}
+
+function startMediaMaintenanceScheduler(): void {
+  // دورة أولى بعد 30 ثانية من الإقلاع ثم كل 6 ساعات
+  setTimeout(runMaintenanceCycle, 30_000);
+  setInterval(runMaintenanceCycle, MEDIA_MAINTENANCE_INTERVAL_MS);
+  logger.info({ intervalMs: MEDIA_MAINTENANCE_INTERVAL_MS }, "Media maintenance scheduler started");
+}

@@ -223,7 +223,8 @@ export function useStoryCreationActions({
       if (storyFile) {
         const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
         const filePath = `${userId}/story-${Date.now()}-${safeName}`;
-        await uploadStoryMedia({ file: storyFile, path: filePath });
+        // صور القصص: 1080×1920 كحد أقصى + مستهدف 350KB (الفيديو يُعامل كفيديو)
+        await uploadStoryMedia({ file: storyFile, path: filePath, preset: 'storyImage' });
         mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;
         mediaType = storyFile.type.startsWith('video') ? 'video' : 'photo';
       }
@@ -302,6 +303,7 @@ export function useStoryCreationActions({
           await uploadStoryMedia({
             file: mediaFile,
             path: filePath,
+            preset: 'storyImage',
             onProgress: setUploadProgress,
           });
           mediaUrl = supabase.storage.from(storageBucket).getPublicUrl(filePath).data.publicUrl;

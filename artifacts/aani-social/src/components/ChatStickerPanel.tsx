@@ -246,7 +246,7 @@ export default function ChatStickerPanel({
     const extension = file.type === 'image/webp' ? 'webp' : 'png';
     const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-60) || `sticker.${extension}`;
     const path = `${currentUserId}/stickers/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
-    await uploadMedia({ file, path });
+    await uploadMedia({ file, path, preset: 'chatImage' });
     const url = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
     const sticker: CustomSticker = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, url, label: 'ملصق مخصص' };
     setCustomStickers(current => {

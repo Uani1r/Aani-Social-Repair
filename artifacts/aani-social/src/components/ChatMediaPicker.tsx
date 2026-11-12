@@ -188,7 +188,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
       const uploadResults = await Promise.allSettled(selectedPhotosSnapshot.map(async (photo, index) => {
         const safeName = photo.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'photo.jpg';
         const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
-        await uploadMedia({ file: photo.file, path, quality: hdSnapshot ? 'hd' : 'data-saving' });
+        await uploadMedia({ file: photo.file, path, preset: 'chatImage', quality: hdSnapshot ? 'hd' : 'data-saving' });
         uploadedPaths.push(path);
         return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
       }));

@@ -50,8 +50,35 @@ export function baseUrl(value: unknown): string {
 }
 
 /**
+ قائمة كاملة لملفات مجلد ImageKit مع Pagination إلزامية (skip/limit):
+ فشل أي صفحة يرمي استثناءً — لا تُستخدم قائمة جزئية أبداً في قرارات الحذف.
+ */
+export async function listAllImageKitFiles(folderPath: string): Promise<ImageKitFileItem[]> {
+  const limit = 1000;
+  let skip = 0;
+  const all: ImageKitFileItem[] = [];
+  while (true) {
+    const result = await imagekitRequest("files", {
+      path: folderPath,
+      includeFolder: "false",
+      limit: String(limit),
+      skip: String(skip),
+    });
+    if (!result.ok || !Array.isArray(result.data)) {
+      throw new Error(`ImageKit listing failed: HTTP ${result.status}`);
+    }
+    const batch = result.data as ImageKitFileItem[];
+    all.push(...batch);
+    if (batch.length < limit) break;
+    skip += batch.length;
+  }
+  return all;
+}
+
+/**
  يحذف ملفات ImageKit التي تطابق هذه الروابط بالضبط (مطابقة الرابط الأساسي).
- يعيد عدد الملفات المحذوفة والفاشلة.
+ يعيد عدد الملفات المحذوفة والفاشلة. فشل جلب القائمة يرمي استثناءً —
+ المتصل (Worker) يعيد جدولة المهمة بدل الحذف الأعمى.
  */
 export async function deleteImageKitFilesByUrls(
   fileUrls: string[],
@@ -72,7 +99,7 @@ export async function deleteImageKitFilesByUrls(
   }
   if (targets.size === 0) return { deleted: 0, failed: 0 };
 
-  // نُخزّن قائمة كل مجلد مرة واحدة ضمن عملية الحذف نفسها
+  // نُخزّن قائمة كل مجلد مرة واحدة ضمن عملية الحذف نفسها (لا List لكل ملف على حدة)
   const listCache = new Map<string, ImageKitFileItem[]>();
   let deleted = 0;
   let failed = 0;
@@ -80,12 +107,7 @@ export async function deleteImageKitFilesByUrls(
   for (const [targetUrl, folderPath] of targets) {
     let items = listCache.get(folderPath);
     if (!items) {
-      const listed = await imagekitRequest("files", {
-        path: folderPath,
-        includeFolder: "false",
-        limit: "1000",
-      });
-      items = Array.isArray(listed.data) ? (listed.data as ImageKitFileItem[]) : [];
+      items = await listAllImageKitFiles(folderPath);
       listCache.set(folderPath, items);
     }
 
@@ -94,6 +116,7 @@ export async function deleteImageKitFilesByUrls(
     );
     const fileId = typeof match?.fileId === "string" ? match.fileId : "";
     if (!fileId) {
+      // لا حذف أعمى: تطابق غير مؤكد بين الرابط وfileId → فشل يُعاد المحاولة/فحصه
       failed += 1;
       continue;
     }

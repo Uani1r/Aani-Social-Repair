@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom';
 
 import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { requestMediaDeletion } from '@/lib/mediaMaintenance';
 import { USE_SOUND_EVENT, type StorySound } from '@/lib/sounds';
 import { pauseInstant, playInstant, resumeInstant, stopInstant } from '@/lib/instantAudio';
 import { displayName } from '@/lib/types';
@@ -1778,9 +1777,8 @@ export default function StoriesBar({
     if (!supabaseConfigured || !currentStory) return;
     if (currentStory.user_id !== userId) return;
     if (!confirm('هل أنت متأكد من رغبتك في حذف هذه الستوري؟')) return;
-    // حذف ملف الوسائط من ImageKit أولاً (يتحقق الخادم من الملكية ومن عدم
-    // استخدامه في أبرز القصص أو الأصوات) — فشلها لا يمنع حذف الستوري.
-    await requestMediaDeletion('story', currentStory.id).catch(() => undefined);
+    // حذف الصف فقط: Trigger جدول media_deletion_jobs يسجّل رابط الوسائط
+    // وWorker الخادم يحذف ملف ImageKit بعد فحص المراجع الحية.
     const { error } = await supabase
       .from('stories')
       .delete()
