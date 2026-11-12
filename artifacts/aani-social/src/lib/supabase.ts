@@ -62,17 +62,29 @@ if (!/^https:\/\/[a-zA-Z0-9-]+\.supabase\.co\/?$/.test(supabaseUrl)) {
   console.error("[supabase] VITE_SUPABASE_URL is not a valid Supabase project URL.", supabaseUrl);
 }
 
-export const supabase: SupabaseClient = createClient(
-  supabaseUrl,
-  supabasePublicKey,
-  {
+function createSupabaseClient(url: string, key: string): SupabaseClient {
+  return createClient(url, key, {
     auth: {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
     },
-  },
-);
+  });
+}
+
+// محصّن ضد أي فشل عند الإقلاع: إن رفض createClient القيم الحالية
+// (رابط أو مفتاح غير صالح في Secrets مثلًا) يعاد الإنشاء بالقيم الاحتياطية
+// العامة بدل أن ينهار التحميل ويترك التطبيق شاشة بيضاء.
+export let supabase: SupabaseClient;
+try {
+  supabase = createSupabaseClient(supabaseUrl, supabasePublicKey);
+} catch (createClientError) {
+  console.error(
+    "[supabase] تعذر إنشاء عميل Supabase بالإعدادات الحالية — إعادة المحاولة بقيم الاحتياط العام.",
+    createClientError,
+  );
+  supabase = createSupabaseClient(FALLBACK_SUPABASE_URL, FALLBACK_SUPABASE_ANON_KEY);
+}
 
 export { supabaseUrl, supabasePublicKey };
 

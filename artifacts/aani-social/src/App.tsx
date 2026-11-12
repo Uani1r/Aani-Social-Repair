@@ -27,7 +27,12 @@ import { readLocalUserPreferences, saveLocalUserPreferences, userPreferencesFrom
 import { applyFontPreference, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import '@/index.css';
 
-installSupabaseErrorInterceptor(supabase);
+// محمي داخل try/catch: فشل تفعيل اعتراض الأخطاء لا يجب أن يمنع إقلاع التطبيق
+try {
+  installSupabaseErrorInterceptor(supabase);
+} catch (interceptorError) {
+  console.error('[app] تعذر تفعيل اعتراض أخطاء Supabase — التطبيق يعمل بدونه', interceptorError);
+}
 
 function App() {
   useModalBodyScrollLock();
