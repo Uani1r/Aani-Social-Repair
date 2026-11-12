@@ -84,3 +84,51 @@ order by column_name;
 - إن مُنعت القراءة (RLS): `[reels] المنشور محفوظ لكن قراءته من posts أعادت لا شيء` + رسالة على الشاشة.
 - عند فشل جلب الريلز: `[reels] فشل استعلام الريلز` مع `code/message/details/hint`،
   وتظهر الرسالة نفسها أعلى شاشة الريلز مع زر «إعادة المحاولة».
+
+
+## 8) السبب المكتشف: عمود ناقص في جملة SELECT
+
+استعلام جلب الريلز يطلب هذه الأعمدة معاً:
+
+```
+id, user_id, content, post_metadata, media_url, media_urls, media_asset_id,
+type, destination, visibility, created_at, likes_count, comments_count,
+reposts_count, shares_count, comments_disabled, audio_url, audio_title,
+sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end,
+hide_likes, hide_comments, comment_privacy
+```
+
+أعمدة العدّادات وخصائص التفاعل أضافتها ترحيلات قديمة
+(`20261026000000`, `20261030000000`, `20261125000000`).
+عند إعادة بناء الجداول يدوياً يبقى أحدها ناقصاً، فيرفض PostgREST الاستعلام
+كاملاً بخطأ `42703` — فيكون الحفظ سليماً ولا يظهر أي ريل.
+
+### الإصلاح من جهة قاعدة البيانات
+نفّذ الترحيل `20270120000000_posts_interaction_columns_repair.sql`،
+ثم تحقق من النتيجة بهذا الاستعلام (يجب أن تكون كل القيم `true`):
+
+```sql
+select column_name,
+       exists (
+         select 1 from information_schema.columns c
+         where c.table_schema = 'public' and c.table_name = 'posts'
+           and c.column_name = e.column_name
+       ) as exists
+from (values
+  ('likes_count'), ('comments_count'), ('reposts_count'), ('shares_count'),
+  ('comments_disabled'), ('hide_likes'), ('hide_comments'), ('comment_privacy'),
+  ('media_urls'), ('media_asset_id'), ('sound_trim_start'), ('sound_trim_end'),
+  ('trim_start'), ('trim_end'), ('display_order'), ('tagged_user_ids')
+) as e(column_name)
+order by exists asc;
+```
+
+### الإصلاح من جهة التطبيق (مطبَّق)
+`usePosts.ts` و`ProfileReelsPlayer.tsx` يقرآن اسم العمود من رسالة الخطأ،
+يحذفانه من جملة `SELECT`، ويعيدان المحاولة (حتى 10 مرات)، وإن فشل كل شيء
+يجلبان `*` بدل إخفاء الريلز. كل محاولة تُطبع في الكونسول:
+
+- `[posts] عمود مفقود في جدول posts — أُعيد الاستعلام بدونه { query, column }`
+- `[posts] فشل الاستعلام بالأعمدة الصريحة — إعادة المحاولة بكل الأعمدة (*)`
+
+إن ظهر السطر الثاني فمعناه أن الصلاحيات تمنع `*`؛ نفّذ الترحيل أعلاه.

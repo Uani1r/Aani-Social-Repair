@@ -79,13 +79,10 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
     let active = true;
     void (async () => {
       try {
-        const buildProfileReelQuery = (includeSoundTrim: boolean, includeMediaAssetId: boolean, useDestinationFilter: boolean) => {
-          const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
-          const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
-          const columns = `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end`;
+        const buildProfileReelQuery = (columns: string[], useDestinationFilter: boolean) => {
           const request = supabase
             .from('posts')
-            .select(columns)
+            .select(columns.join(', '))
             .eq('user_id', profileUserId);
           // بلا مرشح الوجهة إن لم يُطبَّق عمود destination بعد؛ الفلترة تُعاد محلياً
           const filtered = useDestinationFilter
@@ -95,21 +92,41 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
             .order('created_at', { ascending: false })
             .limit(60);
         };
-        let includeSoundTrim = true;
-        let includeMediaAssetId = true;
+        // نفس منطق usePosts: أي عمود مفقود (خطأ 42703) يُحذف من القائمة ويُعاد
+        // الاستعلام، وإن فشل كل شيء نجلب (*) بدل إخفاء الريلز بصمت.
+        let columns = [
+          'id', 'user_id', 'content', 'post_metadata', 'media_url', 'media_urls',
+          'media_asset_id', 'type', 'destination', 'visibility', 'created_at',
+          'likes_count', 'comments_count', 'reposts_count', 'shares_count',
+          'hide_likes', 'hide_comments', 'comment_privacy', 'audio_url',
+          'audio_title', 'sound_id', 'sound_trim_start', 'sound_trim_end',
+          'trim_start', 'trim_end',
+        ];
         let useDestinationFilter = true;
-        let result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId, useDestinationFilter);
-        for (let attempt = 0; attempt < 3 && result.error; attempt += 1) {
-          if (includeSoundTrim && (result.error.code === '42703' || result.error.code === 'PGRST204') && /sound_trim/i.test(result.error.message || '')) {
-            includeSoundTrim = false;
-          } else if (includeMediaAssetId && (result.error.code === '42703' || result.error.code === 'PGRST204') && /media_asset_id/i.test(result.error.message || '')) {
-            includeMediaAssetId = false;
-          } else if (useDestinationFilter && /destination/i.test(result.error.message || '')) {
+        let result = await buildProfileReelQuery(columns, useDestinationFilter);
+        for (let attempt = 0; attempt < 12 && result.error; attempt += 1) {
+          const code = result.error.code;
+          const message = result.error.message || '';
+          const missingColumn = (code === '42703' || code === 'PGRST204')
+            // الأطول أولاً: 'media_asset_id' قبل 'id'، و'sound_trim_start' قبل 'trim_start'
+            ? [...columns]
+              .sort((first, second) => second.length - first.length)
+              .find(column => message.includes(column))
+            : undefined;
+          if (missingColumn) {
+            console.warn('[reels] عمود مفقود في posts — أُعيد استعلام ريلز الملف بدونه', missingColumn);
+            columns = columns.filter(column => column !== missingColumn);
+            result = await buildProfileReelQuery(columns, useDestinationFilter);
+          } else if (useDestinationFilter && /destination/i.test(message)) {
             useDestinationFilter = false;
+            result = await buildProfileReelQuery(columns, useDestinationFilter);
           } else {
             break;
           }
-          result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId, useDestinationFilter);
+        }
+        if (result.error) {
+          console.warn('[reels] فشل استعلام ريلز الملف — إعادة المحاولة بكل الأعمدة (*)', result.error);
+          result = await buildProfileReelQuery(['*'], false);
         }
         const { data: rows, error } = result;
         if (error) {

@@ -31,11 +31,23 @@ function isPostsPermissionError(value: unknown): boolean {
   return code === '42501' || /permission denied for table posts|row-level security.*posts|posts.*row-level security/i.test(message);
 }
 
-function isMissingColumnError(value: unknown, column: string): boolean {
-  if (!isRecord(value)) return false;
+/**
+ * العمود الذي رفض PostgREST الاستعلام بسببه، من بين الأعمدة المطلوبة فعلاً.
+ * يغطي صيغ الرسائل المختلفة:
+ *   column posts.likes_count does not exist
+ *   column "likes_count" of relation "posts" does not exist
+ *   Could not find the 'likes_count' column of 'posts' in the schema cache
+ * يُستخدم لتقليص قائمة الأعمدة بدل فشل الاستعلام بالكامل.
+ */
+function missingSelectColumn(value: unknown, candidates: string[]): string | null {
+  if (!isRecord(value)) return null;
   const code = typeof value.code === 'string' ? value.code : '';
   const message = typeof value.message === 'string' ? value.message : '';
-  return (code === '42703' || code === 'PGRST204') && message.includes(column);
+  if (code !== '42703' && code !== 'PGRST204') return null;
+  // الأطول أولاً حتى لا يُقرأ sound_trim_start على أنه trim_start
+  return [...candidates]
+    .sort((first, second) => second.length - first.length)
+    .find(column => message.includes(column)) || null;
 }
 
 function normalizePostRow(value: unknown): PostRow | null {
@@ -178,27 +190,30 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     if (repostRows.length === 0) return [];
 
     const postIds = Array.from(new Set(repostRows.map(row => row.post_id)));
-    const buildRepostColumns = (includeSoundTrim: boolean, includeMediaAssetId: boolean) => {
-      const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
-      const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
-      return `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`;
-    };
+    // نفس منطق استعلام الريلز: تقليص الأعمدة عند عمود مفقود ثم (*) كحل أخير
+    let repostColumns = [
+      'id', 'user_id', 'content', 'post_metadata', 'media_url', 'media_urls',
+      'media_asset_id', 'type', 'destination', 'visibility', 'created_at',
+      'likes_count', 'comments_count', 'reposts_count', 'shares_count',
+      'comments_disabled', 'audio_url', 'audio_title', 'sound_id',
+      'sound_trim_start', 'sound_trim_end', 'trim_start', 'trim_end',
+      'hide_likes', 'hide_comments', 'comment_privacy',
+    ];
     const fetchRepostPosts = (columns: string) => supabase
       .from('posts')
       .select(columns)
       .in('id', postIds);
-    let includeSoundTrim = true;
-    let includeMediaAssetId = true;
-    let result = await fetchRepostPosts(buildRepostColumns(includeSoundTrim, includeMediaAssetId));
-    for (let attempt = 0; attempt < 2 && result.error; attempt += 1) {
-      if (includeSoundTrim && isMissingColumnError(result.error, 'sound_trim')) {
-        includeSoundTrim = false;
-      } else if (includeMediaAssetId && isMissingColumnError(result.error, 'media_asset_id')) {
-        includeMediaAssetId = false;
-      } else {
-        break;
-      }
-      result = await fetchRepostPosts(buildRepostColumns(includeSoundTrim, includeMediaAssetId));
+    let result = await fetchRepostPosts(repostColumns.join(', '));
+    for (let attempt = 0; attempt < 10 && result.error; attempt += 1) {
+      const missingColumn = missingSelectColumn(result.error, repostColumns);
+      if (!missingColumn) break;
+      console.warn('[posts] عمود مفقود في جدول posts — أُعيد استعلام الريبوست بدونه', missingColumn);
+      repostColumns = repostColumns.filter(column => column !== missingColumn);
+      result = await fetchRepostPosts(repostColumns.join(', '));
+    }
+    if (result.error) {
+      console.warn('[posts] فشل استعلام الريبوست بالأعمدة الصريحة — إعادة المحاولة بكل الأعمدة (*)', result.error);
+      result = await fetchRepostPosts('*');
     }
     const { data: postData, error: postsError } = result;
     if (postsError) return [];
@@ -206,7 +221,7 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
       post.visibility === 'public'
       && (destination === 'reels'
-        ? post.type === 'reel' || (post.type === 'photo' && post.destination === 'reels')
+        ? post.type === 'reel' || post.destination === 'reels'
         : post.destination === 'feed'),
     );
     const postsById = new Map(originalPosts.map(post => [post.id, post] as const));
@@ -280,15 +295,20 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         postIds?: string[],
         includeProfileOrder = true,
       ) => {
-        const buildColumns = (includeSoundTrim: boolean, includeMediaAssetId: boolean) => {
-          const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
-          const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
-          return kind === 'profile' && includeProfileOrder
-            ? `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`
-            : `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`;
-        };
-        const buildQuery = (columns: string) => {
-          const request = supabase.from('posts').select(columns);
+        // قائمة أعمدة صريحة، تُقلَّص تلقائياً عند أول عمود غير موجود في المخطط
+        // (خطأ 42703) بدل أن يفشل استعلام الريلز بالكامل بصمت. وإن فشل كل شيء
+        // نجلب كل الأعمدة (*) التي تسمح بها الصلاحيات.
+        let columns = [
+          'id', 'user_id', 'content', 'post_metadata', 'media_url', 'media_urls',
+          'media_asset_id', 'type', 'destination', 'visibility', 'created_at',
+          ...(kind === 'profile' && includeProfileOrder ? ['display_order'] : []),
+          'likes_count', 'comments_count', 'reposts_count', 'shares_count',
+          'comments_disabled', 'audio_url', 'audio_title', 'sound_id',
+          'sound_trim_start', 'sound_trim_end', 'trim_start', 'trim_end',
+          'hide_likes', 'hide_comments', 'comment_privacy',
+        ];
+        const buildQuery = (selected: string) => {
+          const request = supabase.from('posts').select(selected);
           if (kind === 'profile' && postIds) {
             return request.in('id', postIds).order('created_at', { ascending: false });
           }
@@ -302,18 +322,26 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           }
           return request.order('created_at', { ascending: false });
         };
-        let includeSoundTrim = true;
-        let includeMediaAssetId = true;
-        let result = await buildQuery(buildColumns(includeSoundTrim, includeMediaAssetId));
-        for (let attempt = 0; attempt < 2 && result.error; attempt += 1) {
-          if (includeSoundTrim && isMissingColumnError(result.error, 'sound_trim')) {
-            includeSoundTrim = false;
-          } else if (includeMediaAssetId && isMissingColumnError(result.error, 'media_asset_id')) {
-            includeMediaAssetId = false;
-          } else {
-            break;
-          }
-          result = await buildQuery(buildColumns(includeSoundTrim, includeMediaAssetId));
+        let result = await buildQuery(columns.join(', '));
+        for (let attempt = 0; attempt < 10 && result.error; attempt += 1) {
+          const missingColumn = missingSelectColumn(result.error, columns);
+          if (!missingColumn) break;
+          console.warn('[posts] عمود مفقود في جدول posts — أُعيد الاستعلام بدونه', {
+            query: kind,
+            column: missingColumn,
+          });
+          columns = columns.filter(column => column !== missingColumn);
+          result = await buildQuery(columns.join(', '));
+        }
+        if (result.error) {
+          console.warn('[posts] فشل الاستعلام بالأعمدة الصريحة — إعادة المحاولة بكل الأعمدة (*)', {
+            query: kind,
+            code: result.error.code,
+            message: result.error.message,
+            details: result.error.details,
+            hint: result.error.hint,
+          });
+          result = await buildQuery('*');
         }
         return result;
       };
