@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
+import MediaDiagnosticAlert from '@/components/MediaDiagnosticAlert';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
 import NotificationsModal from '@/components/NotificationsModal';
@@ -20,6 +21,7 @@ import SearchPage from '@/pages/SearchPage';
 import useAppSession from '@/hooks/useAppSession';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { handleAppError, installSupabaseErrorInterceptor } from '@/lib/appErrors';
+import { initMediaDiagnostics } from '@/lib/mediaDiagnostics';
 import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -32,6 +34,13 @@ try {
   installSupabaseErrorInterceptor(supabase);
 } catch (interceptorError) {
   console.error('[app] تعذر تفعيل اعتراض أخطاء Supabase — التطبيق يعمل بدونه', interceptorError);
+}
+
+// تشخيص الوسائط: رصد صامت مستقل (fetch/XHR) — فشل تفعيله لا يمنع الإقلاع
+try {
+  initMediaDiagnostics();
+} catch (diagnosticsError) {
+  console.error('[app] تعذر تفعيل تشخيص الوسائط — التطبيق يعمل بدونه', diagnosticsError);
 }
 
 function App() {
@@ -112,6 +121,7 @@ function App() {
       <>
         <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
         <GlobalErrorToast />
+        <MediaDiagnosticAlert />
         <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
       </>
     );
@@ -228,6 +238,7 @@ function App() {
         )}
       </WouterRouter>
       <GlobalErrorToast />
+      <MediaDiagnosticAlert />
       <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
     </TooltipProvider>
   );

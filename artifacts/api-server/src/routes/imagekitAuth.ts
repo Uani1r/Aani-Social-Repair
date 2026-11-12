@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
 
 import { logger } from "../lib/logger";
+import { describeExpireValue, logImageKitAuthDiagnostics } from "../lib/mediaDiagnostics";
 import { readSupabaseAdminConfig } from "../lib/supabaseAdmin";
 
 const router = Router();
@@ -60,6 +61,10 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
       const userId = await getAuthenticatedUserId(supabaseConfig, accessToken);
       if (!userId) return res.status(401).json({ success: false, error: "The session is invalid or expired." });
 
+      // فحص تشخيصي صامت: يسجل أي مشكلة في إعدادات ImageKit (مفاتيح ناقصة/
+      // فراغات/مفتاح مرفوض من ImageKit نفسه) في سجل الخادم دون تعطيل الطلب
+      logImageKitAuthDiagnostics(imagekit);
+
       const token = crypto.randomUUID();
       // ImageKit يتوقع expire بالثواني (unix time) وبحد أقصى ساعة واحدة
       const expire = Math.floor(Date.now() / 1000) + 60 * 30;
@@ -70,6 +75,12 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
         .createHash("sha1")
         .update(`${imagekit.privateKey}${token}${expire}`)
         .digest("hex");
+
+      // سجل تشخيصي غير حساس: هل المعاملات المولّدة بصيغة سليمة (بلا أسرار)
+      logger.info(
+        { expire, expireCheck: describeExpireValue(expire), tokenPrefix: token.slice(0, 8), publicKeyPrefix: imagekit.publicKey.slice(0, 12) },
+        "ImageKit upload auth generated",
+      );
 
       return res
         .status(200)
