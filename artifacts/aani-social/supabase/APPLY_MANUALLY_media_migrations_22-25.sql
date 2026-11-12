@@ -1,0 +1,652 @@
+-- ============================================================================
+-- ملف الترحيلات اليدوية — منظومة الوسائط (Aani Social)
+-- ============================================================================
+-- طريقة الاستخدام: انسخ كل قسم كاملاً (من "begin;" حتى "commit;") والصقه
+-- في Supabase SQL Editor على حدة، بالترتيب التالي — ثم راقب رسائل الـ Notices.
+--
+--   القسم 1 ← 20270122 (تنظيف السجلات المنتهية + جدولة pg_cron اختيارياً)
+--   القسم 2 ← 20270123 (طابور الحذف المؤجل media_deletion_jobs)
+--   القسم 3 ← 20270124 (التحصين + سجل الرفع media_upload_ledger)
+--   القسم 4 ← 20270125 (إغلاق صلاحيات دوال SECURITY DEFINER على service_role فقط)
+--
+-- ملاحظات:
+--   - كل قسم مستقل ومعاملة منفصلة (begin/commit) — إن فشل قسم أعد النشر بعد
+--     قراءة رسالة الخطأ، والأقسام الأخرى لا تتأثر.
+--   - القسم 3 يتسامح مع غياب جداول أبرز القصص (Notice فقط، لا فشل).
+--   - القسم 4 يتحقق من وجود كل دالة/جدول/عمود قبل التنفيذ.
+--   - بعد الأقسام الأربعة: شغّل verify_media_security.sql للتأكد أن صلاحيات
+--     الدوال الست على service_role فقط.
+--   - لا ينفّذ هذا الملف أي حذف لملفات ImageKit — طابور فقط، والحذف من الخادم
+--     بعد مراجعتك.
+-- ============================================================================
+
+
+-- ============================================================================
+-- القسم 1 / 4 — 20270122000000_expired_media_cleanup.sql
+-- تنظيف تلقائي للمحتوى المنتهي ضمن حد قاعدة البيانات (500 MB في الباقة المجانية):
+-- - القصص المنتهية قبل أكثر من يومين وغير المستخدمة في أبرز القصص (بالمرجع أو بالرابط)
+--   أو في الأصوات النشطة، مع أرشفة مشاهداتها.
+-- - الإشعارات الأقدم من 30 يوماً.
+-- ملفات ImageKit المقابلة تُحذف عبر نقطة النهاية /api/media/purge-expired من الخادم.
+-- ============================================================================
+
+begin;
+
+create or replace function public.aani_cleanup_expired_media_records()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  purged_stories bigint := 0;
+  purged_views bigint := 0;
+  purged_notifications bigint := 0;
+  expired_ids uuid[];
+begin
+  select array_agg(s.id) into expired_ids
+  from public.stories s
+  where s.expires_at < now() - interval '2 days'
+    and not exists (
+      select 1 from public.profile_highlights h
+      where h.source_story_id = s.id
+        or (h.media_url is not null and s.media_url is not null
+            and regexp_replace(h.media_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+    )
+    and not exists (
+      select 1 from public.sounds sd
+      where (sd.source_video_url is not null and s.media_url is not null
+             and regexp_replace(sd.source_video_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+         or (sd.preview_url is not null and s.media_url is not null
+             and regexp_replace(sd.preview_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+    );
+
+  if expired_ids is not null then
+    delete from public.story_views where story_id = any(expired_ids);
+    get diagnostics purged_views = row_count;
+
+    delete from public.stories where id = any(expired_ids);
+    get diagnostics purged_stories = row_count;
+  end if;
+
+  delete from public.notifications where created_at < now() - interval '30 days';
+  get diagnostics purged_notifications = row_count;
+
+  return jsonb_build_object(
+    'stories', purged_stories,
+    'story_views', purged_views,
+    'notifications', purged_notifications
+  );
+end $$;
+
+grant execute on function public.aani_cleanup_expired_media_records() to authenticated;
+
+-- جدولة يومية عبر pg_cron إن كان متاحاً في هذه البيئة — وإلا يغطي الفحص
+-- الدوري من العميل (مرة كل 24 ساعة لكل مستخدم) نفس العمل دون تعطل الترحيل.
+do $cron$
+begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    if not exists (select 1 from pg_extension where extname = 'pg_cron') then
+      create extension if not exists pg_cron;
+    end if;
+
+    if exists (select 1 from cron.job where jobname = 'aani-expired-media-cleanup') then
+      perform cron.unschedule('aani-expired-media-cleanup');
+    end if;
+
+    perform cron.schedule(
+      'aani-expired-media-cleanup',
+      '17 3 * * *',
+      'select public.aani_cleanup_expired_media_records();'
+    );
+  end if;
+exception
+  when others then
+    null; -- pg_cron غير متاح — لا تفشل الترحيل
+end $cron$;
+
+notify pgrst, 'reload schema';
+
+commit;
+
+
+-- ============================================================================
+-- القسم 2 / 4 — 20270123000000_media_deletion_outbox.sql
+-- طابور الحذف المؤجل (Outbox) + تشديد صلاحيات تنظيف قاعدة البيانات:
+-- - حذف منشور/قصة يُسجل روابط وسائطه داخل المعاملة نفسها عبر Trigger،
+--   وWorker الخادم يحذف ملفات ImageKit لاحقاً بعد فحص المراجع الحية مرة أخرى.
+-- - الدالة العامة لم تعد قابلة للاستدعاء من authenticated/anon.
+-- ============================================================================
+
+begin;
+
+create table if not exists public.media_deletion_jobs (
+  id bigint generated by default as identity primary key,
+  media_url text not null,
+  status text not null default 'pending'
+    check (status in ('pending', 'processing', 'completed', 'failed', 'skipped')),
+  attempts integer not null default 0,
+  next_attempt_at timestamptz not null default now(),
+  last_error text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (media_url)
+);
+
+create index if not exists idx_media_deletion_jobs_pending
+  on public.media_deletion_jobs (status, next_attempt_at);
+
+alter table public.media_deletion_jobs enable row level security;
+-- لا سياسات RLS إطلاقاً → anon وauthenticated ممنوعون تماماً (deny by default).
+revoke all on table public.media_deletion_jobs from anon, authenticated;
+grant select, insert, update on table public.media_deletion_jobs to service_role;
+
+-- Trigger: يسجل روابط الوسائط في الطابور داخل معاملة الحذف نفسها
+-- (لا حذف فعلي للملفات هنا — Worker الخادم هو من ينفذ الحذف بعد الفحص).
+create or replace function public.aani_queue_deleted_media()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  row_data jsonb;
+  media_value text;
+begin
+  row_data := to_jsonb(old);
+  for media_value in
+    select value
+    from (
+      select row_data ->> 'media_url' as value
+      union all
+      select jsonb_array_elements_text(
+        case
+          when jsonb_typeof(row_data -> 'media_urls') = 'array'
+          then row_data -> 'media_urls'
+          else '[]'::jsonb
+        end
+      )
+    ) media_values
+  loop
+    if media_value is null or media_value = '' then
+      continue;
+    end if;
+    insert into public.media_deletion_jobs (media_url, status)
+    values (regexp_replace(media_value, '[?#].*$', ''), 'pending')
+    on conflict (media_url) do nothing;
+  end loop;
+  return old;
+end $$;
+
+drop trigger if exists aani_queue_deleted_media on public.posts;
+create trigger aani_queue_deleted_media
+  after delete on public.posts
+  for each row execute function public.aani_queue_deleted_media();
+
+drop trigger if exists aani_queue_deleted_media on public.stories;
+create trigger aani_queue_deleted_media
+  after delete on public.stories
+  for each row execute function public.aani_queue_deleted_media();
+
+-- الدالة نفسها بقفل استشاري يمنع تشغيل دورتين متزامنتين (pg_cron + الخادم معاً)
+create or replace function public.aani_cleanup_expired_media_records()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  purged_stories bigint := 0;
+  purged_views bigint := 0;
+  purged_notifications bigint := 0;
+  expired_ids uuid[];
+begin
+  perform pg_advisory_xact_lock(hashtext('aani_media_cleanup'));
+
+  select array_agg(s.id) into expired_ids
+  from public.stories s
+  where s.expires_at < now() - interval '2 days'
+    and not exists (
+      select 1 from public.profile_highlights h
+      where h.source_story_id = s.id
+        or (h.media_url is not null and s.media_url is not null
+            and regexp_replace(h.media_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+    )
+    and not exists (
+      select 1 from public.sounds sd
+      where (sd.source_video_url is not null and s.media_url is not null
+             and regexp_replace(sd.source_video_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+         or (sd.preview_url is not null and s.media_url is not null
+             and regexp_replace(sd.preview_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+    );
+
+  if expired_ids is not null then
+    delete from public.story_views where story_id = any(expired_ids);
+    get diagnostics purged_views = row_count;
+
+    delete from public.stories where id = any(expired_ids);
+    get diagnostics purged_stories = row_count;
+  end if;
+
+  delete from public.notifications where created_at < now() - interval '30 days';
+  get diagnostics purged_notifications = row_count;
+
+  return jsonb_build_object(
+    'stories', purged_stories,
+    'story_views', purged_views,
+    'notifications', purged_notifications
+  );
+end $$;
+
+-- التنظيف العام لم يعد متاحاً لأي مستخدم عادي — الخادم الموثوق فقط
+revoke all on function public.aani_cleanup_expired_media_records() from public, anon, authenticated;
+grant execute on function public.aani_cleanup_expired_media_records() to service_role;
+
+notify pgrst, 'reload schema';
+
+commit;
+
+
+-- ============================================================================
+-- القسم 3 / 4 — 20270124000000_media_outbox_hardening.sql
+-- تحصين طابور الحذف المؤجل وتوسيع تغطية أنواع الوسائط:
+-- 1) RPC حجز ذري للمهام (FOR UPDATE SKIP LOCKED) مع إيجار (lease).
+-- 2) سجل الرفع media_upload_ledger لملاحقة الملفات المرفوعة بلا مرجع.
+-- 3) إدراج موحد للمهام + Triggers استبدال الأفاتار/الغلاف/غلاف الأبرز
+--    وحذف رسائل الدردشة الحاملة لروابط /aani/.
+--    لا حذف فعلي داخل Triggers — الطابور فقط.
+-- تتسامح مع بيئة بلا جداول أبرز القصص (to_regclass — Notice فقط، لا فشل).
+-- ============================================================================
+
+begin;
+
+-- 1) RPC الحجز الذري =========================================================
+create or replace function public.aani_claim_media_deletion_jobs(
+  p_batch integer default 25,
+  p_lease_minutes integer default 30
+)
+returns setof public.media_deletion_jobs
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  return query
+  update public.media_deletion_jobs as j
+     set status = 'processing',
+         updated_at = now()
+   where j.id in (
+     select c.id
+       from public.media_deletion_jobs as c
+      where (c.status = 'pending' and c.next_attempt_at <= now())
+         or (c.status = 'processing'
+             and c.updated_at < now() - make_interval(mins => greatest(p_lease_minutes, 1)))
+      order by c.next_attempt_at
+      limit greatest(p_batch, 1)
+      for update skip locked
+    )
+    returning *;
+end $$;
+
+grant execute on function public.aani_claim_media_deletion_jobs(integer, integer) to service_role;
+
+-- 2) سجل الرفع (Upload Ledger) ==============================================
+create table if not exists public.media_upload_ledger (
+  id bigint generated by default as identity primary key,
+  media_url text not null unique,
+  file_id text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_media_upload_ledger_created
+  on public.media_upload_ledger (created_at);
+
+alter table public.media_upload_ledger enable row level security;
+-- لا سياسات RLS: المستخدم العادي لا يكتب ولا يقرأ السجل — الخادم الموثوق فقط
+revoke all on table public.media_upload_ledger from anon, authenticated;
+grant select, insert, delete on table public.media_upload_ledger to service_role;
+
+-- 3) إدراج موحد للمهام (يعيد فتح المهمة القديمة عند إعادة إدراج الرابط) ======
+-- ملاحظة الأمان: أسماء ملفات ImageKit فريدة (useUniqueFileName=true) فالرابط
+-- نفسه لا يعود لملف جديد، وWorker يعيد فحص المراجع كاملة قبل أي حذف —
+-- لذا إعادة فتح مهمة قديمة هنا آمنة ومطابقة للنمط المطلوب.
+create or replace function public.aani_enqueue_media_deletion_job(p_media_url text)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  if p_media_url is null or btrim(p_media_url) = '' then
+    return;
+  end if;
+  if position('/aani/' in p_media_url) = 0 then
+    return;
+  end if;
+  insert into public.media_deletion_jobs (media_url, status)
+  values (regexp_replace(p_media_url, '[?#].*$', ''), 'pending')
+  on conflict (media_url) do update
+    set status = 'pending',
+        attempts = 0,
+        next_attempt_at = now(),
+        updated_at = now();
+end $$;
+
+-- توحيد سلوك Trigger المنشورات/القصص الحالي مع الإدراج الموحد أعلاه
+create or replace function public.aani_queue_deleted_media()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  row_data jsonb;
+  media_value text;
+begin
+  row_data := to_jsonb(old);
+  for media_value in
+    select value
+    from (
+      select row_data ->> 'media_url' as value
+      union all
+      select jsonb_array_elements_text(
+        case
+          when jsonb_typeof(row_data -> 'media_urls') = 'array'
+          then row_data -> 'media_urls'
+          else '[]'::jsonb
+        end
+      )
+    ) media_values
+  loop
+    perform public.aani_enqueue_media_deletion_job(media_value);
+  end loop;
+  return old;
+end $$;
+
+-- 4) استبدال صور الحساب والأغلفة وأغلفة أبرز القصص ==========================
+create or replace function public.aani_queue_media_if_replaced()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  if (TG_TABLE_NAME = 'profiles') then
+    if (old.avatar_url is distinct from new.avatar_url) then
+      perform public.aani_enqueue_media_deletion_job(old.avatar_url);
+    end if;
+    if (old.cover_url is distinct from new.cover_url) then
+      perform public.aani_enqueue_media_deletion_job(old.cover_url);
+    end if;
+  elsif (TG_TABLE_NAME = 'profile_highlight_collections') then
+    if (old.cover_url is distinct from new.cover_url) then
+      perform public.aani_enqueue_media_deletion_job(old.cover_url);
+    end if;
+  end if;
+  return coalesce(new, old);
+end $$;
+
+-- Triggers تُنشأ فقط إذا وُجد جدولها — لا يفشل الترحيل في بيئة بلا أبرز قصص
+do $ddl$
+begin
+  if to_regclass('public.profiles') is not null then
+    drop trigger if exists aani_queue_replaced_media on public.profiles;
+    create trigger aani_queue_replaced_media
+      after update of avatar_url, cover_url on public.profiles
+      for each row execute function public.aani_queue_media_if_replaced();
+  end if;
+
+  if to_regclass('public.profile_highlight_collections') is not null then
+    drop trigger if exists aani_queue_replaced_media on public.profile_highlight_collections;
+    create trigger aani_queue_replaced_media
+      after update of cover_url on public.profile_highlight_collections
+      for each row execute function public.aani_queue_media_if_replaced();
+  else
+    raise notice 'public.profile_highlight_collections غير موجود في هذه البيئة — سيُنشأ Trigger غلاف أبرز القصص بعد تطبيق ترحيلات أبرز القصص وإعادة تشغيل هذا الملف';
+  end if;
+end $ddl$;
+
+-- 5) حذف رسالة يحمل روابط /aani/ داخل نصها (مرفقات الدردشة) =================
+-- حلقة FOR-IN-SELECT تلتقط كل الروابط (وليس الرابط الأول فقط)، وcoalesce
+-- يحمي من محتوى فارغ — دون أي subquery تعيد أكثر من صف داخل تعبير.
+create or replace function public.aani_queue_deleted_message_media()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  media_url text;
+begin
+  for media_url in
+    select (regexp_matches(coalesce(old.content, ''), 'https://[^\s"<>]+', 'g'))[1]
+  loop
+    perform public.aani_enqueue_media_deletion_job(media_url);
+  end loop;
+  return old;
+end $$;
+
+do $ddl$
+begin
+  if to_regclass('public.messages') is not null then
+    drop trigger if exists aani_queue_deleted_message_media on public.messages;
+    create trigger aani_queue_deleted_message_media
+      after delete on public.messages
+      for each row execute function public.aani_queue_deleted_message_media();
+  end if;
+end $ddl$;
+
+-- 6) دالة التنظيف: تتحقق من وجود جدول أبرز القصص عند التشغيل ================
+-- في بيئة بلا أبرز قصص، لا توجد مراجع أبرز قصص أصلاً — يُكتفى بفحص الأصوات.
+create or replace function public.aani_cleanup_expired_media_records()
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  purged_stories bigint := 0;
+  purged_views bigint := 0;
+  purged_notifications bigint := 0;
+  expired_ids uuid[];
+begin
+  perform pg_advisory_xact_lock(hashtext('aani_media_cleanup'));
+
+  if to_regclass('public.profile_highlights') is not null then
+    select array_agg(s.id) into expired_ids
+    from public.stories s
+    where s.expires_at < now() - interval '2 days'
+      and not exists (
+        select 1 from public.profile_highlights h
+        where h.source_story_id = s.id
+          or (h.media_url is not null and s.media_url is not null
+              and regexp_replace(h.media_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+      )
+      and not exists (
+        select 1 from public.sounds sd
+        where (sd.source_video_url is not null and s.media_url is not null
+               and regexp_replace(sd.source_video_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+           or (sd.preview_url is not null and s.media_url is not null
+               and regexp_replace(sd.preview_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+      );
+  else
+    select array_agg(s.id) into expired_ids
+    from public.stories s
+    where s.expires_at < now() - interval '2 days'
+      and not exists (
+        select 1 from public.sounds sd
+        where (sd.source_video_url is not null and s.media_url is not null
+               and regexp_replace(sd.source_video_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+           or (sd.preview_url is not null and s.media_url is not null
+               and regexp_replace(sd.preview_url, '[#?].*$', '') = regexp_replace(s.media_url, '[#?].*$', ''))
+      );
+  end if;
+
+  if expired_ids is not null then
+    delete from public.story_views where story_id = any(expired_ids);
+    get diagnostics purged_views = row_count;
+
+    delete from public.stories where id = any(expired_ids);
+    get diagnostics purged_stories = row_count;
+  end if;
+
+  delete from public.notifications where created_at < now() - interval '30 days';
+  get diagnostics purged_notifications = row_count;
+
+  return jsonb_build_object(
+    'stories', purged_stories,
+    'story_views', purged_views,
+    'notifications', purged_notifications
+  );
+end $$;
+
+-- التنظيف العام لم يعد متاحاً لأي مستخدم عادي — الخادم الموثوق فقط
+revoke all on function public.aani_cleanup_expired_media_records() from public, anon, authenticated;
+grant execute on function public.aani_cleanup_expired_media_records() to service_role;
+
+notify pgrst, 'reload schema';
+
+commit;
+
+
+-- ============================================================================
+-- القسم 4 / 4 — 20270125000000_media_security_lockdown.sql
+-- إغلاق صلاحيات دوال SECURITY DEFINER الخاصة بوسائط التطبيق:
+-- 1) دوال طابور الحذف المؤجل والتنظيف تعمل من الخادم الموثوق (service_role)
+--    أو عبر Triggers (تنفيذ Trigger لا يتطلب صلاحية EXECUTE أصلاً)، فلا سبب
+--    لبقاء EXECUTE الافتراضي على PUBLIC. تسحب الصلاحية من PUBLIC ومن anon
+--    ومن authenticated صراحةً، وتمنحها لـ service_role فقط.
+-- 2) Triggers الاستبدال (أغلفة الحساب/الأبرز) تُنشأ فقط عندما تكون أعمدتها
+--    موجودة، وبيئة ناقصة المخطط لا تفشل.
+-- 3) الجداول تُسحب منها أي منح مباشر لـ anon/authenticated.
+-- ============================================================================
+
+begin;
+
+-- 1) إغلاق صلاحيات دوال الوسائط ============================================
+do $ddl$
+declare
+  target_functions text[] := array[
+    'aani_claim_media_deletion_jobs(integer,integer)',
+    'aani_enqueue_media_deletion_job(text)',
+    'aani_queue_deleted_media()',
+    'aani_queue_media_if_replaced()',
+    'aani_queue_deleted_message_media()',
+    'aani_cleanup_expired_media_records()'
+  ];
+  target_signature text;
+  proc_oid oid;
+begin
+  foreach target_signature in array target_functions loop
+    proc_oid := to_regprocedure('public.' || target_signature);
+    if proc_oid is null then
+      raise notice 'الدالة % غير موجودة في هذه البيئة — تُتخطى (الترحيل المرجعي لم يُطبَّق)', target_signature;
+      continue;
+    end if;
+
+    -- PUBLIC: الوضع الافتراضي عند CREATE FUNCTION يمنح EXECUTE للعموم — نسحبه
+    execute format('revoke all on function public.%s from public', target_signature);
+    -- أدوار Supabase (إن وُجدت في هذه البيئة)
+    if to_regrole('anon') is not null then
+      execute format('revoke all on function public.%s from anon', target_signature);
+    end if;
+    if to_regrole('authenticated') is not null then
+      execute format('revoke all on function public.%s from authenticated', target_signature);
+    end if;
+    -- الخادم الموثوق فقط
+    if to_regrole('service_role') is not null then
+      execute format('grant execute on function public.%s to service_role', target_signature);
+    end if;
+    raise notice 'أُغلقت صلاحيات الدالة % — service_role فقط', target_signature;
+  end loop;
+end $ddl$;
+
+-- 2) ضمانة توافق: إنشاء Triggers الاستبدال مشروط بوجود الأعمدة نفسها —
+--    بيئة تنقصها profiles.cover_url أو profile_highlight_collections
+--    (ترحيلات 20261210/20261215 غير مطبقة) لا تفشل هنا؛ يُنشأ كل Trigger
+--    فقط عندما تكون أعمدته موجودة فعلاً، مع إشعار صريح لما يُتخطى.
+--    (هذا لا يعدّل ترحيلاً مطبقاً — Triggers مطابقة لترحيل 24 عند اكتمال المخطط)
+do $ddl$
+declare
+  has_profiles_table boolean := to_regclass('public.profiles') is not null;
+  has_collections_table boolean := to_regclass('public.profile_highlight_collections') is not null;
+  has_avatar boolean;
+  has_profile_cover boolean;
+  has_collection_cover boolean;
+begin
+  if has_profiles_table then
+    select
+      exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'profiles' and column_name = 'avatar_url'),
+      exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'profiles' and column_name = 'cover_url')
+    into has_avatar, has_profile_cover;
+
+    if has_avatar and has_profile_cover then
+      drop trigger if exists aani_queue_replaced_media on public.profiles;
+      create trigger aani_queue_replaced_media
+        after update of avatar_url, cover_url on public.profiles
+        for each row execute function public.aani_queue_media_if_replaced();
+      raise notice 'Trigger استبدال وسائط profiles جاهز';
+    else
+      raise notice 'أعمدة profiles للوسائط غير مكتملة — يُتخطى Trigger الاستبدال (طبّق ترحيل 20261210000000 أولاً)';
+    end if;
+  else
+    raise notice 'public.profiles غير موجود — يُتخطى Trigger الاستبدال';
+  end if;
+
+  if has_collections_table then
+    select exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'profile_highlight_collections'
+                     and column_name = 'cover_url')
+    into has_collection_cover;
+
+    if has_collection_cover then
+      drop trigger if exists aani_queue_replaced_media on public.profile_highlight_collections;
+      create trigger aani_queue_replaced_media
+        after update of cover_url on public.profile_highlight_collections
+        for each row execute function public.aani_queue_media_if_replaced();
+      raise notice 'Trigger استبدال أغلفة أبرز القصص جاهز';
+    else
+      raise notice 'عمود cover_url غير موجود في profile_highlight_collections — يُتخطى Trigger (طبّق ترحيل 20261215000000 أولاً)';
+    end if;
+  else
+    raise notice 'public.profile_highlight_collections غير موجود — يُتخطى Trigger (طبّق ترحيل 20261212000000 أولاً)';
+  end if;
+end $ddl$;
+
+-- 3) الجداول: لا وصول مباشر لأي مستخدم عادي ===============================
+do $ddl$
+begin
+  if to_regclass('public.media_deletion_jobs') is not null then
+    if to_regrole('anon') is not null then
+      revoke all on table public.media_deletion_jobs from anon;
+    end if;
+    if to_regrole('authenticated') is not null then
+      revoke all on table public.media_deletion_jobs from authenticated;
+    end if;
+    if to_regrole('service_role') is not null then
+      grant select, insert, update, delete on table public.media_deletion_jobs to service_role;
+    end if;
+  else
+    raise notice 'public.media_deletion_jobs غير موجود — تُتخطى حجب الجدول (طبِّق ترحيل 20270123000000 أولاً)';
+  end if;
+
+  if to_regclass('public.media_upload_ledger') is not null then
+    if to_regrole('anon') is not null then
+      revoke all on table public.media_upload_ledger from anon;
+    end if;
+    if to_regrole('authenticated') is not null then
+      revoke all on table public.media_upload_ledger from authenticated;
+    end if;
+    if to_regrole('service_role') is not null then
+      grant select, insert, delete on table public.media_upload_ledger to service_role;
+    end if;
+  else
+    raise notice 'public.media_upload_ledger غير موجود — تُتخطى حجب الجدول (طبِّق ترحيل 20270124000000 أولاً)';
+  end if;
+end $ddl$;
+
+notify pgrst, 'reload schema';
+
+commit;
