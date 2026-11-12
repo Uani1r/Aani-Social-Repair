@@ -183,13 +183,14 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
       .from('reposts')
       .select('post_id, user_id, created_at')
       .order('created_at', { ascending: false })
-      .limit(1000);
+      .limit(40);
     if (repostError) return [];
 
     const repostRows = normalizeRepostRows(repostData).filter(row => row.user_id);
     if (repostRows.length === 0) return [];
 
-    const postIds = Array.from(new Set(repostRows.map(row => row.post_id)));
+    // سقف صارم: أول 40 معرفاً فقط — لا سحب لمئات المنشورات المعاد نشرها دفعة واحدة
+    const postIds = Array.from(new Set(repostRows.map(row => row.post_id))).slice(0, 40);
     // نفس منطق استعلام الريلز: تقليص الأعمدة عند عمود مفقود ثم (*) كحل أخير
     let repostColumns = [
       'id', 'user_id', 'content', 'post_metadata', 'media_url', 'media_urls',
@@ -202,7 +203,8 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     const fetchRepostPosts = (columns: string) => supabase
       .from('posts')
       .select(columns)
-      .in('id', postIds);
+      .in('id', postIds)
+      .limit(40);
     let result = await fetchRepostPosts(repostColumns.join(', '));
     for (let attempt = 0; attempt < 10 && result.error; attempt += 1) {
       const missingColumn = missingSelectColumn(result.error, repostColumns);
