@@ -68,6 +68,16 @@ async function requeueJob(
   });
 }
 
+/** شرط الاحتياط لحجز المهام بلا RPC (قبل تطبيق الترحيل): pending المستحقة
+ *  الآن + processing الذي انتهى إيجاره (دالة صرفة قابلة للاختبار). */
+export function buildStaleClaimOrCondition(now: Date, leaseMinutes: number = LEASE_MINUTES): string {
+  const leaseCutoff = new Date(now.getTime() - leaseMinutes * 60 * 1000).toISOString();
+  return `(
+    and(status.eq.pending,next_attempt_at.lte.${now.toISOString()}),
+    and(status.eq.processing,updated_at.lte.${leaseCutoff})
+  )`;
+}
+
 /**
  حجز دفعة مهام ذرياً: RPC بقفل SKIP LOCKED يمنع عاملين من معالجة المهمة نفسها،
  ويسترجع المهام التي انتهى إيجارها (processing متقادمة) — فلا تبقى عالقة للأبد.
@@ -99,10 +109,7 @@ async function claimJobs(config: SupabaseAdminConfig): Promise<Record<string, un
     logger.warn("aani_claim_media_deletion_jobs unavailable yet — using REST claim fallback");
     const claim = await restRequest(config, "GET", "media_deletion_jobs", {
       select: "id,media_url,attempts",
-      or: `(
-        and(status.eq.pending,next_attempt_at.lte.${new Date().toISOString()}),
-        and(status.eq.processing,updated_at.lte.${new Date(Date.now() - LEASE_MINUTES * 60 * 1000).toISOString()})
-      )`,
+      or: buildStaleClaimOrCondition(new Date(), LEASE_MINUTES),
       order: "next_attempt_at.asc",
       limit: String(BATCH_SIZE),
     });
@@ -139,12 +146,22 @@ export async function processDeletionJobs(
     // فشل حجز الدُفعة يؤجل الدورة كاملة — لا حذف يقع على شك
     const jobs = await claimJobs(config);
 
+    // حماية من الحذف المزدوج: معرّف مكرر في الدفعة (خطأ حجز، إعادة محاولة
+    // متزامنة، أو دمج مصدرين) يُعالج مرة واحدة فقط داخل الدورة.
+    const seenJobIds = new Set<string>();
+
     let completed = 0;
     let deferred = 0;
     let failed = 0;
 
     for (const job of jobs) {
       const jobId = String(job.id);
+      if (seenJobIds.has(jobId)) {
+        deferred += 1;
+        logger.warn({ jobId }, "Duplicate claimed job id in batch; skipped to prevent double deletion");
+        continue;
+      }
+      seenJobIds.add(jobId);
       const mediaUrl = normalizeMediaUrl(job.media_url);
       if (!mediaUrl) {
         await patchJob(config, jobId, { status: "failed", last_error: "invalid-media-url" });

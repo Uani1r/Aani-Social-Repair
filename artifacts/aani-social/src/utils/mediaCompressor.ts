@@ -17,6 +17,17 @@ export const MAX_UPLOAD_BYTES = 23.5 * 1024 * 1024;
 // GIF وSVG تُرفع كما هي (شفافية/حركة) — سقف صارم لمنع استغلال الاستثناء برفع ملفات ضخمة:
 export const UNCOMPRESSIBLE_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 
+/**
+ مواصفات الفيديو النهائية الموحدة (تُطبَّق على كل المسارات — الضغط المحلي،
+ المرور، المسار الاحتياطي، والمعالجة الخادمية): MP4 + H.264 + AAC عند وجود
+ صوت، أقصى ضلع 1280 (بلا تكبير)، 30fps كحد نهائي، Fast Start، وضمن حد الحجم.
+ */
+export const VIDEO_MAX_SIDE = 1280;
+export const VIDEO_MAX_SHORT_SIDE = 720;
+export const VIDEO_MAX_FPS = 30;
+/** سماحية تقريب لمعدلات الإطارات القياسية (30/1، 30000/1001) */
+export const VIDEO_MAX_FPS_EPSILON = 0.01;
+
 export type MediaPreset =
   | 'avatar'
   | 'cover'
@@ -233,6 +244,10 @@ export type Mp4TrackInspection = {
    لا مجرد FourCC عابر في البيانات.
    */
   hasCodecConfig: boolean;
+  /** أقصى ضلع عرض من tkhd (بكسل) — يغيب إن تعذّر استخراجه (بنية غير قابلة للتحقق) */
+  maxSide?: number;
+  /** معدل الإطارات من mdhd timescale + stts (تقريب لأقرب 1/100) — يغيب إن تعذّر */
+  fps?: number;
 };
 
 export type Mp4Inspection = {
@@ -243,7 +258,7 @@ export type Mp4Inspection = {
   tracks: Mp4TrackInspection[];
 };
 
-const CONTAINER_BOXES = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
+const CONTAINER_BOXES = new Set(['moov', 'mdia', 'minf', 'stbl']);
 const VIDEO_SAMPLE_CODECS = new Set(['avc1', 'avc3', 'hvc1', 'hev1', 'mp4v', 'vp09', 'av01']);
 const AUDIO_SAMPLE_CODECS = new Set(['mp4a', 'Opus', 'ac-3', 'ec-3', 'fLaC', 'alac']);
 
@@ -287,6 +302,28 @@ export function inspectMp4Bytes(bytes: Uint8Array): Mp4Inspection {
   if (bytes.length < 12) return inspection;
   if (fourCCAt(bytes, 4) === 'ftyp') inspection.containerVerified = true;
 
+  /** معطيات المسار الحالي (trak) — تُملأ تدريجياً من tkhd/mdhd/stts/stsd */
+  type TrakInspection = {
+    kind?: 'video' | 'audio';
+    codec?: string;
+    hasCodecConfig?: boolean;
+    maxSide?: number;
+    timescale?: number;
+    fps?: number;
+  };
+  let currentTrak: TrakInspection | null = null;
+
+  function finalizeTrak(trak: TrakInspection): void {
+    if (!trak.kind || !trak.codec) return;
+    inspection.tracks.push({
+      kind: trak.kind,
+      codec: trak.codec,
+      hasCodecConfig: trak.hasCodecConfig === true,
+      ...(trak.maxSide !== undefined ? { maxSide: trak.maxSide } : {}),
+      ...(trak.fps !== undefined ? { fps: trak.fps } : {}),
+    });
+  }
+
   /**
    يبحث عن صندوق إعداد الترميز داخل نطاق sample entry نفسه: ترويسة صندوق
    صحيحة (حجم معقول ضمن حدود المدخل + النوع المتوقع). الصناديق الثابتة قبل
@@ -303,7 +340,7 @@ export function inspectMp4Bytes(bytes: Uint8Array): Mp4Inspection {
   }
 
   /** stsd FullBox: ترويسة (8) + version/flags (4) + entry_count (4) ثم المدخلات. */
-  function parseStsd(boxStart: number, boxEnd: number): void {
+  function parseStsd(boxStart: number, boxEnd: number, trak: TrakInspection | null): void {
     let entryOffset = boxStart + 16;
     while (entryOffset + 8 <= boxEnd) {
       const entrySize = readU32(bytes, entryOffset);
@@ -311,20 +348,61 @@ export function inspectMp4Bytes(bytes: Uint8Array): Mp4Inspection {
       const codec = fourCCAt(bytes, entryOffset + 4);
       const kind = VIDEO_SAMPLE_CODECS.has(codec) ? 'video' : AUDIO_SAMPLE_CODECS.has(codec) ? 'audio' : null;
       if (kind) {
+        // المدخل الأول يحدد ترميز المسار (stsd متعدد المدخلات غير معتاد)
         const configType = codecConfigType(codec);
-        inspection.tracks.push({
-          kind,
-          codec,
-          hasCodecConfig: configType
-            ? entryContainsConfigBox(entryOffset + 8, entryOffset + entrySize, configType)
-            : false,
-        });
+        trak.kind = kind;
+        trak.codec = codec;
+        trak.hasCodecConfig = configType
+          ? entryContainsConfigBox(entryOffset + 8, entryOffset + entrySize, configType)
+          : false;
+        return;
       }
       entryOffset += entrySize;
     }
   }
 
-  function walk(start: number, end: number, depth: number): void {
+  /** tkhd: الأبعاد المعروضة (fixed-point 16.16) في نهاية الترويسة — v0 عند 84/88، v1 عند 100/104 */
+  function parseTkhd(boxStart: number, boxEnd: number, trak: TrakInspection | null): void {
+    if (!trak || boxEnd - boxStart < 8) return;
+    const version = bytes[boxStart + 8]!;
+    const widthOffset = boxStart + (version === 1 ? 100 : 84);
+    if (widthOffset + 8 > boxEnd) return;
+    const width = Math.round(readU32(bytes, widthOffset) / 65536);
+    const height = Math.round(readU32(bytes, widthOffset + 4) / 65536);
+    if (width > 0 && height > 0) trak.maxSide = Math.max(width, height);
+  }
+
+  /** mdhd: التايمزكيل — v0 عند +20، v1 عند +28 */
+  function parseMdhd(boxStart: number, boxEnd: number, trak: TrakInspection | null): void {
+    if (!trak || boxEnd - boxStart < 8) return;
+    const version = bytes[boxStart + 8]!;
+    const timescaleOffset = boxStart + 12 + (version === 1 ? 16 : 8);
+    if (timescaleOffset + 4 > boxEnd) return;
+    const timescale = readU32(bytes, timescaleOffset);
+    if (timescale > 0) trak.timescale = timescale;
+  }
+
+  /** stts: معدل الإطارات من مجموع عيناتها — fps = sampleCount / (totalDurationTicks / timescale) */
+  function parseStts(boxStart: number, boxEnd: number, trak: TrakInspection | null): void {
+    if (!trak || boxEnd - boxStart < 16) return;
+    const entryCount = readU32(bytes, boxStart + 12);
+    let sampleCount = 0;
+    let totalTicks = 0;
+    let offset = boxStart + 16;
+    for (let entry = 0; entry < entryCount && offset + 8 <= boxEnd; entry += 1) {
+      const count = readU32(bytes, offset);
+      const delta = readU32(bytes, offset + 4);
+      sampleCount += count;
+      totalTicks += count * delta;
+      offset += 8;
+    }
+    if (sampleCount > 0 && totalTicks > 0 && (trak.timescale ?? 0) > 0) {
+      const durationSeconds = totalTicks / trak.timescale!;
+      if (durationSeconds > 0) trak.fps = Math.round((sampleCount / durationSeconds) * 100) / 100;
+    }
+  }
+
+  function walk(start: number, end: number, depth: number, trak: TrakInspection | null): void {
     if (depth > 6) return;
     let offset = start;
     while (offset + 8 <= end) {
@@ -340,14 +418,21 @@ export function inspectMp4Bytes(bytes: Uint8Array): Mp4Inspection {
       }
       if (size < headerSize) break;
       if (offset + size > end) break; // صندوق غير مكتمل في هذه القطعة
-      if (type === 'stsd') parseStsd(offset, offset + size);
+      if (type === 'stsd') parseStsd(offset, offset + size, trak);
+      else if (type === 'tkhd') parseTkhd(offset, offset + size, trak);
+      else if (type === 'mdhd') parseMdhd(offset, offset + size, trak);
+      else if (type === 'stts') parseStts(offset, offset + size, trak);
       else if (type === 'moov') inspection.moovVerified = true;
-      else if (CONTAINER_BOXES.has(type)) walk(offset + headerSize, offset + size, depth + 1);
+      else if (type === 'trak') {
+        const nextTrak: TrakInspection = {};
+        walk(offset + headerSize, offset + size, depth + 1, nextTrak);
+        finalizeTrak(nextTrak);
+      } else if (CONTAINER_BOXES.has(type)) walk(offset + headerSize, offset + size, depth + 1, trak);
       offset += size;
     }
   }
 
-  walk(0, bytes.length, 0);
+  walk(0, bytes.length, 0, null);
   return inspection;
 }
 
@@ -370,6 +455,20 @@ export function decideMp4Passthrough(inspection: Mp4Inspection): { accepted: boo
   if (!h264Track.hasCodecConfig) {
     return { accepted: false, reason: 'avc-configuration-box-missing' };
   }
+  // المواصفة الموحدة: أقصى ضلع 1280 و30fps كحد نهائي — ما لا يمكن التحقق
+  // من دقته أو معدل إطاراته لا يمر (يُعاد ترميزه بدل اعتماد مواصفات مجهولة)
+  if (h264Track.maxSide === undefined) {
+    return { accepted: false, reason: 'video-dimensions-unverifiable' };
+  }
+  if (h264Track.maxSide > VIDEO_MAX_SIDE) {
+    return { accepted: false, reason: `video-dimensions-above-limit(${h264Track.maxSide})` };
+  }
+  if (h264Track.fps === undefined) {
+    return { accepted: false, reason: 'video-frame-rate-unverifiable' };
+  }
+  if (h264Track.fps > VIDEO_MAX_FPS + VIDEO_MAX_FPS_EPSILON) {
+    return { accepted: false, reason: `frame-rate-above-limit(${h264Track.fps})` };
+  }
 
   const incompatibleAudio = inspection.tracks.find(
     track => track.kind === 'audio' && !(track.codec === 'mp4a' && track.hasCodecConfig),
@@ -380,7 +479,7 @@ export function decideMp4Passthrough(inspection: Mp4Inspection): { accepted: boo
 
   return {
     accepted: true,
-    reason: `mp4-structure-verified: ${h264Track.codec}+avcC${
+    reason: `mp4-structure-verified: ${h264Track.codec}+avcC ≤${h264Track.maxSide}px ${h264Track.fps}fps${
       inspection.tracks.some(track => track.kind === 'audio') ? ' + mp4a/esds' : ' (silent)'
     }`,
   };
@@ -822,9 +921,11 @@ export async function compressVideo(
             width: targetWidth,
             height: targetHeight,
             fit: 'contain',
+            // 30fps كحد نهائي — خيار موثق في Conversion API (يضبط معدل إطارات الناتج)
+            frameRate: VIDEO_MAX_FPS,
             quality: new mb.Quality({ bitrate }),
           }
-        : { quality: new mb.Quality({ bitrate }) },
+        : { frameRate: VIDEO_MAX_FPS, quality: new mb.Quality({ bitrate }) },
       audio: { codec: 'aac', quality: new mb.Quality({ bitrate: 128e3 }) },
     });
     if (!conversion.isValid) {
@@ -849,7 +950,7 @@ export async function compressVideo(
   const sourceWidth = videoTrack ? await videoTrack.getDisplayWidth().catch(() => 0) : 0;
   const sourceHeight = videoTrack ? await videoTrack.getDisplayHeight().catch(() => 0) : 0;
 
-  // تخطي إعادة الترميز: MP4 بترميز H.264+AAC بجودة ≤720p وحجمه أقل من 6MB أصلاً
+  // تخطي إعادة الترميز: MP4 بترميز H.264+AAC ضمن حدود الأبعاد وحجمه أقل من 6MB أصلاً
   // (التحقق من الترميز ضروري: تخطي فيديو بترميز آخر قد يجعله غير قابل للتشغيل
   // في بعض المتصفحات، بينما إعادة الترميز لـ H.264+AAC تضمن التوافق — خصوصاً على iPhone Safari)
   const isMp4 = file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
@@ -859,9 +960,14 @@ export async function compressVideo(
   const videoCodecOk = /avc|h264|h\.264/i.test(videoCodec);
   const audioCodecOk = !audioTrack || /aac|mp4a/i.test(audioCodec);
   const alreadyCompact = sourceWidth > 0 && sourceHeight > 0
-    && Math.max(sourceWidth, sourceHeight) <= 1280
-    && Math.min(sourceWidth, sourceHeight) <= 720
+    && Math.max(sourceWidth, sourceHeight) <= VIDEO_MAX_SIDE
+    && Math.min(sourceWidth, sourceHeight) <= VIDEO_MAX_SHORT_SIDE
     && videoCodecOk && audioCodecOk;
+
+  // تحقق بنيوي كامل من مواصفات MP4 الأصلي (حاوية + ترميزات + أبعاد + fps)
+  // من شجرة الصناديق نفسها — شرط إضافي لأي مسار مرور: لا يمر ملف لمجرد أن
+  // حجمه أقل من الحد، وما لا يمكن التحقق من مواصفاته لا يُعد مطابقاً.
+  const structuralSpecVerified = isMp4 ? await verifyMp4Passthrough(file) : false;
 
   // وصف ترميز الملف كما تحقق فعلياً من المسار probe (يُسجل في القياسات فقط)
   const verifiedCodec = videoCodecOk
@@ -885,21 +991,22 @@ export async function compressVideo(
     });
   }
 
-  if (isMp4 && alreadyCompact && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
-    recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'already H.264/AAC ≤720p ≤6MB' });
+  if (isMp4 && alreadyCompact && structuralSpecVerified && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
+    recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'already H.264/AAC within spec (structure-verified)' });
     onProgress?.(100);
     return file;
   }
   if (file.size > maxBytes && !videoTrack) throw new MediaTooLargeError();
 
-  // الأبعاد: أقصى 720 للجانب القصير و1280 للطويل، بأبعاد زوجية لمتطلبات H.264
+  // الأبعاد: أقصى 720 للجانب القصير و1280 للطويل (المواصفة الموحدة)، بأبعاد
+  // زوجية لمتطلبات H.264 — والتكبير ممنوع (scale ≤ 1) للفيديو الأصغر
   let targetWidth = 0;
   let targetHeight = 0;
   if (sourceWidth > 0 && sourceHeight > 0) {
     const scale = Math.min(
       1,
-      1280 / Math.max(sourceWidth, sourceHeight),
-      720 / Math.min(sourceWidth, sourceHeight),
+      VIDEO_MAX_SIDE / Math.max(sourceWidth, sourceHeight),
+      VIDEO_MAX_SHORT_SIDE / Math.min(sourceWidth, sourceHeight),
     );
     targetWidth = Math.max(2, Math.round((sourceWidth * scale) / 2) * 2);
     targetHeight = Math.max(2, Math.round((sourceHeight * scale) / 2) * 2);
@@ -922,9 +1029,11 @@ export async function compressVideo(
       result = await runExclusive(() => attemptEncode(harsherBitrate, targetWidth, targetHeight));
     }
 
-    // لا نجعل الضغط يكبّر الملف بلا داعٍ: إن كان الأصل متوافقاً فعلاً
-    // (H.264/AAC محقق من المسار probe) وضمن الحد وأصغر من الناتج — نحتفظ بالأصل.
-    if (isMp4 && videoCodecOk && audioCodecOk && file.size <= maxBytes && result.size >= file.size) {
+    // لا نجعل الضغط يكبّر الملف بلا داعٍ: إن كان الأصل متوافقاً فعلاً —
+    // مواصفاته مثبتة بنيوياً (H.264/AAC + أبعاد + fps ضمن الحدود) وضمن الحد
+    // وأصغر من الناتج — نحتفظ بالأصل. غير ذلك يُرفع الناتج المعاد ترميزه
+    // (بما فيه خفض 30fps) وإن كان أكبر قليلاً — الالتزام بالمواصفة أولاً.
+    if (isMp4 && videoCodecOk && audioCodecOk && structuralSpecVerified && file.size <= maxBytes && result.size >= file.size) {
       recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'reencode-not-smaller-than-verified-original' });
       onProgress?.(100);
       return file;

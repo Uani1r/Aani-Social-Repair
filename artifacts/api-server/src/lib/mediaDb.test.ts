@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   arrayOverlapCondition,
   buildMediaReferenceConditions,
+  isMissingRelationError,
   isUnknownColumnError,
   MediaReferenceCheckError,
   postgrestValue,
@@ -242,4 +243,91 @@ test('تطبيع الروابط يزيل التزخرف قبل الفحص (?tr= 
   const base = 'https://ik.imagekit.io/anisocial/aani/u1/x.mp4';
   assert.equal(normalizeMediaUrl(`${base}?tr=w-400`), base);
   assert.equal(normalizeMediaUrl(`${base}#t=5,10`), base);
+});
+
+/* ------------------------------------------------------------------ */
+/* تصنيف الجداول: أساسية (غيابها يوقف الحذف) مقابل اختيارية            */
+/* ------------------------------------------------------------------ */
+
+test('isMissingRelationError: يميز غياب الجدول عن غياب العمود', () => {
+  const tableMissing = { status: 404, data: { code: "42P01", message: 'relation "public.posts" does not exist' } };
+  const tableMissingRest = { status: 404, data: null, errorText: "Could not find the table 'profile_highlight_collections' in the schema cache" };
+  const columnMissing = { status: 400, data: { code: "PGRST204", message: "Could not find the 'cover_url' column of 'profile_highlight_collections' in the schema cache" } };
+  const pgColumnMissing = { status: 400, data: { code: "42703", message: "column posts.xyz does not exist" } };
+  assert.equal(isMissingRelationError(tableMissing), true);
+  assert.equal(isMissingRelationError(tableMissingRest), true);
+  assert.equal(isMissingRelationError(columnMissing), false);
+  assert.equal(isMissingRelationError(pgColumnMissing), false);
+  assert.equal(isMissingRelationError({ status: 500, data: null }), false);
+});
+
+test('غياب جدول أساسي (posts) يوقف الحذف تماماً — استثناء وليس "غير مستخدم"', async () => {
+  const stub = stubSupabaseFetch((table) =>
+    table === 'posts'
+      ? { status: 404, body: '{"code":"42P01","message":"relation \\"public.posts\\" does not exist"}' }
+      : []);
+  try {
+    // الفحص يرمي استثناءً → المهمة تعود إلى pending → لا حذف
+    await assert.rejects(() => mediaInActiveUse(CONFIG, [URL_A]), MediaReferenceCheckError);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('غياب الجدول الاختياري كاملاً (profile_highlight_collections) يُتخطى وفق السياسة', async () => {
+  const stub = stubSupabaseFetch((table) =>
+    table === 'profile_highlight_collections'
+      ? { status: 404, body: '{"code":"PGRST205","message":"Could not find the table \'profile_highlight_collections\' in the schema cache"}' }
+      : []);
+  try {
+    // الجدول الاختياري الوحيد — غيابه في بيئة بلا أبرز قصص يعني لا مراجع أصلاً
+    assert.equal(await mediaInActiveUse(CONFIG, [URL_A]), false);
+    // بقية الجداول الأساسية فُحصت فعلاً
+    assert.ok(stub.tables.includes('posts'));
+    assert.ok(stub.tables.includes('messages'));
+    assert.ok(stub.tables.includes('media_assets'));
+  } finally {
+    stub.restore();
+  }
+});
+
+test('غياب عمود في جدول أساسي يُتخطى شرطاً شرطاً والبقية تُفحص (posts.media_urls)', async () => {
+  const stub = stubSupabaseFetch((table, params) => {
+    if (table !== 'posts') return [];
+    const orValue = params.get('or') ?? '';
+    if (orValue.includes('media_urls')) {
+      // or=() المجمعة تفشل بسبب عمود media_urls غير الموجود
+      return { status: 400, body: '{"code":"PGRST204","message":"Could not find the \'media_urls\' column of \'posts\' in the schema cache"}' };
+    }
+    // فحص شرط واحد (media_url أو audio_url) يعمل
+    return [];
+  });
+  try {
+    assert.equal(await mediaInActiveUse(CONFIG, [URL_A]), false);
+    // أُجري فحوص فردية بعد انكشاف غياب العمود
+    const singleProbes = stub.tables.filter(name => name === 'posts').length;
+    assert.ok(singleProbes > 1);
+  } finally {
+    stub.restore();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/* تطبيع الروابط (السياسة الموثقة في normalizeMediaUrl)                */
+/* ------------------------------------------------------------------ */
+
+test('روابط موقعة ومعاملات تحويل متعددة تُوحَّد — وروابط مختلفة فعلاً لا تتطابق', () => {
+  const plain = 'https://ik.imagekit.io/anisocial/aani/u1/v.mp4';
+  // توقيع/صلاحية/تحويل: نفس المورد (المسار هو الهوية) — للمقارنة فقط، لا للجلب
+  assert.equal(normalizeMediaUrl(`${plain}?ik-s=f4a9&ik-t=1712345678&ik-ep=180`), plain);
+  assert.equal(normalizeMediaUrl(`${plain}?tr=w-400&tr=q-auto`), plain);
+  assert.equal(
+    normalizeMediaUrl(`${plain}?ik-s=aaa`),
+    normalizeMediaUrl(`${plain}?ik-s=bbb&expires=1999999999`),
+  );
+  // ملفات مختلفة فعلاً لا تُدمج أبداً
+  assert.notEqual(
+    normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/a.mp4?tr=w-100'),
+    normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/b.mp4?tr=w-100'),
+  );
 });

@@ -3,7 +3,9 @@
 --    أو عبر Triggers (تنفيذ Trigger لا يتطلب صلاحية EXECUTE أصلاً)، فلا سبب
 --    لبقاء EXECUTE الافتراضي على PUBLIC. هذه الجولة تسحب الصلاحية من PUBLIC
 --    ومن anon ومن authenticated صراحةً، وتمنحها لـ service_role فقط.
--- 2) الجداول (media_deletion_jobs و media_upload_ledger) تُسحب منها أي منح
+-- 2) Triggers الاستبدال (أغلفة الحساب/الأبرز) تُنشأ فقط عندما تكون أعمدتها موجودة،
+--    وبيئة ناقصة المخطط لا تفشل.
+-- 3) الجداول (media_deletion_jobs و media_upload_ledger) تُسحب منها أي منح
 --    مباشر لـ anon/authenticated (RLS يرفض مطلقاً أصلاً — نضاعف الحماية).
 --
 -- استقلالية الترحيل: إن لم تُطبَّق الترحيلات السابقة (23/24) فالدوال والجداول
@@ -50,7 +52,61 @@ begin
   end loop;
 end $ddl$;
 
--- 2) الجداول: لا وصول مباشر لأي مستخدم عادي ===============================
+-- 2) ضمانة توافق: إنشاء Triggers الاستبدال مشروط بوجود الأعمدة نفسها —
+--    بيئة تنقصها profiles.cover_url أو profile_highlight_collections
+--    (ترحيلات 20261210/20261215 غير مطبقة) لا تفشل هنا؛ يُنشأ كل Trigger
+--    فقط عندما تكون أعمدته موجودة فعلاً، مع إشعار صريح لما يُتخطى.
+--    (هذا لا يعدّل ترحيلاً مطبقاً — Triggers مطابقة لترحيل 24 عند اكتمال المخطط)
+do $ddl$
+declare
+  has_profiles_table boolean := to_regclass('public.profiles') is not null;
+  has_collections_table boolean := to_regclass('public.profile_highlight_collections') is not null;
+  has_avatar boolean;
+  has_profile_cover boolean;
+  has_collection_cover boolean;
+begin
+  if has_profiles_table then
+    select
+      exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'profiles' and column_name = 'avatar_url'),
+      exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'profiles' and column_name = 'cover_url')
+    into has_avatar, has_profile_cover;
+
+    if has_avatar and has_profile_cover then
+      drop trigger if exists aani_queue_replaced_media on public.profiles;
+      create trigger aani_queue_replaced_media
+        after update of avatar_url, cover_url on public.profiles
+        for each row execute function public.aani_queue_media_if_replaced();
+      raise notice 'Trigger استبدال وسائط profiles جاهز';
+    else
+      raise notice 'أعمدة profiles للوسائط غير مكتملة — يُتخطى Trigger الاستبدال (طبّق ترحيل 20261210000000 أولاً)';
+    end if;
+  else
+    raise notice 'public.profiles غير موجود — يُتخطى Trigger الاستبدال';
+  end if;
+
+  if has_collections_table then
+    select exists (select 1 from information_schema.columns
+                   where table_schema = 'public' and table_name = 'profile_highlight_collections'
+                     and column_name = 'cover_url')
+    into has_collection_cover;
+
+    if has_collection_cover then
+      drop trigger if exists aani_queue_replaced_media on public.profile_highlight_collections;
+      create trigger aani_queue_replaced_media
+        after update of cover_url on public.profile_highlight_collections
+        for each row execute function public.aani_queue_media_if_replaced();
+      raise notice 'Trigger استبدال أغلفة أبرز القصص جاهز';
+    else
+      raise notice 'عمود cover_url غير موجود في profile_highlight_collections — يُتخطى Trigger (طبّق ترحيل 20261215000000 أولاً)';
+    end if;
+  else
+    raise notice 'public.profile_highlight_collections غير موجود — يُتخطى Trigger (طبّق ترحيل 20261212000000 أولاً)';
+  end if;
+end $ddl$;
+
+-- 3) الجداول: لا وصول مباشر لأي مستخدم عادي ===============================
 do $ddl$
 begin
   if to_regclass('public.media_deletion_jobs') is not null then

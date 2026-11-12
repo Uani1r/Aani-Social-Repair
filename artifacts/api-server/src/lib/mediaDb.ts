@@ -13,7 +13,13 @@ export function readAdminConfig(): SupabaseAdminConfig | null {
   return readSupabaseAdminConfig();
 }
 
-/** الرابط الأساسي للوسائط بلا معاملات تحويل (?tr=) ولا هاشتاغ تعديل (#t=). */
+/** الرابط الأساسي للوسائط بلا معاملات تحويل (?tr=) ولا هاشتاغ تعديل (#t=).
+ *  سياسة التطبيع الموثقة: يُستخدم الناتج للمقارنة وتحديد هوية الملف في سجل
+ *  الرفع فقط — لا للجلب. معاملات التوقيع/المصادقة (ik-s/ik-t/token/expires
+ *  وغيرها) تُهمَل عمداً لأن هوية المورد هي المسار نفسه؛ اتجاه المطابقة آمن:
+ *  رابط موقّع مخزّن في قاعدة البيانات يطابق الملف العاري فيبقى الملف محفوظاً
+ *  عند الشك، بدل حذف ملف مشار إليه برابط موقّع. لا يُحذف أي استعلام أو
+ *  معامل من البيانات المخزنة نفسها. */
 export function normalizeMediaUrl(value: unknown): string {
   if (typeof value !== "string" || !value) return "";
   try {
@@ -80,6 +86,20 @@ export function isUnknownColumnError(result: { status: number; data: unknown; er
     || message.includes("PGRST204")
     || message.includes("PGRST205")
     || /\b(42703|42P01)\b/.test(message);
+}
+
+/**
+ فجوة على مستوى الجدول (لا عمود): العلاقة نفسها غير موجودة في هذه البيئة —
+ 42P01 "relation ... does not exist" أو PGRST205 "table ... not found in
+ schema cache". رسائل الأعمدة (42703 / PGRST204 "... column ...") مستثناة صراحةً.
+ */
+export function isMissingRelationError(result: { status: number; data: unknown; errorText?: string }): boolean {
+  if (result.status !== 400 && result.status !== 404) return false;
+  const message = extractRestErrorMessage(result);
+  const relationMissing = /\b42P01\b/.test(message)
+    || message.includes("PGRST205")
+    || /relation\s+"[^"]+"\s+does not exist/.test(message);
+  return relationMissing && !message.toLowerCase().includes("column");
 }
 
 export async function restRequest(
@@ -176,16 +196,16 @@ export function buildMediaReferenceConditions(
 
 /**
  فحص صارم: هل الروابط (أو معرّف قصة/منشور) مستخدمة في أي جدول حي؟
- الجداول والأعمدة المرجعية الفعلية للصور والفيديو والصوت والمرفقات:
- - posts: media_url، media_urls (مصفوفة)، audio_url (الصوت المستخرج/المختار)
- - stories: media_url
- - profile_highlights: media_url (+ source_story_id عند استبعاد قصة)
- - profile_highlight_collections: cover_url (ترحيل 20261215 — قد يغيب في بيئات بلا أبرز قصص)
- - sounds: source_video_url (الفيديو الأصلي)، preview_url (معاينة الصوت)
- - messages: content (روابط مرفقات الدردشة محفوظة داخل النص)
- - profiles: avatar_url، cover_url
- - media_assets: video_url، poster_url
- أي فشل استعلام يرمي استثناءً (إلا عموداً غير موجود في هذه البيئة).
+ تصنيف الجداول المرجعية (السياسة موثقة في anyMatch أدناه):
+ - أساسية (غيابها أو تعذر الاستعلام عنها يوقف الحذف كلياً):
+   posts (media_url, media_urls, audio_url)، stories (media_url)،
+   profile_highlights (media_url)، sounds (source_video_url, preview_url)،
+   messages (content)، profiles (avatar_url, cover_url)،
+   media_assets (video_url, poster_url).
+ - اختيارية (فقط جدول أغلفة مجموعات أبرز القصص):
+   profile_highlight_collections (cover_url) — غياب الجدول كاملاً في بيئة
+   بلا ميزة أبرز القصص يعني لا توجد مراجع أصلاً، فيُتخطى وفق السياسة أدناه.
+ أي فشل استعلام يرمي استثناءً (إلا فجوات المخطط الموثقة).
  */
 export async function mediaInActiveUse(
   config: SupabaseAdminConfig,
@@ -205,16 +225,23 @@ export async function mediaInActiveUse(
   }
 
   /**
-   مبدأ Fail Closed: أي فشل استعلام يمنع التحقق → يرمي استثناءً → الحذف يُؤجل.
-   الاستثناء الوحيد: عمود غير موجود فعلاً في هذه البيئة — عندها لا نتجاهل الجدول
-   كاملاً بل نفحص كل شرط بمفرده؛ العمود المفقود وحده يُتخطى مع تسجيل، وكل فشل
-   آخر يبقى قاتلاً للعملية.
+   مبدأ Fail Closed مع تصنيف الجداول:
+   - الجداول الأساسية: غياب الجدول نفسه أو تعذر الاستعلام عنه يوقف الحذف
+     كلياً (يرمي استثناءً → المهمة تعود إلى pending) — غياب جدول أساسي
+     ليس دليلاً على أن الملف غير مستخدم أبداً.
+   - الجداول الاختيارية (profile_highlight_collections فقط): غياب الجدول
+     كاملاً في بيئات بلا أبرز قصص يُتخطى مع تسجيل.
+   - غياب عمود (الجدول موجود): لا يمكن لعمود غير موجود أن يحمل مراجع —
+     يُتخطى الشرط وحده مع تسجيل، وبقية أعمدة الجدول تُفحص شرطاً شرطاً.
+   أي فشل آخر (تصريح، 5xx...) قاتل دائماً.
    */
   async function anyMatch(
     table: string,
     conditions: string[],
-    extraParams: Record<string, string> = {},
+    options: { optional?: boolean; extraParams?: Record<string, string> } = {},
   ): Promise<boolean> {
+    const optional = options.optional === true;
+    const extraParams = options.extraParams ?? {};
     if (conditions.length === 0) return false;
     const result = await restRequest(config, "GET", table, {
       select: "id",
@@ -226,30 +253,48 @@ export async function mediaInActiveUse(
       const rows = await requireSuccessfulCheck(result);
       return rows.length > 0;
     } catch (error) {
-      if (isUnknownColumnError(result)) {
-        let matched = false;
-        for (const condition of conditions) {
-          const single = await restRequest(config, "GET", table, {
-            select: "id",
-            ...conditionToParams(condition),
-            limit: "1",
-            ...extraParams,
-          });
-          try {
-            const rows = await requireSuccessfulCheck(single);
-            if (rows.length > 0) matched = true;
-          } catch (singleError) {
-            if (isUnknownColumnError(single)) {
-              logger.warn({ table, condition }, "Reference column missing in this environment; column skipped");
-              continue;
-            }
-            throw singleError;
-          }
+      if (!isUnknownColumnError(result)) throw error;
+
+      // غياب الجدول نفسه: أساسي → يتوقف الحذف كلياً؛ اختياري → يُتخطى مع تسجيل
+      if (isMissingRelationError(result)) {
+        if (optional) {
+          logger.warn({ table }, "Optional reference table missing in this environment; table skipped");
+          return false;
         }
-        logger.warn({ table, status: result.status }, "Reference check split: schema lacks an expected column; per-column probing used");
-        return matched;
+        logger.error({ table, status: result.status }, "Core reference table is missing; deletion is blocked");
+        throw error;
       }
-      throw error;
+
+      // غياب عمود: فحص كل شرط بمفرده؛ العمود المفقود وحده يُتخطى مع تسجيل
+      let matched = false;
+      for (const condition of conditions) {
+        const single = await restRequest(config, "GET", table, {
+          select: "id",
+          ...conditionToParams(condition),
+          limit: "1",
+          ...extraParams,
+        });
+        try {
+          const rows = await requireSuccessfulCheck(single);
+          if (rows.length > 0) matched = true;
+        } catch (singleError) {
+          if (isUnknownColumnError(single)) {
+            if (isMissingRelationError(single)) {
+              if (optional) {
+                logger.warn({ table }, "Optional reference table missing (probing); table skipped");
+                return matched;
+              }
+              logger.error({ table }, "Core reference table is missing (probing); deletion is blocked");
+              throw singleError;
+            }
+            logger.warn({ table, condition }, "Reference column missing in this environment; column skipped");
+            continue;
+          }
+          throw singleError;
+        }
+      }
+      logger.warn({ table, status: result.status }, "Reference check split: schema lacks an expected column; per-column probing used");
+      return matched;
     }
   }
 
@@ -257,22 +302,22 @@ export async function mediaInActiveUse(
   const excludeStory = options.excludeStoryId ? { id: `neq.${options.excludeStoryId}` } : {};
 
   const checks: Promise<boolean>[] = [
-    // المنشورات: الرابط الأحادي + مصفوفة الروابط (شرط ov لكل رابط على حدة)
+    // أساسي: المنشورات — الرابط الأحادي + مصفوفة الروابط (شرط ov لكل رابط)
     // + رابط الصوت المختار/المستخرج (audio_url — مرجع ملف صوتي حقيقي)
-    anyMatch("posts", buildMediaReferenceConditions(urls, ["media_url", "audio_url"], ["media_urls"]), excludePost),
-    // القصص (مثل إعادة نشر قصة تنسخ media_url الأصلي)
-    anyMatch("stories", buildMediaReferenceConditions(urls, ["media_url"]), excludeStory),
-    // أبرز القصص: عنصر القصة الأصلي أو القصص المضافة يدوياً
+    anyMatch("posts", buildMediaReferenceConditions(urls, ["media_url", "audio_url"], ["media_urls"]), { extraParams: excludePost }),
+    // أساسي: القصص (مثل إعادة نشر قصة تنسخ media_url الأصلي)
+    anyMatch("stories", buildMediaReferenceConditions(urls, ["media_url"]), { extraParams: excludeStory }),
+    // أساسي: أبرز القصص (عناصر مضافة يدوياً أو من قصة)
     anyMatch("profile_highlights", buildMediaReferenceConditions(urls, ["media_url"])),
-    // أغلفة مجموعات أبرز القصص (العمود قد يغيب في بيئات بلا أبرز قصص — يُتخطى)
-    anyMatch("profile_highlight_collections", buildMediaReferenceConditions(urls, ["cover_url"])),
-    // الأصوات النشطة: الفيديو الأصلي أو معاينة الصوت
+    // اختياري: أغلفة مجموعات أبرز القصص — قد يغيب الجدول كاملاً في بيئات قديمة (سياسة موثقة أعلاه)
+    anyMatch("profile_highlight_collections", buildMediaReferenceConditions(urls, ["cover_url"]), { optional: true }),
+    // أساسي: الأصوات النشطة — الفيديو الأصلي أو معاينة الصوت
     anyMatch("sounds", buildMediaReferenceConditions(urls, ["source_video_url", "preview_url"])),
-    // الرسائل والمرفقات (الروابط محفوظة داخل نص الرسالة)
+    // أساسي: الرسائل ومرفقات الدردشة (الروابط داخل نص الرسالة)
     anyMatch("messages", buildMediaReferenceConditions(urls, ["content"])),
-    // صور الحساب والأغلفة
+    // أساسي: صور الحساب والأغلفة
     anyMatch("profiles", buildMediaReferenceConditions(urls, ["avatar_url", "cover_url"])),
-    // أصول الوسائط قيد المعالجة (الفيديو والصورة البارزة)
+    // أساسي: أصول الوسائط قيد المعالجة (الفيديو والصورة البارزة)
     anyMatch("media_assets", buildMediaReferenceConditions(urls, ["video_url", "poster_url"])),
   ];
 

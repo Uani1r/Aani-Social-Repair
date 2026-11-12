@@ -190,13 +190,52 @@ function buildSampleEntry(kind: 'video' | 'audio', codec: string, withConfig: bo
     : fixedBody);
 }
 
-function buildTrack(kind: 'video' | 'audio', codec: string, withConfig: boolean): Uint8Array {
-  const stsd = mp4Box('stsd', concatBytes([
+/** tkhd بإصدار 0 — الأبعاد fixed-point 16.16 في نهاية الترويسة (84 بايت payload) */
+function buildTkhd(maxSide: number | null): Uint8Array {
+  if (maxSide === null) {
+    return mp4Box('tkhd', new Uint8Array(84)); // بلا أبعاد صالحة (غير قابل للتحقق)
+  }
+  return mp4Box('tkhd', concatBytes([
     u32Bytes(0), // version/flags
-    u32Bytes(1), // entry_count
-    buildSampleEntry(kind, codec, withConfig),
+    u32Bytes(0), u32Bytes(0), u32Bytes(1), u32Bytes(0), u32Bytes(0),
+    new Uint8Array(8), u16Bytes(0), u16Bytes(0), u16Bytes(0), u16Bytes(0),
+    new Uint8Array(36), // matrix
+    u32Bytes(maxSide * 65536),
+    u32Bytes(Math.round(maxSide / 2) * 65536),
   ]));
-  return mp4Box('trak', mp4Box('mdia', mp4Box('minf', mp4Box('stbl', stsd))));
+}
+
+/** mdhd بإصدار 0 — timescale عند إزاحة 12 داخل الـ payload (20 bytes) */
+function buildMdhd(timescale: number): Uint8Array {
+  return mp4Box('mdhd', concatBytes([
+    u32Bytes(0), u32Bytes(0), u32Bytes(0), u32Bytes(timescale), u32Bytes(0),
+  ]));
+}
+
+/** stts — delta = timescale/fps؛ fps=0 → عينات بدلتا صفر (معدل غير قابل للتحقق) */
+function buildStts(fps: number, timescale: number): Uint8Array {
+  return mp4Box('stts', concatBytes([
+    u32Bytes(0), u32Bytes(1), u32Bytes(10), u32Bytes(fps > 0 ? Math.round(timescale / fps) : 0),
+  ]));
+}
+
+type TrackSpec = { maxSide?: number | null; fps?: number };
+
+function buildTrack(kind: 'video' | 'audio', codec: string, withConfig: boolean, spec: TrackSpec = {}): Uint8Array {
+  const timescale = 90000;
+  // الافتراضي: 640x360 بـ 30fps — مواصفات داخل الحدود
+  const maxSide = spec.maxSide === undefined ? 640 : spec.maxSide;
+  const fps = spec.fps === undefined ? 30 : spec.fps;
+  const stbl = mp4Box('stbl', concatBytes([
+    mp4Box('stsd', concatBytes([
+      u32Bytes(0), // version/flags
+      u32Bytes(1), // entry_count
+      buildSampleEntry(kind, codec, withConfig),
+    ])),
+    buildStts(fps, timescale),
+  ]));
+  const mdia = mp4Box('mdia', concatBytes([buildMdhd(timescale), mp4Box('minf', stbl)]));
+  return mp4Box('trak', concatBytes([buildTkhd(kind === 'video' ? maxSide : 64), mdia]));
 }
 
 function buildMoov(...tracks: Uint8Array[]): Uint8Array {
@@ -216,16 +255,20 @@ function buildFtyp(): Uint8Array {
 /* التحقق البنيوي من MP4: لا مرور إلا على مواصفات مثبتة فعلاً          */
 /* ------------------------------------------------------------------ */
 
-test('التحقق البنيوي: avc1+avcC و mp4a+esds يُقبلان للمرور', () => {
+test('التحقق البنيوي: avc1+avcC و mp4a+esds ضمن المواصفة يُقبلان للمرور', () => {
   const bytes = concatBytes([buildFtyp(), buildMoov(buildTrack('video', 'avc1', true), buildTrack('audio', 'mp4a', true))]);
   const inspection = inspectMp4Bytes(bytes);
   assert.equal(inspection.containerVerified, true);
   assert.equal(inspection.moovVerified, true);
   assert.equal(inspection.tracks.length, 2);
+  const video = inspection.tracks.find(entry => entry.kind === 'video');
+  assert.equal(video!.maxSide, 640);
+  assert.equal(video!.fps, 30);
   const decision = decideMp4Passthrough(inspection);
   assert.equal(decision.accepted, true);
   assert.ok(decision.reason.includes('avc1+avcC'));
   assert.ok(decision.reason.includes('mp4a/esds'));
+  assert.ok(decision.reason.includes('30fps'));
 });
 
 test('avc1 بلا صندوق إعداد avcC يُرفض (الترميز غير مثبت بنيوياً)', () => {
@@ -295,4 +338,83 @@ test('verifyMp4Passthrough: hevc1 مخفي بعد mdat يُرفض', async () => 
   ]);
   const file = new File([bytes], 'video.mp4', { type: 'video/mp4' });
   assert.equal(await verifyMp4Passthrough(file), false);
+});
+  const file = new File([bytes], 'video.mp4', { type: 'video/mp4' });
+  assert.equal(await verifyMp4Passthrough(file), false);
+});
+
+/* ------------------------------------------------------------------ */
+/* المواصفة الموحدة للفيديو: أقصى ضلع 1280 و30fps كحد نهائي            */
+/* ------------------------------------------------------------------ */
+
+test('fps أعلى من 30 (مثلاً 60) يُرفض — لا مرور على مواصفة مخالفة', () => {
+  const bytes = concatBytes([buildFtyp(), buildMoov(buildTrack('video', 'avc1', true, { fps: 60 }))]);
+  const decision = decideMp4Passthrough(inspectMp4Bytes(bytes));
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.reason, 'frame-rate-above-limit(60)');
+});
+
+test('29.97fps القياسي (30000/1001) يُقبل ضمن السماحية', () => {
+  // delta = round(90000/29.97) = 3003 → fps ≈ 29.97
+  const bytes = concatBytes([buildFtyp(), buildMoov(buildTrack('video', 'avc1', true, { fps: 29.97 }))]);
+  const decision = decideMp4Passthrough(inspectMp4Bytes(bytes));
+  assert.equal(decision.accepted, true);
+});
+
+test('أقصى ضلع أكبر من 1280 يُرفض', () => {
+  const bytes = concatBytes([buildFtyp(), buildMoov(buildTrack('video', 'avc1', true, { maxSide: 1920 }))]);
+  const decision = decideMp4Passthrough(inspectMp4Bytes(bytes));
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.reason, 'video-dimensions-above-limit(1920)');
+});
+
+test('أبعاد غير قابلة للتحقق (tkhd بلا أبعاد) → رفض وإعادة ترميز', () => {
+  const bytes = concatBytes([buildFtyp(), buildMoov(buildTrack('video', 'avc1', true, { maxSide: null }))]);
+  const inspection = inspectMp4Bytes(bytes);
+  const video = inspection.tracks.find(entry => entry.kind === 'video');
+  assert.equal(video!.maxSide, undefined);
+  const decision = decideMp4Passthrough(inspection);
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.reason, 'video-dimensions-unverifiable');
+});
+
+test('معدل إطارات غير قابل للتحقق (stts بدلتا صفر) → رفض وإعادة ترميز', () => {
+  const bytes = concatBytes([buildFtyp(), buildMoov(buildTrack('video', 'avc1', true, { fps: 0 }))]);
+  const inspection = inspectMp4Bytes(bytes);
+  assert.equal(inspection.tracks.find(entry => entry.kind === 'video')!.fps, undefined);
+  const decision = decideMp4Passthrough(inspection);
+  assert.equal(decision.accepted, false);
+  assert.equal(decision.reason, 'video-frame-rate-unverifiable');
+});
+
+/* ------------------------------------------------------------------ */
+/* تطبيع روابط الوسائط (السياسة الموثقة في normalizeMediaUrl)          */
+/* ------------------------------------------------------------------ */
+
+test('روابط ImageKit متعددة المعاملات: معاملات التحويل والهاشتاغ لا تغير هوية الملف', () => {
+  const base = 'https://ik.imagekit.io/anisocial/aani/u1/v.mp4';
+  assert.equal(normalizeMediaUrl(`${base}?tr=w-400&tr=q-auto`), base);
+  assert.equal(normalizeMediaUrl(`${base}#t=3,9&tr=foo`), base);
+  assert.equal(normalizeMediaUrl(`${base}?tr=w-400#t=5,10`), base);
+});
+
+test('روابط موقعة: معاملات التوقيع/الصلاحية تُهمَل للمقارنة — نفس الملف يتطابق', () => {
+  // التوقيعات لا تغير هوية المورد (المسار هو الهوية)؛ اتجاه المطابقة آمن:
+  // رابط موقّع مخزّن في القاعدة يطابق الملف العاري فيبقى الملف عند الشك.
+  const plain = 'https://ik.imagekit.io/anisocial/aani/u1/v.mp4';
+  const signedA = `${plain}?ik-s=f4a9b2&ik-t=1712345678&ik-ep=180`;
+  const signedB = `${plain}?ik-s=999999&ik-t=1999999999`;
+  assert.equal(normalizeMediaUrl(signedA), plain);
+  assert.equal(normalizeMediaUrl(signedA), normalizeMediaUrl(signedB));
+});
+
+test('روابط مختلفة فعلاً لا تتطابق أبداً حتى مع معاملات متشابهة', () => {
+  const a = normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/a.mp4');
+  const b = normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/b.mp4');
+  assert.notEqual(a, b);
+  // معامل غير تحويلي في المسار (ملف مختلف فعلاً) لا يُدمج مع آخر
+  assert.notEqual(
+    normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/thumb.mp4?tr=w-100'),
+    normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/full.mp4?tr=w-100'),
+  );
 });

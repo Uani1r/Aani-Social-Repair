@@ -238,6 +238,9 @@ function runFfmpeg(inputPath: string, outputPath: string, stripAudio: boolean): 
     "-hide_banner",
     "-y",
     "-i", inputPath,
+    // المواصفة الموحدة: أقصى ضلع 1280 مع صيانة نسبة الأبعاد ودون تكبير
+    // (force_original_aspect_ratio=decrease يصغّر فقط)، وأبعاد زوجية لـ H.264
+    "-vf", "scale=1280:1280:force_original_aspect_ratio=decrease:force_divisible_by=2",
     "-c:v", "libx264",
     "-preset", "ultrafast",
     "-profile:v", "high",
@@ -245,6 +248,7 @@ function runFfmpeg(inputPath: string, outputPath: string, stripAudio: boolean): 
     "-crf", "23",
     "-maxrate", "4.5M",
     "-bufsize", "9M",
+    // 30fps كحد نهائي (CFR) — يُتحقق منه على الناتج أدناه
     "-r", "30",
     ...audioOptions,
     "-movflags", "+faststart",
@@ -286,12 +290,15 @@ function probeOutput(outputPath: string): Promise<{
   height: number;
   /** ترميز أول مسار فيديو في الناتج (h264 متوقع) — للتحقق لا للعرض. */
   videoCodec: string | null;
-  /** عدد مسارات الصوت في الناتج — يُستخدم لإثبات إزالة الصوت الأصلي عند العزل. */
+  /** معدل إطارات الناتج من ffprobe (r_frame_rate) — للتحقق لا للعرض. */
+  fps: number | null;
+  /** عدد مسارات الصوت في الناتج — لإثبات إزالة الصوت الأصلي عند العزل. */
   audioStreamCount: number;
+  audioCodec: string | null;
 }> {
   const args = [
     "-v", "error",
-    "-show_entries", "stream=codec_type,codec_name,width,height:format=duration",
+    "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate:format=duration",
     "-of", "json",
     outputPath,
   ];
@@ -320,7 +327,7 @@ function probeOutput(outputPath: string): Promise<{
       }
       try {
         const result = JSON.parse(stdout) as {
-          streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number }>;
+          streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number; r_frame_rate?: string }>;
           format?: { duration?: string };
         };
         const streams = Array.isArray(result.streams) ? result.streams : [];
@@ -331,12 +338,21 @@ function probeOutput(outputPath: string): Promise<{
         if (![width, height, duration].every(Number.isFinite) || width <= 0 || height <= 0 || duration <= 0) {
           throw new Error("ffprobe returned invalid video dimensions or duration.");
         }
+        let fps: number | null = null;
+        const frameRate = typeof video?.r_frame_rate === "string" ? video.r_frame_rate : "";
+        const frameRateMatch = frameRate.match(/^(\d+)\/(\d+)$/);
+        if (frameRateMatch && Number(frameRateMatch[2]) > 0) {
+          fps = Number(frameRateMatch[1]) / Number(frameRateMatch[2]);
+        }
+        const audio = streams.find(stream => stream.codec_type === "audio");
         resolve({
           duration,
           width,
           height,
           videoCodec: typeof video?.codec_name === "string" && video.codec_name ? video.codec_name : null,
+          fps,
           audioStreamCount: streams.filter(stream => stream.codec_type === "audio").length,
+          audioCodec: typeof audio?.codec_name === "string" && audio.codec_name ? audio.codec_name : null,
         });
       } catch (error) {
         reject(error instanceof Error ? error : new Error("Could not parse ffprobe output."));
@@ -439,17 +455,32 @@ async function processClaimedMediaAsset(
     await runFfmpeg(inputPath, outputPath, stripAudio);
     const metadata = await probeOutput(outputPath);
 
-    // إثبات العزل فعلياً (لا ادعاء): عند اختيار صوت بديل يجب ألا يبقى أي مسار
-    // صوتي في الفيديو النهائي — إن بقي واحد فالمعالجة تفشل صراحةً بدل تسليم
+    // إثبات المواصفات على الناتج نفسه (لا ادعاء) — أي اختلال يفشل المعالجة
+    // صراحةً قبل الرفع، ولا يُرفع الملف باعتباره مطابقاً للمواصفات أبداً:
+    if (metadata.videoCodec && metadata.videoCodec !== "h264") {
+      throw new Error(`The processed video was encoded as ${metadata.videoCodec} instead of H.264.`);
+    }
+    const maxSide = Math.max(metadata.width, metadata.height);
+    if (maxSide > 1280) {
+      throw new Error(`The processed video exceeds the 1280px max side (${maxSide}px).`);
+    }
+    if (metadata.fps === null) {
+      throw new Error("Could not verify the frame rate of the processed video.");
+    }
+    if (metadata.fps > 30.01) {
+      throw new Error(`The processed video exceeds the 30fps limit (${metadata.fps}).`);
+    }
+    // إثبات العزل فعلياً: عند اختيار صوت بديل يجب ألا يبقى أي مسار صوتي
+    // في الفيديو النهائي — إن بقي واحد فالمعالجة تفشل صراحةً بدل تسليم
     // فيديو يحمل الصوت الأصلي تحت موسيقى مختارة.
     if (stripAudio && metadata.audioStreamCount > 0) {
       throw new Error(
         `Audio isolation failed: the processed video still contains ${metadata.audioStreamCount} audio track(s).`,
       );
     }
-    // الترميز متوقع H.264 دائماً (runFfmpeg يرمّز libx264) — نتحقق من الناتج لا من الأمر.
-    if (metadata.videoCodec && metadata.videoCodec !== "h264") {
-      throw new Error(`The processed video was encoded as ${metadata.videoCodec} instead of H.264.`);
+    // عند بقاء صوت مطلوب: يجب أن يكون AAC (المواصفة)؛ صوت غائب مع مصدر صامت مسموح
+    if (!stripAudio && metadata.audioStreamCount > 0 && metadata.audioCodec !== "aac") {
+      throw new Error(`The processed video audio was encoded as ${metadata.audioCodec} instead of AAC.`);
     }
 
     await uploadProcessedVideo(config, processedPath, outputPath);
