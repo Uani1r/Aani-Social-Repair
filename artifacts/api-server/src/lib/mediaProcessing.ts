@@ -280,11 +280,18 @@ function runFfmpeg(inputPath: string, outputPath: string, stripAudio: boolean): 
   });
 }
 
-function probeOutput(outputPath: string): Promise<{ duration: number; width: number; height: number }> {
+function probeOutput(outputPath: string): Promise<{
+  duration: number;
+  width: number;
+  height: number;
+  /** ترميز أول مسار فيديو في الناتج (h264 متوقع) — للتحقق لا للعرض. */
+  videoCodec: string | null;
+  /** عدد مسارات الصوت في الناتج — يُستخدم لإثبات إزالة الصوت الأصلي عند العزل. */
+  audioStreamCount: number;
+}> {
   const args = [
     "-v", "error",
-    "-select_streams", "v:0",
-    "-show_entries", "stream=width,height:format=duration",
+    "-show_entries", "stream=codec_type,codec_name,width,height:format=duration",
     "-of", "json",
     outputPath,
   ];
@@ -313,16 +320,24 @@ function probeOutput(outputPath: string): Promise<{ duration: number; width: num
       }
       try {
         const result = JSON.parse(stdout) as {
-          streams?: Array<{ width?: number; height?: number }>;
+          streams?: Array<{ codec_type?: string; codec_name?: string; width?: number; height?: number }>;
           format?: { duration?: string };
         };
-        const width = Number(result.streams?.[0]?.width);
-        const height = Number(result.streams?.[0]?.height);
+        const streams = Array.isArray(result.streams) ? result.streams : [];
+        const video = streams.find(stream => stream.codec_type === "video");
+        const width = Number(video?.width);
+        const height = Number(video?.height);
         const duration = Number(result.format?.duration);
         if (![width, height, duration].every(Number.isFinite) || width <= 0 || height <= 0 || duration <= 0) {
           throw new Error("ffprobe returned invalid video dimensions or duration.");
         }
-        resolve({ duration, width, height });
+        resolve({
+          duration,
+          width,
+          height,
+          videoCodec: typeof video?.codec_name === "string" && video.codec_name ? video.codec_name : null,
+          audioStreamCount: streams.filter(stream => stream.codec_type === "audio").length,
+        });
       } catch (error) {
         reject(error instanceof Error ? error : new Error("Could not parse ffprobe output."));
       }
@@ -423,6 +438,20 @@ async function processClaimedMediaAsset(
     await downloadOriginal(config, originalPath, userId, inputPath);
     await runFfmpeg(inputPath, outputPath, stripAudio);
     const metadata = await probeOutput(outputPath);
+
+    // إثبات العزل فعلياً (لا ادعاء): عند اختيار صوت بديل يجب ألا يبقى أي مسار
+    // صوتي في الفيديو النهائي — إن بقي واحد فالمعالجة تفشل صراحةً بدل تسليم
+    // فيديو يحمل الصوت الأصلي تحت موسيقى مختارة.
+    if (stripAudio && metadata.audioStreamCount > 0) {
+      throw new Error(
+        `Audio isolation failed: the processed video still contains ${metadata.audioStreamCount} audio track(s).`,
+      );
+    }
+    // الترميز متوقع H.264 دائماً (runFfmpeg يرمّز libx264) — نتحقق من الناتج لا من الأمر.
+    if (metadata.videoCodec && metadata.videoCodec !== "h264") {
+      throw new Error(`The processed video was encoded as ${metadata.videoCodec} instead of H.264.`);
+    }
+
     await uploadProcessedVideo(config, processedPath, outputPath);
     await updateRelatedPosts(config, relatedPosts, originalVideoUrls, processedUrl, mediaAssetId);
 
@@ -438,7 +467,8 @@ async function processClaimedMediaAsset(
     });
     if (!updated.length) throw new Error("The processed video was uploaded but the media asset record could not be finalized.");
 
-    return { success: true, status: "ready", video_url: processedUrl, ...metadata };
+    const { duration, width, height } = metadata;
+    return { success: true, status: "ready", video_url: processedUrl, duration, width, height };
   } catch (error) {
     const message = errorText(error);
     try {

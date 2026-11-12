@@ -32,10 +32,11 @@ export class MediaReferenceCheckError extends Error {}
  فشل الاستعلام أو البيانات غير القابلة للتحقق يمنع الحذف.
  */
 export async function requireSuccessfulCheck(
-  result: { ok: boolean; status: number; data: unknown },
+  result: { ok: boolean; status: number; data: unknown; errorText?: string },
 ): Promise<Record<string, unknown>[]> {
   if (!result.ok) {
-    throw new MediaReferenceCheckError(`Media reference check failed: HTTP ${result.status}`);
+    const detail = result.errorText ? ` — ${result.errorText.slice(0, 300)}` : "";
+    throw new MediaReferenceCheckError(`Media reference check failed: HTTP ${result.status}${detail}`);
   }
   if (result.data === null) {
     throw new MediaReferenceCheckError("Media reference check returned no verifiable data.");
@@ -50,17 +51,35 @@ export async function requireSuccessfulCheck(
  فجوة مخطط: عمود غير موجود (PGRST204/42703) أو جدول غير موجود إطلاقاً في هذه
  البيئة (42P01/PGRST205). كلاهما معناه أن مخزن المراجع هذا غير موجود بالشكل
  الذي يفترضه الكود — يُسجل ويُتخطى الجدول/العمود، وليس "قائمة فارغة = آمن".
+ يعمل على جسم الخطأ المُحلَّل (data.message) أو على نص الاستجابة الخام
+ (errorText) الذي يحتفظ به restRequest الآن. أي خطأ آخر (تصريح، 5xx، ...)
+ لا يُصنف فجوة مخطط ويبقى قاتلاً — Fail Closed.
  */
-export function isUnknownColumnError(result: { status: number; data: unknown }): boolean {
-  const message =
-    result.data && typeof result.data === "object" && "message" in (result.data as Record<string, unknown>)
-      ? String((result.data as Record<string, unknown>).message)
-      : "";
-  return (result.status === 400 || result.status === 404)
-    && (message.includes("does not exist")
-      || message.includes("Could not find the '")
-      || message.includes("PGRST204")
-      || message.includes("PGRST205"));
+export type RestResult = {
+  ok: boolean;
+  status: number;
+  data: unknown;
+  /** نص الاستجابة الخام — يُحفظ دائماً حتى تبقى رسالة الخطأ قابلة للقراءة والتشخيص. */
+  errorText: string;
+};
+
+function extractRestErrorMessage(result: { data: unknown; errorText?: string }): string {
+  if (result.data && typeof result.data === "object") {
+    const record = result.data as Record<string, unknown>;
+    const message = record["message"] ?? record["error"];
+    if (typeof message === "string" && message) return message;
+  }
+  return result.errorText ?? "";
+}
+
+export function isUnknownColumnError(result: { status: number; data: unknown; errorText?: string }): boolean {
+  if (result.status !== 400 && result.status !== 404) return false;
+  const message = extractRestErrorMessage(result);
+  return message.includes("does not exist")
+    || message.includes("Could not find the '")
+    || message.includes("PGRST204")
+    || message.includes("PGRST205")
+    || /\b(42703|42P01)\b/.test(message);
 }
 
 export async function restRequest(
@@ -69,7 +88,7 @@ export async function restRequest(
   path: string,
   searchParams: Record<string, string> = {},
   body?: Record<string, unknown> | Record<string, unknown>[],
-): Promise<{ ok: boolean; status: number; data: unknown }> {
+): Promise<RestResult> {
   const url = new URL(`/rest/v1/${path}`, config.url);
   for (const [key, value] of Object.entries(searchParams)) {
     url.searchParams.set(key, value);
@@ -83,14 +102,89 @@ export async function restRequest(
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  const data = response.ok ? await response.json().catch(() => null) : null;
-  return { ok: response.ok, status: response.status, data };
+  // نص الاستجابة الخام يُحفظ دائماً: رسالة الخطأ من PostgREST (جسم JSON أو نص)
+  // تبقى متاحة للتصنيف (فجوة مخطط؟) وللتشخيص بدل إسقاطها عند الفشل.
+  const rawBody = await response.text().catch(() => "");
+  let data: unknown = null;
+  if (rawBody) {
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      data = null;
+    }
+  }
+  return { ok: response.ok, status: response.status, data, errorText: rawBody };
+}
+
+/* ------------------------------------------------------------------ */
+/* صياغة شروط PostgREST لفحص المراجع (قابلة للاختبار بلا شبكة)         */
+/* ------------------------------------------------------------------ */
+
+/**
+ محارف PostgREST الخاصة التي تُفسَّر داخل or=(...) إن لم تُغلَّف القيمة
+ بعلامات اقتباس مزدوجة: الفاصلة تفصل الشروط، والأقواس تفتح تعبيرات متداخلة،
+ وعلامات الاقتباس تحدد حدود القيمة.
+ */
+const POSTGREST_VALUE_SPECIAL = /["(),\s]/;
+
+/**
+ قيمة PostgREST آمنة داخل or=(...): تُغلَّف بعلامات اقتباس مزدوجة عند الحاجة
+ (مع مضاعفة الاقتباسات الداخلية)، وتبقى كما هي إن كانت بسيطة — نحافظ على
+ الصيغة المجرّبة للروابط العادية ولا نغيّرها بلا داعٍ.
+ */
+export function postgrestValue(value: string): string {
+  return POSTGREST_VALUE_SPECIAL.test(value)
+    ? `"${value.replace(/"/g, '""')}"`
+    : value;
+}
+
+/**
+ شرط overlap على عمود مصفوفة (text[]): المصفوفة تحتوي هذا الرابط.
+ كل رابط شرط مستقل — مصفوفة تحتوي عدة روابط تُفحص رابطاً رابطاً ولا تُجمَع
+ في قائمة ov.{u1,u2} واحدة تفصلها فواصل قد تنكسر داخل or=(...).
+ */
+export function arrayOverlapCondition(column: string, url: string): string {
+  return `${column}.ov.{${postgrestValue(url)}}`;
+}
+
+/**
+ شرط ilike على عمود نصي: الرابط كجزء من القيمة (يغطي الروابط المزخرفة
+ ?tr= / #t= معاً). محارف % و _ تبقى wildcards — الإفراط في المطابقة
+ اتجاه آمن للغاية (الملف يبقى محفوظاً عند الشك).
+ */
+export function textMatchCondition(column: string, url: string): string {
+  return `${column}.ilike.${postgrestValue(`*${url}*`)}`;
+}
+
+/**
+ كل شروط المراجع لقائمة روابط: لكل رابط شرط لكل عمود نصي وشرط ov لكل
+ عمود مصفوفة — جميعها تُدمج لاحقاً في or=(...) واحدة (المطابقة: أي عمود
+ يحوي أي رابط = الملف مستخدم).
+ */
+export function buildMediaReferenceConditions(
+  urls: readonly string[],
+  textColumns: readonly string[],
+  arrayColumns: readonly string[] = [],
+): string[] {
+  const conditions: string[] = [];
+  for (const url of urls) {
+    for (const column of textColumns) conditions.push(textMatchCondition(column, url));
+    for (const column of arrayColumns) conditions.push(arrayOverlapCondition(column, url));
+  }
+  return conditions;
 }
 
 /**
  فحص صارم: هل الروابط (أو معرّف قصة/منشور) مستخدمة في أي جدول حي؟
- الجداول: posts، stories، profile_highlights، sounds، messages،
- profiles (avatar/cover)، media_assets.
+ الجداول والأعمدة المرجعية الفعلية للصور والفيديو والصوت والمرفقات:
+ - posts: media_url، media_urls (مصفوفة)، audio_url (الصوت المستخرج/المختار)
+ - stories: media_url
+ - profile_highlights: media_url (+ source_story_id عند استبعاد قصة)
+ - profile_highlight_collections: cover_url (ترحيل 20261215 — قد يغيب في بيئات بلا أبرز قصص)
+ - sounds: source_video_url (الفيديو الأصلي)، preview_url (معاينة الصوت)
+ - messages: content (روابط مرفقات الدردشة محفوظة داخل النص)
+ - profiles: avatar_url، cover_url
+ - media_assets: video_url، poster_url
  أي فشل استعلام يرمي استثناءً (إلا عموداً غير موجود في هذه البيئة).
  */
 export async function mediaInActiveUse(
@@ -100,11 +194,6 @@ export async function mediaInActiveUse(
 ): Promise<boolean> {
   const urls = [...new Set(mediaUrls.map(normalizeMediaUrl).filter(Boolean))];
   if (urls.length === 0 && !options.excludeStoryId) return false;
-
-  // ilike على المقطع يغطي الروابط المزخرفة (?tr= / #t=) وغير المزخرفة معاً.
-  // روابط هذا التطبيق بلا فواصل ولا % فيُبنى شرط or= بأمان.
-  const urlConditions = (columns: string[]): string[] =>
-    urls.flatMap((url) => columns.map((column) => `${column}.ilike.*${url}*`));
 
   // تحويل شرط مثل "media_url.ilike.*https://...*" إلى معاملات استعلام مفردة
   function conditionToParams(condition: string): Record<string, string> {
@@ -118,8 +207,8 @@ export async function mediaInActiveUse(
   /**
    مبدأ Fail Closed: أي فشل استعلام يمنع التحقق → يرمي استثناءً → الحذف يُؤجل.
    الاستثناء الوحيد: عمود غير موجود فعلاً في هذه البيئة — عندها لا نتجاهل الجدول
-   كاملاً (كما كانت النسخة السابقة) بل نفحص كل شرط بمفرده؛ العمود المفقود وحده
-   يُتخطى مع تسجيل، وكل فشل آخر يبقى قاتلاً للعملية.
+   كاملاً بل نفحص كل شرط بمفرده؛ العمود المفقود وحده يُتخطى مع تسجيل، وكل فشل
+   آخر يبقى قاتلاً للعملية.
    */
   async function anyMatch(
     table: string,
@@ -164,37 +253,27 @@ export async function mediaInActiveUse(
     }
   }
 
+  const excludePost = options.excludePostId ? { id: `neq.${options.excludePostId}` } : {};
+  const excludeStory = options.excludeStoryId ? { id: `neq.${options.excludeStoryId}` } : {};
+
   const checks: Promise<boolean>[] = [
-    // أبرز القصص: غلاف أو عنصر (media_url) أو مرجع القصة الأصلية
-    anyMatch("profile_highlights", urlConditions(["media_url"])),
+    // المنشورات: الرابط الأحادي + مصفوفة الروابط (شرط ov لكل رابط على حدة)
+    // + رابط الصوت المختار/المستخرج (audio_url — مرجع ملف صوتي حقيقي)
+    anyMatch("posts", buildMediaReferenceConditions(urls, ["media_url", "audio_url"], ["media_urls"]), excludePost),
+    // القصص (مثل إعادة نشر قصة تنسخ media_url الأصلي)
+    anyMatch("stories", buildMediaReferenceConditions(urls, ["media_url"]), excludeStory),
+    // أبرز القصص: عنصر القصة الأصلي أو القصص المضافة يدوياً
+    anyMatch("profile_highlights", buildMediaReferenceConditions(urls, ["media_url"])),
+    // أغلفة مجموعات أبرز القصص (العمود قد يغيب في بيئات بلا أبرز قصص — يُتخطى)
+    anyMatch("profile_highlight_collections", buildMediaReferenceConditions(urls, ["cover_url"])),
     // الأصوات النشطة: الفيديو الأصلي أو معاينة الصوت
-    anyMatch("sounds", urlConditions(["source_video_url", "preview_url"])),
+    anyMatch("sounds", buildMediaReferenceConditions(urls, ["source_video_url", "preview_url"])),
     // الرسائل والمرفقات (الروابط محفوظة داخل نص الرسالة)
-    anyMatch("messages", urlConditions(["content"])),
+    anyMatch("messages", buildMediaReferenceConditions(urls, ["content"])),
     // صور الحساب والأغلفة
-    anyMatch("profiles", urlConditions(["avatar_url", "cover_url"])),
-    // أصول الوسائط قيد المعالجة
-    anyMatch("media_assets", urlConditions(["video_url"])),
-    // منشورات أخرى تشترك في الملف نفسه — media_url نصي
-    anyMatch(
-      "posts",
-      urlConditions(["media_url"]),
-      options.excludePostId ? { id: `neq.${options.excludePostId}` } : {},
-    ),
-    // منشورات أخرى عبر مصفوفة media_urls (PostgREST ov= يتقاطع مع القيم)
-    ...(urls.length > 0
-      ? [anyMatch(
-          "posts",
-          [`media_urls=ov.{${urls.join(",")}}`],
-          options.excludePostId ? { id: `neq.${options.excludePostId}` } : {},
-        )]
-      : []),
-    // قصص أخرى (مثل إعادة نشر قصة تنسخ media_url الأصلي)
-    anyMatch(
-      "stories",
-      urlConditions(["media_url"]),
-      options.excludeStoryId ? { id: `neq.${options.excludeStoryId}` } : {},
-    ),
+    anyMatch("profiles", buildMediaReferenceConditions(urls, ["avatar_url", "cover_url"])),
+    // أصول الوسائط قيد المعالجة (الفيديو والصورة البارزة)
+    anyMatch("media_assets", buildMediaReferenceConditions(urls, ["video_url", "poster_url"])),
   ];
 
   if (options.excludeStoryId) {

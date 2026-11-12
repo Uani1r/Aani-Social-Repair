@@ -39,6 +39,16 @@ async function patchJob(
   }
 }
 
+/** تأخير إعادة المحاولة: 5 دقائق × 2^المحاولة، حتى سقف 24 ساعة (دالة صرفة قابلة للاختبار). */
+export function computeRetryDelayMs(attempts: number): number {
+  return Math.min(2 ** Math.max(0, Math.floor(attempts)) * 5 * 60 * 1000, 24 * 60 * 60 * 1000);
+}
+
+/** إيقاف المحاولات نهائياً بعد الحد الأقصى — المهمة تُعلَّم failed وتبقى قابلة لإعادة الفتح عند إدراج الرابط من جديد. */
+export function shouldStopRetrying(attempts: number, maxAttempts: number = MAX_ATTEMPTS): boolean {
+  return attempts >= maxAttempts;
+}
+
 /** إعادة جدولة المهمة بـ Backoff تصاعدي (5 دقائق × 2^المحاولة، حتى 24 ساعة). */
 async function requeueJob(
   config: SupabaseAdminConfig,
@@ -46,10 +56,10 @@ async function requeueJob(
   reason: string,
 ): Promise<void> {
   const attempts = typeof job.attempts === "number" ? job.attempts : 0;
-  const exhausted = attempts >= MAX_ATTEMPTS;
+  const exhausted = shouldStopRetrying(attempts);
   const nextAttemptAt = exhausted
     ? undefined
-    : new Date(Date.now() + Math.min(2 ** attempts * 5 * 60 * 1000, 24 * 60 * 60 * 1000)).toISOString();
+    : new Date(Date.now() + computeRetryDelayMs(attempts)).toISOString();
   await patchJob(config, String(job.id), {
     status: exhausted ? "failed" : "pending",
     attempts: attempts + 1,

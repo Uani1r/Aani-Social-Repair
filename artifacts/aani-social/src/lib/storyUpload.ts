@@ -11,6 +11,7 @@
 
 import { supabase, registerUploadedMediaUrl } from '@/lib/supabase';
 import { safeExecute } from '@/lib/appErrors';
+import { recordUploadLedgerReliably } from '@/lib/uploadLedgerQueue';
 import {
   compressImage,
   compressVideo,
@@ -222,21 +223,11 @@ async function uploadMediaUnsafe({
   registerUploadedMediaUrl(path, url);
 
   // سجل الرفع (Upload Ledger): لملاحقة الملفات المرفوعة بلا مرجع — كنس اليتامى
-  // يحدث لاحقاً من الخادم بعد فترة سماح وفحص مراجع صارم. اختياري تماماً:
-  // لا يُنتظر، ولا يفشل الرفع أو يتعطل إن لم يوصل.
-  try {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const ledgerToken = sessionData.session?.access_token;
-    if (ledgerToken) {
-      void fetch('/api/media/upload-ledger', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${ledgerToken}` },
-        body: JSON.stringify({ url }),
-      }).catch(() => undefined);
-    }
-  } catch {
-    /* السجل اختياري — لا يؤثر على الرفع */
-  }
+  // يحدث لاحقاً من الخادم بعد فترة سماح وفحص مراجع صارم. التسجيل موثوق:
+  // محاولة فورية، وعند فشلها يبقى الرابط في طابور محلي يُعاد إرساله تلقائياً
+  // عند تسجيل الدخول/الإقلاع (uploadLedgerQueue). لا يُنتظر ولا يفشل الرفع
+  // أبداً — لكن fire-and-forget وحده لم يعد الاعتماد الوحيد.
+  void recordUploadLedgerReliably(url).catch(() => undefined);
 
   return url;
 }

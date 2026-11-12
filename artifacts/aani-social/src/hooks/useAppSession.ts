@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
+import { flushUploadLedgerQueue } from '@/lib/uploadLedgerQueue';
 import type { Profile } from '@/lib/types';
 
 export default function useAppSession() {
@@ -22,7 +23,12 @@ export default function useAppSession() {
       try {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        if (mounted) setSession(data.session);
+        if (mounted) {
+          setSession(data.session);
+          // سجل الرفع: أي روابط فشل تسجيلها سابقاً تُعاد محاولة تسجيلها الآن
+          // (فشلها لا يؤثر على الإقلاع أبداً)
+          void flushUploadLedgerQueue().catch(() => undefined);
+        }
       } catch (error) {
         console.error('تعذر استعادة جلسة المستخدم:', error);
         if (mounted) setSession(null);
@@ -38,6 +44,8 @@ export default function useAppSession() {
       setSession(nextSession);
       setProfile(null);
       if (event === 'SIGNED_IN' && nextSession?.user?.id) {
+        // سجل الرفع: إعادة محاولة تسجيل الروابط المعلقة فور توفر جلسة جديدة
+        void flushUploadLedgerQueue().catch(() => undefined);
         const signedInUserId = nextSession.user.id;
         window.setTimeout(() => {
           void supabase.from('profiles')

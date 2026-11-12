@@ -219,23 +219,216 @@ export function findMp4CodecMarkers(
   return found;
 }
 
+/* ------------------------------------------------------------------ */
+/* فحص بنيوي حقيقي لملفات MP4 (شجرة الصناديق — لا مسح FourCC وحده)     */
+/* ------------------------------------------------------------------ */
+
+export type Mp4TrackInspection = {
+  kind: 'video' | 'audio';
+  /** ترميز sample entry كما هو داخل stsd (avc1/hev1/mp4a/Opus/...) */
+  codec: string;
+  /**
+   وجود صندوق إعداد الترميز داخل sample entry نفسه (avcC للـ H.264،
+   esds للـ AAC، hvcC للـ HEVC) — دليل بنيوي على مسار فعلي قابل للفك،
+   لا مجرد FourCC عابر في البيانات.
+   */
+  hasCodecConfig: boolean;
+};
+
+export type Mp4Inspection = {
+  /** صندوق ftyp في المقدمة (حاوية MP4 صالحة) */
+  containerVerified: boolean;
+  /** صندوق moov وُجد (قد يكون بعد mdat) وقُرئت شجرته */
+  moovVerified: boolean;
+  tracks: Mp4TrackInspection[];
+};
+
+const CONTAINER_BOXES = new Set(['moov', 'trak', 'mdia', 'minf', 'stbl']);
+const VIDEO_SAMPLE_CODECS = new Set(['avc1', 'avc3', 'hvc1', 'hev1', 'mp4v', 'vp09', 'av01']);
+const AUDIO_SAMPLE_CODECS = new Set(['mp4a', 'Opus', 'ac-3', 'ec-3', 'fLaC', 'alac']);
+
+/** صندوق إعداد الترميز المتوقع داخل sample entry (H.264 → avcC، AAC → esds، HEVC → hvcC). */
+function codecConfigType(codec: string): string | null {
+  switch (codec) {
+    case 'avc1':
+    case 'avc3':
+      return 'avcC';
+    case 'hvc1':
+    case 'hev1':
+      return 'hvcC';
+    case 'mp4a':
+      return 'esds';
+    default:
+      return null;
+  }
+}
+
+function readU32(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset]! << 24) | (bytes[offset + 1]! << 16) | (bytes[offset + 2]! << 8) | bytes[offset + 3]!) >>> 0;
+}
+
+function readU64(bytes: Uint8Array, offset: number): number {
+  // آمن حتى 2^53 — أحجام الصناديق لا تقترب من هذا أبداً
+  return readU32(bytes, offset) * 0x100000000 + readU32(bytes, offset + 4);
+}
+
+function fourCCAt(bytes: Uint8Array, offset: number): string {
+  return String.fromCharCode(bytes[offset]!, bytes[offset + 1]!, bytes[offset + 2]!, bytes[offset + 3]!);
+}
+
+/**
+ يحلل بايتات MP4 ويستخرج المسارات الفعلية من شجرة الصناديق:
+ ftyp في المقدمة → moov → trak → mdia → minf → stbl → stsd →
+ sample entries (الترميز + صندوق الإعداد داخل المدخل).
+ دالة صرفة قابلة للاختبار بلا متصفح ولا شبكة.
+ */
+export function inspectMp4Bytes(bytes: Uint8Array): Mp4Inspection {
+  const inspection: Mp4Inspection = { containerVerified: false, moovVerified: false, tracks: [] };
+  if (bytes.length < 12) return inspection;
+  if (fourCCAt(bytes, 4) === 'ftyp') inspection.containerVerified = true;
+
+  /**
+   يبحث عن صندوق إعداد الترميز داخل نطاق sample entry نفسه: ترويسة صندوق
+   صحيحة (حجم معقول ضمن حدود المدخل + النوع المتوقع). الصناديق الثابتة قبل
+   الأبناء تختلف بين الأنواع (78 بايت للفيديو، 28 للصوت) فالمسح داخل المدخل
+   وحده أدق من افتراض إزاحة ثابتة، وحدود المدخل تمنع الإيجابيات الخاطئة.
+   */
+  function entryContainsConfigBox(entryStart: number, entryEnd: number, configType: string): boolean {
+    for (let offset = entryStart + 8; offset + 8 <= entryEnd; offset += 1) {
+      const size = readU32(bytes, offset);
+      if (size < 8 || offset + size > entryEnd) continue;
+      if (fourCCAt(bytes, offset + 4) === configType) return true;
+    }
+    return false;
+  }
+
+  /** stsd FullBox: ترويسة (8) + version/flags (4) + entry_count (4) ثم المدخلات. */
+  function parseStsd(boxStart: number, boxEnd: number): void {
+    let entryOffset = boxStart + 16;
+    while (entryOffset + 8 <= boxEnd) {
+      const entrySize = readU32(bytes, entryOffset);
+      if (entrySize < 8 || entryOffset + entrySize > boxEnd) break;
+      const codec = fourCCAt(bytes, entryOffset + 4);
+      const kind = VIDEO_SAMPLE_CODECS.has(codec) ? 'video' : AUDIO_SAMPLE_CODECS.has(codec) ? 'audio' : null;
+      if (kind) {
+        const configType = codecConfigType(codec);
+        inspection.tracks.push({
+          kind,
+          codec,
+          hasCodecConfig: configType
+            ? entryContainsConfigBox(entryOffset + 8, entryOffset + entrySize, configType)
+            : false,
+        });
+      }
+      entryOffset += entrySize;
+    }
+  }
+
+  function walk(start: number, end: number, depth: number): void {
+    if (depth > 6) return;
+    let offset = start;
+    while (offset + 8 <= end) {
+      let size = readU32(bytes, offset);
+      const type = fourCCAt(bytes, offset + 4);
+      let headerSize = 8;
+      if (size === 1) {
+        if (offset + 16 > end) break;
+        size = readU64(bytes, offset + 8);
+        headerSize = 16;
+      } else if (size === 0) {
+        size = end - offset; // الصندوق الأخير يمتد حتى نهاية النطاق
+      }
+      if (size < headerSize) break;
+      if (offset + size > end) break; // صندوق غير مكتمل في هذه القطعة
+      if (type === 'stsd') parseStsd(offset, offset + size);
+      else if (type === 'moov') inspection.moovVerified = true;
+      else if (CONTAINER_BOXES.has(type)) walk(offset + headerSize, offset + size, depth + 1);
+      offset += size;
+    }
+  }
+
+  walk(0, bytes.length, 0);
+  return inspection;
+}
+
+/**
+ قرار المرور دون إعادة ترميز من التحليل البنيوي:
+ - مسار فيديو avc1/avc3 مع صندوق إعداد avcC إلزامي.
+ - كل مسار صوتي إن وُجد يجب أن يكون AAC (mp4a + esds).
+ - أي ترميز آخر (HEVC، Opus، ...) أو بنية غير قابلة للتحقق → رفض.
+ */
+export function decideMp4Passthrough(inspection: Mp4Inspection): { accepted: boolean; reason: string } {
+  if (!inspection.containerVerified) return { accepted: false, reason: 'ftyp-container-missing' };
+  if (!inspection.moovVerified) return { accepted: false, reason: 'moov-missing-or-unparseable' };
+
+  const videoTracks = inspection.tracks.filter(track => track.kind === 'video');
+  if (videoTracks.length === 0) return { accepted: false, reason: 'no-video-track' };
+  const h264Track = videoTracks.find(track => track.codec === 'avc1' || track.codec === 'avc3');
+  if (!h264Track) {
+    return { accepted: false, reason: `video-codec-not-h264(${videoTracks.map(track => track.codec).join(",")})` };
+  }
+  if (!h264Track.hasCodecConfig) {
+    return { accepted: false, reason: 'avc-configuration-box-missing' };
+  }
+
+  const incompatibleAudio = inspection.tracks.find(
+    track => track.kind === 'audio' && !(track.codec === 'mp4a' && track.hasCodecConfig),
+  );
+  if (incompatibleAudio) {
+    return { accepted: false, reason: `audio-track-${incompatibleAudio.codec}-not-verified-aac` };
+  }
+
+  return {
+    accepted: true,
+    reason: `mp4-structure-verified: ${h264Track.codec}+avcC${
+      inspection.tracks.some(track => track.kind === 'audio') ? ' + mp4a/esds' : ' (silent)'
+    }`,
+  };
+}
+
 /**
  تحقق حقيقي من ملف MP4 قبل السماح بالمرور دون إعادة ترميز:
  1) صندوق ftyp في المقدمة (حاوية MP4 صالحة)
- 2) مسح FourCC يثبت وجود ترميز فيديو avc1 — الامتداد وحده لا يثبت شيئاً.
+ 2) قراءة الصناديق العليا حتى إيجاد moov (قد يقع بعد mdat ضخم — نقرأ
+    ترويسات الصناديق فقط ونقفز فوق البيانات، لا مسح بايتات عمياء)
+ 3) تحليل شجرة moov: مسارات فيديو H.264 (avc1/avc3 مع صندوق avcC)
+    وكل مسار صوتي AAC (mp4a مع esds)
+ أي ملف لا يمكن التحقق من مواصفاته → false (إعادة معالجة أو رفض، لا مرور أعمى).
  */
-async function verifyMp4Passthrough(file: File): Promise<boolean> {
+/** مُصدَّرة للاختبارات فقط — منطق القرار نفسه في decideMp4Passthrough. */
+export async function verifyMp4Passthrough(file: File): Promise<boolean> {
   try {
     const head = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer());
-    if (head.length < 12) return false;
-    if (String.fromCharCode(head[4], head[5], head[6], head[7]) !== 'ftyp') return false;
-    const CHUNK = 1024 * 1024;
-    const total = Math.min(file.size, 8 * 1024 * 1024);
-    const chunks: Uint8Array[] = [];
-    for (let offset = 0; offset < total; offset += CHUNK) {
-      chunks.push(new Uint8Array(await file.slice(offset, Math.min(offset + CHUNK, total)).arrayBuffer()));
+    if (head.length < 12 || fourCCAt(head, 4) !== 'ftyp') return false;
+
+    const MAX_TOP_LEVEL_BOXES = 64;
+    const MAX_MOOV_BYTES = 8 * 1024 * 1024;
+    let offset = 0;
+    for (let boxes = 0; offset + 8 <= file.size && boxes < MAX_TOP_LEVEL_BOXES; boxes += 1) {
+      const header = new Uint8Array(await file.slice(offset, offset + 16).arrayBuffer());
+      let size = readU32(header, 0);
+      const type = fourCCAt(header, 4);
+      let headerSize = 8;
+      if (size === 1) {
+        if (header.length < 16) return false;
+        size = readU64(header, 8);
+        headerSize = 16;
+      } else if (size === 0) {
+        size = file.size - offset; // الصندوق الأخير يمتد حتى نهاية الملف
+      }
+      if (size < headerSize) return false;
+      if (type === 'moov') {
+        if (size > MAX_MOOV_BYTES) return false;
+        const bytes = new Uint8Array(await file.slice(offset, offset + size).arrayBuffer());
+        const inspection = inspectMp4Bytes(bytes);
+        // ftyp تحقق من الملف نفسه أعلاه — شريحة moov وحدها لا تحويه
+        inspection.containerVerified = true;
+        return decideMp4Passthrough(inspection).accepted;
+      }
+      offset += size;
     }
-    return findMp4CodecMarkers(chunks).hasH264;
+    // moov غير موجود ضمن الصناديق المقروءة → الملف غير قابل للتحقق
+    return false;
   } catch {
     return false;
   }
@@ -580,13 +773,14 @@ export async function compressVideo(
   const mb = await loadMediabunny();
   if (!mb) {
     // لا نرفع الفيديو الأصلي بصمت إذا تعذر الضغط (Safari قديم بلا WebCodecs).
-    // مسار المرور الصغير يتطلب تحققاً حقيقياً: حاوية MP4 (ftyp) + مسح FourCC
-    // يثبت ترميز avc1 — الامتداد وحده لا يثبت أن الملف H.264.
+    // مسار المرور الصغير يتطلب تحققاً بنيوياً حقيقياً: حاوية MP4 (ftyp) +
+    // تحليل شجرة moov — مسار فيديو avc1 مع صندوق avcC، وكل صوت AAC (mp4a+esds).
+    // الامتداد ومسح FourCC وحدهما لا يثبتان شيئاً؛ ما لا يمكن التحقق منه يُرفض.
     if (file.type === 'video/mp4'
       && file.size <= 6 * 1024 * 1024
       && file.size <= maxBytes
       && await verifyMp4Passthrough(file)) {
-      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع ملف MP4 صغير (≤6MB) بعد تحقق الحاوية والترميز avc1.');
+      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع ملف MP4 صغير (≤6MB) بعد تحقق بنيوي للحاوية والمسارات (avc1+avcC / mp4a+esds).');
       recordCompressionMetric({
         kind: 'video',
         preset: 'video',
@@ -594,8 +788,8 @@ export async function compressVideo(
         finalBytes: file.size,
         durationMs: Date.now() - startedAt,
         outcome: 'skipped-passthrough',
-        failureReason: 'no-webcodecs: container+avc1-verified',
-        finalVideoCodec: 'avc1 (container-verified)',
+        failureReason: 'no-webcodecs: mp4-structure-verified',
+        finalVideoCodec: 'avc1+avcC (structure-verified)',
       });
       return file;
     }

@@ -212,9 +212,31 @@ router.post("/media/upload-ledger", (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: "The session is invalid or expired." });
     }
     const body = (req.body || {}) as { url?: unknown };
-    const mediaUrl = normalizeMediaUrl(body.url);
+    // تحقق صارم من الرابط: ملفات ImageKit فقط، داخل مجلد /aani/، والمجلد الفرعي
+    // الأول يطابق هوية المستخدم — كل عمليات الرفع في التطبيق ترفع تحت `${userId}/...`.
+    // لا يُسجَّل رابط لا يملكه المستخدم حتى لا تُستخدم الندبة لتسجيل ملفات الغير.
+    let mediaUrl = "";
+    let ownerSegment = "";
+    if (typeof body.url === "string" && body.url) {
+      const base = normalizeMediaUrl(body.url);
+      try {
+        const parsed = new URL(base);
+        if (parsed.hostname.endsWith("ik.imagekit.io")) {
+          const match = parsed.pathname.match(/^\/aani\/([^/]+)(\/|$)/);
+          if (match) {
+            mediaUrl = base;
+            ownerSegment = decodeURIComponent(match[1]);
+          }
+        }
+      } catch {
+        /* رابط غير صالح — يُرفض أدناه */
+      }
+    }
     if (!mediaUrl) {
-      return res.status(400).json({ success: false, error: "url is required." });
+      return res.status(400).json({ success: false, error: "A valid ImageKit media URL under /aani/ is required." });
+    }
+    if (ownerSegment !== userId) {
+      return res.status(403).json({ success: false, error: "You can only register uploads from your own media folder." });
     }
     try {
       await recordUploadLedger(config, mediaUrl);
