@@ -84,8 +84,10 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
           success: true,
           urlEndpoint: imagekit.urlEndpoint,
           publicKey: imagekit.publicKey,
-          // UUID v4 جديد داخل معالج الطلب نفسه عند كل استدعاء
-          token: crypto.randomUUID(),
+          // نفس التوكن المُستخدم في حساب التوقيع تماماً — إرجاع توكن مختلف
+          // (استدعاء ثانٍ لـ randomUUID) يجعل التوقيع غير مطابق دائماً
+          // ويرفض ImageKit كل رفعة برسالة "invalid signature parameter".
+          token,
           expire,
           signature,
         });
