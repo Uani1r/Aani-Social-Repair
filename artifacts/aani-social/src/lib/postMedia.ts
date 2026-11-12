@@ -6,10 +6,43 @@ type PostMediaRecord = {
   media_asset_id?: string | null;
 };
 
+// معاملات التحسين التلقائي من ImageKit: جودة تكيفية حسب الشبكة + صيغة تلقائية
+// (H.264/WebM للفيديو وWebP/AVIF للصور) — تقلّص الحجم وتسرّع البثّ على الهاتف.
+const IMAGEKIT_MEDIA_TRANSFORMS = 'q-auto,f-auto';
+
+/**
+ * يضيف `?tr=q-auto,f-auto` إلى روابط ImageKit فقط (ik.imagekit.io)
+ * مع منع التكرار، وإلحاق الاستعلام قبل أي رمز تعديل (#t= / #crop=...)
+ * حتى يبقى ترميز القص سليمًا. الروابط الأخرى تُعاد كما هي.
+ */
+export function optimizeImageKitMediaUrl(url: string): string {
+  if (!url || !/^https?:\/\//i.test(url)) return url;
+
+  const fragmentIndex = url.indexOf('#');
+  const base = fragmentIndex >= 0 ? url.slice(0, fragmentIndex) : url;
+  const fragment = fragmentIndex >= 0 ? url.slice(fragmentIndex) : '';
+
+  try {
+    const parsed = new URL(base);
+    if (!/(^|\.)ik\.imagekit\.io$/i.test(parsed.hostname)) return url;
+
+    const existingTr = parsed.searchParams.getAll('tr');
+    if (existingTr.some(value => value.includes('q-auto') && value.includes('f-auto'))) return url;
+
+    parsed.searchParams.delete('tr');
+    // سلسلة التحويلات في ImageKit تُفصل بفواصل داخل معامل tr واحد
+    parsed.searchParams.set('tr', [...existingTr, IMAGEKIT_MEDIA_TRANSFORMS].join(','));
+
+    return `${parsed.toString()}${fragment}`;
+  } catch {
+    return url;
+  }
+}
+
 function toPublicMediaUrl(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const raw = value.trim();
-  if (/^(?:https?:|blob:|data:|\/\/)/i.test(raw)) return raw;
+  if (/^(?:https?:|blob:|data:|\/\/)/i.test(raw)) return optimizeImageKitMediaUrl(raw);
 
   const hashIndex = raw.indexOf('#');
   const fragment = hashIndex >= 0 ? raw.slice(hashIndex) : '';
@@ -35,7 +68,7 @@ function toPublicMediaUrl(value: unknown): string | null {
 
   if (!objectPath) return null;
   const publicUrl = supabase.storage.from(bucket).getPublicUrl(objectPath).data.publicUrl;
-  return publicUrl ? `${publicUrl}${query}${fragment}` : null;
+  return publicUrl ? optimizeImageKitMediaUrl(`${publicUrl}${query}${fragment}`) : null;
 }
 
 export async function resolvePostMediaUrls<T extends PostMediaRecord>(posts: T[]): Promise<T[]> {

@@ -69,7 +69,7 @@ export function defaultSoundTitle(creatorName?: string | null): string {
   return `الصوت الأصلي - ${(creatorName || '').trim() || 'المستخدم'}`;
 }
 
-/** الرابط الأساسي للفيديو بدون ترميز التعديل (#t= / #crop=...) — يطابق sounds.source_video_url */
+/** الرابط الأساسي للفيديو بدون ترميز التعديل (#t= / #crop=...) ومعاملات العرض (?tr=...) — يطابق sounds.source_video_url */
 export function baseVideoUrl(url: string): string {
-  return url.replace(/#.*$/, '');
+  return url.replace(/[?#].*$/, '');
 }

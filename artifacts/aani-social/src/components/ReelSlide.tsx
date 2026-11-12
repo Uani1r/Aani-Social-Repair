@@ -40,7 +40,7 @@ const formatReelTime = (value: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'metadata' }: {
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'auto' }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
@@ -70,11 +70,13 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const isOverlayOpen = Boolean(onClose);
   const [isVisible, setIsVisible] = useState(false);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
+  // مؤشر التحميل الخفيف: true أثناء انتظار البيانات/التخزين المؤقت (waiting/stalled)
+  const [isBuffering, setIsBuffering] = useState(false);
   // نظام الأصوات: عند وجود صوت مستعار (من فيديو آخر) يبقى صوت الفيديو مكتوماً
   // ويعمل الصوت المستعار بدلاً منه — زر الكتم يتحكم بالصوت المستعار.
   const [muted, setMuted] = useState(() => Boolean(
     post.sound_id && post.audio_url && post.media_url
-    && post.media_url.replace(/#.*$/, '') !== post.audio_url.replace(/#.*$/, ''),
+    && baseVideoUrl(post.media_url) !== baseVideoUrl(post.audio_url),
   ));
   const [playbackTime, setPlaybackTime] = useState(0);
   const [videoDuration, setVideoDuration] = useState(0);
@@ -98,7 +100,10 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const videoSrc = videoTimeRange
     ? appendVideoTrimFragment(mediaUrl, videoTimeRange)
     : stripVideoEditFragment(mediaUrl);
-  useEffect(() => setHasVideoFrame(false), [backgroundMediaSuspended, videoSrc]);
+  useEffect(() => {
+    setHasVideoFrame(false);
+    setIsBuffering(false);
+  }, [backgroundMediaSuspended, videoSrc]);
   // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
   const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
   // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
@@ -398,6 +403,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   const handleVideoCanPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
+    setIsBuffering(false);
     if (!isVisible || backgroundMediaSuspended || manuallyPausedRef.current || hasOpenFeedDialog()) return;
     playExclusive(post.id, video);
   };
@@ -585,7 +591,13 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 preload={videoPreload}
                 onLoadedMetadata={handleVideoLoadedMetadata}
                 onCanPlay={handleVideoCanPlay}
-                onPlaying={() => setHasVideoFrame(true)}
+                onPlaying={() => {
+                  setHasVideoFrame(true);
+                  setIsBuffering(false);
+                }}
+                onWaiting={() => setIsBuffering(true)}
+                onStalled={() => setIsBuffering(true)}
+                onCanPlayThrough={() => setIsBuffering(false)}
                 onVolumeChange={event => {
                   if (!backgroundSoundUrl) return;
                   event.currentTarget.muted = true;
@@ -600,6 +612,12 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 className="relative z-0 h-full w-full cursor-pointer object-cover"
                 style={{ transform: videoCropTransform, transformOrigin: 'center' }}
               />
+              {/* مؤشر تحميل خفيف حتى أول إطار مُشغَّل وأثناء أي تجمد مؤقت للبث */}
+              {isVisible && !manuallyPausedRef.current && (isBuffering || !hasVideoFrame) && (
+                <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center">
+                  <Loader2 className="h-9 w-9 animate-spin text-white/75" aria-label="جارٍ تحميل الفيديو" />
+                </div>
+              )}
             </>
           )}
         </div>
