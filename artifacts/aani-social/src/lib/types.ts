@@ -244,7 +244,7 @@ export const getPostTaggedUserIds = (post: Pick<Post, 'post_metadata' | 'tagged_
 
 export type PostRow = Pick<
   Post,
-  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'post_metadata' | 'type' | 'destination' | 'visibility' | 'created_at' | 'display_order'
+  'id' | 'user_id' | 'content' | 'media_url' | 'media_urls' | 'media_asset_id' | 'post_metadata' | 'type' | 'destination' | 'visibility' | 'created_at' | 'display_order'
 > & {
   hide_likes?: boolean;
   hide_comments?: boolean;

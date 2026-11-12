@@ -4,6 +4,7 @@ import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/int
 import { handleAppError } from '@/lib/appErrors';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type PostRow, type Profile } from '@/lib/types';
+import { resolvePostMediaUrls } from '@/lib/postMedia';
 import { registerContentRefreshRequest } from '@/lib/contentRefresh';
 
 // ذاكرة مؤقتة على مستوى الوحدة (بديل Keep-Alive/staleTime):
@@ -30,6 +31,13 @@ function isPostsPermissionError(value: unknown): boolean {
   return code === '42501' || /permission denied for table posts|row-level security.*posts|posts.*row-level security/i.test(message);
 }
 
+function isMissingColumnError(value: unknown, column: string): boolean {
+  if (!isRecord(value)) return false;
+  const code = typeof value.code === 'string' ? value.code : '';
+  const message = typeof value.message === 'string' ? value.message : '';
+  return (code === '42703' || code === 'PGRST204') && message.includes(column);
+}
+
 function normalizePostRow(value: unknown): PostRow | null {
   if (!isRecord(value)
     || typeof value.id !== 'string'
@@ -49,6 +57,7 @@ function normalizePostRow(value: unknown): PostRow | null {
     post_metadata: normalizePostMetadata(value.post_metadata),
     media_url: typeof value.media_url === 'string' ? value.media_url : null,
     media_urls: mediaUrls,
+    media_asset_id: typeof value.media_asset_id === 'string' ? value.media_asset_id : null,
     type: value.type === 'photo' || value.type === 'reel' ? value.type : 'text',
     display_order: typeof value.display_order === 'number' ? value.display_order : 0,
     destination: value.destination === 'reels' ? 'reels' : 'feed',
@@ -80,7 +89,7 @@ function normalizePostRows(value: unknown): PostRow[] {
 }
 
 async function normalizePostRowsWithVisibility(value: unknown): Promise<PostRow[]> {
-  const posts = normalizePostRows(value);
+  const posts = await resolvePostMediaUrls(normalizePostRows(value));
   if (posts.length === 0) return posts;
 
   try {
@@ -169,24 +178,36 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
     if (repostRows.length === 0) return [];
 
     const postIds = Array.from(new Set(repostRows.map(row => row.post_id)));
-    const repostColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end, hide_likes, hide_comments, comment_privacy';
-    let { data: postData, error: postsError } = await supabase
+    const buildRepostColumns = (includeSoundTrim: boolean, includeMediaAssetId: boolean) => {
+      const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
+      const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
+      return `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`;
+    };
+    const fetchRepostPosts = (columns: string) => supabase
       .from('posts')
-      .select(repostColumns)
+      .select(columns)
       .in('id', postIds);
-    // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
-    if (postsError && (postsError.code === '42703' || postsError.code === 'PGRST204') && /sound_trim/i.test(postsError.message || '')) {
-      ({ data: postData, error: postsError } = await supabase
-        .from('posts')
-        .select(repostColumns.replace('sound_trim_start, sound_trim_end, ', ''))
-        .in('id', postIds));
+    let includeSoundTrim = true;
+    let includeMediaAssetId = true;
+    let result = await fetchRepostPosts(buildRepostColumns(includeSoundTrim, includeMediaAssetId));
+    for (let attempt = 0; attempt < 2 && result.error; attempt += 1) {
+      if (includeSoundTrim && isMissingColumnError(result.error, 'sound_trim')) {
+        includeSoundTrim = false;
+      } else if (includeMediaAssetId && isMissingColumnError(result.error, 'media_asset_id')) {
+        includeMediaAssetId = false;
+      } else {
+        break;
+      }
+      result = await fetchRepostPosts(buildRepostColumns(includeSoundTrim, includeMediaAssetId));
     }
+    const { data: postData, error: postsError } = result;
     if (postsError) return [];
 
     const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
       post.visibility === 'public'
-      && post.destination === destination
-      && (destination !== 'reels' || post.type === 'reel' || post.type === 'photo'),
+      && (destination === 'reels'
+        ? post.type === 'reel' || (post.type === 'photo' && post.destination === 'reels')
+        : post.destination === 'feed'),
     );
     const postsById = new Map(originalPosts.map(post => [post.id, post] as const));
     const visibleReposts = repostRows.filter(row => postsById.has(row.post_id));
@@ -259,11 +280,12 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         postIds?: string[],
         includeProfileOrder = true,
       ) => {
-        const buildColumns = (includeSoundTrim: boolean) => {
+        const buildColumns = (includeSoundTrim: boolean, includeMediaAssetId: boolean) => {
+          const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
           const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
           return kind === 'profile' && includeProfileOrder
-            ? `id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`
-            : `id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`;
+            ? `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, display_order, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`
+            : `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, comments_disabled, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end, hide_likes, hide_comments, comment_privacy`;
         };
         const buildQuery = (columns: string) => {
           const request = supabase.from('posts').select(columns);
@@ -280,14 +302,18 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           }
           return request.order('created_at', { ascending: false });
         };
-        let result = await buildQuery(buildColumns(true));
-        // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
-        if (
-          result.error
-          && (result.error.code === '42703' || result.error.code === 'PGRST204')
-          && /sound_trim/i.test(result.error.message || '')
-        ) {
-          result = await buildQuery(buildColumns(false));
+        let includeSoundTrim = true;
+        let includeMediaAssetId = true;
+        let result = await buildQuery(buildColumns(includeSoundTrim, includeMediaAssetId));
+        for (let attempt = 0; attempt < 2 && result.error; attempt += 1) {
+          if (includeSoundTrim && isMissingColumnError(result.error, 'sound_trim')) {
+            includeSoundTrim = false;
+          } else if (includeMediaAssetId && isMissingColumnError(result.error, 'media_asset_id')) {
+            includeMediaAssetId = false;
+          } else {
+            break;
+          }
+          result = await buildQuery(buildColumns(includeSoundTrim, includeMediaAssetId));
         }
         return result;
       };
@@ -406,7 +432,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         if (postsErr) throw postsErr;
 
         const rawPosts = (await normalizePostRowsWithVisibility(postData))
-          .filter(post => (post.type === 'reel' || post.type === 'photo') && post.destination === 'reels');
+          .filter(post => post.type === 'reel' || (post.type === 'photo' && post.destination === 'reels'));
         let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];

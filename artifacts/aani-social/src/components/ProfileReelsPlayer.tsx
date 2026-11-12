@@ -9,6 +9,7 @@ import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
 import { normalizePostMetadata, type Post, type Profile } from '@/lib/types';
+import { resolvePostMediaUrls } from '@/lib/postMedia';
 
 // مشغل الريلز الكامل لملف شخصي واحد: يفتح من الريل المختار مباشرة
 // ويقتصر التنقل (السحب) على ريلز هذا الملف الشخصي فقط بنفس ترتيبها.
@@ -78,26 +79,38 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
     let active = true;
     void (async () => {
       try {
-        const profileReelColumns = 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end';
-        let { data: rows, error } = await supabase
-          .from('posts')
-          .select(profileReelColumns)
-          .eq('user_id', profileUserId)
-          .eq('type', 'reel')
-          .order('created_at', { ascending: false })
-          .limit(60);
-        // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
-        if (error && (error.code === '42703' || error.code === 'PGRST204') && /sound_trim/i.test(error.message || '')) {
-          ({ data: rows, error } = await supabase
+        const buildProfileReelQuery = (includeSoundTrim: boolean, includeMediaAssetId: boolean) => {
+          const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
+          const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
+          const columns = `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end`;
+          return supabase
             .from('posts')
-            .select(profileReelColumns.replace('sound_trim_start, sound_trim_end, ', ''))
+            .select(columns)
             .eq('user_id', profileUserId)
-            .eq('type', 'reel')
+            .or('type.eq.reel,and(type.eq.photo,destination.eq.reels)')
             .order('created_at', { ascending: false })
-            .limit(60));
+            .limit(60);
+        };
+        let includeSoundTrim = true;
+        let includeMediaAssetId = true;
+        let result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId);
+        for (let attempt = 0; attempt < 2 && result.error; attempt += 1) {
+          if (includeSoundTrim && (result.error.code === '42703' || result.error.code === 'PGRST204') && /sound_trim/i.test(result.error.message || '')) {
+            includeSoundTrim = false;
+          } else if (includeMediaAssetId && (result.error.code === '42703' || result.error.code === 'PGRST204') && /media_asset_id/i.test(result.error.message || '')) {
+            includeMediaAssetId = false;
+          } else {
+            break;
+          }
+          result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId);
         }
+        const { data: rows, error } = result;
         const safeRows = (!error && Array.isArray(rows) ? rows : []) as unknown[];
-        const authorIds = Array.from(new Set(safeRows
+        const reelRows = safeRows.filter(row => {
+          const record = row as Record<string, unknown>;
+          return record.type === 'reel' || (record.type === 'photo' && record.destination === 'reels');
+        });
+        const authorIds = Array.from(new Set(reelRows
           .map(row => (row as Record<string, unknown>).user_id)
           .filter((id): id is string => typeof id === 'string' && Boolean(id))));
 
@@ -114,7 +127,7 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
         }
 
         if (!active) return;
-        setFetchedReels(safeRows.map(row => {
+        const fetchedPosts = reelRows.map(row => {
           const record = row as Record<string, unknown>;
           const authorId = typeof record.user_id === 'string' ? record.user_id : '';
           return {
@@ -122,7 +135,9 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
             post_metadata: normalizePostMetadata(record.post_metadata),
             author: profiles.get(authorId) || { id: authorId, username: '', full_name: '', avatar_url: null, bio: '' },
           } as Post;
-        }));
+        });
+        const resolvedReels = await resolvePostMediaUrls(fetchedPosts);
+        if (active) setFetchedReels(resolvedReels);
       } catch {
         if (active) setFetchedReels([]);
       }
