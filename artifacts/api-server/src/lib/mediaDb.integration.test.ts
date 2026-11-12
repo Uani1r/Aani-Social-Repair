@@ -63,10 +63,12 @@ async function deleteTestRows(): Promise<void> {
   await restRequest(config, "DELETE", "profiles", { id: `eq.${TEST_PROFILE_ID}` });
 }
 
-/** يكشف أي جداول المراجع الأساسية غائبة في بيئة الاختبار فعلياً */
+/** يكشف أي جداول المراجع الأساسية غائبة في بيئة الاختبار فعلياً —
+ *  profile_highlight_collections جدول اختياري وفق سياسة mediaDb.ts
+ *  (غيابه يُتخطى ولا يوقف الحذف) فلا يُحتسب أساسياً هنا */
 async function missingCoreTables(): Promise<string[]> {
   const coreTables = [
-    "posts", "stories", "profile_highlights", "profile_highlight_collections",
+    "posts", "stories", "profile_highlights",
     "sounds", "messages", "profiles", "media_assets",
   ];
   const missing: string[] = [];

@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:unit": "tsx --test ./src/lib/mediaDb.test.ts ./src/lib/mediaDeletionWorker.test.ts",
+    "test:unit": "tsx --test ./src/lib/mediaDb.test.ts ./src/lib/mediaDeletionWorker.test.ts ./src/lib/mediaProcessing.test.ts",
     "test:integration": "tsx --test ./src/lib/mediaDb.integration.test.ts"
   },
   "dependencies": {

@@ -130,8 +130,21 @@ async function loadSoundSource(config: SupabaseAdminConfig, soundId: string): Pr
   return typeof source === "string" && source.trim() ? source.trim() : null;
 }
 
-function stripFragment(url: string): string {
-  return url.split("#", 1)[0];
+/**
+ مفتاح هوية الوسيط للمقارنة: الأصل (origin) + المسار الأساسي فقط، دون
+ معاملات الاستعلام ولا الهاشتاغ. روابط الصور/الفيديو في هذا التطبيق تُعنَون
+ بمسارها؛ الاختلاف في ?tr= أو #t= أو تواقيع مؤقتة لا يغير هوية الملف، بينما
+ اختلاف المسار يعني ملفاً مختلفاً فعلاً. تُستخدم للمقارنة فقط — لا تُعدَّل
+ الروابط الأصلية المخزنة في قاعدة البيانات إطلاقاً.
+ (روابط نسبيّة قديمة: يُزال التزخرف [#?] ويعاد المسار كما هو.)
+ */
+export function mediaIdentityKey(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return url.split(/[?#]/)[0] ?? url;
+  }
 }
 
 async function shouldStripOriginalAudio(
@@ -142,10 +155,10 @@ async function shouldStripOriginalAudio(
   for (const post of posts) {
     const mediaSources = [post.media_url, ...(Array.isArray(post.media_urls) ? post.media_urls : [])]
       .filter((value): value is string => typeof value === "string" && Boolean(value))
-      .map(stripFragment);
+      .map(mediaIdentityKey);
     const nativeSources = new Set([...mediaSources, ...originalVideoUrls]);
 
-    if (post.audio_url && !nativeSources.has(stripFragment(post.audio_url))) return true;
+    if (post.audio_url && !nativeSources.has(mediaIdentityKey(post.audio_url))) return true;
     if (post.sound_id) {
       let soundSource: string | null = null;
       try {
@@ -155,7 +168,7 @@ async function shouldStripOriginalAudio(
         // favor the requested custom-audio behavior and remove the video's audio.
         return true;
       }
-      if (!soundSource || !nativeSources.has(stripFragment(soundSource))) return true;
+      if (!soundSource || !nativeSources.has(mediaIdentityKey(soundSource))) return true;
     }
   }
   return false;
@@ -248,8 +261,10 @@ function runFfmpeg(inputPath: string, outputPath: string, stripAudio: boolean): 
     "-crf", "23",
     "-maxrate", "4.5M",
     "-bufsize", "9M",
-    // 30fps كحد نهائي (CFR) — يُتحقق منه على الناتج أدناه
+    // 30fps كحد نهائي مع فرض CFR (fps_mode=cfr يزيل الاختلافات الزمنية بين
+    // الإطارات) — يُتحقق منه لاحقاً من الطوابع الزمنية الفعلية للناتج
     "-r", "30",
+    "-fps_mode", "cfr",
     ...audioOptions,
     "-movflags", "+faststart",
     outputPath,
@@ -368,6 +383,71 @@ function probeOutput(outputPath: string): Promise<{
   });
 }
 
+/**
+ تحقق مستقل ثانٍ من معدل الإطارات الفعلي: قراءة الطوابع الزمنية للإطارات
+ (حتى 90 إطاراً من بداية الناتج عبر ffprobe) وحساب أقصى معدل لحظي بين
+ إطارين متتاليين. r_frame_rate وavg_frame_rate وحدهما لا يثبتان السلوك
+ الفعلي للفيديو VFR — الطوابع الزمنية هي الدليل الحقيقي.
+ يفشل صراحةً عند: أقل من إطارين قابلين للقراءة، أو طابع غير قابل للتحليل،
+ أو أي فجوة زمنية بين إطارين أقصر من 1/30 ثانية (أي تجاوز 30fps فعلياً).
+ */
+function verifyFrameTimestampRate(outputPath: string): Promise<{ maxInstantaneousRate: number | null }> {
+  const args = [
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "frame=pts_time",
+    "-of", "csv=p=0",
+    "-frames:v", "90",
+    outputPath,
+  ];
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.env["FFPROBE_PATH"] || "ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    timeout.unref();
+    child.stdout?.on("data", chunk => {
+      stdout = `${stdout}${chunk.toString()}`.slice(0, MAX_PROCESS_LOG_CHARS);
+    });
+    child.stderr?.on("data", chunk => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-MAX_PROCESS_LOG_CHARS);
+    });
+    child.once("error", error => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", code => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `ffprobe (frame timestamps) exited with code ${code ?? "unknown"}.`));
+        return;
+      }
+      const timestamps = stdout
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => Number(line))
+        .filter(value => Number.isFinite(value));
+      if (timestamps.length < 2) {
+        resolve({ maxInstantaneousRate: null });
+        return;
+      }
+      let maxInstantaneousRate = 0;
+      for (let index = 1; index < timestamps.length; index += 1) {
+        const gap = timestamps[index]! - timestamps[index - 1]!;
+        if (gap <= 0) {
+          // طوابع غير تصاعدية — لا يمكن التحقق من معدل موثوق
+          resolve({ maxInstantaneousRate: null });
+          return;
+        }
+        maxInstantaneousRate = Math.max(maxInstantaneousRate, 1 / gap);
+      }
+      resolve({ maxInstantaneousRate: Math.round(maxInstantaneousRate * 100) / 100 });
+    });
+  });
+}
+
 async function uploadProcessedVideo(config: SupabaseAdminConfig, storagePath: string, filePath: string): Promise<void> {
   const fileInfo = await stat(filePath);
   const body = Readable.toWeb(createReadStream(filePath)) as ReadableStream<Uint8Array>;
@@ -411,7 +491,7 @@ async function updateRelatedPosts(
       const existingUrls = post.media_urls.filter((url): url is string => typeof url === "string");
       let replacedAny = false;
       mediaUrls = existingUrls.map(url => {
-        if (originalVideoUrls.has(stripFragment(url))) {
+        if (originalVideoUrls.has(mediaIdentityKey(url))) {
           replacedAny = true;
           return replaceMediaBase(url, processedUrl);
         }
@@ -454,7 +534,11 @@ async function processClaimedMediaAsset(
 
     validateOriginalPath(originalPath, userId);
     const originalUrl = asset.video_url || publicStorageUrl(config, originalPath);
-    const originalVideoUrls = new Set([stripFragment(originalUrl), publicStorageUrl(config, originalPath)]);
+    // مفاتيح الهوية (أصل + مسار) للمقارنة فقط — الروابط الأصلية لا تُعدَّل
+    const originalVideoUrls = new Set([
+      mediaIdentityKey(originalUrl),
+      mediaIdentityKey(publicStorageUrl(config, originalPath)),
+    ]);
     const relatedPosts = await loadRelatedPosts(config, mediaAssetId);
     const stripAudio = await shouldStripOriginalAudio(config, relatedPosts, originalVideoUrls);
 
@@ -483,6 +567,17 @@ async function processClaimedMediaAsset(
     if (metadata.rFrameRate > 30.01 || metadata.avgFrameRate > 30.01) {
       throw new Error(
         `The processed video exceeds the 30fps limit (r_frame_rate=${metadata.rFrameRate}, avg_frame_rate=${metadata.avgFrameRate}).`,
+      );
+    }
+    // الدليل الحقيقي: الطوابع الزمنية الفعلية للإطارات — أي فجوة أقصر من
+    // 1/30 ثانية تعني تجاوزاً فعلياً لـ30fps، وتعذر القراءة يعني رفضاً.
+    const timestampCheck = await verifyFrameTimestampRate(outputPath);
+    if (timestampCheck.maxInstantaneousRate === null) {
+      throw new Error("Could not verify the actual frame timestamps of the processed output.");
+    }
+    if (timestampCheck.maxInstantaneousRate > 30.01) {
+      throw new Error(
+        `The processed video exceeds the 30fps limit at some point (max instantaneous rate=${timestampCheck.maxInstantaneousRate}).`,
       );
     }
     // إثبات العزل فعلياً: عند اختيار صوت بديل يجب ألا يبقى أي مسار صوتي

@@ -96,6 +96,33 @@ test('فشل localStorage أثناء الكتابة لا يبتلع بصمت —
   assert.ok(secondary.data.some(entry => entry.url === 'https://ik.imagekit.io/aani/u1/c.mp4'));
 });
 
+test('بيانات localStorage التالفة (قراءة فاشلة) ترمي خطأً وتتراجع السلسلة — لا قائمة فارغة بصمت', async () => {
+  // طبقة أولى ترمي عند القراءة (بيانات تالفة/رفض خصوصية) — وضع localStorage الحقيقي
+  const corruptProxy: LedgerStore = {
+    async getAll() {
+      throw new Error('upload-ledger local storage is corrupt (not an array)');
+    },
+    async put() {
+      throw new Error('storage is corrupt');
+    },
+    async delete() {
+      throw new Error('storage is corrupt');
+    },
+  };
+  const secondary = memoryStore();
+  const store = createResilientStore([
+    { name: 'localStorage', build: () => corruptProxy },
+    { name: 'memory', build: () => secondary },
+  ]);
+
+  // getAll الفاشلة تتراجع بدل إرجاع [] صامتة
+  assert.equal((await store.getAll()).length, 0);
+  // الكتابة بعد التراجع تصل الطبقة السليمة — لا فقدان صامت
+  await store.put(makeEntry('https://ik.imagekit.io/aani/u1/after-corrupt.mp4'));
+  assert.ok(secondary.data.some(entry => entry.url === 'https://ik.imagekit.io/aani/u1/after-corrupt.mp4'));
+  assert.equal((await store.getAll()).length, 1);
+});
+
 /* ------------------------------------------------------------------ */
 /* الدفعات المتسلسلة واستمرار إعادة المحاولة                           */
 /* ------------------------------------------------------------------ */
@@ -155,6 +182,10 @@ test('تكرار تسجيل نفس الرابط (upsert) لا يضاعف الإ�
   const url = 'https://ik.imagekit.io/aani/u1/dup.mp4';
   await store.put(makeEntry(url));
   await store.put(makeEntry(url, { attempts: 3 }));
+  assert.equal(store.data.length, 1);
+  assert.equal(store.data[0].attempts, 3);
+});
+
   assert.equal(store.data.length, 1);
   assert.equal(store.data[0].attempts, 3);
 });

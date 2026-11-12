@@ -247,21 +247,18 @@ function createIndexedDbStore(): LedgerStore {
 
 function createLocalStorageStore(): LedgerStore {
   const KEY = 'aani-upload-ledger-pending';
+  // قراءة فاشلة (بيانات تالفة، أو getItem رفضه وضع خصوصية) تُرمى استثناءً
+  // — وليست قائمة فارغة بصمت — كي تتراجع سلسلة التخزين المرنة إلى الطبقة
+  // التالية وتحاول ترحيل ما يمكن إنقاذه قبل التخلي عن هذه الطبقة.
   const read = (): PendingLedgerEntry[] => {
-    try {
-      const raw = localStorage.getItem(KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter((entry): entry is PendingLedgerEntry =>
-        typeof (entry as PendingLedgerEntry)?.url === 'string'
-        && typeof (entry as PendingLedgerEntry)?.attempts === 'number'
-        && typeof (entry as PendingLedgerEntry)?.nextAttemptAt === 'number');
-    } catch (error) {
-      // بيانات تالفة — نُعلن ثم نبدأ طابوراً فارغاً (لا نُخفي المشكلة بصمت)
-      console.warn('[upload-ledger] محتوى التخزين المحلي تالف — بدء طابور جديد:', error);
-      return [];
-    }
+    const raw = localStorage.getItem(KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) throw new Error('upload-ledger local storage is corrupt (not an array)');
+    return parsed.filter((entry): entry is PendingLedgerEntry =>
+      typeof (entry as PendingLedgerEntry)?.url === 'string'
+      && typeof (entry as PendingLedgerEntry)?.attempts === 'number'
+      && typeof (entry as PendingLedgerEntry)?.nextAttemptAt === 'number');
   };
   const write = (entries: PendingLedgerEntry[]): void => {
     try {
@@ -286,6 +283,10 @@ function createLocalStorageStore(): LedgerStore {
 }
 
 function createMemoryStore(): LedgerStore {
+  // حل أخير مؤقت فقط: يُفقد عند إعادة التحميل/إغلاق التطبيق — لكنه يضمن
+  // استمرار قائمة الانتظار وعملية الدفع خلال الجلسة بدل إفشال التسجيل.
+  // المحفزات الأربعة (الموعد/الاتصال/الرؤية/الدخول) تعيد محاولة الدفع،
+  // والملف نفسه يبقى محمياً بفحص المراجع الخادمي قبل أي حذف.
   const entries = new Map<string, PendingLedgerEntry>();
   return {
     async getAll() { return [...entries.values()]; },
