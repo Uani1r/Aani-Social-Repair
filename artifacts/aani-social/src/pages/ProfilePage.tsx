@@ -1206,7 +1206,8 @@ export default function ProfilePage({
       const uploadPendingImage = async (kind: ProfileImageKind, file: File) => {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
         const path = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
-        await uploadMedia({ file, path });
+        // ضغط من جهة العميل: الأفاتار 400×400 < 80KB، الغلاف بعرض أقصى 1200px < 200KB
+        await uploadMedia({ file, path, preset: kind === 'avatar' ? 'avatar' : 'cover' });
         uploadedPaths.push(path);
         const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
         if (kind === 'avatar') patch.avatar_url = publicUrl;

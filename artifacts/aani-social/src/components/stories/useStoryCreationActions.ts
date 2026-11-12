@@ -132,6 +132,7 @@ export function useStoryCreationActions({
       await uploadStoryMedia({
         file: localFile,
         path: filePath,
+        preset: 'feedImage',
         onProgress: percent => onProgress?.(
           10 + Math.round(((imageUploadIndex + percent / 100) / imageUploadCount) * 65),
         ),

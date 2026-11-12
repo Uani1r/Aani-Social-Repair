@@ -186,10 +186,11 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
       context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, OUTPUT_SIZE, OUTPUT_SIZE);
 
       const blob = await new Promise<Blob>((resolve, reject) => {
-        canvas.toBlob(value => value ? resolve(value) : reject(new Error('تعذر تصدير الصورة.')), 'image/png');
+        // JPEG بدل PNG: الناتج أصغر بكثير (يُعاد ضغطه لاحقاً عبر إعداد avatar)
+        canvas.toBlob(value => value ? resolve(value) : reject(new Error('تعذر تصدير الصورة.')), 'image/jpeg', 0.9);
       });
       const baseName = file.name.replace(/\.[^.]+$/, '') || (outputSuffix === '-avatar' ? 'profile-avatar' : 'highlight-cover');
-      onSave(new File([blob], `${baseName}${outputSuffix}.png`, { type: 'image/png', lastModified: Date.now() }));
+      onSave(new File([blob], `${baseName}${outputSuffix}.jpg`, { type: 'image/jpeg', lastModified: Date.now() }));
     } catch (error) {
       console.error('[image cropper] تعذر اقتصاص الصورة:', error);
       toast.error(error instanceof Error ? error.message : 'تعذر حفظ الصورة.');

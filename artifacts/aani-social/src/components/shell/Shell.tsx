@@ -24,6 +24,7 @@ import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
+import { extractAudio, NoAudioTrackError } from '@/utils/mediaCompressor';
 import { createVideoPoster } from '@/lib/videoPoster';
 import { appendImageMediaAspect, appendVideoTrimFragment, buildVideoMediaUrl } from '@/lib/videoMedia';
 import { displayName, type Post, type PostDestination, type PostMetadataTag, type VideoCropTransform, type VideoTrimRange } from '@/lib/types';
@@ -1542,13 +1543,14 @@ export default function Shell({
       : null;
     // غلاف الفيديو المختار في المعاينة (يُرفع فقط عند نشر فيديو)
     const coverFile = mediaType === 'video' ? videoCoverFile : null;
-    // الصوت المختار من مكتبة الأصوات مع ترميز HTML5 (#t=start,end) لزمني الاقتصاص
-    // — فيبدأ التشغيل عند البداية وينتهي عند النهاية مباشرة في المشغلات
-    const borrowedAudioUrl = pendingSound?.sourceVideoUrl
-      ? (pendingSound.soundTrim && pendingSound.soundTrim.end > pendingSound.soundTrim.start
-        ? appendVideoTrimFragment(pendingSound.sourceVideoUrl, pendingSound.soundTrim)
-        : pendingSound.sourceVideoUrl)
-      : null;
+        // الصوت المختار من مكتبة الأصوات (preview_url الخفيف أولاً) مع ترميز
+        // HTML5 (#t=start,end) لزمني الاقتصاص — يقرأه المشغل مباشرة
+        const borrowedSoundBase = pendingSound?.previewUrl || pendingSound?.sourceVideoUrl || null;
+        const borrowedAudioUrl = borrowedSoundBase
+          ? (pendingSound?.soundTrim && pendingSound.soundTrim.end > pendingSound.soundTrim.start
+            ? appendVideoTrimFragment(borrowedSoundBase, pendingSound.soundTrim)
+            : borrowedSoundBase)
+          : null;
     if (!content && files.length === 0 && metadata.length === 0) return;
     if (Array.from(content).length > 2000) {
       setCreateError('نص المنشور يتجاوز الحد الأقصى البالغ 2000 حرف. اختصر النص قبل النشر.');
@@ -1605,9 +1607,23 @@ export default function Shell({
     // ImageKit: المسار معرّف للسجل فقط؛ الرابط النهائي يعود من نتيجة الرفع
     let mediaAssetPaths: { originalPath: string; posterPath: string | null } | null = null;
     let posterUploadUrl: string | null = null;
+    // إلغاء النشر: متحكم جديد مع كل محاولة — يبطل الضغط والعزل والرفع الجاري
+    const attemptAbort: { controller: AbortController | null } = { controller: null };
     const attemptPublish = async () => {
       if (attemptInProgress) return;
       attemptInProgress = true;
+      const controller = new AbortController();
+      attemptAbort.controller = controller;
+      const attemptSignal = controller.signal;
+      const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
+        updatePendingPost(postId, {
+          phaseLabel: phase === 'compressing'
+            ? `جارٍ تحسين الجودة...${typeof percent === 'number' ? ` ${percent}%` : ''}`
+            : phase === 'extracting-audio'
+              ? `جارٍ عزل الصوت...${typeof percent === 'number' ? ` ${percent}%` : ''}`
+              : 'جارٍ الرفع...',
+        });
+      };
       updatePendingPost(postId, { stage: 'uploading', progress: 0, error: null });
       try {
         const { data: authData, error: authError } = await supabase.auth.getUser();
@@ -1645,10 +1661,15 @@ export default function Shell({
         const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
 
         await Promise.all(uploadJobs.map(async (job, jobIndex) => {
-          // الرفع مباشرة إلى ImageKit — يعيد الرابط العام النهائي للملف
+          // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
           const publicUrl = await uploadMedia({
             file: job.file,
             path: job.path,
+            preset: job.kind === 'poster'
+              ? 'feedImage'
+              : mediaType === 'video' ? 'video' : 'feedImage',
+            signal: attemptSignal,
+            onPhase: onUploadPhase,
             onProgress: percent => {
               jobProgress[jobIndex] = percent;
               const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
@@ -1694,23 +1715,54 @@ export default function Shell({
           updatePendingPost(postId, { stage: 'publishing', progress: 95, error: null });
         }
 
-        // نظام الأصوات: كل فيديو جديد يُنشئ صوته الأصلي تلقائياً ليتمكن الآخرون من «استخدام هذا الصوت»
-        // (source_video_url يشير للفيديو المرفوع نفسه — بلا Storage إضافية؛ فشلها لا يعطل النشر)
+        // نظام الأصوات: استخراج الصوت محلياً من الفيديو (AAC .m4a خفيف عبر
+        // mediabunny) ورفعه إلى ImageKit وتخزينه في preview_url — فتستهلك
+        // المعاينات والمشغلات صوتاً خفيفاً بدل تحميل الفيديو الكامل في <audio>.
+        // الفيديو الصامت: يُتخطى إنشاء الصوت كلياً دون تعطيل نشر الفيديو.
         let attachedSoundId: string | null = null;
-        if (mediaType === 'video' && !pendingSound && uploadedUrls[0]) {
+        let silentVideo = false;
+        if (mediaType === 'video' && !pendingSound && uploadedUrls[0] && files[0]) {
+          let extractedSoundUrl: string | null = null;
           try {
-            const { data: soundRow } = await supabase
-              .from('sounds')
-              .insert({
-                title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
-                source_video_url: uploadedUrls[0].replace(/#.*$/, ''),
-                creator_id: authenticatedUserId,
-              })
-              .select('id')
-              .single();
-            attachedSoundId = soundRow?.id ?? null;
-          } catch {
-            attachedSoundId = null;
+            onUploadPhase('extracting-audio');
+            const audioFile = await extractAudio(files[0], {
+              kind: 'extractedSound',
+              signal: attemptSignal,
+              onProgress: percent => updatePendingPost(postId, {
+                phaseLabel: `جارٍ عزل الصوت... ${percent}%`,
+              }),
+            });
+            const audioPath = `${authenticatedUserId}/${postId}/sound-${Date.now()}.m4a`;
+            extractedSoundUrl = await uploadMedia({
+              file: audioFile,
+              path: audioPath,
+              signal: attemptSignal,
+              onPhase: onUploadPhase,
+            });
+          } catch (extractError) {
+            if (extractError instanceof NoAudioTrackError) {
+              silentVideo = true;
+              console.info('[sound] الفيديو صامت — لن يُنشأ صوت أصلي.');
+            } else {
+              console.warn('[sound] تعذر استخراج الصوت — سيُنشأ الصوت من الفيديو الأصلي.', extractError);
+            }
+          }
+          if (!silentVideo) {
+            try {
+              const { data: soundRow } = await supabase
+                .from('sounds')
+                .insert({
+                  title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
+                  source_video_url: uploadedUrls[0].replace(/#.*$/, ''),
+                  ...(extractedSoundUrl ? { preview_url: extractedSoundUrl } : {}),
+                  creator_id: authenticatedUserId,
+                })
+                .select('id')
+                .single();
+              attachedSoundId = soundRow?.id ?? null;
+            } catch {
+              attachedSoundId = null;
+            }
           }
         }
 
@@ -1971,6 +2023,10 @@ export default function Shell({
       error: null,
       objectUrls,
       retry: () => { void attemptPublish(); },
+      cancel: () => {
+        attemptAbort.controller?.abort();
+        removePendingPost(postId);
+      },
     });
     void attemptPublish();
 

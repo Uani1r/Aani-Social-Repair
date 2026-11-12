@@ -1719,7 +1719,7 @@ export default function MessagesPage({
     try {
       const uploadBlob = new Blob([blob], { type: format.mimeType });
       const file = new File([uploadBlob], `voice-${messageId}.${format.extension}`, { type: format.mimeType });
-      await uploadMedia({ file, path });
+      await uploadMedia({ file, path, preset: 'voiceMessage' });
       uploadedPath = path;
       const audioUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
       const content = voiceMessageContent(audioUrl, durationMs);

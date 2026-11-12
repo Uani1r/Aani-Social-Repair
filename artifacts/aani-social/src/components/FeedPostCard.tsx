@@ -516,14 +516,19 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
               ) : (
                 <Loader2 size={15} className="animate-spin text-[#f1a17f]" />
               )}
-              {pendingState.stage === 'uploading' ? 'جارٍ رفع الوسائط' : pendingState.stage === 'processing' ? 'جارٍ ضغط الفيديو وتجهيزه' : pendingState.stage === 'publishing' ? 'جارٍ حفظ المنشور' : pendingState.stage === 'ready' ? 'تم رفع الفيديو ونشره' : pendingState.stage === 'success' ? 'تم نشر المنشور' : 'تعذر نشر المنشور'}
+              {pendingState.phaseLabel || (pendingState.stage === 'uploading' ? 'جارٍ رفع الوسائط' : pendingState.stage === 'processing' ? 'جارٍ ضغط الفيديو وتجهيزه' : pendingState.stage === 'publishing' ? 'جارٍ حفظ المنشور' : pendingState.stage === 'ready' ? 'تم رفع الفيديو ونشره' : pendingState.stage === 'success' ? 'تم نشر المنشور' : 'تعذر نشر المنشور')}
             </span>
             {pendingState.stage !== 'failed' && <span className="text-zinc-400">{pendingState.progress}%</span>}
           </div>
           {pendingState.stage !== 'failed' && (
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label="تقدم النشر" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
-              <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' || pendingState.stage === 'ready' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
-            </div>
+            <>
+              <div className="h-1.5 overflow-hidden rounded-full bg-white/10" role="progressbar" aria-label="تقدم النشر" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
+                <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' || pendingState.stage === 'ready' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
+              </div>
+              {pendingState.cancel && pendingState.stage !== 'ready' && pendingState.stage !== 'success' && (
+                <button type="button" onClick={pendingState.cancel} className="mt-2 rounded-full bg-white/10 px-3 py-1 text-[11px] text-zinc-300 hover:bg-white/15">إلغاء</button>
+              )}
+            </>
           )}
           {pendingState.stage === 'failed' && (
             <>

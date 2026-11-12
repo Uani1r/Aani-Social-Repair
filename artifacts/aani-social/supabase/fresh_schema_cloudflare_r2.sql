@@ -269,6 +269,7 @@ create table public.sounds (
   id uuid primary key default gen_random_uuid(),
   title text not null,
   source_video_url text,
+  preview_url text,
   creator_id uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now()
 );

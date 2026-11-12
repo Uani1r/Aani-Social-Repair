@@ -78,6 +78,8 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.118.0"
+    "@mediabunny/aac-encoder": "1.65.2",
+    "@supabase/supabase-js": "^2.118.0",
+    "mediabunny": "1.65.2"
   }
 }

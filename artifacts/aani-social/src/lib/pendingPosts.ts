@@ -10,6 +10,10 @@ export type PendingPost = {
   error: string | null;
   objectUrls: string[];
   retry: (() => void) | null;
+  /** إلغاء النشر الجاري (يبطل الضغط/العزل/الرفع) */
+  cancel?: (() => void) | null;
+  /** وصف المرحلة الحالية: «جارٍ تحسين الجودة...» / «جارٍ عزل الصوت...» / «جارٍ الرفع...» */
+  phaseLabel?: string | null;
 };
 
 let pendingPosts: PendingPost[] = [];

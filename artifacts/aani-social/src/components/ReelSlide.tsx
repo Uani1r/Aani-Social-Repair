@@ -692,14 +692,19 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
           <div className="mb-2 flex items-center justify-between gap-3 text-xs">
             <span className="flex items-center gap-2">
               {pendingState.stage === 'success' || pendingState.stage === 'ready' ? <CheckCircle2 size={15} className="text-emerald-400" /> : pendingState.stage === 'failed' ? <X size={15} className="text-rose-400" /> : <Loader2 size={15} className="animate-spin text-[#f1a17f]" />}
-              {pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'processing' ? 'جارٍ ضغط الفيديو وتجهيزه' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'ready' ? 'تم رفع الريل ونشره' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل'}
+              {pendingState.phaseLabel || (pendingState.stage === 'uploading' ? 'جارٍ رفع الريل' : pendingState.stage === 'processing' ? 'جارٍ ضغط الفيديو وتجهيزه' : pendingState.stage === 'publishing' ? 'جارٍ حفظ الريل' : pendingState.stage === 'ready' ? 'تم رفع الريل ونشره' : pendingState.stage === 'success' ? 'تم نشر الريل' : 'تعذر نشر الريل')}
             </span>
             {pendingState.stage !== 'failed' && <span>{pendingState.progress}%</span>}
           </div>
           {pendingState.stage !== 'failed' ? (
-            <div className="h-1.5 overflow-hidden rounded-full bg-white/15" role="progressbar" aria-label="تقدم نشر الريل" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
-              <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' || pendingState.stage === 'ready' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
-            </div>
+            <>
+              <div className="h-1.5 overflow-hidden rounded-full bg-white/15" role="progressbar" aria-label="تقدم نشر الريل" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pendingState.progress}>
+                <div className={`h-full rounded-full transition-[width] duration-200 ${pendingState.stage === 'success' || pendingState.stage === 'ready' ? 'bg-emerald-400' : 'bg-[#f1a17f]'}`} style={{ width: `${pendingState.progress}%` }} />
+              </div>
+              {pendingState.cancel && pendingState.stage !== 'ready' && pendingState.stage !== 'success' && (
+                <button type="button" onClick={pendingState.cancel} className="mt-2 rounded-full bg-white/10 px-3 py-1 text-[11px] text-white/80 hover:bg-white/15">إلغاء</button>
+              )}
+            </>
           ) : (
             <>
               <p role="alert" data-video-test-visible="true" className="text-xs leading-5 text-rose-200">{pendingState.error || 'حدث خطأ أثناء نشر الريل.'}</p>

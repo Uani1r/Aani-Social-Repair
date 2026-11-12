@@ -1,18 +1,40 @@
-// رفع الوسائط مباشرة إلى ImageKit.io مع نسبة تقدّم حقيقية عبر XHR.
+// رفع الوسائط مباشرة إلى ImageKit.io مع ضغط وعزل صوت من جهة العميل.
+//
+// - الصور: ضغط دائم عبر mediaCompressor (avatar/cover/feedImage) — WebP مع
+//   تحويل تلقائي إلى JPEG على iOS Safari + تصحيح EXIF.
+// - الفيديو: ضغط H.264+AAC داخل MP4 بحد أقصى 720p عبر mediabunny، مع مسار
+//   احتياطي آمن (متصفح قديم + ملف ≤24MB → يُرفع كما هو).
+// - الصوت: voiceMessage يحوَّل إلى .m4a بتردد 44.1kHz متوافق مع iOS وAndroid.
 // التوقيع الآمن (token/expire/signature) يأتي من الخادم الخلفي:
 // GET /api/media/imagekit-auth (يستخدم IMAGEKIT_PRIVATE_KEY ولا يكشفه).
-// الرابط العام الناتج يُسجَّل في supabase.ts فيُرجعه getPublicUrl
-// لكل مكان يحوّل مسار الرفع إلى رابط عرض.
+// الرابط العام الناتج يُسجَّل في supabase.ts فيُرجعه getPublicUrl.
 
 import { supabase, registerUploadedMediaUrl } from '@/lib/supabase';
 import { safeExecute } from '@/lib/appErrors';
-import { readLocalUserPreferences, type MediaQualityPreference } from '@/lib/userPreferences';
+import {
+  compressImage,
+  compressVideo,
+  extractAudio,
+  MAX_UPLOAD_BYTES,
+  MediaTooLargeError,
+  type MediaPreset,
+} from '@/utils/mediaCompressor';
+
+export type UploadPhase = 'compressing' | 'extracting-audio' | 'uploading';
 
 interface UploadOptions {
   file: File;
   path: string;
+  /** نسبة الرفع نفسه (كما كانت) */
   onProgress?: (percent: number) => void;
-  quality?: MediaQualityPreference;
+  /** المرحلة الحالية: تحسين الجودة / عزل الصوت / الرفع */
+  onPhase?: (phase: UploadPhase, percent?: number) => void;
+  /** إعداد الضغط — عند غيابه يُستنتج من نوع الملف */
+  preset?: MediaPreset;
+  /** إلغاء الضغط والرفع الجاري */
+  signal?: AbortSignal;
+  /** توافق قديم فقط — الضغط يعمل دائماً الآن بغض النظر عن هذه القيمة */
+  quality?: 'hd' | 'data-saving';
 }
 
 type ImageKitAuthParams = {
@@ -25,7 +47,7 @@ type ImageKitAuthParams = {
 
 let cachedAuth: { params: ImageKitAuthParams; expiresAt: number } | null = null;
 
-async function fetchImageKitAuth(): Promise<ImageKitAuthParams> {
+async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthParams> {
   if (cachedAuth && Date.now() < cachedAuth.expiresAt) return cachedAuth.params;
 
   const { data } = await supabase.auth.getSession();
@@ -34,6 +56,7 @@ async function fetchImageKitAuth(): Promise<ImageKitAuthParams> {
 
   const response = await fetch('/api/media/imagekit-auth', {
     headers: { authorization: `Bearer ${accessToken}` },
+    signal,
   });
   const result = await response.json().catch(() => null) as
     | (ImageKitAuthParams & { success?: unknown; error?: unknown })
@@ -53,51 +76,61 @@ async function fetchImageKitAuth(): Promise<ImageKitAuthParams> {
   return params;
 }
 
-async function prepareMediaFile(file: File, quality: MediaQualityPreference): Promise<File> {
-  if (
-    quality !== 'data-saving'
-    || !file.type.startsWith('image/')
-    || file.type === 'image/gif'
-    || file.type === 'image/svg+xml'
-  ) return file;
-
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const image = new Image();
-    await new Promise<void>((resolve, reject) => {
-      image.onload = () => resolve();
-      image.onerror = () => reject(new Error('تعذر ضغط الصورة.'));
-      image.src = objectUrl;
-    });
-    const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-    const context = canvas.getContext('2d');
-    if (!context) return file;
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/webp', 0.76));
-    if (!blob || blob.size >= file.size) return file;
-
-    const baseName = file.name.replace(/\.[^.]+$/, '') || 'image';
-    return new File([blob], `${baseName}.webp`, { type: 'image/webp', lastModified: Date.now() });
-  } catch {
-    return file;
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
+function detectPreset(file: File): MediaPreset | null {
+  if (file.type.startsWith('video/')) return 'video';
+  // GIF وSVG تُرفع كما هي (شفافية/حركة) — والحماية العليا عبر MAX_UPLOAD_BYTES
+  if (file.type === 'image/gif' || file.type === 'image/svg+xml') return null;
+  if (file.type.startsWith('image/')) return 'feedImage';
+  return null;
 }
 
-async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOptions): Promise<string> {
-  const { data: sessionData } = await supabase.auth.getSession();
-  const resolvedQuality = quality || readLocalUserPreferences(sessionData.session?.user?.id || '').mediaQuality;
-  const uploadFile = await prepareMediaFile(file, resolvedQuality);
-  const auth = await fetchImageKitAuth();
+async function uploadMediaUnsafe({
+  file,
+  path,
+  onProgress,
+  onPhase,
+  preset,
+  signal,
+}: UploadOptions): Promise<string> {
+  if (signal?.aborted) throw new DOMException('أُلغيت العملية.', 'AbortError');
 
-  const normalizedPath = path.replace(/^\/+/, '');
-  const dirIndex = normalizedPath.lastIndexOf('/');
-  const fileName = dirIndex >= 0 ? normalizedPath.slice(dirIndex + 1) : normalizedPath;
-  const folder = `/aani/${dirIndex >= 0 ? normalizedPath.slice(0, dirIndex) : 'misc'}`;
+  // 1) الضغط/العزل من جهة العميل — يعمل دائماً افتراضياً
+  onPhase?.('compressing', 0);
+  const effectivePreset = preset ?? detectPreset(file);
+  let uploadFile = file;
+
+  if (effectivePreset === 'avatar' || effectivePreset === 'cover' || effectivePreset === 'feedImage') {
+    uploadFile = await compressImage(file, effectivePreset, percent => onPhase?.('compressing', percent), signal);
+  } else if (effectivePreset === 'video') {
+    uploadFile = await compressVideo(file, {
+      onProgress: percent => onPhase?.('compressing', percent),
+      signal,
+    });
+  } else if (effectivePreset === 'voiceMessage') {
+    // تسجيلات الدردشة (webm/opus في Chrome) تتحول إلى .m4a خفيف متوافق مع iOS —
+    // وعند غياب الدعم يبقى التسجيل الأصلي (المسار الاحتياطي الآمن داخل extractAudio)
+    uploadFile = await extractAudio(file, {
+      kind: 'voiceMessage',
+      onProgress: percent => onPhase?.('compressing', percent),
+      signal,
+    });
+  }
+
+  if (uploadFile.size > MAX_UPLOAD_BYTES) throw new MediaTooLargeError();
+
+  // 2) امتداد المسار يطابق المحتوى الفعلي بعد التحويل (voiceMessage → .m4a)
+  const normalizedPath = effectivePreset === 'voiceMessage' && /\.(webm|ogg|oga)$/i.test(path)
+    ? path.replace(/\.(webm|ogg|oga)$/i, '.m4a')
+    : path;
+
+  // 3) الرفع المباشر إلى ImageKit
+  onPhase?.('uploading');
+  const auth = await fetchImageKitAuth(signal);
+
+  const normalized = normalizedPath.replace(/^\/+/, '');
+  const dirIndex = normalized.lastIndexOf('/');
+  const fileName = dirIndex >= 0 ? normalized.slice(dirIndex + 1) : normalized;
+  const folder = `/aani/${dirIndex >= 0 ? normalized.slice(0, dirIndex) : 'misc'}`;
 
   const url = await new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -111,6 +144,14 @@ async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOpti
     form.append('expire', String(auth.expire));
     form.append('signature', auth.signature);
 
+    const detachAbort = signal
+      ? (() => {
+          const onAbort = () => xhr.abort();
+          signal.addEventListener('abort', onAbort, { once: true });
+          return () => signal.removeEventListener('abort', onAbort);
+        })()
+      : () => undefined;
+
     xhr.open('POST', 'https://upload.imagekit.io/api/v1/files/upload');
     xhr.upload.onprogress = event => {
       if (event.lengthComputable && event.total > 0) {
@@ -118,6 +159,7 @@ async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOpti
       }
     };
     xhr.onload = () => {
+      detachAbort();
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
           const parsed = JSON.parse(xhr.responseText) as { url?: unknown };
@@ -134,12 +176,18 @@ async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOpti
         reject(new Error(`فشل رفع الوسائط (HTTP ${xhr.status}).`));
       }
     };
-    xhr.onerror = () => reject(new Error('تعذر الاتصال بخدمة رفع الوسائط.'));
-    xhr.onabort = () => reject(new Error('أُلغيت عملية رفع الوسائط.'));
+    xhr.onerror = () => {
+      detachAbort();
+      reject(new Error('تعذر الاتصال بخدمة رفع الوسائط.'));
+    };
+    xhr.onabort = () => {
+      detachAbort();
+      reject(new DOMException('أُلغيت عملية رفع الوسائط.', 'AbortError'));
+    };
     xhr.send(form);
   });
 
-  // سجّل الرابط النهائي مقابل مسار الرفع: أي getPublicUrl(path) لاحق
+  // سجّل الرابط النهائي مقابل مسار الرفع الأصلي: أي getPublicUrl(path) لاحق
   // في التطبيق يعيد رابط ImageKit الحقيقي بدل رابط Supabase غير موجود.
   registerUploadedMediaUrl(path, url);
   return url;
