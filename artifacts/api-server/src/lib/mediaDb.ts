@@ -47,18 +47,20 @@ export async function requireSuccessfulCheck(
 }
 
 /**
- عمود غير موجود في هذه البيئة (ترحيل مفقود): الجدول لا يحمل مراجع بهذا الشكل.
- يُسجل ويُتجاهل كجدول — هذا ليس "قائمة فارغة = آمن" بل غياب العمود نفسه.
+ فجوة مخطط: عمود غير موجود (PGRST204/42703) أو جدول غير موجود إطلاقاً في هذه
+ البيئة (42P01/PGRST205). كلاهما معناه أن مخزن المراجع هذا غير موجود بالشكل
+ الذي يفترضه الكود — يُسجل ويُتخطى الجدول/العمود، وليس "قائمة فارغة = آمن".
  */
 export function isUnknownColumnError(result: { status: number; data: unknown }): boolean {
   const message =
     result.data && typeof result.data === "object" && "message" in (result.data as Record<string, unknown>)
       ? String((result.data as Record<string, unknown>).message)
       : "";
-  return result.status === 400
+  return (result.status === 400 || result.status === 404)
     && (message.includes("does not exist")
       || message.includes("Could not find the '")
-      || message.includes("PGRST204"));
+      || message.includes("PGRST204")
+      || message.includes("PGRST205"));
 }
 
 export async function restRequest(
