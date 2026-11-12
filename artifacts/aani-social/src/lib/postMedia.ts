@@ -6,17 +6,62 @@ type PostMediaRecord = {
   media_asset_id?: string | null;
 };
 
-// معاملات التحسين التلقائي من ImageKit: جودة تكيفية حسب الشبكة + صيغة تلقائية
-// (H.264/WebM للفيديو وWebP/AVIF للصور) — تقلّص الحجم وتسرّع البثّ على الهاتف.
+// معاملات التحسين التلقائي من ImageKit للصور: جودة تكيفية حسب الشبكة + صيغة تلقائية
+// (WebP/AVIF) — تقلّص الحجم وتسرّع العرض. أما الفيديو فيُبثّ مباشرة بلا أي
+// تحويلات حتى يبدأ التشغيل فوراً من CDN على متصفح الهاتف (iOS Safari).
 const IMAGEKIT_MEDIA_TRANSFORMS = 'q-auto,f-auto';
 
+const VIDEO_FILE_EXTENSION_PATTERN = /\.(mp4|m4v|mov|webm|mkv|avi|ogv|3gp|m2ts)(?=$|[?#])/i;
+
+function isImageKitHost(hostname: string): boolean {
+  return /(^|\.)ik\.imagekit\.io$/i.test(hostname);
+}
+
+/** رابط فيديو مضاف إلى ImageKit؟ (بالامتداد، قبل أي ?query أو #fragment) */
+export function isImageKitVideoUrl(url: string | null | undefined): boolean {
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+
+  const fragmentIndex = url.indexOf('#');
+  const base = fragmentIndex >= 0 ? url.slice(0, fragmentIndex) : url;
+
+  try {
+    const parsed = new URL(base);
+    return isImageKitHost(parsed.hostname) && VIDEO_FILE_EXTENSION_PATTERN.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
 /**
- * يضيف `?tr=q-auto,f-auto` إلى روابط ImageKit فقط (ik.imagekit.io)
- * مع منع التكرار، وإلحاق الاستعلام قبل أي رمز تعديل (#t= / #crop=...)
- * حتى يبقى ترميز القص سليمًا. الروابط الأخرى تُعاد كما هي.
+ * صورة مصغرة تلقائية للفيديو عبر ImageKit بإلحاق `/ik-thumbnail.jpg`
+ * بنهاية رابط الفيديو — تُستخدم في poster بدل الشاشة السوداء.
+ * يعيد null لغير روابط ImageKit.
+ */
+export function getImageKitVideoThumbnailUrl(url: string | null | undefined): string | null {
+  if (!isImageKitVideoUrl(url)) return null;
+
+  const source = url as string;
+  const fragmentIndex = source.indexOf('#');
+  const base = fragmentIndex >= 0 ? source.slice(0, fragmentIndex) : source;
+
+  try {
+    const parsed = new URL(base);
+    parsed.searchParams.delete('tr');
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    return `${parsed.origin}${cleanPath}/ik-thumbnail.jpg${parsed.search}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * يضيف `?tr=q-auto,f-auto` إلى روابط الصور من ImageKit فقط (ik.imagekit.io)
+ * مع منع التكرار، وإلحاق الاستعلام قبل أي رمز تعديل (#t= / #crop=...).
+ * روابط الفيديو تُعاد مباشرة بلا تحويلات لضمان أسرع بثّ، وغيرها تُعاد كما هي.
  */
 export function optimizeImageKitMediaUrl(url: string): string {
   if (!url || !/^https?:\/\//i.test(url)) return url;
+  if (isImageKitVideoUrl(url)) return url;
 
   const fragmentIndex = url.indexOf('#');
   const base = fragmentIndex >= 0 ? url.slice(0, fragmentIndex) : url;
@@ -24,7 +69,7 @@ export function optimizeImageKitMediaUrl(url: string): string {
 
   try {
     const parsed = new URL(base);
-    if (!/(^|\.)ik\.imagekit\.io$/i.test(parsed.hostname)) return url;
+    if (!isImageKitHost(parsed.hostname)) return url;
 
     const existingTr = parsed.searchParams.getAll('tr');
     if (existingTr.some(value => value.includes('q-auto') && value.includes('f-auto'))) return url;

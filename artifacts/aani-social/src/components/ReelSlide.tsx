@@ -29,6 +29,7 @@ import { displayName, formatDate, getPostCoverUrl, type Post } from '@/lib/types
 import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, appendVideoTrimFragment, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
 import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
+import { getImageKitVideoThumbnailUrl } from '@/lib/postMedia';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -40,7 +41,7 @@ const formatReelTime = (value: number) => {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 };
 
-export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'auto' }: {
+export default function ReelSlide({ post, currentUserId, onOpenComments, onRefresh, pendingState, onRetryPending, onDismissPending, onClose, initialPlaybackTime, onPlaybackTimeChange, showCreatedAt = false, captionSheet = false, trailingAccountControl, videoPreload = 'metadata' }: {
   post: Post;
   currentUserId: string;
   onOpenComments: (postId: string) => void;
@@ -70,6 +71,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const isOverlayOpen = Boolean(onClose);
   const [isVisible, setIsVisible] = useState(false);
   const [hasVideoFrame, setHasVideoFrame] = useState(false);
+  // مؤشر التحميل الخفيف: يختفي فور onLoadedData أو onCanPlay ويُلغى عند onError
+  const [isMediaLoading, setIsMediaLoading] = useState(true);
   // مؤشر التحميل الخفيف: true أثناء انتظار البيانات/التخزين المؤقت (waiting/stalled)
   const [isBuffering, setIsBuffering] = useState(false);
   // نظام الأصوات: عند وجود صوت مستعار (من فيديو آخر) يبقى صوت الفيديو مكتوماً
@@ -103,6 +106,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   useEffect(() => {
     setHasVideoFrame(false);
     setIsBuffering(false);
+    setIsMediaLoading(true);
   }, [backgroundMediaSuspended, videoSrc]);
   // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
   const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
@@ -403,6 +407,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
 
   const handleVideoCanPlay = (event: SyntheticEvent<HTMLVideoElement>) => {
     const video = event.currentTarget;
+    setIsMediaLoading(false);
     setIsBuffering(false);
     if (!isVisible || backgroundMediaSuspended || manuallyPausedRef.current || hasOpenFeedDialog()) return;
     playExclusive(post.id, video);
@@ -539,6 +544,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   };
 
   const postCoverUrl = getPostCoverUrl(post);
+  // صورة مصغرة تلقائية من ImageKit (/ik-thumbnail.jpg) كposter للفيديو
+  // لمنع الشاشة السوداء قبل تحميل أول إطار — تُستخدم فقط عند غياب غلاف مختار
+  const videoStillUrl = postCoverUrl || getImageKitVideoThumbnailUrl(post.media_url) || null;
 
   return (
     <section
@@ -568,9 +576,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             />
           ) : (
             <>
-              {postCoverUrl && (
+              {videoStillUrl && (
                 <img
-                  src={postCoverUrl}
+                  src={videoStillUrl}
                   alt=""
                   aria-hidden="true"
                   draggable={false}
@@ -583,13 +591,23 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 src={backgroundMediaSuspended ? undefined : videoSrc}
                 data-aani-background-media=""
                 data-aani-video-id={post.id}
-                poster={postCoverUrl || undefined}
+                poster={videoStillUrl || undefined}
                 loop={!videoTimeRange}
                 autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
                 muted={Boolean(backgroundSoundUrl) || muted}
                 playsInline
+                webkit-playsinline="true"
                 preload={videoPreload}
                 onLoadedMetadata={handleVideoLoadedMetadata}
+                onLoadedData={() => {
+                  setIsMediaLoading(false);
+                  setIsBuffering(false);
+                }}
+                onError={() => {
+                  setIsMediaLoading(false);
+                  setIsBuffering(false);
+                  console.warn('[reels] تعذر تحميل الفيديو من مصدره', { id: post.id });
+                }}
                 onCanPlay={handleVideoCanPlay}
                 onPlaying={() => {
                   setHasVideoFrame(true);
@@ -612,8 +630,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 className="relative z-0 h-full w-full cursor-pointer object-cover"
                 style={{ transform: videoCropTransform, transformOrigin: 'center' }}
               />
-              {/* مؤشر تحميل خفيف حتى أول إطار مُشغَّل وأثناء أي تجمد مؤقت للبث */}
-              {isVisible && !manuallyPausedRef.current && (isBuffering || !hasVideoFrame) && (
+              {/* مؤشر تحميل خفيف حتى onLoadedData/onCanPlay وأثناء أي تجمد مؤقت للبث */}
+              {isVisible && !manuallyPausedRef.current && (isMediaLoading || isBuffering) && (
                 <div className="pointer-events-none absolute inset-0 z-[2] flex items-center justify-center">
                   <Loader2 className="h-9 w-9 animate-spin text-white/75" aria-label="جارٍ تحميل الفيديو" />
                 </div>
