@@ -185,7 +185,3 @@ test('تكرار تسجيل نفس الرابط (upsert) لا يضاعف الإ�
   assert.equal(store.data.length, 1);
   assert.equal(store.data[0].attempts, 3);
 });
-
-  assert.equal(store.data.length, 1);
-  assert.equal(store.data[0].attempts, 3);
-});

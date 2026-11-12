@@ -3,6 +3,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -384,31 +385,108 @@ function probeOutput(outputPath: string): Promise<{
 }
 
 /**
- تحقق مستقل ثانٍ من معدل الإطارات الفعلي: قراءة الطوابع الزمنية للإطارات
- (حتى 90 إطاراً من بداية الناتج عبر ffprobe) وحساب أقصى معدل لحظي بين
- إطارين متتاليين. r_frame_rate وavg_frame_rate وحدهما لا يثبتان السلوك
- الفعلي للفيديو VFR — الطوابع الزمنية هي الدليل الحقيقي.
- يفشل صراحةً عند: أقل من إطارين قابلين للقراءة، أو طابع غير قابل للتحليل،
- أو أي فجوة زمنية بين إطارين أقصر من 1/30 ثانية (أي تجاوز 30fps فعلياً).
+ مُقيِّم الطوابع الزمنية (دالة صرفة قابلة للاختبار): يُغذَّى بأسطر pts_time
+ واحداً تلو الآخر — ولا يُتجاهل أي إطار: سطر غير قابل للتحليل، طابع غير
+ تصاعدي، أو فجوة أقصر من 1/30 ثانية (تجاوز فعلي لـ30fps) = رفض فوري.
+ الحالة في الذاكرة إطارٌ واحد فقط (الطابع السابق + أقصى معدل) — لا تُحمَّل
+ جميع الطوابع دفعة واحدة مهما طال الفيديو.
  */
-function verifyFrameTimestampRate(outputPath: string): Promise<{ maxInstantaneousRate: number | null }> {
+export const VIDEO_FPS_LIMIT = 30;
+export const VIDEO_FPS_EPSILON = 0.01;
+
+export type FrameTimestampVerdict = {
+  verified: boolean;
+  reason?: string;
+  maxInstantaneousRate?: number;
+};
+
+export function createFrameTimestampVerifier() {
+  let lastTimestamp: number | null = null;
+  let maxInstantaneousRate: number | null = null;
+  let frameCount = 0;
+  let failure: string | null = null;
+
+  return {
+    /** يُغذَّى بكل سطر من مخرجات ffprobe — يُرجع قراراً فورياً لكل سطر */
+    push(line: string): FrameTimestampVerdict {
+      if (failure) return { verified: false, reason: failure };
+      const trimmed = line.trim();
+      if (!trimmed) return { verified: true, maxInstantaneousRate: maxInstantaneousRate ?? undefined };
+      // أي إطار لا يمكن تحليل طابعه يرفض الناتج — لا تصفية صامتة
+      const timestamp = Number(trimmed);
+      if (!Number.isFinite(timestamp)) {
+        failure = `unparseable frame timestamp: ${trimmed.slice(0, 40)}`;
+        return { verified: false, reason: failure };
+      }
+      if (lastTimestamp !== null) {
+        const gap = timestamp - lastTimestamp;
+        if (gap <= 0) {
+          failure = "non-monotonic frame timestamps";
+          return { verified: false, reason: failure };
+        }
+        const instantaneousRate = 1 / gap;
+        if (instantaneousRate > VIDEO_FPS_LIMIT + VIDEO_FPS_EPSILON) {
+          failure = `frame rate exceeds ${VIDEO_FPS_LIMIT}fps (instantaneous=${instantaneousRate.toFixed(2)})`;
+          return { verified: false, reason: failure };
+        }
+        maxInstantaneousRate = Math.max(maxInstantaneousRate ?? 0, instantaneousRate);
+      }
+      lastTimestamp = timestamp;
+      frameCount += 1;
+      return { verified: true, maxInstantaneousRate: maxInstantaneousRate ?? undefined };
+    },
+    /** القرار النهائي بعد انتهاء التغذية: إطارات أقل من اثنين = غير قابل للتحقق */
+    verdict(): FrameTimestampVerdict {
+      if (failure) return { verified: false, reason: failure };
+      if (frameCount < 2) return { verified: false, reason: "fewer than 2 readable frame timestamps" };
+      return { verified: true, maxInstantaneousRate: maxInstantaneousRate ?? undefined };
+    },
+    frameCount(): number {
+      return frameCount;
+    },
+  };
+}
+
+/**
+ تحقق مستقل ثانٍ من معدل الإطارات الفعلي: يقرأ الطوابع الزمنية لجميع
+ إطارات الناتج — وليس عينة أولى فقط — تدفقياً سطراً سطراً عبر readline
+ (الذاكرة تحمل إطاراً واحداً في كل لحظة مهما طال الفيديو)، ويُجهَّز ffprobe
+ عند أول إخلال. r_frame_rate وavg_frame_rate وحدهما لا يثبتان السلوك
+ الفعلي للفيديو VFR — الطوابع الزمنية الكاملة هي الدليل.
+ */
+function verifyFrameTimestampRate(outputPath: string): Promise<FrameTimestampVerdict> {
   const args = [
     "-v", "error",
     "-select_streams", "v:0",
     "-show_entries", "frame=pts_time",
     "-of", "csv=p=0",
-    "-frames:v", "90",
     outputPath,
   ];
 
   return new Promise((resolve, reject) => {
     const child = spawn(process.env["FFPROBE_PATH"] || "ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
+    const verifier = createFrameTimestampVerifier();
     let stderr = "";
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
+    let settled = false;
+    let timedOut = false;
+    // فحص كامل المدة — مهلة أطول من فحص العينة (Demux بلا فك ترميز بكسلات)
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 120_000);
     timeout.unref();
-    child.stdout?.on("data", chunk => {
-      stdout = `${stdout}${chunk.toString()}`.slice(0, MAX_PROCESS_LOG_CHARS);
+
+    const readline = createInterface({ input: child.stdout! });
+    readline.on("line", line => {
+      if (settled) return;
+      const result = verifier.push(line);
+      if (!result.verified) {
+        settled = true;
+        clearTimeout(timeout);
+        child.kill("SIGKILL"); // إنهاء مبكر عند أول إخلال
+        readline.close();
+        resolve(result);
+      }
     });
     child.stderr?.on("data", chunk => {
       stderr = `${stderr}${chunk.toString()}`.slice(-MAX_PROCESS_LOG_CHARS);
@@ -419,31 +497,14 @@ function verifyFrameTimestampRate(outputPath: string): Promise<{ maxInstantaneou
     });
     child.once("close", code => {
       clearTimeout(timeout);
+      if (settled) return;
+      settled = true;
       if (code !== 0) {
-        reject(new Error(stderr.trim() || `ffprobe (frame timestamps) exited with code ${code ?? "unknown"}.`));
+        const detail = timedOut ? "ffprobe frame scan exceeded the time limit." : stderr.trim();
+        reject(new Error(detail || `ffprobe (frame timestamps) exited with code ${code ?? "unknown"}.`));
         return;
       }
-      const timestamps = stdout
-        .split(/\r?\n/)
-        .map(line => line.trim())
-        .filter(line => line.length > 0)
-        .map(line => Number(line))
-        .filter(value => Number.isFinite(value));
-      if (timestamps.length < 2) {
-        resolve({ maxInstantaneousRate: null });
-        return;
-      }
-      let maxInstantaneousRate = 0;
-      for (let index = 1; index < timestamps.length; index += 1) {
-        const gap = timestamps[index]! - timestamps[index - 1]!;
-        if (gap <= 0) {
-          // طوابع غير تصاعدية — لا يمكن التحقق من معدل موثوق
-          resolve({ maxInstantaneousRate: null });
-          return;
-        }
-        maxInstantaneousRate = Math.max(maxInstantaneousRate, 1 / gap);
-      }
-      resolve({ maxInstantaneousRate: Math.round(maxInstantaneousRate * 100) / 100 });
+      resolve(verifier.verdict());
     });
   });
 }
@@ -569,16 +630,12 @@ async function processClaimedMediaAsset(
         `The processed video exceeds the 30fps limit (r_frame_rate=${metadata.rFrameRate}, avg_frame_rate=${metadata.avgFrameRate}).`,
       );
     }
-    // الدليل الحقيقي: الطوابع الزمنية الفعلية للإطارات — أي فجوة أقصر من
-    // 1/30 ثانية تعني تجاوزاً فعلياً لـ30fps، وتعذر القراءة يعني رفضاً.
+    // الدليل الحقيقي: الطوابع الزمنية الفعلية لجميع إطارات الناتج — أي فجوة
+    // أقصر من 1/30 ثانية تعني تجاوزاً فعلياً لـ30fps، وتعذر قراءة أي إطار
+    // أو نتيجة أقل من إطارين يعني رفضاً — لا قبول بتحقق جزئي.
     const timestampCheck = await verifyFrameTimestampRate(outputPath);
-    if (timestampCheck.maxInstantaneousRate === null) {
-      throw new Error("Could not verify the actual frame timestamps of the processed output.");
-    }
-    if (timestampCheck.maxInstantaneousRate > 30.01) {
-      throw new Error(
-        `The processed video exceeds the 30fps limit at some point (max instantaneous rate=${timestampCheck.maxInstantaneousRate}).`,
-      );
+    if (!timestampCheck.verified) {
+      throw new Error(`Frame timestamp verification failed: ${timestampCheck.reason ?? "unknown reason"}.`);
     }
     // إثبات العزل فعلياً: عند اختيار صوت بديل يجب ألا يبقى أي مسار صوتي
     // في الفيديو النهائي — إن بقي واحد فالمعالجة تفشل صراحةً بدل تسليم
