@@ -668,6 +668,9 @@ export async function compressImage(
           const canvas = document.createElement('canvas');
           canvas.width = drawWidth;
           canvas.height = drawHeight;
+          // يُصرَّح هنا (خارج try/finally) حتى يبقى مرئياً لفحص الحلقة بعدها —
+          // إعلانه داخل try جعل الاستخدام بعدها ReferenceError عند كل تكرار
+          let withinTarget = false;
           let context: CanvasRenderingContext2D | null = null;
           try {
             context = canvas.getContext('2d');
@@ -682,7 +685,6 @@ export async function compressImage(
               context.drawImage(source, 0, 0, drawWidth, drawHeight);
             }
 
-            let withinTarget = false;
             for (const mimeType of formats) {
               const blob = await new Promise<Blob | null>(resolve => {
                 try {
