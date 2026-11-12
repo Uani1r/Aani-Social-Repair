@@ -6,6 +6,7 @@ import { logger } from "./lib/logger";
 import { PUSH_WEBHOOK_PATHS } from "./routes/pushNotifications";
 import { readAdminConfig, runExpiredRecordsCleanup, sweepOrphanUploads } from "./lib/mediaDb";
 import { processDeletionJobs } from "./lib/mediaDeletionWorker";
+import { imageKitConfigured } from "./lib/imagekitAdmin";
 
 // تحديد مسار ملفات الواجهة الثابتة: يعمل من جذر المستودع (تشغيل التطوير/النشر)
 // ومن حاوية الإنتاج (Dockerfile ينسخ dist/public إلى جذر العمل).
@@ -112,8 +113,33 @@ function runMaintenanceCycle(): void {
 }
 
 function startMediaMaintenanceScheduler(): void {
-  // دورة أولى بعد 30 ثانية من الإقلاع ثم كل 6 ساعات
+  // مفتاح إيقاف تشغيلي: ضع AANI_MEDIA_MAINTENANCE_DISABLED=true لإيقاف
+  // دورات الصيانة كلياً (حذف ImageKit + كنس اليتامى + تنظيف السجلات) دون
+  // نشر كود — للاستخدام اليدوي الآمن عند الحاجة فقط. الافتراضي: مفعّل.
+  const disabled = ["1", "true", "yes"].includes(
+    (process.env["AANI_MEDIA_MAINTENANCE_DISABLED"] || "").trim().toLowerCase(),
+  );
+  if (disabled) {
+    logger.warn("Media maintenance scheduler is DISABLED via AANI_MEDIA_MAINTENANCE_DISABLED — no automatic deletion will run");
+    return;
+  }
+
+  if (!imageKitConfigured()) {
+    // الفحص مرتين بالداخل: حتى لو لم يُضبط المفتاح الآن، Worker يعيد جدولة
+    // المهام بدل الحذف (requeue) — لا حذف يقع على شك أبداً
+    logger.warn("IMAGEKIT_PRIVATE_KEY is not set — deletion worker will requeue jobs until it is configured");
+  }
+
+  // دورة أولى بعد 30 ثانية من الإقلاع ثم كل 6 ساعات.
+  // التفعيل يشترط فقط: ترحيلات 22-25 مطبقة في Supabase (Triggers الطابور
+  // تسجل الوسائط عند حذف منشور/قصة/حساب أو استبدال أفاتار/غلاف) + مفاتيح
+  // الخدمة مضبوطة. الحماية المفعّلة: قفل استشاري داخل RPC + حجز ذري
+  // SKIP LOCKED + قفل عملية واحدة + فحص مراجع حية صارم (Fail Closed) —
+  // أي شك في المراجع يعيد المهمة إلى pending ولا يُحذف أي ملف مستخدم.
   setTimeout(runMaintenanceCycle, 30_000);
   setInterval(runMaintenanceCycle, MEDIA_MAINTENANCE_INTERVAL_MS);
-  logger.info({ intervalMs: MEDIA_MAINTENANCE_INTERVAL_MS }, "Media maintenance scheduler started");
+  logger.info(
+    { intervalMs: MEDIA_MAINTENANCE_INTERVAL_MS, firstCycleInMs: 30_000 },
+    "Media maintenance scheduler ACTIVE: expired-records cleanup + deletion worker + orphan sweep",
+  );
 }
