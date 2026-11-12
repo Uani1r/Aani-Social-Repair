@@ -21,6 +21,7 @@ import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
+import { requestMediaDeletion } from '@/lib/mediaMaintenance';
 import { appendVideoTrimFragment, getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop, parseVideoTimeRange, type VideoTimeRange } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
 import { displayName, formatDate, getPostCoverUrl, type Post, type Profile } from '@/lib/types';
@@ -426,6 +427,9 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const handleDeletePost = async () => {
     if (!supabaseConfigured) return;
     if (confirm('هل أنت تأكد من رغبتك في حذف هذا المنشور؟')) {
+      // حذف ملفات الوسائط من ImageKit أولاً (الخادم يتحقق من الملكية ومن
+      // عدم استخدامها في أبرز القصص أو الأصوات النشطة) — فشلها لا يمنع حذف المنشور.
+      await requestMediaDeletion('post', post.id).catch(() => undefined);
       const { error } = await supabase.from('posts').delete().eq('id', post.id).eq('user_id', currentUserId);
       if (error) {
         alert('تعذر حذف المنشور. حاول مرة أخرى.');

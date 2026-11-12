@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { runMediaMaintenanceOncePerDay } from '@/lib/mediaMaintenance';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
 import type { Profile } from '@/lib/types';
 
@@ -87,6 +88,12 @@ export default function useAppSession() {
       active = false;
     };
   }, [user?.id, user?.email, user?.user_metadata?.full_name, user?.user_metadata?.name, user?.user_metadata?.username]);
+
+  // فحص صحي يومي: تنظيف القصص المنتهية والإشعارات القديمة وملفات الوسائط غير المستخدمة
+  useEffect(() => {
+    if (!supabaseConfigured || !user?.id) return;
+    void runMediaMaintenanceOncePerDay();
+  }, [user?.id]);
 
   const signOut = async () => {
     if (supabaseConfigured) await supabase.auth.signOut();

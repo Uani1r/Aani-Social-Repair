@@ -27,6 +27,12 @@ interface UseStoriesDataOptions {
   setCurrentTimeSec: Dispatch<SetStateAction<number>>;
 }
 
+// أعمدة محددة بدل select('*') لتقليل حجم بيانات Supabase المنقولة —
+// تُغطي كل ما يستهلكه normalizeStoryRow + تضمين رابط صوت القصة.
+const STORY_COLUMNS = 'id,user_id,media_url,media_type,caption,is_close_friends,duration_seconds,timed_texts,created_at,expires_at,filter_key,original_story_id,share_type,sound_id,sound_trim_start,sound_trim_end,sounds(source_video_url)';
+// فشل بسبب أعمدة/تضمين غير مطبق (ترحيل مفقود) — اجلب بلا تضمين الصوت
+const FALLBACK_SELECT_ERROR = /PGRST200|relation|sounds|column|does not exist/i;
+
 export function useStoriesData({
   userId,
   pendingProfileStoryOwnerId,
@@ -60,11 +66,10 @@ export function useStoriesData({
     // (يُضمَّن رابط الصوت المرفق من جدول sounds ليُشغَّل تزامناً مع عرض القصة)
     let { data, error } = await supabase
       .from('stories')
-      .select('*, sounds ( source_video_url )')
+      .select(STORY_COLUMNS)
       .in('user_id', allowedUserIds)
       .order('created_at', { ascending: true });
-    if (error && /PGRST200|relation|sounds/i.test(error.message || '')) {
-      // ترحيل أعمدة صوت القصص غير مطبق بعد — اجلب بلا تضمين الصوت
+    if (error && FALLBACK_SELECT_ERROR.test(error.message || '')) {
       ({ data, error } = await supabase
         .from('stories')
         .select('*')
@@ -180,11 +185,10 @@ export function useStoriesData({
       try {
         let { data, error } = await supabase
           .from('stories')
-          .select('*, sounds ( source_video_url )')
+          .select(STORY_COLUMNS)
           .eq('user_id', pendingProfileStoryOwnerId)
           .order('created_at', { ascending: true });
-        if (error && /PGRST200|relation|sounds/i.test(error.message || '')) {
-          // ترحيل أعمدة صوت القصص غير مطبق بعد — اجلب بلا تضمين الصوت
+        if (error && FALLBACK_SELECT_ERROR.test(error.message || '')) {
           ({ data, error } = await supabase
             .from('stories')
             .select('*')

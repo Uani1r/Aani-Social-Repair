@@ -17,6 +17,7 @@ import {
   extractAudio,
   MAX_UPLOAD_BYTES,
   MediaTooLargeError,
+  UNCOMPRESSIBLE_IMAGE_MAX_BYTES,
   type MediaPreset,
 } from '@/utils/mediaCompressor';
 
@@ -98,6 +99,13 @@ async function uploadMediaUnsafe({
   onPhase?.('compressing', 0);
   const effectivePreset = preset ?? detectPreset(file);
   let uploadFile = file;
+
+  // GIF وSVG تُستثنى من ضغط Canvas (شفافية/حركة) — بسقف صارم 2MB حتى لا
+  // يُستثمر هذا الاستثناء في رفع ملفات ضخمة غير مضغوطة:
+  if ((file.type === 'image/gif' || file.type === 'image/svg+xml')
+    && file.size > UNCOMPRESSIBLE_IMAGE_MAX_BYTES) {
+    throw new MediaTooLargeError('حجم ملف GIF/SVG يتجاوز الحد الأقصى المسموح (2 ميغابايت). اختر ملفاً أصغر.');
+  }
 
   if (effectivePreset === 'avatar' || effectivePreset === 'cover' || effectivePreset === 'feedImage') {
     uploadFile = await compressImage(file, effectivePreset, percent => onPhase?.('compressing', percent), signal);

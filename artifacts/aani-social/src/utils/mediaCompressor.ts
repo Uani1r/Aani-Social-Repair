@@ -10,12 +10,18 @@
 // كل العمليات داخل طابور متسلسل (runExclusive) مع Wake Lock لحماية iOS Safari
 // من تعطّل الضغط في الخلفية، ومسار احتياطي آمن للمتصفحات القديمة.
 
-export const MAX_UPLOAD_BYTES = 24 * 1024 * 1024; // أماناً تحت حد 25MB في خطة ImageKit المجانية
+// هامش أمان حقيقي تحت حد 25 MB في خطة ImageKit المجانية:
+// 23.5 MiB ≈ 24.6 MB عشرياً — لن يُرفض الملف أبداً عند الحدود الفعلية.
+export const MAX_UPLOAD_BYTES = 23.5 * 1024 * 1024;
+
+// GIF وSVG تُرفع كما هي (شفافية/حركة) — سقف صارم لمنع استغلال الاستثناء برفع ملفات ضخمة:
+export const UNCOMPRESSIBLE_IMAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 export type MediaPreset =
   | 'avatar'
   | 'cover'
   | 'feedImage'
+  | 'highlightCover'
   | 'video'
   | 'extractedSound'
   | 'voiceMessage';
@@ -79,7 +85,7 @@ function ensureNotAborted(signal?: AbortSignal): void {
 /* ضغط الصور عبر Canvas                                                */
 /* ------------------------------------------------------------------ */
 
-type ImagePreset = 'avatar' | 'cover' | 'feedImage';
+type ImagePreset = 'avatar' | 'cover' | 'feedImage' | 'highlightCover';
 
 const IMAGE_TARGETS: Record<ImagePreset, {
   square?: number;
@@ -87,8 +93,12 @@ const IMAGE_TARGETS: Record<ImagePreset, {
   targetBytes: number;
   startQuality: number;
   minQuality: number;
+  /** قص المنتصف 1:1 (Center-Crop) بدل مطّ الصورة داخل الإطار المربع */
+  centerCrop?: boolean;
 }> = {
-  avatar: { square: 400, targetBytes: 80 * 1024, startQuality: 0.82, minQuality: 0.6 },
+  avatar: { square: 400, targetBytes: 80 * 1024, startQuality: 0.82, minQuality: 0.6, centerCrop: true },
+  // غلاف/خلفية أبرز القصص: قص مركزي 1:1 بمستهدف 100KB (تُعرض داخل دائرة ~208px)
+  highlightCover: { square: 512, targetBytes: 100 * 1024, startQuality: 0.8, minQuality: 0.5, centerCrop: true },
   cover: { maxSide: 1200, targetBytes: 200 * 1024, startQuality: 0.82, minQuality: 0.6 },
   feedImage: { maxSide: 1280, targetBytes: 300 * 1024, startQuality: 0.82, minQuality: 0.6 },
 };
@@ -195,7 +205,15 @@ export async function compressImage(
         canvas.height = drawHeight;
         const context = canvas.getContext('2d');
         if (!context) throw new Error('تعذر تجهيز مساحة ضغط الصورة.');
-        context.drawImage(source, 0, 0, drawWidth, drawHeight);
+        if (target.centerCrop) {
+          // قص المنتصف (Center-Crop 1:1) بدل إطالة الصورة داخل الإطار:
+          const cropSize = Math.min(width, height);
+          const cropX = (width - cropSize) / 2;
+          const cropY = (height - cropSize) / 2;
+          context.drawImage(source, cropX, cropY, cropSize, cropSize, 0, 0, drawWidth, drawHeight);
+        } else {
+          context.drawImage(source, 0, 0, drawWidth, drawHeight);
+        }
 
         let withinTarget = false;
         for (const mimeType of formats) {
@@ -250,13 +268,19 @@ export async function compressImage(
 /* mediabunny: تحميل الكسول + مُرمِّز AAC الاحتياطي                     */
 /* ------------------------------------------------------------------ */
 
+type MediabunnyVideoTrack = {
+  getDisplayWidth: () => Promise<number>;
+  getDisplayHeight: () => Promise<number>;
+  /** سلسلة الترميز مثل 'avc1' — تُستخدم للتحقق قبل تخطي إعادة الترميز */
+  codec?: unknown;
+};
+
+type MediabunnyAudioTrack = { codec?: unknown };
+
 type MediabunnyInput = {
   computeDuration: () => Promise<number>;
-  getPrimaryVideoTrack: () => Promise<{
-    getDisplayWidth: () => Promise<number>;
-    getDisplayHeight: () => Promise<number>;
-  } | null>;
-  getPrimaryAudioTrack: () => Promise<unknown | null>;
+  getPrimaryVideoTrack: () => Promise<MediabunnyVideoTrack | null>;
+  getPrimaryAudioTrack: () => Promise<MediabunnyAudioTrack | null>;
 };
 
 type MediabunnyModule = {
@@ -350,10 +374,15 @@ export async function compressVideo(
   ensureNotAborted(signal);
 
   const mb = await loadMediabunny();
-  // مسار احتياطي آمن: متصفح قديم + ملف ضمن الحد → يُرفع كما هو بلا تعطل
   if (!mb) {
-    if (file.size <= maxBytes) return file;
-    throw new MediaTooLargeError();
+    // لا نرفع الفيديو الأصلي بصمت إذا تعذر الضغط (Safari قديم بلا WebCodecs):
+    // الملفات الصغيرة (≤6MB) آمنة على باقة ImageKit المجانية فتُرفع كما هي،
+    // وما فوقها يُرفض برسالة واضحة بدل رفعه غير مضغوطاً.
+    if (file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
+      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع الملف الصغير كما هو.');
+      return file;
+    }
+    throw new Error('تعذر ضغط الفيديو على متصفحك (يتطلب WebCodecs). لا يمكن رفع الملفات الكبيرة غير المضغوطة؛ جرّب متصفحاً حديثاً أو اختر مقطعاً أقصر.');
   }
 
   const baseName = file.name.replace(/\.[^.]+$/, '') || 'video';
@@ -400,11 +429,19 @@ export async function compressVideo(
   const sourceWidth = videoTrack ? await videoTrack.getDisplayWidth().catch(() => 0) : 0;
   const sourceHeight = videoTrack ? await videoTrack.getDisplayHeight().catch(() => 0) : 0;
 
-  // تخطي إعادة الترميز: MP4 بجودة ≤720p وحجمه أقل من 6MB أصلاً
+  // تخطي إعادة الترميز: MP4 بترميز H.264+AAC بجودة ≤720p وحجمه أقل من 6MB أصلاً
+  // (التحقق من الترميز ضروري: تخطي فيديو بترميز آخر قد يجعله غير قابل للتشغيل
+  // في بعض المتصفحات، بينما إعادة الترميز لـ H.264+AAC تضمن التوافق — خصوصاً على iPhone Safari)
   const isMp4 = file.type === 'video/mp4' || /\.mp4$/i.test(file.name);
+  const videoCodec = typeof videoTrack?.codec === 'string' ? videoTrack.codec : '';
+  const audioTrack = await probeInput.getPrimaryAudioTrack().catch(() => null);
+  const audioCodec = typeof audioTrack?.codec === 'string' ? audioTrack.codec : '';
+  const videoCodecOk = /avc|h264|h\.264/i.test(videoCodec);
+  const audioCodecOk = !audioTrack || /aac|mp4a/i.test(audioCodec);
   const alreadyCompact = sourceWidth > 0 && sourceHeight > 0
     && Math.max(sourceWidth, sourceHeight) <= 1280
-    && Math.min(sourceWidth, sourceHeight) <= 720;
+    && Math.min(sourceWidth, sourceHeight) <= 720
+    && videoCodecOk && audioCodecOk;
   if (isMp4 && alreadyCompact && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
     onProgress?.(100);
     return file;

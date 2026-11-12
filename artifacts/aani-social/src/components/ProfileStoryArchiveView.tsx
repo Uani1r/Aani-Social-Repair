@@ -9,6 +9,7 @@ import { normalizeStoryAuthor, normalizeStoryRow, type StoryRow } from '@/compon
 import type { ProfileHighlight, ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { decodeStoryFilterKey, getStoryFilterOverlay } from '@/lib/storyFilters';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { requestMediaDeletion } from '@/lib/mediaMaintenance';
 import { GridSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 
@@ -148,6 +149,9 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
     const deletedIndex = stories.findIndex(story => story.id === storyToDelete.id);
     setDeletingStory(true);
     try {
+      // حذف ملف الوسائط من ImageKit أولاً (يتحقق الخادم من الملكية ومن عدم
+      // استخدامه في أبرز القصص أو الأصوات) — فشلها لا يمنع حذف الستوري.
+      await requestMediaDeletion('story', storyToDelete.id).catch(() => undefined);
       const { error: deleteError } = await supabase
         .from('stories')
         .delete()

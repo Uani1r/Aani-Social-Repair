@@ -73,11 +73,11 @@ function buildChannel(
 
   let channel: RealtimeChannel = supabase.channel(`aani-interactions-${userId}`);
 
-  // Posts exposes safe aggregate columns through its select grants, so its
-  // counter updates can reach every viewer without exposing interaction rows.
-  // Interaction rows remain subscribed for per-user flags and reconciliation.
-  // saved_posts is an optional legacy table; bookmarks is canonical.
-  (["posts", "likes", "comments", "reposts", "bookmarks", "post_shares", "post_feedback"] as const).forEach(
+  // post_feedback وpost_shares أُزيلتا من الاشتراك لتوفير اتصالات Realtime المجانية:
+  // عدّاداتهما تصلك عبر تحديثات جدول posts نفسه، والتغذية الراجعة الخاصة
+  // بالمستخدم ومؤشر "شاركتُ" لا يحتاجان تحديثاً حياً لحظياً.
+  // saved_posts هو جدول قديم اختياري؛ bookmarks هو المرجع القانوني.
+  (["posts", "likes", "comments", "reposts", "bookmarks"] as const).forEach(
     (table) => {
       channel = channel.on(
         "postgres_changes",

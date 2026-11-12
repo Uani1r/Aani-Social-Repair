@@ -1095,7 +1095,8 @@ export function ProfileHighlightViewer({
       if (editCoverFile) {
         const safeName = editCoverFile.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'highlight-cover';
         uploadedPath = `${currentUserId}/highlights/covers/${activeCollection.id}/${Date.now()}-${safeName}`;
-        await uploadMedia({ file: editCoverFile, path: uploadedPath });
+        // غلاف أبرز القصص: إجبارياً عبر الضغط — قص مركزي 1:1 + مستهدف 100KB (WebP/JPEG)
+        await uploadMedia({ file: editCoverFile, path: uploadedPath, preset: 'highlightCover' });
         coverUrl = supabase.storage.from(storageBucket).getPublicUrl(uploadedPath).data.publicUrl;
       }
 
