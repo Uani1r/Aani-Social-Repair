@@ -10,9 +10,9 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
  *
  * Never place a service_role key or any secret in this file.
  */
-const FALLBACK_SUPABASE_URL = "https://whvhxgfdumxzunzsjkll.supabase.co";
+const FALLBACK_SUPABASE_URL = "https://auqqqwfjxrxizlmeweka.supabase.co";
 const FALLBACK_SUPABASE_ANON_KEY =
-  "sb_publishable_uY5fTNffiCtUgKnrTLu6rA_KOoaS18j";
+  "sb_publishable_RD_YttgesZJraGb7dvuArQ_ggxUCfmt";
 
 const FALLBACK_STORAGE_BUCKET = "aani-media";
 
