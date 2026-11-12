@@ -108,12 +108,14 @@ async function uploadMediaUnsafe({
     throw new MediaTooLargeError('حجم ملف GIF/SVG يتجاوز الحد الأقصى المسموح (2 ميغابايت). اختر ملفاً أصغر.');
   }
 
-  // SVG غير موثوق: يُفحص ضد المحتوى النشط (script/embed/object/foreignObject/
-  // معالجات أحداث inline) — يُرفض المشبوه برسالة واضحة بدل تمرييره دون تنقية.
-  // الفحص يغطي أول 64KB (تُوضع العناصر النشطة دائماً في مقدمة الملف عملياً).
+  // SVG غير موثوق: يُفحص ضد المحتوى النشط (script/embed/object/iframe/foreignObject/
+  // معالجات أحداث inline/xlink javascript/عناصر use خارجية) — يُرفض المشبوه برسالة
+  // واضحة بدل تمرييره دون تنقية. الفحص يغطي أول 64KB (تُوضع العناصر النشطة دائماً
+  // في مقدمة الملف عملياً). تنقية كاملة عبر مكتبة (DOMPurify) تتطلب اعتماد
+  // تبعية جديدة — مؤجل لقرار مستقل، والموقف الحالي: الرفض بدل السماح المشبوه.
   if (file.type === 'image/svg+xml') {
     const svgText = await file.slice(0, 64 * 1024).text();
-    if (/<script[\s>]|<\s*embed|<\s*object|foreignObject|<\s*iframe|\son\w+\s*=\s*["'>]/i.test(svgText)) {
+    if (/<script[\s>]|<\s*embed|<\s*object|foreignObject|<\s*iframe|<\s*use[\s>]|xlink:href\s*=\s*["']?\s*javascript:|data:text\/html|\son\w+\s*=\s*["'>]/i.test(svgText)) {
       throw new Error('ملف SVG يحتوي على محتوى غير آمن (برمجيات نشطة) ولا يمكن رفعه.');
     }
   }
@@ -218,6 +220,24 @@ async function uploadMediaUnsafe({
   // سجّل الرابط النهائي مقابل مسار الرفع الأصلي: أي getPublicUrl(path) لاحق
   // في التطبيق يعيد رابط ImageKit الحقيقي بدل رابط Supabase غير موجود.
   registerUploadedMediaUrl(path, url);
+
+  // سجل الرفع (Upload Ledger): لملاحقة الملفات المرفوعة بلا مرجع — كنس اليتامى
+  // يحدث لاحقاً من الخادم بعد فترة سماح وفحص مراجع صارم. اختياري تماماً:
+  // لا يُنتظر، ولا يفشل الرفع أو يتعطل إن لم يوصل.
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const ledgerToken = sessionData.session?.access_token;
+    if (ledgerToken) {
+      void fetch('/api/media/upload-ledger', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${ledgerToken}` },
+        body: JSON.stringify({ url }),
+      }).catch(() => undefined);
+    }
+  } catch {
+    /* السجل اختياري — لا يؤثر على الرفع */
+  }
+
   return url;
 }
 

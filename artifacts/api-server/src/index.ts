@@ -1,13 +1,18 @@
 import path from "path";
+import { existsSync } from "node:fs";
 import express from "express";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { PUSH_WEBHOOK_PATHS } from "./routes/pushNotifications";
-import { readAdminConfig, runExpiredRecordsCleanup } from "./lib/mediaDb";
+import { readAdminConfig, runExpiredRecordsCleanup, sweepOrphanUploads } from "./lib/mediaDb";
 import { processDeletionJobs } from "./lib/mediaDeletionWorker";
 
-// تحديد مسار الملفات الثابتة الناتجة عن البناء
-const publicPath = path.resolve(process.cwd(), "dist/public");
+// تحديد مسار ملفات الواجهة الثابتة: يعمل من جذر المستودع (تشغيل التطوير/النشر)
+// ومن حاوية الإنتاج (Dockerfile ينسخ dist/public إلى جذر العمل).
+const publicPath =
+  [path.resolve(process.cwd(), "dist/public"), path.resolve(process.cwd(), "artifacts/aani-social/dist/public")]
+    .find((candidate) => existsSync(path.join(candidate, "index.html")))
+    ?? path.resolve(process.cwd(), "dist/public");
 
 // خدمة ملفات الـ CSS والـ JS المجمعة
 app.use(express.static(publicPath));
@@ -95,6 +100,13 @@ function runMaintenanceCycle(): void {
       logger.info({ stats }, "Media deletion worker cycle finished");
     } catch (error) {
       logger.error({ err: error }, "Media deletion worker cycle failed");
+    }
+    try {
+      // كنس الملفات المرفوعة بلا مرجع (فترة سماح 48 ساعة + فحص مراجع صارم)
+      const sweep = await sweepOrphanUploads(config, { graceHours: 48, batchSize: 50 });
+      logger.info({ sweep }, "Orphan upload sweep finished");
+    } catch (error) {
+      logger.error({ err: error }, "Orphan upload sweep failed");
     }
   })();
 }

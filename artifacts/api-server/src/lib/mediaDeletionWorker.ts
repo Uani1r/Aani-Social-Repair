@@ -1,6 +1,9 @@
 // Worker طابور الحذف المؤجل (Outbox): يعالج مهام media_deletion_jobs.
-// - لا يحذف أي ملف قبل فحص المراجع الحية مرة أخرى (فحص صارم).
-// - فشل مؤقت → إعادة جدولة بـ Backoff حتى 24 ساعة (المهمة لا تُفقد عند إعادة التشغيل).
+// - حجز ذري للمهام عبر RPC (FOR UPDATE SKIP LOCKED) مع إيجار: المهام المتروكة
+//   بعد انتهاء مدة الحجز (توقف الخادم مثلاً) تُسترجع تلقائياً — لا مهمة عالقة.
+// - لا يحذف أي ملف قبل فحص المراجع الحية مرة أخرى (فحص صارم، fail closed).
+// - مرجع حي → المهمة تعود إلى pending بفحص لاحق (أسبوع) — لا ملفات عالقة للأبد.
+// - فشل مؤقت → إعادة جدولة بـ Backoff حتى 24 ساعة، والمهمة لا تُفقد عند إعادة التشغيل.
 // - قفل داخل العملية يمنع تشغيل دورتين متزامنتين، ودُفعة محدودة كل دورة.
 
 import { logger } from "./logger";
@@ -16,6 +19,8 @@ import {
 
 const BATCH_SIZE = 25;
 const MAX_ATTEMPTS = 12;
+const LEASE_MINUTES = 30;
+const STILL_REFERENCED_RECHECK_MS = 7 * 24 * 60 * 60 * 1000;
 
 let running = false;
 
@@ -53,10 +58,57 @@ async function requeueJob(
   });
 }
 
+/**
+ حجز دفعة مهام ذرياً: RPC بقفل SKIP LOCKED يمنع عاملين من معالجة المهمة نفسها،
+ ويسترجع المهام التي انتهى إيجارها (processing متقادمة) — فلا تبقى عالقة للأبد.
+ مسار احتياطي REST (قبل تطبيق الترحيل) مع شرط الإيجار نفسه — ضعيف الذرية لكنه
+ مقيد بقفل العملية الواحدة داخل هذا الـ Worker.
+ */
+async function claimJobs(config: SupabaseAdminConfig): Promise<Record<string, unknown>[]> {
+  const response = await fetch(
+    new URL("/rest/v1/rpc/aani_claim_media_deletion_jobs", config.url),
+    {
+      method: "POST",
+      headers: {
+        apikey: config.serviceRoleKey,
+        authorization: `Bearer ${config.serviceRoleKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ p_batch: BATCH_SIZE, p_lease_minutes: LEASE_MINUTES }),
+    },
+  );
+  const data = await response.json().catch(() => null) as unknown;
+  if (response.ok && Array.isArray(data)) {
+    return data as Record<string, unknown>[];
+  }
+  const message = data && typeof data === "object" && "message" in (data as Record<string, unknown>)
+    ? String((data as Record<string, unknown>).message)
+    : "";
+  if (response.status === 404 || message.includes("does not exist") || message.includes("schema cache")) {
+    // الترحيل لم يُطبق بعد — مسار احتياطي بنفس شرط الإيجار
+    logger.warn("aani_claim_media_deletion_jobs unavailable yet — using REST claim fallback");
+    const claim = await restRequest(config, "GET", "media_deletion_jobs", {
+      select: "id,media_url,attempts",
+      or: `(
+        and(status.eq.pending,next_attempt_at.lte.${new Date().toISOString()}),
+        and(status.eq.processing,updated_at.lte.${new Date(Date.now() - LEASE_MINUTES * 60 * 1000).toISOString()})
+      )`,
+      order: "next_attempt_at.asc",
+      limit: String(BATCH_SIZE),
+    });
+    const jobs = asRows(await requireSuccessfulCheck(claim));
+    for (const job of jobs) {
+      await patchJob(config, String(job.id), { status: "processing" });
+    }
+    return jobs;
+  }
+  throw new Error(`Claiming media deletion jobs failed: HTTP ${response.status}`);
+}
+
 export type DeletionWorkerStats = {
   processed: number;
   completed: number;
-  skipped: number;
+  deferred: number;
   failed: number;
   reason?: string;
 };
@@ -65,27 +117,20 @@ export async function processDeletionJobs(
   configOverride?: SupabaseAdminConfig,
 ): Promise<DeletionWorkerStats> {
   if (running) {
-    return { processed: 0, completed: 0, skipped: 0, failed: 0, reason: "already-running" };
+    return { processed: 0, completed: 0, deferred: 0, failed: 0, reason: "already-running" };
   }
   const config = configOverride ?? readSupabaseAdminConfig();
   if (!config) {
-    return { processed: 0, completed: 0, skipped: 0, failed: 0, reason: "no-database-config" };
+    return { processed: 0, completed: 0, deferred: 0, failed: 0, reason: "no-database-config" };
   }
 
   running = true;
   try {
-    // استلام الدُفعة: فشل هذا الاستعلام يؤجل الدورة كاملة — لا حذف يقع
-    const claimResult = await restRequest(config, "GET", "media_deletion_jobs", {
-      select: "id,media_url,attempts",
-      status: "eq.pending",
-      next_attempt_at: `lte.${new Date().toISOString()}`,
-      order: "next_attempt_at.asc",
-      limit: String(BATCH_SIZE),
-    });
-    const jobs = asRows(await requireSuccessfulCheck(claimResult));
+    // فشل حجز الدُفعة يؤجل الدورة كاملة — لا حذف يقع على شك
+    const jobs = await claimJobs(config);
 
     let completed = 0;
-    let skipped = 0;
+    let deferred = 0;
     let failed = 0;
 
     for (const job of jobs) {
@@ -97,12 +142,17 @@ export async function processDeletionJobs(
         continue;
       }
 
-      await patchJob(config, jobId, { status: "processing" });
       try {
         // فحص المراجع الحية بعد حذف الصف: أي مرجع متبقٍ معناه ملف مشترك — يبقى في ImageKit
         if (await mediaInActiveUse(config, [mediaUrl])) {
-          await patchJob(config, jobId, { status: "skipped", last_error: "still-referenced" });
-          skipped += 1;
+          // مرجع حي الآن قد يزول لاحقاً: المهمة تعود إلى pending بفحص بعد أسبوع —
+          // لا ملفات غير مستخدمة تبقى عالقة في skipped إلى الأبد، ولا إزعاج دوري متكرر.
+          await patchJob(config, jobId, {
+            status: "pending",
+            next_attempt_at: new Date(Date.now() + STILL_REFERENCED_RECHECK_MS).toISOString(),
+            last_error: "still-referenced",
+          });
+          deferred += 1;
           continue;
         }
 
@@ -114,9 +164,12 @@ export async function processDeletionJobs(
         }
 
         const result = await deleteImageKitFilesByUrls([mediaUrl]);
-        if (result.deleted > 0 || result.failed === 0) {
-          // محذوف، أو غير موجود أصلاً (مكرر من محاولة سابقة) — لا إعادة حذف للملف نفسه
-          await patchJob(config, jobId, { status: "completed" });
+        if (result.deleted > 0 || result.verifiedAbsent > 0) {
+          // حُذف فعلياً، أو تحققنا بالفحص الكامل أنه غير موجود في ImageKit أصلاً
+          await patchJob(config, jobId, {
+            status: "completed",
+            last_error: result.verifiedAbsent > 0 ? "verified-absent" : null,
+          });
           completed += 1;
         } else {
           await requeueJob(config, job, `imagekit-delete-failed(${result.failed})`);
@@ -129,7 +182,7 @@ export async function processDeletionJobs(
       }
     }
 
-    return { processed: jobs.length, completed, skipped, failed };
+    return { processed: jobs.length, completed, deferred, failed };
   } finally {
     running = false;
   }

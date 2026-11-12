@@ -66,6 +66,60 @@ export class NoAudioTrackError extends Error {
 }
 
 /* ------------------------------------------------------------------ */
+/* قياسات التوفير الفعلية (سجل تقني غير حساس — بلا محتوى الملفات)       */
+/* ------------------------------------------------------------------ */
+
+export type MediaCompressionMetric = {
+  kind: 'image' | 'video' | 'audio';
+  preset?: MediaPreset;
+  originalBytes: number;
+  finalBytes: number;
+  durationMs: number;
+  outcome: 'ok' | 'skipped-passthrough' | 'failed';
+  failureReason?: string;
+  finalVideoCodec?: string;
+  savingPct: number;
+};
+
+const METRICS_BUFFER_LIMIT = 200;
+const compressionMetrics: MediaCompressionMetric[] = [];
+
+function computeSavingPct(originalBytes: number, finalBytes: number): number {
+  // savingPct = originalBytes > 0 ? (original - final) / original * 100 : 0
+  return originalBytes > 0
+    ? Math.max(0, Math.round(((originalBytes - finalBytes) / originalBytes) * 100))
+    : 0;
+}
+
+/** تسجيل نتيجة عملية ضغط — لا يُسجل محتوى الملفات ولا أي بيانات شخصية. */
+export function recordCompressionMetric(
+  metric: Omit<MediaCompressionMetric, 'savingPct'>,
+): void {
+  const entry: MediaCompressionMetric = {
+    ...metric,
+    savingPct: computeSavingPct(metric.originalBytes, metric.finalBytes),
+  };
+  compressionMetrics.push(entry);
+  if (compressionMetrics.length > METRICS_BUFFER_LIMIT) compressionMetrics.shift();
+  try {
+    console.info(
+      `[media-metrics] ${metric.kind} ${metric.preset ?? '-'} `
+      + `${metric.originalBytes}→${metric.finalBytes}B `
+      + `(${entry.savingPct}% توفير) في ${Math.round(metric.durationMs)}ms — ${metric.outcome}`
+      + `${metric.failureReason ? `: ${metric.failureReason}` : ''}`
+      + `${metric.finalVideoCodec ? ` [${metric.finalVideoCodec}]` : ''}`,
+    );
+  } catch {
+    /* تجاهل */
+  }
+}
+
+/** آخر 200 عملية ضغط — لمعرفة مقدار ما وفّرته المنظومة فعلياً. */
+export function getCompressionMetrics(): readonly MediaCompressionMetric[] {
+  return compressionMetrics;
+}
+
+/* ------------------------------------------------------------------ */
 /* الطابور المتسلسل + Wake Lock                                        */
 /* ------------------------------------------------------------------ */
 
@@ -143,15 +197,45 @@ export function calculateVideoBitrate(
 }
 
 /**
- فحص خفيف للحاوية (بلا mediabunny): MP4 صالح يبدأ بصندوق 'ftyp' بعد حجم الصندوق.
- يُستخدم فقط في مسار المرور الصغير عندما لا يمكن تحميل mediabunny إطلاقاً.
+ مسح FourCC لترميزات MP4 (مدخلات stsd داخل moov): يتحقق فعلياً من وجود
+ ترميز فيديو H.264 (avc1) بدل الاعتماد على امتداد الملف أو وجود ftyp وحده.
+ الصوت اختياري (فيديو صامت مشروع). دالة صرفة قابلة للاختبار بلا متصفح.
  */
-async function looksLikeMp4Container(file: File): Promise<boolean> {
+export function findMp4CodecMarkers(
+  chunks: readonly Uint8Array[],
+): { hasH264: boolean; hasAacAudio: boolean } {
+  const found = { hasH264: false, hasAacAudio: false };
+  if (typeof TextDecoder === 'undefined') return found;
+  // latin1: كل بايت → محرف واحد، فتُقرأ FourCCs ASCII بأمان من البيانات الثنائية
+  const decoder = new TextDecoder('latin1');
+  let carry = '';
+  for (const chunk of chunks) {
+    const text = carry + decoder.decode(chunk, { stream: true });
+    if (text.includes('avc1')) found.hasH264 = true;
+    if (text.includes('mp4a')) found.hasAacAudio = true;
+    carry = text.slice(-3); // تغطية العلامات الممتدة عبر حدود القطع
+    if (found.hasH264 && found.hasAacAudio) break;
+  }
+  return found;
+}
+
+/**
+ تحقق حقيقي من ملف MP4 قبل السماح بالمرور دون إعادة ترميز:
+ 1) صندوق ftyp في المقدمة (حاوية MP4 صالحة)
+ 2) مسح FourCC يثبت وجود ترميز فيديو avc1 — الامتداد وحده لا يثبت شيئاً.
+ */
+async function verifyMp4Passthrough(file: File): Promise<boolean> {
   try {
     const head = new Uint8Array(await file.slice(0, 64 * 1024).arrayBuffer());
     if (head.length < 12) return false;
-    const boxType = String.fromCharCode(head[4], head[5], head[6], head[7]);
-    return boxType === 'ftyp';
+    if (String.fromCharCode(head[4], head[5], head[6], head[7]) !== 'ftyp') return false;
+    const CHUNK = 1024 * 1024;
+    const total = Math.min(file.size, 8 * 1024 * 1024);
+    const chunks: Uint8Array[] = [];
+    for (let offset = 0; offset < total; offset += CHUNK) {
+      chunks.push(new Uint8Array(await file.slice(offset, Math.min(offset + CHUNK, total)).arrayBuffer()));
+    }
+    return findMp4CodecMarkers(chunks).hasH264;
   } catch {
     return false;
   }
@@ -160,8 +244,6 @@ async function looksLikeMp4Container(file: File): Promise<boolean> {
 /* ------------------------------------------------------------------ */
 /* ضغط الصور عبر Canvas                                                */
 /* ------------------------------------------------------------------ */
-
-type ImagePreset = 'avatar' | 'cover' | 'feedImage' | 'highlightCover';
 
 const IMAGE_TARGETS: Record<ImagePreset, {
   square?: number;
@@ -254,98 +336,131 @@ export async function compressImage(
   const hasAlpha = file.type === 'image/png' || file.type === 'image/gif';
 
   return runExclusive(async () => {
-    ensureNotAborted(signal);
+    const startedAt = Date.now();
     await acquireWakeLock();
     try {
       const { source, width, height, release } = await loadImageSource(file);
-      let drawWidth = width;
-      let drawHeight = height;
-      if (target.square) {
-        drawWidth = target.square;
-        drawHeight = target.square;
-      } else if (target.maxSide || target.maxShortSide) {
-        // نُصغّر فقط — لا نكبّر صورة أصغر من هدفها — مع صون نسبة الأبعاد:
-        const scale = Math.min(
-          1,
-          target.maxSide ? target.maxSide / Math.max(width, height) : 1,
-          target.maxShortSide ? target.maxShortSide / Math.min(width, height) : 1,
-        );
-        drawWidth = Math.max(1, Math.round(width * scale));
-        drawHeight = Math.max(1, Math.round(height * scale));
-      }
-
-      const formats = hasAlpha
-        ? (supportsWebpEncode() ? ['image/webp'] : ['image/png'])
-        : (supportsWebpEncode() ? ['image/webp', 'image/jpeg'] : ['image/jpeg']);
-
-      let best: { blob: Blob; ext: string } | null = null;
-      let quality = target.startQuality;
-      let iteration = 0;
-      const maxIterations = 8;
-
-      while (iteration < maxIterations) {
-        iteration += 1;
-        ensureNotAborted(signal);
-        onProgress?.(Math.min(90, Math.round((iteration / maxIterations) * 90)));
-
-        const canvas = document.createElement('canvas');
-        canvas.width = drawWidth;
-        canvas.height = drawHeight;
-        const context = canvas.getContext('2d');
-        if (!context) throw new Error('تعذر تجهيز مساحة ضغط الصورة.');
-        if (target.centerCrop) {
-          // قص المنتصف (Center-Crop 1:1) بدل إطالة الصورة داخل الإطار:
-          const cropSize = Math.min(width, height);
-          const cropX = (width - cropSize) / 2;
-          const cropY = (height - cropSize) / 2;
-          context.drawImage(source, cropX, cropY, cropSize, cropSize, 0, 0, drawWidth, drawHeight);
-        } else {
-          context.drawImage(source, 0, 0, drawWidth, drawHeight);
+      try {
+        let drawWidth = width;
+        let drawHeight = height;
+        if (target.square) {
+          // قاعدة صارمة: الناتج لا يتجاوز أبعاد المصدر أبداً — لا تكبير للصور الصغيرة
+          const sourceMinSide = Math.min(width, height);
+          drawWidth = Math.max(1, Math.min(target.square, sourceMinSide));
+          drawHeight = drawWidth;
+        } else if (target.maxSide || target.maxShortSide) {
+          // نُصغّر فقط — لا نكبّر صورة أصغر من هدفها — مع صون نسبة الأبعاد:
+          const scale = Math.min(
+            1,
+            target.maxSide ? target.maxSide / Math.max(width, height) : 1,
+            target.maxShortSide ? target.maxShortSide / Math.min(width, height) : 1,
+          );
+          drawWidth = Math.max(1, Math.round(width * scale));
+          drawHeight = Math.max(1, Math.round(height * scale));
         }
 
-        let withinTarget = false;
-        for (const mimeType of formats) {
-          const blob = await new Promise<Blob | null>(resolve => {
-            try {
-              canvas.toBlob(resolve, mimeType, mimeType === 'image/png' ? undefined : quality);
-            } catch {
-              resolve(null);
+        const formats = hasAlpha
+          ? (supportsWebpEncode() ? ['image/webp'] : ['image/png'])
+          : (supportsWebpEncode() ? ['image/webp', 'image/jpeg'] : ['image/jpeg']);
+
+        let best: { blob: Blob; ext: string } | null = null;
+        let quality = target.startQuality;
+        let iteration = 0;
+        const maxIterations = 8;
+
+        while (iteration < maxIterations) {
+          iteration += 1;
+          ensureNotAborted(signal);
+          onProgress?.(Math.min(90, Math.round((iteration / maxIterations) * 90)));
+
+          const canvas = document.createElement('canvas');
+          canvas.width = drawWidth;
+          canvas.height = drawHeight;
+          let context: CanvasRenderingContext2D | null = null;
+          try {
+            context = canvas.getContext('2d');
+            if (!context) throw new Error('تعذر تجهيز مساحة ضغط الصورة.');
+            if (target.centerCrop) {
+              // قص المنتصف (Center-Crop 1:1) بدل إطالة الصورة داخل الإطار:
+              const cropSize = Math.min(width, height);
+              const cropX = (width - cropSize) / 2;
+              const cropY = (height - cropSize) / 2;
+              context.drawImage(source, cropX, cropY, cropSize, cropSize, 0, 0, drawWidth, drawHeight);
+            } else {
+              context.drawImage(source, 0, 0, drawWidth, drawHeight);
             }
-          });
-          if (!blob) continue;
-          const ext = extensionFor(blob.type || mimeType);
-          if (blob.size <= target.targetBytes) {
-            best = { blob, ext };
-            withinTarget = true;
-            break;
+
+            let withinTarget = false;
+            for (const mimeType of formats) {
+              const blob = await new Promise<Blob | null>(resolve => {
+                try {
+                  canvas.toBlob(resolve, mimeType, mimeType === 'image/png' ? undefined : quality);
+                } catch {
+                  resolve(null);
+                }
+              });
+              if (!blob) continue;
+              const ext = extensionFor(blob.type || mimeType);
+              if (blob.size <= target.targetBytes) {
+                best = { blob, ext };
+                withinTarget = true;
+                break;
+              }
+              if (!best || blob.size < best.blob.size) best = { blob, ext };
+            }
+          } finally {
+            // تحرير Canvas فوراً بعد كل تكرار (نجاحاً أو فشلاً) — الأجهزة الضعيفة
+            canvas.width = 0;
+            canvas.height = 0;
           }
-          if (!best || blob.size < best.blob.size) best = { blob, ext };
+
+          if (withinTarget) break;
+
+          // لم نصل للهدف: نخفض الجودة ونصغّر الأبعاد تدريجياً
+          if (drawWidth > 200) {
+            drawWidth = Math.max(160, Math.round(drawWidth * 0.88));
+            drawHeight = target.square
+              ? drawWidth
+              : Math.max(160, Math.round(drawHeight * 0.88));
+          }
+          quality = Math.max(target.minQuality, quality - 0.06);
         }
 
-        // تصفير أبعاد Canvas لتحرير الذاكرة فوراً على الأجهزة الضعيفة
-        canvas.width = 0;
-        canvas.height = 0;
-
-        if (withinTarget) break;
-
-        // لم نصل للهدف: نخفض الجودة ونصغّر الأبعاد تدريجياً
-        if (drawWidth > 200) {
-          drawWidth = Math.max(160, Math.round(drawWidth * 0.88));
-          drawHeight = target.square
-            ? drawWidth
-            : Math.max(160, Math.round(drawHeight * 0.88));
+        ensureNotAborted(signal);
+        if (!best) throw new Error('تعذر ضغط الصورة.');
+        const result = new File([best.blob], `${baseName}-compressed.${best.ext}`, {
+          type: best.blob.type || 'image/jpeg',
+          lastModified: Date.now(),
+        });
+        recordCompressionMetric({
+          kind: 'image',
+          preset,
+          originalBytes: file.size,
+          finalBytes: result.size,
+          durationMs: Date.now() - startedAt,
+          outcome: 'ok',
+        });
+        onProgress?.(100);
+        return result;
+      } catch (error) {
+        recordCompressionMetric({
+          kind: 'image',
+          preset,
+          originalBytes: file.size,
+          finalBytes: 0,
+          durationMs: Date.now() - startedAt,
+          outcome: 'failed',
+          failureReason: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      } finally {
+        // تحرير مصدر الصورة دائماً (نجاحاً أو فشلاً أو إلغاءً) — iOS Safari حساس للذاكرة
+        try {
+          release();
+        } catch {
+          /* محرر مسبقاً */
         }
-        quality = Math.max(target.minQuality, quality - 0.06);
       }
-
-      release();
-      ensureNotAborted(signal);
-      if (!best) throw new Error('تعذر ضغط الصورة.');
-      onProgress?.(100);
-      return new File([best.blob], `${baseName}-compressed.${best.ext}`, {
-        type: best.blob.type || 'image/jpeg',
-        lastModified: Date.now(),
-      });
     } finally {
       await releaseWakeLock();
     }
@@ -460,17 +575,39 @@ export async function compressVideo(
   const { onProgress, signal } = options;
   const maxBytes = options.maxBytes ?? MAX_UPLOAD_BYTES;
   ensureNotAborted(signal);
+  const startedAt = Date.now();
 
   const mb = await loadMediabunny();
   if (!mb) {
-    // لا نرفع الفيديو الأصلي بصمت إذا تعذر الضغط (Safari قديم بلا WebCodecs):
-    // مسار المرور الصغير يتطلب فحصاً فعلياً للحاوية (MP4 بصندوق ftyp) — لا
-    // تمريروا أعمى لملف لا نعرف صيغته. الفيديو المسجل من iPhone بـ H.264/AAC.
-    if (file.type === 'video/mp4' && await looksLikeMp4Container(file)
-      && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
-      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع ملف MP4 صغير (≤6MB) بعد فحص الحاوية.');
+    // لا نرفع الفيديو الأصلي بصمت إذا تعذر الضغط (Safari قديم بلا WebCodecs).
+    // مسار المرور الصغير يتطلب تحققاً حقيقياً: حاوية MP4 (ftyp) + مسح FourCC
+    // يثبت ترميز avc1 — الامتداد وحده لا يثبت أن الملف H.264.
+    if (file.type === 'video/mp4'
+      && file.size <= 6 * 1024 * 1024
+      && file.size <= maxBytes
+      && await verifyMp4Passthrough(file)) {
+      console.warn('[mediaCompressor] تعذر ضغط الفيديو محلياً — سيُرفع ملف MP4 صغير (≤6MB) بعد تحقق الحاوية والترميز avc1.');
+      recordCompressionMetric({
+        kind: 'video',
+        preset: 'video',
+        originalBytes: file.size,
+        finalBytes: file.size,
+        durationMs: Date.now() - startedAt,
+        outcome: 'skipped-passthrough',
+        failureReason: 'no-webcodecs: container+avc1-verified',
+        finalVideoCodec: 'avc1 (container-verified)',
+      });
       return file;
     }
+    recordCompressionMetric({
+      kind: 'video',
+      preset: 'video',
+      originalBytes: file.size,
+      finalBytes: 0,
+      durationMs: Date.now() - startedAt,
+      outcome: 'failed',
+      failureReason: 'no-webcodecs and file not verifiable as MP4/H.264',
+    });
     throw new Error('تعذر ضغط الفيديو على متصفحك (يتطلب WebCodecs). لا يمكن رفع الملفات الكبيرة غير المضغوطة؛ جرّب متصفحاً حديثاً أو اختر مقطعاً أقصر.');
   }
 
@@ -531,7 +668,31 @@ export async function compressVideo(
     && Math.max(sourceWidth, sourceHeight) <= 1280
     && Math.min(sourceWidth, sourceHeight) <= 720
     && videoCodecOk && audioCodecOk;
+
+  // وصف ترميز الملف كما تحقق فعلياً من المسار probe (يُسجل في القياسات فقط)
+  const verifiedCodec = videoCodecOk
+    ? `avc1${audioTrack ? `+${/aac|mp4a/i.test(audioCodec) ? 'aac' : audioCodec}` : '+no-audio'}`
+    : undefined;
+
+  function recordVideoMetric(
+    outcome: 'ok' | 'skipped-passthrough' | 'failed',
+    finalBytes: number,
+    extra: { failureReason?: string; finalVideoCodec?: string } = {},
+  ): void {
+    recordCompressionMetric({
+      kind: 'video',
+      preset: 'video',
+      originalBytes: file.size,
+      finalBytes,
+      durationMs: Date.now() - startedAt,
+      outcome,
+      failureReason: extra.failureReason,
+      finalVideoCodec: extra.finalVideoCodec ?? verifiedCodec,
+    });
+  }
+
   if (isMp4 && alreadyCompact && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
+    recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'already H.264/AAC ≤720p ≤6MB' });
     onProgress?.(100);
     return file;
   }
@@ -566,9 +727,31 @@ export async function compressVideo(
       onProgress?.(0);
       result = await runExclusive(() => attemptEncode(harsherBitrate, targetWidth, targetHeight));
     }
-    if (result.size > maxBytes) throw new MediaTooLargeError();
+
+    // لا نجعل الضغط يكبّر الملف بلا داعٍ: إن كان الأصل متوافقاً فعلاً
+    // (H.264/AAC محقق من المسار probe) وضمن الحد وأصغر من الناتج — نحتفظ بالأصل.
+    if (isMp4 && videoCodecOk && audioCodecOk && file.size <= maxBytes && result.size >= file.size) {
+      recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'reencode-not-smaller-than-verified-original' });
+      onProgress?.(100);
+      return file;
+    }
+
+    if (result.size > maxBytes) {
+      recordVideoMetric('failed', result.size, {
+        failureReason: `exceeds MAX_UPLOAD_BYTES (${result.size}B > ${maxBytes}B) after harsher retry`,
+      });
+      throw new MediaTooLargeError();
+    }
+    recordVideoMetric('ok', result.size, { finalVideoCodec: 'avc1+aac (reencoded)' });
     onProgress?.(100);
     return result;
+  } catch (error) {
+    if (!(error instanceof MediaTooLargeError)) {
+      recordVideoMetric('failed', 0, {
+        failureReason: error instanceof Error ? error.message : String(error),
+      });
+    }
+    throw error;
   } finally {
     await releaseWakeLock();
   }
@@ -589,16 +772,35 @@ export async function extractAudio(
 ): Promise<File> {
   const { kind, trim, onProgress, signal } = options;
   ensureNotAborted(signal);
+  const startedAt = Date.now();
 
   const mb = await loadMediabunny();
   if (!mb) {
     // مسار احتياطي: رسائل الدردشة تبقى بصيغة المسجل الأصلية (webm/opus) إن
     // كان المتصفح لا يدعم التحويل، بشرط بقاء الحجم ضمن الحد المسموح.
     if (kind === 'voiceMessage' && source.size <= MAX_UPLOAD_BYTES) {
+      recordCompressionMetric({
+        kind: 'audio',
+        preset: kind,
+        originalBytes: source.size,
+        finalBytes: source.size,
+        durationMs: Date.now() - startedAt,
+        outcome: 'skipped-passthrough',
+        failureReason: 'no-webcodecs: original recorder format kept',
+      });
       return source instanceof File
         ? source
         : new File([source], `voice-${Date.now()}.webm`, { type: source.type || 'audio/webm', lastModified: Date.now() });
     }
+    recordCompressionMetric({
+      kind: 'audio',
+      preset: kind,
+      originalBytes: source.size,
+      finalBytes: 0,
+      durationMs: Date.now() - startedAt,
+      outcome: 'failed',
+      failureReason: 'no-webcodecs',
+    });
     throw new Error('متصفحك لا يدعم استخراج الصوت محلياً.');
   }
 
@@ -639,11 +841,31 @@ export async function extractAudio(
       const buffer = output.target.buffer;
       if (!buffer) throw new Error('تعذر إنتاج ملف الصوت.');
       onProgress?.(100);
-      return new File(
+      const result = new File(
         [buffer],
         kind === 'voiceMessage' ? `voice-${Date.now()}.m4a` : `sound-${Date.now()}.m4a`,
         { type: 'audio/mp4', lastModified: Date.now() },
       );
+      recordCompressionMetric({
+        kind: 'audio',
+        preset: kind,
+        originalBytes: source.size,
+        finalBytes: result.size,
+        durationMs: Date.now() - startedAt,
+        outcome: 'ok',
+      });
+      return result;
+    } catch (error) {
+      recordCompressionMetric({
+        kind: 'audio',
+        preset: kind,
+        originalBytes: source.size,
+        finalBytes: 0,
+        durationMs: Date.now() - startedAt,
+        outcome: 'failed',
+        failureReason: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     } finally {
       await releaseWakeLock();
     }

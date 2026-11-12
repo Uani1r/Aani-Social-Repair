@@ -104,6 +104,21 @@ export async function mediaInActiveUse(
   const urlConditions = (columns: string[]): string[] =>
     urls.flatMap((url) => columns.map((column) => `${column}.ilike.*${url}*`));
 
+  // تحويل شرط مثل "media_url.ilike.*https://...*" إلى معاملات استعلام مفردة
+  function conditionToParams(condition: string): Record<string, string> {
+    const separatorIndex = condition.indexOf('.');
+    if (separatorIndex <= 0) throw new Error(`Malformed reference condition: ${condition}`);
+    const column = condition.slice(0, separatorIndex);
+    const operatorAndValue = condition.slice(separatorIndex + 1);
+    return { [column]: operatorAndValue };
+  }
+
+  /**
+   مبدأ Fail Closed: أي فشل استعلام يمنع التحقق → يرمي استثناءً → الحذف يُؤجل.
+   الاستثناء الوحيد: عمود غير موجود فعلاً في هذه البيئة — عندها لا نتجاهل الجدول
+   كاملاً (كما كانت النسخة السابقة) بل نفحص كل شرط بمفرده؛ العمود المفقود وحده
+   يُتخطى مع تسجيل، وكل فشل آخر يبقى قاتلاً للعملية.
+   */
   async function anyMatch(
     table: string,
     conditions: string[],
@@ -121,8 +136,27 @@ export async function mediaInActiveUse(
       return rows.length > 0;
     } catch (error) {
       if (isUnknownColumnError(result)) {
-        logger.warn({ table, status: result.status }, "Reference check skipped: schema lacks expected column");
-        return false;
+        let matched = false;
+        for (const condition of conditions) {
+          const single = await restRequest(config, "GET", table, {
+            select: "id",
+            ...conditionToParams(condition),
+            limit: "1",
+            ...extraParams,
+          });
+          try {
+            const rows = await requireSuccessfulCheck(single);
+            if (rows.length > 0) matched = true;
+          } catch (singleError) {
+            if (isUnknownColumnError(single)) {
+              logger.warn({ table, condition }, "Reference column missing in this environment; column skipped");
+              continue;
+            }
+            throw singleError;
+          }
+        }
+        logger.warn({ table, status: result.status }, "Reference check split: schema lacks an expected column; per-column probing used");
+        return matched;
       }
       throw error;
     }
@@ -139,12 +173,20 @@ export async function mediaInActiveUse(
     anyMatch("profiles", urlConditions(["avatar_url", "cover_url"])),
     // أصول الوسائط قيد المعالجة
     anyMatch("media_assets", urlConditions(["video_url"])),
-    // منشورات أخرى تشترك في الملف نفسه
+    // منشورات أخرى تشترك في الملف نفسه — media_url نصي
     anyMatch(
       "posts",
       urlConditions(["media_url"]),
       options.excludePostId ? { id: `neq.${options.excludePostId}` } : {},
     ),
+    // منشورات أخرى عبر مصفوفة media_urls (PostgREST ov= يتقاطع مع القيم)
+    ...(urls.length > 0
+      ? [anyMatch(
+          "posts",
+          [`media_urls=ov.{${urls.join(",")}}`],
+          options.excludePostId ? { id: `neq.${options.excludePostId}` } : {},
+        )]
+      : []),
     // قصص أخرى (مثل إعادة نشر قصة تنسخ media_url الأصلي)
     anyMatch(
       "stories",
@@ -214,4 +256,83 @@ export async function enqueueMediaDeletionJobs(
 
 export function asRows(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
+}
+
+/** تسجيل ملف مرفوع حديثاً في سجل الرفع (لملاحقة الملفات بلا مرجع). */
+export async function recordUploadLedger(
+  config: SupabaseAdminConfig,
+  mediaUrl: string,
+  fileId?: string,
+): Promise<void> {
+  const response = await fetch(
+    new URL("/rest/v1/media_upload_ledger?on_conflict=media_url", config.url),
+    {
+      method: "POST",
+      headers: {
+        apikey: config.serviceRoleKey,
+        authorization: `Bearer ${config.serviceRoleKey}`,
+        "content-type": "application/json",
+        Prefer: "resolution=ignore-duplicates",
+      },
+      body: JSON.stringify({
+        media_url: normalizeMediaUrl(mediaUrl),
+        ...(fileId ? { file_id: fileId } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Upload ledger write failed: HTTP ${response.status}`);
+  }
+}
+
+/**
+ كنس الملفات المرفوعة بلا مرجع (Orphan Sweep): يفحص فقط ما تجاوز فترة
+ السماح (48 ساعة افتراضياً) بجزء صغير لكل دورة، ويستخدم الفحص الصارم نفسه —
+ أي فشل تحقق يترك القيد لدورة قادمة ولا يُحذف شيء على الشك.
+ */
+export async function sweepOrphanUploads(
+  config: SupabaseAdminConfig,
+  options: { graceHours?: number; batchSize?: number } = {},
+): Promise<{ reviewed: number; enqueued: number; resolved: number; failed: number }> {
+  const graceHours = options.graceHours ?? 48;
+  const batchSize = options.batchSize ?? 50;
+  const cutoff = new Date(Date.now() - graceHours * 60 * 60 * 1000).toISOString();
+
+  const claim = await restRequest(config, "GET", "media_upload_ledger", {
+    select: "id,media_url",
+    created_at: `lt.${cutoff}`,
+    order: "created_at.asc",
+    limit: String(batchSize),
+  });
+  const rows = asRows(await requireSuccessfulCheck(claim));
+
+  let enqueued = 0;
+  let resolved = 0;
+  let failed = 0;
+
+  for (const row of rows) {
+    const mediaUrl = normalizeMediaUrl(row.media_url);
+    if (!mediaUrl) {
+      failed += 1;
+      continue;
+    }
+    try {
+      if (await mediaInActiveUse(config, [mediaUrl])) {
+        // صار له مرجع حي — نُخرجه من السجل؛ حذفه مستقبلاً عبر Triggers الطابور
+        await restRequest(config, "DELETE", "media_upload_ledger", { id: `eq.${String(row.id)}` });
+        resolved += 1;
+      } else {
+        // لا مرجع بعد فترة السماح → طابور الحذف (Worker يفحص المراجع مرة أخيرة)
+        await enqueueMediaDeletionJobs(config, [mediaUrl]);
+        await restRequest(config, "DELETE", "media_upload_ledger", { id: `eq.${String(row.id)}` });
+        enqueued += 1;
+      }
+    } catch (error) {
+      // فشل فحص → القيد يبقى في السجل ويُعاد في الدورة القادمة (fail closed)
+      failed += 1;
+      logger.warn({ err: error, mediaUrl }, "Orphan sweep check failed; ledger row kept for next cycle");
+    }
+  }
+
+  return { reviewed: rows.length, enqueued, resolved, failed };
 }

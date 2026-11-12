@@ -11,8 +11,10 @@ externalPort = 80
 localPort = 8080
 
 [deployment]
-build = ["sh", "-c", "npx vite build artifacts/aani-social"]
-run = ["node", "dist/index.js"]
+# بناء الواجهة وAPI Server معاً — الخادم يقدم SPA + /api من عملية واحدة
+# (index.mjs يبحث عن dist/public في الجذر أو artifacts/aani-social/dist/public)
+build = ["sh", "-c", "pnpm install --no-frozen-lockfile && pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/aani-social run build"]
+run = ["node", "artifacts/api-server/dist/index.mjs"]
 router = "application"
 deploymentTarget = "autoscale"
 

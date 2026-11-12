@@ -20,6 +20,7 @@ import {
   enqueueMediaDeletionJobs,
   mediaInActiveUse,
   normalizeMediaUrl,
+  recordUploadLedger,
   restRequest,
   runExpiredRecordsCleanup,
 } from "../lib/mediaDb";
@@ -195,6 +196,36 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
   })().catch((error) => {
     logger.error({ err: error }, "Media deletion enqueue crashed unexpectedly");
     if (!res.headersSent) res.status(500).json({ success: false, error: "Could not schedule media deletion." });
+  });
+});
+
+// سجل الرفع: العميل يبلّغ بعد نجاح رفع ImageKit حتى يُكنس لاحقاً أي ملف
+// بقي بلا مرجع (فشل حفظ السجل في Supabase). فشل التسجيل لا يفشل الرفع أبداً.
+router.post("/media/upload-ledger", (req: Request, res: Response) => {
+  void (async () => {
+    const config = readSupabaseAdminConfig();
+    if (!config) {
+      return res.status(503).json({ success: false, error: "Database is not configured." });
+    }
+    const userId = await getAuthenticatedUserId(config, readBearerToken(req));
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "The session is invalid or expired." });
+    }
+    const body = (req.body || {}) as { url?: unknown };
+    const mediaUrl = normalizeMediaUrl(body.url);
+    if (!mediaUrl) {
+      return res.status(400).json({ success: false, error: "url is required." });
+    }
+    try {
+      await recordUploadLedger(config, mediaUrl);
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      logger.warn({ err: error }, "Upload ledger write failed");
+      return res.status(502).json({ success: false, error: "Could not record upload ledger." });
+    }
+  })().catch((error) => {
+    logger.error({ err: error }, "Upload ledger request crashed unexpectedly");
+    if (!res.headersSent) res.status(500).json({ success: false, error: "Could not record upload ledger." });
   });
 });
 

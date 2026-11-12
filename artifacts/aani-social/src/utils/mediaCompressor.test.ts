@@ -7,10 +7,13 @@ import assert from 'node:assert/strict';
 
 import {
   calculateVideoBitrate,
+  findMp4CodecMarkers,
+  getCompressionMetrics,
   IMAGE_PRESETS,
   isImagePreset,
   MAX_UPLOAD_BYTES,
   normalizeMediaUrl,
+  recordCompressionMetric,
   UNCOMPRESSIBLE_IMAGE_MAX_BYTES,
 } from './mediaCompressor';
 
@@ -63,4 +66,75 @@ test('تطبيع الروابط القديمة النسبية لا يفشل', ()
   assert.equal(normalizeMediaUrl(''), '');
   assert.equal(normalizeMediaUrl(null), '');
   assert.equal(normalizeMediaUrl(42), '');
+});
+
+test('مسح FourCC يثبت ترميز avc1 فعلياً (لا قبول بالامتداد وحده)', () => {
+  const encoder = new TextEncoder();
+  const chunk = (text: string) => encoder.encode(text);
+
+  // حاوية تحمل avc1 داخل stsd → مقبول للمرور
+  const withAvc = findMp4CodecMarkers([chunk('....ftypisom....'), chunk('....avc1.64001f....')]);
+  assert.equal(withAvc.hasH264, true);
+  assert.equal(withAvc.hasAacAudio, false); // فيديو صامت مشروع
+
+  // فيديو بصوت AAC
+  const withBoth = findMp4CodecMarkers([chunk('....avc1....mp4a.40.2....')]);
+  assert.equal(withBoth.hasH264, true);
+  assert.equal(withBoth.hasAacAudio, true);
+
+  // فيديو بترميز آخر (hevc مثلاً) → لا يُقبل كـ H.264
+  const hevc = findMp4CodecMarkers([chunk('....hvc1....')]);
+  assert.equal(hevc.hasH264, false);
+
+  // لا علامات إطلاقاً
+  const empty = findMp4CodecMarkers([chunk('....ftypisom....mdat....')]);
+  assert.equal(empty.hasH264, false);
+});
+
+test('العلامات الممتدة عبر حدود القطع تُكتشف (carry 3 بايت)', () => {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode('xxxa');
+  const rest = encoder.encode('vc1yyy');
+  const split = findMp4CodecMarkers([bytes, rest]);
+  assert.equal(split.hasH264, true);
+});
+
+test('سجل القياسات يحسب نسبة التوفير وينعّم السجل عند 200', () => {
+  recordCompressionMetric({
+    kind: 'image',
+    preset: 'avatar',
+    originalBytes: 1000,
+    finalBytes: 200,
+    durationMs: 120,
+    outcome: 'ok',
+  });
+  const metrics = getCompressionMetrics();
+  const last = metrics[metrics.length - 1];
+  assert.equal(last.savingPct, 80); // (1000 - 200) / 1000 = 80%
+  assert.equal(last.outcome, 'ok');
+
+  // صفر أصول → توفير 0 لا NaN
+  recordCompressionMetric({
+    kind: 'video',
+    preset: 'video',
+    originalBytes: 0,
+    finalBytes: 0,
+    durationMs: 5,
+    outcome: 'failed',
+    failureReason: 'test',
+  });
+  assert.equal(getCompressionMetrics()[getCompressionMetrics().length - 1].savingPct, 0);
+
+  // السجل مخروطي بحد 200
+  for (let index = 0; index < 250; index += 1) {
+    recordCompressionMetric({
+      kind: 'image',
+      preset: 'feedImage',
+      originalBytes: 100,
+      finalBytes: 50,
+      durationMs: 1,
+      outcome: 'ok',
+    });
+  }
+  assert.ok(getCompressionMetrics().length <= 200);
 });

@@ -75,29 +75,55 @@ export async function listAllImageKitFiles(folderPath: string): Promise<ImageKit
   return all;
 }
 
+export type ImageKitDeletionResult = {
+  deleted: number;
+  /** تحققنا بالفحص الكامل أن الملف غير موجود في ImageKit (لا هدف حذف له) */
+  verifiedAbsent: number;
+  failed: number;
+};
+
 /**
  يحذف ملفات ImageKit التي تطابق هذه الروابط بالضبط (مطابقة الرابط الأساسي).
- يعيد عدد الملفات المحذوفة والفاشلة. فشل جلب القائمة يرمي استثناءً —
- المتصل (Worker) يعيد جدولة المهمة بدل الحذف الأعمى.
+ فشل جلب القائمة يرمي استثناءً — المتصل (Worker) يعيد الجدولة بدل الحذف الأعمى.
+ لا نعيد أبداً {deleted:0,failed:0} كادعاء نجاح: كل حالة تُميَّز صراحة.
  */
 export async function deleteImageKitFilesByUrls(
   fileUrls: string[],
-): Promise<{ deleted: number; failed: number }> {
-  if (!imageKitConfigured()) return { deleted: 0, failed: 0 };
+): Promise<ImageKitDeletionResult> {
+  if (!imageKitConfigured()) {
+    throw new Error("ImageKit is not configured — cannot verify or delete files");
+  }
 
   const targets = new Map<string, string>(); // الرابط الأساسي → مجلد ImageKit
+  let verifiedAbsent = 0;
+  let unresolvable = 0;
+
   for (const raw of fileUrls) {
     if (typeof raw !== "string" || !raw) continue;
     try {
       const parsed = new URL(raw);
+      if (!parsed.hostname.endsWith("ik.imagekit.io")) {
+        // ليس ملفاً في ImageKit أصلاً (روابط تخزين قديمة/خارجية) — لا هدف حذف له
+        verifiedAbsent += 1;
+        continue;
+      }
       const folderPath = parsed.pathname.replace(/\/[^/]*$/, "");
-      if (!folderPath || !folderPath.includes("/aani/")) continue;
+      if (!folderPath || !folderPath.includes("/aani/")) {
+        verifiedAbsent += 1;
+        continue;
+      }
       targets.set(`${parsed.origin}${parsed.pathname}`, folderPath);
     } catch {
-      continue;
+      // تعذر تحديد هدف الحذف — فشل صريح (لا نجاح وهمي)
+      unresolvable += 1;
     }
   }
-  if (targets.size === 0) return { deleted: 0, failed: 0 };
+  if (targets.size === 0) {
+    if (unresolvable > 0) {
+      throw new Error(`Could not resolve ImageKit deletion target(s) for ${unresolvable} URL(s)`);
+    }
+    return { deleted: 0, verifiedAbsent, failed: 0 };
+  }
 
   // نُخزّن قائمة كل مجلد مرة واحدة ضمن عملية الحذف نفسها (لا List لكل ملف على حدة)
   const listCache = new Map<string, ImageKitFileItem[]>();
@@ -116,8 +142,9 @@ export async function deleteImageKitFilesByUrls(
     );
     const fileId = typeof match?.fileId === "string" ? match.fileId : "";
     if (!fileId) {
-      // لا حذف أعمى: تطابق غير مؤكد بين الرابط وfileId → فشل يُعاد المحاولة/فحصه
-      failed += 1;
+      // القائمة كاملة (بـ Pagination) ولم يجد الملف → تحقق فعلي من عدم الوجود
+      // (حُذف سابقاً) — لا حذف أعمى ولا إعادة محاولة أبدية على ملف غير موجود
+      verifiedAbsent += 1;
       continue;
     }
 
@@ -126,5 +153,8 @@ export async function deleteImageKitFilesByUrls(
     else failed += 1;
   }
 
-  return { deleted, failed };
+  if (failed > 0 && deleted === 0 && verifiedAbsent === 0) {
+    throw new Error(`ImageKit deletion failed for ${failed} file(s)`);
+  }
+  return { deleted, verifiedAbsent, failed };
 }
