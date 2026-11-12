@@ -309,18 +309,21 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         ];
         const buildQuery = (selected: string) => {
           const request = supabase.from('posts').select(selected);
+          // سقف جلب صارم (40 منشوراً) على كل مسارات هذا الجلب — يمنع سحب
+          // مئات الصفوف دفعة واحدة واستنزاف باندويث قاعدة البيانات المجانية
           if (kind === 'profile' && postIds) {
-            return request.in('id', postIds).order('created_at', { ascending: false });
+            return request.in('id', postIds).order('created_at', { ascending: false }).limit(40);
           }
           if (kind === 'profile' && includeProfileOrder) {
             return request.eq('user_id', profileId || '')
               .order('display_order', { ascending: true })
-              .order('created_at', { ascending: false });
+              .order('created_at', { ascending: false })
+              .limit(40);
           }
           if (kind === 'profile') {
-            return request.eq('user_id', profileId || '').order('created_at', { ascending: false });
+            return request.eq('user_id', profileId || '').order('created_at', { ascending: false }).limit(40);
           }
-          return request.order('created_at', { ascending: false });
+          return request.order('created_at', { ascending: false }).limit(40);
         };
         let result = await buildQuery(columns.join(', '));
         for (let attempt = 0; attempt < 10 && result.error; attempt += 1) {

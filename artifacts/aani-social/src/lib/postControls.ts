@@ -17,6 +17,7 @@ import { toast } from "sonner";
 
 import { supabase, supabaseConfigured } from "./supabase";
 import { uploadMedia } from "./storyUpload";
+import { extractAudio, MAX_UPLOAD_BYTES } from "../utils/mediaCompressor";
 import type { Post, PostFeedback } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -380,9 +381,22 @@ export async function uploadPostAudio(
 ): Promise<PostAudio> {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "-");
   const path = `${userId}/audio-${postId}-${Date.now()}-${safeName}`;
+  // الملف الصوتي المرفوع مباشرة يُحوَّل أولاً إلى AAC/M4A (112kbps، 44.1kHz)
+  // بنفس مسار الصوت المستخرج من الفيديو — لا رفع خام يستنزف حد التخزين.
+  // عند فشل التحويل (متصفح قديم بلا WebCodecs) يُرفع الأصل فقط إذا كان ضمن
+  // حد الحجم المعتمد MAX_UPLOAD_BYTES؛ وإلا يفشل الرفع برسالة واضحة.
+  let audioFile: File = file;
+  try {
+    audioFile = await extractAudio(file, { kind: 'extractedSound' });
+  } catch (error) {
+    if (file.size > MAX_UPLOAD_BYTES) {
+      throw error;
+    }
+    console.warn("[postControls] تعذر تحويل الصوت إلى M4A — سيُرفع الأصل ضمن حد الحجم:", error);
+  }
   // الرفع مباشرة إلى ImageKit — يعيد الرابط العام النهائي ويُسجَّل في
   // سجل روابط supabase.ts فتقرأه أي getPublicUrl لاحقة بشكل صحيح
-  const url = await uploadMedia({ file, path });
+  const url = await uploadMedia({ file: audioFile, path });
   return { url, title: file.name.replace(/\.[^.]+$/, "") };
 }
 
