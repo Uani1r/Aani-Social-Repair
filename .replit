@@ -36,3 +36,5 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
+
+[nix]
