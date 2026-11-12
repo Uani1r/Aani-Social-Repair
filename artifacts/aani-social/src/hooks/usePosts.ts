@@ -429,10 +429,35 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       } else if (query === 'reel') {
         const { data: postData, error: postsErr } = await fetchPostRows('reel');
 
-        if (postsErr) throw postsErr;
+        if (postsErr) {
+          // اطبع الخطأ الحقيقي (عمود ناقص/صلاحيات/RLS) بدل رسالة عامة فقط
+          console.error('[reels] فشل استعلام الريلز', {
+            code: postsErr.code,
+            message: postsErr.message,
+            details: postsErr.details,
+            hint: postsErr.hint,
+          });
+          throw postsErr;
+        }
 
-        const rawPosts = (await normalizePostRowsWithVisibility(postData))
-          .filter(post => post.type === 'reel' || (post.type === 'photo' && post.destination === 'reels'));
+        const allRows = await normalizePostRowsWithVisibility(postData);
+        // الريل هو أي منشور وُجّه إلى الريلز أو أي فيديو (type = 'reel')،
+        // حتى لو حُفظت وجهته feed بسبب قاعدة بيانات ناقصة الترحيلات.
+        const rawPosts = allRows.filter(post => post.destination === 'reels' || post.type === 'reel');
+        if (allRows.length > 0 && rawPosts.length === 0) {
+          console.warn('[reels] الاستعلام أعاد صفوفاً لكن لا أحدها ريل', allRows.slice(0, 5).map(post => ({
+            id: post.id,
+            type: post.type,
+            destination: post.destination,
+          })));
+        }
+        const reelsWithoutMedia = rawPosts.filter(post => !post.media_url && !post.media_urls?.length);
+        if (reelsWithoutMedia.length > 0) {
+          console.warn('[reels] ريلز بلا رابط وسائط (ستظهر شاشة سوداء)', reelsWithoutMedia.map(post => ({
+            id: post.id,
+            media_asset_id: post.media_asset_id ?? null,
+          })));
+        }
         let formatted: Post[] = [];
         if (rawPosts.length > 0) {
           const uIds = [...new Set(rawPosts.map(post => post.user_id))];
@@ -454,11 +479,17 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         setPosts(await hydratePostInteractions(reelPosts, currentUserId));
       }
     } catch (caughtError) {
+      console.error('[posts] فشل جلب المنشورات', { query, error: caughtError });
       if (!silent) {
         setPostsState([]);
+        const errorCode = isRecord(caughtError) && typeof caughtError.code === 'string' ? caughtError.code : '';
+        const errorMessage = isRecord(caughtError) && typeof caughtError.message === 'string' ? caughtError.message : '';
+        const errorDetail = errorCode || errorMessage
+          ? ` (${[errorCode, errorMessage].filter(Boolean).join(': ')})`
+          : '';
         setError(isPostsPermissionError(caughtError)
           ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
-          : 'تعذر تحميل المنشورات. أعد المحاولة بعد لحظات.');
+          : `تعذر تحميل ${query === 'reel' ? 'الريلز' : 'المنشورات'}. أعد المحاولة بعد لحظات.${errorDetail}`);
       }
       handleAppError(
         'فشل تحميل المنشورات',
@@ -475,7 +506,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     // وإلا جلب عادي أول مرة يظهر فيه السكلتون.
     void refresh(hadCachedPostsRef.current);
     let repostRefreshTimer: number | null = null;
-    const onPostCreated = () => void refresh();
+    // تحديث فوري بعد نجاح النشر: جلب صامت يحدّث القائمة والذاكرة المؤقتة
+    // دون وميض Skeleton، فيظهر الريل الجديد في تبويب الريلز مباشرة.
+    const onPostCreated = () => void refresh(true);
     const onRepostChanged = () => {
       if (repostRefreshTimer !== null) window.clearTimeout(repostRefreshTimer);
       repostRefreshTimer = window.setTimeout(() => {

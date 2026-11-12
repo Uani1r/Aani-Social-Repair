@@ -79,36 +79,52 @@ export default function ProfileReelsPlayer({ reels, profileUserId, initialReelId
     let active = true;
     void (async () => {
       try {
-        const buildProfileReelQuery = (includeSoundTrim: boolean, includeMediaAssetId: boolean) => {
+        const buildProfileReelQuery = (includeSoundTrim: boolean, includeMediaAssetId: boolean, useDestinationFilter: boolean) => {
           const mediaAssetColumn = includeMediaAssetId ? 'media_asset_id, ' : '';
           const soundTrimColumns = includeSoundTrim ? 'sound_trim_start, sound_trim_end, ' : '';
           const columns = `id, user_id, content, post_metadata, media_url, media_urls, ${mediaAssetColumn}type, destination, visibility, created_at, likes_count, comments_count, reposts_count, shares_count, hide_likes, hide_comments, comment_privacy, audio_url, audio_title, sound_id, ${soundTrimColumns}trim_start, trim_end`;
-          return supabase
+          const request = supabase
             .from('posts')
             .select(columns)
-            .eq('user_id', profileUserId)
-            .or('type.eq.reel,and(type.eq.photo,destination.eq.reels)')
+            .eq('user_id', profileUserId);
+          // بلا مرشح الوجهة إن لم يُطبَّق عمود destination بعد؛ الفلترة تُعاد محلياً
+          const filtered = useDestinationFilter
+            ? request.or('type.eq.reel,and(type.eq.photo,destination.eq.reels)')
+            : request;
+          return filtered
             .order('created_at', { ascending: false })
             .limit(60);
         };
         let includeSoundTrim = true;
         let includeMediaAssetId = true;
-        let result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId);
-        for (let attempt = 0; attempt < 2 && result.error; attempt += 1) {
+        let useDestinationFilter = true;
+        let result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId, useDestinationFilter);
+        for (let attempt = 0; attempt < 3 && result.error; attempt += 1) {
           if (includeSoundTrim && (result.error.code === '42703' || result.error.code === 'PGRST204') && /sound_trim/i.test(result.error.message || '')) {
             includeSoundTrim = false;
           } else if (includeMediaAssetId && (result.error.code === '42703' || result.error.code === 'PGRST204') && /media_asset_id/i.test(result.error.message || '')) {
             includeMediaAssetId = false;
+          } else if (useDestinationFilter && /destination/i.test(result.error.message || '')) {
+            useDestinationFilter = false;
           } else {
             break;
           }
-          result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId);
+          result = await buildProfileReelQuery(includeSoundTrim, includeMediaAssetId, useDestinationFilter);
         }
         const { data: rows, error } = result;
+        if (error) {
+          console.error('[reels] فشل جلب ريلز الملف الشخصي', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+          });
+        }
         const safeRows = (!error && Array.isArray(rows) ? rows : []) as unknown[];
         const reelRows = safeRows.filter(row => {
           const record = row as Record<string, unknown>;
-          return record.type === 'reel' || (record.type === 'photo' && record.destination === 'reels');
+          // أي فيديو (type = reel) أو أي منشور وُجّه إلى الريلز
+          return record.type === 'reel' || record.destination === 'reels';
         });
         const authorIds = Array.from(new Set(reelRows
           .map(row => (row as Record<string, unknown>).user_id)

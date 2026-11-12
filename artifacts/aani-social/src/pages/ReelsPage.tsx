@@ -30,6 +30,11 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
 
   useEffect(() => subscribePendingPosts(() => setPendingPosts(getPendingPosts())), []);
 
+  // أي خطأ في جلب الريلز يظهر على الشاشة (error) وفي الكونسول مع تفاصيله
+  useEffect(() => {
+    if (error) console.error('[reels] تعذر تحميل الريلز:', error);
+  }, [error]);
+
   useEffect(() => {
     if (loading || new URLSearchParams(location.split('?')[1] || '').has('openReel')) return undefined;
     const container = scrollRef.current;

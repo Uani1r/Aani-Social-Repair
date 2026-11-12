@@ -1756,6 +1756,12 @@ export default function Shell({
           media_urls: uploadedUrls.length > 0 ? uploadedUrls : null,
           ...(mediaAssetId ? { media_asset_id: mediaAssetId } : {}),
           type,
+          // الوجهة تُحفظ صراحةً في كل محاولة حفظ: كانت تُضاف في المحاولة الأولى
+          // فقط، فكانت أي إعادة محاولة (عمود ناقص) تحفظ الريل بوجهة feed
+          // الافتراضية فلا يظهر في تبويب الريلز أبداً.
+          // (visibility لم تُضف هنا عن قصد: قيمتها الافتراضية public، ومنح
+          // الإدراج في الترحيلات عمودي فقط، فإضافتها قد تُرفض بصلاحيات.)
+          destination: postDestination,
           created_at: createdAt,
           // العمود الصريح لمصفوفة معرفات المشار إليهم (ترحيل 20270102000000)
           ...(taggedUserIds.length > 0 ? { tagged_user_ids: taggedUserIds } : {}),
@@ -1774,83 +1780,43 @@ export default function Shell({
             : {}),
           ...trimColumns,
         };
-        let postError = (await supabase.from('posts').upsert({
-          ...postPayload,
-          destination: postDestination,
-        }, { onConflict: 'id' })).error;
+        // مصدر واحد للحقيقة: نفس الحمولة (بما فيها destination/type) تُستخدم في
+        // كل محاولة حفظ، فلا يُحفظ ريل بوجهة feed عند إعادة المحاولة.
+        let postPayloadForSave: Record<string, unknown> = { ...postPayload };
+        const optionalPostColumns = new Set([
+          'destination', 'media_asset_id', 'tagged_user_ids',
+          'audio_url', 'audio_title', 'sound_id',
+          'sound_trim_start', 'sound_trim_end', 'trim_start', 'trim_end',
+        ]);
+        const optionalPostColumnList = [...optionalPostColumns].sort((first, second) => second.length - first.length);
+        const missingOptionalColumn = (error: unknown): string | null => {
+          if (typeof error !== 'object' || error === null) return null;
+          const { code, message } = error as { code?: unknown; message?: unknown };
+          if (code !== '42703' && code !== 'PGRST204') return null;
+          const text = typeof message === 'string' ? message : '';
+          // يغطي رسالة Postgres (column "x" ... does not exist) ورسالة PostgREST
+          // (Could not find the 'x' column ...). الأطول أولاً حتى لا يُقرأ
+          // sound_trim_start على أنه trim_start.
+          return optionalPostColumnList.find(column => text.includes(column)) || null;
+        };
+        const upsertPost = (payload: Record<string, unknown>) => supabase
+          .from('posts')
+          .upsert(payload, { onConflict: 'id' });
 
-        if (
-          postError
-          && postDestination === 'feed'
-          && (postError.code === '42703' || postError.code === 'PGRST204')
-          && postError.message.includes('destination')
-        ) {
-          postError = (await supabase.from('posts').upsert(postPayload, { onConflict: 'id' })).error;
+        let postError = (await upsertPost(postPayloadForSave)).error;
+        // قاعدة بيانات ناقصة أعمدة (ترحيلات غير مطبقة) → أعد المحاولة بلا العمود
+        // الناقص فقط مع الإبقاء على destination/type/الوسائط وبقية البيانات.
+        for (let attempt = 0; attempt < 6 && postError; attempt += 1) {
+          const missingColumn = missingOptionalColumn(postError);
+          if (!missingColumn || !(missingColumn in postPayloadForSave)) break;
+          const nextPayload = { ...postPayloadForSave };
+          delete nextPayload[missingColumn];
+          postPayloadForSave = nextPayload;
+          postError = (await upsertPost(postPayloadForSave)).error;
         }
 
-        // قاعدة بيانات لم يُطبَّق عليها عمود tagged_user_ids بعد → أعد المحاولة بدونه حتى لا يتعطل النشر
-        if (
-          postError
-          && 'tagged_user_ids' in postPayload
-          && (postError.code === '42703' || postError.code === 'PGRST204')
-          && postError.message.includes('tagged_user_ids')
-        ) {
-          const payloadWithoutColumn = { ...postPayload } as Record<string, unknown>;
-          delete payloadWithoutColumn.tagged_user_ids;
-          postError = (await supabase.from('posts').upsert(payloadWithoutColumn, { onConflict: 'id' })).error;
-        }
-
-        // قاعدة بيانات لم يُطبَّق عليها عمودا الصوت بعد → أعد المحاولة بدونهما حتى لا يتعطل النشر
-        if (
-          postError
-          && borrowedAudioUrl
-          && (postError.code === '42703' || postError.code === 'PGRST204')
-          && postError.message.includes('audio_url')
-        ) {
-          const payloadWithoutAudio = { ...postPayload } as Record<string, unknown>;
-          delete payloadWithoutAudio.audio_url;
-          delete payloadWithoutAudio.audio_title;
-          postError = (await supabase.from('posts').upsert(payloadWithoutAudio, { onConflict: 'id' })).error;
-        }
-
-        // قاعدة بيانات لم يُطبَّق عليها جدول الأصوات/عمود sound_id بعد → أعد المحاولة بدونه
-        if (
-          postError
-          && effectiveSoundId
-          && (postError.code === '42703' || postError.code === 'PGRST204')
-          && postError.message.includes('sound_id')
-        ) {
-          const payloadWithoutSound = { ...postPayload } as Record<string, unknown>;
-          delete payloadWithoutSound.sound_id;
-          postError = (await supabase.from('posts').upsert(payloadWithoutSound, { onConflict: 'id' })).error;
-        }
-
-        // قاعدة بيانات لم يُطبَّق عليها عمودا اقتصاص الصوت بعد → أعد المحاولة بدونهما
-        if (
-          postError
-          && pendingSound?.soundTrim
-          && (postError.code === '42703' || postError.code === 'PGRST204')
-          && postError.message.includes('sound_trim')
-        ) {
-          const payloadWithoutSoundTrim = { ...postPayload } as Record<string, unknown>;
-          delete payloadWithoutSoundTrim.sound_trim_start;
-          delete payloadWithoutSoundTrim.sound_trim_end;
-          postError = (await supabase.from('posts').upsert(payloadWithoutSoundTrim, { onConflict: 'id' })).error;
-        }
-
-        // قاعدة بيانات لم يُطبَّق عليها عمودا القص بعد → أعد المحاولة بدونهما
-        // (القص يبقى محفوظاً داخل ترميز #t= في عنوان الوسائط)
-        if (
-          postError
-          && 'trim_start' in postPayload
-          && (postError.code === '42703' || postError.code === 'PGRST204')
-          && postError.message.includes('trim_start')
-        ) {
-          const payloadWithoutTrim = { ...postPayload } as Record<string, unknown>;
-          delete payloadWithoutTrim.trim_start;
-          delete payloadWithoutTrim.trim_end;
-          postError = (await supabase.from('posts').upsert(payloadWithoutTrim, { onConflict: 'id' })).error;
-        }
+        // (أُلغيت محاولات tagged_user_ids/audio/sound_id/sound_trim/trim المنفصلة:
+        // الحلقة أعلاه تتعامل مع أي عمود ناقص وتحافظ على destination في كل محاولة)
 
         // قاعدة بيانات لا تقبل وسام الغلاف بعد → أعد المحاولة بدونه حتى لا يتعطل النشر
         if (
@@ -1862,13 +1828,13 @@ export default function Shell({
             || ((postError.code === '42703' || postError.code === 'PGRST204') && postError.message.includes('post_metadata'))
           )
         ) {
-          postError = (await supabase.from('posts').upsert({
-            ...postPayload,
-            // أعد المحاولة بلا وسام الغلاف مع الإبقاء على وسوم الإشارة وtagged_users
-            post_metadata: [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])],
-          }, { onConflict: 'id' })).error;
+          // أعد المحاولة بلا وسام الغلاف مع الإبقاء على وسوم الإشارة وtagged_users
+          const metadataWithoutCover = [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])];
+          postError = (await upsertPost({
+            ...postPayloadForSave,
+            post_metadata: metadataWithoutCover,
+          })).error;
           if (!postError) {
-            const metadataWithoutCover = [...metadata, ...(taggedUsersTag ? [taggedUsersTag] : [])];
             updatePendingPost(postId, { post: { ...publishedPost, post_metadata: metadataWithoutCover }, error: null });
           }
         }
@@ -1889,6 +1855,45 @@ export default function Shell({
           }
           markAppErrorReported(publishError);
           throw publishError;
+        }
+
+        // إن اضطررنا لحذف عمود من الحمولة لأن قاعدة البيانات لا تملكه، أبلغ المستخدم
+        // بالترحيل المطلوب بدل أن يختفي الريل بصمت.
+        if (!('destination' in postPayloadForSave) && postDestination === 'reels') {
+          toast.error('حُفظ المنشور بلا عمود الوجهة: طبّق الترحيل 20261126000000_post_destinations.sql على Supabase ليظهر الريل في تبويب الريلز.');
+        }
+
+        // تحقق تشخيصي بعد الحفظ: هل الصف الذي كتبناه هو نفسه الذي يبحث عنه
+        // تبويب الريلز (type/destination/media_url)؟ أي اختلاف يُطبع في الكونسول
+        // ويظهر على الشاشة بدل أن يختفي الريل بصمت.
+        try {
+          const { data: savedRow, error: verifyError } = await supabase
+            .from('posts')
+            .select('id, type, destination, media_url')
+            .eq('id', postId)
+            .maybeSingle();
+          if (verifyError) {
+            console.error('[reels] تعذر التحقق من صف المنشور بعد النشر', {
+              code: verifyError.code,
+              message: verifyError.message,
+              details: verifyError.details,
+              hint: verifyError.hint,
+            });
+          } else if (!savedRow) {
+            console.error('[reels] المنشور محفوظ لكن قراءته من posts أعادت لا شيء (RLS/SELECT)', { postId });
+            toast.error('تم حفظ المنشور لكن قاعدة البيانات لا تسمح بقراءته؛ راجع سياسة SELECT في جدول posts.');
+          } else {
+            const saved = savedRow as { type?: unknown; destination?: unknown; media_url?: unknown };
+            console.info('[reels] صف المنشور المحفوظ', savedRow);
+            if (postDestination === 'reels' && saved.destination !== 'reels') {
+              console.warn('[reels] destination المحفوظ لا يطابق المطلوب', { expected: 'reels', saved: saved.destination });
+            }
+            if (!saved.media_url) {
+              console.warn('[reels] media_url فارغ في الصف المحفوظ — سيعرض الريل شاشة سوداء', { postId });
+            }
+          }
+        } catch (verifyFailure) {
+          console.warn('[reels] فشل التحقق من صف المنشور بعد النشر', verifyFailure);
         }
 
         let completedPost = publishedPost;
