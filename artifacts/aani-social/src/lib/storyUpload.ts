@@ -87,6 +87,25 @@ function detectPreset(file: File): MediaPreset | null {
   return null;
 }
 
+/** امتداد صحيح حسب نوع المحتوى — ImageKit يرفض أسماء بلا امتداد */
+function ensureUploadName(file: File, fallbackBase: string): string {
+  if (file.name && /\.[a-zA-Z0-9]+$/.test(file.name)) return file.name;
+  const extensionByType: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/webp': '.webp',
+    'image/png': '.png',
+    'image/gif': '.gif',
+    'video/mp4': '.mp4',
+    'audio/mp4': '.m4a',
+    'audio/webm': '.webm',
+    'audio/mpeg': '.mp3',
+    'audio/wav': '.wav',
+    'audio/ogg': '.ogg',
+  };
+  const extension = extensionByType[file.type] ?? '.bin';
+  return `${fallbackBase || 'media'}${extension}`;
+}
+
 async function uploadMediaUnsafe({
   file,
   path,
@@ -159,19 +178,36 @@ async function uploadMediaUnsafe({
   const auth = await fetchImageKitAuth(signal);
 
   const normalized = normalizedPath.replace(/^\/+/, '');
-  const dirIndex = normalized.lastIndexOf('/');
-  const fileName = dirIndex >= 0 ? normalized.slice(dirIndex + 1) : normalized;
-  const folder = `/aani/${dirIndex >= 0 ? normalized.slice(0, dirIndex) : 'misc'}`;
+  // المسار يُنظَّف دائماً: رموز غير مقبولة لدى ImageKit تُستبدل بشرطة، وتُدمج
+  // الشرطات المائلة المتتالية، ولا أقسام فارغة — مجلد نظيف خالٍ من العيوب
+  const cleanPath = normalized
+    .replace(/[^a-zA-Z0-9._\-\/]/g, '-')
+    .replace(/\/+/g, '/')
+    .replace(/^\/+|\/+$/g, '');
+  const dirIndex = cleanPath.lastIndexOf('/');
+  const fileName = dirIndex >= 0 ? cleanPath.slice(dirIndex + 1) : cleanPath;
+  const folder = `/aani/${dirIndex >= 0 ? cleanPath.slice(0, dirIndex) : 'misc'}`;
+
+  // اسم رفع آمن بامتداد صحيح — ImageKit يعتمد الامتداد لتحديد نوع المحتوى
+  // ويرفض أسماء بلا امتداد؛ الضواغط قد تعيد Blob بلا اسم فيصار للنوع
+  const uploadName = ensureUploadName(uploadFile, fileName || 'media');
 
   const url = await new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
-    form.append('file', uploadFile);
-    form.append('fileName', fileName);
+    // الاسم الآمن يُمرَّر صراحةً كوسيط ثالث — حتى لو عاد الضاغط كائن Blob
+    // بلا اسم تبقى الامتداد صحيحاً (.jpg/.webp/.mp4/.m4a)
+    form.append('file', uploadFile, uploadName);
+    form.append('fileName', uploadName);
     form.append('folder', folder);
     form.append('useUniqueFileName', 'true');
+    if (!auth.publicKey) {
+      reject(new Error('مفتاح ImageKit العام مفقود من إعدادات الخادم (IMAGEKIT_PUBLIC_KEY).'));
+      return;
+    }
     form.append('publicKey', auth.publicKey);
     form.append('token', auth.token);
+    // expire بالثواني (unix) كما يتطلب ImageKit — cachedAuth يبقيه تحت ساعة
     form.append('expire', String(auth.expire));
     form.append('signature', auth.signature);
 
@@ -204,7 +240,19 @@ async function uploadMediaUnsafe({
           reject(new Error('تعذر قراءة رابط الملف بعد الرفع.'));
         }
       } else {
-        reject(new Error(`فشل رفع الوسائط (HTTP ${xhr.status}).`));
+        // رسالة ImageKit الحقيقية تُستخرج من استجابة الخطأ بدل إخفائها
+        let detail = '';
+        try {
+          const parsed = JSON.parse(xhr.responseText) as { message?: unknown; help?: unknown };
+          if (typeof parsed.message === 'string' && parsed.message) {
+            detail = parsed.message;
+          } else if (typeof parsed.help === 'string' && parsed.help) {
+            detail = parsed.help;
+          }
+        } catch {
+          if (xhr.responseText) detail = xhr.responseText.slice(0, 200);
+        }
+        reject(new Error(`فشل رفع الوسائط (HTTP ${xhr.status})${detail ? `: ${detail}` : '.'}`));
       }
     };
     xhr.onerror = () => {

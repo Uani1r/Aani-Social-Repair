@@ -61,10 +61,14 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
       if (!userId) return res.status(401).json({ success: false, error: "The session is invalid or expired." });
 
       const token = crypto.randomUUID();
+      // ImageKit يتوقع expire بالثواني (unix time) وبحد أقصى ساعة واحدة
       const expire = Math.floor(Date.now() / 1000) + 60 * 30;
+      // الخوارزمية الموثقة في ImageKit SDK الرسمي: SHA1 عادي لدمج
+      // privateKey + token + expire (وليس HMAC بمفتاح خاص — ما كان يجعل
+      // التوقيع الناتج مختلفاً تماماً ويرفض خادم ImageKit كل رفعة 40x)
       const signature = crypto
-        .createHmac("sha1", imagekit.privateKey)
-        .update(`${token}${expire}`)
+        .createHash("sha1")
+        .update(`${imagekit.privateKey}${token}${expire}`)
         .digest("hex");
 
       return res.status(200).json({
