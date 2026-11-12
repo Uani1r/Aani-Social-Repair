@@ -55,7 +55,7 @@ end $$;
 grant execute on function public.aani_cleanup_expired_media_records() to authenticated;
 
 -- جدولة يومية عبر pg_cron إن كان متاحاً في هذه البيئة — وإلا يغطي الفحص
-// الدوري من العميل (مرة كل 24 ساعة لكل مستخدم) نفس العمل دون تعطل الترحيل.
+-- الدوري من العميل (مرة كل 24 ساعة لكل مستخدم) نفس العمل دون تعطل الترحيل.
 do $cron$
 begin
   if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
