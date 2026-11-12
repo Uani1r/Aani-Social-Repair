@@ -1,6 +1,10 @@
-// رفع الوسائط مع نسبة تقدّم حقيقية عبر XHR وخطة بديلة عبر عميل Supabase.
+// رفع الوسائط مباشرة إلى ImageKit.io مع نسبة تقدّم حقيقية عبر XHR.
+// التوقيع الآمن (token/expire/signature) يأتي من الخادم الخلفي:
+// GET /api/media/imagekit-auth (يستخدم IMAGEKIT_PRIVATE_KEY ولا يكشفه).
+// الرابط العام الناتج يُسجَّل في supabase.ts فيُرجعه getPublicUrl
+// لكل مكان يحوّل مسار الرفع إلى رابط عرض.
 
-import { supabase, storageBucket, supabasePublicKey, supabaseUrl } from '@/lib/supabase';
+import { supabase, registerUploadedMediaUrl } from '@/lib/supabase';
 import { safeExecute } from '@/lib/appErrors';
 import { readLocalUserPreferences, type MediaQualityPreference } from '@/lib/userPreferences';
 
@@ -9,6 +13,44 @@ interface UploadOptions {
   path: string;
   onProgress?: (percent: number) => void;
   quality?: MediaQualityPreference;
+}
+
+type ImageKitAuthParams = {
+  urlEndpoint: string;
+  publicKey: string;
+  token: string;
+  expire: number;
+  signature: string;
+};
+
+let cachedAuth: { params: ImageKitAuthParams; expiresAt: number } | null = null;
+
+async function fetchImageKitAuth(): Promise<ImageKitAuthParams> {
+  if (cachedAuth && Date.now() < cachedAuth.expiresAt) return cachedAuth.params;
+
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+  if (!accessToken) throw new Error('يجب تسجيل الدخول قبل رفع الوسائط.');
+
+  const response = await fetch('/api/media/imagekit-auth', {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  const result = await response.json().catch(() => null) as
+    | (ImageKitAuthParams & { success?: unknown; error?: unknown })
+    | null;
+  if (!response.ok || !result || result.success !== true) {
+    throw new Error(typeof result?.error === 'string' ? result.error : 'تعذر تجهيز توقيع رفع الوسائط.');
+  }
+
+  const params: ImageKitAuthParams = {
+    urlEndpoint: result.urlEndpoint,
+    publicKey: result.publicKey,
+    token: result.token,
+    expire: result.expire,
+    signature: result.signature,
+  };
+  cachedAuth = { params, expiresAt: Date.now() + 25 * 60 * 1000 };
+  return params;
 }
 
 async function prepareMediaFile(file: File, quality: MediaQualityPreference): Promise<File> {
@@ -46,71 +88,64 @@ async function prepareMediaFile(file: File, quality: MediaQualityPreference): Pr
   }
 }
 
-async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOptions): Promise<void> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  const baseUrl = supabaseUrl;
-  const anonKey = supabasePublicKey;
-  const resolvedQuality = quality || readLocalUserPreferences(data.session?.user?.id || '').mediaQuality;
+async function uploadMediaUnsafe({ file, path, onProgress, quality }: UploadOptions): Promise<string> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const resolvedQuality = quality || readLocalUserPreferences(sessionData.session?.user?.id || '').mediaQuality;
   const uploadFile = await prepareMediaFile(file, resolvedQuality);
+  const auth = await fetchImageKitAuth();
 
-  if (!token || !baseUrl) {
-    const { error } = await supabase.storage
-      .from(storageBucket)
-      .upload(path, uploadFile, { contentType: uploadFile.type, upsert: true });
-    if (error) throw error;
-    onProgress?.(100);
-    return;
-  }
+  const normalizedPath = path.replace(/^\/+/, '');
+  const dirIndex = normalizedPath.lastIndexOf('/');
+  const fileName = dirIndex >= 0 ? normalizedPath.slice(dirIndex + 1) : normalizedPath;
+  const folder = `/aani/${dirIndex >= 0 ? normalizedPath.slice(0, dirIndex) : 'misc'}`;
 
-  await new Promise<void>((resolve, reject) => {
+  const url = await new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    let fallbackStarted = false;
-    const encodedPath = path.split('/').map(segment => encodeURIComponent(segment)).join('/');
+    const form = new FormData();
+    form.append('file', uploadFile);
+    form.append('fileName', fileName);
+    form.append('folder', folder);
+    form.append('useUniqueFileName', 'true');
+    form.append('publicKey', auth.publicKey);
+    form.append('token', auth.token);
+    form.append('expire', String(auth.expire));
+    form.append('signature', auth.signature);
 
-    const fallbackUpload = async () => {
-      if (fallbackStarted) return;
-      fallbackStarted = true;
-      try {
-        const { error } = await supabase.storage
-          .from(storageBucket)
-          .upload(path, uploadFile, { contentType: uploadFile.type, upsert: true });
-        if (error) throw error;
-        onProgress?.(100);
-        resolve();
-      } catch (error) {
-        reject(error || new Error('تعذر رفع ملف الوسائط إلى التخزين'));
-      }
-    };
-
-    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/storage/v1/object/${encodeURIComponent(storageBucket)}/${encodedPath}`);
-    xhr.setRequestHeader('authorization', `Bearer ${token}`);
-    if (anonKey) xhr.setRequestHeader('apikey', anonKey);
-    xhr.setRequestHeader('x-upsert', 'true');
-    xhr.setRequestHeader('content-type', uploadFile.type || 'application/octet-stream');
-
+    xhr.open('POST', 'https://upload.imagekit.io/api/v1/files/upload');
     xhr.upload.onprogress = event => {
       if (event.lengthComputable && event.total > 0) {
         onProgress?.(Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))));
       }
     };
-
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.(100);
-        resolve();
+        try {
+          const parsed = JSON.parse(xhr.responseText) as { url?: unknown };
+          if (typeof parsed.url === 'string' && parsed.url) {
+            onProgress?.(100);
+            resolve(parsed.url);
+          } else {
+            reject(new Error('نجح الرفع لكن لم يُرجَع رابط الملف.'));
+          }
+        } catch {
+          reject(new Error('تعذر قراءة رابط الملف بعد الرفع.'));
+        }
       } else {
-        void fallbackUpload();
+        reject(new Error(`فشل رفع الوسائط (HTTP ${xhr.status}).`));
       }
     };
-
-    xhr.onerror = () => void fallbackUpload();
-    xhr.onabort = () => reject(new Error('أُلغيت عملية رفع الوسائط'));
-    xhr.send(uploadFile);
+    xhr.onerror = () => reject(new Error('تعذر الاتصال بخدمة رفع الوسائط.'));
+    xhr.onabort = () => reject(new Error('أُلغيت عملية رفع الوسائط.'));
+    xhr.send(form);
   });
+
+  // سجّل الرابط النهائي مقابل مسار الرفع: أي getPublicUrl(path) لاحق
+  // في التطبيق يعيد رابط ImageKit الحقيقي بدل رابط Supabase غير موجود.
+  registerUploadedMediaUrl(path, url);
+  return url;
 }
 
-export function uploadMedia(options: UploadOptions): Promise<void> {
+export function uploadMedia(options: UploadOptions): Promise<string> {
   return safeExecute(
     'فشل رفع الوسائط',
     () => uploadMediaUnsafe(options),

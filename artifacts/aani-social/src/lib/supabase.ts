@@ -75,3 +75,42 @@ export const supabase: SupabaseClient = createClient(
 );
 
 export { supabaseUrl, supabasePublicKey };
+
+// ===== ImageKit: سجل روابط الملفات المرفوعة مباشرة =====
+// عند الرفع المباشر إلى ImageKit (بدل Supabase Storage) يُسجَّل هنا الرابط
+// العام الناتج مقابل مسار الرفع، فيعيد getPublicUrl الرابط الحقيقي للملف
+// المرفوع حديثاً بدل تكوين رابط Supabase غير موجود. الصفوف القديمة في
+// قاعدة البيانات (مسارات Supabase) تُحلَّ كما كانت عبر التخزين.
+const uploadedMediaUrlRegistry = new Map<string, string>();
+
+function normalizeMediaPathKey(path: string): string {
+  return (path || '').split('#', 1)[0].replace(/^\/+/, '');
+}
+
+export function registerUploadedMediaUrl(path: string, url: string): void {
+  const key = normalizeMediaPathKey(path);
+  if (!key || !url) return;
+  uploadedMediaUrlRegistry.set(key, url);
+}
+
+type StorageBucketApiLike = ReturnType<typeof supabase.storage.from>;
+
+const originalStorageFrom = supabase.storage.from.bind(supabase.storage);
+
+(supabase.storage as unknown as { from: (bucket: string) => StorageBucketApiLike }).from = (
+  bucket: string,
+): StorageBucketApiLike => {
+  const bucketApi = originalStorageFrom(bucket);
+  const originalGetPublicUrl = bucketApi.getPublicUrl.bind(bucketApi);
+  (bucketApi as unknown as { getPublicUrl: unknown }).getPublicUrl = (
+    path: string,
+    options?: Parameters<typeof originalGetPublicUrl>[1],
+  ): ReturnType<typeof originalGetPublicUrl> => {
+    const registered = uploadedMediaUrlRegistry.get(normalizeMediaPathKey(path));
+    if (registered) {
+      return { data: { publicUrl: registered }, error: null } as ReturnType<typeof originalGetPublicUrl>;
+    }
+    return originalGetPublicUrl(path, options);
+  };
+  return bucketApi;
+};

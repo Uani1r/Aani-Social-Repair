@@ -21,7 +21,7 @@ import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
-import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
 import { createVideoPoster } from '@/lib/videoPoster';
@@ -1602,7 +1602,9 @@ export default function Shell({
 
     let attemptInProgress = false;
     let mediaAssetRecordCreated = false;
-    let mediaAssetPaths: { originalPath: string; videoUrl: string; posterPath: string | null; posterUrl: string | null } | null = null;
+    // ImageKit: المسار معرّف للسجل فقط؛ الرابط النهائي يعود من نتيجة الرفع
+    let mediaAssetPaths: { originalPath: string; posterPath: string | null } | null = null;
+    let posterUploadUrl: string | null = null;
     const attemptPublish = async () => {
       if (attemptInProgress) return;
       attemptInProgress = true;
@@ -1626,39 +1628,10 @@ export default function Shell({
           const safeName = sourceFile.name.replace(/[^a-zA-Z0-9._-]/g, '-') || 'video';
           const originalPath = `${authenticatedUserId}/${postId}/0-${safeName}`;
           const posterPath = effectiveCoverFile ? `${authenticatedUserId}/${postId}/poster-${mediaAssetId}` : null;
-          const videoUrl = supabase.storage.from(storageBucket).getPublicUrl(originalPath).data.publicUrl;
-          const posterUrl = posterPath
-            ? supabase.storage.from(storageBucket).getPublicUrl(posterPath).data.publicUrl
-            : null;
-          mediaAssetPaths = { originalPath, videoUrl, posterPath, posterUrl };
+          mediaAssetPaths = { originalPath, posterPath };
         }
 
         const assetPaths = mediaAssetPaths;
-        if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
-          const { data: existingAsset, error: existingAssetError } = await supabase
-            .from('media_assets')
-            .select('id')
-            .eq('id', mediaAssetId)
-            .eq('user_id', authenticatedUserId)
-            .maybeSingle();
-          if (existingAssetError) throw new Error(`تعذر التحقق من سجل الوسائط: ${existingAssetError.message}`);
-          if (!existingAsset) {
-            // سياسة الجدول الحالية تسمح للعميل بالإدراج والقراءة فقط؛ تبدأ الحالة uploading.
-            const { error: mediaAssetError } = await supabase.from('media_assets').insert({
-              id: mediaAssetId,
-              user_id: authenticatedUserId,
-              original_path: assetPaths.originalPath,
-              storage_path: assetPaths.originalPath,
-              processed_path: null,
-              video_url: assetPaths.videoUrl,
-              poster_url: assetPaths.posterUrl,
-              processing_status: 'uploading',
-              status: 'uploading',
-            });
-            if (mediaAssetError) throw new Error(`تعذر إنشاء سجل الوسائط: ${mediaAssetError.message}`);
-          }
-          mediaAssetRecordCreated = true;
-        }
 
         const uploadJobs: { file: File; path: string; kind: 'media' | 'poster'; mediaIndex?: number }[] = files.map((file, index) => {
           const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-') || `media-${index}`;
@@ -1672,7 +1645,8 @@ export default function Shell({
         const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
 
         await Promise.all(uploadJobs.map(async (job, jobIndex) => {
-          await uploadMedia({
+          // الرفع مباشرة إلى ImageKit — يعيد الرابط العام النهائي للملف
+          const publicUrl = await uploadMedia({
             file: job.file,
             path: job.path,
             onProgress: percent => {
@@ -1685,8 +1659,8 @@ export default function Shell({
               });
             },
           });
-          const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(job.path).data.publicUrl;
           if (job.kind === 'poster') {
+            posterUploadUrl = publicUrl;
             coverTag = { kind: 'cover', label: 'غلاف', href: publicUrl };
           } else if (job.mediaIndex !== undefined) {
             const file = files[job.mediaIndex];
@@ -1695,6 +1669,26 @@ export default function Shell({
               : appendImageMediaAspect(publicUrl, file.name);
           }
         }));
+
+        // سجل أصول الوسائط: يُنشأ بعد الرفع لأن الرابط النهائي (ImageKit)
+        // لا يكون معروفاً قبله. فشله لا يعطل النشر — المنشور يحمل الرابط نفسه.
+        if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
+          const { error: mediaAssetError } = await supabase.from('media_assets').insert({
+            id: mediaAssetId,
+            user_id: authenticatedUserId,
+            original_path: assetPaths.originalPath,
+            storage_path: assetPaths.originalPath,
+            processed_path: null,
+            video_url: (uploadedUrls[0] || '').replace(/#.*$/, ''),
+            poster_url: posterUploadUrl,
+            processing_status: 'ready',
+            status: 'ready',
+          });
+          if (mediaAssetError) {
+            console.warn('[media] تعذر إنشاء سجل media_assets — المنشور يعمل بدونه', mediaAssetError);
+          }
+          mediaAssetRecordCreated = true;
+        }
 
         if (mediaType === 'video') {
           updatePendingPost(postId, { stage: 'publishing', progress: 95, error: null });
@@ -1897,7 +1891,11 @@ export default function Shell({
         }
 
         let completedPost = publishedPost;
-        if (mediaType === 'video' && mediaAssetId) {
+        // ImageKit يدير التشغيل والتحسين بنفسه: المعالجة الخلفية (FFmpeg)
+        // مطلوبة فقط للروابط القديمة المستضافة على Supabase Storage.
+        const isSupabaseStorageMedia = typeof publishedPost.media_url === 'string'
+          && /\/storage\/v1\/object\//.test(publishedPost.media_url);
+        if (mediaType === 'video' && mediaAssetId && isSupabaseStorageMedia) {
           updatePendingPost(postId, { stage: 'processing', progress: 98, error: null });
           try {
             const { data: sessionData, error: sessionError } = await supabase.auth.getSession();

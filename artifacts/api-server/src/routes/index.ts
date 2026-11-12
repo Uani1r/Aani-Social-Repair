@@ -1,11 +1,13 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import imagekitAuthRouter from "./imagekitAuth";
 import mediaProcessingRouter from "./mediaProcessing";
 import pushNotificationsRouter from "./pushNotifications";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(imagekitAuthRouter);
 router.use(mediaProcessingRouter);
 router.use(pushNotificationsRouter);
 
