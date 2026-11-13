@@ -50,11 +50,10 @@ function refreshBodyScrollLock() {
 }
 
 function scheduleRefresh() {
-  if (refreshFrame !== null) return;
-  refreshFrame = window.requestAnimationFrame(() => {
-    refreshFrame = null;
-    refreshBodyScrollLock();
-  });
+  // متزامن مع دورة النافذة: MutationObserver يُستدعى بعد اكتمال تغييرات DOM
+  // مباشرة، فلا حاجة لتأجيله إلى requestAnimationFrame (كان يترك نافذة زمنية
+  // تبقى فيها الصفحة مقفلة بعد إغلاق النافذة على iOS Safari).
+  refreshBodyScrollLock();
 }
 
 export function useModalBodyScrollLock() {
@@ -79,15 +78,24 @@ export function useModalBodyScrollLock() {
       lockOwners = Math.max(0, lockOwners - 1);
       refreshBodyScrollLock();
 
-      // شبكة أمان نهائية عند مغادرة آخر مكوّن: يجب ألا يبقى body
-      // مقفلاً بأي شكل بعد إغلاق المشغلات/النوافذ، مهما كان مسار القفل.
+      // شبكة أمان عند مغادرة آخر مكوّن: لا نلمس body إلا إذا كنا فعلاً من
+      // يملك القفل (سجلنا الحالة) أو تركنا overflow=hidden. وإذا كانت هناك
+      // نافذة أخرى ما زالت مفتوحة نبقي القفل كما هو.
       if (lockOwners === 0 && !hasOpenDialog()) {
         const body = document.body;
-        body.style.overflow = 'unset';
-        body.style.position = 'static';
-        body.style.overscrollBehavior = '';
-        body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
-        savedBodyState = null;
+        const owned = savedBodyState !== null || body.style.overflow === 'hidden';
+        if (owned) {
+          const overflow = savedBodyState?.overflow ?? '';
+          const overscrollBehavior = savedBodyState?.overscrollBehavior ?? '';
+          const scrollTop = savedBodyState?.scrollTop ?? null;
+          savedBodyState = null;
+          body.style.overflow = overflow || 'unset';
+          body.style.overscrollBehavior = overscrollBehavior;
+          body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
+          if (scrollTop !== null && window.scrollY !== scrollTop) {
+            window.scrollTo({ left: window.scrollX, top: scrollTop, behavior: 'auto' });
+          }
+        }
       }
     };
   }, []);

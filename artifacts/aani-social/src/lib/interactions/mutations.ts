@@ -152,8 +152,8 @@ export async function toggleRepost(
 
   try {
     if (!supabaseConfigured) {
-      writeLocalFlag(userId, post.id, { reposted });
-      toast.warning("تم تسجيل إعادة النشر على هذا الجهاز فقط");
+      patchCache(post.id, userId, { reposted: before.reposted, reposts: before.reposts });
+      toast.error("تعذر إعادة النشر: لا يوجد اتصال بقاعدة البيانات");
       return;
     }
 
@@ -161,28 +161,48 @@ export async function toggleRepost(
       ? await supabase.from("reposts").insert({ post_id: post.id, user_id: userId })
       : await supabase.from("reposts").delete().eq("post_id", post.id).eq("user_id", userId);
 
-    if (error && error.code !== "23505") {
-      if (isMissingRelation(error)) {
-        writeLocalFlag(userId, post.id, { reposted });
-        toast.warning("تم تسجيل إعادة النشر على هذا الجهاز.");
+    if (error) {
+      console.error("[reposts] فشل حفظ إعادة النشر", {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        reposted,
+        postId: post.id,
+        userId,
+      });
+
+      // 23505: السجل موجود بالفعل (نقر مزدوج/سباق) — الحالة الصحيحة هي "معاد
+      // النشر". نثبّتها ونعيد مزامنة العداد من قاعدة البيانات بدل حالة وهمية.
+      if (error.code === "23505") {
+        patchCache(post.id, userId, { reposted: true });
+        writeLocalFlag(userId, post.id, { reposted: true });
+        stored = true;
+      } else {
+        // فشل حقيقي (جدول مفقود/صلاحيات/شبكة): لا يُعتبر التخزين المحلي نجاحاً.
+        patchCache(post.id, userId, { reposted: before.reposted, reposts: before.reposts });
+        const missing = isMissingRelation(error);
+        toast.error(
+          missing
+            ? "تعذر حفظ إعادة النشر: جدول reposts غير موجود في قاعدة البيانات. طبّق ترحيلات التفاعلات."
+            : error.code === "42501"
+              ? "تعذر حفظ إعادة النشر: لا تملك صلاحية كتابة سجل إعادة النشر."
+              : "تعذر حفظ إعادة النشر في قاعدة البيانات، حاول مرة أخرى",
+        );
         return;
       }
-
-      patchCache(post.id, userId, {
-        reposted: before.reposted,
-        reposts: before.reposts,
-      });
-      toast.error("تعذر إعادة النشر، حاول مرة أخرى");
-      return;
     }
 
-    stored = true;
-    writeLocalFlag(userId, post.id, { reposted });
+    if (!stored) {
+      stored = true;
+      writeLocalFlag(userId, post.id, { reposted });
+    }
     toast.success(reposted ? "تمت إعادة نشر المنشور" : "تمت إزالة إعادة النشر");
   } finally {
     markPending(post.id, userId, -1);
   }
 
+  // لا نُطلق الحدث ولا نزامن إلا بعد تأكيد نجاح العملية في قاعدة البيانات
   if (stored) {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("aani:repost-changed"));

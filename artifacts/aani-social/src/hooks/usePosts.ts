@@ -388,15 +388,26 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
 
         const rawPosts = await normalizePostRowsWithVisibility(postData);
 
-        // جلب المنشورات التي أعاد المستخدم نشرها لعرضها في ملفه الشخصي
-        const { data: repostData } = await supabase
+        // جلب المنشورات التي أعاد المستخدم نشرها لعرضها في ملفه الشخصي.
+        // error يُفحص صراحةً: فشل RLS أو غياب الجدول لا يُعرض كقائمة فارغة صامتة.
+        const { data: repostData, error: repostsError } = await supabase
           .from('reposts')
           .select('post_id, user_id, created_at')
           .eq('user_id', targetUserId)
           .order('created_at', { ascending: false })
           .limit(100);
 
-        const repostRows = normalizeRepostRows(repostData);
+        if (repostsError) {
+          console.error('[reposts] تعذر جلب إعادات نشر الملف الشخصي', {
+            code: repostsError.code,
+            message: repostsError.message,
+            details: repostsError.details,
+            hint: repostsError.hint,
+            targetUserId,
+          });
+        }
+
+        const repostRows = repostsError ? [] : normalizeRepostRows(repostData);
         const repostPostIds = repostRows
           .map(row => row.post_id)
           .filter(id => !rawPosts.some(post => post.id === id));
@@ -406,11 +417,27 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         repostRows.forEach(row => repostedAtById.set(row.post_id, row.created_at));
 
         if (repostPostIds.length > 0) {
-          let repostRowsResult = await fetchPostRows('profile', undefined, repostPostIds);
-          if (repostRowsResult.error && (/display_order/i.test(repostRowsResult.error.message) || isPostsPermissionError(repostRowsResult.error))) {
-            repostRowsResult = await fetchPostRows('profile', undefined, repostPostIds, false);
+          // fetchPostRows يحدّ كل طلب بـ40 صفاً (حد PostgREST) — نجلب دفعات ونضمّها
+          // حتى لا تختفي إعادات نشر بعد المنشور الأربعين.
+          const repostedRawCollected: Array<PostRow & { reposter_id: string }> = [];
+          for (let start = 0; start < repostPostIds.length; start += 40) {
+            const chunk = repostPostIds.slice(start, start + 40);
+            let repostRowsResult = await fetchPostRows('profile', undefined, chunk);
+            if (repostRowsResult.error && (/display_order/i.test(repostRowsResult.error.message) || isPostsPermissionError(repostRowsResult.error))) {
+              repostRowsResult = await fetchPostRows('profile', undefined, chunk, false);
+            }
+            if (repostRowsResult.error) {
+              console.error('[reposts] تعذر جلب المنشورات الأصلية لإعادات النشر', {
+                code: repostRowsResult.error.code,
+                message: repostRowsResult.error.message,
+                chunkSize: chunk.length,
+              });
+              continue;
+            }
+            const normalized = await normalizePostRowsWithVisibility(repostRowsResult.data);
+            repostedRawCollected.push(...normalized.map(post => ({ ...post, reposter_id: targetUserId })));
           }
-          repostedRaw = (await normalizePostRowsWithVisibility(repostRowsResult.data)).map(post => ({ ...post, reposter_id: targetUserId }));
+          repostedRaw = repostedRawCollected;
         }
 
         const allRaw: PostRow[] = [...rawPosts, ...repostedRaw];

@@ -13,6 +13,13 @@ import type { ShareSheetProps } from './types';
 import { useShareRecipients } from './useShareRecipients';
 
 /**
+ * الدفعات الجارية على مستوى الوحدة (لا المكوّن): تبقى فعّالة حتى لو أُغلقت
+ * النافذة وأُزيل المكوّن، فلا يتكرر إرسال نفس المنشور لنفس المستلمين عند
+ * إعادة الفتح أو النقر المزدوج.
+ */
+const inFlightSends = new Set<string>();
+
+/**
  * نافذة المشاركة السفلية بنمط TikTok:
  * تُعرض عبر React Portal مثبتة أسفل الشاشة (لا تتحرك مع سكرول المنشور)،
  * وتضم: إرسال خاص للمتابَعين/المتابِعين، إعادة نشر، ومشاركة خارجية حقيقية.
@@ -48,14 +55,10 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // قفل تمرير الصفحة خلف النافذة
-  useEffect(() => {
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.body.style.overflow = previous;
-    };
-  }, []);
+  // ملاحظة: لا يضبط هذا المكوّن document.body.style.overflow إطلاقاً.
+  // القفل المركزي (useModalBodyScrollLock في App) يكتشف role="dialog" ويقفل/يفكّ
+  // التمرير بعدّاد مشترك، فتعديل المكوّن للخاصية نفسها كان يترك body مقفلاً
+  // بعد الإغلاق على iOS Safari (سباق قفلين على القيمة السابقة).
 
   // مفتاح Escape يغلق النافذة
   useEffect(() => {
@@ -94,7 +97,9 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
   const encodedUrl = encodeURIComponent(shareUrl);
   const encodedText = encodeURIComponent(shareText);
 
-  const sendToSelected = async () => {
+  // إرسال خلفي حقيقي: تُغلق النافذة فوراً عند قبول الأمر، ويستمر الإرسال
+  // بالبيانات الملتقطة قبل الإغلاق (بلا أي اعتماد على state المكوّن بعد إزالته).
+  const sendToSelected = () => {
     if (sendingRef.current || selected.size === 0) return;
 
     if (!supabaseConfigured) {
@@ -102,65 +107,85 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
       return;
     }
 
-    sendingRef.current = true;
-    setSending(true);
-
     const recipients = Array.from(selected);
+    const sendKey = `${post.id}:${currentUserId}:${[...recipients].sort().join(',')}`;
+    if (inFlightSends.has(sendKey)) return;
+    inFlightSends.add(sendKey);
+
+    // نسخة ثابتة قبل إغلاق النافذة
+    const targetPost = post;
+    const senderId = currentUserId;
+    const notifySent = onSent;
     const cleanNote = note.trim().slice(0, 500);
     const content = `[post:${post.id}]${cleanNote ? ` ${cleanNote}` : ''}`;
 
-    try {
-      const results = await Promise.all(
-        recipients.map(async recipientId => {
-          const payload = {
-            sender_id: currentUserId,
-            recipient_id: recipientId,
-            content,
-            post_id: post.id,
-          };
+    sendingRef.current = true;
+    setSending(true);
+    setSelected(new Set());
+    setNote('');
 
-          const first = await supabase.from('messages').insert(payload);
-          if (!first.error) return true;
+    // الإغلاق فوري — لا setTimeout مرتبط بالشبكة ولا انتظار لأي طلب
+    close();
 
-          const code = (first.error as { code?: string }).code;
-          if (code === '42703' || /post_id/i.test(first.error.message || '')) {
-            // العمود غير موجود بعد في هذه القاعدة: نرسل الرسالة بدون مرجع المنشور
-            const legacy: Record<string, unknown> = { ...payload };
-            delete legacy.post_id;
-            const second = await supabase.from('messages').insert(legacy);
-            return !second.error;
-          }
+    void (async () => {
+      try {
+        const results = await Promise.all(
+          recipients.map(async recipientId => {
+            const payload = {
+              sender_id: senderId,
+              recipient_id: recipientId,
+              content,
+              post_id: targetPost.id,
+            };
 
-          console.error('[share] تعذر إرسال الرسالة الخاصة:', first.error);
-          return false;
-        }),
-      );
+            const first = await supabase.from('messages').insert(payload);
+            if (!first.error) return true;
 
-      const ok = results.filter(Boolean).length;
+            const code = (first.error as { code?: string }).code;
+            if (code === '42703' || /post_id/i.test(first.error.message || '')) {
+              // العمود غير موجود بعد في هذه القاعدة: نرسل الرسالة بدون مرجع المنشور
+              const legacy: Record<string, unknown> = { ...payload };
+              delete legacy.post_id;
+              const second = await supabase.from('messages').insert(legacy);
+              return !second.error;
+            }
 
-      if (ok === 0) {
-        toast.error('تعذر إرسال المنشور. تحقق من الاتصال وحاول مجدداً.');
-        return;
+            console.error('[share] تعذر إرسال الرسالة الخاصة:', first.error);
+            return false;
+          }),
+        );
+
+        const ok = results.filter(Boolean).length;
+        const failed = recipients.length - ok;
+
+        if (ok === 0) {
+          toast.error('تعذر إرسال المنشور. تحقق من الاتصال وحاول مجدداً.');
+          return;
+        }
+
+        toast.success(
+          failed === 0
+            ? (ok === 1 ? 'تم إرسال المنشور' : `تم إرسال المنشور إلى ${ok} أشخاص`)
+            : `تم إرسال المنشور إلى ${ok} من ${recipients.length}، وتعذر إرسال ${failed}`,
+        );
+
+        // العداد يُسجَّل بعدد الرسائل الناجحة فقط. فشل تسجيل العداد لا يحوّل
+        // الإرسال الناجح إلى فشل وهمي للمستخدم.
+        try {
+          await recordShares(targetPost, senderId, ok);
+        } catch (counterError) {
+          console.warn('[share] تعذر تسجيل عداد المشاركة بعد إرسال ناجح:', counterError);
+        }
+
+        notifySent?.(ok);
+      } catch (error) {
+        console.error('[share] خطأ أثناء الإرسال:', error);
+        toast.error('تعذر إرسال المنشور. حاول مرة أخرى.');
+      } finally {
+        inFlightSends.delete(sendKey);
+        sendingRef.current = false;
       }
-
-      toast.success(
-        ok === 1 ? 'تم إرسال المنشور' : `تم إرسال المنشور إلى ${ok} أشخاص`,
-      );
-
-      // يسجل نجاح الإرسال لكل مستلم ويحدّث العداد فوراً في الواجهة وقاعدة البيانات
-      await recordShares(post, currentUserId, ok);
-
-      onSent?.(ok);
-      setSelected(new Set());
-      setNote('');
-      close();
-    } catch (error) {
-      console.error('[share] خطأ أثناء الإرسال:', error);
-      toast.error('تعذر إرسال المنشور. حاول مرة أخرى.');
-    } finally {
-      sendingRef.current = false;
-      setSending(false);
-    }
+    })();
   };
 
   const copyLink = async () => {
