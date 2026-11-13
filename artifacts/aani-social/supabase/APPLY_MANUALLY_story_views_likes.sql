@@ -22,6 +22,77 @@ create table if not exists public.story_views (
   primary key (story_id, user_id)
 );
 
+-- =====================================================================
+-- 1b) ترقية جدول story_views القديم إن وُجد ببطاقة أقدم: إضافة الأعمدة
+--     والقيود الناقصة صراحةً — CREATE TABLE IF NOT EXISTS يتخطى الجدول
+--     الموجود مسبقاً حتى لو نقصت أعمدته (الخطأ الحقيقي 42703:
+--     column "viewed_at" does not exist).
+-- =====================================================================
+
+alter table public.story_views
+  add column if not exists story_id uuid,
+  add column if not exists user_id uuid,
+  add column if not exists viewed_at timestamptz;
+
+-- تعبئة viewed_at من created_at للجداول القديمة التي كانت تسجل به، ثم
+-- جعله NOT NULL مع قيمة افتراضية الآن أن كل الصفوف له قيمة
+do $$
+declare
+  had_created_at boolean;
+  added_viewed_at boolean := false;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'story_views'
+      and column_name = 'created_at'
+  ) into had_created_at;
+
+  if had_created_at then
+    update public.story_views set viewed_at = coalesce(created_at, now());
+  end if;
+
+  -- عمود NOT NULL يحتاج قيمة لكل الصفوف — القيمة الافتراضية تكفي بعد التعبئة
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'story_views'
+      and column_name = 'viewed_at'
+      and is_nullable = 'YES'
+  ) then
+    execute 'alter table public.story_views alter column viewed_at set not null';
+    execute 'alter table public.story_views alter column viewed_at set default now()';
+    added_viewed_at := true;
+  end if;
+
+  -- المفتاح الأساسي الفريد (قصة، مستخدم) — قد يغيب في البنية القديمة
+  begin
+    execute 'alter table public.story_views add constraint aani_story_views_pkey primary key (story_id, user_id)';
+  exception
+    when duplicate_table then null;      -- القيد موجود بالفعل
+    when unique_violation then null;     -- صفوف مكررة قديمة — لا نحذف شيئاً ولا نفشل
+    when others then null;
+  end;
+
+  -- المفتاح الأجنبي إلى profiles — إلزامي لعمل الضميمة viewer:profiles(...)
+  -- قد يفشل إن كانت صفوفاً يتيمة قديمة؛ حينها لا يمنع بقية الترحيل
+  begin
+    execute 'alter table public.story_views add constraint aani_story_views_user_fk foreign key (user_id) references public.profiles(id) on delete cascade';
+  exception
+    when duplicate_object then null;
+    when foreign_key_violation then null;
+    when others then null;
+  end;
+
+  begin
+    execute 'alter table public.story_views add constraint aani_story_views_story_fk foreign key (story_id) references public.stories(id) on delete cascade';
+  exception
+    when duplicate_object then null;
+    when foreign_key_violation then null;
+    when others then null;
+  end;
+end $$;
+
 create index if not exists aani_story_views_story_viewed_idx
   on public.story_views (story_id, viewed_at desc);
 
@@ -36,6 +107,56 @@ create table if not exists public.story_likes (
   created_at timestamptz not null default now(),
   unique (story_id, user_id)
 );
+
+-- 2b) ترقية جدول story_likes القديم إن وُجد ببطاقة أقدم
+alter table public.story_likes
+  add column if not exists id uuid,
+  add column if not exists story_id uuid,
+  add column if not exists user_id uuid,
+  add column if not exists created_at timestamptz;
+
+do $$
+begin
+  -- عمود المعرف مع قيمته الافتراضية للصفوف القديمة الناقصة
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'story_likes'
+      and column_name = 'id'
+      and column_default is null
+  ) then
+    execute 'update public.story_likes set id = gen_random_uuid() where id is null';
+    execute 'alter table public.story_likes alter column id set default gen_random_uuid()';
+    execute 'alter table public.story_likes alter column id set not null';
+    execute 'alter table public.story_likes add constraint aani_story_likes_pkey primary key (id)';
+  end if;
+
+  -- القيد الفريد (قصة، مستخدم) — قد يغيب في البنية القديمة
+  begin
+    execute 'alter table public.story_likes add constraint aani_story_likes_story_user_unique unique (story_id, user_id)';
+  exception
+    when duplicate_table then null;
+    when unique_violation then null;
+    when others then null;
+  end;
+
+  -- المفاتيح الأجنبية الناقصة
+  begin
+    execute 'alter table public.story_likes add constraint aani_story_likes_story_fk foreign key (story_id) references public.stories(id) on delete cascade';
+  exception
+    when duplicate_object then null;
+    when foreign_key_violation then null;
+    when others then null;
+  end;
+
+  begin
+    execute 'alter table public.story_likes add constraint aani_story_likes_user_fk foreign key (user_id) references public.profiles(id) on delete cascade';
+  exception
+    when duplicate_object then null;
+    when foreign_key_violation then null;
+    when others then null;
+  end;
+end $$;
 
 create index if not exists aani_story_likes_story_idx
   on public.story_likes (story_id, created_at desc);
