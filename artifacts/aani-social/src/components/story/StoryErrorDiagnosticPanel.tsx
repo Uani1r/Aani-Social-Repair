@@ -14,18 +14,9 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Activity, RefreshCw, X } from 'lucide-react';
 
-import {
-  buildMediaDiagnosticReport,
-  checkMediaServers,
-  copyTextToClipboard,
-  describeHttpStatusLabel,
-  getMediaDiagnosticEvents,
-  getLastKnownServerBuildVersion,
-  MEDIA_DIAGNOSTICS_BUILD_STAMP,
-  subscribeMediaDiagnostics,
-  type MediaDiagnosticEvent,
-  type ServerCheckResult,
-} from '@/lib/mediaDiagnostics';
+// استيراد آمن: if (typeof x === 'function') قبل كل استدعاء — كاش المتصفح
+// القديم قد يحمل نسخة من الوحدة بلا دالة جديدة، والخطأ هنا يُسقط الإقلاع كله
+import * as mediaDiagnostics from '@/lib/mediaDiagnostics';
 
 const styles = {
   fab: {
@@ -209,7 +200,8 @@ export default function StoryErrorDiagnosticPanel() {
   useEffect(() => {
     try {
       // اشتراك دائم: آخر فشل يبقى في اللوحة حتى لو أُغلق المحرر أو أعيد فتحه
-      return subscribeMediaDiagnostics(event => {
+      if (typeof mediaDiagnostics.subscribeMediaDiagnostics !== 'function') return undefined;
+      return mediaDiagnostics.subscribeMediaDiagnostics(event => {
         if (!event.ok) setLatestFailure(event);
       });
     } catch {
@@ -219,7 +211,11 @@ export default function StoryErrorDiagnosticPanel() {
 
   const handleCheck = () => {
     setChecking(true);
-    void checkMediaServers()
+    if (typeof mediaDiagnostics.checkMediaServers !== 'function') {
+      setChecking(false);
+      return;
+    }
+    void mediaDiagnostics.checkMediaServers()
       .then(result => {
         setServerCheck(result);
         const live = result.uploadCheck?.serverBuildVersion || null;
@@ -230,12 +226,14 @@ export default function StoryErrorDiagnosticPanel() {
   };
 
   const handleCopy = () => {
-    const events = getMediaDiagnosticEvents();
+    const events = typeof mediaDiagnostics.getMediaDiagnosticEvents === 'function'
+      ? mediaDiagnostics.getMediaDiagnosticEvents()
+      : [];
     const lastFailure = [...events].reverse().find(event => !event.ok) || null;
     const parts: string[] = [];
     parts.push('تقرير تشخيص نشر القصص — كامل');
-    parts.push(`ختم الواجهة: ${MEDIA_DIAGNOSTICS_BUILD_STAMP}`);
-    parts.push(`إصدار الخادم (آخر مُلاحَظ): ${getLastKnownServerBuildVersion() || 'غير معروف'}`);
+    parts.push(`ختم الواجهة: ${mediaDiagnostics.MEDIA_DIAGNOSTICS_BUILD_STAMP}`);
+    parts.push(`إصدار الخادم (آخر مُلاحَظ): ${mediaDiagnostics.getLastKnownServerBuildVersion?.() || 'غير معروف'}`);
     if (serverVersionLive) parts.push(`إصدار الخادم (من الفحص الحي): ${serverVersionLive}`);
     if (serverCheck) {
       parts.push(`فحص حي: ${describeServerCheck(serverCheck)?.text || ''}`);
@@ -249,11 +247,11 @@ export default function StoryErrorDiagnosticPanel() {
     const target = lastFailure || latestFailure;
     if (target) {
       parts.push('--- آخر فشل ---');
-      parts.push(buildMediaDiagnosticReport(target));
+      parts.push(mediaDiagnostics.buildMediaDiagnosticReport(target));
     } else {
       parts.push('لا يوجد حدث فشل مسجل بعد.');
     }
-    void copyTextToClipboard(parts.join('\n')).then(success => {
+    void mediaDiagnostics.copyTextToClipboard(parts.join('\n')).then(success => {
       setCopied(success);
       if (success) window.setTimeout(() => setCopied(false), 3000);
     });
@@ -283,8 +281,8 @@ export default function StoryErrorDiagnosticPanel() {
 
         <div style={styles.sectionTitle}>الإصدارات — Story Diagnostics / Versions</div>
         <div style={styles.versionBox}>
-          <div>client (واجهة): {MEDIA_DIAGNOSTICS_BUILD_STAMP}</div>
-          <div>server (خادم، آخر مُلاحَظ): {getLastKnownServerBuildVersion() || 'غير معروف'}</div>
+          <div>client (واجهة): {mediaDiagnostics.MEDIA_DIAGNOSTICS_BUILD_STAMP}</div>
+          <div>server (خادم، آخر مُلاحَظ): {mediaDiagnostics.getLastKnownServerBuildVersion?.() || 'غير معروف'}</div>
           {serverVersionLive ? <div>server (فحص حي): {serverVersionLive}</div> : null}
           <div style={{ color: '#9ca3af' }}>إذا اختلفت نسختا الواجهة والخادم فالعملية القديمة لا تزال تعمل</div>
         </div>
@@ -294,7 +292,7 @@ export default function StoryErrorDiagnosticPanel() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={styles.versionBox}>
               <div>المرحلة: [{latestFailure.stage}]</div>
-              <div>HTTP: {describeHttpStatusLabel(latestFailure)}</div>
+              <div>HTTP: {mediaDiagnostics.describeHttpStatusLabel?.(latestFailure) ?? '؟'}</div>
               <div>{latestFailure.method} {latestFailure.endpoint}</div>
             </div>
             {latestFailure.rawResponse ? <pre style={styles.monoBox}>{latestFailure.rawResponse}</pre> : null}

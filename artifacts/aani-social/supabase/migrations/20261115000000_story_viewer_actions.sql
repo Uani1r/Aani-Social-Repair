@@ -266,7 +266,7 @@ create policy aani_story_views_select_story_owner on public.story_views
       select 1 from public.stories as story
       where story.id = story_views.story_id
         and story.user_id = (select auth.uid())
-        and not public.aani_is_user_blocked(story.user_id, story_views.user_id)
+        and not public.aani_is_user_blocked(story.user_id, story_views.viewer_id)
     )
   );
 drop policy if exists aani_story_views_owner_guard on public.story_views;
@@ -276,14 +276,14 @@ create policy aani_story_views_owner_guard on public.story_views
       select 1 from public.stories as story
       where story.id = story_views.story_id
         and story.user_id = (select auth.uid())
-        and not public.aani_is_user_blocked(story.user_id, story_views.user_id)
+        and not public.aani_is_user_blocked(story.user_id, story_views.viewer_id)
     )
   );
 
 drop policy if exists aani_story_views_insert_guard on public.story_views;
 create policy aani_story_views_insert_guard on public.story_views
   as restrictive for insert to authenticated with check (
-    user_id = (select auth.uid())
+    viewer_id = (select auth.uid())
     and exists (
       select 1 from public.stories as story
       where story.id = story_views.story_id

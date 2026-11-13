@@ -6,6 +6,7 @@ import type {
   StoryViewerPreviewState,
 } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { pushGlobalError } from '@/lib/globalErrorStore';
 import { displayName } from '@/lib/types';
 import type { StoryRow } from './types';
 
@@ -164,6 +165,22 @@ export function useStoryViewerActions({
     } catch (error) {
       if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
       console.error('[story views] تعذر تحميل قائمة المشاهدين:', error);
+      // نظام التشخيص الشامل: رمز الخطأ الحقيقي (PGRST*/42703/42501...) والرسالة
+      // الكاملة مع details/hint — بدل إخفائه خلف رسالة عامة
+      const errorInfo = error && typeof error === 'object'
+        ? error as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown }
+        : null;
+      const rawMessage = error instanceof Error
+        ? error.message
+        : typeof errorInfo?.message === 'string' ? errorInfo.message : '';
+      pushGlobalError({
+        screen: 'StoryViewersSheet (المشاهدات والإعجابات)',
+        target: 'story_viewer_entries + story_likes (Supabase)',
+        error,
+        message: rawMessage || 'فشل تحميل قائمة المشاهدين',
+        details: typeof errorInfo?.details === 'string' ? errorInfo.details : undefined,
+        hint: typeof errorInfo?.hint === 'string' ? errorInfo.hint : undefined,
+      });
       setStoryViewsError(true);
       setStoryViewers([]);
       setStoryViewsCount(0);

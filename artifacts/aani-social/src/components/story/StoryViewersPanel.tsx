@@ -1,9 +1,10 @@
 import type { FormEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Ban, Bug, Eye, EyeOff, Flag, Heart, Loader2, MoreVertical, UserRound, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
-import { openGlobalErrorPanel } from '@/lib/globalErrorStore';
+import { openGlobalErrorPanel, subscribeGlobalErrors } from '@/lib/globalErrorStore';
 import { ListSkeleton } from '@/components/Skeletons';
 import {
   DropdownMenu,
@@ -68,6 +69,23 @@ export default function StoryViewersPanel({
   onViewerReportCategoryChange,
   onViewerReportDetailsChange,
 }: StoryViewersPanelProps) {
+  // رمز ورسالة آخر خطأ مشاهدين من السجل الشامل — يُعرض فوق النص الأحمر
+  const [storyViewsErrorCode, setStoryViewsErrorCode] = useState<string>('');
+  const [storyViewsErrorMessage, setStoryViewsErrorMessage] = useState<string>('');
+
+  useEffect(() => {
+    try {
+      return subscribeGlobalErrors(entry => {
+        if (entry.screen.includes('StoryViewers')) {
+          setStoryViewsErrorCode(entry.code);
+          setStoryViewsErrorMessage(entry.message);
+        }
+      });
+    } catch {
+      return undefined;
+    }
+  }, []);
+
   if (!storyViewsOpen || !isStoryOwner) return null;
 
   return (
@@ -118,7 +136,12 @@ export default function StoryViewersPanel({
           )}
           {storyViewsError && (
             <div className="py-5 text-center">
-              <p className="text-xs text-red-300">تعذر تحميل بيانات المشاهدين أو الإعجابات الفعلية. تحقق من قاعدة البيانات والاتصال.</p>
+              <p className="text-xs text-red-300">تعذر تحميل بيانات المشاهدين أو الإعجابات الفعلية.</p>
+              {storyViewsErrorCode ? (
+                <p className="mt-1 text-[11px] text-red-200" dir="auto">
+                  {storyViewsErrorCode}: {storyViewsErrorMessage}
+                </p>
+              ) : null}
               <button
                 type="button"
                 onClick={() => openGlobalErrorPanel()}
