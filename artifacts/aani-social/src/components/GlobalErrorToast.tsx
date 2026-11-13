@@ -38,10 +38,12 @@ export default function GlobalErrorToast() {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-bold text-white">{notice.operation}</p>
               <p className="mt-0.5 text-xs leading-5 text-zinc-300">{notice.userMessage}</p>
-              <div className="mt-2 rounded-xl border border-white/[0.07] bg-black/30 px-2.5 py-2">
-                <p className="mb-1 text-[10px] font-semibold text-amber-300">التشخيص التقني</p>
-                <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 text-zinc-400">{notice.diagnostic}</pre>
-              </div>
+              {import.meta.env.DEV && (
+                <div className="mt-2 rounded-xl border border-white/[0.07] bg-black/30 px-2.5 py-2">
+                  <p className="mb-1 text-[10px] font-semibold text-amber-300">التشخيص التقني</p>
+                  <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-4 text-zinc-400">{notice.diagnostic}</pre>
+                </div>
+              )}
             </div>
             <button
               type="button"

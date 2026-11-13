@@ -587,8 +587,8 @@ export default function StoryCreationEditor({
         currentUserId={userId}
         onClose={onCloseCloseFriends}
       />
-      {/* لوحة تشخيص نشر القصص — Portal مستقل فوق جميع الطبقات */}
-      <StoryErrorDiagnosticPanel />
+      {/* لوحة تشخيص نشر القصص — Portal مستقل، للتطوير فقط (لا تظهر في الإنتاج) */}
+      {import.meta.env.DEV && <StoryErrorDiagnosticPanel />}
     </div>
   );
 }

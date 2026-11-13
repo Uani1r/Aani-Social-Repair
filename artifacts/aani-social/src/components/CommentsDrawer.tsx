@@ -126,6 +126,17 @@ const filterHiddenComments = (
     return [{ ...item, replies: visibleReplies }];
   });
 
+// هل فشل استدعاء RPC لأن الدالة غير موجودة/غير مطبقة في قاعدة البيانات؟
+// (42883 = undefined_function، PGRST202 = دالة غير موجودة في مخطط PostgREST)
+const isMissingCommentFunctionError = (error: unknown): boolean => {
+  if (!error || typeof error !== 'object') return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  const codeText = typeof code === 'string' ? code : '';
+  if (codeText === '42883' || codeText === 'PGRST202') return true;
+  const text = typeof message === 'string' ? message : '';
+  return /could not find the function|function .* does not exist|undefined_function/i.test(text);
+};
+
 const copyText = async (text: string): Promise<void> => {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);
@@ -996,6 +1007,9 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     }
 
     setPendingEditIds((prev) => ({ ...prev, [comment.id]: true }));
+    const previousComments = comments;
+    // Optimistic: يظهر النص الجديد فوراً في الشجرة، ويُعاد السابق عند الفشل
+    setComments((previous) => patchCommentInTree(previous, comment.id, { content: normalized }));
     try {
       const { error } = await supabase.rpc('aani_edit_comment', {
         p_comment_id: comment.id,
@@ -1003,11 +1017,29 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       });
       if (error) throw error;
       toast.success('تم تعديل التعليق');
-      await loadComments(false);
+      // تحقق خلفي من تطابق ما حفظته قاعدة البيانات
+      void loadComments(false);
       return true;
     } catch (error: unknown) {
-      console.error('[comments] تعذر تعديل التعليق:', error);
-      toast.error('تعذر تعديل التعليق. تحقق من تطبيق تحديث إدارة التعليقات.');
+      // قاعدة بيانات لم يُطبَّق عليها ترحيل إدارة التعليقات: التعديل المباشر
+      // محصور بصاحب التعليق عبر RLS (لا توسيع صلاحيات).
+      if (isMissingCommentFunctionError(error)) {
+        const { error: fallbackError } = await supabase
+          .from('comments')
+          .update({ content: normalized })
+          .eq('id', comment.id)
+          .eq('user_id', currentUserId);
+        if (!fallbackError) {
+          toast.success('تم تعديل التعليق');
+          void loadComments(false);
+          return true;
+        }
+        console.error('[comments] تعذر تعديل التعليق (مسار مباشر):', fallbackError);
+      } else {
+        console.error('[comments] تعذر تعديل التعليق:', error);
+      }
+      setComments(previousComments);
+      toast.error('تعذر حفظ التعديل. حاول مرة أخرى.');
       return false;
     } finally {
       setPendingEditIds((prev) => {
@@ -1022,17 +1054,37 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     const canDelete = comment.user_id === currentUserId || postOwnerId === currentUserId;
     if (!canDelete || pendingDeleteIds[comment.id] || !window.confirm('هل تريد حذف هذا التعليق؟')) return;
 
+    const previousComments = comments;
     setPendingDeleteIds((prev) => ({ ...prev, [comment.id]: true }));
+    // Optimistic: يختفي التعليق (وما تحته) فوراً، ويُعاد كاملاً عند الفشل
+    setComments((previous) => removeCommentFromTree(previous, comment.id));
     try {
       const { error } = await supabase.rpc('aani_delete_comment', {
         p_comment_id: comment.id,
       });
       if (error) throw error;
       toast.success('تم حذف التعليق');
-      await loadComments(false);
+      void loadComments(false);
     } catch (error: unknown) {
-      console.error('[comments] تعذر حذف التعليق:', error);
-      toast.error('تعذر حذف التعليق. تحقق من صلاحيات الحساب وتحديث إدارة التعليقات.');
+      // قاعدة بيانات بلا دالة الحذف: صاحب التعليق فقط يمكنه الحذف مباشرة عبر
+      // سياسة RLS الحالية (user_id = auth.uid()). لا تُمنح أي صلاحية إضافية.
+      if (comment.user_id === currentUserId && isMissingCommentFunctionError(error)) {
+        const { error: fallbackError } = await supabase
+          .from('comments')
+          .delete()
+          .eq('id', comment.id)
+          .eq('user_id', currentUserId);
+        if (!fallbackError) {
+          toast.success('تم حذف التعليق');
+          void loadComments(false);
+          return;
+        }
+        console.error('[comments] تعذر حذف التعليق (مسار مباشر):', fallbackError);
+      } else {
+        console.error('[comments] تعذر حذف التعليق:', error);
+      }
+      setComments(previousComments);
+      toast.error('تعذر حذف التعليق. تحقق من صلاحياتك ثم حاول مرة أخرى.');
     } finally {
       setPendingDeleteIds((prev) => {
         const next = { ...prev };

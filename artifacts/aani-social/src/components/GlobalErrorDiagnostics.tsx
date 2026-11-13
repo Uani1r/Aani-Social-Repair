@@ -230,6 +230,10 @@ export default function GlobalErrorDiagnostics() {
     });
   };
 
+  // لوحة التشخيص للتطوير فقط — لا زر عائم ولا نافذة للمستخدم النهائي في الإنتاج.
+  // يبقى تخزين الأخطاء وتسجيلها في Console كما هو.
+  if (!import.meta.env.DEV) return null;
+
   if (!open) {
     return createPortal(
       <button type="button" style={styles.fab} onClick={() => { setOpen(true); setEntries([...getGlobalErrors()]); }} aria-label="لوحة التشخيص">

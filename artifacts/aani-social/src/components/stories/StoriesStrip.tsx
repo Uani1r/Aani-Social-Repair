@@ -66,27 +66,26 @@ export default function StoriesStrip({
             </span>
             {uploading && (
               <svg
-                viewBox="0 0 64 64"
-                className="pointer-events-none absolute z-10 h-16 w-16 animate-spin"
-                style={{ left: 'calc(50% - 2rem)', top: 'calc(50% - 2rem)' }}
+                viewBox="0 0 80 80"
+                className="unified-story-upload-ring"
                 role="progressbar"
                 aria-label={`جارٍ نشر القصة ${uploadProgress}%`}
                 aria-valuemin={0}
                 aria-valuemax={100}
                 aria-valuenow={uploadProgress}
               >
-                <circle cx="32" cy="32" r="29" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="2.5" />
+                {/* الحلقة على الإطار الخارجي (نصف قطر أكبر من إطار الصورة) فلا تلامس الصورة */}
+                <circle cx="40" cy="40" r="37" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="2.5" />
                 <circle
-                  cx="32"
-                  cy="32"
-                  r="29"
+                  cx="40"
+                  cy="40"
+                  r="37"
                   fill="none"
                   stroke="#ec4899"
                   strokeWidth="2.5"
                   strokeLinecap="round"
-                  strokeDasharray={2 * Math.PI * 29}
-                  strokeDashoffset={2 * Math.PI * 29 * (1 - uploadProgress / 100)}
-                  style={{ transition: 'stroke-dashoffset 120ms linear' }}
+                  strokeDasharray={2 * Math.PI * 37}
+                  strokeDashoffset={2 * Math.PI * 37 * (1 - Math.max(0, Math.min(100, uploadProgress)) / 100)}
                 />
               </svg>
             )}

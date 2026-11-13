@@ -135,19 +135,21 @@ export default function StoryViewersPanel({
           {storyViewsError && (
             <div className="py-5 text-center">
               <p className="text-xs text-red-300">تعذر تحميل بيانات المشاهدين أو الإعجابات الفعلية.</p>
-              {storyViewsErrorCode ? (
+              {import.meta.env.DEV && storyViewsErrorCode ? (
                 <p className="mt-1 text-[11px] text-red-200" dir="auto">
                   {storyViewsErrorCode}: {storyViewsErrorMessage}
                 </p>
               ) : null}
-              <button
-                type="button"
-                onClick={() => openGlobalErrorPanel()}
-                className="mt-2 inline-flex items-center gap-1 rounded-full border border-red-300/40 bg-red-400/10 px-3 py-1 text-[11px] font-bold text-red-200"
-              >
-                <Bug size={12} />
-                تشخيص الخطأ
-              </button>
+              {import.meta.env.DEV && (
+                <button
+                  type="button"
+                  onClick={() => openGlobalErrorPanel()}
+                  className="mt-2 inline-flex items-center gap-1 rounded-full border border-red-300/40 bg-red-400/10 px-3 py-1 text-[11px] font-bold text-red-200"
+                >
+                  <Bug size={12} />
+                  تشخيص الخطأ
+                </button>
+              )}
             </div>
           )}
           {!storyViewsLoading && !storyViewsError && storyViewers.length > 0 && (

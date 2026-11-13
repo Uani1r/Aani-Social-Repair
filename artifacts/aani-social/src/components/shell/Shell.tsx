@@ -958,9 +958,9 @@ export default function Shell({
   const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
-  // مهلة النشر الكاملة (ضغط + رفع + حفظ). تجاوزها يفكّ القفل ويُظهر خطأً واضحاً
-  // بدل أن تبقى شاشة الإنشاء معلقة بلا استجابة.
-  const PUBLISH_TIMEOUT_MS = 15000;
+  // مهلة النشر الكاملة (ضغط + رفع + حفظ). رُفعت إلى 90 ثانية لتستوعب استيقاظ
+  // الخادم وشبكات الجوال البطيئة، وتجاوزها يفكّ القفل ويُظهر خطأً واضحاً.
+  const PUBLISH_TIMEOUT_MS = 90000;
   // أقصى انتظار لمهمة "الصوت الأصلي" المشتركة. انتهاؤه لا يلغي المهمة ولا
   // يسمح ببدء إدراج ثانٍ: المهمة تبقى في الخريطة حتى تنتهي فعلياً.
   const ORIGINAL_SOUND_TASK_TIMEOUT_MS = 12000;
@@ -972,6 +972,8 @@ export default function Shell({
   const publishLockRef = useRef(0);
   // متحكم الإلغاء الجاري: يستخدمه زر X لإلغاء الرفع فوراً
   const activePublishAbortRef = useRef<AbortController | null>(null);
+  // هل استجاب الخادم مرة واحدة في هذه الجلسة؟ يمنع تكرار فحص الاستيقاظ
+  const backendAwakeRef = useRef(false);
   // معرّف المنشور ثابت لكل جلسة إنشاء: إعادة المحاولة تستخدم نفس المعرّف
   // (upsert onConflict id) فلا يتكرر المنشور ولا تتكرر الوسائط المرفوعة.
   const composerPostIdRef = useRef<string | null>(null);
@@ -1742,7 +1744,7 @@ export default function Shell({
         if (isCurrentAttempt()) {
           releasePublishLock();
           setIsSubmitting(false);
-          setCreateError('انتهت مهلة النشر (15 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.');
+          setCreateError('انتهت مهلة النشر (90 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.');
         }
       }, PUBLISH_TIMEOUT_MS);
       // فحص المحاولة الحيّة: يُستدعى قبل كل مرحلة مهمة وبعد كل await، فلا تتابع
@@ -1751,6 +1753,64 @@ export default function Shell({
         if (!isCurrentAttempt() || attemptSignal.aborted) {
           throw new DOMException('أُلغيت محاولة النشر.', 'AbortError');
         }
+      };
+      // انتظار بسيط قابل للإلغاء (لا يترك مؤقتات معلقة بعد الإلغاء)
+      const delayWithSignal = (ms: number): Promise<void> => new Promise<void>((resolve, reject) => {
+        if (attemptSignal.aborted) {
+          reject(new DOMException('أُلغيت محاولة النشر.', 'AbortError'));
+          return;
+        }
+        const onAbort = () => {
+          window.clearTimeout(timer);
+          reject(new DOMException('أُلغيت محاولة النشر.', 'AbortError'));
+        };
+        const timer = window.setTimeout(() => {
+          attemptSignal.removeEventListener('abort', onAbort);
+          resolve();
+        }, ms);
+        attemptSignal.addEventListener('abort', onAbort, { once: true });
+      });
+      // استيقاظ الخادم (Render) قبل الرفع: محاولات محدودة بتراجع 2/4/8 ثوانٍ،
+      // وفشلها صامت — لا يمنع المحاولة، فقط يمنح الخادم وقتاً للاستجابة.
+      const waitForBackendAwake = async (): Promise<void> => {
+        if (backendAwakeRef.current) return;
+        for (let index = 0; index < 3; index += 1) {
+          ensureAttemptAlive();
+          try {
+            const response = await fetch('/api/health', { signal: attemptSignal, cache: 'no-store' });
+            if (response.ok) {
+              backendAwakeRef.current = true;
+              return;
+            }
+          } catch (error) {
+            if (isAbortLike(error)) throw error;
+          }
+          if (index < 2) await delayWithSignal([2000, 4000, 8000][index]);
+        }
+      };
+      // هل الخطأ عابر (شبكة/استيقاظ خادم/5xx) ويعيد المحاولة؟ أخطاء الصلاحيات
+      // والبيانات الدائمة لا تُعاد.
+      const isTransientPostError = (error: unknown): boolean => {
+        if (!error || typeof error !== 'object') return false;
+        const { code, message } = error as { code?: unknown; message?: unknown };
+        const codeText = typeof code === 'string' ? code : '';
+        if (/^5\d\d$/.test(codeText) || codeText === 'PGRST000' || codeText === 'PGRST001') return true;
+        const text = typeof message === 'string' ? message : '';
+        return /failed to fetch|network ?error|timeout|timed out|load failed|fetch failed|connection|503|502|504/i.test(text);
+      };
+      // رسالة المستخدم: لا تفاصيل تقنية في الإنتاج (أكواد SQLSTATE/PGRST أو
+      // أسماء دوال/أعمدة أو تفاصيل AbortController). التفاصيل تبقى في Console.
+      const toUserFacingPublishMessage = (error: unknown, didTimeOut: boolean): string => {
+        if (didTimeOut) {
+          return 'انتهت مهلة النشر (90 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.';
+        }
+        const raw = error instanceof Error ? error.message : '';
+        if (import.meta.env.DEV) return raw || 'حدث خطأ غير متوقع أثناء النشر.';
+        if (!raw) return 'تعذر نشر المنشور. تحقق من الاتصال ثم حاول مرة أخرى.';
+        if (/PGRST\d|[0-9]{5}|abort|AbortController|function|relation|column|rpc|supabase|SQL|migration|schema/i.test(raw)) {
+          return 'تعذر نشر المنشور. تحقق من الاتصال ثم حاول مرة أخرى.';
+        }
+        return raw;
       };
       const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
         // محاولة قديمة لا تكتب في بطاقة المنشور المملوكة لمحاولة أحدث
@@ -1786,6 +1846,8 @@ export default function Shell({
           return;
         }
         ensureAttemptAlive();
+        // استيقاظ الخادم قبل الرفع (توقيع ImageKit يمر بخادمنا) — صامت ومحدود
+        await waitForBackendAwake();
 
         const effectiveCoverFile = mediaType === 'video'
           ? coverFile || (pendingPosterPromise ? await pendingPosterPromise : null)
@@ -2074,9 +2136,24 @@ export default function Shell({
           supabase.from('posts').upsert(payload, { onConflict: 'id' }),
           attemptSignal,
         );
+        // إعادة محاولة صامتة عند أخطاء عابرة (استيقاظ/شبكة/5xx) بنفس المعرّف
+        // ونفس الحمولة — upsert على id يجعل التكرار مستحيلاً.
+        const upsertPostWithRetry = async (payload: Record<string, unknown>) => {
+          let result = await upsertPost(payload);
+          for (let retry = 0; retry < 2 && result.error && isTransientPostError(result.error); retry += 1) {
+            ensureAttemptAlive();
+            if (isCurrentAttempt()) {
+              setCreateError('الاتصال بالخادم بطيء، جارٍ إعادة المحاولة تلقائياً…');
+            }
+            await delayWithSignal([2000, 4000][retry] ?? 4000);
+            ensureAttemptAlive();
+            result = await upsertPost(payload);
+          }
+          return result;
+        };
 
         ensureAttemptAlive();
-        let postError = (await upsertPost(postPayloadForSave)).error;
+        let postError = (await upsertPostWithRetry(postPayloadForSave)).error;
         // بعد اكتمال الحفظ: توقّف إن أُبطلت المحاولة أو بدأت محاولة أحدث.
         // (الكتابة قد تكون وصلت فعلاً؛ الفحص يمنع متابعة المسار ولا يمسّ الحالة.)
         ensureAttemptAlive();
@@ -2278,11 +2355,7 @@ export default function Shell({
         if (!wasAppErrorReported(error)) {
           handleAppError('فشل نشر المنشور', error, 'تعذر نشر المنشور. راجع التفاصيل التشخيصية ثم أعد المحاولة.');
         }
-        const message = timedOutNow
-          ? 'انتهت مهلة النشر (15 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.'
-          : error instanceof Error && error.message
-            ? error.message
-            : 'حدث خطأ غير متوقع أثناء النشر.';
+        const message = toUserFacingPublishMessage(error, timedOutNow);
         updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
         // لا تتجمد الواجهة أبداً: فكّ القفل وأظهر الخطأ، مع بقاء النموذج مفتوحاً
         releasePublishLock();

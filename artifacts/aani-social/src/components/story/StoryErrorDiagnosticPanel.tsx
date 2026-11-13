@@ -257,6 +257,10 @@ export default function StoryErrorDiagnosticPanel() {
     });
   };
 
+  // أدوات التشخيص للتطوير فقط — لا زر عائم ولا لوحة للمستخدم النهائي في الإنتاج.
+  // يبقى تسجيل الأخطاء الداخلية (Console/mediaDiagnostics) كما هو.
+  if (!import.meta.env.DEV) return null;
+
   if (!open) {
     return createPortal(
       <button type="button" style={styles.fab} onClick={() => setOpen(true)} aria-label="تشخيص">

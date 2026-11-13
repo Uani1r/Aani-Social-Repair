@@ -2296,6 +2296,23 @@ a:active > .aani-notifications-card {
   background: transparent;
 }
 
+/* حلقة تقدّم رفع الستوري: إطار خارجي مستقل حول إطار القصة، لا يغطي صورة
+   الحساب إطلاقاً ولا يستقبل أي لمس (pointer-events: none). */
+.unified-story-upload-ring {
+  position: absolute;
+  inset: -6px;
+  z-index: 15;
+  pointer-events: none;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+  will-change: transform;
+  overflow: visible;
+}
+
+.unified-story-upload-ring circle {
+  transition: stroke-dashoffset 200ms linear;
+}
+
 .unified-stories-content {
   gap: 20px;
   padding: 12px 20px 16px;
