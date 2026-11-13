@@ -959,8 +959,9 @@ export default function Shell({
   // رمز المحاولة: أي محاولة جديدة (أو إغلاق النافذة) يُبطل نتائج المحاولات الأقدم
   // فلا تعدّل حالتها ولا تحفظ منشوراً بعد انتهاء مهلتها.
   const publishAttemptRef = useRef(0);
-  // حماية من النقر المتكرر على «نشر» قبل أن يُحدَّث isSubmitting
-  const publishInFlightRef = useRef(false);
+  // قفل النشر يحمل رمز المحاولة المالكة (0 = حرّ). كل محاولة تحرّره فقط إن كانت
+  // لا تزال مالكة له، فلا يحرّره finally لمحاولة قديمة بعد بدء محاولة جديدة.
+  const publishLockRef = useRef(0);
   // متحكم الإلغاء الجاري: يستخدمه زر X لإلغاء الرفع فوراً
   const activePublishAbortRef = useRef<AbortController | null>(null);
   // معرّف المنشور ثابت لكل جلسة إنشاء: إعادة المحاولة تستخدم نفس المعرّف
@@ -1532,7 +1533,7 @@ export default function Shell({
 
   const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, filesOverride?: File[], fileTypeOverride?: 'image' | 'video' | null) => {
     // منع النقر المتكرر: لا محاولة ثانية قبل انتهاء الحالية أو فكّ قفلها
-    if (publishInFlightRef.current || isSubmitting) return;
+    if (publishLockRef.current !== 0) return;
     // إيقاف معاينة الصوت فوراً لحظة النقر على النشر
     stopAudioEngine();
     if (!supabaseConfigured) {
@@ -1572,8 +1573,11 @@ export default function Shell({
       return;
     }
 
-    // قفل الواجهة مع مؤشر واضح فور بدء المحاولة (قبل أي await)
-    publishInFlightRef.current = true;
+    // رمز المحاولة الجديدة يُنشأ قبل القفل، فيكون القفل ملكاً لها وحدها.
+    // القفل يُفكّ فور بدء المحاولة (لا ينتظر أي await) ويُحرَّر عند النجاح أو
+    // الفشل أو انتهاء المهلة — وبواسطة مالكه فقط.
+    const attemptToken = ++publishAttemptRef.current;
+    publishLockRef.current = attemptToken;
     setCreateError('');
     setIsSubmitting(true);
     // هل كانت نافذة الإنشاء مفتوحة؟ (مسار الصور المقصوصة ينشر بلا نافذة نص)
@@ -1634,12 +1638,28 @@ export default function Shell({
     let posterUploadUrl: string | null = null;
     // إلغاء النشر: متحكم جديد مع كل محاولة — يبطل الضغط والعزل والرفع الجاري
     const attemptAbort: { controller: AbortController | null } = { controller: null };
-    const attemptToken = ++publishAttemptRef.current;
     const isCurrentAttempt = () => attemptToken === publishAttemptRef.current;
+    // تحرير القفل: فقط إن كانت هذه المحاولة لا تزال مالكته
+    const releasePublishLock = () => {
+      if (publishLockRef.current === attemptToken) publishLockRef.current = 0;
+    };
+    const isAbortLike = (value: unknown) => {
+      const name = (value as { name?: string } | null)?.name;
+      return name === 'AbortError' || name === 'TimeoutError';
+    };
+    // مهلة قصيرة لأي فحص شبكي داخل مسار النشر — لا تجمّد واجهة الإنشاء
+    const withPublishTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
+      new Promise<T>(resolve => {
+        const timer = window.setTimeout(() => resolve(fallback), ms);
+        promise.then(
+          value => { window.clearTimeout(timer); resolve(value); },
+          () => { window.clearTimeout(timer); resolve(fallback); },
+        );
+      });
     // النجاح فقط يغلق النافذة ويصفّر النموذج ويُبلّغ شريط المنشورات
     const finishComposerAfterSuccess = () => {
       if (!isCurrentAttempt()) return;
-      publishInFlightRef.current = false;
+      releasePublishLock();
       composerPostIdRef.current = null;
       setPostText('');
       setSelectedFiles([]);
@@ -1667,21 +1687,29 @@ export default function Shell({
     };
     // هل حُفظ المنشور فعلاً في قاعدة البيانات؟ يُستخدم قبل إعلان فشل المهلة
     // وقبل أي إعادة إرسال، فلا نُنشئ نسخة ثانية من منشور وصل فعلاً.
+    // محدود المهلة (3 ثوانٍ): تعذّر الفحص لا يجمّد النموذج ولا يمنع إعادة المحاولة.
     const postRowExists = async (): Promise<boolean> => {
       try {
-        const { data: existingRow } = await supabase
+        const query = supabase
           .from('posts')
           .select('id')
           .eq('id', postId)
           .maybeSingle();
-        return Boolean(existingRow?.id);
+        const result = await withPublishTimeout<
+          { data: { id?: string } | null }
+        >(query as unknown as Promise<{ data: { id?: string } | null }>, 3000, { data: null });
+        return Boolean(result?.data?.id);
       } catch {
         return false;
       }
     };
     const attemptPublish = async () => {
+      // محاولة قديمة (بعد مهلة وبدء محاولة أحدث): لا تعمل ولا تلمس شيئاً
+      if (!isCurrentAttempt()) return;
       if (attemptInProgress) return;
       attemptInProgress = true;
+      // إعادة المحاولة من بطاقة المنشور تعيد أخذ القفل ما دامت المحاولة هي الحالية
+      publishLockRef.current = attemptToken;
       const controller = new AbortController();
       attemptAbort.controller = controller;
       activePublishAbortRef.current = controller;
@@ -1690,8 +1718,10 @@ export default function Shell({
       const timeoutId = window.setTimeout(() => {
         timedOut = true;
         controller.abort();
-        // فكّ القفل فوراً عند المهلة، دون انتظار انتهاء الطلب الملغى
+        // فكّ القفل فوراً عند المهلة (بوصفنا مالكيه) ليتمكن المستخدم من إعادة
+        // المحاولة مباشرة، دون انتظار عودة الطلب الملغى.
         if (isCurrentAttempt()) {
+          releasePublishLock();
           setIsSubmitting(false);
           setCreateError('انتهت مهلة النشر (15 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.');
         }
@@ -1847,6 +1877,9 @@ export default function Shell({
               onPhase: onUploadPhase,
             });
           } catch (extractError) {
+            // إلغاء المحاولة أو انتهاء مهلتها: لا نتابع إلى أي كتابة جانبية
+            // (إدراج سجل صوت) بعد الإلغاء.
+            if (isAbortLike(extractError)) throw extractError;
             if (extractError instanceof NoAudioTrackError) {
               silentVideo = true;
               console.info('[sound] الفيديو صامت — لن يُنشأ صوت أصلي.');
@@ -1855,6 +1888,7 @@ export default function Shell({
             }
           }
           if (!silentVideo) {
+            ensureAttemptAlive();
             try {
               const { data: soundRow } = await supabase
                 .from('sounds')
@@ -2115,14 +2149,18 @@ export default function Shell({
         // نجاح الحفظ فقط: أغلق النافذة وصفّر النموذج وأبلغ شريط المنشورات
         finishComposerAfterSuccess();
       } catch (error) {
-        const abortName = (error as { name?: string } | null)?.name;
-        const aborted = abortName === 'AbortError' || abortName === 'TimeoutError';
+        // محاولة قديمة أُبطلت (مهلة + إعادة محاولة، أو إغلاق X): لا تكتب شيئاً
+        // ولا تعدّل حالة المحاولة الأحدث ولا تحرّر قفلها.
+        if (!isCurrentAttempt()) return;
+        const aborted = isAbortLike(error);
         const timedOutNow = timedOut;
         // المهلة ليست دليل فشل: إن كان الطلب قد وصل إلى الخادم فالمنشور محفوظ.
         // نتحقق من الصف قبل إعلان الخطأ وقبل أي إعادة إرسال.
         let savedDespiteError = false;
         if (aborted) {
           savedDespiteError = await postRowExists();
+          // بعد فحص محدود المهلة: قد تكون محاولة جديدة بدأت أثناءه
+          if (!isCurrentAttempt()) return;
         }
         if (savedDespiteError) {
           updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
@@ -2144,18 +2182,18 @@ export default function Shell({
             : 'حدث خطأ غير متوقع أثناء النشر.';
         updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
         // لا تتجمد الواجهة أبداً: فكّ القفل وأظهر الخطأ، مع بقاء النموذج مفتوحاً
-        if (isCurrentAttempt()) {
-          publishInFlightRef.current = false;
-          setIsSubmitting(false);
-          setCreateError(message);
-          if (!composerOpen) toast.error(message);
-        }
+        releasePublishLock();
+        setIsSubmitting(false);
+        setCreateError(message);
+        if (!composerOpen) toast.error(message);
       } finally {
         window.clearTimeout(timeoutId);
         if (activePublishAbortRef.current === controller) {
           activePublishAbortRef.current = null;
         }
         attemptInProgress = false;
+        // تحرير القفل بمالكه فقط: محاولة قديمة لا تفتح قفل محاولة جديدة
+        releasePublishLock();
         releasePageInteraction();
       }
     };
@@ -2268,7 +2306,7 @@ export default function Shell({
           // زر X متاح دائماً — حتى أثناء النشر: يُبطل المحاولة الجارية ويحرّر القفل
           // فوراً بدل ترك الواجهة معلقة على طلب لا ينتهي.
           publishAttemptRef.current += 1;
-          publishInFlightRef.current = false;
+          publishLockRef.current = 0;
           activePublishAbortRef.current?.abort();
           activePublishAbortRef.current = null;
           composerPostIdRef.current = null;
