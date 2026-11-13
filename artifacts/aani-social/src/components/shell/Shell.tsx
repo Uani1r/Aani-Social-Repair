@@ -33,6 +33,11 @@ import { requestContentRefresh } from '@/lib/contentRefresh';
 import { useRouteScrollMemory } from '@/hooks/useRouteScrollMemory';
 import { goBackOrPush } from '@/lib/overlayBack';
 
+// مهام إنشاء "الصوت الأصلي" المشتركة بين محاولات النشر: مفتاح = (مالك + رابط
+// الفيديو الأساسي). تضمن سجلاً واحداً في sounds حتى لو وصلت كتابة محاولة
+// قديمة وتزامنت مع محاولة أحدث، دون أي تغيير في مخطط قاعدة البيانات.
+const originalSoundTasks = new Map<string, Promise<string | null>>();
+
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('تعذر تجهيز معاينة الصورة.'));
@@ -1766,6 +1771,8 @@ export default function Shell({
         // منع التكرار: إن كان هذا المنشور محفوظاً فعلاً (مهلة سابقة وصل طلبها
         // إلى الخادم، أو نقر مكرر) نُكمل كنجاح بلا رفع أو حفظ ثانٍ.
         if (await postRowExists()) {
+          // بعد await: قد تكون المحاولة أُبطلت أو بدأت محاولة أحدث أثناء الفحص
+          ensureAttemptAlive();
           updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
           window.dispatchEvent(new Event('aani:post-created'));
           window.setTimeout(() => {
@@ -1872,6 +1879,48 @@ export default function Shell({
           updatePendingPost(postId, { stage: 'publishing', progress: 95, error: null });
         }
 
+        // --- سجل "الصوت الأصلي": إنشاء واحد فقط لكل (مالك + رابط فيديو) ---
+        // posts.upsert على id لا يحمي جدول sounds (لا قيد فريد عليه). الحل من جهة
+        // العميل: مهمة مشتركة واحدة لكل مفتاح (creator_id + base video url) مع
+        // إعادة استخدام سجل قائم. إلغاء محاولة لا يلغي المهمة المشتركة التي قد
+        // يعتمد عليها محاولة أحدث؛ كل محاولة تتحقق من رمزها قبلها وبعدها.
+        const ensureOriginalSound = async (previewUrl: string | null): Promise<string | null> => {
+          const baseVideoUrl = uploadedUrls[0].replace(/#.*$/, '');
+          const key = `${authenticatedUserId}:${baseVideoUrl}`;
+          const inFlight = originalSoundTasks.get(key);
+          if (inFlight) return inFlight;
+          const task = (async () => {
+            // 1) إعادة استخدام سجل قائم لنفس المالك ونفس رابط الفيديو (يغطي
+            //    إعادة تحميل الصفحة، أو كتابة وصلت من محاولة سابقة)
+            const { data: existingSound } = await supabase
+              .from('sounds')
+              .select('id')
+              .eq('creator_id', authenticatedUserId)
+              .eq('source_video_url', baseVideoUrl)
+              .limit(1)
+              .maybeSingle();
+            if (existingSound?.id) return existingSound.id as string;
+            const { data: soundRow, error: soundError } = await supabase
+              .from('sounds')
+              .insert({
+                title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
+                source_video_url: baseVideoUrl,
+                ...(previewUrl ? { preview_url: previewUrl } : {}),
+                creator_id: authenticatedUserId,
+              })
+              .select('id')
+              .single();
+            if (soundError) throw soundError;
+            return (soundRow?.id as string) ?? null;
+          })();
+          originalSoundTasks.set(key, task);
+          try {
+            return await task;
+          } finally {
+            originalSoundTasks.delete(key);
+          }
+        };
+
         // نظام الأصوات: استخراج الصوت محلياً من الفيديو (AAC .m4a خفيف عبر
         // mediabunny) ورفعه إلى ImageKit وتخزينه في preview_url — فتستهلك
         // المعاينات والمشغلات صوتاً خفيفاً بدل تحميل الفيديو الكامل في <audio>.
@@ -1885,9 +1934,13 @@ export default function Shell({
             const audioFile = await extractAudio(files[0], {
               kind: 'extractedSound',
               signal: attemptSignal,
-              onProgress: percent => updatePendingPost(postId, {
-                phaseLabel: `جارٍ عزل الصوت... ${percent}%`,
-              }),
+              onProgress: percent => {
+                // محاولة قديمة لا تحدّث بطاقة المنشور المملوكة لمحاولة أحدث
+                if (!isCurrentAttempt()) return;
+                updatePendingPost(postId, {
+                  phaseLabel: `جارٍ عزل الصوت... ${percent}%`,
+                });
+              },
             });
             const audioPath = `${authenticatedUserId}/${postId}/sound-${Date.now()}.m4a`;
             extractedSoundUrl = await uploadMedia({
@@ -1910,24 +1963,12 @@ export default function Shell({
           if (!silentVideo) {
             ensureAttemptAlive();
             try {
-              const { data: soundRow } = await attachAbortSignal(
-                supabase
-                  .from('sounds')
-                  .insert({
-                    title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
-                    source_video_url: uploadedUrls[0].replace(/#.*$/, ''),
-                    ...(extractedSoundUrl ? { preview_url: extractedSoundUrl } : {}),
-                    creator_id: authenticatedUserId,
-                  })
-                  .select('id')
-                  .single(),
-                attemptSignal,
-              );
-              // بعد الكتابة: لا متابعة لمحاولة أُلغيت (قد تكون الكتابة وصلت)
+              attachedSoundId = await ensureOriginalSound(extractedSoundUrl);
+              // بعد الكتابة: لا متابعة لمحاولة أُلغيت
               ensureAttemptAlive();
-              attachedSoundId = soundRow?.id ?? null;
             } catch (soundError) {
               if (isAbortLike(soundError)) throw soundError;
+              console.warn('[sound] تعذر إنشاء سجل الصوت الأصلي — المنشور يعمل بدونه.', soundError);
               attachedSoundId = null;
             }
           }
@@ -2167,6 +2208,10 @@ export default function Shell({
               throw new Error(message);
             }
           } catch (processingError) {
+            // إلغاء المحاولة أو محاولة قديمة: لا واجهة ولا رسالة — يُترك الأمر
+            // للمعالج الخارجي ليقرّر (نجاح محفوظ أو فشل محاولة حالية).
+            if (!isCurrentAttempt()) throw processingError;
+            if (isAbortLike(processingError)) throw processingError;
             console.warn('[media] تعذرت معالجة الفيديو بعد نشر الأصل:', processingError);
             toast.error('تم نشر الفيديو الأصلي، لكن تعذرت معالجة نسخة التشغيل. الأصل محفوظ ويمكن تشغيله.');
           }
