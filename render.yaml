@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: aani-social
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: main
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: commit
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_SUPABASE_URL
+        value: https://auqqqwfjxrxizlmeweka.supabase.co
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        value: sb_publishable_RD_YttgesZJraGb7dvuArQ_ggxUCfmt
+      - key: SUPABASE_URL
+        value: https://auqqqwfjxrxizlmeweka.supabase.co
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: IMAGEKIT_URL_ENDPOINT
+        value: https://ik.imagekit.io/anisocial
+      - key: IMAGEKIT_PUBLIC_KEY
+        sync: false
+      - key: IMAGEKIT_PRIVATE_KEY
+        sync: false
+      - key: SUPABASE_STORAGE_BUCKET
+        value: aani-media
