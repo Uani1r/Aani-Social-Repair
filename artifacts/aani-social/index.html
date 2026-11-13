@@ -64,13 +64,32 @@
           }
           panel.textContent += message + '\n\n';
         }
+        // «Script error.» بلا تفاصيل = خطأ من سكربت خارجي عبر المصادر
+        // (سكربتات Replit المحقونة في نافذة المعاينة مثلاً). ليس خطأ إقلاعياً
+        // ولا يخص التطبيق: يُطبع في Console فقط ولا يُرسم كشاشة سوداء.
+        function isMaskedExternalError(message, filename) {
+          if (/^script error\.?$/i.test(String(message || ''))) return true;
+          if (!filename) return false;
+          try {
+            return new URL(filename, window.location.href).origin !== window.location.origin;
+          } catch (error) { return false; }
+        }
         window.addEventListener('error', function (event) {
+          if (isMaskedExternalError(event.message, event.filename)) {
+            try { console.warn('[aani-boot] خطأ خارجي مُجهَّل المصدر (غير معطِّل):', event.message, event.filename || ''); } catch (error) { /* تجاهل */ }
+            return;
+          }
           var message = String(event.message || 'خطأ غير معروف');
           if (event.filename) message += '\n' + event.filename + ':' + event.lineno + ':' + event.colno;
           show(message);
         });
         window.addEventListener('unhandledrejection', function (event) {
-          show('Promise rejected: ' + formatReason(event.reason));
+          var reason = formatReason(event.reason);
+          if (isMaskedExternalError(reason, '')) {
+            try { console.warn('[aani-boot] رفض وعد خارجي مُجهَّل المصدر (غير معطِّل):', reason); } catch (error) { /* تجاهل */ }
+            return;
+          }
+          show('Promise rejected: ' + reason);
         });
       })();
     </script>

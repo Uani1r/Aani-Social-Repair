@@ -9,10 +9,12 @@ router = "path"
 [[services]]
 name = "web"
 paths = [ "/" ]
-localPort = 19949
+localPort = 5000
 
 [services.development]
-run = "pnpm --filter @workspace/aani-social run dev"
+# مسار التشغيل الوحيد أثناء التطوير: نفس سكربت .replit (API على 8080،
+# Vite على 5000، تثبيت واحد للحزم، بلا عمليات قديمة متضاربة).
+run = "bash scripts/dev-local.sh"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/aani-social", "run", "build" ]

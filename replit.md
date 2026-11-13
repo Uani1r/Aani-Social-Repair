@@ -4,7 +4,7 @@
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/aani-social run dev` — تشغيل واجهة Aani Social.
+- `bash scripts/dev-local.sh` — مسار التشغيل الوحيد أثناء التطوير (API على 8080 وواجهة Aani Social على 5000، تثبيت واحد للحزم ويوقف الخوادم القديمة تلقائياً).
 - `pnpm --filter @workspace/aani-social run typecheck` — فحص TypeScript للواجهة.
 - `pnpm --filter @workspace/aani-social run typecheck:edge` — فحص دوال Supabase.
 - `pnpm --filter @workspace/aani-social run test:edge` — اختبارات HTTP محلية بمحاكاة الشبكة.

@@ -196,13 +196,31 @@ export function installGlobalErrorCapture(): void {
   if (captureInstalled) return;
   captureInstalled = true;
 
+  const isMaskedExternal = (message: string | undefined, filename: string | undefined): boolean => {
+    if (/^script error\.?$/i.test(message || '')) return true;
+    if (!filename) return false;
+    try {
+      return new URL(filename, window.location.href).origin !== window.location.origin;
+    } catch {
+      return false;
+    }
+  };
+
   try {
     window.addEventListener('error', event => {
+      // «Script error.» بلا كائن خطأ = خطأ من سكربت خارجي عبر المصادر
+      // (سكربتات Replit المحقونة في المعاينة مثلاً). يُسجَّل مميَّزاً كخطأ
+      // خارجي غير معطِّل، ولا يُعرض كخطأ داخلي من التطبيق.
+      const maskedExternal = !event.error && isMaskedExternal(event.message, event.filename);
       pushGlobalError({
-        screen: 'خطأ غير معالج في التطبيق',
+        screen: maskedExternal
+          ? 'خطأ خارجي (سكربت خارجي عبر المصادر — غير معطِّل)'
+          : 'خطأ غير معالج في التطبيق',
         target: event.filename || '(داخلي)',
         error: event.error,
-        message: event.message,
+        message: maskedExternal
+          ? 'Script error. (مُجهَّل المصدر — لا تفاصيل متاحة له من المتصفح)'
+          : event.message,
       });
     });
     window.addEventListener('unhandledrejection', event => {
