@@ -117,11 +117,16 @@ wait_for_http() {
   local pid="$2"
   local url="$3"
   local expected_status="$4"
+  local on_failure="${5:-fail}"
   local status=""
   local attempts=$((STARTUP_TIMEOUT_SECONDS * 4))
 
   for ((attempt = 0; attempt < attempts; attempt += 1)); do
     if ! kill -0 -- "-$pid" 2>/dev/null; then
+      if [[ "$on_failure" == "warn" ]]; then
+        printf '[dev-local] WARNING: %s process exited before becoming ready (URL: %s).\n' "$name" "$url" >&2
+        return 1
+      fi
       fail_startup "$name process exited before becoming ready (URL: $url)."
     fi
 
@@ -133,6 +138,10 @@ wait_for_http() {
     sleep "$POLL_INTERVAL_SECONDS"
   done
 
+  if [[ "$on_failure" == "warn" ]]; then
+    printf '[dev-local] WARNING: %s did not return HTTP %s within %ss (URL: %s; last status: %s).\n' "$name" "$expected_status" "$STARTUP_TIMEOUT_SECONDS" "$url" "${status:-no response}" >&2
+    return 1
+  fi
   fail_startup "$name did not return HTTP $expected_status within ${STARTUP_TIMEOUT_SECONDS}s (URL: $url; last status: ${status:-no response})."
 }
 
@@ -168,21 +177,32 @@ printf '[dev-local] Starting Vite on 0.0.0.0:5000...\n'
 setsid env PORT=5000 pnpm --filter @workspace/aani-social run dev >"$vite_log" 2>&1 &
 vite_pid=$!
 
-# فحوص الجاهزية متوازية: تأخر API لا يؤخر إعلان جاهزية Vite، وكلا
-# الخادمين يعملان منذ الآن؛ فشل أي فحص يعرض سجلاته ويوقف المجموعة.
-wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200' &
-api_check_pid=$!
-wait_for_http 'Vite homepage' "$vite_pid" 'http://127.0.0.1:5000/' '200' &
-vite_check_pid=$!
+# فحص جاهزية Vite: أساسي — فشله يوقف السكربت (لا واجهة بدونه).
+wait_for_http 'Vite homepage' "$vite_pid" 'http://127.0.0.1:5000/' '200'
 wait_for_http 'Vite main module' "$vite_pid" 'http://127.0.0.1:5000/src/main.tsx' '200'
 
-wait "$api_check_pid"
-wait "$vite_check_pid"
-
-printf '[dev-local] Both servers are ready. Waiting for either process to exit...\n'
-if wait -n "$api_pid" "$vite_pid"; then
-  exit_code=0
+# فحص API مستقل وغير حاجب: فشله أو تأخره تحذير فقط — الواجهة تبقى
+# عاملة على 5000 ولا تُوقف عملية Vite مهما حدث للـAPI.
+if wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200' 'warn'; then
+  printf '[dev-local] API ready on 8080.\n' >&2
 else
-  exit_code=$?
+  printf '[dev-local] WARNING: API غير جاهز على 8080 — الواجهة تبقى عاملة على 5000 وطلبات /api ستفشل حتى عودة الـAPI.\n' >&2
+  show_logs 'API server' "$api_log"
 fi
-fail_startup "A server process exited unexpectedly (exit code $exit_code)."
+
+printf '[dev-local] Vite is serving on 5000. Monitoring both servers...\n'
+
+# المراقبة: توقف API تحذير فقط ولا يقتل الواجهة أبداً؛ توقف Vite فادح
+# (لا واجهة بدونه) فينظّف العملية الأخرى. لا عمليات مجهولة تُقتل هنا،
+# والتنظيف الكامل يبقى في trap EXIT عند إيقاف المشروع.
+while true; do
+  if ! kill -0 -- "-$vite_pid" 2>/dev/null; then
+    fail_startup "Vite process exited unexpectedly."
+  fi
+  if [[ -n "$api_pid" ]] && ! kill -0 -- "-$api_pid" 2>/dev/null; then
+    printf '[dev-local] WARNING: API process exited — الواجهة تبقى عاملة على 5000. أعد تشغيل الـAPI لإرجاع /api.\n' >&2
+    show_logs 'API server' "$api_log"
+    api_pid=""
+  fi
+  sleep "$POLL_INTERVAL_SECONDS"
+done

@@ -43,21 +43,20 @@ export default defineConfig(async ({ mode }) => {
   const rawPort = process.env.PORT || '5000';
   const port = Number(rawPort) || 5000;
 
-  // منع تخزين HTML فقط: index.html لا يجب أن يُقدَّم قديماً بعد التعديلات
-  // (يشير إلى أسماء ملفات hash تغيّرت). JS/CSS/الصور المعماة بـhash تبقى
-  // قابلة للتخزين الطويل — لا تغيير عليها.
+  // منع تخزين HTML فقط: يُضبط الترويس قبل إرسال رؤوس الاستجابة (لا داخل
+  // حدث finish المتأخر) عبر مطابقة مسار الطلب: '/' أو *.html — في dev
+  // وpreview. JS/CSS/الصور المعماة بـhash تبقى بتخزينها الطويل — لا تغيير.
   function injectHtmlNoStore(server: ViteDevServer): void {
     server.middlewares.use((_req, res, next) => {
-      res.on('finish', () => {
-        try {
-          const contentType = res.getHeader('content-type');
-          if (typeof contentType === 'string' && contentType.includes('text/html')) {
-            res.setHeader('Cache-Control', 'no-store');
-          }
-        } catch {
-          // الوسيط لا يفشل أي طلب أبداً
+      try {
+        const method = _req.method || '';
+        const url = (_req.url || '').split('?')[0];
+        if ((method === 'GET' || method === 'HEAD') && (url === '/' || url.endsWith('.html'))) {
+          res.setHeader('Cache-Control', 'no-store');
         }
-      });
+      } catch {
+        // الوسيط لا يفشل أي طلب أبداً
+      }
       next();
     });
   }

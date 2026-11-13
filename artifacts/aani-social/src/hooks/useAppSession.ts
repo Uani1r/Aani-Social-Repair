@@ -8,12 +8,17 @@ import type { Profile } from '@/lib/types';
 export default function useAppSession() {
   const [session, setSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  // الحسم الحقيقي لحالة الجلسة: لا تظهر شاشة تسجيل الدخول إلا بعد حسمها
+  // (نجاح getSession/فشله الصريح/حدث onAuthStateChange) — مهلة العرض
+  // لا تُحوّل حالة المصادقة غير المحسومة إلى "مستخدم غير مسجل".
+  const [authResolved, setAuthResolved] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const user = session?.user;
 
   useEffect(() => {
     if (!supabaseConfigured) {
       setAuthLoading(false);
+      setAuthResolved(true);
       return;
     }
 
@@ -33,21 +38,26 @@ export default function useAppSession() {
         console.error('تعذر استعادة جلسة المستخدم:', error);
         if (mounted) setSession(null);
       } finally {
-        if (mounted) setAuthLoading(false);
+        if (mounted) {
+          setAuthLoading(false);
+          setAuthResolved(true);
+        }
       }
     };
 
     void loadSession();
 
-    // ضمانة ضد التعليق: مهلة 2500ms تحرر authLoading فتظهر الواجهة فوراً،
-    // بينما تبقى معالجة نتيجة استعادة الجلسة المتأخرة تعمل بالتوازي (المستمع
-    // onAuthStateChange واستمرار loadSession يطبقان أي جلسة تصل لاحقاً).
+    // مهلة عرض شاشة الانتظار فقط: تحرّر حالة التحميل بعد 2500ms كي لا
+    // يعلق الإقلاع على استعادة الجلسة، لكنها لا تحسم حالة المصادقة —
+    // جلسة تصل لاحقاً (من loadSession أو onAuthStateChange) تُطبَّق
+    // طبيعياً والواجهة تنتقل إلى الحالة الصحيحة دون فقدانها.
     const authLoadingGuard = window.setTimeout(() => {
       if (mounted) setAuthLoading(false);
     }, 2500);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
+      setAuthResolved(true);
       setSession(nextSession);
       setProfile(null);
       if (event === 'SIGNED_IN' && nextSession?.user?.id) {
@@ -134,5 +144,5 @@ export default function useAppSession() {
     setProfile(null);
   };
 
-  return { authLoading, user, profile, setProfile, signOut };
+  return { authLoading, authResolved, user, profile, setProfile, signOut };
 }

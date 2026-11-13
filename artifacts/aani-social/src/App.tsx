@@ -27,7 +27,7 @@ import '@/index.css';
 
 function App() {
   useModalBodyScrollLock();
-  const { authLoading, user, profile, setProfile, signOut } = useAppSession();
+  const { authLoading, authResolved, user, profile, setProfile, signOut } = useAppSession();
   const { setTheme, resolvedTheme } = useTheme();
   useInteractionRealtime(user?.id);
 
@@ -80,7 +80,11 @@ function App() {
     return () => document.removeEventListener('selectstart', preventNativeTextSelection, true);
   }, []);
 
-  if (authLoading) {
+  // شاشة الانتظار تُعرض حتى تُحسم حالة الجلسة فعلياً — مهلة 2500ms تحرر
+  // حالة التحميل فقط، ولا تُحوّل الحالة غير المحسومة إلى "غير مسجل" ولا
+  // تعرض تسجيل الدخول قبل تأكيد غياب الجلسة (الجلسة المتأخرة تُطبَّق فور
+  // وصولها والواجهة تنتقل إليها مباشرة).
+  if (authLoading || !authResolved) {
     return (
       <>
         <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
