@@ -26,7 +26,8 @@ workspace_runner_pattern='(@workspace/(aani-social|api-server)|artifacts/(aani-s
 # يحفظ الانتماء بعد خروج الزعيم أو تغيّر أفراد المجموعة.
 declare -A group_known_pids=()
 
-# المجموعات المثبتة الهوية: PGID ← "pid:starttime" من /proc.
+# المجموعات المثبتة الهوية: PGID ← " pid:starttime pid:starttime ..." من /proc.
+# تُحفظ هوية الزعيم وأبنائه، ويُعاد فحصها قبل كل إشارة.
 declare -A trusted_groups=()
 # يُرفع عند تسجيل عضو جديد في مجموعة قائمة، فتُكتب الهوية مرة واحدة فقط.
 state_dirty=0
@@ -108,14 +109,51 @@ identity_matches() {
   [[ "$actual_pgid" == "$pgid" && "$actual_start" == "$start" ]]
 }
 
-# نثق بمجموعة أنشأناها للتو: نسجّل هوية زعيمها من /proc وقت الإنشاء.
-trust_group() {
+# هل ما زالت هوية واحدة على الأقل من الهويات المسجّلة للمجموعة تطابق عملية
+# حيّة؟ التحقق يجمع ثلاثة عناصر معاً: PID نفسه، ووقت بدء العملية، وPGID.
+# يُطبَّق على الزعيم والأبناء بالتساوي، ويُعاد قبل كل إشارة.
+trusted_identity_matches() {
   local pgid="${1:-}"
+  local tokens=""
+  local token=""
+  local pid=""
+  local start=""
+  [[ -n "$pgid" ]] || return 1
+  tokens="${trusted_groups[$pgid]:-}"
+  [[ -n "$tokens" ]] || return 1
+  for token in $tokens; do
+    pid="${token%%:*}"
+    start="${token#*:}"
+    [[ "$start" == "$token" ]] && continue
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if identity_matches "$pid" "$pgid" "$start"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# يحدّث هوية المجموعة من أعضائها الأحياء الآن (الزعيم والأبناء). يُستدعى فقط
+# بعد إثبات الملكية، فكل أعضاء المجموعة الحالية هم من مجموعتنا. حفظ هوية
+# الأبناء يجعل المجموعة قابلة للتنظيف حتى بعد خروج الزعيم.
+refresh_group_trust() {
+  local pgid="${1:-}"
+  local pid=""
   local identity=""
-  [[ -n "$pgid" ]] || return 0
-  identity="$(proc_identity "$pgid" || true)"
-  [[ -n "$identity" ]] || return 0
-  trusted_groups["$pgid"]="$pgid:${identity#* }"
+  local identity_pgid=""
+  local start=""
+  local line=""
+  [[ -n "$pgid" ]] || return 1
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    identity="$(proc_identity "$pid" || true)"
+    [[ -n "$identity" ]] || continue
+    read -r identity_pgid start <<<"$identity"
+    [[ "$identity_pgid" == "$pgid" ]] || continue
+    line="$line $pid:$start"
+  done < <(group_member_pids "$pgid")
+  trusted_groups["$pgid"]="$line"
+  [[ -n "$line" ]]
 }
 
 # هل الزعيم (PID == PGID) ما زال حياً؟ نطابق PGID الفعلي أيضاً كي لا تعطي
@@ -206,15 +244,21 @@ remember_group_members() {
   group_known_pids["$pgid"]="$known"
 }
 
-# هل المجموعة لنا؟ الأولوية لثقة مثبتة بالهوية (pid + وقت البدء): إما
-# أنشأناها أو أثبتناها من ملف الحالة. وبدونها يبقى التحقق محدوداً: اسم الحزمة
-# في سطر الأوامر، أو مجلد عمل داخل المستودع، أو عضو سجّلناه سابقاً.
+# هل المجموعة لنا؟ الأولوية لثقة مثبتة بالهوية (PID + وقت البدء + PGID):
+# وجود ثقة سابقة لا يكفي، بل يجب أن تطابق الآن هوية أحد أعضائها المسجّلين.
+# وبدون أي هوية مسجّلة يبقى التحقق محدوداً: اسم الحزمة في سطر الأوامر، أو مجلد
+# عمل داخل المستودع، أو عضو سجّلناه سابقاً.
 group_is_ours() {
   local pgid="${1:-}"
+  local tokens=""
   [[ -n "$pgid" ]] || return 1
   group_has_members "$pgid" || return 1
-  if [[ -n "${trusted_groups[$pgid]:-}" ]]; then
-    return 0
+  tokens="${trusted_groups[$pgid]:-}"
+  if [[ -n "$tokens" ]]; then
+    if trusted_identity_matches "$pgid"; then
+      return 0
+    fi
+    return 1
   fi
   if group_matches_workspace "$pgid"; then
     return 0
@@ -235,17 +279,14 @@ stop_group() {
     return 0
   fi
 
-  # قبل أي إشارة: إن كانت الهوية المسجلة تخص الزعيم وما زال حياً، يجب أن
-  # يطابق وقت بدء عمليته السجل — وإلا فهو PID أُعيد استخدامه.
+  # قبل أي إشارة: إن كانت لدينا هوية مسجّلة (زعيم أو ابن)، يجب أن تطابق الآن
+  # بثلاثة عناصر معاً: PID ووقت البدء وPGID. وفشل التحقق يمنع SIGTERM
+  # وSIGKILL كليهما.
   local trusted_token="${trusted_groups[$pgid]:-}"
   if [[ -n "$trusted_token" ]]; then
-    local trusted_pid="${trusted_token%%:*}"
-    local trusted_start="${trusted_token#*:}"
-    if [[ "$trusted_pid" == "$pgid" ]] && group_leader_alive "$pgid"; then
-      if ! identity_matches "$pgid" "$pgid" "$trusted_start"; then
-        printf '[dev-local] WARNING: وقت بدء العملية %s لا يطابق السجل (إعادة استخدام PID؟) — لن توجَّه أي إشارة إلى المجموعة.\n' "$pgid" >&2
-        return 0
-      fi
+    if ! trusted_identity_matches "$pgid"; then
+      printf '[dev-local] WARNING: هوية المجموعة %s المسجّلة (PID/وقت البدء/PGID) لم تعد تطابق أي عملية حيّة — لن يُرسل SIGTERM ولا SIGKILL إلى هذه المجموعة.\n' "$pgid" >&2
+      return 0
     fi
   fi
 
@@ -516,8 +557,8 @@ vite_pgid=$!
 
 remember_group_members "$api_pgid"
 remember_group_members "$vite_pgid"
-trust_group "$api_pgid"
-trust_group "$vite_pgid"
+refresh_group_trust "$api_pgid" || true
+refresh_group_trust "$vite_pgid" || true
 write_state_file
 state_dirty=0
 
@@ -556,6 +597,7 @@ while true; do
     fail_startup "Vite process group (PGID $vite_pgid) no longer belongs to this workspace — every Aani Vite process has exited. Refusing to signal an unidentified process group."
   fi
   remember_group_members "$vite_pgid"
+  refresh_group_trust "$vite_pgid" || true
   if group_leader_alive "$vite_pgid"; then
     vite_leader_warned=0
   elif [[ "$vite_leader_warned" -eq 0 ]]; then
@@ -574,6 +616,7 @@ while true; do
       api_pgid=""
     else
       remember_group_members "$api_pgid"
+      refresh_group_trust "$api_pgid" || true
       if group_leader_alive "$api_pgid"; then
         api_leader_warned=0
       elif [[ "$api_leader_warned" -eq 0 ]]; then
