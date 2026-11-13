@@ -39,12 +39,12 @@ export default function useAppSession() {
 
     void loadSession();
 
-    // ضمانة ضد التعليق: حتى لو علق getSession أو تأخرت الشبكة إلى الأبد،
-    // تُصفَّر authLoading بعد 10 ثوانٍ فتظهر واجهة تسجيل الدخول دائماً
-    // بدل شاشة تحميل عالقة. (الاستدعاء لاحقاً غير مؤذٍ — التصفير idempotent)
+    // ضمانة ضد التعليق: مهلة 2500ms تحرر authLoading فتظهر الواجهة فوراً،
+    // بينما تبقى معالجة نتيجة استعادة الجلسة المتأخرة تعمل بالتوازي (المستمع
+    // onAuthStateChange واستمرار loadSession يطبقان أي جلسة تصل لاحقاً).
     const authLoadingGuard = window.setTimeout(() => {
       if (mounted) setAuthLoading(false);
-    }, 10000);
+    }, 2500);
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
@@ -83,9 +83,18 @@ export default function useAppSession() {
     };
     const metadataName = validName(user.user_metadata?.full_name) || validName(user.user_metadata?.name);
 
-    void supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,gender,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,is_nearby_visible,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', user.id).maybeSingle().then(({ data }) => {
-      if (!active) return;
-      const row = data as Profile | null;
+    // ملف بديل من user_metadata فقط — يُستخدم عند فشل طلب profiles أو تعذر
+    // معالجة الصف، حتى لا يمنع فشل الملف الشخصي رسم التطبيق.
+    const fallbackProfile = (): Profile => ({
+      id: user.id,
+      username: validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'user',
+      full_name: metadataName || validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'مستخدم',
+      display_name: metadataName,
+      avatar_url: null,
+      bio: '',
+    });
+
+    const applyProfile = (row: Profile | null) => {
       const username = validName(row?.username) || validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'user';
       const storedDisplayName = validName(row?.display_name);
       setProfile({
@@ -97,7 +106,22 @@ export default function useAppSession() {
         avatar_url: row?.avatar_url || null,
         bio: row?.bio || '',
       });
-    });
+    };
+
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,gender,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,is_nearby_visible,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', user.id).maybeSingle();
+        if (error) throw error;
+        if (!active) return;
+        applyProfile(data as Profile | null);
+      } catch (profileError) {
+        // فشل تحميل الملف الشخصي (شبكة/RLS/انقطاع) لا يمنع رسم التطبيق
+        console.warn('[app] تعذر تحميل الملف الشخصي — استخدام بيانات الجلسة:', profileError);
+        if (!active) return;
+        applyProfile(null);
+        setProfile(current => current ?? fallbackProfile());
+      }
+    })();
 
     return () => {
       active = false;

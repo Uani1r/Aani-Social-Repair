@@ -11,6 +11,44 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* 2.1 خط Alexandria مستضاف محلياً (بدون شبكة خارجية) — كل الأوزان
+   الضرورية (300-700) مع font-display: swap كي لا يحجب الرسم الأول */
+@font-face {
+  font-family: 'Alexandria';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url('/fonts/alexandria-300.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Alexandria';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/alexandria-400.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Alexandria';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/alexandria-500.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Alexandria';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/alexandria-600.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Alexandria';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/alexandria-700.ttf') format('truetype');
+}
+
 /* 3. توجيه Tailwind لمسح كافة ملفات المكونات واستخراج الكلاسات */
 @source "./**/*.{js,ts,jsx,tsx,html}";
 @source "../**/*.{js,ts,jsx,tsx,html}";

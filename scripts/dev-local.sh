@@ -147,13 +147,20 @@ command -v setsid >/dev/null 2>&1 || {
 
 stop_old_servers
 
-# Install once, before either development server starts. The frontend's dev
-# script intentionally does not install; deployment/build install paths remain
-# unchanged.
-printf '[dev-local] Installing workspace dependencies once...\n'
-pnpm install --prefer-offline
+# تثبيت الاعتماديات فقط عند الحاجة الفعلية: بلا node_modules أو غياب
+# أدوات التشغيل (vite للواجهة، tsx للـAPI). التشغيل الاعتيادي بعد أول
+# مرة لا يثبّت شيئاً — مسارات البناء والنشر غير متأثرة.
+if [[ ! -d "$ROOT_DIR/artifacts/aani-social/node_modules" ]] \
+  || [[ ! -d "$ROOT_DIR/artifacts/api-server/node_modules" ]] \
+  || [[ ! -x "$ROOT_DIR/artifacts/aani-social/node_modules/.bin/vite" ]] \
+  || [[ ! -x "$ROOT_DIR/artifacts/api-server/node_modules/.bin/tsx" ]]; then
+  printf '[dev-local] Installing workspace dependencies (missing node_modules or runners)...\n'
+  pnpm install --prefer-offline
+else
+  printf '[dev-local] Dependencies already installed — skipping pnpm install.\n'
+fi
 
-printf '[dev-local] Starting API server on 8080...\n'
+printf '[dev-local] Starting API server on 8080 (tsx watch, no rebuild)...\n'
 setsid env PORT=8080 pnpm --filter @workspace/api-server run dev >"$api_log" 2>&1 &
 api_pid=$!
 
@@ -161,9 +168,16 @@ printf '[dev-local] Starting Vite on 0.0.0.0:5000...\n'
 setsid env PORT=5000 pnpm --filter @workspace/aani-social run dev >"$vite_log" 2>&1 &
 vite_pid=$!
 
-wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200'
-wait_for_http 'Vite homepage' "$vite_pid" 'http://127.0.0.1:5000/' '200'
+# فحوص الجاهزية متوازية: تأخر API لا يؤخر إعلان جاهزية Vite، وكلا
+# الخادمين يعملان منذ الآن؛ فشل أي فحص يعرض سجلاته ويوقف المجموعة.
+wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200' &
+api_check_pid=$!
+wait_for_http 'Vite homepage' "$vite_pid" 'http://127.0.0.1:5000/' '200' &
+vite_check_pid=$!
 wait_for_http 'Vite main module' "$vite_pid" 'http://127.0.0.1:5000/src/main.tsx' '200'
+
+wait "$api_check_pid"
+wait "$vite_check_pid"
 
 printf '[dev-local] Both servers are ready. Waiting for either process to exit...\n'
 if wait -n "$api_pid" "$vite_pid"; then

@@ -1,7 +1,7 @@
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { defineConfig, loadEnv } from 'vite';
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
 
 const appDir = path.resolve(import.meta.dirname);
 // The pnpm workspace root. A .env file may live here as well as in the app
@@ -43,11 +43,37 @@ export default defineConfig(async ({ mode }) => {
   const rawPort = process.env.PORT || '5000';
   const port = Number(rawPort) || 5000;
 
+  // منع تخزين HTML فقط: index.html لا يجب أن يُقدَّم قديماً بعد التعديلات
+  // (يشير إلى أسماء ملفات hash تغيّرت). JS/CSS/الصور المعماة بـhash تبقى
+  // قابلة للتخزين الطويل — لا تغيير عليها.
+  function injectHtmlNoStore(server: ViteDevServer): void {
+    server.middlewares.use((_req, res, next) => {
+      res.on('finish', () => {
+        try {
+          const contentType = res.getHeader('content-type');
+          if (typeof contentType === 'string' && contentType.includes('text/html')) {
+            res.setHeader('Cache-Control', 'no-store');
+          }
+        } catch {
+          // الوسيط لا يفشل أي طلب أبداً
+        }
+      });
+      next();
+    });
+  }
+
+  const htmlNoStorePlugin: Plugin = {
+    name: 'aani-html-no-store',
+    configureServer: injectHtmlNoStore,
+    configurePreviewServer: injectHtmlNoStore,
+  };
+
   return {
     base: '/',
     plugins: [
       react(),
       tailwindcss(),
+      htmlNoStorePlugin,
 
       ...(process.env.NODE_ENV !== 'production' &&
       process.env.REPL_ID !== undefined

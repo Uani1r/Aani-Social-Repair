@@ -15,6 +15,7 @@
 
   var realErrors = [];      // {kind:'js', message, file, line, col}
   var failedResources = []; // {kind:'resource', tag, src}
+  var rejectedPromises = []; // {kind:'rejection', message, file, line}
   var fired = false;
 
   function isCrossOrigin(url) {
@@ -23,6 +24,23 @@
     } catch (error) {
       return false;
     }
+  }
+
+  // أخطاء الشبكة العابرة المعروفة لا تُسجَّل (فشل fetch مؤقت لا يمنع الإقلاع)
+  function isTransientNetworkProblem(text) {
+    return /(failed to fetch|networkerror|load failed|network request failed|aborted|timed?\s?out|err_(?:network|internet|connection|name)_\w+|fetch is aborted)/i.test(text || '');
+  }
+
+  // أول إطار مفيد من الـstack: اسم الملف والسطر فقط — بلا أي بيانات جلسة أو قيم متغيرات
+  function firstStackFrame(error) {
+    try {
+      var frames = String(error.stack || '').split('\n');
+      for (var i = 0; i < frames.length; i++) {
+        var frame = frames[i].trim();
+        if (frame && frame.indexOf('boot-guard.js') === -1) return frame.slice(0, 220);
+      }
+    } catch (error2) { /* تجاهل */ }
+    return '';
   }
 
   // مرحلة الالتقاط فقط لرصد فشل تحميل وسوم script/link؛ لا يعدّل أي سلوك.
@@ -50,6 +68,25 @@
     } catch (error) { /* هذه الأداة لا تفشل إطلاقاً */ }
   }, true);
 
+  // مستمع خفيف لرفض الوعود: يُسجَّل فقط ما يمكن التحقق من مصدره (نطاق
+  // التطبيق، رسالة واضحة). بلا preventDefault — لا نُخفي شيئاً عن Console.
+  window.addEventListener('unhandledrejection', function (event) {
+    try {
+      var reason = event.reason;
+      if (reason === undefined || reason === null) return; // مُجهَّل المصدر — تجاهل
+      var message = reason instanceof Error ? String(reason.message || '') : (typeof reason === 'string' ? reason : '');
+      if (!message || isTransientNetworkProblem(message)) return;
+      var frame = reason instanceof Error ? firstStackFrame(reason) : '';
+      // رفض بلا مصدر قابل للتحقق (مثل سلاسل من سكربتات خارجية) — تجاهل
+      if (!frame && reason instanceof Error && !reason.stack) return;
+      rejectedPromises.push({
+        kind: 'rejection',
+        message: message.slice(0, 220),
+        file: frame,
+      });
+    } catch (error) { /* هذه الأداة لا تفشل إطلاقاً */ }
+  });
+
   function formatFirstProblem() {
     if (realErrors.length > 0) {
       var first = realErrors[0];
@@ -58,6 +95,10 @@
     if (failedResources.length > 0) {
       var resource = failedResources[0];
       return 'أول ملف فشل تحميله: <' + resource.tag + '> ' + resource.src;
+    }
+    if (rejectedPromises.length > 0) {
+      var rejection = rejectedPromises[0];
+      return 'أول رفض وعد غير معالج: ' + rejection.message + (rejection.file ? '\nالمصدر: ' + rejection.file : '');
     }
     return 'لا أخطاء حقيقية مسجلة من نطاق التطبيق.';
   }
