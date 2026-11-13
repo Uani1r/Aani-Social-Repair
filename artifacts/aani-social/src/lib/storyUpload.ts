@@ -116,6 +116,11 @@ async function uploadMediaUnsafe({
 }: UploadOptions): Promise<string> {
   if (signal?.aborted) throw new DOMException('أُلغيت العملية.', 'AbortError');
 
+  // مسار بديل عبر الخادم (بلا توقيع): يعاد تفعيله تلقائياً فقط عند رفض
+  // الرفع المباشر من ImageKit بسبب التوقيع — خطأ البيئة (مفاتيح غير
+  // متطابقة مثلاً) لا يمنع المستخدم من النشر.
+  let serverProxyFailedWithSignature = false;
+
   // 1) الضغط/العزل من جهة العميل — يعمل دائماً افتراضياً
   onPhase?.('compressing', 0);
   const effectivePreset = preset ?? detectPreset(file);
@@ -192,7 +197,7 @@ async function uploadMediaUnsafe({
   // ويرفض أسماء بلا امتداد؛ الضواغط قد تعيد Blob بلا اسم فيصار للنوع
   const uploadName = ensureUploadName(uploadFile, fileName || 'media');
 
-  const url = await new Promise<string>((resolve, reject) => {
+  const directUploadPromise = new Promise<string>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
     // الاسم الآمن يُمرَّر صراحةً كوسيط ثالث — حتى لو عاد الضاغط كائن Blob
@@ -252,6 +257,9 @@ async function uploadMediaUnsafe({
         } catch {
           if (xhr.responseText) detail = xhr.responseText.slice(0, 200);
         }
+        serverProxyFailedWithSignature = xhr.status >= 400 && xhr.status < 500
+          && xhr.status !== 413
+          && /invalid signature|signature parameter/i.test(detail);
         reject(new Error(`فشل رفع الوسائط (HTTP ${xhr.status})${detail ? `: ${detail}` : '.'}`));
       }
     };
@@ -265,6 +273,49 @@ async function uploadMediaUnsafe({
     };
     xhr.send(form);
   });
+
+  /** الرفع عبر الخادم بالمفتاح الخاص (Basic auth — بلا توقيع توكن).
+   *  يُستعمل فقط كاحتياط عندما يرفض ImageKit الرفع المباشر بسبب التوقيع. */
+  const uploadViaServerProxy = async (): Promise<string> => {
+    onPhase?.('uploading');
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) throw new Error('يجب تسجيل الدخول قبل رفع الوسائط.');
+
+    const response = await fetch('/api/media/upload', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': uploadFile.type || 'application/octet-stream',
+        'x-aani-file-name': encodeURIComponent(uploadName),
+        'x-aani-folder': encodeURIComponent(folder),
+      },
+      body: uploadFile,
+      signal,
+    });
+    const result = await response.json().catch(() => null) as
+      | { success?: unknown; url?: unknown; error?: unknown }
+      | null;
+    if (response.ok && result && result.success === true && typeof result.url === 'string' && result.url) {
+      onProgress?.(100);
+      return result.url;
+    }
+    const detail = typeof result?.error === 'string' && result.error ? result.error : `HTTP ${response.status}`;
+    throw new Error(`فشل الرفع عبر الخادم (${detail})`);
+  };
+
+  let url: string;
+  try {
+    url = await directUploadPromise;
+  } catch (directError) {
+    if (serverProxyFailedWithSignature && !signal?.aborted) {
+      // التوقيع مرفوض من البيئة (ليس من المستخدم) — نكمل تلقائياً عبر الخادم
+      console.warn('[upload] رفض ImageKit التوقيع — تحويل الرفع عبر الخادم (بلا توقيع)');
+      url = await uploadViaServerProxy();
+    } else {
+      throw directError;
+    }
+  }
 
   // سجّل الرابط النهائي مقابل مسار الرفع الأصلي: أي getPublicUrl(path) لاحق
   // في التطبيق يعيد رابط ImageKit الحقيقي بدل رابط Supabase غير موجود.

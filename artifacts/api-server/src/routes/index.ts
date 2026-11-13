@@ -3,6 +3,7 @@ import healthRouter from "./health";
 import imagekitAuthRouter from "./imagekitAuth";
 import mediaCleanupRouter from "./mediaCleanup";
 import mediaProcessingRouter from "./mediaProcessing";
+import mediaUploadRouter from "./mediaUpload";
 import pushNotificationsRouter from "./pushNotifications";
 
 const router: IRouter = Router();
@@ -11,6 +12,7 @@ router.use(healthRouter);
 router.use(imagekitAuthRouter);
 router.use(mediaCleanupRouter);
 router.use(mediaProcessingRouter);
+router.use(mediaUploadRouter);
 router.use(pushNotificationsRouter);
 
 /**

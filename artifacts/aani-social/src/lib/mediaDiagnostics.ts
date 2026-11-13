@@ -26,7 +26,7 @@ export type MediaDiagnosticStage =
   | 'عملية شبكة أخرى';
 
 /** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
-export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-story-diagnostics-v2';
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-story-diagnostics-v3-server-upload-fallback';
 
 export interface MediaDiagnosticParams {
   publicKeyPresent?: boolean;
