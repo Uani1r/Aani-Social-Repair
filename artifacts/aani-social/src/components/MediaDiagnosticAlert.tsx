@@ -3,6 +3,7 @@
 // يظهر تلقائياً عند فشل أي نداء وسائط مُرصود (HTTP ≥ 400 أو فشل شبكة).
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import {
   buildMediaDiagnosticReport,
@@ -149,7 +150,10 @@ export default function MediaDiagnosticAlert() {
     });
   };
 
-  return (
+  // Portal إلى document.body: تنبيه مستقل عن شجرة App — يظهر فوق محرر القصة
+  // (الذي يُعرض عبر createPortal بطبقته الخاصة) ولا يخفيه إغلاق المحرر أو
+  // إعادة فتحه. z-index أعلى من أقصى طبقات المحرر (z-[130]).
+  return createPortal(
     <div style={styles.overlay} role="alert">
       <div style={styles.headerRow}>
         <span style={styles.title}>تشخيص الوسائط</span>
@@ -170,6 +174,7 @@ export default function MediaDiagnosticAlert() {
           إغلاق
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
 
 import { logger } from "../lib/logger";
-import { describeExpireValue, logImageKitAuthDiagnostics } from "../lib/mediaDiagnostics";
+import { buildImageKitSignature, describeExpireValue, logImageKitAuthDiagnostics } from "../lib/mediaDiagnostics";
 import { readSupabaseAdminConfig } from "../lib/supabaseAdmin";
 
 const router = Router();
@@ -68,17 +68,14 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
       const token = crypto.randomUUID();
       // ImageKit يتوقع expire بالثواني (unix time) وبحد أقصى ساعة واحدة
       const expire = Math.floor(Date.now() / 1000) + 60 * 30;
-      // الخوارزمية الموثقة في ImageKit SDK الرسمي: SHA1 عادي لدمج
-      // privateKey + token + expire (وليس HMAC بمفتاح خاص — ما كان يجعل
-      // التوقيع الناتج مختلفاً تماماً ويرفض خادم ImageKit كل رفعة 40x)
-      const signature = crypto
-        .createHash("sha1")
-        .update(`${imagekit.privateKey}${token}${expire}`)
-        .digest("hex");
+      // خوارزمية ImageKit الرسمية كما في حزمها (imagekit-nodejs
+      // → getAuthenticationParameters): HMAC-SHA1 بالمفتاح الخاص
+      // كمفتاح، على النص token + expire — وليس SHA1 عادي.
+      const signature = buildImageKitSignature(imagekit.privateKey, token, expire);
 
       // سجل تشخيصي غير حساس: هل المعاملات المولّدة بصيغة سليمة (بلا أسرار)
       logger.info(
-        { expire, expireCheck: describeExpireValue(expire), tokenPrefix: token.slice(0, 8), publicKeyPrefix: imagekit.publicKey.slice(0, 12) },
+        { expire, expireCheck: describeExpireValue(expire), tokenPrefix: token.slice(0, 8), publicKeyPrefix: imagekit.publicKey.slice(0, 12), algorithm: "HMAC-SHA1(privateKey, token+expire)" },
         "ImageKit upload auth generated",
       );
 

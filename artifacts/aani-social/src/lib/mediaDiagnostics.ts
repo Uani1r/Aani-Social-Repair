@@ -19,6 +19,7 @@
 
 export type MediaDiagnosticStage =
   | 'الرفع إلى ImageKit'
+  | 'الرفع إلى ImageKit (مسار بديل عبر الخادم)'
   | 'جلب توقيع ImageKit'
   | 'الحفظ في قاعدة البيانات (نشر القصة)'
   | 'فشل نشر القصة (من كود النشر)'
@@ -192,9 +193,11 @@ function recordResult(options: {
   networkError?: string;
   rawResponse?: string;
   params?: MediaDiagnosticParams;
+  explicitStage?: MediaDiagnosticStage;
 }): void {
   try {
-    const stage = classifyStage(options.url);
+    // المرحلة الصريحة تسبق التصنيف من الرابط — لا تعديل بعد الإرسال
+    const stage = options.explicitStage ?? classifyStage(options.url);
     const event: MediaDiagnosticEvent = {
       id: `diag-${Date.now()}-${eventCounter += 1}`,
       at: Date.now(),
@@ -371,25 +374,45 @@ export function getMediaDiagnosticEvents(): readonly MediaDiagnosticEvent[] {
   return events;
 }
 
-/** إزاحة المرحلة التي فشلت — تُستدعى مباشرة من كتلة catch الخاصة بالنشر
- *  (حتى لو لم ترصد طبقة الشبكة الفشل، تظهر نافذة التشخيص من هنا) */
+/** إزاحة المرحلة التي فشلت — تُستدعى مباشرة من كتلة catch الخاصة بالنشر.
+ *  يُبنى الحدث مباشرة بالمرحلة والرابط وكود HTTP الحقيقي (لا حدث عام يُعدَّل
+ *  بعد إرساله)، وكود HTTP يُستخرج من نص رسالة الرفع إن لم يُمرَّر صراحةً. */
 export function reportMediaStageFailure(
   stage: MediaDiagnosticStage,
   details: { endpoint?: string; rawResponse?: string; httpStatus?: number },
 ): void {
-  recordResult({
-    url: details.endpoint || '(داخلي)',
-    method: '—',
-    httpStatus: details.httpStatus ?? null,
-    rawResponse: details.rawResponse || '',
-  });
-  // recordResult يصنّف المرحلة من الرابط؛ الحدث الداخلي يحمل مرحلتنا الصريحة
-  try {
-    const last = events[events.length - 1];
-    if (last && last.endpoint === (details.endpoint || '(داخلي)')) last.stage = stage;
-  } catch {
-    // صامت
+  let endpoint = details.endpoint || '(داخلي)';
+  let httpStatus = details.httpStatus ?? null;
+
+  // استخراج كود الحالة الحقيقي من نص رسالة الرفع: "فشل رفع الوسائط (HTTP 400)"
+  // أو "فشل الرفع عبر الخادم (HTTP 404)" — لا يُوصف بفشل شبكي إطلاقاً عند وجوده
+  if (httpStatus === null) {
+    const statusMatch = details.rawResponse?.match(/HTTP\s+(\d{3})/i);
+    if (statusMatch) {
+      httpStatus = Number(statusMatch[1]);
+    }
   }
+
+  // تحديد نقطة النهاية والمرحلة الفعلية من نص رسالة الرفع
+  if (/فشل رفع الوسائط/.test(details.rawResponse || '')) {
+    endpoint = 'https://upload.imagekit.io/api/v1/files/upload';
+    if (stage === 'فشل نشر القصة (من كود النشر)') {
+      stage = 'الرفع إلى ImageKit';
+    }
+  } else if (/فشل الرفع عبر الخادم/.test(details.rawResponse || '')) {
+    endpoint = '/api/media/upload';
+    if (stage === 'فشل نشر القصة (من كود النشر)') {
+      stage = 'الرفع إلى ImageKit (مسار بديل عبر الخادم)';
+    }
+  }
+
+  recordResult({
+    url: endpoint,
+    method: 'POST',
+    httpStatus,
+    rawResponse: details.rawResponse || '',
+    explicitStage: stage,
+  });
 }
 
 function describeBytes(bytes?: number): string {

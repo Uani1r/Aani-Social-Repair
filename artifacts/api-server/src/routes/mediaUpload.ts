@@ -53,6 +53,17 @@ function sanitizeFolder(raw: string): string {
   return `/aani/${cleaned || "misc"}`;
 }
 
+// نقطة تحقق عملية: افتح GET /api/media/upload في المتصفح — الاستجابة JSON
+// هنا تعني أن الخادم المُخدَّم يشتمل على نقطة الرفع الاحتياطية فعلاً؛
+// 404 تعني أن العملية تستخدم بناءً قديماً بدونها.
+router.get("/media/upload", (_req: Request, res: Response) => {
+  return res.status(200).json({
+    success: true,
+    route: "POST /api/media/upload",
+    message: "نقطة الرفع الاحتياطي حيّة على هذه العملية.",
+  });
+});
+
 router.post("/media/upload", express.raw({ type: "*/*", limit: "30mb" }), (req: Request, res: Response) => {
   void (async () => {
     const supabaseConfig = readSupabaseAdminConfig();
@@ -84,7 +95,13 @@ router.post("/media/upload", express.raw({ type: "*/*", limit: "30mb" }), (req: 
       const fileName = (decodeURIComponent(fileNameHeader) || `upload-${Date.now()}`)
         .replace(/[\r\n\0]/g, "")
         .slice(0, 180) || `upload-${Date.now()}`;
-      const contentType = (req.header("x-aani-content-type") || "application/octet-stream").split(";")[0] || "application/octet-stream";
+      // نوع الملف: العميل يرسله في content-type (ترويسة الطلب نفسها) —
+      // قد يتضمن charset يُزال هنا؛ x-aani-content-type احتياط للتوافق
+      const contentType = (req.header("content-type") || req.header("x-aani-content-type") || "application/octet-stream")
+        .split(";")[0]
+        .trim()
+        .toLowerCase()
+        || "application/octet-stream";
       const folder = sanitizeFolder(decodeURIComponent(req.header("x-aani-folder") || ""));
 
       // رفع من خادم إلى خادم بالمفتاح الخاص (Basic auth) — بلا توقيع توكن

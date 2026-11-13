@@ -7,11 +7,33 @@
 // - تحقق اختياري (بكاش 10 دقائق) من صلاحية المفتاح الخاص عبر واجهة
 //   إدارة ImageKit نفسها (نفس أسلوب Basic auth في imagekitAdmin.ts).
 
+import crypto from "node:crypto";
+
 import { logger } from "./logger";
 
 export interface ImageKitConfigDiagnosis {
   issues: string[];
   info: string[];
+}
+
+/**
+ * خوارزمية توقيع الرفع المباشر كما توثقها ImageKit وتنفذها حزمها الرسمية
+ * (imagekit-nodejs: src/resources/helper.ts → getAuthenticationParameters):
+ *
+ *   signature = HMAC-SHA1(key = privateKey, message = token + expire)
+ *
+ * مصدر واحد للحقيقة: نقطة التوقيع imagekitAuth.ts تستخدم هذه الدالة،
+ * والاختبارات (mediaDiagnostics.test.ts) تثبت خوارزميتها.
+ */
+export function buildImageKitSignature(
+  privateKey: string,
+  token: string,
+  expire: number,
+): string {
+  return crypto
+    .createHmac("sha1", privateKey)
+    .update(`${token}${expire}`, "utf8")
+    .digest("hex");
 }
 
 export function diagnoseImageKitSignatureConfig(config: {
