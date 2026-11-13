@@ -303,7 +303,21 @@ stop_group() {
     sleep "$POLL_INTERVAL_SECONDS"
   done
   if group_has_members "$pgid"; then
-    kill -KILL -- "-$pgid" 2>/dev/null || true
+    # نفس التحقق يُعاد قبل SIGKILL: العملية التي أثبتت الهوية قد تكون خرجت
+    # بين SIGTERM وهذه اللحظة، أو أُعيد استخدام PID. لا KILL بلا إثبات.
+    local kill_allowed=0
+    if [[ -n "$trusted_token" ]]; then
+      if trusted_identity_matches "$pgid"; then
+        kill_allowed=1
+      fi
+    elif group_is_ours "$pgid"; then
+      kill_allowed=1
+    fi
+    if ((kill_allowed)); then
+      kill -KILL -- "-$pgid" 2>/dev/null || true
+    else
+      printf '[dev-local] WARNING: بعد SIGTERM لم تعد أي هوية مسجّلة للمجموعة %s تطابق عملية حيّة (PID/وقت البدء/PGID) — لن يُرسل SIGKILL. افحص المجموعة يدوياً: ps -o pid,pgid,lstart,args -s %s\n' "$pgid" "$pgid" >&2
+    fi
   fi
   wait "$pgid" 2>/dev/null || true
   group_known_pids["$pgid"]=""
