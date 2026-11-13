@@ -303,9 +303,9 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
     void interactions.toggleLike();
   };
 
-  const toggleRepost = () => {
-    void interactions.toggleRepost();
-  };
+  // تُعاد نتيجة الحفظ (true/false) لتمريرها إلى ShareSheet: النجاح لا يُعلَن
+  // إلا بعد تأكيد قاعدة البيانات.
+  const toggleRepost = () => interactions.toggleRepost();
 
   const toggleBookmark = () => {
     void interactions.toggleBookmark();

@@ -329,9 +329,8 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     void interactions.toggleBookmark();
   };
 
-  const toggleRepost = () => {
-    void interactions.toggleRepost();
-  };
+  // تُعاد نتيجة الحفظ (true/false) — ShareSheet يعتمد عليها لتأكيد النجاح.
+  const toggleRepost = () => interactions.toggleRepost();
 
   const saveFeedback = async (value: 'interested' | 'not_interested') => {
     if (!supabaseConfigured) return;

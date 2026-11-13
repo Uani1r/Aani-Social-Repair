@@ -51,7 +51,7 @@ export default function PostCard({
 
   const toggleLike = interactions?.toggleLike || (() => {});
   const toggleBookmark = interactions?.toggleBookmark || (() => {});
-  const toggleRepost = interactions?.toggleRepost || (() => {});
+  const toggleRepost = interactions?.toggleRepost ?? (() => Promise.resolve(false));
   const share = interactions?.share || (() => {});
 
   const handleOpenComments = () => {
