@@ -8,18 +8,19 @@ import { Bug, Copy, RefreshCw, X } from 'lucide-react';
 
 import {
   buildFullErrorReport,
-  checkMediaServers,
   clearGlobalErrors,
   closeGlobalErrorPanel,
-  copyTextToClipboard,
   getGlobalErrorServerVersion,
   getGlobalErrors,
-  MEDIA_DIAGNOSTICS_BUILD_STAMP,
   setGlobalErrorServerVersion,
   subscribeGlobalErrors,
   subscribePanelOpen,
   type GlobalErrorEntry,
 } from '@/lib/globalErrorStore';
+// استيراد namespace آمن: تُقرأ دوال تشخيص الوسائط (checkMediaServers وغيرها)
+// من وحدتها الصحيحة mediaDiagnostics — لا من globalErrorStore — مع فحص
+// وجودها قبل النداء كي لا يُعطّل فشل التشخيص إقلاع التطبيق إطلاقاً.
+import * as mediaDiagnostics from '@/lib/mediaDiagnostics';
 
 const styles = {
   fab: {
@@ -200,7 +201,12 @@ export default function GlobalErrorDiagnostics() {
 
   const handleCheckServer = () => {
     setChecking(true);
-    void checkMediaServers()
+    if (typeof mediaDiagnostics.checkMediaServers !== 'function') {
+      setChecking(false);
+      setServerCheck({ text: 'وحدة تشخيص الوسائط غير متوفرة في هذه النسخة — لا يؤثر ذلك على التطبيق.', ok: false });
+      return;
+    }
+    void mediaDiagnostics.checkMediaServers()
       .then(result => {
         const version = result.uploadCheck?.serverBuildVersion || null;
         setGlobalErrorServerVersion(version);
@@ -214,7 +220,11 @@ export default function GlobalErrorDiagnostics() {
   };
 
   const handleCopy = () => {
-    void copyTextToClipboard(buildFullErrorReport()).then(success => {
+    const copy = typeof mediaDiagnostics.copyTextToClipboard === 'function'
+      ? mediaDiagnostics.copyTextToClipboard
+      : null;
+    if (!copy) return;
+    void copy(buildFullErrorReport()).then(success => {
       setCopied(success);
       if (success) window.setTimeout(() => setCopied(false), 3000);
     });
@@ -246,7 +256,7 @@ export default function GlobalErrorDiagnostics() {
         </div>
 
         <div style={styles.meta}>
-          <div>client (واجهة): {MEDIA_DIAGNOSTICS_BUILD_STAMP}</div>
+          <div>client (واجهة): {mediaDiagnostics.MEDIA_DIAGNOSTICS_BUILD_STAMP}</div>
           <div>server (خادم): {getGlobalErrorServerVersion() || 'غير معروف — اضغط فحص الخادم الآن'}</div>
           <div style={{ color: '#9ca3af' }}>آخر {getGlobalErrors().length || 0} خطأ مسجل من كل الشاشات</div>
         </div>
