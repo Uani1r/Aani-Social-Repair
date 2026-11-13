@@ -27,7 +27,7 @@ export type MediaDiagnosticStage =
   | 'عملية شبكة أخرى';
 
 /** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
-export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v8';
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v9';
 
 /** آخر إصدار خادم مُلاحَظ — من ردود الرفع/التوقيع أو من فحص حي */
 let lastKnownServerBuildVersion: string | null = null;
@@ -516,9 +516,10 @@ export function reportMediaStageFailure(
   });
 }
 
-/** هل النص خطأ RPC من Supabase/PostgREST؟ (دالة غير موجودة، كاش قديم، RLS، …) */
+/** هل النص خطأ RPC من Supabase/PostgREST؟ (دالة غير موجودة، كاش قديم، RLS،
+ *  قيود جدول، …) */
 export function isSupabaseRpcError(raw: string): boolean {
-  return /(Could not find the function|schema cache|PGRST|permission denied|row-level security|duplicate key value violates unique|violates foreign key)/i.test(raw);
+  return /(Could not find the function|schema cache|PGRST|permission denied|row-level security|duplicate key value violates unique|violates foreign key|violates check constraint|violates not-null|violates unique)/i.test(raw);
 }
 
 /** وصف كود الحالة للعرض: HTTP رقمي، أو Supabase RPC Error، أو فشل شبكي فقط

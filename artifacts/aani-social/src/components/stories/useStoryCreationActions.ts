@@ -219,7 +219,9 @@ export function useStoryCreationActions({
     setUploading(true);
     try {
       let mediaUrl = sourceStory?.media_url || '';
-      let mediaType = sourceStory?.media_type === 'video' ? 'video' : sourceStory ? 'photo' : 'text';
+      // 'image' هي القيمة القياسية في قيد stories_media_type_check بقواعد
+      // fresh_schema — 'photo' يرفضه القيد القديم؛ العرض يتعامل مع القيمتين
+      let mediaType = sourceStory?.media_type === 'video' ? 'video' : sourceStory ? 'image' : 'text';
 
       if (storyFile) {
         const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -300,7 +302,8 @@ export function useStoryCreationActions({
     void (async () => {
       try {
         let mediaUrl = sourceStory?.media_url || '';
-        let mediaType = sourceStory?.media_type === 'video' ? 'video' : 'photo';
+        // 'image' بدل 'photo' — القيمة المقبولة في قيد stories_media_type_check
+        let mediaType = sourceStory?.media_type === 'video' ? 'video' : 'image';
 
         if (mediaFile) {
           const safeName = mediaFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');

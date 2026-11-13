@@ -96,6 +96,8 @@ drop function if exists public.aani_create_story(
 --    كلها بقيم افتراضية NULL حتى لا تفشل لو أُرسل جزء منها فقط.
 --    SECURITY DEFINER لتجاوز RLS على INSERT مع إبقاء فحوص الهوية
 --    والقصة الأصل داخل الدالة (نفس تصميم ترحيل 20261113000000).
+--    media_type تقبل 'image' و'photo' معاً — قواعد مبنية من
+--    fresh_schema_cloudflare_r2.sql تستخدم 'image' وأخرى 'photo'.
 -- =====================================================================
 
 create or replace function public.aani_create_story(
@@ -128,7 +130,7 @@ begin
     raise exception 'Authentication required' using errcode = '42501';
   end if;
 
-  if p_media_type is null or p_media_type not in ('text', 'photo', 'video') then
+  if p_media_type is null or p_media_type not in ('text', 'photo', 'image', 'video') then
     raise exception 'Invalid story media type' using errcode = '22023';
   end if;
 
@@ -248,6 +250,19 @@ grant execute on function public.aani_create_story(
   text, text, text, boolean, integer, jsonb, text, uuid, text, integer,
   uuid, real, real
 ) to authenticated, service_role;
+
+-- =====================================================================
+-- 5b) توسيع قيد نوع الوسائط: قواعد مبنية من fresh_schema_cloudflare_r2.sql
+--     تقبل ('text','image','video') فقط بينما عملاء أقدم يرسلون 'photo' —
+--     القيد الجديد يقبل القيم الأربع حتى لا يُرفض أي صف قديم أو عميل قديم
+-- =====================================================================
+
+alter table public.stories
+  drop constraint if exists stories_media_type_check;
+
+alter table public.stories
+  add constraint stories_media_type_check
+  check (media_type in ('text', 'photo', 'image', 'video'));
 
 -- =====================================================================
 -- 6) تحديث كاش PostgREST فوراً حتى يرى PostgREST الدالة الجديدة
