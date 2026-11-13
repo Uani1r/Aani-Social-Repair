@@ -83,13 +83,37 @@ group_leader_alive() {
   [[ "$actual" == "$pgid" && "$state" != Z* ]]
 }
 
+group_member_cwds() {
+  local pgid="${1:-}"
+  local pid=""
+  [[ -n "$pgid" ]] || return 0
+  command -v readlink >/dev/null 2>&1 || return 0
+  [[ -d /proc ]] || return 0
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    readlink -f "/proc/$pid/cwd" 2>/dev/null || true
+  done < <(group_member_pids "$pgid")
+}
+
+# الانتماء يُثبت بأحد أمرين: سطر أوامر أحد الأعضاء يشير إلى الحزمة/المشغّل،
+# أو مجلد عمل أحد الأعضاء داخل هذا المستودع (أبناء vite/tsx يعملون داخل مجلد
+# الحزمة حتى لو كان الملف المنفَّذ داخل مخزن pnpm في جذر مساحة العمل).
 group_matches_workspace() {
   local pgid="${1:-}"
   local lines=""
+  local cwd=""
   [[ -n "$pgid" ]] || return 1
   lines="$(group_member_cmdlines "$pgid" || true)"
-  [[ -n "$lines" ]] || return 1
-  grep -Eq -- "$workspace_runner_pattern" <<<"$lines"
+  if [[ -n "$lines" ]] && grep -Eq -- "$workspace_runner_pattern" <<<"$lines"; then
+    return 0
+  fi
+  while IFS= read -r cwd; do
+    [[ -n "$cwd" ]] || continue
+    if [[ "$cwd" == "$ROOT_DIR" || "$cwd" == "$ROOT_DIR"/* ]]; then
+      return 0
+    fi
+  done < <(group_member_cwds "$pgid")
+  return 1
 }
 
 group_known_pids_of() {
