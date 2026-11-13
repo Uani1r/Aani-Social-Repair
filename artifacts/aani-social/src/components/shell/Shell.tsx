@@ -961,6 +961,9 @@ export default function Shell({
   // مهلة النشر الكاملة (ضغط + رفع + حفظ). تجاوزها يفكّ القفل ويُظهر خطأً واضحاً
   // بدل أن تبقى شاشة الإنشاء معلقة بلا استجابة.
   const PUBLISH_TIMEOUT_MS = 15000;
+  // أقصى انتظار لمهمة "الصوت الأصلي" المشتركة. انتهاؤه لا يلغي المهمة ولا
+  // يسمح ببدء إدراج ثانٍ: المهمة تبقى في الخريطة حتى تنتهي فعلياً.
+  const ORIGINAL_SOUND_TASK_TIMEOUT_MS = 12000;
   // رمز المحاولة: أي محاولة جديدة (أو إغلاق النافذة) يُبطل نتائج المحاولات الأقدم
   // فلا تعدّل حالتها ولا تحفظ منشوراً بعد انتهاء مهلتها.
   const publishAttemptRef = useRef(0);
@@ -1887,18 +1890,29 @@ export default function Shell({
         const ensureOriginalSound = async (previewUrl: string | null): Promise<string | null> => {
           const baseVideoUrl = uploadedUrls[0].replace(/#.*$/, '');
           const key = `${authenticatedUserId}:${baseVideoUrl}`;
+          // مهمة قائمة لنفس المفتاح: ننتظرها بمهلة محدودة بدل بدء إدراج ثانٍ.
+          // انتهاء مهلة الانتظار لا يلغي المهمة ولا يزيلها من الخريطة.
           const inFlight = originalSoundTasks.get(key);
-          if (inFlight) return inFlight;
+          if (inFlight) return withPublishTimeout(inFlight, ORIGINAL_SOUND_TASK_TIMEOUT_MS, null);
           const task = (async () => {
             // 1) إعادة استخدام سجل قائم لنفس المالك ونفس رابط الفيديو (يغطي
             //    إعادة تحميل الصفحة، أو كتابة وصلت من محاولة سابقة)
-            const { data: existingSound } = await supabase
+            const { data: existingSound, error: lookupError } = await supabase
               .from('sounds')
               .select('id')
               .eq('creator_id', authenticatedUserId)
               .eq('source_video_url', baseVideoUrl)
               .limit(1)
               .maybeSingle();
+            if (lookupError) {
+              // فشل الفحص ⇒ لا نعلم بوجود سجل، فلا نُدرج (تفادي التكرار).
+              // نشر المنشور يستمر بلا ربط صوت.
+              console.warn('[sound] تعذر فحص سجل الصوت الأصلي — لن يُنشأ سجل جديد لتجنب التكرار.', {
+                code: lookupError.code,
+                message: lookupError.message,
+              });
+              return null;
+            }
             if (existingSound?.id) return existingSound.id as string;
             const { data: soundRow, error: soundError } = await supabase
               .from('sounds')
@@ -1914,11 +1928,14 @@ export default function Shell({
             return (soundRow?.id as string) ?? null;
           })();
           originalSoundTasks.set(key, task);
-          try {
-            return await task;
-          } finally {
-            originalSoundTasks.delete(key);
-          }
+          // الإزالة مشروطة بأن تكون المهمة نفسها ما زالت في الخريطة: مهمة أحدث
+          // بالمفتاح نفسه لا تُحذف أبداً بواسطة مهمة أقدم. و.then هنا يبتلع
+          // رفض المهمة حتى لا يتحول إلى رفض غير معالَج بعد مهلة المنتظرين.
+          const release = () => {
+            if (originalSoundTasks.get(key) === task) originalSoundTasks.delete(key);
+          };
+          void task.then(release, release);
+          return withPublishTimeout(task, ORIGINAL_SOUND_TASK_TIMEOUT_MS, null);
         };
 
         // نظام الأصوات: استخراج الصوت محلياً من الفيديو (AAC .m4a خفيف عبر
