@@ -43,17 +43,47 @@ export default defineConfig(async ({ mode }) => {
   const rawPort = process.env.PORT || '5000';
   const port = Number(rawPort) || 5000;
 
-  // منع تخزين HTML فقط: يُضبط الترويس قبل إرسال رؤوس الاستجابة (لا داخل
-  // حدث finish المتأخر) عبر مطابقة مسار الطلب: '/' أو *.html — في dev
-  // وpreview. JS/CSS/الصور المعماة بـhash تبقى بتخزينها الطويل — لا تغيير.
+  // منع تخزين HTML فقط — على كل استجابة HTML فعلية (شاملة مسارات SPA مثل
+  // /feed و /profile و /messages التي يُقدَّم فيها index.html). يُضبط
+  // الترويس قبل إرسالها عبر اعتراض setHeader/writeHead/end عند اكتمال
+  // Content-Type = text/html. JS/CSS/الصور المعماة بـhash تبقى بتخزينها
+  // الطويل — لا تغيير عليها، وHMR كما هو.
   function injectHtmlNoStore(server: ViteDevServer): void {
     server.middlewares.use((_req, res, next) => {
       try {
-        const method = _req.method || '';
-        const url = (_req.url || '').split('?')[0];
-        if ((method === 'GET' || method === 'HEAD') && (url === '/' || url.endsWith('.html'))) {
+        const isHtmlContentType = (): boolean => {
+          const contentType = res.getHeader('Content-Type');
+          return typeof contentType === 'string' && contentType.includes('text/html');
+        };
+        const coerceCacheControl = (): void => {
+          if (res.headersSent || !isHtmlContentType()) return;
           res.setHeader('Cache-Control', 'no-store');
-        }
+        };
+
+        const originalSetHeader = res.setHeader.bind(res) as typeof res.setHeader;
+        res.setHeader = ((name: string, value: unknown) => {
+          const lowered = name.toLowerCase();
+          if (lowered === 'cache-control' && isHtmlContentType()) {
+            // إجبار no-store لأي استجابة HTML فعلية
+            value = 'no-store';
+          } else if (lowered === 'content-type' && typeof value === 'string' && value.includes('text/html')) {
+            // عند ضبط النوع HTML، أي كاش-كونترول سابق يرقى إلى no-store
+            if (res.getHeader('Cache-Control')) value = 'no-store';
+          }
+          return originalSetHeader(name, value);
+        }) as typeof res.setHeader;
+
+        const originalWriteHead = res.writeHead.bind(res) as typeof res.writeHead;
+        res.writeHead = ((...args: Parameters<typeof originalWriteHead>) => {
+          coerceCacheControl();
+          return originalWriteHead(...args);
+        }) as typeof res.writeHead;
+
+        const originalEnd = res.end.bind(res) as (...args: unknown[]) => unknown;
+        res.end = ((...args: unknown[]) => {
+          coerceCacheControl();
+          return originalEnd(...args);
+        }) as typeof res.end;
       } catch {
         // الوسيط لا يفشل أي طلب أبداً
       }

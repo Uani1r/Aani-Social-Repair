@@ -8,6 +8,7 @@ STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-120}"
 POLL_INTERVAL_SECONDS=0.25
 api_pid=""
 vite_pid=""
+api_check_pid=""
 api_log="$(mktemp "${TMPDIR:-/tmp}/aani-api.XXXXXX.log")"
 vite_log="$(mktemp "${TMPDIR:-/tmp}/aani-vite.XXXXXX.log")"
 
@@ -42,6 +43,9 @@ cleanup() {
   trap - EXIT INT TERM
   stop_group "$vite_pid"
   stop_group "$api_pid"
+  if [[ -n "$api_check_pid" ]]; then
+    kill "$api_check_pid" 2>/dev/null || true
+  fi
   rm -f "$api_log" "$vite_log"
   return "$status"
 }
@@ -181,14 +185,18 @@ vite_pid=$!
 wait_for_http 'Vite homepage' "$vite_pid" 'http://127.0.0.1:5000/' '200'
 wait_for_http 'Vite main module' "$vite_pid" 'http://127.0.0.1:5000/src/main.tsx' '200'
 
-# فحص API مستقل وغير حاجب: فشله أو تأخره تحذير فقط — الواجهة تبقى
-# عاملة على 5000 ولا تُوقف عملية Vite مهما حدث للـAPI.
-if wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200' 'warn'; then
-  printf '[dev-local] API ready on 8080.\n' >&2
-else
-  printf '[dev-local] WARNING: API غير جاهز على 8080 — الواجهة تبقى عاملة على 5000 وطلبات /api ستفشل حتى عودة الـAPI.\n' >&2
-  show_logs 'API server' "$api_log"
-fi
+# فحص API مستقل وغير حاجب منذ البداية: يجري في الخلفية، ومتى حُسمت
+# نتيجته (نجاح أو تحذير) لا يُؤخّر جاهزية Vite ولا يوقفه.
+check_api_when_ready() {
+  if wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200' 'warn'; then
+    printf '[dev-local] API ready on 8080.\n' >&2
+  else
+    printf '[dev-local] WARNING: API غير جاهز على 8080 — الواجهة تبقى عاملة على 5000 وطلبات /api ستفشل حتى عودة الـAPI.\n' >&2
+    show_logs 'API server' "$api_log"
+  fi
+}
+check_api_when_ready &
+api_check_pid=$!
 
 printf '[dev-local] Vite is serving on 5000. Monitoring both servers...\n'
 
