@@ -11,11 +11,18 @@
 // - عند أي فشل (HTTP ≥ 400 أو خطأ شبكة) يسجّل حدثاً تشخيصياً يعرض:
 //     المرحلة، نقطة النهاية، كود الحالة، الرسالة الخام كاملة،
 //     وحضور publicKey/token/expire/signature وصيغة expire ونوع/حجم الملف.
+// - كل فشل يُرفع أيضاً إلى globalErrorStore (سجل الأخطاء الشامل لكل الشاشات).
 // - لا يطبع ولا ينسخ أي مفتاح سري: IMAGEKIT_PRIVATE_KEY لا يغادر الخادم
 //   أصلاً، وقيمة signature لا تُعرض (حضورها وطولها فقط) حتى لا تُنشر علناً
 //   في لقطة شاشة أو رسالة.
 // - فشل تنفيذ أي شيء في هذه الوحدة لا يجب أن يؤثر على التطبيق إطلاقاً:
 //   كل شيء داخل try/catch، والرصد صامت تماماً عند عدم الحاجة.
+
+import {
+  pushGlobalError,
+  setGlobalErrorClientStamp,
+  setGlobalErrorServerVersion,
+} from '@/lib/globalErrorStore';
 
 export type MediaDiagnosticStage =
   | 'الرفع إلى ImageKit'
@@ -27,7 +34,7 @@ export type MediaDiagnosticStage =
   | 'عملية شبكة أخرى';
 
 /** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
-export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v9';
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v10';
 
 /** آخر إصدار خادم مُلاحَظ — من ردود الرفع/التوقيع أو من فحص حي */
 let lastKnownServerBuildVersion: string | null = null;
@@ -302,9 +309,30 @@ function recordResult(options: {
     // نجاح جلب التوقيع يُسجَّل دائماً (يُستعمل كمرجع عند فشل الرفع بعده)
     if (stage === 'جلب توقيع ImageKit' || shouldAlert(event)) {
       pushEvent(event);
+      if (!event.ok) {
+        // رفع الحدث إلى سجل الأخطاء الشامل (كل الشاشات) — مرحلة الشبكة
+        pushGlobalError({
+          screen: `الوسائط — ${stage}`,
+          target: event.endpoint,
+          message: event.rawResponse || event.networkError || `HTTP ${event.httpStatus ?? '؟'}`,
+        });
+        noteServerVersionFromRaw(event.rawResponse);
+      }
     }
   } catch {
     // صامت دائماً
+  }
+}
+
+// إصدار الخادم يُستخرج من أي استجابة JSON تحمل serverBuildVersion
+function noteServerVersionFromRaw(raw: string): void {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof parsed.serverBuildVersion === 'string' && parsed.serverBuildVersion) {
+      setGlobalErrorServerVersion(parsed.serverBuildVersion);
+    }
+  } catch {
+    // ليس JSON — لا شيء
   }
 }
 
@@ -327,6 +355,7 @@ export function initMediaDiagnostics(): void {
   // ختم البناء: يساعد على كشف حزمة قديمة (التنبيه لن يظهر إطلاقاً من حزمة قديمة)
   try {
     (window as unknown as Record<string, unknown>).__AANI_MEDIA_DIAGNOSTICS_BUILD = MEDIA_DIAGNOSTICS_BUILD_STAMP;
+    setGlobalErrorClientStamp(MEDIA_DIAGNOSTICS_BUILD_STAMP);
     console.info(`[mediaDiagnostics] build stamp: ${MEDIA_DIAGNOSTICS_BUILD_STAMP}`);
   } catch {
     // صامت
@@ -480,6 +509,18 @@ export function reportMediaStageFailure(
     if (statusMatch) {
       httpStatus = Number(statusMatch[1]);
     }
+  }
+
+  // كل فشل نشر يُرفع أيضاً إلى سجل الأخطاء الشامل بتصنيف المرحلة الفعلية
+  try {
+    pushGlobalError({
+      screen: `نشر القصص — ${stage === 'فشل نشر القصة (من كود النشر)' ? 'المرحلة غير محددة' : stage}`,
+      target: endpoint,
+      message: details.rawResponse || `HTTP ${httpStatus ?? '؟'}`,
+      details: httpStatus !== null ? `HTTP ${httpStatus}` : undefined,
+    });
+  } catch {
+    // صامت
   }
 
   // تحديد نقطة النهاية والمرحلة الفعلية من نص رسالة الرفع

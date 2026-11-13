@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
+import GlobalErrorDiagnostics from '@/components/GlobalErrorDiagnostics';
 import MediaDiagnosticAlert from '@/components/MediaDiagnosticAlert';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
@@ -22,6 +23,7 @@ import useAppSession from '@/hooks/useAppSession';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { handleAppError, installSupabaseErrorInterceptor } from '@/lib/appErrors';
 import { initMediaDiagnostics } from '@/lib/mediaDiagnostics';
+import { installGlobalErrorCapture } from '@/lib/globalErrorStore';
 import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -39,6 +41,7 @@ try {
 // تشخيص الوسائط: رصد صامت مستقل (fetch/XHR) — فشل تفعيله لا يمنع الإقلاع
 try {
   initMediaDiagnostics();
+  installGlobalErrorCapture();
 } catch (diagnosticsError) {
   console.error('[app] تعذر تفعيل تشخيص الوسائط — التطبيق يعمل بدونه', diagnosticsError);
 }
@@ -239,6 +242,7 @@ function App() {
       </WouterRouter>
       <GlobalErrorToast />
       <MediaDiagnosticAlert />
+      <GlobalErrorDiagnostics />
       <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
     </TooltipProvider>
   );

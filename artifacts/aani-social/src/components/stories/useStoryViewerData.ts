@@ -29,10 +29,14 @@ export function useStoryViewerData({
   setStoryViewerPreview,
 }: UseStoryViewerDataOptions) {
   const loadStoryViewerEntries = useCallback(async (storyId: string, requestId: number) => {
+    // story_views الفعلي أعمدته (viewer_id, created_at) — نقرأ عبر منظر
+    // story_viewer_entries الذي يعرض user_id/viewed_at بأسمائها المتوقعة.
+    // بلا ضميمة مضمّنة: الملفات الشخصية تُجلب بطلب ثانٍ آمن لكل المشاهدين
+    // والإعجاب معاً — تجنباً لأي PGRST200 على علاقات PostgREST.
     const [viewsResult, likesResult] = await Promise.all([
       supabase
-        .from('story_views')
-        .select('user_id, viewed_at, viewer:profiles(id, username, full_name, display_name, avatar_url, is_private)', { count: 'exact' })
+        .from('story_viewer_entries')
+        .select('user_id, viewed_at', { count: 'exact' })
         .eq('story_id', storyId)
         .order('viewed_at', { ascending: true }),
       supabase
@@ -52,19 +56,22 @@ export function useStoryViewerData({
       ...viewItems.map(item => String(item.user_id)),
       ...likeItems.map(item => String(item.user_id)),
     ])];
-    const likeOnlyIds = viewerIds.filter(id => !viewedUserIds.has(id));
-    const likeOnlyProfiles = new Map<string, StoryViewerProfile>();
-    if (likeOnlyIds.length > 0) {
+
+    // جلب ملفات كل المشاهدين والأعجاب في طلب واحد آمن (عبر profiles مباشرة)
+    const viewerProfiles = new Map<string, StoryViewerProfile>();
+    if (viewerIds.length > 0) {
       const { data, error } = await supabase
         .from('profiles')
         .select('id, username, full_name, display_name, avatar_url, gender, is_private')
-        .in('id', likeOnlyIds);
+        .in('id', viewerIds);
       if (error) {
-        console.warn('[story views] تعذر تحميل ملفات من أعجبوا بالقصة:', error);
+        console.warn('[story views] تعذر تحميل ملفات المشاهدين والأعجاب:', error);
       } else {
-        ((data || []) as StoryViewerProfile[]).forEach(profile => likeOnlyProfiles.set(String(profile.id), profile));
+        ((data || []) as StoryViewerProfile[]).forEach(profile => viewerProfiles.set(String(profile.id), profile));
       }
     }
+    const profileFor = (id: string): StoryViewerProfile | null => viewerProfiles.get(id) ?? null;
+
     let followedIds = new Set<string>();
     let pendingIds = new Set<string>();
     if (userId && viewerIds.length > 0) {
@@ -101,6 +108,7 @@ export function useStoryViewerData({
         ...item,
         user_id: String(item.user_id),
         viewed_at: String(item.viewed_at),
+        viewer: profileFor(String(item.user_id)),
         liked_at: likedAtByUser.get(String(item.user_id)) ?? null,
         is_viewer: true,
         is_liked: likedUserIds.has(String(item.user_id)),
@@ -114,7 +122,7 @@ export function useStoryViewerData({
           viewed_at: String(item.created_at),
           liked_at: String(item.created_at),
           is_viewer: false,
-          viewer: likeOnlyProfiles.get(String(item.user_id)) ?? null,
+          viewer: profileFor(String(item.user_id)),
           is_liked: true,
           is_following: followedIds.has(String(item.user_id)),
           follow_request_pending: pendingIds.has(String(item.user_id)),
