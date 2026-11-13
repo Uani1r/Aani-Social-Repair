@@ -94,6 +94,9 @@ export type MediaCompressionMetric = {
 
 const METRICS_BUFFER_LIMIT = 200;
 const compressionMetrics: MediaCompressionMetric[] = [];
+// مهلة ترميز canvas.toBlob لكل صيغة: بعض إصدارات Safari/iOS لا تستدعي الـcallback
+// إطلاقاً (ذاكرة ممتلئة أو سياق مفقود) فتتعلق العملية بلا نهاية بلا هذه المهلة.
+const TO_BLOB_TIMEOUT_MS = 8000;
 
 function computeSavingPct(originalBytes: number, finalBytes: number): number {
   // savingPct = originalBytes > 0 ? (original - final) / original * 100 : 0
@@ -686,11 +689,22 @@ export async function compressImage(
             }
 
             for (const mimeType of formats) {
+              // Safari/iOS قد لا يستدعي callback الخاص بـtoBlob إطلاقاً (سياق
+              // canvas مفقود أو ذاكرة ممتلئة) فتتعلق عملية النشر بلا نهاية.
+              // مهلة مستقلة لكل ترميز: عند تجاوزها نجرّب الصيغة التالية بدل الانتظار.
               const blob = await new Promise<Blob | null>(resolve => {
+                let settled = false;
+                const finish = (value: Blob | null) => {
+                  if (settled) return;
+                  settled = true;
+                  clearTimeout(timer);
+                  resolve(value);
+                };
+                const timer = setTimeout(() => finish(null), TO_BLOB_TIMEOUT_MS);
                 try {
-                  canvas.toBlob(resolve, mimeType, mimeType === 'image/png' ? undefined : quality);
+                  canvas.toBlob(finish, mimeType, mimeType === 'image/png' ? undefined : quality);
                 } catch {
-                  resolve(null);
+                  finish(null);
                 }
               });
               if (!blob) continue;

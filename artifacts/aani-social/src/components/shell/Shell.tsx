@@ -953,6 +953,19 @@ export default function Shell({
   const [destination, setDestination] = useState<PostDestination>('feed');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createError, setCreateError] = useState('');
+  // مهلة النشر الكاملة (ضغط + رفع + حفظ). تجاوزها يفكّ القفل ويُظهر خطأً واضحاً
+  // بدل أن تبقى شاشة الإنشاء معلقة بلا استجابة.
+  const PUBLISH_TIMEOUT_MS = 15000;
+  // رمز المحاولة: أي محاولة جديدة (أو إغلاق النافذة) يُبطل نتائج المحاولات الأقدم
+  // فلا تعدّل حالتها ولا تحفظ منشوراً بعد انتهاء مهلتها.
+  const publishAttemptRef = useRef(0);
+  // حماية من النقر المتكرر على «نشر» قبل أن يُحدَّث isSubmitting
+  const publishInFlightRef = useRef(false);
+  // متحكم الإلغاء الجاري: يستخدمه زر X لإلغاء الرفع فوراً
+  const activePublishAbortRef = useRef<AbortController | null>(null);
+  // معرّف المنشور ثابت لكل جلسة إنشاء: إعادة المحاولة تستخدم نفس المعرّف
+  // (upsert onConflict id) فلا يتكرر المنشور ولا تتكرر الوسائط المرفوعة.
+  const composerPostIdRef = useRef<string | null>(null);
   const isPublishFlowOpen = showPublishOptionsSheet || showImagePreviewModal || showVideoPreviewModal || showCreateModal;
   const publishFlowWasOpenRef = useRef(false);
 
@@ -1518,6 +1531,8 @@ export default function Shell({
   };
 
   const handlePublish = (postMetadata: PostMetadataTag[] = [], postDestination: PostDestination = destination, filesOverride?: File[], fileTypeOverride?: 'image' | 'video' | null) => {
+    // منع النقر المتكرر: لا محاولة ثانية قبل انتهاء الحالية أو فكّ قفلها
+    if (publishInFlightRef.current || isSubmitting) return;
     // إيقاف معاينة الصوت فوراً لحظة النقر على النشر
     stopAudioEngine();
     if (!supabaseConfigured) {
@@ -1557,7 +1572,17 @@ export default function Shell({
       return;
     }
 
-    const postId = createPostId();
+    // قفل الواجهة مع مؤشر واضح فور بدء المحاولة (قبل أي await)
+    publishInFlightRef.current = true;
+    setCreateError('');
+    setIsSubmitting(true);
+    // هل كانت نافذة الإنشاء مفتوحة؟ (مسار الصور المقصوصة ينشر بلا نافذة نص)
+    const composerOpen = showCreateModal;
+
+    // معرّف ثابت لجلسة الإنشاء: نفس المعرّف في كل إعادة محاولة (upsert على id)
+    // يمنع إنشاء منشور مكرر إذا انتهت المهلة وكان الطلب قد وصل إلى الخادم.
+    const postId = composerPostIdRef.current ?? createPostId();
+    composerPostIdRef.current = postId;
     const mediaAssetId = mediaType === 'video' && files.length > 0 ? createPostId() : null;
     const pendingPosterPromise = mediaType === 'video'
       ? videoPosterPromiseRef.current?.catch(() => null) ?? null
@@ -1609,12 +1634,75 @@ export default function Shell({
     let posterUploadUrl: string | null = null;
     // إلغاء النشر: متحكم جديد مع كل محاولة — يبطل الضغط والعزل والرفع الجاري
     const attemptAbort: { controller: AbortController | null } = { controller: null };
+    const attemptToken = ++publishAttemptRef.current;
+    const isCurrentAttempt = () => attemptToken === publishAttemptRef.current;
+    // النجاح فقط يغلق النافذة ويصفّر النموذج ويُبلّغ شريط المنشورات
+    const finishComposerAfterSuccess = () => {
+      if (!isCurrentAttempt()) return;
+      publishInFlightRef.current = false;
+      composerPostIdRef.current = null;
+      setPostText('');
+      setSelectedFiles([]);
+      setImagePreviewImages([]);
+      setShowImagePreviewModal(false);
+      setShowVideoPreviewModal(false);
+      setVideoTrim(null);
+      setVideoCrop(null);
+      setFileType(null);
+      setDestination('feed');
+      clearVideoCover();
+      setVideoMentions([]);
+      setShowCreateModal(false);
+      setIsSubmitting(false);
+      setCreateError('');
+      stopAudioEngine();
+      setPendingSound(null);
+      setAutoSoundMedia(false);
+      setImagePostTags([]);
+      const destinationPath = postDestination === 'reels' ? '/reels' : '/feed';
+      const shouldNavigate = postDestination === 'reels'
+        ? path !== '/reels'
+        : path === '/reels';
+      if (shouldNavigate) setLocation(destinationPath);
+    };
+    // هل حُفظ المنشور فعلاً في قاعدة البيانات؟ يُستخدم قبل إعلان فشل المهلة
+    // وقبل أي إعادة إرسال، فلا نُنشئ نسخة ثانية من منشور وصل فعلاً.
+    const postRowExists = async (): Promise<boolean> => {
+      try {
+        const { data: existingRow } = await supabase
+          .from('posts')
+          .select('id')
+          .eq('id', postId)
+          .maybeSingle();
+        return Boolean(existingRow?.id);
+      } catch {
+        return false;
+      }
+    };
     const attemptPublish = async () => {
       if (attemptInProgress) return;
       attemptInProgress = true;
       const controller = new AbortController();
       attemptAbort.controller = controller;
+      activePublishAbortRef.current = controller;
       const attemptSignal = controller.signal;
+      let timedOut = false;
+      const timeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        // فكّ القفل فوراً عند المهلة، دون انتظار انتهاء الطلب الملغى
+        if (isCurrentAttempt()) {
+          setIsSubmitting(false);
+          setCreateError('انتهت مهلة النشر (15 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.');
+        }
+      }, PUBLISH_TIMEOUT_MS);
+      // فحص المحاولة الحيّة: يُستدعى قبل كل مرحلة مهمة وبعد كل await، فلا تتابع
+      // محاولة انتهت مهلتها إلى الحفظ.
+      const ensureAttemptAlive = () => {
+        if (!isCurrentAttempt() || attemptSignal.aborted) {
+          throw new DOMException('أُلغيت محاولة النشر.', 'AbortError');
+        }
+      };
       const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
         updatePendingPost(postId, {
           phaseLabel: phase === 'compressing'
@@ -1631,6 +1719,20 @@ export default function Shell({
         const authenticatedUserId = authData.user?.id;
         if (!authenticatedUserId) throw new Error('يجب تسجيل الدخول قبل نشر المحتوى.');
         if (authenticatedUserId !== userId) throw new Error('تغيّر الحساب النشط. حدّث الصفحة ثم أعد المحاولة.');
+        ensureAttemptAlive();
+        // منع التكرار: إن كان هذا المنشور محفوظاً فعلاً (مهلة سابقة وصل طلبها
+        // إلى الخادم، أو نقر مكرر) نُكمل كنجاح بلا رفع أو حفظ ثانٍ.
+        if (await postRowExists()) {
+          updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
+          window.dispatchEvent(new Event('aani:post-created'));
+          window.setTimeout(() => {
+            removePendingPost(postId);
+            window.dispatchEvent(new Event('aani:post-created'));
+          }, 800);
+          finishComposerAfterSuccess();
+          return;
+        }
+        ensureAttemptAlive();
 
         const effectiveCoverFile = mediaType === 'video'
           ? coverFile || (pendingPosterPromise ? await pendingPosterPromise : null)
@@ -1691,6 +1793,9 @@ export default function Shell({
           }
         }));
 
+        // بعد الرفع: إن كانت المحاولة قد أُلغيت أو انتهت مهلتها لا نمضي إلى الحفظ
+        ensureAttemptAlive();
+
         // سجل أصول الوسائط: يُنشأ بعد الرفع لأن الرابط النهائي (ImageKit)
         // لا يكون معروفاً قبله. فشله لا يعطل النشر — المنشور يحمل الرابط نفسه.
         if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
@@ -1710,6 +1815,8 @@ export default function Shell({
           }
           mediaAssetRecordCreated = true;
         }
+
+        ensureAttemptAlive();
 
         if (mediaType === 'video') {
           updatePendingPost(postId, { stage: 'publishing', progress: 95, error: null });
@@ -1849,10 +1956,12 @@ export default function Shell({
           .from('posts')
           .upsert(payload, { onConflict: 'id' });
 
+        ensureAttemptAlive();
         let postError = (await upsertPost(postPayloadForSave)).error;
         // قاعدة بيانات ناقصة أعمدة (ترحيلات غير مطبقة) → أعد المحاولة بلا العمود
         // الناقص فقط مع الإبقاء على destination/type/الوسائط وبقية البيانات.
         for (let attempt = 0; attempt < 6 && postError; attempt += 1) {
+          ensureAttemptAlive();
           const missingColumn = missingOptionalColumn(postError);
           if (!missingColumn || !(missingColumn in postPayloadForSave)) break;
           const nextPayload = { ...postPayloadForSave };
@@ -2003,13 +2112,49 @@ export default function Shell({
           removePendingPost(postId);
           window.dispatchEvent(new Event('aani:post-created'));
         }, 1200);
+        // نجاح الحفظ فقط: أغلق النافذة وصفّر النموذج وأبلغ شريط المنشورات
+        finishComposerAfterSuccess();
       } catch (error) {
+        const abortName = (error as { name?: string } | null)?.name;
+        const aborted = abortName === 'AbortError' || abortName === 'TimeoutError';
+        const timedOutNow = timedOut;
+        // المهلة ليست دليل فشل: إن كان الطلب قد وصل إلى الخادم فالمنشور محفوظ.
+        // نتحقق من الصف قبل إعلان الخطأ وقبل أي إعادة إرسال.
+        let savedDespiteError = false;
+        if (aborted) {
+          savedDespiteError = await postRowExists();
+        }
+        if (savedDespiteError) {
+          updatePendingPost(postId, { stage: 'success', progress: 100, error: null, retry: null });
+          window.dispatchEvent(new Event('aani:post-created'));
+          window.setTimeout(() => {
+            removePendingPost(postId);
+            window.dispatchEvent(new Event('aani:post-created'));
+          }, 800);
+          finishComposerAfterSuccess();
+          return;
+        }
         if (!wasAppErrorReported(error)) {
           handleAppError('فشل نشر المنشور', error, 'تعذر نشر المنشور. راجع التفاصيل التشخيصية ثم أعد المحاولة.');
         }
-        const message = error instanceof Error ? error.message : 'حدث خطأ غير متوقع أثناء النشر.';
+        const message = timedOutNow
+          ? 'انتهت مهلة النشر (15 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.'
+          : error instanceof Error && error.message
+            ? error.message
+            : 'حدث خطأ غير متوقع أثناء النشر.';
         updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
+        // لا تتجمد الواجهة أبداً: فكّ القفل وأظهر الخطأ، مع بقاء النموذج مفتوحاً
+        if (isCurrentAttempt()) {
+          publishInFlightRef.current = false;
+          setIsSubmitting(false);
+          setCreateError(message);
+          if (!composerOpen) toast.error(message);
+        }
       } finally {
+        window.clearTimeout(timeoutId);
+        if (activePublishAbortRef.current === controller) {
+          activePublishAbortRef.current = null;
+        }
         attemptInProgress = false;
         releasePageInteraction();
       }
@@ -2029,33 +2174,8 @@ export default function Shell({
       },
     });
     void attemptPublish();
-
-    setPostText('');
-    setSelectedFiles([]);
-    setImagePreviewImages([]);
-    setShowImagePreviewModal(false);
-    setShowVideoPreviewModal(false);
-    setVideoTrim(null);
-    setVideoCrop(null);
-    setFileType(null);
-    setDestination('feed');
-    clearVideoCover();
-    setVideoMentions([]);
-    setShowCreateModal(false);
-    setIsSubmitting(false);
-    setCreateError('');
-    stopAudioEngine();
-    setPendingSound(null);
-    setAutoSoundMedia(false);
-    setImagePostTags([]);
-    // لا إعادة توجيه تلقائية للرئيسية: ابقَ في الشاشة التي كنت عليها،
-    // والانتقال فقط عند تغيّر السياق الفعلي (نشر ريلز من غير شاشة الريلز،
-    // أو مغادرة شاشة الريلز بعد نشر منشور تغذية)
-    const destinationPath = postDestination === 'reels' ? '/reels' : '/feed';
-    const shouldNavigate = postDestination === 'reels'
-      ? path !== '/reels'
-      : path === '/reels';
-    if (shouldNavigate) setLocation(destinationPath);
+    // النافذة تبقى مفتوحة طوال الرفع والحفظ، وتُغلق في finishComposerAfterSuccess
+    // فقط بعد نجاح الحفظ — لا تُصفَّر بيانات النموذج هنا كي تبقى إعادة المحاولة ممكنة.
   };
 
   const isFeedPath = path === '/' || path === '/feed';
@@ -2145,6 +2265,15 @@ export default function Shell({
         }}
         onPublish={(tagContent, postDestination) => void handlePublish(tagContent, postDestination)}
         onCloseCreatePost={() => {
+          // زر X متاح دائماً — حتى أثناء النشر: يُبطل المحاولة الجارية ويحرّر القفل
+          // فوراً بدل ترك الواجهة معلقة على طلب لا ينتهي.
+          publishAttemptRef.current += 1;
+          publishInFlightRef.current = false;
+          activePublishAbortRef.current?.abort();
+          activePublishAbortRef.current = null;
+          composerPostIdRef.current = null;
+          setIsSubmitting(false);
+          setCreateError('');
           setShowCreateModal(false);
           setVideoMentions([]);
           setAutoSoundMedia(false);

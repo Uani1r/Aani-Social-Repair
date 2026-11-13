@@ -575,9 +575,11 @@ export default function CreatePostModal({
               type="button"
               onClick={handlePublish}
               disabled={isSubmitting || (!postText.trim() && selectedFiles.length === 0 && tags.length === 0)}
-              className="min-w-[120px] rounded-full bg-white px-8 py-3 text-base font-bold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-busy={isSubmitting}
+              className="inline-flex min-w-[120px] items-center justify-center gap-2 rounded-full bg-white px-8 py-3 text-base font-bold text-zinc-950 transition hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isSubmitting ? 'جاري النشر...' : 'نشر'}
+              {isSubmitting && <Loader2 size={18} className="animate-spin" aria-hidden="true" />}
+              {isSubmitting ? 'جاري النشر…' : 'نشر'}
             </button>
           </div>
           {createError && <p role="alert" data-video-test-visible="true" className="mt-3 text-sm text-red-400">{createError}</p>}
