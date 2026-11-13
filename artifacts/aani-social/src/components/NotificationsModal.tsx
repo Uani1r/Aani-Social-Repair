@@ -186,6 +186,13 @@ const getNotificationTarget = (item: NotificationEntry, currentUserId: string): 
     return { kind: 'call', callerId: item.actor_id, callId: referenceId || null };
   }
 
+  // إعجاب بتعليق (يحمل comment_id): يُفتح على التعليق نفسه، لا على المنشور فقط —
+  // متوافق مع معالج التنبيه اللحظي في Shell.tsx.
+  if (item.type === 'like' && item.comment_id) {
+    const postId = item.post_id || referenceId;
+    return postId ? { kind: 'comment', postId, commentId: item.comment_id } : null;
+  }
+
   if ((item.type === 'like' || item.type === 'repost') && (referenceId || item.post_id)) {
     return { kind: 'post', postId: referenceId || item.post_id!, contentKind: item.content_kind || null };
   }
