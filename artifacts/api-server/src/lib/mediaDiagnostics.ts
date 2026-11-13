@@ -11,8 +11,8 @@ import crypto from "node:crypto";
 
 import { logger } from "./logger";
 
-/** إصدار بناء الخادم — يُعاد في كل ردود /api/*/  للتحقق من الشاشة أن
- *  العملية الفعلية تعمل بأحدث نسخة فعلاً (وليست عملية قديمة عالقة). */
+// إصدار بناء الخادم — يُعاد في كل ردود واجهة API للتحقق من الشاشة أن
+// العملية الفعلية تعمل بأحدث نسخة فعلاً (وليست عملية قديمة عالقة).
 export const SERVER_BUILD_VERSION = "2027-01-24-hmac-signature-v6";
 
 export interface ImageKitConfigDiagnosis {
