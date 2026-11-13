@@ -25,6 +25,15 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Aani Social"
+mode = "sequential"
+author = 67139751
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/dev-local.sh"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
