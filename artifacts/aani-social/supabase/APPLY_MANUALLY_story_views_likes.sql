@@ -202,6 +202,237 @@ create index if not exists aani_user_reports_target_created_idx
   on public.user_reports (reported_user_id, created_at desc);
 
 -- =====================================================================
+-- 3b) ترقية الجداول المساندة القديمة إن وُجدت ببطاقة أقدم — بنفس منهجية
+--     الترقية التي نجحت مع viewed_at: إضافة الأعمدة الناقصة صراحةً،
+--     تعبئتها من أي أسماء قديمة مرشّحة موجودة (blocked_id / target_user_id /
+--     blocked_profile_id / reporter_id / owner_id ...) ثم جعلها NOT NULL
+--     عند الإمكان — قبل أي سياسة RLS أو دالة تعتمد عليها.
+-- =====================================================================
+
+do $$
+declare
+  column_exists boolean;
+begin
+  ---------------------------------------------------------------
+  -- user_blocks: العمودان blocker_id و blocked_user_id
+  ---------------------------------------------------------------
+  -- blocker_id: إن غاب والجدول يحمل اسماً قديماً مثل blocker / user_a
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocker_id'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_blocks add column blocker_id uuid;
+    -- تعبئة من الأسماء القديمة المرشحة إن وُجدت
+    if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocker') then
+      execute 'update public.user_blocks set blocker_id = blocker where blocker_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'user_a') then
+      execute 'update public.user_blocks set blocker_id = user_a where blocker_id is null';
+    end if;
+  end if;
+
+  -- blocked_user_id: إن غاب والجدول يحمل اسماً قديماً مثل blocked_id / target_user_id / blocked_profile_id / user_b
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_user_id'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_blocks add column blocked_user_id uuid;
+    if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_id') then
+      execute 'update public.user_blocks set blocked_user_id = blocked_id where blocked_user_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'target_user_id') then
+      execute 'update public.user_blocks set blocked_user_id = target_user_id where blocked_user_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_profile_id') then
+      execute 'update public.user_blocks set blocked_user_id = blocked_profile_id where blocked_user_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'user_b') then
+      execute 'update public.user_blocks set blocked_user_id = user_b where blocked_user_id is null';
+    end if;
+  end if;
+
+  -- جعلهما NOT NULL عند الإمكان (جدول فارغ أو كله معبّأ)
+  begin
+    execute 'alter table public.user_blocks alter column blocker_id set not null';
+    execute 'alter table public.user_blocks alter column blocked_user_id set not null';
+  exception when others then null; -- صفوف قديمة ناقصة تبقى NULL — السياسات تتجاهلها بأمان
+  end;
+
+  -- المفتاح الأساسي المركب إن غاب
+  begin
+    execute 'alter table public.user_blocks add constraint aani_user_blocks_pkey primary key (blocker_id, blocked_user_id)';
+  exception when duplicate_table then null; when unique_violation then null; when others then null;
+  end;
+
+  -- قيد عدم حظر النفس
+  begin
+    execute 'alter table public.user_blocks add constraint aani_user_blocks_not_self check (blocker_id <> blocked_user_id)';
+  exception when duplicate_object then null; when others then null;
+  end;
+
+  -- المفاتيح الأجنبية (تُتخطى بأمان عند صفوف يتيمة قديمة)
+  begin
+    execute 'alter table public.user_blocks add constraint aani_user_blocks_blocker_fk foreign key (blocker_id) references public.profiles(id) on delete cascade';
+  exception when duplicate_object then null; when foreign_key_violation then null; when others then null;
+  end;
+  begin
+    execute 'alter table public.user_blocks add constraint aani_user_blocks_blocked_fk foreign key (blocked_user_id) references public.profiles(id) on delete cascade';
+  exception when duplicate_object then null; when foreign_key_violation then null; when others then null;
+  end;
+
+  ---------------------------------------------------------------
+  -- story_hidden_users: العمودان story_owner_id و hidden_user_id
+  ---------------------------------------------------------------
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'story_hidden_users' and column_name = 'story_owner_id'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.story_hidden_users add column story_owner_id uuid;
+    if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'story_hidden_users' and column_name = 'owner_id') then
+      execute 'update public.story_hidden_users set story_owner_id = owner_id where story_owner_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'story_hidden_users' and column_name = 'user_id') then
+      execute 'update public.story_hidden_users set story_owner_id = user_id where story_owner_id is null';
+    end if;
+  end if;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'story_hidden_users' and column_name = 'hidden_user_id'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.story_hidden_users add column hidden_user_id uuid;
+    if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'story_hidden_users' and column_name = 'hidden_id') then
+      execute 'update public.story_hidden_users set hidden_user_id = hidden_id where hidden_user_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'story_hidden_users' and column_name = 'blocked_user_id') then
+      execute 'update public.story_hidden_users set hidden_user_id = blocked_user_id where hidden_user_id is null';
+    end if;
+  end if;
+
+  begin
+    execute 'alter table public.story_hidden_users alter column story_owner_id set not null';
+    execute 'alter table public.story_hidden_users alter column hidden_user_id set not null';
+  exception when others then null;
+  end;
+
+  begin
+    execute 'alter table public.story_hidden_users add constraint aani_story_hidden_users_pkey primary key (story_owner_id, hidden_user_id)';
+  exception when duplicate_table then null; when unique_violation then null; when others then null;
+  end;
+
+  begin
+    execute 'alter table public.story_hidden_users add constraint aani_story_hidden_users_owner_fk foreign key (story_owner_id) references public.profiles(id) on delete cascade';
+  exception when duplicate_object then null; when foreign_key_violation then null; when others then null;
+  end;
+  begin
+    execute 'alter table public.story_hidden_users add constraint aani_story_hidden_users_hidden_fk foreign key (hidden_user_id) references public.profiles(id) on delete cascade';
+  exception when duplicate_object then null; when foreign_key_violation then null; when others then null;
+  end;
+
+  ---------------------------------------------------------------
+  -- user_reports: العمودان reporter_id و reported_user_id
+  ---------------------------------------------------------------
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'reporter_id'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_reports add column reporter_id uuid;
+    if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_reports' and column_name = 'reporter') then
+      execute 'update public.user_reports set reporter_id = reporter where reporter_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_reports' and column_name = 'user_id') then
+      execute 'update public.user_reports set reporter_id = user_id where reporter_id is null';
+    end if;
+  end if;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'reported_user_id'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_reports add column reported_user_id uuid;
+    if exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_reports' and column_name = 'reported_id') then
+      execute 'update public.user_reports set reported_user_id = reported_id where reported_user_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_reports' and column_name = 'target_user_id') then
+      execute 'update public.user_reports set reported_user_id = target_user_id where reported_user_id is null';
+    elsif exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'user_reports' and column_name = 'reported_user') then
+      execute 'update public.user_reports set reported_user_id = reported_user where reported_user_id is null';
+    end if;
+  end if;
+
+  begin
+    execute 'alter table public.user_reports alter column reporter_id set not null';
+    execute 'alter table public.user_reports alter column reported_user_id set not null';
+  exception when others then null;
+  end;
+
+  -- عمود category قد يغيب في بنية قديمة — الإضافة بلا NOT NULL أولاً
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'category'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_reports add column category text;
+  end if;
+  -- عمود details إن غاب
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'details'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_reports add column details text;
+  end if;
+  -- عمود status إن غاب مع تعبئته وضبط افتراضه
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'status'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_reports add column status text not null default 'pending';
+  end if;
+  -- عمود created_at إن غاب
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'created_at'
+  ) into column_exists;
+  if not column_exists then
+    alter table public.user_reports add column created_at timestamptz not null default now();
+  end if;
+  -- عمود id مع مفتاحه الأساسي إن غاب
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'id'
+  ) into column_exists;
+  if not column_exists then
+    execute 'update public.user_reports set id = gen_random_uuid() where id is null';
+  end if;
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_reports' and column_name = 'id'
+  ) then
+    alter table public.user_reports add column id uuid default gen_random_uuid();
+    execute 'update public.user_reports set id = gen_random_uuid() where id is null';
+    execute 'alter table public.user_reports alter column id set not null';
+    execute 'alter table public.user_reports add constraint aani_user_reports_pkey primary key (id)';
+  end if;
+
+  begin
+    execute 'alter table public.user_reports add constraint aani_user_reports_reporter_fk foreign key (reporter_id) references public.profiles(id) on delete cascade';
+  exception when duplicate_object then null; when foreign_key_violation then null; when others then null;
+  end;
+  begin
+    execute 'alter table public.user_reports add constraint aani_user_reports_reported_fk foreign key (reported_user_id) references public.profiles(id) on delete cascade';
+  exception when duplicate_object then null; when foreign_key_violation then null; when others then null;
+  end;
+end $$;
+
+-- الفهارس بعد اكتمال الترقية — الأعمدة مضمونة الوجود الآن
+create index if not exists aani_user_blocks_blocked_user_idx
+  on public.user_blocks (blocked_user_id, blocker_id);
+create index if not exists aani_story_hidden_users_hidden_idx
+  on public.story_hidden_users (hidden_user_id, story_owner_id);
+create index if not exists aani_user_reports_target_created_idx
+  on public.user_reports (reported_user_id, created_at desc);
+
+-- =====================================================================
 -- 4) RLS: تفعيل + صلاحيات + سياسات
 --    story_views: يقرأ المالك فقط (باستثناء المحظورين) — يكتب المشاهد نفسه
 --    story_likes: يقرأ صاحب الإعجاب أو مالك القصة — يكتب من يستطيع المشاهدة
