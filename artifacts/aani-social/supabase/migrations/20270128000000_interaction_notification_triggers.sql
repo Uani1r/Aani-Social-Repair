@@ -25,7 +25,8 @@ create or replace function public.aani_notification_exists(
   p_actor_id uuid,
   p_type text,
   p_reference_id uuid,
-  p_comment_id uuid
+  p_comment_id uuid,
+  p_since timestamptz default null
 )
 returns boolean
 language sql
@@ -41,11 +42,16 @@ as $$
       and n.type = p_type
       and coalesce(n.reference_id, n.entity_id) is not distinct from p_reference_id
       and n.comment_id is not distinct from p_comment_id
+      -- نافذة زمنية اختيارية: تمنع تكرار نفس الحدث (تنفيذ مزدوج) دون أن تمنع
+      -- تفاعلاً جديداً مشروعاً بعد إلغاء التفاعل السابق وإعادته لاحقاً.
+      and (p_since is null or n.created_at >= p_since)
   );
 $$;
-revoke all on function public.aani_notification_exists(uuid, uuid, text, uuid, uuid) from public, anon, authenticated;
+revoke all on function public.aani_notification_exists(uuid, uuid, text, uuid, uuid, timestamptz) from public, anon, authenticated;
 
 -- 2) احترام تصنيفات إعدادات الإشعارات (default true)
+-- قراءة آمنة: قيم JSON غير الصالحة/NULL/المفاتيح الغائبة تُعيد true بدل رفع استثناء
+-- يُفشل عملية الإعجاب/التعليق/المتابعة.
 create or replace function public.aani_notifications_enabled(
   p_user_id uuid,
   p_category text
@@ -58,7 +64,10 @@ set search_path = ''
 as $$
   select coalesce(
     (
-      select coalesce((p.notification_settings ->> p_category)::boolean, true)
+      select case jsonb_typeof(p.notification_settings -> p_category)
+               when 'boolean' then (p.notification_settings ->> p_category)::boolean
+               else true
+             end
       from public.profiles as p
       where p.id = p_user_id
     ),
@@ -85,7 +94,11 @@ begin
   if v_owner is null or v_owner = new.user_id then return new; end if;
   if public.aani_is_user_blocked(new.user_id, v_owner) then return new; end if;
   if not public.aani_notifications_enabled(v_owner, 'interactions') then return new; end if;
-  if public.aani_notification_exists(v_owner, new.user_id, 'like', new.post_id, null) then return new; end if;
+  -- نافذة 15 ثانية: تكرار الحدث نفسه فقط. قيود PK/UNIQUE على likes تمنع
+  -- الإعجاب النشط المكرر، وبعد إلغائه وإعادته لاحقاً يُنشأ إشعار جديد.
+  if public.aani_notification_exists(v_owner, new.user_id, 'like', new.post_id, null, now() - interval '15 seconds') then
+    return new;
+  end if;
 
   insert into public.notifications
     (user_id, actor_id, type, content, reference_id, entity_id, comment_id, content_kind)
@@ -180,7 +193,9 @@ begin
   if v_author is null or v_author = new.user_id then return new; end if;
   if public.aani_is_user_blocked(new.user_id, v_author) then return new; end if;
   if not public.aani_notifications_enabled(v_author, 'interactions') then return new; end if;
-  if public.aani_notification_exists(v_author, new.user_id, 'like', v_post_id, new.comment_id) then return new; end if;
+  if public.aani_notification_exists(v_author, new.user_id, 'like', v_post_id, new.comment_id, now() - interval '15 seconds') then
+    return new;
+  end if;
 
   select post.type into v_post_type from public.posts as post where post.id = v_post_id;
 
@@ -217,7 +232,9 @@ begin
   if v_owner is null or v_owner = new.user_id then return new; end if;
   if public.aani_is_user_blocked(new.user_id, v_owner) then return new; end if;
   if not public.aani_notifications_enabled(v_owner, 'interactions') then return new; end if;
-  if public.aani_notification_exists(v_owner, new.user_id, 'repost', new.post_id, null) then return new; end if;
+  if public.aani_notification_exists(v_owner, new.user_id, 'repost', new.post_id, null, now() - interval '15 seconds') then
+    return new;
+  end if;
 
   insert into public.notifications
     (user_id, actor_id, type, content, reference_id, entity_id, comment_id, content_kind)
@@ -247,7 +264,9 @@ begin
   if v_target is null or v_target = new.follower_id then return new; end if;
   if public.aani_is_user_blocked(new.follower_id, v_target) then return new; end if;
   if not public.aani_notifications_enabled(v_target, 'followers') then return new; end if;
-  if public.aani_notification_exists(v_target, new.follower_id, 'follow', new.follower_id, null) then return new; end if;
+  if public.aani_notification_exists(v_target, new.follower_id, 'follow', new.follower_id, null, now() - interval '15 seconds') then
+    return new;
+  end if;
 
   insert into public.notifications
     (user_id, actor_id, type, content, reference_id, entity_id)
