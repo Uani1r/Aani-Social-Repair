@@ -27,7 +27,7 @@ export type MediaDiagnosticStage =
   | 'عملية شبكة أخرى';
 
 /** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
-export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v7';
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v8';
 
 /** آخر إصدار خادم مُلاحَظ — من ردود الرفع/التوقيع أو من فحص حي */
 let lastKnownServerBuildVersion: string | null = null;
@@ -492,6 +492,11 @@ export function reportMediaStageFailure(
     endpoint = '/api/media/upload';
     if (stage === 'فشل نشر القصة (من كود النشر)') {
       stage = 'الرفع إلى ImageKit (مسار بديل عبر الخادم)';
+    }
+  } else if (/تعذر تجهيز توقيع/.test(details.rawResponse || '')) {
+    endpoint = '/api/media/imagekit-auth';
+    if (stage === 'فشل نشر القصة (من كود النشر)') {
+      stage = 'جلب توقيع ImageKit';
     }
   } else if (isSupabaseRpcError(details.rawResponse || '')) {
     // خطأ من قاعدة بيانات Supabase (مثل "Could not find the function … in

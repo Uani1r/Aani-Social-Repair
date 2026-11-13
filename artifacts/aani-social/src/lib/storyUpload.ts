@@ -48,6 +48,22 @@ type ImageKitAuthParams = {
   signature: string;
 };
 
+const AUTH_BOOT_RETRY_DELAYS_MS = [1500, 3000];
+
+function waitDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('أُلغيت العملية.', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(new DOMException('أُلغيت العملية.', 'AbortError'));
+    }, { once: true });
+  });
+}
+
 async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthParams> {
   // بلا كاش نهائياً: توكن ImageKit يُقبل مرة واحدة فقط — كل محاولة رفع
   // (أول مرة، إعادة محاولة، عدة ملفات، أو فيديو ثم صوته) تحصل على توقيع
@@ -57,17 +73,35 @@ async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthPara
   const accessToken = data.session?.access_token;
   if (!accessToken) throw new Error('يجب تسجيل الدخول قبل رفع الوسائط.');
 
-  const response = await fetch('/api/media/imagekit-auth', {
-    headers: { authorization: `Bearer ${accessToken}` },
-    // ترويسات تمنع أي تخزين مؤقت على مستوى الشبكة أيضاً
-    cache: 'no-store',
-    signal,
-  });
+  // صمود أمام نافذة إقلاع الخادم بعد إعادة التشغيل: 502/503/504 من الوسيط
+  // تعني أن عملية api-server لم تنتهِ من البناء بعد — نعيد المحاولة مرتين
+  // قبل الإعلان عن الفشل (لا تُعاد المحاولة عند أخطاء 4xx أو نجاح).
+  let response!: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    response = await fetch('/api/media/imagekit-auth', {
+      headers: { authorization: `Bearer ${accessToken}` },
+      // ترويسات تمنع أي تخزين مؤقت على مستوى الشبكة أيضاً
+      cache: 'no-store',
+      signal,
+    });
+    if (response.ok) break;
+    if (response.status >= 500 && attempt < AUTH_BOOT_RETRY_DELAYS_MS.length) {
+      await waitDelay(AUTH_BOOT_RETRY_DELAYS_MS[attempt], signal);
+      continue;
+    }
+    break;
+  }
+
   const result = await response.json().catch(() => null) as
     | (ImageKitAuthParams & { success?: unknown; error?: unknown })
     | null;
   if (!response.ok || !result || result.success !== true) {
-    throw new Error(typeof result?.error === 'string' ? result.error : 'تعذر تجهيز توقيع رفع الوسائط.');
+    const serverError = typeof result?.error === 'string' && result.error ? result.error : '';
+    // أخطاء 5xx أثناء الإقلاع (بعد استنفاد المحاولات) تُعرض برمزها الحقيقي
+    if (response.status >= 500) {
+      throw new Error(`تعذر تجهيز توقيع رفع الوسائط (HTTP ${response.status}) — الخادم ما يزال يُقلَع أو غير متاح${serverError ? `: ${serverError}` : '.'}`);
+    }
+    throw new Error(typeof result?.error === 'string' && result.error ? result.error : 'تعذر تجهيز توقيع رفع الوسائط.');
   }
 
   return {
@@ -282,17 +316,23 @@ async function uploadMediaUnsafe({
     const accessToken = sessionData.session?.access_token;
     if (!accessToken) throw new Error('يجب تسجيل الدخول قبل رفع الوسائط.');
 
-    const response = await fetch('/api/media/upload', {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${accessToken}`,
-        'content-type': uploadFile.type || 'application/octet-stream',
-        'x-aani-file-name': encodeURIComponent(uploadName),
-        'x-aani-folder': encodeURIComponent(folder),
-      },
-      body: uploadFile,
-      signal,
-    });
+    // صمود أمام نافذة إقلاع الخادم: إعادة محاولة واحدة على أخطاء 5xx
+    let response!: Response;
+    for (let attempt = 0; ; attempt += 1) {
+      response = await fetch('/api/media/upload', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': uploadFile.type || 'application/octet-stream',
+          'x-aani-file-name': encodeURIComponent(uploadName),
+          'x-aani-folder': encodeURIComponent(folder),
+        },
+        body: uploadFile,
+        signal,
+      });
+      if (response.ok || response.status < 500 || attempt >= 1) break;
+      await waitDelay(2000, signal);
+    }
     const result = await response.json().catch(() => null) as
       | { success?: unknown; url?: unknown; error?: unknown }
       | null;

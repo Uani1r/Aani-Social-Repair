@@ -189,6 +189,9 @@ function describeServerCheck(check: ServerCheckResult | null): { text: string; c
   if (upload && upload.status === 404) {
     return { text: `HTTP 404 من نقطة الرفع الاحتياطي — الخادم يعمل ببناء قديم عالق لا يحتوي المسار. أعد التشغيل (Run) ثم أعد الفحص.`, color: SERVER_STALE_COLOR };
   }
+  if (upload && upload.status >= 500 && upload.status <= 599) {
+    return { text: `HTTP ${upload.status} من نقطة الرفع الاحتياطي — الخادم غير مستجيب حالياً؛ غالباً إعادة التشغيل ما زالت تجري (pnpm install + build) أو العملية توقفت. انتظر دقيقة واضغط "فحص الخادم الآن" مجدداً.`, color: SERVER_STALE_COLOR };
+  }
   if (upload && upload.status === 0) {
     return { text: 'لا استجابة من الخادم على 8080 — عملية الخادم متوقفة. شغّل التطبيق (Run) ثم أعد الفحص.', color: SERVER_STALE_COLOR };
   }
