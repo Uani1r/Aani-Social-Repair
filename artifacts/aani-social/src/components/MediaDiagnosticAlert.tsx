@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   buildMediaDiagnosticReport,
   copyTextToClipboard,
+  MEDIA_DIAGNOSTICS_BUILD_STAMP,
   subscribeMediaDiagnostics,
   type MediaDiagnosticEvent,
 } from '@/lib/mediaDiagnostics';
@@ -60,6 +61,13 @@ const styles = {
     color: '#9ca3af',
     direction: 'ltr' as const,
     wordBreak: 'break-all' as const,
+  },
+  stamp: {
+    marginTop: 2,
+    fontSize: 10,
+    color: '#6b7280',
+    direction: 'ltr' as const,
+    textAlign: 'left' as const,
   },
   raw: {
     margin: '8px 0',
@@ -151,6 +159,7 @@ export default function MediaDiagnosticAlert() {
       </div>
       <div style={styles.stage}>المرحلة: [{event.stage}]</div>
       <div style={styles.endpoint}>{event.method} {event.endpoint}</div>
+      <div style={styles.stamp}>ختم البناء: {MEDIA_DIAGNOSTICS_BUILD_STAMP} — إن كان قديماً فالمتصفح يخدّم حزمة سابقة</div>
       {event.rawResponse ? <pre style={styles.raw}>{event.rawResponse}</pre> : null}
       {event.networkError ? <pre style={styles.raw}>{event.networkError}</pre> : null}
       <div style={styles.buttonRow}>

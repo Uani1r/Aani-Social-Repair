@@ -6,6 +6,7 @@ import type { StoryCanvasStyle, StoryMediaTransformOverlay, StoryTextOverlay, St
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { stopInstant } from '@/lib/instantAudio';
 import { uploadStoryMedia } from '@/lib/storyUpload';
+import { reportMediaStageFailure } from '@/lib/mediaDiagnostics';
 import type { Profile } from '@/lib/types';
 import type { StorySound } from '@/lib/sounds';
 import { encodeStoryFilterKey, type StoryAdjustments } from '@/lib/storyFilters';
@@ -270,6 +271,10 @@ export function useStoryCreationActions({
       setShowUploadModal(false);
       await fetchStories();
     } catch (err) {
+      // نافذة التشخيص: المرحلة + الرسالة الخام + زر النسخ (إضافة دون تغيير السلوك)
+      reportMediaStageFailure('فشل نشر القصة (من كود النشر)', {
+        rawResponse: err instanceof Error ? err.message : String(err),
+      });
       alert(err instanceof Error ? err.message : 'تعذر نشر القصة.');
     } finally {
       setUploading(false);
@@ -357,6 +362,8 @@ export function useStoryCreationActions({
         const details = error instanceof Error
           ? error.message
           : String(errorInfo?.message || '');
+        // نافذة التشخيص: المرحلة + الرسالة الخام + زر النسخ (إضافة دون تغيير السلوك)
+        reportMediaStageFailure('فشل نشر القصة (من كود النشر)', { rawResponse: details });
         const errorCode = String(errorInfo?.code || '');
         if (errorCode === 'PGRST202' || /aani_create_story|function.*not found|PGRST202/i.test(details)) {
           toast.error('حدّث قاعدة البيانات بتشغيل ترحيل القصص ثم أعد المحاولة');
@@ -457,6 +464,8 @@ export function useStoryCreationActions({
         : [errorInfo?.message, errorInfo?.details, errorInfo?.hint]
           .filter((value): value is string => typeof value === 'string' && value.length > 0)
           .join(' — ');
+      // نافذة التشخيص: المرحلة + الرسالة الخام + زر النسخ (إضافة دون تغيير السلوك)
+      reportMediaStageFailure('فشل نشر القصة (من كود النشر)', { rawResponse: details });
       const errorCode = String(errorInfo?.code || '');
       if (errorCode === 'PGRST202' || /aani_create_story|function.*not found|schema cache/i.test(details)) {
         toast.error('قاعدة البيانات لا تحتوي على إجراء نشر القصص المطلوب. طبّق آخر ترحيلات القصص في Supabase ثم أعد المحاولة.');

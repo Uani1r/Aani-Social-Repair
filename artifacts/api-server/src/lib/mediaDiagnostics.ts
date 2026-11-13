@@ -32,6 +32,11 @@ export function diagnoseImageKitSignatureConfig(config: {
   if (!publicKey) {
     issues.push("IMAGEKIT_PUBLIC_KEY فارغ — الرفع المباشر سيفشل دائماً");
   } else {
+    if (!publicKey.startsWith("public")) {
+      issues.push(
+        `IMAGEKIT_PUBLIC_KEY لا يبدأ بـ "public" (يبدأ بـ "${publicKey.slice(0, 8)}") — تحقق أنه المفتاح العام من لوحة ImageKit وليس شيئاً آخر`,
+      );
+    }
     info.push(`publicKey: يبدأ بـ "${publicKey.slice(0, 12)}" وطوله ${publicKey.length}`);
   }
 
@@ -138,6 +143,11 @@ export function logImageKitAuthDiagnostics(config: {
       .then(result => {
         if (!result.ok) {
           logger.warn({ status: result.status, detail: result.summary }, "ImageKit private key probe failed");
+        } else {
+          logger.info(
+            { detail: result.summary, publicKeyPrefix: config.publicKey.slice(0, 12) },
+            "ImageKit private key probe OK — إذا استمر رفض الرفع بـ invalid signature، فالشك الأول: أن IMAGEKIT_PUBLIC_KEY و IMAGEKIT_PRIVATE_KEY من حسابين مختلفين أو أن الخادم المُخدَّم لم يُعد بناءه (خاصة Replit Deployment يحتاج Deploy لا مجرد سحب)",
+          );
         }
       })
       .catch(() => undefined);

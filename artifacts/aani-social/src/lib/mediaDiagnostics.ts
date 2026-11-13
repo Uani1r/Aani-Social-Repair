@@ -21,8 +21,12 @@ export type MediaDiagnosticStage =
   | 'الرفع إلى ImageKit'
   | 'جلب توقيع ImageKit'
   | 'الحفظ في قاعدة البيانات (نشر القصة)'
+  | 'فشل نشر القصة (من كود النشر)'
   | 'سجل الرفع (media_upload_ledger)'
   | 'عملية شبكة أخرى';
+
+/** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-story-diagnostics-v2';
 
 export interface MediaDiagnosticParams {
   publicKeyPresent?: boolean;
@@ -228,6 +232,14 @@ export function initMediaDiagnostics(): void {
   if (installed) return;
   installed = true;
 
+  // ختم البناء: يساعد على كشف حزمة قديمة (التنبيه لن يظهر إطلاقاً من حزمة قديمة)
+  try {
+    (window as unknown as Record<string, unknown>).__AANI_MEDIA_DIAGNOSTICS_BUILD = MEDIA_DIAGNOSTICS_BUILD_STAMP;
+    console.info(`[mediaDiagnostics] build stamp: ${MEDIA_DIAGNOSTICS_BUILD_STAMP}`);
+  } catch {
+    // صامت
+  }
+
   // ===== تغليف fetch =====
   const originalFetch = window.fetch.bind(window);
   window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -359,7 +371,8 @@ export function getMediaDiagnosticEvents(): readonly MediaDiagnosticEvent[] {
   return events;
 }
 
-/** إزاحة المرحلة التي فشلت — للأماكن التي يرصدها المتصفح لا الشبكة (احتياطي مستقبلي) */
+/** إزاحة المرحلة التي فشلت — تُستدعى مباشرة من كتلة catch الخاصة بالنشر
+ *  (حتى لو لم ترصد طبقة الشبكة الفشل، تظهر نافذة التشخيص من هنا) */
 export function reportMediaStageFailure(
   stage: MediaDiagnosticStage,
   details: { endpoint?: string; rawResponse?: string; httpStatus?: number },
@@ -370,6 +383,13 @@ export function reportMediaStageFailure(
     httpStatus: details.httpStatus ?? null,
     rawResponse: details.rawResponse || '',
   });
+  // recordResult يصنّف المرحلة من الرابط؛ الحدث الداخلي يحمل مرحلتنا الصريحة
+  try {
+    const last = events[events.length - 1];
+    if (last && last.endpoint === (details.endpoint || '(داخلي)')) last.stage = stage;
+  } catch {
+    // صامت
+  }
 }
 
 function describeBytes(bytes?: number): string {
@@ -407,6 +427,7 @@ function describeParams(params?: MediaDiagnosticParams): string[] {
 export function buildMediaDiagnosticReport(event: MediaDiagnosticEvent): string {
   const lines: string[] = [];
   lines.push('تشخيص وسائط آني — تقرير خطأ');
+  lines.push(`ختم البناء: ${MEDIA_DIAGNOSTICS_BUILD_STAMP}`);
   lines.push(`الوقت: ${new Date(event.at).toLocaleString('ar')}`);
   lines.push(`المرحلة: [${event.stage}]`);
   lines.push(`الرابط: ${event.endpoint}`);
