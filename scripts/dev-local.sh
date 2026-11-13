@@ -10,20 +10,26 @@ api_pgid=""
 vite_pgid=""
 api_check_pid=""
 
-# ملف حالة خارج المستودع يسجّل مجموعات العمليات (PGID) التي أنشأها هذا
-# السكربت، كي يوقف التشغيل التالي تلك المجموعات تحديداً — وليس أي عملية
-# تشبهها في الاسم. وجوده يجعل التنظيف مرتبطاً بمجموعاتنا لا بأسماء عامة.
+# ملف حالة خارج المستودع يسجّل هوية مجموعات العمليات التي أنشأها هذا السكربت:
+# رقم PGID مع أزواج pid:starttime مقروءة من /proc. رقم PGID وحده لا يثبت الهوية
+# لأنه يُعاد استخدامه، فلا تُقبل مجموعة مستعادة إلا إذا طابق وقت بدء أحد
+# أعضائها السجل.
 STATE_FILE="${TMPDIR:-/tmp}/aani-dev-local-$(printf '%s' "$ROOT_DIR" | tr -c 'A-Za-z0-9' '_').state"
 
-# نمط يميّز مشغّلات هذه مساحة العمل داخل مجموعة عملية واحدة:
-#   * مغلفات pnpm باسم الحزمة (@workspace/aani-social، @workspace/api-server)
-#   * أبناء vite/tsx بمسار الحزمة داخل المستودع أو باسم المشغّل tsx
-# يُطبَّق فقط على أعضاء مجموعة أثبتنا ملكيتها، فلا يمس أي عملية خارجها.
-workspace_runner_pattern='(@workspace/(aani-social|api-server)|artifacts/(aani-social|api-server)|tsx)'
+# نمط احتياطي لتمييز مشغّلات هذه مساحة العمل: أسماء الحزم ومساراتها فقط.
+# أُزيل منه أي اسم أداة عام (tsx/vite) لأنه يوسّع النطاق بلا إثبات هوية.
+# الملكية الفعلية تُثبت بـpid + وقت البدء من /proc، أو بمجلد عمل داخل المستودع
+# (وهو ما يغطي أبناء vite/tsx الذين يُنفَّذون من مخزن pnpm في جذر مساحة العمل).
+workspace_runner_pattern='(@workspace/(aani-social|api-server)|artifacts/(aani-social|api-server))'
 
 # أرقام أعضاء المجموعات التي أثبتنا انتماءها لهذه مساحة العمل: PGID ← " PID PID ..."
 # يحفظ الانتماء بعد خروج الزعيم أو تغيّر أفراد المجموعة.
 declare -A group_known_pids=()
+
+# المجموعات المثبتة الهوية: PGID ← "pid:starttime" من /proc.
+declare -A trusted_groups=()
+# يُرفع عند تسجيل عضو جديد في مجموعة قائمة، فتُكتب الهوية مرة واحدة فقط.
+state_dirty=0
 
 api_log="$(mktemp "${TMPDIR:-/tmp}/aani-api.XXXXXX.log")"
 vite_log="$(mktemp "${TMPDIR:-/tmp}/aani-vite.XXXXXX.log")"
@@ -66,6 +72,50 @@ group_has_members() {
   [[ -n "$pgid" ]] || return 1
   pids="$(group_member_pids "$pgid")"
   [[ -n "$pids" ]]
+}
+
+# هوية العملية من /proc/<pid>/stat: "pgid starttime". اسم العملية قد يحتوي
+# مسافات وأقواساً، لذلك يُقتطع حتى آخر ") " ثم تُقرأ الحقول بعده: الحقل 3
+# (state) هو أولها، وحقل 22 (starttime) هو التاسع عشر بعده.
+proc_identity() {
+  local pid="${1:-}"
+  local stat_line=""
+  local rest=""
+  local -a fields=()
+  [[ -n "$pid" ]] || return 1
+  IFS= read -r stat_line <"/proc/$pid/stat" 2>/dev/null || return 1
+  [[ -n "$stat_line" ]] || return 1
+  rest="${stat_line##*) }"
+  [[ -n "$rest" ]] || return 1
+  read -r -a fields <<<"$rest"
+  ((${#fields[@]} >= 20)) || return 1
+  printf '%s %s' "${fields[2]}" "${fields[19]}"
+}
+
+# هل ما زالت العملية pid هي نفسها (نفس وقت البدء) وما زالت في مجموعة pgid؟
+# هذا ما يمنع إرسال إشارة إلى مجموعة أُعيد استخدام رقمها.
+identity_matches() {
+  local pid="${1:-}"
+  local pgid="${2:-}"
+  local start="${3:-}"
+  local identity=""
+  local actual_pgid=""
+  local actual_start=""
+  [[ -n "$pid" && -n "$pgid" && -n "$start" ]] || return 1
+  identity="$(proc_identity "$pid" || true)"
+  [[ -n "$identity" ]] || return 1
+  read -r actual_pgid actual_start <<<"$identity"
+  [[ "$actual_pgid" == "$pgid" && "$actual_start" == "$start" ]]
+}
+
+# نثق بمجموعة أنشأناها للتو: نسجّل هوية زعيمها من /proc وقت الإنشاء.
+trust_group() {
+  local pgid="${1:-}"
+  local identity=""
+  [[ -n "$pgid" ]] || return 0
+  identity="$(proc_identity "$pgid" || true)"
+  [[ -n "$identity" ]] || return 0
+  trusted_groups["$pgid"]="$pgid:${identity#* }"
 }
 
 # هل الزعيم (PID == PGID) ما زال حياً؟ نطابق PGID الفعلي أيضاً كي لا تعطي
@@ -150,18 +200,22 @@ remember_group_members() {
     [[ -n "$pid" ]] || continue
     if [[ "$known" != *" $pid "* ]]; then
       known="$known $pid"
+      state_dirty=1
     fi
   done < <(group_member_pids "$pgid")
   group_known_pids["$pgid"]="$known"
 }
 
-# هل المجموعة لمشغّلات هذه مساحة العمل؟ إما بمطابقة سطر أوامر أحد أعضائها،
-# أو بوجود عضو معروف لدينا من قياس سابق. الثانية تُبقي المجموعة معروفة بعد
-# خروج الزعيم، فيظل التنظيف ممكناً.
+# هل المجموعة لنا؟ الأولوية لثقة مثبتة بالهوية (pid + وقت البدء): إما
+# أنشأناها أو أثبتناها من ملف الحالة. وبدونها يبقى التحقق محدوداً: اسم الحزمة
+# في سطر الأوامر، أو مجلد عمل داخل المستودع، أو عضو سجّلناه سابقاً.
 group_is_ours() {
   local pgid="${1:-}"
   [[ -n "$pgid" ]] || return 1
   group_has_members "$pgid" || return 1
+  if [[ -n "${trusted_groups[$pgid]:-}" ]]; then
+    return 0
+  fi
   if group_matches_workspace "$pgid"; then
     return 0
   fi
@@ -179,6 +233,20 @@ stop_group() {
     wait "$pgid" 2>/dev/null || true
     group_known_pids["$pgid"]=""
     return 0
+  fi
+
+  # قبل أي إشارة: إن كانت الهوية المسجلة تخص الزعيم وما زال حياً، يجب أن
+  # يطابق وقت بدء عمليته السجل — وإلا فهو PID أُعيد استخدامه.
+  local trusted_token="${trusted_groups[$pgid]:-}"
+  if [[ -n "$trusted_token" ]]; then
+    local trusted_pid="${trusted_token%%:*}"
+    local trusted_start="${trusted_token#*:}"
+    if [[ "$trusted_pid" == "$pgid" ]] && group_leader_alive "$pgid"; then
+      if ! identity_matches "$pgid" "$pgid" "$trusted_start"; then
+        printf '[dev-local] WARNING: وقت بدء العملية %s لا يطابق السجل (إعادة استخدام PID؟) — لن توجَّه أي إشارة إلى المجموعة.\n' "$pgid" >&2
+        return 0
+      fi
+    fi
   fi
 
   if ! group_is_ours "$pgid"; then
@@ -245,17 +313,66 @@ port_is_free() {
   [[ "$probe_out" == "free" ]]
 }
 
-# يُوقف مجموعات تشغيل سابقة سجّلها هذا السكربت (ملف الحالة) — تنظيف مرتبط
-# بمجموعاتنا نحن، ويشمل الأبناء حتى لو خرج الزعيم.
+# يكتب هوية المجموعات الحالية: لكل مجموعة سطر يبدأ بـPGID ثم أزواج
+# pid:starttime لأعضائها الأحياء (من /proc). التحقق عند التشغيل التالي يطابق
+# وقت البدء، فلا تُمس مجموعة أُعيد استخدام رقمها.
+write_state_file() {
+  local pgid=""
+  local pid=""
+  local identity=""
+  local identity_pgid=""
+  local start=""
+  local line=""
+  : >"$STATE_FILE" 2>/dev/null || return 0
+  for pgid in "$vite_pgid" "$api_pgid"; do
+    [[ -n "$pgid" ]] || continue
+    line="$pgid"
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      identity="$(proc_identity "$pid" || true)"
+      [[ -n "$identity" ]] || continue
+      read -r identity_pgid start <<<"$identity"
+      [[ "$identity_pgid" == "$pgid" ]] || continue
+      line="$line $pid:$start"
+    done < <(group_member_pids "$pgid")
+    printf '%s\n' "$line" >>"$STATE_FILE" 2>/dev/null || true
+  done
+}
+
+# يُوقف مجموعات تشغيل سابقة سجّلها هذا السكربت، بعد إثبات الهوية من /proc
+# (PID + وقت البدء + PGID). إن تعذّر الإثبات — إعادة استخدام PGID أو خروج كل
+# الأطراف المسجلة — لا تُرسل أي إشارة، وتُطبع تحذير واضح.
 stop_recorded_groups() {
   [[ -f "$STATE_FILE" ]] || return 0
+  local line=""
   local pgid=""
-  while IFS= read -r pgid; do
+  local token=""
+  local pid=""
+  local start=""
+  local proven="0"
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    pgid="${line%% *}"
     [[ "$pgid" =~ ^[0-9]+$ ]] || continue
-    if group_is_ours "$pgid"; then
-      printf '[dev-local] Stopping process group %s left by a previous run...\n' "$pgid" >&2
-      stop_group "$pgid"
+    group_has_members "$pgid" || continue
+    proven="0"
+    for token in ${line#"$pgid"}; do
+      pid="${token%%:*}"
+      start="${token#*:}"
+      [[ "$start" == "$token" ]] && continue
+      [[ "$pid" =~ ^[0-9]+$ ]] || continue
+      if identity_matches "$pid" "$pgid" "$start"; then
+        proven="1"
+        break
+      fi
+    done
+    if [[ "$proven" != "1" ]]; then
+      printf '[dev-local] WARNING: مجموعة العمليات %s من تشغيل سابق لم يثبت انتماؤها (وقت بدء العملية لا يطابق السجل، احتمال إعادة استخدام PGID) — لن توجَّه إليها أي إشارة. افحصها يدوياً: ps -o pid,pgid,lstart,args -s %s\n' "$pgid" "$pgid" >&2
+      continue
     fi
+    trusted_groups["$pgid"]="$token"
+    printf '[dev-local] Stopping process group %s left by a previous run...\n' "$pgid" >&2
+    stop_group "$pgid"
   done <"$STATE_FILE"
   rm -f "$STATE_FILE"
 }
@@ -399,7 +516,10 @@ vite_pgid=$!
 
 remember_group_members "$api_pgid"
 remember_group_members "$vite_pgid"
-printf '%s\n%s\n' "$vite_pgid" "$api_pgid" >"$STATE_FILE"
+trust_group "$api_pgid"
+trust_group "$vite_pgid"
+write_state_file
+state_dirty=0
 
 # فحص جاهزية Vite: أساسي — فشله يوقف السكربت (لا واجهة بدونه).
 wait_for_http 'Vite homepage' "$vite_pgid" 'http://127.0.0.1:5000/' '200'
@@ -461,6 +581,13 @@ while true; do
         api_leader_warned=1
       fi
     fi
+  fi
+
+  # تُحدَّث الهوية في ملف الحالة متى ظهر عضو جديد (ابن vite/tsx)، فيُثبت
+  # انتماء المجموعة في التشغيل التالي حتى لو خرج زعيمها وبقي الأبناء.
+  if ((state_dirty)); then
+    write_state_file
+    state_dirty=0
   fi
 
   sleep "$POLL_INTERVAL_SECONDS"
