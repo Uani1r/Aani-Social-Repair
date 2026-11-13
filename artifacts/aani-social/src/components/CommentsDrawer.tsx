@@ -1021,25 +1021,14 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       void loadComments(false);
       return true;
     } catch (error: unknown) {
-      // قاعدة بيانات لم يُطبَّق عليها ترحيل إدارة التعليقات: التعديل المباشر
-      // محصور بصاحب التعليق عبر RLS (لا توسيع صلاحيات).
-      if (isMissingCommentFunctionError(error)) {
-        const { error: fallbackError } = await supabase
-          .from('comments')
-          .update({ content: normalized })
-          .eq('id', comment.id)
-          .eq('user_id', currentUserId);
-        if (!fallbackError) {
-          toast.success('تم تعديل التعليق');
-          void loadComments(false);
-          return true;
-        }
-        console.error('[comments] تعذر تعديل التعليق (مسار مباشر):', fallbackError);
-      } else {
-        console.error('[comments] تعذر تعديل التعليق:', error);
-      }
+      // لا مسار بديل مباشر: ترحيل إدارة التعليقات يمنح authenticated قراءة
+      // التعليقات فقط (لا UPDATE/DELETE مباشرة). الحذف/التعديل عبر RPC الآمن
+      // الذي يتحقق من auth.uid() داخل قاعدة البيانات.
+      console.error('[comments] تعذر تعديل التعليق:', error);
       setComments(previousComments);
-      toast.error('تعذر حفظ التعديل. حاول مرة أخرى.');
+      toast.error(isMissingCommentFunctionError(error)
+        ? 'تعذر حفظ التعديل: طبّق ترحيل إدارة التعليقات (20261201000000_comment_management.sql) على قاعدة البيانات ثم أعد المحاولة.'
+        : 'تعذر حفظ التعديل. حاول مرة أخرى.');
       return false;
     } finally {
       setPendingEditIds((prev) => {
@@ -1066,25 +1055,11 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       toast.success('تم حذف التعليق');
       void loadComments(false);
     } catch (error: unknown) {
-      // قاعدة بيانات بلا دالة الحذف: صاحب التعليق فقط يمكنه الحذف مباشرة عبر
-      // سياسة RLS الحالية (user_id = auth.uid()). لا تُمنح أي صلاحية إضافية.
-      if (comment.user_id === currentUserId && isMissingCommentFunctionError(error)) {
-        const { error: fallbackError } = await supabase
-          .from('comments')
-          .delete()
-          .eq('id', comment.id)
-          .eq('user_id', currentUserId);
-        if (!fallbackError) {
-          toast.success('تم حذف التعليق');
-          void loadComments(false);
-          return;
-        }
-        console.error('[comments] تعذر حذف التعليق (مسار مباشر):', fallbackError);
-      } else {
-        console.error('[comments] تعذر حذف التعليق:', error);
-      }
+      console.error('[comments] تعذر حذف التعليق:', error);
       setComments(previousComments);
-      toast.error('تعذر حذف التعليق. تحقق من صلاحياتك ثم حاول مرة أخرى.');
+      toast.error(isMissingCommentFunctionError(error)
+        ? 'تعذر حذف التعليق: طبّق ترحيل إدارة التعليقات (20261201000000_comment_management.sql) على قاعدة البيانات ثم أعد المحاولة.'
+        : 'تعذر حذف التعليق. تحقق من صلاحياتك ثم حاول مرة أخرى.');
     } finally {
       setPendingDeleteIds((prev) => {
         const next = { ...prev };

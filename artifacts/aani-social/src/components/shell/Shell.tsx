@@ -972,8 +972,11 @@ export default function Shell({
   const publishLockRef = useRef(0);
   // متحكم الإلغاء الجاري: يستخدمه زر X لإلغاء الرفع فوراً
   const activePublishAbortRef = useRef<AbortController | null>(null);
-  // هل استجاب الخادم مرة واحدة في هذه الجلسة؟ يمنع تكرار فحص الاستيقاظ
-  const backendAwakeRef = useRef(false);
+  // آخر وقت استجاب فيه الخادم لفحص الصحة (0 = غير مستيقظ/منتهي الصلاحية).
+  // ليس علماً دائماً: يُبطَل عند أخطاء الاتصال ويُعاد فحصه بعد انتهاء صلاحيته.
+  const backendAwakeRef = useRef(0);
+  // مدة اعتبار الخادم مستيقظاً قبل إعادة الفحص
+  const BACKEND_AWAKE_TTL_MS = 60000;
   // معرّف المنشور ثابت لكل جلسة إنشاء: إعادة المحاولة تستخدم نفس المعرّف
   // (upsert onConflict id) فلا يتكرر المنشور ولا تتكرر الوسائط المرفوعة.
   const composerPostIdRef = useRef<string | null>(null);
@@ -1770,23 +1773,29 @@ export default function Shell({
         }, ms);
         attemptSignal.addEventListener('abort', onAbort, { once: true });
       });
-      // استيقاظ الخادم (Render) قبل الرفع: محاولات محدودة بتراجع 2/4/8 ثوانٍ،
-      // وفشلها صامت — لا يمنع المحاولة، فقط يمنح الخادم وقتاً للاستجابة.
+      // استيقاظ الخادم (Render) قبل الرفع: فحص صحة محدود بتراجع فعلي
+      // 2/4/8 ثوانٍ (أربع محاولات). النجاح يُسجَّل بوقت وليس علماً دائماً، فإذا
+      // عاد الخادم للنوم أو ظهر خطأ اتصال لاحقاً يُعاد الفحص. فشل الفحص لا يمنع
+      // النشر — يكمل المسار بعد المحاولات المحدودة.
       const waitForBackendAwake = async (): Promise<void> => {
-        if (backendAwakeRef.current) return;
-        for (let index = 0; index < 3; index += 1) {
+        const lastAwakeAt = backendAwakeRef.current;
+        if (lastAwakeAt > 0 && Date.now() - lastAwakeAt < BACKEND_AWAKE_TTL_MS) return;
+        const delays = [2000, 4000, 8000];
+        for (let index = 0; index <= delays.length; index += 1) {
           ensureAttemptAlive();
           try {
             const response = await fetch('/api/health', { signal: attemptSignal, cache: 'no-store' });
             if (response.ok) {
-              backendAwakeRef.current = true;
+              backendAwakeRef.current = Date.now();
               return;
             }
           } catch (error) {
             if (isAbortLike(error)) throw error;
           }
-          if (index < 2) await delayWithSignal([2000, 4000, 8000][index]);
+          if (index < delays.length) await delayWithSignal(delays[index]);
         }
+        // لم يستجب الخادم ضمن المحاولات: نُبقي الحالة غير مستيقظة ونكمل النشر.
+        backendAwakeRef.current = 0;
       };
       // هل الخطأ عابر (شبكة/استيقاظ خادم/5xx) ويعيد المحاولة؟ أخطاء الصلاحيات
       // والبيانات الدائمة لا تُعاد.
@@ -2142,6 +2151,15 @@ export default function Shell({
           let result = await upsertPost(payload);
           for (let retry = 0; retry < 2 && result.error && isTransientPostError(result.error); retry += 1) {
             ensureAttemptAlive();
+            // احتمال أن الكتابة وصلت وفُقد الرد: فحص السجل قبل إعادة الإرسال،
+            // فلا نُعيد طلباً ربما نجح ولا نكرر أي أثر جانبي. (لا رفع جديد للوسائط
+            // هنا — الرفع تمّ مرة واحدة قبل هذه المرحلة).
+            if (await postRowExists()) {
+              return { ...result, error: null } as typeof result;
+            }
+            ensureAttemptAlive();
+            // خطأ اتصال مرتبط بالخادم ⇒ أبطِل حالة الاستيقاظ ليُعاد فحص الصحة
+            backendAwakeRef.current = 0;
             if (isCurrentAttempt()) {
               setCreateError('الاتصال بالخادم بطيء، جارٍ إعادة المحاولة تلقائياً…');
             }
@@ -2354,6 +2372,11 @@ export default function Shell({
         }
         if (!wasAppErrorReported(error)) {
           handleAppError('فشل نشر المنشور', error, 'تعذر نشر المنشور. راجع التفاصيل التشخيصية ثم أعد المحاولة.');
+        }
+        // خطأ اتصال/خادم عابر: أبطِل حالة الاستيقاظ ليُعاد فحص الصحة في المحاولة
+        // التالية بدل افتراض أن الخادم ما زال مستيقظاً.
+        if (!timedOutNow && isTransientPostError(error)) {
+          backendAwakeRef.current = 0;
         }
         const message = toUserFacingPublishMessage(error, timedOutNow);
         updatePendingPost(postId, { stage: 'failed', error: message, retry: () => { void attemptPublish(); } });
