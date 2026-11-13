@@ -13,6 +13,7 @@ import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
+import StoryErrorDiagnosticPanel from '@/components/story/StoryErrorDiagnosticPanel';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import type { StoryImageStickerUpdate, StoryTimedText } from '@/components/stories/types';
 import type { MusicTrack } from '@/lib/music';
@@ -586,6 +587,8 @@ export default function StoryCreationEditor({
         currentUserId={userId}
         onClose={onCloseCloseFriends}
       />
+      {/* لوحة تشخيص نشر القصص — Portal مستقل فوق جميع الطبقات */}
+      <StoryErrorDiagnosticPanel />
     </div>
   );
 }

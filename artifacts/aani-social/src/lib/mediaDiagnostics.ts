@@ -27,7 +27,95 @@ export type MediaDiagnosticStage =
   | 'عملية شبكة أخرى';
 
 /** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
-export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-story-diagnostics-v3-server-upload-fallback';
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v6';
+
+/** آخر إصدار خادم مُلاحَظ — من ردود الرفع/التوقيع أو من فحص حي */
+let lastKnownServerBuildVersion: string | null = null;
+
+export function getLastKnownServerBuildVersion(): string | null {
+  return lastKnownServerBuildVersion;
+}
+
+function noteServerBuildVersion(value: unknown): void {
+  if (typeof value === 'string' && value.length > 0) {
+    lastKnownServerBuildVersion = value;
+  }
+}
+
+/** أثناء فحص الخادم الحي: لا يُرصَد كفشل ولا يُظهر تنبيهاً */
+let probeInFlight = false;
+
+export interface ServerCheckResult {
+  running: boolean;
+  uploadCheck?: {
+    ok: boolean;
+    status: number;
+    serverBuildVersion: string | null;
+    bodyPreview: string;
+  };
+  authCheck?: {
+    status: number;
+    /** 401 هنا يعني المسار حيّ ويطالب بالمصادقة — أي أن الخادم ليس قديماً */
+    provesRouteExists: boolean;
+    bodyPreview: string;
+  };
+  error?: string;
+}
+
+/** فحص حي من الشاشة: هل عملية الخادم التي تستقبل الطلبات حديثة فعلاً؟ */
+export async function checkMediaServers(): Promise<ServerCheckResult> {
+  probeInFlight = true;
+  try {
+    const result: ServerCheckResult = { running: false };
+
+    const [uploadResponse, authResponse] = await Promise.all([
+      fetch('/api/media/upload', { cache: 'no-store' }).catch(error => ({ error }) as unknown as Response & { error?: unknown }),
+      fetch('/api/media/imagekit-auth', { cache: 'no-store' }).catch(error => ({ error }) as unknown as Response & { error?: unknown }),
+    ]);
+
+    try {
+      const status = typeof uploadResponse?.status === 'number' ? uploadResponse.status : 0;
+      const text = 'text' in uploadResponse && typeof uploadResponse.text === 'function'
+        ? await uploadResponse.text().catch(() => '')
+        : `خطأ شبكي: ${String((uploadResponse as { error?: unknown }).error || '')}`;
+      let serverBuildVersion: string | null = null;
+      try {
+        const parsed = JSON.parse(text) as Record<string, unknown>;
+        if (typeof parsed.serverBuildVersion === 'string') {
+          serverBuildVersion = parsed.serverBuildVersion;
+          noteServerBuildVersion(serverBuildVersion);
+        }
+      } catch {
+        // رد غير JSON
+      }
+      result.uploadCheck = { ok: status >= 200 && status < 300, status, serverBuildVersion, bodyPreview: text.slice(0, 300) };
+    } catch {
+      // يُعالج لاحقاً
+    }
+
+    try {
+      const status = typeof authResponse?.status === 'number' ? authResponse.status : 0;
+      const text = 'text' in authResponse && typeof authResponse.text === 'function'
+        ? await authResponse.text().catch(() => '')
+        : `خطأ شبكي: ${String((authResponse as { error?: unknown }).error || '')}`;
+      result.authCheck = {
+        status,
+        // 401 من هذه النقطة يعني أن المسار موجود ويطالب بالمصادقة
+        provesRouteExists: status === 401,
+        bodyPreview: text.slice(0, 300),
+      };
+    } catch {
+      // يُعالج لاحقاً
+    }
+
+    result.running = (result.uploadCheck?.ok === true)
+      || (result.authCheck?.provesRouteExists === true)
+      || (result.uploadCheck !== undefined && result.uploadCheck.status > 0);
+    return result;
+  } finally {
+    probeInFlight = false;
+  }
+}
 
 export interface MediaDiagnosticParams {
   publicKeyPresent?: boolean;
@@ -135,6 +223,7 @@ function paramsFromForm(form: FormData): MediaDiagnosticParams {
 function paramsFromAuthBody(text: string): MediaDiagnosticParams | undefined {
   try {
     const parsed = JSON.parse(text) as Record<string, unknown>;
+    noteServerBuildVersion(parsed.serverBuildVersion);
     const params: MediaDiagnosticParams = {
       publicKeyPresent: typeof parsed.publicKey === 'string' && parsed.publicKey.length > 0,
       tokenPresent: typeof parsed.token === 'string' && parsed.token.length > 0,
@@ -258,7 +347,7 @@ export function initMediaDiagnostics(): void {
     }
     const method = (init?.method || (typeof input !== 'string' && !(input instanceof URL) ? input.method : 'GET') || 'GET').toUpperCase();
 
-    if (!url || !isTrackedUrl(url)) {
+    if (!url || !isTrackedUrl(url) || probeInFlight) {
       return originalFetch(input, init);
     }
 

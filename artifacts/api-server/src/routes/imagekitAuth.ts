@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
 
 import { logger } from "../lib/logger";
-import { buildImageKitSignature, describeExpireValue, logImageKitAuthDiagnostics } from "../lib/mediaDiagnostics";
+import { buildImageKitSignature, describeExpireValue, logImageKitAuthDiagnostics, SERVER_BUILD_VERSION } from "../lib/mediaDiagnostics";
 import { readSupabaseAdminConfig } from "../lib/supabaseAdmin";
 
 const router = Router();
@@ -90,6 +90,7 @@ router.get("/media/imagekit-auth", (req: Request, res: Response) => {
         })
         .json({
           success: true,
+          serverBuildVersion: SERVER_BUILD_VERSION,
           urlEndpoint: imagekit.urlEndpoint,
           publicKey: imagekit.publicKey,
           // نفس التوكن المُستخدم في حساب التوقيع تماماً — إرجاع توكن مختلف

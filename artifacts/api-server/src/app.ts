@@ -5,6 +5,7 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import pushNotificationsRouter, { handlePushWebhook } from "./routes/pushNotifications";
 import { logger } from "./lib/logger";
+import { SERVER_BUILD_VERSION } from "./lib/mediaDiagnostics";
 
 const app: Express = express();
 
@@ -31,7 +32,7 @@ app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true, limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.status(200).json({ success: true, status: "ok" });
+  res.status(200).json({ success: true, status: "ok", serverBuildVersion: SERVER_BUILD_VERSION });
 });
 
 app.use("/api", router);

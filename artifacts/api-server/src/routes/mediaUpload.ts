@@ -13,6 +13,7 @@
 import express, { Router, type Request, type Response } from "express";
 
 import { logger } from "../lib/logger";
+import { SERVER_BUILD_VERSION } from "../lib/mediaDiagnostics";
 import { readSupabaseAdminConfig } from "../lib/supabaseAdmin";
 
 const router = Router();
@@ -59,6 +60,7 @@ function sanitizeFolder(raw: string): string {
 router.get("/media/upload", (_req: Request, res: Response) => {
   return res.status(200).json({
     success: true,
+    serverBuildVersion: SERVER_BUILD_VERSION,
     route: "POST /api/media/upload",
     message: "نقطة الرفع الاحتياطي حيّة على هذه العملية.",
   });
