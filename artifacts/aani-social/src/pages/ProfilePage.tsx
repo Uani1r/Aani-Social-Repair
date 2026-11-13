@@ -278,7 +278,7 @@ export default function ProfilePage({
 
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
   const pageDirection = typeof document !== 'undefined' && document.documentElement.dir === 'ltr' ? 'ltr' : 'rtl';
-  const { posts, loading, refresh, error } = usePosts('profile', activeUserId, currentUserId);
+  const { posts, loading, refresh, error, repostsError } = usePosts('profile', activeUserId, currentUserId);
   const safeProfilePosts = Array.isArray(posts) ? posts : [];
   const ownProfilePosts = safeProfilePosts.filter(post => post.user_id === activeUserId && !post.reposter_id);
   const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
@@ -2237,6 +2237,21 @@ export default function ProfilePage({
             : profileContentTab === 'tagged'
               ? taggedPosts
               : displayProfilePosts.filter(post => post.type !== 'text');
+        if (profileContentTab === 'reposts' && repostsError) {
+          // فشل قراءة سجلات reposts (RLS/جدول): حالة خطأ مرئية بدل تبويب فارغ مضلل
+          return (
+            <div className="mt-6 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-5 text-center" dir="rtl">
+              <p className="text-sm font-semibold text-red-200">{repostsError}</p>
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                className="mt-3 rounded-full bg-white px-4 py-2 text-sm font-semibold text-black"
+              >
+                إعادة المحاولة
+              </button>
+            </div>
+          );
+        }
         if (!mediaPosts.length) {
           // الحالة الفارغة الموحدة: الشعار وكلمة «لا يوجد» فقط بلا حدود حمراء
           return <EmptyState className="min-h-64" />;

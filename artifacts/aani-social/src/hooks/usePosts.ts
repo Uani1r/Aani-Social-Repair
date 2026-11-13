@@ -271,6 +271,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   const [posts, setPostsState] = useState<Post[]>(() => postsCache.get(cacheKey) || []);
   const [loading, setLoading] = useState(!hadCachedPosts);
   const [error, setError] = useState('');
+  // خطأ قراءة سجلات إعادة النشر (RLS/جدول مفقود) — يُعرض في تبويب إعادة النشر
+  // بدل إظهار تبويب فارغ يوحي بعدم وجود إعادة نشر.
+  const [repostsError, setRepostsError] = useState('');
   const hadCachedPostsRef = useRef(hadCachedPosts);
 
   // كل نجاح جلب يُخزَّن في الذاكرة المؤقتة ليُعاد استخدامه عند
@@ -405,6 +408,13 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
             hint: repostsError.hint,
             targetUserId,
           });
+          setRepostsError(
+            repostsError.code === '42501'
+              ? 'تعذر تحميل إعادات النشر: صلاحيات القراءة (RLS) تمنع قراءة سجلات reposts لهذا الحساب.'
+              : 'تعذر تحميل إعادات النشر من قاعدة البيانات. حاول التحديث، وإن استمر الخطأ راجع سجلات التشخيص.',
+          );
+        } else {
+          setRepostsError('');
         }
 
         const repostRows = repostsError ? [] : normalizeRepostRows(repostData);
@@ -597,5 +607,5 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     [posts, currentUserId, interactionVersion],
   );
 
-  return { posts: currentPosts, loading, error, refresh };
+  return { posts: currentPosts, loading, error, repostsError, refresh };
 }

@@ -67,7 +67,7 @@ export type PostInteractions = InteractionSnapshot & {
   pending: boolean;
   toggleLike: () => Promise<void>;
   toggleBookmark: () => Promise<void>;
-  toggleRepost: () => Promise<void>;
+  toggleRepost: () => Promise<boolean>;
   share: () => Promise<void>;
 };
 

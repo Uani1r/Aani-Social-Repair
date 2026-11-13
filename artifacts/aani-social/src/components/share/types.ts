@@ -4,7 +4,7 @@ export interface ShareSheetProps {
   post: Post;
   currentUserId: string;
   reposted?: boolean;
-  onToggleRepost?: () => void | Promise<void>;
+  onToggleRepost?: () => boolean | Promise<boolean>;
   onRecordExternalShare?: () => void;
   onSent?: (count: number) => void;
   onClose: () => void;

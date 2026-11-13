@@ -78,23 +78,19 @@ export function useModalBodyScrollLock() {
       lockOwners = Math.max(0, lockOwners - 1);
       refreshBodyScrollLock();
 
-      // شبكة أمان عند مغادرة آخر مكوّن: لا نلمس body إلا إذا كنا فعلاً من
-      // يملك القفل (سجلنا الحالة) أو تركنا overflow=hidden. وإذا كانت هناك
-      // نافذة أخرى ما زالت مفتوحة نبقي القفل كما هو.
-      if (lockOwners === 0 && !hasOpenDialog()) {
+      // شبكة أمان عند مغادرة آخر مكوّن: لا نلمس body إلا إذا كنّا نحن من قفلناه
+      // فعلاً (سجّلنا الحالة الأصلية). مجرد رؤية overflow === 'hidden' ليست دليلاً
+      // على الملكية — قد يكون قفلاً لنظام/مكوّن آخر ويجب ألا نغيّر قيمته الأصلية.
+      // والنوافذ المتداخلة تبقى مقفلة ما دامت هناك نافذة مفتوحة أو مالك آخر.
+      if (lockOwners === 0 && !hasOpenDialog() && savedBodyState !== null) {
         const body = document.body;
-        const owned = savedBodyState !== null || body.style.overflow === 'hidden';
-        if (owned) {
-          const overflow = savedBodyState?.overflow ?? '';
-          const overscrollBehavior = savedBodyState?.overscrollBehavior ?? '';
-          const scrollTop = savedBodyState?.scrollTop ?? null;
-          savedBodyState = null;
-          body.style.overflow = overflow || 'unset';
-          body.style.overscrollBehavior = overscrollBehavior;
-          body.classList.remove('overflow-hidden', 'fixed', 'inset-0');
-          if (scrollTop !== null && window.scrollY !== scrollTop) {
-            window.scrollTo({ left: window.scrollX, top: scrollTop, behavior: 'auto' });
-          }
+        const { scrollTop, overflow, overscrollBehavior } = savedBodyState;
+        savedBodyState = null;
+        // استعادة القيمة الأصلية مرة واحدة فقط (حتى لو كانت hidden أصلاً)
+        body.style.overflow = overflow;
+        body.style.overscrollBehavior = overscrollBehavior;
+        if (scrollTop !== null && window.scrollY !== scrollTop) {
+          window.scrollTo({ left: window.scrollX, top: scrollTop, behavior: 'auto' });
         }
       }
     };

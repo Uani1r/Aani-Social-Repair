@@ -169,12 +169,17 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
             : `تم إرسال المنشور إلى ${ok} من ${recipients.length}، وتعذر إرسال ${failed}`,
         );
 
-        // العداد يُسجَّل بعدد الرسائل الناجحة فقط. فشل تسجيل العداد لا يحوّل
-        // الإرسال الناجح إلى فشل وهمي للمستخدم.
+        // العداد يُسجَّل بعدد الرسائل الناجحة فقط. recordShares يعيد boolean
+        // (ولا يرمي) ويعرض رسالة الخطأ بنفسه — فلا نُحوّل الإرسال الناجح إلى
+        // فشل وهمي، ولا نكتفي بتحذير Console عند فشل حقيقي.
+        let counterSaved = false;
         try {
-          await recordShares(targetPost, senderId, ok);
+          counterSaved = await recordShares(targetPost, senderId, ok);
         } catch (counterError) {
-          console.warn('[share] تعذر تسجيل عداد المشاركة بعد إرسال ناجح:', counterError);
+          console.error('[share] استثناء غير متوقع أثناء تسجيل عداد المشاركة:', counterError);
+        }
+        if (!counterSaved) {
+          console.error('[share] لم يُسجَّل عدّاد المشاركة في قاعدة البيانات (الرسائل أُرسلت بنجاح).');
         }
 
         notifySent?.(ok);
@@ -236,11 +241,12 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
 
     setRepostBusy(true);
     try {
-      await onToggleRepost();
+      // النتيجة صريحة: true فقط بعد تأكيد الحفظ في قاعدة البيانات.
+      // عند الفشل يبقى toggleRepost مسؤولاً عن حالة UI ورسالة الخطأ.
+      const confirmed = await onToggleRepost();
+      if (!confirmed) return;
 
-      const wasReposting = !reposted;
-
-      if (wasReposting) {
+      if (!reposted) {
         if (supabaseConfigured) {
           try {
             const cleanNote = note.trim().slice(0, 200);
@@ -276,13 +282,11 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
           }
         }
 
-        toast.success('تمت إعادة نشر المنشور');
         setNote('');
-      } else {
-        toast.success('تم إلغاء إعادة النشر');
       }
+      // رسالة نجاح واحدة فقط — يعرضها toggleRepost بعد تأكيد قاعدة البيانات.
     } catch {
-      /* The original repost handler reports errors. */
+      /* معالج إعادة النشر الأصلي يعرض رسالة الفشل. */
     } finally {
       setRepostBusy(false);
     }

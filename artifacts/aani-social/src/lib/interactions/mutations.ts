@@ -132,12 +132,12 @@ export async function toggleRepost(
   postOrId: Post | string,
   userId: string,
   overrideState?: boolean,
-): Promise<void> {
+): Promise<boolean> {
   const post: Post = typeof postOrId === "string"
     ? ({ id: postOrId } as Post)
     : postOrId;
 
-  if (isPending(post.id, userId)) return;
+  if (isPending(post.id, userId)) return false;
 
   const before = readInteractionState(post, userId);
   const reposted = overrideState !== undefined ? !overrideState : !before.reposted;
@@ -154,7 +154,7 @@ export async function toggleRepost(
     if (!supabaseConfigured) {
       patchCache(post.id, userId, { reposted: before.reposted, reposts: before.reposts });
       toast.error("تعذر إعادة النشر: لا يوجد اتصال بقاعدة البيانات");
-      return;
+      return false;
     }
 
     const { error } = reposted
@@ -172,9 +172,9 @@ export async function toggleRepost(
         userId,
       });
 
-      // 23505: السجل موجود بالفعل (نقر مزدوج/سباق) — الحالة الصحيحة هي "معاد
-      // النشر". نثبّتها ونعيد مزامنة العداد من قاعدة البيانات بدل حالة وهمية.
-      if (error.code === "23505") {
+      // 23505 تعارض إدخال: يخص محاولة الإضافة فقط. السجل موجود بالفعل ⇒ الحالة
+      // الصحيحة "معاد النشر". لا يُستخدم هذا الفرع عند محاولة الإزالة.
+      if (error.code === "23505" && reposted) {
         patchCache(post.id, userId, { reposted: true });
         writeLocalFlag(userId, post.id, { reposted: true });
         stored = true;
@@ -189,7 +189,7 @@ export async function toggleRepost(
               ? "تعذر حفظ إعادة النشر: لا تملك صلاحية كتابة سجل إعادة النشر."
               : "تعذر حفظ إعادة النشر في قاعدة البيانات، حاول مرة أخرى",
         );
-        return;
+        return false;
       }
     }
 
@@ -209,6 +209,7 @@ export async function toggleRepost(
     }
     await hydratePostIds([post.id], userId, { force: true });
   }
+  return stored;
 }
 
 export function buildPostUrl(postId: string): string {
