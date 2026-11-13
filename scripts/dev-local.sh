@@ -9,6 +9,10 @@ POLL_INTERVAL_SECONDS=0.25
 api_pid=""
 vite_pid=""
 api_check_pid=""
+# الأنماط المتوقعة لعمليات هذة مساحة العمل — تُستخدم للتحقق قبل أي إشارة
+# كي لا يعطي kill -0 نتيجة خاطئة عند إعادة استخدام PID من عملية أخرى.
+vite_expected="@workspace/aani-social"
+api_expected="@workspace/api-server"
 api_log="$(mktemp "${TMPDIR:-/tmp}/aani-api.XXXXXX.log")"
 vite_log="$(mktemp "${TMPDIR:-/tmp}/aani-vite.XXXXXX.log")"
 
@@ -23,26 +27,47 @@ show_logs() {
   fi
 }
 
+# هل مجموعة العملية (PGID) حية وتنتمي فعلاً إلى مشغّلات هذه مساحة العمل؟
+# setsid يجعل PID = PGID = معرف جلسة الأمر، والتحقق من سطر الأوامر يمنع
+# النتائج الخاطئة عند إعادة استخدام PID من عملية مجهولة (لن تُقتل أبداً).
+group_is_ours() {
+  local pid="$1"
+  local expected="$2"
+  [[ -n "$pid" ]] || return 1
+  kill -0 -- "-$pid" 2>/dev/null || return 1
+  local cmdline
+  cmdline="$(ps -p "$pid" -o args= 2>/dev/null | head -n 1)"
+  [[ "$cmdline" == *"$expected"* ]]
+}
+
 stop_group() {
   local pid="${1:-}"
+  local expected="${2:-}"
   [[ -n "$pid" ]] || return 0
 
-  if kill -0 -- "-$pid" 2>/dev/null; then
-    kill -TERM -- "-$pid" 2>/dev/null || true
-    for _ in {1..20}; do
-      kill -0 -- "-$pid" 2>/dev/null || break
-      sleep "$POLL_INTERVAL_SECONDS"
-    done
-    kill -KILL -- "-$pid" 2>/dev/null || true
+  if ! kill -0 -- "-$pid" 2>/dev/null; then
+    wait "$pid" 2>/dev/null || true
+    return 0
   fi
+  if ! group_is_ours "$pid" "$expected"; then
+    printf '[dev-local] WARNING: العملية %s لم تعد تنتمي إلى مشغّلات هذه مساحة العمل (إعادة استخدام PID؟) — لن تُقتل.\n' "$pid" >&2
+    return 0
+  fi
+
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  for _ in {1..20}; do
+    kill -0 -- "-$pid" 2>/dev/null || break
+    sleep "$POLL_INTERVAL_SECONDS"
+  done
+  kill -KILL -- "-$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
 }
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
-  stop_group "$vite_pid"
-  stop_group "$api_pid"
+  stop_group "$vite_pid" "$vite_expected"
+  stop_group "$api_pid" "$api_expected"
   if [[ -n "$api_check_pid" ]]; then
     kill "$api_check_pid" 2>/dev/null || true
   fi
@@ -93,11 +118,14 @@ stop_old_servers() {
     exit 1
   }
 
-  # أوقف فقط مشغّلات مساحة العمل المعروفة (pnpm run dev للواجهة وAPI وأي
-  # vite dev server قديم). لا عمليات مجهولة ولا killall.
+  # أوقف فقط مشغّلات مساحة العمل المعروفة: مغلفات pnpm لأوامر dev، أي
+  # vite dev server قديم، وعملية tsx watch للـAPI (طفل مغلف pnpm يبقى
+  # حياً بعد قتل المغلف ويحتفظ بـ8080 — يُوقف بالاسم الدقيق فقط).
+  # لا عمليات مجهولة ولا killall.
   pkill -TERM -f '[p]npm.*@workspace/api-server.*run dev' 2>/dev/null || true
   pkill -TERM -f '[p]npm.*@workspace/aani-social.*run dev' 2>/dev/null || true
   pkill -TERM -f '[v]ite --config' 2>/dev/null || true
+  pkill -TERM -f '[t]sx watch ./src/index.ts' 2>/dev/null || true
 
   for _ in {1..40}; do
     if port_is_free 5000 && port_is_free 8080; then
@@ -201,15 +229,25 @@ api_check_pid=$!
 printf '[dev-local] Vite is serving on 5000. Monitoring both servers...\n'
 
 # المراقبة: توقف API تحذير فقط ولا يقتل الواجهة أبداً؛ توقف Vite فادح
-# (لا واجهة بدونه) فينظّف العملية الأخرى. لا عمليات مجهولة تُقتل هنا،
-# والتنظيف الكامل يبقى في trap EXIT عند إيقاف المشروع.
+# (لا واجهة بدونه) فينظّف العملية الأخرى. التحقق من انتماء المجموعة
+# يمنع النتائج الخاطئة عند إعادة استخدام PID، والتنظيف الكامل يبقى
+# في trap EXIT عند إيقاف المشروع. لا عمليات مجهولة تُقتل هنا.
 while true; do
-  if ! kill -0 -- "-$vite_pid" 2>/dev/null; then
-    fail_startup "Vite process exited unexpectedly."
+  if ! group_is_ours "$vite_pid" "$vite_expected"; then
+    if kill -0 -- "-$vite_pid" 2>/dev/null; then
+      printf '[dev-local] WARNING: عملية Vite (PID %s) لم تعد تنتمي إلى هذه مساحة العمل — لن تُراقَب ولن تُقتل.\n' "$vite_pid" >&2
+    else
+      fail_startup "Vite process exited unexpectedly."
+    fi
+    vite_pid=""
   fi
-  if [[ -n "$api_pid" ]] && ! kill -0 -- "-$api_pid" 2>/dev/null; then
-    printf '[dev-local] WARNING: API process exited — الواجهة تبقى عاملة على 5000. أعد تشغيل الـAPI لإرجاع /api.\n' >&2
-    show_logs 'API server' "$api_log"
+  if [[ -n "$api_pid" ]] && ! group_is_ours "$api_pid" "$api_expected"; then
+    if kill -0 -- "-$api_pid" 2>/dev/null; then
+      printf '[dev-local] WARNING: عملية API (PID %s) لم تعد تنتمي إلى هذه مساحة العمل — لن تُراقَب ولن تُقتل.\n' "$api_pid" >&2
+    else
+      printf '[dev-local] WARNING: API process exited — الواجهة تبقى عاملة على 5000. أعد تشغيل الـAPI لإرجاع /api.\n' >&2
+      show_logs 'API server' "$api_log"
+    fi
     api_pid=""
   fi
   sleep "$POLL_INTERVAL_SECONDS"

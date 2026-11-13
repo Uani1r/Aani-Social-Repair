@@ -5,12 +5,12 @@ version = "1.0.0"
 id = "3B4_FFSkEVBkAeYMFRJ2e"
 
 [[services]]
+# التوجيه فقط: الـAPI يشغّله المسار الرئيسي الوحيد (.replit →
+# bash scripts/dev-local.sh) على 8080 — بلا مشغّل تطوير مكرر هنا
+# كي لا تتنافس عمليتا API على المنفذ نفسه.
 localPort = 8080
 name = "API Server"
 paths = ["/api"]
-
-[services.development]
-run = "pnpm --filter @workspace/api-server run dev"
 
 [services.production]
 
