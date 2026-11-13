@@ -19,7 +19,6 @@ import {
   type StoryGestureTarget,
   type StoryViewerEntry,
   type StoryViewerPreviewSession,
-  type StoryViewerPreviewState,
 } from '@/lib/appShared';
 
 import StoryComposerSheet from './StoryComposerSheet';
@@ -134,7 +133,7 @@ export default function StoriesBar({
   const [storyViewsError, setStoryViewsError] = useState(false);
   const [storyViewsCount, setStoryViewsCount] = useState(0);
   const [storyViewers, setStoryViewers] = useState<StoryViewerEntry[]>([]);
-  const [storyViewerPreview, setStoryViewerPreview] = useState<StoryViewerPreviewState | null>(null);
+
   const [viewerActionBusyId, setViewerActionBusyId] = useState<string | null>(null);
   const [viewerReportTarget, setViewerReportTarget] = useState<StoryViewerEntry | null>(null);
   const [viewerReportCategory, setViewerReportCategory] = useState<'spam' | 'harassment' | 'hate' | 'fake_account' | 'other'>('spam');
@@ -1366,13 +1365,12 @@ export default function StoriesBar({
     };
   }, [currentStory]);
   const currentStoryFilterOverlay = getStoryFilterOverlay(currentStoryFilter.id);
-  const { loadStoryViewerEntries, loadStoryViewerPreview } = useStoryViewerData({
+  const { loadStoryViewerEntries } = useStoryViewerData({
     userId,
     currentStory,
     storyViewsRequestRef,
     setStoryViewers,
     setStoryViewsCount,
-    setStoryViewerPreview,
   });
   const {
     handleOpenStoryViews,
@@ -1407,13 +1405,11 @@ export default function StoriesBar({
     storyViewsRequestRef,
     storyViewsChannelRef,
     loadStoryViewerEntries,
-    loadStoryViewerPreview,
     setStoryViewsOpen,
     setStoryViewsLoading,
     setStoryViewsError,
     setStoryViewsCount,
     setStoryViewers,
-    setStoryViewerPreview,
     setViewerActionBusyId,
     setViewerReportTarget,
     setViewerReportCategory,
@@ -1460,31 +1456,6 @@ export default function StoriesBar({
   }, [currentStory?.id]);
 
   useEffect(() => {
-    if (!storyViewerPreview) return;
-    const preview = storyViewerPreview;
-    const expirePreview = () => {
-      try {
-        localStorage.setItem(preview.storageKey, JSON.stringify({
-          profileIds: [],
-          createdAt: preview.createdAt,
-          expiresAt: preview.expiresAt,
-          expired: true,
-        } satisfies StoryViewerPreviewSession));
-      } catch {
-        /* التخزين المحلي غير متاح */
-      }
-      setStoryViewerPreview(current => current?.storageKey === preview.storageKey ? null : current);
-    };
-    const remaining = preview.expiresAt - Date.now();
-    if (remaining <= 0) {
-      expirePreview();
-      return;
-    }
-    const timer = window.setTimeout(expirePreview, remaining);
-    return () => window.clearTimeout(timer);
-  }, [storyViewerPreview]);
-
-  useEffect(() => {
     const expireStoredPreviews = () => {
       try {
         const prefix = 'aani:story-viewer-preview:';
@@ -1514,7 +1485,6 @@ export default function StoriesBar({
               expiresAt: session.expiresAt,
               expired: true,
             } satisfies StoryViewerPreviewSession));
-            setStoryViewerPreview(current => current?.storageKey === key ? null : current);
           }
           index += 1;
         }
@@ -2181,7 +2151,6 @@ export default function StoriesBar({
           storyViewsError={storyViewsError}
           storyViewsCount={storyViewsCount}
           storyViewers={storyViewers}
-          storyViewerPreview={storyViewerPreview}
           viewerActionBusyId={viewerActionBusyId}
           viewerReportTarget={viewerReportTarget}
           viewerReportCategory={viewerReportCategory}

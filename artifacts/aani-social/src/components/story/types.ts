@@ -1,6 +1,6 @@
 import type { FormEvent } from 'react';
 
-import type { StoryViewerEntry, StoryViewerPreviewState } from '@/lib/appShared';
+import type { StoryViewerEntry } from '@/lib/appShared';
 import type { Profile } from '@/lib/types';
 import type { StoryRow } from '@/components/stories/types';
 
@@ -25,7 +25,6 @@ export type StoryViewerProps = {
   storyViewsError: boolean;
   storyViewsCount: number;
   storyViewers: StoryViewerEntry[];
-  storyViewerPreview: StoryViewerPreviewState | null;
   viewerActionBusyId: string | null;
   viewerReportTarget: StoryViewerEntry | null;
   viewerReportCategory: 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';

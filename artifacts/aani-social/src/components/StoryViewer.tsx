@@ -39,7 +39,6 @@ export default function StoryViewer({
   storyViewsError,
   storyViewsCount,
   storyViewers,
-  storyViewerPreview,
   viewerActionBusyId,
   viewerReportTarget,
   viewerReportCategory,
@@ -367,7 +366,6 @@ export default function StoryViewer({
           storyViewsError={storyViewsError}
           storyViewsCount={storyViewsCount}
           storyViewers={storyViewers}
-          storyViewerPreview={storyViewerPreview}
           viewerActionBusyId={viewerActionBusyId}
           viewerReportTarget={viewerReportTarget}
           viewerReportCategory={viewerReportCategory}

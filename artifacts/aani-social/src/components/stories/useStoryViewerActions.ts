@@ -3,7 +3,6 @@ import { toast } from 'sonner';
 
 import type {
   StoryViewerEntry,
-  StoryViewerPreviewState,
 } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { pushGlobalError } from '@/lib/globalErrorStore';
@@ -13,7 +12,6 @@ import type { StoryRow } from './types';
 type StoryReportCategory = 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';
 
 type StoryDataLoader = (storyId: string, requestId: number) => Promise<StoryViewerEntry[] | null>;
-type StoryPreviewLoader = (storyId: string, actualViewerIds: string[], requestId: number) => Promise<void>;
 
 interface UseStoryViewerActionsOptions {
   userId: string;
@@ -37,13 +35,11 @@ interface UseStoryViewerActionsOptions {
   storyViewsRequestRef: MutableRefObject<number>;
   storyViewsChannelRef: MutableRefObject<ReturnType<typeof supabase.channel> | null>;
   loadStoryViewerEntries: StoryDataLoader;
-  loadStoryViewerPreview: StoryPreviewLoader;
   setStoryViewsOpen: Dispatch<SetStateAction<boolean>>;
   setStoryViewsLoading: Dispatch<SetStateAction<boolean>>;
   setStoryViewsError: Dispatch<SetStateAction<boolean>>;
   setStoryViewsCount: Dispatch<SetStateAction<number>>;
   setStoryViewers: Dispatch<SetStateAction<StoryViewerEntry[]>>;
-  setStoryViewerPreview: Dispatch<SetStateAction<StoryViewerPreviewState | null>>;
   setViewerActionBusyId: Dispatch<SetStateAction<string | null>>;
   setViewerReportTarget: Dispatch<SetStateAction<StoryViewerEntry | null>>;
   setViewerReportCategory: Dispatch<SetStateAction<StoryReportCategory>>;
@@ -80,13 +76,11 @@ export function useStoryViewerActions({
   storyViewsRequestRef,
   storyViewsChannelRef,
   loadStoryViewerEntries,
-  loadStoryViewerPreview,
   setStoryViewsOpen,
   setStoryViewsLoading,
   setStoryViewsError,
   setStoryViewsCount,
   setStoryViewers,
-  setStoryViewerPreview,
   setViewerActionBusyId,
   setViewerReportTarget,
   setViewerReportCategory,
@@ -113,7 +107,6 @@ export function useStoryViewerActions({
     setStoryViewsLoading(true);
     setStoryViewsError(false);
     setStoryViewers([]);
-    setStoryViewerPreview(null);
 
     if (storyViewsChannelRef.current) {
       void supabase.removeChannel(storyViewsChannelRef.current);
@@ -124,22 +117,9 @@ export function useStoryViewerActions({
       const rows = await loadStoryViewerEntries(storyId, requestId);
       if (!rows || requestId !== storyViewsRequestRef.current) return;
 
-      try {
-        await loadStoryViewerPreview(storyId, rows.map(item => item.user_id), requestId);
-      } catch (previewError) {
-        console.warn('[story views] تعذر تحميل حسابات المعاينة المؤقتة:', previewError);
-      }
-      if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
-
       const refreshStoryViewerEntries = () => {
         const refreshRequestId = ++storyViewsRequestRef.current;
-        void loadStoryViewerEntries(storyId, refreshRequestId).then(rows => {
-          if (!rows) return;
-          const realViewerIds = new Set(rows.map(item => item.user_id));
-          setStoryViewerPreview(current => current?.storyId === storyId
-            ? { ...current, rows: current.rows.filter(item => !realViewerIds.has(item.user_id)) }
-            : current);
-        }).catch(error => {
+        void loadStoryViewerEntries(storyId, refreshRequestId).catch(error => {
           if (refreshRequestId !== storyViewsRequestRef.current) return;
           console.error('[story views] تعذر تحديث قائمة المشاهدين:', error);
           setStoryViewsError(true);
@@ -309,9 +289,6 @@ export function useStoryViewerActions({
       if (error) throw error;
       const wasVisible = storyViewers.some(item => item.user_id === viewer.user_id && item.is_viewer !== false);
       setStoryViewers(current => current.filter(item => item.user_id !== viewer.user_id));
-      setStoryViewerPreview(current => current?.storyId === currentStory?.id
-        ? { ...current, rows: current.rows.filter(item => item.user_id !== viewer.user_id) }
-        : current);
       if (wasVisible) setStoryViewsCount(count => Math.max(0, count - 1));
       toast.success('تم حظر الحساب ومنع التواصل وإزالة المتابعة والأصدقاء المقربين المتبادلة.');
     } catch (error) {
@@ -426,6 +403,16 @@ export function useStoryViewerActions({
           );
         if (error) throw error;
         setIsLiked(true);
+        // كل من أعجب بالقصة يُحتسب مشاهداً: upsert مشاهدة فورية — إن كان
+        // له سجل "معاينة" قديم يُرقّى فوراً إلى مشاهدة كاملة محتسبة.
+        void supabase
+          .rpc('aani_record_story_view', { p_story_id: currentStory.id })
+          .then(({ error: viewError }) => {
+            if (viewError) console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
+          })
+          .catch(viewError => {
+            console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
+          });
         try {
           const { error: notificationError } = await supabase.from('notifications').insert({
             user_id: currentStory.user_id,
