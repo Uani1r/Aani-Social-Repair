@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import {
   buildMediaDiagnosticReport,
   copyTextToClipboard,
+  describeHttpStatusLabel,
   MEDIA_DIAGNOSTICS_BUILD_STAMP,
   subscribeMediaDiagnostics,
   type MediaDiagnosticEvent,
@@ -158,7 +159,7 @@ export default function MediaDiagnosticAlert() {
       <div style={styles.headerRow}>
         <span style={styles.title}>تشخيص الوسائط</span>
         <span style={styles.statusChip}>
-          {event.httpStatus === null ? 'فشل شبكي' : `HTTP ${event.httpStatus}`}
+          {describeHttpStatusLabel(event)}
         </span>
       </div>
       <div style={styles.stage}>المرحلة: [{event.stage}]</div>

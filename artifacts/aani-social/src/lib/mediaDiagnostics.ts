@@ -27,7 +27,7 @@ export type MediaDiagnosticStage =
   | 'عملية شبكة أخرى';
 
 /** ختم البناء: إن لم يظهر في المتصفح فالحزمة المُخدَّمة قديمة — ليس كود المستودع */
-export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v6';
+export const MEDIA_DIAGNOSTICS_BUILD_STAMP = '2027-01-24-diagnostics-panel-v7';
 
 /** آخر إصدار خادم مُلاحَظ — من ردود الرفع/التوقيع أو من فحص حي */
 let lastKnownServerBuildVersion: string | null = null;
@@ -493,6 +493,13 @@ export function reportMediaStageFailure(
     if (stage === 'فشل نشر القصة (من كود النشر)') {
       stage = 'الرفع إلى ImageKit (مسار بديل عبر الخادم)';
     }
+  } else if (isSupabaseRpcError(details.rawResponse || '')) {
+    // خطأ من قاعدة بيانات Supabase (مثل "Could not find the function … in
+    // the schema cache") — لا يُوصف بفشل شبكي إطلاقاً
+    endpoint = 'Supabase RPC (aani_create_story)';
+    if (stage === 'فشل نشر القصة (من كود النشر)') {
+      stage = 'الحفظ في قاعدة البيانات (نشر القصة)';
+    }
   }
 
   recordResult({
@@ -502,6 +509,21 @@ export function reportMediaStageFailure(
     rawResponse: details.rawResponse || '',
     explicitStage: stage,
   });
+}
+
+/** هل النص خطأ RPC من Supabase/PostgREST؟ (دالة غير موجودة، كاش قديم، RLS، …) */
+export function isSupabaseRpcError(raw: string): boolean {
+  return /(Could not find the function|schema cache|PGRST|permission denied|row-level security|duplicate key value violates unique|violates foreign key)/i.test(raw);
+}
+
+/** وصف كود الحالة للعرض: HTTP رقمي، أو Supabase RPC Error، أو فشل شبكي فقط
+ *  عندما لا توجد أي استجابة ولا رسالة خطأ من قاعدة البيانات */
+export function describeHttpStatusLabel(event: MediaDiagnosticEvent): string {
+  if (event.httpStatus !== null) return `HTTP ${event.httpStatus}`;
+  if (isSupabaseRpcError(event.rawResponse || '') || event.stage === 'الحفظ في قاعدة البيانات (نشر القصة)') {
+    return 'Supabase RPC Error';
+  }
+  return 'فشل شبكي (لا استجابة)';
 }
 
 function describeBytes(bytes?: number): string {
@@ -544,7 +566,7 @@ export function buildMediaDiagnosticReport(event: MediaDiagnosticEvent): string 
   lines.push(`المرحلة: [${event.stage}]`);
   lines.push(`الرابط: ${event.endpoint}`);
   lines.push(`الطريقة: ${event.method}`);
-  lines.push(`كود الحالة: ${event.httpStatus === null ? 'فشل شبكي (لا استجابة)' : `HTTP ${event.httpStatus}`}`);
+  lines.push(`كود الحالة: ${describeHttpStatusLabel(event)}`);
   if (event.networkError) lines.push(`خطأ الشبكة: ${event.networkError}`);
   if (event.rawResponse) lines.push(`الرسالة الخام:\n${event.rawResponse}`);
   const eventParams = describeParams(event.params);
@@ -555,7 +577,7 @@ export function buildMediaDiagnosticReport(event: MediaDiagnosticEvent): string 
   const authEvent = findLatestAuthEvent(event.at);
   if (authEvent && authEvent.id !== event.id) {
     lines.push(`آخر جلب توقيع (${Math.round((event.at - authEvent.at) / 1000)} ثانية قبل الفشل):`);
-    lines.push(`  كود الحالة: ${authEvent.httpStatus === null ? 'فشل شبكي' : `HTTP ${authEvent.httpStatus}`}`);
+    lines.push(`  كود الحالة: ${describeHttpStatusLabel(authEvent)}`);
     lines.push(...describeParams(authEvent.params).map(line => `  ${line}`));
   }
   try {

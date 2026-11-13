@@ -18,6 +18,7 @@ import {
   buildMediaDiagnosticReport,
   checkMediaServers,
   copyTextToClipboard,
+  describeHttpStatusLabel,
   getMediaDiagnosticEvents,
   getLastKnownServerBuildVersion,
   MEDIA_DIAGNOSTICS_BUILD_STAMP,
@@ -290,7 +291,7 @@ export default function StoryErrorDiagnosticPanel() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={styles.versionBox}>
               <div>المرحلة: [{latestFailure.stage}]</div>
-              <div>HTTP: {latestFailure.httpStatus === null ? 'فشل شبكي' : latestFailure.httpStatus}</div>
+              <div>HTTP: {describeHttpStatusLabel(latestFailure)}</div>
               <div>{latestFailure.method} {latestFailure.endpoint}</div>
             </div>
             {latestFailure.rawResponse ? <pre style={styles.monoBox}>{latestFailure.rawResponse}</pre> : null}
