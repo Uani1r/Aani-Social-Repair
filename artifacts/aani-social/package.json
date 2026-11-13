@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "typecheck:edge": "tsc -p supabase/functions/tsconfig.json",
     "test:edge": "tsx --test ./supabase/functions/tests/gemini-edge.test.ts",
-    "test:unit": "tsx --test ./src/utils/mediaCompressor.test.ts ./src/lib/uploadLedgerQueue.test.ts"
+    "test:unit": "tsx --test ./src/utils/mediaCompressor.test.ts ./src/lib/uploadLedgerQueue.test.ts ./src/utils/htmlNoStore.test.ts"
   },
   "devDependencies": {
     "@hookform/resolvers": "^3.10.0",
