@@ -1647,6 +1647,17 @@ export default function Shell({
       const name = (value as { name?: string } | null)?.name;
       return name === 'AbortError' || name === 'TimeoutError';
     };
+    // إرفاق إشارة الإلغاء بطلب Supabase إن كانت المكتبة المثبتة تدعمها
+    // (postgrest-js 2.x يوفر .abortSignal). الفحص وقت التشغيل يجعل الأمر آمناً
+    // مع أي إصدار: عند غيابه يبقى الطلب بلا إلغاء، وتكفل حراسة الرمز عدم
+    // متابعة المسار بعد الكتابة.
+    const attachAbortSignal = <B,>(builder: B, signal: AbortSignal): B => {
+      const candidate = builder as B & { abortSignal?: (value: AbortSignal) => B };
+      if (typeof candidate.abortSignal === 'function') {
+        return candidate.abortSignal(signal);
+      }
+      return builder;
+    };
     // مهلة قصيرة لأي فحص شبكي داخل مسار النشر — لا تجمّد واجهة الإنشاء
     const withPublishTimeout = <T,>(promise: Promise<T>, ms: number, fallback: T): Promise<T> =>
       new Promise<T>(resolve => {
@@ -1734,6 +1745,8 @@ export default function Shell({
         }
       };
       const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
+        // محاولة قديمة لا تكتب في بطاقة المنشور المملوكة لمحاولة أحدث
+        if (!isCurrentAttempt()) return;
         updatePendingPost(postId, {
           phaseLabel: phase === 'compressing'
             ? `جارٍ تحسين الجودة...${typeof percent === 'number' ? ` ${percent}%` : ''}`
@@ -1803,6 +1816,8 @@ export default function Shell({
             signal: attemptSignal,
             onPhase: onUploadPhase,
             onProgress: percent => {
+              // محاولة قديمة لا تعدّل تقدّم بطاقة المنشور المملوكة لمحاولة أحدث
+              if (!isCurrentAttempt()) return;
               jobProgress[jobIndex] = percent;
               const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
                 sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)
@@ -1829,17 +1844,22 @@ export default function Shell({
         // سجل أصول الوسائط: يُنشأ بعد الرفع لأن الرابط النهائي (ImageKit)
         // لا يكون معروفاً قبله. فشله لا يعطل النشر — المنشور يحمل الرابط نفسه.
         if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
-          const { error: mediaAssetError } = await supabase.from('media_assets').insert({
-            id: mediaAssetId,
-            user_id: authenticatedUserId,
-            original_path: assetPaths.originalPath,
-            storage_path: assetPaths.originalPath,
-            processed_path: null,
-            video_url: (uploadedUrls[0] || '').replace(/#.*$/, ''),
-            poster_url: posterUploadUrl,
-            processing_status: 'ready',
-            status: 'ready',
-          });
+          const { error: mediaAssetError } = await attachAbortSignal(
+            supabase.from('media_assets').insert({
+              id: mediaAssetId,
+              user_id: authenticatedUserId,
+              original_path: assetPaths.originalPath,
+              storage_path: assetPaths.originalPath,
+              processed_path: null,
+              video_url: (uploadedUrls[0] || '').replace(/#.*$/, ''),
+              poster_url: posterUploadUrl,
+              processing_status: 'ready',
+              status: 'ready',
+            }),
+            attemptSignal,
+          );
+          // بعد الكتابة: لا متابعة لمحاولة أُلغيت
+          ensureAttemptAlive();
           if (mediaAssetError) {
             console.warn('[media] تعذر إنشاء سجل media_assets — المنشور يعمل بدونه', mediaAssetError);
           }
@@ -1890,18 +1910,24 @@ export default function Shell({
           if (!silentVideo) {
             ensureAttemptAlive();
             try {
-              const { data: soundRow } = await supabase
-                .from('sounds')
-                .insert({
-                  title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
-                  source_video_url: uploadedUrls[0].replace(/#.*$/, ''),
-                  ...(extractedSoundUrl ? { preview_url: extractedSoundUrl } : {}),
-                  creator_id: authenticatedUserId,
-                })
-                .select('id')
-                .single();
+              const { data: soundRow } = await attachAbortSignal(
+                supabase
+                  .from('sounds')
+                  .insert({
+                    title: `الصوت الأصلي - ${displayName(profile) || 'المستخدم'}`,
+                    source_video_url: uploadedUrls[0].replace(/#.*$/, ''),
+                    ...(extractedSoundUrl ? { preview_url: extractedSoundUrl } : {}),
+                    creator_id: authenticatedUserId,
+                  })
+                  .select('id')
+                  .single(),
+                attemptSignal,
+              );
+              // بعد الكتابة: لا متابعة لمحاولة أُلغيت (قد تكون الكتابة وصلت)
+              ensureAttemptAlive();
               attachedSoundId = soundRow?.id ?? null;
-            } catch {
+            } catch (soundError) {
+              if (isAbortLike(soundError)) throw soundError;
               attachedSoundId = null;
             }
           }
@@ -1986,12 +2012,16 @@ export default function Shell({
           // sound_trim_start على أنه trim_start.
           return optionalPostColumnList.find(column => text.includes(column)) || null;
         };
-        const upsertPost = (payload: Record<string, unknown>) => supabase
-          .from('posts')
-          .upsert(payload, { onConflict: 'id' });
+        const upsertPost = (payload: Record<string, unknown>) => attachAbortSignal(
+          supabase.from('posts').upsert(payload, { onConflict: 'id' }),
+          attemptSignal,
+        );
 
         ensureAttemptAlive();
         let postError = (await upsertPost(postPayloadForSave)).error;
+        // بعد اكتمال الحفظ: توقّف إن أُبطلت المحاولة أو بدأت محاولة أحدث.
+        // (الكتابة قد تكون وصلت فعلاً؛ الفحص يمنع متابعة المسار ولا يمسّ الحالة.)
+        ensureAttemptAlive();
         // قاعدة بيانات ناقصة أعمدة (ترحيلات غير مطبقة) → أعد المحاولة بلا العمود
         // الناقص فقط مع الإبقاء على destination/type/الوسائط وبقية البيانات.
         for (let attempt = 0; attempt < 6 && postError; attempt += 1) {
@@ -2002,6 +2032,7 @@ export default function Shell({
           delete nextPayload[missingColumn];
           postPayloadForSave = nextPayload;
           postError = (await upsertPost(postPayloadForSave)).error;
+          ensureAttemptAlive();
         }
 
         // (أُلغيت محاولات tagged_user_ids/audio/sound_id/sound_trim/trim المنفصلة:
@@ -2023,6 +2054,7 @@ export default function Shell({
             ...postPayloadForSave,
             post_metadata: metadataWithoutCover,
           })).error;
+          ensureAttemptAlive();
           if (!postError) {
             updatePendingPost(postId, { post: { ...publishedPost, post_metadata: metadataWithoutCover }, error: null });
           }
@@ -2056,11 +2088,15 @@ export default function Shell({
         // تبويب الريلز (type/destination/media_url)؟ أي اختلاف يُطبع في الكونسول
         // ويظهر على الشاشة بدل أن يختفي الريل بصمت.
         try {
-          const { data: savedRow, error: verifyError } = await supabase
-            .from('posts')
-            .select('id, type, destination, media_url')
-            .eq('id', postId)
-            .maybeSingle();
+          ensureAttemptAlive();
+          const { data: savedRow, error: verifyError } = await attachAbortSignal(
+            supabase
+              .from('posts')
+              .select('id, type, destination, media_url')
+              .eq('id', postId)
+              .maybeSingle(),
+            attemptSignal,
+          );
           if (verifyError) {
             console.error('[reels] تعذر التحقق من صف المنشور بعد النشر', {
               code: verifyError.code,
@@ -2104,6 +2140,8 @@ export default function Shell({
                 'content-type': 'application/json',
               },
               body: JSON.stringify({ media_asset_id: mediaAssetId }),
+              // طلب قابل للإلغاء: لا يكمل بعد انتهاء مهلة المحاولة
+              signal: attemptSignal,
             });
             const processingResult = await response.json().catch(() => null) as MediaProcessingStatusResponse | null;
             if (!response.ok || processingResult?.success !== true) {
@@ -2133,6 +2171,9 @@ export default function Shell({
             toast.error('تم نشر الفيديو الأصلي، لكن تعذرت معالجة نسخة التشغيل. الأصل محفوظ ويمكن تشغيله.');
           }
         }
+
+        // بعد كل كتابات الحفظ: لا تُعلن النجاح ولا تلمس UI لمحاولة أُبطلت
+        ensureAttemptAlive();
 
         updatePendingPost(postId, {
           stage: mediaType === 'video' && mediaAssetId ? 'ready' : 'success',
