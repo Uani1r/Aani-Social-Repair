@@ -1,25 +1,149 @@
 -- =====================================================================
--- جداول مشاهدات وإعجابات القصص — v3 مطابقة للبنية الفعلية في قاعدة البيانات
--- (مؤكدة عبر information_schema.columns):
+-- جداول مشاهدات وإعجابات القصص — v4 مستقل بذاته (Self-contained)
 --
+-- البنية الفعلية المؤكدة عبر information_schema.columns:
 --   story_views  : id, story_id, viewer_id, created_at
---                  (المشاهد اسمه viewer_id، وزمن المشاهدة created_at)
 --   story_likes  : id, story_id, user_id, created_at
 --   user_blocks  : blocker_id, blocked_id, created_at
 --
--- المطلوب من الواجهة (useStoryViewerData.ts):
---   story_views: user_id, viewed_at + ضميمة viewer:profiles(...)
---   story_likes: user_id, created_at
--- لذلك يُضاف عمود viewed_at مولَّداً دائماً من created_at، ويُنشأ منظر
--- story_viewer_entries يعيد story_id, user_id, viewed_at ليقرأه العميل
--- مباشرة — حل نهائي بلا أي خطأ 42703.
+-- يُنشئ كل ما تحتاجه سياساته داخلياً (بلا أي اعتماد على ترحيلات سابقة):
+--   aani_is_user_blocked / aani_can_view_story / aani_record_story_view
+-- ويضيف عمود viewed_at مولَّداً من created_at + منظر قراءة بأسماء العميل.
 -- =====================================================================
 
 begin;
 
 -- =====================================================================
--- 1) إضافة عمود viewed_at المولَّد على story_views الموجود
---    (مولَّد دائماً من created_at — لا قيم يدوية، لا صفوف ناقصة)
+-- 1) جدول الحظر (بنيته الفعلية: blocker_id + blocked_id) — يُنشأ إن غاب
+--    ويُستخدم في منطق الحظر داخل aani_can_view_story أدناه
+-- =====================================================================
+
+create table if not exists public.user_blocks (
+  blocker_id uuid not null references public.profiles(id) on delete cascade,
+  blocked_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (blocker_id, blocked_id),
+  constraint aani_user_blocks_not_self check (blocker_id <> blocked_id)
+);
+
+-- =====================================================================
+-- 2) دالة الحظر — تستخدم blocked_id (الاسم الفعلي في قاعدتك)
+-- =====================================================================
+
+create or replace function public.aani_is_user_blocked(p_user_a uuid, p_user_b uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    auth.uid() is not null
+    and auth.uid() in (p_user_a, p_user_b)
+    and exists (
+      select 1
+      from public.user_blocks as blocked
+      where (blocked.blocker_id = p_user_a and blocked.blocked_id = p_user_b)
+         or (blocked.blocker_id = p_user_b and blocked.blocked_id = p_user_a)
+    ),
+    false
+  );
+$$;
+revoke all on function public.aani_is_user_blocked(uuid, uuid) from public;
+grant execute on function public.aani_is_user_blocked(uuid, uuid) to authenticated;
+
+-- =====================================================================
+-- 3) دالة رؤية القصة — تعريفها الكامل داخل هذا الملف (كانت من ترحيل
+--    غير مطبَّق عندك). نفس منطق الترحيل 20261115 مع الحظر عبر blocked_id.
+-- =====================================================================
+
+create or replace function public.aani_can_view_story(p_story_id uuid, p_viewer_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  with recursive story_chain (
+    id,
+    user_id,
+    is_close_friends,
+    original_story_id,
+    created_at,
+    expires_at,
+    share_type,
+    parent_link_valid
+  ) as (
+    select
+      story.id,
+      story.user_id,
+      story.is_close_friends,
+      story.original_story_id,
+      story.created_at,
+      story.expires_at,
+      story.share_type,
+      true
+    from public.stories as story
+    where story.id = p_story_id
+
+    union all
+
+    select
+      original.id,
+      original.user_id,
+      original.is_close_friends,
+      original.original_story_id,
+      original.created_at,
+      original.expires_at,
+      original.share_type,
+      child.share_type = 'reshare'
+    from public.stories as original
+    join story_chain as child on child.original_story_id = original.id
+  )
+  select
+    p_viewer_id is not null
+    and exists (select 1 from story_chain where id = p_story_id)
+    and not exists (
+      select 1
+      from story_chain as story
+      join public.profiles as owner on owner.id = story.user_id
+      where story.created_at < now() - interval '24 hours'
+        or story.created_at > now() + interval '5 minutes'
+        or story.expires_at <= now()
+        or story.expires_at > story.created_at + interval '24 hours'
+        or not story.parent_link_valid
+        or (
+          story.user_id <> p_viewer_id
+          and (
+            exists (
+              select 1 from public.user_blocks as blocked
+              where (blocked.blocker_id = story.user_id and blocked.blocked_id = p_viewer_id)
+                 or (blocked.blocker_id = p_viewer_id and blocked.blocked_id = story.user_id)
+            )
+            or (owner.is_private and not exists (
+              select 1
+              from public.follows as accepted
+              where accepted.follower_id = p_viewer_id
+                and accepted.following_id = story.user_id
+            ))
+            or (
+              story.is_close_friends
+              and not exists (
+                select 1
+                from public.close_friends as listed
+                where listed.user_id = story.user_id
+                  and listed.friend_id = p_viewer_id
+              )
+            )
+          )
+        )
+    );
+$$;
+revoke all on function public.aani_can_view_story(uuid, uuid) from public;
+grant execute on function public.aani_can_view_story(uuid, uuid) to authenticated;
+
+-- =====================================================================
+-- 4) عمود viewed_at المولَّد + منظر القراءة بأسماء العميل
 -- =====================================================================
 
 alter table public.story_views
@@ -28,14 +152,6 @@ alter table public.story_views
 
 create index if not exists aani_story_views_story_viewed_idx
   on public.story_views (story_id, created_at desc);
-
--- =====================================================================
--- 2) منظر القراءة الموحّد للمشاهدين — يعيد user_id و viewed_at
---    ليقرأه العميل: from('story_viewer_entries')
---      .select('user_id, viewed_at, viewer:profiles(...)')
---    الضميمة viewer:profiles تعمل لأن العلاقة تمر عبر viewer_id
---    الموجود في الجدول الأصلي، والمنظر يحمل user_id كاسم بديل.
--- =====================================================================
 
 create or replace view public.story_viewer_entries as
   select
@@ -47,7 +163,7 @@ create or replace view public.story_viewer_entries as
   from public.story_views as v;
 
 -- =====================================================================
--- 3) صلاحيات + RLS
+-- 5) صلاحيات و RLS على story_views و story_likes
 -- =====================================================================
 
 grant select on public.story_viewer_entries to authenticated;
@@ -57,7 +173,6 @@ grant select, insert, delete on public.story_likes to authenticated;
 alter table public.story_views enable row level security;
 alter table public.story_likes enable row level security;
 
--- قراءة المشاهدين (عبر الجدول أو المنظر): مالك القصة فقط
 drop policy if exists aani_story_views_select_story_owner on public.story_views;
 create policy aani_story_views_select_story_owner on public.story_views
   for select to authenticated using (
@@ -78,7 +193,6 @@ create policy aani_story_views_owner_guard on public.story_views
     )
   );
 
--- تسجيل مشاهدة: المشاهد نفسه على قصة يستطيع مشاهدتها وليست قصته
 drop policy if exists aani_story_views_insert_viewer on public.story_views;
 create policy aani_story_views_insert_viewer on public.story_views
   for insert to authenticated with check (
@@ -103,7 +217,6 @@ create policy aani_story_views_insert_guard on public.story_views
     )
   );
 
--- الإعجابات: قراءة صاحبها أو مالك القصة
 drop policy if exists aani_story_likes_select_own on public.story_likes;
 create policy aani_story_likes_select_own on public.story_likes
   for select to authenticated using (
@@ -115,7 +228,6 @@ create policy aani_story_likes_select_own on public.story_likes
     )
   );
 
--- الإعجاب: من يستطيع مشاهدة القصة
 drop policy if exists aani_story_likes_insert_own on public.story_likes;
 create policy aani_story_likes_insert_own on public.story_likes
   for insert to authenticated with check (
@@ -123,14 +235,12 @@ create policy aani_story_likes_insert_own on public.story_likes
     and public.aani_can_view_story(story_id, (select auth.uid()))
   );
 
--- إلغاء الإعجاب: صاحب الإعجاب وحده
 drop policy if exists aani_story_likes_delete_own on public.story_likes;
 create policy aani_story_likes_delete_own on public.story_likes
   for delete to authenticated using (user_id = (select auth.uid()));
 
 -- =====================================================================
--- 4) دالة تسجيل المشاهدة (idempotent) — بنية الفعلية: viewer_id
---    (viewed_at وuser_id يُشتقان تلقائياً عبر المنظر للقراءة)
+-- 6) دالة تسجيل المشاهدة (idempotent) — بنية story_views الفعلية
 -- =====================================================================
 
 create or replace function public.aani_record_story_view(p_story_id uuid)
@@ -167,7 +277,7 @@ revoke all on function public.aani_record_story_view(uuid) from public, anon, au
 grant execute on function public.aani_record_story_view(uuid) to authenticated;
 
 -- =====================================================================
--- 5) Realtime على الجدولين (تحديث لحظي لقائمة المشاهدين)
+-- 7) Realtime على الجدولين (تحديث لحظي لقائمة المشاهدين)
 -- =====================================================================
 
 alter table public.story_views replica identity full;
@@ -190,7 +300,7 @@ begin
 end $$;
 
 -- =====================================================================
--- 6) تحديث كاش PostgREST
+-- 8) تحديث كاش PostgREST
 -- =====================================================================
 
 notify pgrst, 'reload schema';
