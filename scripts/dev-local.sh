@@ -6,13 +6,25 @@ cd "$ROOT_DIR"
 
 STARTUP_TIMEOUT_SECONDS="${STARTUP_TIMEOUT_SECONDS:-120}"
 POLL_INTERVAL_SECONDS=0.25
-api_pid=""
-vite_pid=""
+api_pgid=""
+vite_pgid=""
 api_check_pid=""
-# الأنماط المتوقعة لعمليات هذة مساحة العمل — تُستخدم للتحقق قبل أي إشارة
-# كي لا يعطي kill -0 نتيجة خاطئة عند إعادة استخدام PID من عملية أخرى.
-vite_expected="@workspace/aani-social"
-api_expected="@workspace/api-server"
+
+# ملف حالة خارج المستودع يسجّل مجموعات العمليات (PGID) التي أنشأها هذا
+# السكربت، كي يوقف التشغيل التالي تلك المجموعات تحديداً — وليس أي عملية
+# تشبهها في الاسم. وجوده يجعل التنظيف مرتبطاً بمجموعاتنا لا بأسماء عامة.
+STATE_FILE="${TMPDIR:-/tmp}/aani-dev-local-$(printf '%s' "$ROOT_DIR" | tr -c 'A-Za-z0-9' '_').state"
+
+# نمط يميّز مشغّلات هذه مساحة العمل داخل مجموعة عملية واحدة:
+#   * مغلفات pnpm باسم الحزمة (@workspace/aani-social، @workspace/api-server)
+#   * أبناء vite/tsx بمسار الحزمة داخل المستودع أو باسم المشغّل tsx
+# يُطبَّق فقط على أعضاء مجموعة أثبتنا ملكيتها، فلا يمس أي عملية خارجها.
+workspace_runner_pattern='(@workspace/(aani-social|api-server)|artifacts/(aani-social|api-server)|tsx)'
+
+# أرقام أعضاء المجموعات التي أثبتنا انتماءها لهذه مساحة العمل: PGID ← " PID PID ..."
+# يحفظ الانتماء بعد خروج الزعيم أو تغيّر أفراد المجموعة.
+declare -A group_known_pids=()
+
 api_log="$(mktemp "${TMPDIR:-/tmp}/aani-api.XXXXXX.log")"
 vite_log="$(mktemp "${TMPDIR:-/tmp}/aani-vite.XXXXXX.log")"
 
@@ -27,51 +39,152 @@ show_logs() {
   fi
 }
 
-# هل مجموعة العملية (PGID) حية وتنتمي فعلاً إلى مشغّلات هذه مساحة العمل؟
-# setsid يجعل PID = PGID = معرف جلسة الأمر، والتحقق من سطر الأوامر يمنع
-# النتائج الخاطئة عند إعادة استخدام PID من عملية مجهولة (لن تُقتل أبداً).
-group_is_ours() {
-  local pid="$1"
-  local expected="$2"
-  [[ -n "$pid" ]] || return 1
-  kill -0 -- "-$pid" 2>/dev/null || return 1
-  local cmdline
-  cmdline="$(ps -p "$pid" -o args= 2>/dev/null | head -n 1)"
-  [[ "$cmdline" == *"$expected"* ]]
+# --- فحص مجموعات العمليات ----------------------------------------------------
+# setsid يجعل PID = PGID = معرف الجلسة. نفحص الزعيم وأفراد المجموعة بصورة
+# مستقلة: خروج الزعيم لا يعني خروج المجموعة (قد يبقى الابن حياً)، وخروج كل
+# الأعضاء لا يعني أن رقم المجموعة لن يُعاد استخدامه من عملية أخرى.
+
+# نستثني عمليات الزومبي (STAT يبدأ بـZ): لا تُحتسب عضواً حياً، كي لا يُخفي
+# بقايا عملية ميتة انتهاء المجموعة فعلياً.
+group_member_pids() {
+  local pgid="${1:-}"
+  [[ -n "$pgid" ]] || return 0
+  ps -eo pid=,pgid=,stat= 2>/dev/null \
+    | awk -v g="$pgid" '$2 + 0 == g + 0 && $3 !~ /^Z/ { print $1 }'
 }
 
+group_member_cmdlines() {
+  local pgid="${1:-}"
+  [[ -n "$pgid" ]] || return 0
+  ps -eo pgid=,stat=,args= 2>/dev/null \
+    | awk -v g="$pgid" '$1 + 0 == g + 0 && $2 !~ /^Z/ { $1 = ""; $2 = ""; sub(/^[[:space:]]+/, ""); print }'
+}
+
+group_has_members() {
+  local pgid="${1:-}"
+  local pids=""
+  [[ -n "$pgid" ]] || return 1
+  pids="$(group_member_pids "$pgid")"
+  [[ -n "$pids" ]]
+}
+
+# هل الزعيم (PID == PGID) ما زال حياً؟ نطابق PGID الفعلي أيضاً كي لا تعطي
+# إعادة استخدام PID نتيجة خاطئة، ونستثني الزومبي (STAT يبدأ بـZ).
+group_leader_alive() {
+  local pgid="${1:-}"
+  [[ -n "$pgid" ]] || return 1
+  local info=""
+  local actual=""
+  local state=""
+  info="$(ps -p "$pgid" -o pgid=,stat= 2>/dev/null || true)"
+  [[ -n "$info" ]] || return 1
+  read -r actual state <<<"$info"
+  [[ -n "$actual" && -n "$state" ]] || return 1
+  [[ "$actual" == "$pgid" && "$state" != Z* ]]
+}
+
+group_matches_workspace() {
+  local pgid="${1:-}"
+  local lines=""
+  [[ -n "$pgid" ]] || return 1
+  lines="$(group_member_cmdlines "$pgid" || true)"
+  [[ -n "$lines" ]] || return 1
+  grep -Eq -- "$workspace_runner_pattern" <<<"$lines"
+}
+
+group_known_pids_of() {
+  local pgid="${1:-}"
+  local known=""
+  if [[ -n "$pgid" ]]; then
+    known="${group_known_pids[$pgid]:-}"
+  fi
+  printf '%s' "$known"
+}
+
+group_has_known_member() {
+  local pgid="${1:-}"
+  local pid=""
+  local known=""
+  known="$(group_known_pids_of "$pgid")"
+  [[ -n "$known" ]] || return 1
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if [[ "$known" == *" $pid "* ]]; then
+      return 0
+    fi
+  done < <(group_member_pids "$pgid")
+  return 1
+}
+
+remember_group_members() {
+  local pgid="${1:-}"
+  local pid=""
+  local known=""
+  [[ -n "$pgid" ]] || return 0
+  known="$(group_known_pids_of "$pgid")"
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] || continue
+    if [[ "$known" != *" $pid "* ]]; then
+      known="$known $pid"
+    fi
+  done < <(group_member_pids "$pgid")
+  group_known_pids["$pgid"]="$known"
+}
+
+# هل المجموعة لمشغّلات هذه مساحة العمل؟ إما بمطابقة سطر أوامر أحد أعضائها،
+# أو بوجود عضو معروف لدينا من قياس سابق. الثانية تُبقي المجموعة معروفة بعد
+# خروج الزعيم، فيظل التنظيف ممكناً.
+group_is_ours() {
+  local pgid="${1:-}"
+  [[ -n "$pgid" ]] || return 1
+  group_has_members "$pgid" || return 1
+  if group_matches_workspace "$pgid"; then
+    return 0
+  fi
+  group_has_known_member "$pgid"
+}
+
+# إيقاف مجموعة كاملة (بما فيها الأبناء) بلا اعتماد على بقاء الزعيم حياً،
+# وبلا إشارة إلى مجموعة لا نستطيع إثبات أنها لنا.
 stop_group() {
-  local pid="${1:-}"
-  local expected="${2:-}"
-  [[ -n "$pid" ]] || return 0
+  local pgid="${1:-}"
+  local attempt=""
+  [[ -n "$pgid" ]] || return 0
 
-  if ! kill -0 -- "-$pid" 2>/dev/null; then
-    wait "$pid" 2>/dev/null || true
-    return 0
-  fi
-  if ! group_is_ours "$pid" "$expected"; then
-    printf '[dev-local] WARNING: العملية %s لم تعد تنتمي إلى مشغّلات هذه مساحة العمل (إعادة استخدام PID؟) — لن تُقتل.\n' "$pid" >&2
+  if ! group_has_members "$pgid"; then
+    wait "$pgid" 2>/dev/null || true
+    group_known_pids["$pgid"]=""
     return 0
   fi
 
-  kill -TERM -- "-$pid" 2>/dev/null || true
-  for _ in {1..20}; do
-    kill -0 -- "-$pid" 2>/dev/null || break
+  if ! group_is_ours "$pgid"; then
+    printf '[dev-local] WARNING: المجموعة %s لم يثبت أنها لمشغّلات هذه مساحة العمل (إعادة استخدام PGID؟) — لن تُقتل.\n' "$pgid" >&2
+    return 0
+  fi
+
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+  for attempt in {1..20}; do
+    if ! group_has_members "$pgid"; then
+      break
+    fi
     sleep "$POLL_INTERVAL_SECONDS"
   done
-  kill -KILL -- "-$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  if group_has_members "$pgid"; then
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+  fi
+  wait "$pgid" 2>/dev/null || true
+  group_known_pids["$pgid"]=""
 }
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
-  stop_group "$vite_pid" "$vite_expected"
-  stop_group "$api_pid" "$api_expected"
+  stop_group "$vite_pgid"
+  stop_group "$api_pgid"
   if [[ -n "$api_check_pid" ]]; then
     kill "$api_check_pid" 2>/dev/null || true
   fi
-  rm -f "$api_log" "$vite_log"
+  rm -f "$api_log" "$vite_log" "$STATE_FILE"
   return "$status"
 }
 trap cleanup EXIT
@@ -108,6 +221,46 @@ port_is_free() {
   [[ "$probe_out" == "free" ]]
 }
 
+# يُوقف مجموعات تشغيل سابقة سجّلها هذا السكربت (ملف الحالة) — تنظيف مرتبط
+# بمجموعاتنا نحن، ويشمل الأبناء حتى لو خرج الزعيم.
+stop_recorded_groups() {
+  [[ -f "$STATE_FILE" ]] || return 0
+  local pgid=""
+  while IFS= read -r pgid; do
+    [[ "$pgid" =~ ^[0-9]+$ ]] || continue
+    if group_is_ours "$pgid"; then
+      printf '[dev-local] Stopping process group %s left by a previous run...\n' "$pgid" >&2
+      stop_group "$pgid"
+    fi
+  done <"$STATE_FILE"
+  rm -f "$STATE_FILE"
+}
+
+# يوقف فقط عمليات tsx/vite التي تعمل داخل هذا المستودع (بفحص مجلد العمل عبر
+# /proc، أو بوجود مسار المستودع في سطر الأوامر). لا يمس أي عملية خارجه،
+# ولا يستخدم killall ولا أنماطاً عريضة.
+stop_workspace_runner_processes() {
+  [[ -d /proc ]] || return 0
+  command -v readlink >/dev/null 2>&1 || return 0
+  local pid=""
+  local args=""
+  local cwd=""
+  while read -r pid args; do
+    [[ -n "${pid:-}" ]] || continue
+    [[ "$pid" == "$$" ]] && continue
+    case "${args:-}" in
+      *tsx*|*vite*) ;;
+      *) continue ;;
+    esac
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+    if [[ -n "$cwd" && ( "$cwd" == "$ROOT_DIR" || "$cwd" == "$ROOT_DIR"/* ) ]]; then
+      kill -TERM "$pid" 2>/dev/null || true
+    elif [[ "${args:-}" == *"$ROOT_DIR"* ]]; then
+      kill -TERM "$pid" 2>/dev/null || true
+    fi
+  done < <(ps -eo pid=,args= 2>/dev/null || true)
+}
+
 stop_old_servers() {
   command -v pkill >/dev/null 2>&1 || {
     printf '[dev-local] ERROR: pkill is required to stop stale development server runners.\n' >&2
@@ -117,15 +270,26 @@ stop_old_servers() {
     printf '[dev-local] ERROR: node is required for port availability checks (net module).\n' >&2
     exit 1
   }
+  command -v ps >/dev/null 2>&1 || {
+    printf '[dev-local] ERROR: ps is required to verify process-group ownership before signalling.\n' >&2
+    exit 1
+  }
+  command -v awk >/dev/null 2>&1 || {
+    printf '[dev-local] ERROR: awk is required to read process-group members.\n' >&2
+    exit 1
+  }
 
-  # أوقف فقط مشغّلات مساحة العمل المعروفة: مغلفات pnpm لأوامر dev، أي
-  # vite dev server قديم، وعملية tsx watch للـAPI (طفل مغلف pnpm يبقى
-  # حياً بعد قتل المغلف ويحتفظ بـ8080 — يُوقف بالاسم الدقيق فقط).
-  # لا عمليات مجهولة ولا killall.
+  # 1) مجموعات أنشأها تشغيل سابق لهذا السكربت (بالسجل، لا بالاسم).
+  stop_recorded_groups
+
+  # 2) مغلفات pnpm المعروفة لأوامر dev لهاتين الحزمتين فقط (للحالات القديمة
+  #    التي لم تُسجَّل مجموعاتها).
   pkill -TERM -f '[p]npm.*@workspace/api-server.*run dev' 2>/dev/null || true
   pkill -TERM -f '[p]npm.*@workspace/aani-social.*run dev' 2>/dev/null || true
-  pkill -TERM -f '[v]ite --config' 2>/dev/null || true
-  pkill -TERM -f '[t]sx watch ./src/index.ts' 2>/dev/null || true
+
+  # 3) أي مشغّل tsx/vite تشرد داخل هذا المستودع (أبناؤه لا يظهرون باسم
+  #    الحزمة، فيُحدَّدون بمجلد العمل).
+  stop_workspace_runner_processes
 
   for _ in {1..40}; do
     if port_is_free 5000 && port_is_free 8080; then
@@ -146,7 +310,7 @@ stop_old_servers() {
 
 wait_for_http() {
   local name="$1"
-  local pid="$2"
+  local pgid="$2"
   local url="$3"
   local expected_status="$4"
   local on_failure="${5:-fail}"
@@ -154,7 +318,7 @@ wait_for_http() {
   local attempts=$((STARTUP_TIMEOUT_SECONDS * 4))
 
   for ((attempt = 0; attempt < attempts; attempt += 1)); do
-    if ! kill -0 -- "-$pid" 2>/dev/null; then
+    if ! group_has_members "$pgid"; then
       if [[ "$on_failure" == "warn" ]]; then
         printf '[dev-local] WARNING: %s process exited before becoming ready (URL: %s).\n' "$name" "$url" >&2
         return 1
@@ -203,20 +367,24 @@ fi
 
 printf '[dev-local] Starting API server on 8080 (tsx watch, no rebuild)...\n'
 setsid env PORT=8080 pnpm --filter @workspace/api-server run dev >"$api_log" 2>&1 &
-api_pid=$!
+api_pgid=$!
 
 printf '[dev-local] Starting Vite on 0.0.0.0:5000...\n'
 setsid env PORT=5000 pnpm --filter @workspace/aani-social run dev >"$vite_log" 2>&1 &
-vite_pid=$!
+vite_pgid=$!
+
+remember_group_members "$api_pgid"
+remember_group_members "$vite_pgid"
+printf '%s\n%s\n' "$vite_pgid" "$api_pgid" >"$STATE_FILE"
 
 # فحص جاهزية Vite: أساسي — فشله يوقف السكربت (لا واجهة بدونه).
-wait_for_http 'Vite homepage' "$vite_pid" 'http://127.0.0.1:5000/' '200'
-wait_for_http 'Vite main module' "$vite_pid" 'http://127.0.0.1:5000/src/main.tsx' '200'
+wait_for_http 'Vite homepage' "$vite_pgid" 'http://127.0.0.1:5000/' '200'
+wait_for_http 'Vite main module' "$vite_pgid" 'http://127.0.0.1:5000/src/main.tsx' '200'
 
 # فحص API مستقل وغير حاجب منذ البداية: يجري في الخلفية، ومتى حُسمت
 # نتيجته (نجاح أو تحذير) لا يُؤخّر جاهزية Vite ولا يوقفه.
 check_api_when_ready() {
-  if wait_for_http 'API server' "$api_pid" 'http://127.0.0.1:8080/api/health' '200' 'warn'; then
+  if wait_for_http 'API server' "$api_pgid" 'http://127.0.0.1:8080/api/health' '200' 'warn'; then
     printf '[dev-local] API ready on 8080.\n' >&2
   else
     printf '[dev-local] WARNING: API غير جاهز على 8080 — الواجهة تبقى عاملة على 5000 وطلبات /api ستفشل حتى عودة الـAPI.\n' >&2
@@ -228,27 +396,48 @@ api_check_pid=$!
 
 printf '[dev-local] Vite is serving on 5000. Monitoring both servers...\n'
 
-# المراقبة: توقف API تحذير فقط ولا يقتل الواجهة أبداً؛ توقف Vite فادح
-# (لا واجهة بدونه) فينظّف العملية الأخرى. التحقق من انتماء المجموعة
-# يمنع النتائج الخاطئة عند إعادة استخدام PID، والتنظيف الكامل يبقى
-# في trap EXIT عند إيقاف المشروع. لا عمليات مجهولة تُقتل هنا.
+# المراقبة: توقف API تحذير فقط ولا يقتل الواجهة أبداً؛ انتهاء كل عمليات
+# مجموعة Vite فادح (لا واجهة بدونه). خروج الزعيم مع بقاء أفراد المجموعة
+# ليس خروجاً طبيعياً: يستمر فحص المجموعة وأعضائها، ويظل التنظيف ممكناً.
+# أي مجموعة لا نستطيع إثبات أنها لنا لا تُستهدف بأي إشارة.
+vite_leader_warned=0
+api_leader_warned=0
+
 while true; do
-  if ! group_is_ours "$vite_pid" "$vite_expected"; then
-    if kill -0 -- "-$vite_pid" 2>/dev/null; then
-      printf '[dev-local] WARNING: عملية Vite (PID %s) لم تعد تنتمي إلى هذه مساحة العمل — لن تُراقَب ولن تُقتل.\n' "$vite_pid" >&2
-    else
-      fail_startup "Vite process exited unexpectedly."
-    fi
-    vite_pid=""
+  # ---- Vite: بوابة التشغيل ----
+  if ! group_has_members "$vite_pgid"; then
+    fail_startup "Vite process group exited unexpectedly (PGID $vite_pgid has no live members)."
   fi
-  if [[ -n "$api_pid" ]] && ! group_is_ours "$api_pid" "$api_expected"; then
-    if kill -0 -- "-$api_pid" 2>/dev/null; then
-      printf '[dev-local] WARNING: عملية API (PID %s) لم تعد تنتمي إلى هذه مساحة العمل — لن تُراقَب ولن تُقتل.\n' "$api_pid" >&2
-    else
-      printf '[dev-local] WARNING: API process exited — الواجهة تبقى عاملة على 5000. أعد تشغيل الـAPI لإرجاع /api.\n' >&2
+  if ! group_is_ours "$vite_pgid"; then
+    fail_startup "Vite process group (PGID $vite_pgid) no longer belongs to this workspace — every Aani Vite process has exited. Refusing to signal an unidentified process group."
+  fi
+  remember_group_members "$vite_pgid"
+  if group_leader_alive "$vite_pgid"; then
+    vite_leader_warned=0
+  elif [[ "$vite_leader_warned" -eq 0 ]]; then
+    printf '[dev-local] WARNING: زعيم مجموعة Vite (PID %s) خرج وبقيت عمليات تابعة للمجموعة — تستمر المراقبة والتنظيف على مستوى المجموعة.\n' "$vite_pgid" >&2
+    vite_leader_warned=1
+  fi
+
+  # ---- API: مستقل تماماً عن الواجهة ----
+  if [[ -n "$api_pgid" ]]; then
+    if ! group_has_members "$api_pgid"; then
+      printf '[dev-local] WARNING: API process group exited (PGID %s) — الواجهة تبقى عاملة على 5000. أعد تشغيل الـAPI لإرجاع /api.\n' "$api_pgid" >&2
       show_logs 'API server' "$api_log"
+      api_pgid=""
+    elif ! group_is_ours "$api_pgid"; then
+      printf '[dev-local] WARNING: مجموعة API (PGID %s) لم يثبت أنها لنا — لن توجَّه إليها أي إشارة. الواجهة تبقى عاملة على 5000.\n' "$api_pgid" >&2
+      api_pgid=""
+    else
+      remember_group_members "$api_pgid"
+      if group_leader_alive "$api_pgid"; then
+        api_leader_warned=0
+      elif [[ "$api_leader_warned" -eq 0 ]]; then
+        printf '[dev-local] WARNING: زعيم مجموعة API (PID %s) خرج وبقيت عمليات تابعة للمجموعة — تستمر المراقبة والتنظيف على مستوى المجموعة.\n' "$api_pgid" >&2
+        api_leader_warned=1
+      fi
     fi
-    api_pid=""
   fi
+
   sleep "$POLL_INTERVAL_SECONDS"
 done
