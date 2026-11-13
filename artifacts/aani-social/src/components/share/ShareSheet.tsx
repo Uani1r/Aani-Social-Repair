@@ -258,25 +258,8 @@ const ShareSheet: React.FC<ShareSheetProps> = ({
                 .eq('user_id', currentUserId);
             }
 
-            // إشعار حقيقي لصاحب المنشور عند إعادة نشر منشور شخص آخر
-            if (post.user_id !== currentUserId) {
-              const notificationBase = {
-                user_id: post.user_id,
-                actor_id: currentUserId,
-                type: 'repost',
-                content: `${myName || ''} أعاد نشر منشورك`,
-              };
-              const attempts = [
-                { ...notificationBase, reference_id: post.id, entity_id: post.id },
-                { ...notificationBase, reference_id: post.id },
-                { ...notificationBase, entity_id: post.id },
-                notificationBase,
-              ];
-              for (const payload of attempts) {
-                const { error } = await supabase.from('notifications').insert(payload);
-                if (!error) break;
-              }
-            }
+            // إشعار إعادة النشر يُنشأ الآن داخل قاعدة البيانات (Supabase Trigger)
+            // عند إدخال سجل reposts — لا إدخال يدوي من العميل.
           } catch (error) {
             console.warn('[share] تعذر تسجيل ملاحظة/إشعار إعادة النشر:', error);
           }

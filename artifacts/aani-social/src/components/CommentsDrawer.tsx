@@ -824,18 +824,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         replaceCommentInTree(previous, optimisticId, realComment),
       );
 
-      // إشعار الرد: يذهب حصريًا لصاحب التعليق الأصلي
-      if (replyingTo && replyingTo.user_id !== currentUserId) {
-        void supabase
-          .from('notifications')
-          .insert({
-            user_id: replyingTo.user_id,
-            actor_id: currentUserId,
-            type: 'reply',
-            content: `${displayName(currentUser)} رد على تعليقك`,
-            comment_id: replyingTo.id,
-          });
-      }
+      // إشعار الرد يُنشأ الآن داخل قاعدة البيانات (Supabase Trigger) — لا إدخال يدوي.
 
       // إشعارات المنشن: لكل شخص مذكور في التعليق (مرة واحدة لكل شخص)
       const mentionTokens = extractMentions(nextContent);
@@ -948,18 +937,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
       return;
     }
 
-    // إشعار حقيقي لصاحب التعليق عند الإعجاب فقط (وليس عند إلغاء الإعجاب)
-    if (isLiked || target.user_id === currentUserId) return;
-
-    void supabase
-      .from('notifications')
-      .insert({
-        user_id: target.user_id,
-        actor_id: currentUserId,
-        type: 'like',
-        content: `${displayName(currentUser)} قام بالإعجاب بتعليقك`,
-        comment_id: target.id,
-      });
+    // إشعار الإعجاب بالتعليق يُنشأ الآن داخل قاعدة البيانات (Supabase Trigger).
   };
 
   const handleToggleDislike = async (commentId: string, isDisliked: boolean) => {

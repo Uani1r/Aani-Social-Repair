@@ -38,6 +38,21 @@ import { goBackOrPush } from '@/lib/overlayBack';
 // قديمة وتزامنت مع محاولة أحدث، دون أي تغيير في مخطط قاعدة البيانات.
 const originalSoundTasks = new Map<string, Promise<string | null>>();
 
+/** شكل صف الإشعار الوارد من قناة Realtime — كل الحقول التي تحتاجها التنبيهات */
+type RealtimeNotification = {
+  id?: string | null;
+  type?: string | null;
+  actor_id?: string | null;
+  user_id?: string | null;
+  post_id?: string | null;
+  reference_id?: string | null;
+  entity_id?: string | null;
+  comment_id?: string | null;
+  content_kind?: string | null;
+  is_read?: boolean | null;
+  content?: string | null;
+};
+
 const fileAsDataUrl = (file: File): Promise<string> => new Promise((resolve, reject) => {
   const reader = new FileReader();
   reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('تعذر تجهيز معاينة الصورة.'));
@@ -1202,33 +1217,108 @@ export default function Shell({
         });
       }, 80);
     };
-    // تنبيه منبثق فوري للإشعارات المهمة (متابعة / رسالة) مع اسم صاحب الإشعار
-    const showRealtimeToast = (type: string, actorId: string) => {
+    // فتح الوجهة الصحيحة للإشعار — بنفس منطق NotificationsModal
+    const openRealtimeNotification = async (notification: RealtimeNotification) => {
+      const type = String(notification.type ?? '');
+      const actorId = String(notification.actor_id ?? '');
+      const followTypes = ['follow', 'followed', 'new_follower', 'started_following'];
+
+      if (followTypes.includes(type) && actorId) {
+        setLocation(`/profile/${encodeURIComponent(actorId)}`);
+        return;
+      }
+      if (type === 'follow_request') {
+        requestOpenFollowRequests();
+        return;
+      }
+      if (['message', 'new_message', 'call', 'incoming_call'].includes(type) && actorId) {
+        setLocation(`/messages/${encodeURIComponent(actorId)}`);
+        return;
+      }
+
+      let commentId = typeof notification.comment_id === 'string' ? notification.comment_id : '';
+      let postId = String(notification.post_id || notification.reference_id || notification.entity_id || '');
+
+      // إشعار تعليق قد يحمل comment_id فقط: نستخرج post_id من جدول comments
+      if (commentId && !postId && supabaseConfigured) {
+        const { data: commentRow } = await supabase
+          .from('comments')
+          .select('post_id')
+          .eq('id', commentId)
+          .maybeSingle();
+        if (typeof commentRow?.post_id === 'string') postId = commentRow.post_id;
+      }
+      if (!postId) return;
+
+      if (commentId) {
+        onOpenComments(postId, commentId);
+        setLocation(`/post/${encodeURIComponent(postId)}?commentId=${encodeURIComponent(commentId)}`);
+        return;
+      }
+
+      // الريلز: من عمود type الفعلي، مع content_kind كقيمة احتياطية
+      let isReel = notification.content_kind === 'reel';
+      if (supabaseConfigured) {
+        try {
+          const { data: postRow } = await supabase
+            .from('posts')
+            .select('type')
+            .eq('id', postId)
+            .maybeSingle();
+          if (postRow?.type) isReel = postRow.type === 'reel';
+        } catch {
+          /* نكمل بالمنشور العادي عند تعذر الاستعلام */
+        }
+      }
+      if (isReel) {
+        setLocation(`/reels?openReel=${encodeURIComponent(postId)}`);
+      } else {
+        setLocation(`/post/${encodeURIComponent(postId)}`);
+      }
+    };
+
+    // تنبيه منبثق فوري لكل أنواع الإشعارات مع اسم صاحب الإشعار
+    const showRealtimeToast = (notification: RealtimeNotification) => {
       if (showNotifsModalRef.current) return;
+      const type = String(notification.type ?? '');
+      const actorId = String(notification.actor_id ?? '');
+      if (!actorId) return;
+
+      // داخل شاشة الرسائل تُحدَّث القائمة لحظياً، فلا داعي للتنبيه المنبثق
+      if (['message', 'new_message'].includes(type) && currentPathRef.current.startsWith('/messages')) return;
+
+      const describe: Record<string, { title: string; description: string }> = {
+        like: {
+          title: notification.comment_id ? 'أعجب بتعليقك' : 'أعجب بمنشورك',
+          description: 'تفاعل جديد',
+        },
+        comment: { title: 'علّق على منشورك', description: 'تعليق جديد' },
+        reply: { title: 'رد على تعليقك', description: 'رد جديد' },
+        repost: { title: 'أعاد نشر منشورك', description: 'إعادة نشر' },
+        mention: { title: 'أشار إليك في تعليق', description: 'إشارة جديدة' },
+        follow: { title: 'بدأ بمتابعتك', description: 'متابع جديد' },
+        followed: { title: 'بدأ بمتابعتك', description: 'متابع جديد' },
+        new_follower: { title: 'بدأ بمتابعتك', description: 'متابع جديد' },
+        started_following: { title: 'بدأ بمتابعتك', description: 'متابع جديد' },
+        follow_request: { title: 'أرسل طلب متابعة', description: 'طلب متابعة جديد' },
+        message: { title: 'أرسل لك رسالة', description: 'اضغط لفتح المحادثة' },
+        new_message: { title: 'أرسل لك رسالة', description: 'اضغط لفتح المحادثة' },
+        call: { title: 'اتصل بك', description: 'مكالمة جديدة' },
+        incoming_call: { title: 'اتصل بك', description: 'مكالمة واردة' },
+      };
+
       void supabase.from('profiles')
         .select('display_name, full_name, username')
         .eq('id', actorId)
         .maybeSingle()
         .then(({ data }) => {
           const actorName = displayName(data as { display_name?: string | null; full_name?: string | null; username?: string | null } | null) || 'مستخدم';
-          if (type === 'follow') {
-            toast(`${actorName} بدأ متابعتك`, {
-              description: 'إشعار متابعة جديد',
-              action: { label: 'عرض', onClick: () => setLocation(`/profile/${actorId}`) },
-            });
-          } else if (type === 'follow_request') {
-            toast(`${actorName} أرسل طلب متابعة`, {
-              description: 'راجع طلبات المتابعة من نافذة الإشعارات',
-              action: { label: 'عرض', onClick: () => requestOpenFollowRequests() },
-            });
-          } else if (['message', 'new_message'].includes(type)) {
-            // داخل شاشة الرسائل تُحدَّث القائمة لحظياً، فلا داعي للتنبيه المنبثق
-            if (currentPathRef.current.startsWith('/messages')) return;
-            toast(`رسالة جديدة من ${actorName}`, {
-              description: 'اضغط لفتح المحادثة',
-              action: { label: 'فتح', onClick: () => setLocation(`/messages/${actorId}`) },
-            });
-          }
+          const copy = describe[type];
+          if (!copy) return;
+          toast(`${actorName} ${copy.title}`, {
+            description: copy.description,
+            action: { label: 'عرض', onClick: () => { void openRealtimeNotification(notification); } },
+          });
         });
     };
     const channel = supabase.channel(`aani-notifications-${userId}`)
@@ -1238,7 +1328,7 @@ export default function Shell({
         table: 'notifications',
         filter: `user_id=eq.${userId}`,
       }, payload => {
-        const notification = payload.new as { id?: unknown; type?: unknown; is_read?: unknown; actor_id?: unknown };
+        const notification = payload.new as RealtimeNotification;
         const notificationId = typeof notification.id === 'string' ? notification.id : '';
         if (notificationId && !seenNotificationIdsRef.current.has(notificationId)) {
           seenNotificationIdsRef.current.add(notificationId);
@@ -1251,10 +1341,7 @@ export default function Shell({
             && profile?.notification_settings?.messages !== false) playMessageChime();
           // زيادة فورية للشارة قبل وصول نتيجة الاستعلام المضاد
           if (notification.is_read === false) setUnreadCount(current => current + 1);
-          const actorId = typeof notification.actor_id === 'string' ? notification.actor_id : '';
-          if (['follow', 'follow_request', 'message', 'new_message'].includes(notificationType) && actorId) {
-            showRealtimeToast(notificationType, actorId);
-          }
+          void showRealtimeToast(notification);
         }
         refreshUnreadCount();
       })
@@ -1269,7 +1356,7 @@ export default function Shell({
       if (countRefreshTimer !== null) window.clearTimeout(countRefreshTimer);
       void supabase.removeChannel(channel);
     };
-  }, [profile?.notification_settings?.messages, requestOpenFollowRequests, setLocation, userId]);
+  }, [profile?.notification_settings?.messages, requestOpenFollowRequests, setLocation, userId, onOpenComments]);
 
   // إعادة الاتصال التلقائي: عند عودة التطبيق من الخلفية أو رجوع الشبكة
   // تُعاد القنوات للاشتراك (عبر realtimeReconnect) ويُعاد حساب كل عدّادات

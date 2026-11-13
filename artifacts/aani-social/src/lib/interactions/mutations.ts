@@ -39,18 +39,8 @@ export async function toggleLike(post: Post, userId: string): Promise<void> {
       return;
     }
 
-    // إشعار الإعجاب بالمنشور: يُرفق معه post_id عبر reference_id وentity_id،
-    // ونوع المحتوى (reel / post) يُستنتَج في قاعدة البيانات تلقائياً.
-    if (liked && !error && post.user_id && post.user_id !== userId) {
-      void supabase.from("notifications").insert({
-        user_id: post.user_id,
-        actor_id: userId,
-        type: "like",
-        content: "أعجب بمنشورك",
-        reference_id: post.id,
-        entity_id: post.id,
-      });
-    }
+    // إشعار الإعجاب يُنشأ الآن داخل قاعدة البيانات (Supabase Trigger على likes)،
+    // فلا إدخال يدوي من العميل — منعاً لتكرار الإشعار مرتين.
 
     writeLocalFlag(userId, post.id, { liked, likes });
   } catch {
