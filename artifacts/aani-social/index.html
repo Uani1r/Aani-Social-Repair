@@ -51,7 +51,7 @@
             panel = document.createElement('pre');
             panel.id = 'aani-boot-error';
             panel.setAttribute('dir', 'rtl');
-            panel.style.cssText = 'position:fixed;inset:0;z-index:2147483647;margin:0;overflow:auto;background:#18181b;color:#fca5a5;padding:20px;font:13px/1.8 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;';
+            panel.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:2147483647;margin:0;overflow:auto;max-height:45vh;background:#18181b;color:#fca5a5;padding:14px 18px;font:13px/1.8 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;border-bottom:2px solid #7f1d1d;';
             panel.textContent = 'تعذر إقلاع التطبيق (Aani Boot Error):\n\n';
             (document.body || document.documentElement).appendChild(panel);
             window.setInterval(function () {

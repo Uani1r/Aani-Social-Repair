@@ -39,6 +39,13 @@ export default function useAppSession() {
 
     void loadSession();
 
+    // ضمانة ضد التعليق: حتى لو علق getSession أو تأخرت الشبكة إلى الأبد،
+    // تُصفَّر authLoading بعد 10 ثوانٍ فتظهر واجهة تسجيل الدخول دائماً
+    // بدل شاشة تحميل عالقة. (الاستدعاء لاحقاً غير مؤذٍ — التصفير idempotent)
+    const authLoadingGuard = window.setTimeout(() => {
+      if (mounted) setAuthLoading(false);
+    }, 10000);
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
       setSession(nextSession);
@@ -61,6 +68,7 @@ export default function useAppSession() {
 
     return () => {
       mounted = false;
+      window.clearTimeout(authLoadingGuard);
       subscription.unsubscribe();
     };
   }, []);
