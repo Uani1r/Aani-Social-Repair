@@ -56,42 +56,27 @@ fail_startup() {
   exit 1
 }
 
-port_is_listening() {
-  local listeners
-  listeners="$(ss -H -ltn "sport = :$1" 2>/dev/null || true)"
-  [[ -n "$listeners" ]]
-}
-
-signal_known_listener() {
+# فحص توفر المنفذ عبر وحدة net المدمجة في Node.js: نحاول فتح TCP listener
+# مؤقتاً ثم نغلقَه. نجاح الفتح = المنفذ متاح، EADDRINUSE = المنفذ مشغول،
+# وأي نتيجة أخرى (خطأ في الفحص) لا تعتبر دليلاً على أن المنفذ متاح.
+port_is_free() {
   local port="$1"
-  local signal="$2"
-  local listeners
-  local pids
-  local pid
-  local command_line
-
-  listeners="$(ss -H -ltnp "sport = :$port" 2>/dev/null || true)"
-  [[ -n "$listeners" ]] || return 0
-  pids="$(printf '%s' "$listeners" | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u || true)"
-  if [[ -z "$pids" ]]; then
-    printf '[dev-local] ERROR: cannot identify the process listening on port %s:\n%s\n' "$port" "$listeners" >&2
-    exit 1
-  fi
-
-  while IFS= read -r pid; do
-    [[ -n "$pid" ]] || continue
-    command_line="$(ps -p "$pid" -o args= 2>/dev/null || true)"
-    case "$port:$command_line" in
-      5000:*vite*|8080:*dist/index.mjs*|8080:*api-server*)
-        printf '[dev-local] Sending SIG%s to stale server PID %s on port %s.\n' "$signal" "$pid" "$port" >&2
-        kill -"$signal" "$pid" 2>/dev/null || true
-        ;;
-      *)
-        printf '[dev-local] ERROR: port %s is occupied by an unrecognized process (PID %s): %s\n' "$port" "$pid" "${command_line:-unknown command}" >&2
-        exit 1
-        ;;
-    esac
-  done <<< "$pids"
+  local probe_out=""
+  probe_out="$(node -e '
+    const net = require("net");
+    const port = Number(process.argv[1]);
+    const server = net.createServer();
+    server.once("error", (err) => {
+      if (err && err.code === "EADDRINUSE") { console.log("busy"); process.exit(0); }
+      console.log("error:" + (err && err.code ? err.code : "unknown"));
+      process.exit(0);
+    });
+    server.once("listening", () => {
+      server.close(() => { console.log("free"); process.exit(0); });
+    });
+    server.listen(port, "0.0.0.0");
+  ' "$port" 2>/dev/null || true)"
+  [[ "$probe_out" == "free" ]]
 }
 
 stop_old_servers() {
@@ -99,39 +84,29 @@ stop_old_servers() {
     printf '[dev-local] ERROR: pkill is required to stop stale development server runners.\n' >&2
     exit 1
   }
-  command -v ss >/dev/null 2>&1 || {
-    printf '[dev-local] ERROR: ss is required to verify that ports 5000 and 8080 are clear.\n' >&2
-    exit 1
-  }
-  command -v ps >/dev/null 2>&1 || {
-    printf '[dev-local] ERROR: ps is required to identify existing port listeners safely.\n' >&2
+  command -v node >/dev/null 2>&1 || {
+    printf '[dev-local] ERROR: node is required for port availability checks (net module).\n' >&2
     exit 1
   }
 
-  # Stop only this workspace's package runners first, then verify any remaining
-  # listeners by PID/command before signaling them; unknown processes are kept.
+  # أوقف فقط مشغّلات مساحة العمل المعروفة (pnpm run dev للواجهة وAPI وأي
+  # vite dev server قديم). لا عمليات مجهولة ولا killall.
   pkill -TERM -f '[p]npm.*@workspace/api-server.*run dev' 2>/dev/null || true
   pkill -TERM -f '[p]npm.*@workspace/aani-social.*run dev' 2>/dev/null || true
-  signal_known_listener 5000 TERM
-  signal_known_listener 8080 TERM
+  pkill -TERM -f '[v]ite --config' 2>/dev/null || true
 
   for _ in {1..40}; do
-    if ! port_is_listening 5000 && ! port_is_listening 8080; then
+    if port_is_free 5000 && port_is_free 8080; then
       return 0
     fi
     sleep "$POLL_INTERVAL_SECONDS"
   done
 
-  signal_known_listener 5000 KILL
-  signal_known_listener 8080 KILL
+  # فحص نهائي لكل منفذ: إن بقي مشغولاً بعملية لا نستطيع تحديدها بأمان
+  # نتوقف برسالة واضحة بدل قتل عمليات مجهولة قد تكون خدمات Replit.
   for port in 5000 8080; do
-    for _ in {1..20}; do
-      port_is_listening "$port" || break
-      sleep "$POLL_INTERVAL_SECONDS"
-    done
-    if port_is_listening "$port"; then
-      printf '[dev-local] ERROR: port %s remains occupied after stopping the stale server:\n' "$port" >&2
-      ss -ltnp "sport = :$port" >&2 || true
+    if ! port_is_free "$port"; then
+      printf '[dev-local] ERROR: المنفذ %s لا يزال مشغولاً بعملية غير معروفة بعد إيقاف مشغّلات مساحة العمل المعروفة. إيقاف الإقلاع احترازاً — لم تُقتل أي عملية مجهولة. ابحث عن العملية المعتية يدوياً بـ: ps aux | grep %s\n' "$port" "$port" >&2
       exit 1
     fi
   done
