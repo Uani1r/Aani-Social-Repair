@@ -331,3 +331,87 @@ test('روابط موقعة ومعاملات تحويل متعددة تُوحَ�
     normalizeMediaUrl('https://ik.imagekit.io/anisocial/aani/u1/b.mp4?tr=w-100'),
   );
 });
+
+
+/* ------------------------------------------------------------------ */
+/* حمولة PostgREST الحقيقية: غياب جدول في الكاش كان يُسقط الخادم كاملاً  */
+/* ------------------------------------------------------------------ */
+
+// نفس جسم الاستجابة الذي أعادته قاعدة البيانات الحقيقية وأسقط عملية api-server.
+const MISSING_OPTIONAL_TABLE_BODY = JSON.stringify({
+  code: 'PGRST205',
+  details: null,
+  hint: null,
+  message: "Could not find the table 'public.profile_highlight_collections' in the schema cache",
+});
+
+test('PGRST205 الحقيقي (لا رمز داخل message) يُصنَّف غياب جدول لا خطأ قاتلاً', () => {
+  const result = { status: 404, data: JSON.parse(MISSING_OPTIONAL_TABLE_BODY) as unknown, errorText: MISSING_OPTIONAL_TABLE_BODY };
+  assert.equal(isUnknownColumnError(result), true);
+  assert.equal(isMissingRelationError(result), true);
+  // غياب عمود لا يُصنَّف غياب جدول
+  const columnGap = {
+    status: 400,
+    data: { code: 'PGRST204', message: "Could not find the 'cover_url' column of 'profile_highlight_collections' in the schema cache" },
+    errorText: '',
+  };
+  assert.equal(isMissingRelationError(columnGap), false);
+});
+
+test('غياب الجدول الاختياري بالحمولة الحقيقية: تُتخطى الجداول الأساسية ولا حذف على الشك', async () => {
+  const stub = stubSupabaseFetch((table) =>
+    table === 'profile_highlight_collections'
+      ? { status: 404, body: MISSING_OPTIONAL_TABLE_BODY }
+      : []);
+  try {
+    assert.equal(await mediaInActiveUse(CONFIG, [URL_A]), false);
+    assert.ok(stub.tables.includes('posts'));
+    assert.ok(stub.tables.includes('messages'));
+    assert.ok(stub.tables.includes('media_assets'));
+  } finally {
+    stub.restore();
+  }
+});
+
+test('غياب جدول أساسي بالحمولة الحقيقية (PGRST205) يبقى Fail Closed', async () => {
+  const stub = stubSupabaseFetch((table) =>
+    table === 'sounds'
+      ? {
+          status: 404,
+          body: JSON.stringify({
+            code: 'PGRST205',
+            details: null,
+            hint: null,
+            message: "Could not find the table 'public.sounds' in the schema cache",
+          }),
+        }
+      : []);
+  try {
+    await assert.rejects(() => mediaInActiveUse(CONFIG, [URL_A]), MediaReferenceCheckError);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('فشل جدول لاحق لا يترك رفضاً غير معالجاً — كان يُسقط عملية Node.js', async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  const stub = stubSupabaseFetch((table) => {
+    if (table === 'profile_highlight_collections') return { status: 404, body: MISSING_OPTIONAL_TABLE_BODY };
+    if (table === 'media_assets') return { status: 500, body: '{"message":"internal error"}' };
+    return [];
+  });
+  try {
+    // الجدول الاختياري (الرابع) يفشل بفجوة مخطط، والجدول الأساسي الأخير يفشل بـ 500:
+    // لا يُنشأ وعد لجدول قبل بلوغه، فلا رفض معلّق بلا مُنتَظِر.
+    await assert.rejects(() => mediaInActiveUse(CONFIG, [URL_A]), MediaReferenceCheckError);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    stub.restore();
+    process.off('unhandledRejection', onUnhandled);
+  }
+});

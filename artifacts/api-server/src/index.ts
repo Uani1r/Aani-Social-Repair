@@ -8,6 +8,16 @@ import { readAdminConfig, runExpiredRecordsCleanup, sweepOrphanUploads } from ".
 import { processDeletionJobs } from "./lib/mediaDeletionWorker";
 import { imageKitConfigured } from "./lib/imagekitAdmin";
 
+// شبكة أمان للعملية كاملة: أي رفض وعد أو استثناء غير متوقع (من عامل الصيانة
+// أو غيره) يُسجَّل ويُبتلع بدل إسقاط الخادم وتعطيل كل المستخدمين. الحماية
+// الأساسية تبقى try/catch داخل كل دورة، وهذه طبقة أخيرة فقط.
+process.on("unhandledRejection", (reason) => {
+  logger.error({ err: reason }, "Unhandled promise rejection — process kept alive");
+});
+process.on("uncaughtException", (error) => {
+  logger.error({ err: error }, "Uncaught exception — process kept alive");
+});
+
 // تحديد مسار ملفات الواجهة الثابتة: يعمل من جذر المستودع (تشغيل التطوير/النشر)
 // ومن حاوية الإنتاج (Dockerfile ينسخ dist/public إلى جذر العمل).
 const publicPath =
@@ -84,32 +94,44 @@ app.listen(port, (err) => {
 const MEDIA_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function runMaintenanceCycle(): void {
-  void (async () => {
-    const config = readAdminConfig();
-    if (!config) {
-      logger.warn("Media maintenance skipped: Supabase admin config missing");
-      return;
-    }
+  const cycle = (async () => {
+    // حماية شاملة: أي خطأ غير متوقع في الدورة (قاعدة بيانات/شبكة/تحليل)
+    // يُسجل ويُترك للدورة القادمة — لا يُسقط عملية الخادم أبداً.
     try {
-      const cleanup = await runExpiredRecordsCleanup(config);
-      logger.info({ cleanup }, "Scheduled expired-records cleanup finished");
+      const config = readAdminConfig();
+      if (!config) {
+        logger.warn("Media maintenance skipped: Supabase admin config missing");
+        return;
+      }
+      try {
+        const cleanup = await runExpiredRecordsCleanup(config);
+        logger.info({ cleanup }, "Scheduled expired-records cleanup finished");
+      } catch (error) {
+        logger.error({ err: error }, "Scheduled expired-records cleanup failed");
+      }
+      try {
+        const stats = await processDeletionJobs(config);
+        logger.info({ stats }, "Media deletion worker cycle finished");
+      } catch (error) {
+        logger.error({ err: error }, "Media deletion worker cycle failed");
+      }
+      try {
+        // كنس الملفات المرفوعة بلا مرجع (فترة سماح 48 ساعة + فحص مراجع صارم)
+        const sweep = await sweepOrphanUploads(config, { graceHours: 48, batchSize: 50 });
+        logger.info({ sweep }, "Orphan upload sweep finished");
+      } catch (error) {
+        logger.error({ err: error }, "Orphan upload sweep failed");
+      }
     } catch (error) {
-      logger.error({ err: error }, "Scheduled expired-records cleanup failed");
-    }
-    try {
-      const stats = await processDeletionJobs(config);
-      logger.info({ stats }, "Media deletion worker cycle finished");
-    } catch (error) {
-      logger.error({ err: error }, "Media deletion worker cycle failed");
-    }
-    try {
-      // كنس الملفات المرفوعة بلا مرجع (فترة سماح 48 ساعة + فحص مراجع صارم)
-      const sweep = await sweepOrphanUploads(config, { graceHours: 48, batchSize: 50 });
-      logger.info({ sweep }, "Orphan upload sweep finished");
-    } catch (error) {
-      logger.error({ err: error }, "Orphan upload sweep failed");
+      logger.error({ err: error }, "Media maintenance cycle failed; next cycle will retry");
     }
   })();
+
+  // الدورة تُطلق بلا انتظار من مؤقّت، فيجب امتصاص رفضها هنا صراحةً:
+  // رفض غير معالج واحد كافٍ لإسقاط عملية Node.js وإسقاط الخدمة كلها.
+  void cycle.catch((error) => {
+    logger.error({ err: error }, "Media maintenance cycle rejected unexpectedly");
+  });
 }
 
 function startMediaMaintenanceScheduler(): void {
@@ -136,8 +158,17 @@ function startMediaMaintenanceScheduler(): void {
   // الخدمة مضبوطة. الحماية المفعّلة: قفل استشاري داخل RPC + حجز ذري
   // SKIP LOCKED + قفل عملية واحدة + فحص مراجع حية صارم (Fail Closed) —
   // أي شك في المراجع يعيد المهمة إلى pending ولا يُحذف أي ملف مستخدم.
-  setTimeout(runMaintenanceCycle, 30_000);
-  setInterval(runMaintenanceCycle, MEDIA_MAINTENANCE_INTERVAL_MS);
+  // مؤقّت الدورة لا يدع أي استثناء متزامن يهرب إلى حلقة الأحداث
+  const scheduledCycle = () => {
+    try {
+      runMaintenanceCycle();
+    } catch (error) {
+      logger.error({ err: error }, "Media maintenance scheduler tick failed");
+    }
+  };
+
+  setTimeout(scheduledCycle, 30_000);
+  setInterval(scheduledCycle, MEDIA_MAINTENANCE_INTERVAL_MS);
   logger.info(
     { intervalMs: MEDIA_MAINTENANCE_INTERVAL_MS, firstCycleInMs: 30_000 },
     "Media maintenance scheduler ACTIVE: expired-records cleanup + deletion worker + orphan sweep",

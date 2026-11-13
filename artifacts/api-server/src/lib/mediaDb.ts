@@ -78,14 +78,34 @@ function extractRestErrorMessage(result: { data: unknown; errorText?: string }):
   return result.errorText ?? "";
 }
 
+/**
+ توقيع الخطأ الكامل للتصنيف: رسالة PostgREST وحدها لا تحمل دائماً رمز
+ الحالة الذي يميّز فجوة المخطط — فرسالة «Could not find the table '...' in
+ the schema cache» تضع الرمز PGRST205 في حقل code منفصل عن message. لذلك
+ نجمع message/code/details/hint مع نص الاستجابة الخام (errorText) قبل الحكم.
+ */
+function restErrorSignature(result: { data: unknown; errorText?: string }): string {
+  const parts: string[] = [];
+  if (result.data && typeof result.data === "object") {
+    const record = result.data as Record<string, unknown>;
+    for (const key of ["message", "error", "code", "details", "hint"]) {
+      const value = record[key];
+      if (typeof value === "string" && value) parts.push(value);
+    }
+  }
+  if (result.errorText) parts.push(result.errorText);
+  return parts.join(" ");
+}
+
 export function isUnknownColumnError(result: { status: number; data: unknown; errorText?: string }): boolean {
   if (result.status !== 400 && result.status !== 404) return false;
-  const message = extractRestErrorMessage(result);
-  return message.includes("does not exist")
-    || message.includes("Could not find the '")
-    || message.includes("PGRST204")
-    || message.includes("PGRST205")
-    || /\b(42703|42P01)\b/.test(message);
+  const signature = restErrorSignature(result);
+  return signature.includes("does not exist")
+    || signature.includes("Could not find the '")
+    || signature.includes("Could not find the table")
+    || signature.includes("PGRST204")
+    || signature.includes("PGRST205")
+    || /\b(42703|42P01)\b/.test(signature);
 }
 
 /**
@@ -96,9 +116,12 @@ export function isUnknownColumnError(result: { status: number; data: unknown; er
 export function isMissingRelationError(result: { status: number; data: unknown; errorText?: string }): boolean {
   if (result.status !== 400 && result.status !== 404) return false;
   const message = extractRestErrorMessage(result);
-  const relationMissing = /\b42P01\b/.test(message)
-    || message.includes("PGRST205")
-    || /relation\s+"[^"]+"\s+does not exist/.test(message);
+  const signature = restErrorSignature(result);
+  const relationMissing = /\b42P01\b/.test(signature)
+    || signature.includes("PGRST205")
+    || /relation\s+"[^"]+"\s+does not exist/.test(message)
+    // PostgREST 12+: «Could not find the table 'public.x' in the schema cache»
+    || /could not find the table\b/i.test(message);
   return relationMissing && !message.toLowerCase().includes("column");
 }
 
@@ -301,33 +324,36 @@ export async function mediaInActiveUse(
   const excludePost = options.excludePostId ? { id: `neq.${options.excludePostId}` } : {};
   const excludeStory = options.excludeStoryId ? { id: `neq.${options.excludeStoryId}` } : {};
 
-  const checks: Promise<boolean>[] = [
+  // كل فحص دالة كسولة تُنفَّذ عند بلوغها فقط: إنشاء كل الوعود مسبقاً كان
+  // يترك وعوداً مرفوضة بلا مُنتَظِر (رفض غير معالج) يُسقط عملية Node.js كلها
+  // عند فشل جدول لاحق — الآن لا يوجد وعد قائم إلا الذي ننتظره فعلاً.
+  const checks: (() => Promise<boolean>)[] = [
     // أساسي: المنشورات — الرابط الأحادي + مصفوفة الروابط (شرط ov لكل رابط)
     // + رابط الصوت المختار/المستخرج (audio_url — مرجع ملف صوتي حقيقي)
-    anyMatch("posts", buildMediaReferenceConditions(urls, ["media_url", "audio_url"], ["media_urls"]), { extraParams: excludePost }),
+    () => anyMatch("posts", buildMediaReferenceConditions(urls, ["media_url", "audio_url"], ["media_urls"]), { extraParams: excludePost }),
     // أساسي: القصص (مثل إعادة نشر قصة تنسخ media_url الأصلي)
-    anyMatch("stories", buildMediaReferenceConditions(urls, ["media_url"]), { extraParams: excludeStory }),
+    () => anyMatch("stories", buildMediaReferenceConditions(urls, ["media_url"]), { extraParams: excludeStory }),
     // أساسي: أبرز القصص (عناصر مضافة يدوياً أو من قصة)
-    anyMatch("profile_highlights", buildMediaReferenceConditions(urls, ["media_url"])),
+    () => anyMatch("profile_highlights", buildMediaReferenceConditions(urls, ["media_url"])),
     // اختياري: أغلفة مجموعات أبرز القصص — قد يغيب الجدول كاملاً في بيئات قديمة (سياسة موثقة أعلاه)
-    anyMatch("profile_highlight_collections", buildMediaReferenceConditions(urls, ["cover_url"]), { optional: true }),
+    () => anyMatch("profile_highlight_collections", buildMediaReferenceConditions(urls, ["cover_url"]), { optional: true }),
     // أساسي: الأصوات النشطة — الفيديو الأصلي أو معاينة الصوت
-    anyMatch("sounds", buildMediaReferenceConditions(urls, ["source_video_url", "preview_url"])),
+    () => anyMatch("sounds", buildMediaReferenceConditions(urls, ["source_video_url", "preview_url"])),
     // أساسي: الرسائل ومرفقات الدردشة (الروابط داخل نص الرسالة)
-    anyMatch("messages", buildMediaReferenceConditions(urls, ["content"])),
+    () => anyMatch("messages", buildMediaReferenceConditions(urls, ["content"])),
     // أساسي: صور الحساب والأغلفة
-    anyMatch("profiles", buildMediaReferenceConditions(urls, ["avatar_url", "cover_url"])),
+    () => anyMatch("profiles", buildMediaReferenceConditions(urls, ["avatar_url", "cover_url"])),
     // أساسي: أصول الوسائط قيد المعالجة (الفيديو والصورة البارزة)
-    anyMatch("media_assets", buildMediaReferenceConditions(urls, ["video_url", "poster_url"])),
+    () => anyMatch("media_assets", buildMediaReferenceConditions(urls, ["video_url", "poster_url"])),
   ];
 
   if (options.excludeStoryId) {
-    checks.push(anyMatch("profile_highlights", [`source_story_id.eq.${options.excludeStoryId}`]));
+    checks.push(() => anyMatch("profile_highlights", [`source_story_id.eq.${options.excludeStoryId}`]));
   }
 
-  // فشل أي فحص يمنع الحذف — نجمعها جميعاً ونتحمل أول رفض
+  // فشل أي فحص يمنع الحذف — يُنتظر كل فحص بالترتيب ويرمي عند الشك
   for (const check of checks) {
-    if (await check) return true;
+    if (await check()) return true;
   }
   return false;
 }
