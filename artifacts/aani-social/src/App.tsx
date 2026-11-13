@@ -4,8 +4,6 @@ import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
-import GlobalErrorDiagnostics from '@/components/GlobalErrorDiagnostics';
-import MediaDiagnosticAlert from '@/components/MediaDiagnosticAlert';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
 import NotificationsModal from '@/components/NotificationsModal';
@@ -21,30 +19,11 @@ import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
 import useAppSession from '@/hooks/useAppSession';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
-import { handleAppError, installSupabaseErrorInterceptor } from '@/lib/appErrors';
-import { initMediaDiagnostics } from '@/lib/mediaDiagnostics';
-import { installGlobalErrorCapture } from '@/lib/globalErrorStore';
-import { supabase } from '@/lib/supabase';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import { readLocalUserPreferences, saveLocalUserPreferences, userPreferencesFromProfile } from '@/lib/userPreferences';
 import { applyFontPreference, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import '@/index.css';
-
-// محمي داخل try/catch: فشل تفعيل اعتراض الأخطاء لا يجب أن يمنع إقلاع التطبيق
-try {
-  installSupabaseErrorInterceptor(supabase);
-} catch (interceptorError) {
-  console.error('[app] تعذر تفعيل اعتراض أخطاء Supabase — التطبيق يعمل بدونه', interceptorError);
-}
-
-// تشخيص الوسائط: رصد صامت مستقل (fetch/XHR) — فشل تفعيله لا يمنع الإقلاع
-try {
-  initMediaDiagnostics();
-  installGlobalErrorCapture();
-} catch (diagnosticsError) {
-  console.error('[app] تعذر تفعيل تشخيص الوسائط — التطبيق يعمل بدونه', diagnosticsError);
-}
 
 function App() {
   useModalBodyScrollLock();
@@ -101,30 +80,11 @@ function App() {
     return () => document.removeEventListener('selectstart', preventNativeTextSelection, true);
   }, []);
 
-  useEffect(() => {
-    const handleWindowError = (event: ErrorEvent) => {
-      if (event.error) {
-        handleAppError('خطأ غير معالج في التطبيق', event.error, 'حدث خطأ غير متوقع. أعد المحاولة.');
-      }
-    };
-    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
-      handleAppError('فشل إجراء غير مكتمل', event.reason, 'تعذر إتمام العملية. راجع التفاصيل التشخيصية.');
-    };
-
-    window.addEventListener('error', handleWindowError);
-    window.addEventListener('unhandledrejection', handleUnhandledRejection);
-    return () => {
-      window.removeEventListener('error', handleWindowError);
-      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
-    };
-  }, []);
-
   if (authLoading) {
     return (
       <>
         <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
         <GlobalErrorToast />
-        <MediaDiagnosticAlert />
         <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
       </>
     );
@@ -241,8 +201,6 @@ function App() {
         )}
       </WouterRouter>
       <GlobalErrorToast />
-      <MediaDiagnosticAlert />
-      <GlobalErrorDiagnostics />
       <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
     </TooltipProvider>
   );
