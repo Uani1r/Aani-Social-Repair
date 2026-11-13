@@ -1,21 +1,7 @@
--- =====================================================================
--- جداول مشاهدات وإعجابات القصص — v4 مستقل بذاته (Self-contained)
---
--- البنية الفعلية المؤكدة عبر information_schema.columns:
---   story_views  : id, story_id, viewer_id, created_at
---   story_likes  : id, story_id, user_id, created_at
---   user_blocks  : blocker_id, blocked_id, created_at
---
--- يُنشئ كل ما تحتاجه سياساته داخلياً (بلا أي اعتماد على ترحيلات سابقة):
---   aani_is_user_blocked / aani_can_view_story / aani_record_story_view
--- ويضيف عمود viewed_at مولَّداً من created_at + منظر قراءة بأسماء العميل.
--- =====================================================================
-
 begin;
 
 -- =====================================================================
--- 1) جدول الحظر (بنيته الفعلية: blocker_id + blocked_id) — يُنشأ إن غاب
---    ويُستخدم في منطق الحظر داخل aani_can_view_story أدناه
+-- 1) جداول الحظر والأصدقاء المقربين — تُنشأ تلقائياً إن غابت
 -- =====================================================================
 
 create table if not exists public.user_blocks (
@@ -26,8 +12,16 @@ create table if not exists public.user_blocks (
   constraint aani_user_blocks_not_self check (blocker_id <> blocked_id)
 );
 
+create table if not exists public.close_friends (
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  friend_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, friend_id),
+  constraint aani_close_friends_not_self check (user_id <> friend_id)
+);
+
 -- =====================================================================
--- 2) دالة الحظر — تستخدم blocked_id (الاسم الفعلي في قاعدتك)
+-- 2) دالة الحظر — تستخدم blocked_id
 -- =====================================================================
 
 create or replace function public.aani_is_user_blocked(p_user_a uuid, p_user_b uuid)
@@ -53,8 +47,7 @@ revoke all on function public.aani_is_user_blocked(uuid, uuid) from public;
 grant execute on function public.aani_is_user_blocked(uuid, uuid) to authenticated;
 
 -- =====================================================================
--- 3) دالة رؤية القصة — تعريفها الكامل داخل هذا الملف (كانت من ترحيل
---    غير مطبَّق عندك). نفس منطق الترحيل 20261115 مع الحظر عبر blocked_id.
+-- 3) دالة رؤية القصة
 -- =====================================================================
 
 create or replace function public.aani_can_view_story(p_story_id uuid, p_viewer_id uuid)
@@ -143,12 +136,21 @@ revoke all on function public.aani_can_view_story(uuid, uuid) from public;
 grant execute on function public.aani_can_view_story(uuid, uuid) to authenticated;
 
 -- =====================================================================
--- 4) عمود viewed_at المولَّد + منظر القراءة بأسماء العميل
+-- 4) عمود viewed_at المولَّد + فهرس التفرد + منظر القراءة
 -- =====================================================================
 
 alter table public.story_views
   add column if not exists viewed_at timestamptz
   generated always as (created_at) stored;
+
+delete from public.story_views a
+using public.story_views b
+where a.ctid < b.ctid
+  and a.story_id = b.story_id
+  and a.viewer_id = b.viewer_id;
+
+create unique index if not exists aani_story_views_story_viewer_uidx
+  on public.story_views (story_id, viewer_id);
 
 create index if not exists aani_story_views_story_viewed_idx
   on public.story_views (story_id, created_at desc);
@@ -240,7 +242,7 @@ create policy aani_story_likes_delete_own on public.story_likes
   for delete to authenticated using (user_id = (select auth.uid()));
 
 -- =====================================================================
--- 6) دالة تسجيل المشاهدة (idempotent) — بنية story_views الفعلية
+-- 6) دالة تسجيل المشاهدة (idempotent)
 -- =====================================================================
 
 create or replace function public.aani_record_story_view(p_story_id uuid)
@@ -277,7 +279,7 @@ revoke all on function public.aani_record_story_view(uuid) from public, anon, au
 grant execute on function public.aani_record_story_view(uuid) to authenticated;
 
 -- =====================================================================
--- 7) Realtime على الجدولين (تحديث لحظي لقائمة المشاهدين)
+-- 7) Realtime على الجدولين
 -- =====================================================================
 
 alter table public.story_views replica identity full;
