@@ -3354,28 +3354,41 @@ body.aani-immersive .unified-top-bar {
   direction: rtl;
 }
 
-/* المحاذاة الفعلية بالجهة الفيزيائية: ردّي إلى اليمين دائماً، وردّ الطرف
-   الآخر إلى اليسار دائماً، بصرف النظر عن اتجاه الحاوية أو الـflex direction. */
-.messages-story-reply.is-mine {
-  margin-left: auto;
-  margin-right: 0;
-  align-self: flex-end;
+/* حاوية تخطيط فيزيائية للبطاقة: LTR هنا فقط لضمان اليسار/اليمين الفعليين،
+   بينما تبقى نصوص البطاقة نفسها RTL ومحاذاتها إلى اليمين. */
+.messages-story-reply-align {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  direction: ltr;
 }
 
-.messages-story-reply.is-theirs {
-  margin-right: auto;
-  margin-left: 0;
-  align-self: flex-start;
+.messages-story-reply-align.is-mine {
+  justify-content: flex-end;
 }
 
-.messages-message-row.has-reactions.is-mine .messages-message-body {
-  align-items: flex-end;
-  margin-left: auto;
+.messages-story-reply-align.is-theirs {
+  justify-content: flex-start;
 }
 
-.messages-message-row.has-reactions.is-theirs .messages-message-body {
-  align-items: flex-start;
-  margin-right: auto;
+/* صفوف التفاعلات تتحول إلى flex body بدل display: contents؛ نُبقي الحاوية
+   بعرض كامل داخل الجسم حتى تعمل المحاذاة الفيزيائية للبطاقة. */
+.messages-message-row.has-reactions .messages-story-reply-align {
+  width: 100%;
+  flex: 1 1 auto;
+}
+
+.messages-message-row.has-reactions.is-mine.has-story-reply .messages-message-body {
+  width: min(75%, 440px);
+  max-width: min(75%, 440px);
+  align-items: stretch;
+}
+
+.messages-message-row.has-reactions.is-theirs.has-story-reply .messages-message-body {
+  width: min(calc(100% - 44px), 75%, 440px);
+  max-width: min(calc(100% - 44px), 75%, 440px);
+  align-items: stretch;
 }
 
 .messages-story-reply-label {

@@ -154,8 +154,14 @@ export function useStoryCreationActions({
       scale: storyMediaZoom,
       rotation: storyMediaRotate,
     };
+    // بعد القص الحقيقي تُصفَّر التحويلات، فلا داعي لحفظ تحويل مطابق للهوية
+    // يُعاد تطبيقه على الصورة المقصوصة في العارض.
+    const hasNonIdentityMediaTransform = mediaTransform.x !== 0
+      || mediaTransform.y !== 0
+      || mediaTransform.scale !== 1
+      || mediaTransform.rotation !== 0;
     const allLayers: TimedText[] = [
-      ...(includeMediaTransform ? [mediaTransform] : []),
+      ...(includeMediaTransform && hasNonIdentityMediaTransform ? [mediaTransform] : []),
       ...persistedLayers,
       ...(storyDrawStrokes.length > 0
         ? [{
