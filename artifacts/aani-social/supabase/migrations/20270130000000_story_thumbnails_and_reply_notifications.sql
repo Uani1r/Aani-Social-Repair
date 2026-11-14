@@ -19,6 +19,20 @@
 
 begin;
 
+-- 0) وجود الجداول الأساسية قبل أي ALTER TABLE.
+--    التحقق بعد ALTER لا يحمي: ALTER نفسه يفشل إن غاب الجدول.
+do $$
+begin
+  if to_regclass('public.stories') is null
+     or to_regclass('public.notifications') is null
+     or to_regclass('public.user_blocks') is null
+     or to_regclass('public.profiles') is null
+     or to_regclass('public.story_likes') is null then
+    raise exception 'aani: جدول أساسي مفقود (stories/notifications/user_blocks/profiles/story_likes).'
+      using errcode = '42P01';
+  end if;
+end $$;
+
 -- 1) الصورة المصغرة للستوري
 alter table public.stories
   add column if not exists thumbnail_url text;
@@ -43,14 +57,7 @@ declare
   v_bad_type text;
   v_blocked_count integer;
 begin
-  if to_regclass('public.stories') is null
-     or to_regclass('public.notifications') is null
-     or to_regclass('public.user_blocks') is null
-     or to_regclass('public.profiles') is null
-     or to_regclass('public.story_likes') is null then
-    raise exception 'aani: جدول أساسي مفقود (stories/notifications/user_blocks/profiles/story_likes).'
-      using errcode = '42P01';
-  end if;
+  -- الجداول تحققت قبل أي ALTER في الكتلة 0 أعلاه.
 
   select string_agg(required.column_name, ', ')
     into v_missing
@@ -78,6 +85,49 @@ begin
       and col.column_name = 'thumbnail_url'
   ) then
     raise exception 'aani: العمود public.stories.thumbnail_url غير موجود.'
+      using errcode = '42703';
+  end if;
+
+  -- الأعمدة التي تستخدمها دالة الإعجاب في stories: id, user_id, media_type
+  -- (بالإضافة إلى thumbnail_url أعلاه) وأنواعها.
+  if not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'stories'
+      and col.column_name = 'id'
+      and col.data_type = 'uuid'
+  ) or not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'stories'
+      and col.column_name = 'user_id'
+      and col.data_type = 'uuid'
+  ) or not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'stories'
+      and col.column_name = 'media_type'
+      and col.data_type = 'text'
+  ) then
+    raise exception 'aani: public.stories يجب أن يحتوي id uuid وuser_id uuid وmedia_type text.'
+      using errcode = '42703';
+  end if;
+
+  -- story_likes: الأعمدة التي يقرأها المشغّل عبر NEW.
+  if not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'story_likes'
+      and col.column_name = 'story_id'
+      and col.data_type = 'uuid'
+  ) or not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'story_likes'
+      and col.column_name = 'user_id'
+      and col.data_type = 'uuid'
+  ) then
+    raise exception 'aani: public.story_likes يجب أن يحتوي story_id uuid وuser_id uuid.'
       using errcode = '42703';
   end if;
 
@@ -122,15 +172,26 @@ begin
   from information_schema.columns as col
   where col.table_schema = 'public'
     and col.table_name = 'user_blocks'
-    and col.column_name in ('blocked_id', 'blocked_user_id')
-    and col.data_type = 'uuid';
+    and col.column_name in ('blocked_id', 'blocked_user_id');
 
   if v_blocked_count = 0 then
-    raise exception 'aani: public.user_blocks لا يحتوي blocked_id ولا blocked_user_id (uuid).'
+    raise exception 'aani: public.user_blocks لا يحتوي blocked_id ولا blocked_user_id.'
       using errcode = '42703';
   elsif v_blocked_count > 1 then
-    raise exception 'aani: public.user_blocks يحتوي العمودين blocked_id و blocked_user_id معاً؛ مخطط ملتبس.'
+    raise exception 'aani: public.user_blocks يحتوي العمودين blocked_id و blocked_user_id معاً؛ مخطط ملتبس يُرفض حتى لو كان أحدهما فقط uuid.'
       using errcode = '42702';
+  end if;
+
+  -- بعد التأكد من وجود عمود واحد فقط، نتحقق أن نوعه uuid.
+  if not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'user_blocks'
+      and col.column_name in ('blocked_id', 'blocked_user_id')
+      and col.data_type = 'uuid'
+  ) then
+    raise exception 'aani: عمود الحظر الوحيد في public.user_blocks ليس uuid.'
+      using errcode = '42804';
   end if;
 end $$;
 
