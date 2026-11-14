@@ -27,6 +27,7 @@ export interface StoryReplyInsertInput {
 export interface StoryReplyInsertError {
   message?: string;
   code?: string;
+  name?: string;
   details?: string;
   hint?: string;
 }
@@ -35,6 +36,8 @@ export interface StoryReplyInsertResult {
   error: StoryReplyInsertError | null;
   /** أُرسلت الرسالة لكن تعذّر تثبيت حقول معاينة الستوري عليها. */
   warning?: 'preview-not-saved';
+  /** لم يتأكد إدراج الرسالة ولم يُنفَ (انقطاع اتصال/إلغاء)؛ تحقق من المحادثة. */
+  uncertain?: true;
 }
 
 export interface StoryReplyMessageLike {
@@ -55,6 +58,7 @@ function toStoryReplyInsertError(error: unknown): StoryReplyInsertError {
     return {
       message: typeof record.message === 'string' ? record.message : undefined,
       code: typeof record.code === 'string' ? record.code : undefined,
+      name: typeof record.name === 'string' ? record.name : undefined,
       details: typeof record.details === 'string' ? record.details : undefined,
       hint: typeof record.hint === 'string' ? record.hint : undefined,
     };
@@ -161,9 +165,72 @@ export function toAbsoluteMediaUrl(value: string | null | undefined): string | n
   }
 }
 
+type MessageExistence = 'found' | 'not-found' | 'unknown';
+
+/**
+ * عند استثناء أثناء الإدراج (انقطاع اتصال/إلغاء) لا نعرف هل حفظته القاعدة.
+ * نتحقق من الصف نفسه بمعرّف الرسالة الذي أُنشئ قبل الإدراج + المرسل + المستلم،
+ * دون البحث بالنص ودون إعادة إدراج بمعرّف جديد.
+ */
+async function findStoryReplyMessage(
+  messageId: string,
+  senderId: string,
+  recipientId: string,
+): Promise<MessageExistence> {
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('id', messageId)
+      .eq('sender_id', senderId)
+      .eq('recipient_id', recipientId)
+      .maybeSingle();
+    if (error) {
+      console.warn('[story reply] stage=insert-verify unreadable', { code: error.code ?? 'unknown' });
+      return 'unknown';
+    }
+    return data ? 'found' : 'not-found';
+  } catch (error) {
+    const name = error && typeof error === 'object' && 'name' in error
+      ? String((error as { name?: unknown }).name ?? 'unknown')
+      : 'unknown';
+    console.warn('[story reply] stage=insert-verify threw', { name });
+    return 'unknown';
+  }
+}
+
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {
-  const { error } = await supabase.from('messages').insert(payload);
-  return { error: toStoryReplyInsertError(error) };
+  try {
+    const { error } = await supabase.from('messages').insert(payload);
+    return { error: toStoryReplyInsertError(error) };
+  } catch (error) {
+    // استثناء في طلب الإدراج: النتيجة غير محسومة، وتُحسم عبر findStoryReplyMessage.
+    return { error: toStoryReplyInsertError(error), uncertain: true };
+  }
+}
+
+/** إدراج ناجح مؤكد: تحقق المعاينة غير حاجز ولا يغيّر نتيجة الإرسال. */
+async function finishSuccessfulInsert(
+  messageId: string,
+  input: StoryReplyInsertInput,
+  payload: MessageInsertPayload,
+): Promise<StoryReplyInsertResult> {
+  try {
+    const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
+    return { error: null, ...verification };
+  } catch (verificationError) {
+    const name = verificationError && typeof verificationError === 'object' && 'name' in verificationError
+      ? String((verificationError as { name?: unknown }).name ?? 'unknown')
+      : 'unknown';
+    const code = verificationError && typeof verificationError === 'object' && 'code' in verificationError
+      ? String((verificationError as { code?: unknown }).code ?? '')
+      : '';
+    console.warn('[story reply] stage=verify post-insert failed', {
+      name,
+      code: code || 'unknown',
+    });
+    return { error: null, warning: 'preview-not-saved' };
+  }
 }
 
 function createReplyMessageId(): string {
@@ -359,24 +426,31 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
           columnsInPayload: Object.keys(payload).length,
         });
       }
-      // الإدراج نجح: الإرسال ناجح نهائياً. التحقق من حقول المعاينة مرحلة
-      // لاحقة غير حاجزة؛ أي رفض/شبكة/إلغاء فيها لا يغيّر نتيجة الإرسال.
-      try {
-        const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
-        return { error: null, ...verification };
-      } catch (verificationError) {
-        const name = verificationError && typeof verificationError === 'object' && 'name' in verificationError
-          ? String((verificationError as { name?: unknown }).name ?? 'unknown')
-          : 'unknown';
-        const code = verificationError && typeof verificationError === 'object' && 'code' in verificationError
-          ? String((verificationError as { code?: unknown }).code ?? '')
-          : '';
-        console.warn('[story reply] stage=verify post-insert failed', {
-          name,
-          code: code || 'unknown',
-        });
-        return { error: null, warning: 'preview-not-saved' };
+      return finishSuccessfulInsert(messageId, input, payload);
+    }
+
+    // استثناء/انقطاع أثناء طلب الإدراج: النتيجة غير محسومة. نتحقق بالمعرّف
+    // الذي أُنشئ قبل الإدراج، ولا نُعيد الإدراج بمعرّف آخر إطلاقاً.
+    if (lastResult.uncertain) {
+      const existence = await findStoryReplyMessage(messageId, input.senderId, input.recipientId);
+      if (existence === 'found') {
+        console.info('[story reply] stage=insert-verify found after transport error');
+        return finishSuccessfulInsert(messageId, input, payload);
       }
+      if (existence === 'unknown') {
+        console.warn('[story reply] stage=insert-verify unknown', {
+          name: lastResult.error?.name ?? 'unknown',
+          code: lastResult.error?.code ?? 'unknown',
+        });
+        // لا نُعلن فشلاً مؤكداً ولا نجاحاً: الواجهة تعرض حالة غير مؤكدة.
+        return { error: null, uncertain: true };
+      }
+      console.warn('[story reply] stage=insert-verify not found', {
+        name: lastResult.error?.name ?? 'unknown',
+        code: lastResult.error?.code ?? 'unknown',
+      });
+      // لم تُحفظ الرسالة فعلاً: نُبقي الخطأ الحقيقي للمعالجة دون تكرار الإدراج.
+      return { error: lastResult.error };
     }
 
     if (!firstFailureLogged) {

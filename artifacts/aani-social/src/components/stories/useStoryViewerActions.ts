@@ -444,7 +444,7 @@ export function useStoryViewerActions({
       // media_type قد يكون image أو photo، فلا نعتمد على مقارنة واحدة.
       const thumbnailUrl = currentStory.thumbnail_url
         ?? (isImageStoryMediaType(currentStory.media_type) ? currentStory.media_url : null);
-      const { error, warning } = await sendStoryReplyMessage({
+      const result = await sendStoryReplyMessage({
         senderId: userId,
         recipientId: currentStory.user_id,
         text: textToSend,
@@ -453,10 +453,16 @@ export function useStoryViewerActions({
         storyThumbnailUrl: thumbnailUrl,
         storyMediaType: currentStory.media_type,
       });
-      if (error) throw error;
+      if (result.uncertain) {
+        // نتيجة غير محسومة: لا فشل مؤكد، ولا مسح لنص الرد.
+        console.warn('[story replies] stage=send uncertain');
+        toast.warning('لم نتأكد من إرسال الرد. تحقق من المحادثة قبل إعادة المحاولة.', { duration: 8000 });
+        return;
+      }
+      if (result.error) throw result.error;
 
       setReplyText('');
-      if (warning === 'preview-not-saved') {
+      if (result.warning === 'preview-not-saved') {
         toast.warning('تم إرسال الرد، لكن تعذر حفظ معاينة الستوري معه.');
       } else {
         toast.success('تم إرسال الرد في الرسائل الخاصة');
