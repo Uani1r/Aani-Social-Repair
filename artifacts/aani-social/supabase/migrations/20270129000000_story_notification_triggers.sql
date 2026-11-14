@@ -55,6 +55,7 @@ begin;
 do $$
 declare
   v_table text;
+  v_blocked_column_count integer;
 begin
   foreach v_table in array array['messages', 'stories', 'story_likes', 'profiles', 'notifications', 'user_blocks']
   loop
@@ -78,22 +79,16 @@ begin
       using errcode = '42703';
   end if;
 
-  if (
-    select count(*)
-    from information_schema.columns as col
-    where col.table_schema = 'public'
-      and col.table_name = 'user_blocks'
-      and col.column_name in ('blocked_id', 'blocked_user_id')
-  ) = 0 then
+  select count(*) into v_blocked_column_count
+  from information_schema.columns as col
+  where col.table_schema = 'public'
+    and col.table_name = 'user_blocks'
+    and col.column_name in ('blocked_id', 'blocked_user_id');
+
+  if v_blocked_column_count = 0 then
     raise exception 'aani: الجدول public.user_blocks لا يحتوي أي عمود من (blocked_id, blocked_user_id)؛ لا يمكن فحص الحظر.'
       using errcode = '42703';
-  elsif (
-    select count(*)
-    from information_schema.columns as col
-    where col.table_schema = 'public'
-      and col.table_name = 'user_blocks'
-      and col.column_name in ('blocked_id', 'blocked_user_id')
-  ) > 1 then
+  elsif v_blocked_column_count > 1 then
     raise exception 'aani: الجدول public.user_blocks يحتوي العمودين blocked_id و blocked_user_id معاً؛ مخطط ملتبس. أوقف الترحيل وحدّد العمود الصحيح يدوياً.'
       using errcode = '42702';
   end if;
