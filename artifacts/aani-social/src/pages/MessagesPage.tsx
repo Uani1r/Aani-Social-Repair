@@ -3140,7 +3140,7 @@ export default function MessagesPage({
                         window.requestAnimationFrame(() => messageInputRef.current?.focus());
                       }}
                     >
-                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}`} data-message-id={message.id}>
+                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}${isStoryReply ? ' has-story-reply' : ''}`} data-message-id={message.id}>
                         <div className="messages-message-body">
                           {isSharedPost ? (
                             <>

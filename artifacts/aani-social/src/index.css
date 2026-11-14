@@ -3372,10 +3372,29 @@ body.aani-immersive .unified-top-bar {
   justify-content: flex-start;
 }
 
-/* صفوف التفاعلات تتحول إلى flex body؛ نُبقي البطاقة ضمن عرضها الطبيعي. */
+/* صفوف التفاعلات تتحول إلى flex body بدل display: contents؛ نُبقي الحاوية
+   بعرض كامل داخل الجسم حتى تعمل المحاذاة الفيزيائية للبطاقة. */
 .messages-message-row.has-reactions .messages-story-reply-align {
-  width: auto;
-  flex: 0 0 auto;
+  width: 100%;
+  flex: 1 1 auto;
+}
+
+/* في صفوف التفاعلات: جسم الرسالة يصبح flex؛ نمنحه عرضاً كاملاً ونجعل
+   الحاوية تمتد داخله، فتبقى البطاقة على يمين الصادر ويسار الوارد. */
+.messages-message-row.has-reactions.is-mine.has-story-reply .messages-message-body {
+  width: min(75%, 440px);
+  max-width: min(75%, 440px);
+  align-items: stretch;
+}
+
+.messages-message-row.has-reactions.is-theirs.has-story-reply .messages-message-body {
+  width: min(calc(100% - 44px), 75%, 440px);
+  max-width: min(calc(100% - 44px), 75%, 440px);
+  align-items: stretch;
+}
+
+.messages-message-row.has-reactions.has-story-reply .messages-story-reply-align {
+  width: 100%;
 }
 
 .messages-story-reply-label {
