@@ -1,4 +1,5 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from 'react';
+import { useRef } from 'react';
 import { toast } from 'sonner';
 
 import type {
@@ -95,6 +96,9 @@ export function useStoryViewerActions({
   setReplyText,
   setShowMenu,
 }: UseStoryViewerActionsOptions) {
+  // قفل متزامن: يمنع استدعاء الإرسال مرتين قبل أن يحدّث React حالة isSendingReply.
+  const replySendLockRef = useRef(false);
+
   const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
     if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
 
@@ -433,9 +437,18 @@ export function useStoryViewerActions({
 
   const handleSendReply = async (customContent?: string) => {
     const textToSend = (customContent ?? replyText).trim();
-    if (!supabaseConfigured || !currentStory || isStoryOwner || !textToSend || isSendingReply) return;
+    if (!supabaseConfigured
+      || !currentStory
+      || isStoryOwner
+      || !textToSend
+      || isSendingReply
+      || replySendLockRef.current) return;
 
+    replySendLockRef.current = true;
     setIsSendingReply(true);
+    // يُفرَّغ النص فور بدء الإرسال وقبل أول await.
+    setReplyText('');
+
     try {
       // رد الستوري = رسالة خاصة واحدة فقط، بلا أي إشعار reply من الواجهة.
       // بيانات الستوري تُحفظ مع الرسالة نفسها كي تبقى بطاقة الرد سليمة بعد
@@ -454,32 +467,26 @@ export function useStoryViewerActions({
         storyMediaType: currentStory.media_type,
       });
       if (result.uncertain) {
-        // نتيجة غير محسومة: لا فشل مؤكد، ولا مسح لنص الرد.
+        // نتيجة غير محسومة: لا تنبيه للمستخدم هنا؛ التحقق في المحادثة.
         console.warn('[story replies] stage=send uncertain');
-        toast.warning('لم نتأكد من إرسال الرد. تحقق من المحادثة قبل إعادة المحاولة.', { duration: 8000 });
         return;
       }
       if (result.error) throw result.error;
-
-      setReplyText('');
       if (result.warning === 'preview-not-saved') {
-        toast.warning('تم إرسال الرد، لكن تعذر حفظ معاينة الستوري معه.');
-      } else {
-        toast.success('تم إرسال الرد في الرسائل الخاصة');
+        console.warn('[story replies] stage=send preview not saved');
       }
     } catch (error) {
       const name = error && typeof error === 'object' && 'name' in error
         ? String((error as { name?: unknown }).name ?? '')
         : '';
       if (name === 'AbortError') {
-        // إلغاء غير محسوم: لا تنبيه فشل، ولا مسح لنص الرد.
         console.warn('[story replies] stage=send aborted');
         return;
       }
       console.error('[story replies] تعذر إرسال الرد في الرسائل الخاصة:', error);
-      toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setIsSendingReply(false);
+      replySendLockRef.current = false;
     }
   };
 

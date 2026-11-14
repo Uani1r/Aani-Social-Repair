@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Eye, Heart, Loader2, Repeat2, SendHorizontal } from 'lucide-react';
 
 import type { StoryViewerProps } from './types';
@@ -38,6 +39,14 @@ export default function StoryReplyControls({
   onReplyFocusChange,
   onToggleLike,
 }: StoryReplyControlsProps) {
+  const replyInputRef = useRef<HTMLInputElement | null>(null);
+
+  const sendReplyOnce = () => {
+    replyInputRef.current?.blur();
+    onReplyFocusChange(false);
+    onSendReply();
+  };
+
   return (
     <>
       {isStoryOwner && <div className="absolute inset-x-0 bottom-0 z-[25] h-24" aria-hidden="true" />}
@@ -79,6 +88,7 @@ export default function StoryReplyControls({
           <div className="flex min-w-0 flex-1 items-center rounded-full border border-zinc-700/70 bg-zinc-900/95 px-3 py-2 shadow-lg">
             <input
               key={currentStory.id}
+              ref={replyInputRef}
               type="text"
               placeholder="رد على الستوري..."
               aria-label="اكتب رداً على الستوري"
@@ -91,7 +101,7 @@ export default function StoryReplyControls({
               onKeyDown={event => {
                 if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
                   event.preventDefault();
-                  onSendReply();
+                  sendReplyOnce();
                 }
               }}
               className="w-full min-w-0 bg-transparent text-xs text-white outline-none placeholder-zinc-400 disabled:opacity-60"
@@ -99,7 +109,7 @@ export default function StoryReplyControls({
             {replyText.trim() && (
               <button
                 type="button"
-                onClick={onSendReply}
+                onClick={sendReplyOnce}
                 disabled={isSendingReply}
                 aria-label="إرسال الرد"
                 className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-pink-400 transition hover:bg-white/10 disabled:opacity-50"
