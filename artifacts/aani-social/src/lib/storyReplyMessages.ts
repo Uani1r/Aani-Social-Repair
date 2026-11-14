@@ -65,8 +65,36 @@ function insertErrorText(error: StoryReplyInsertError | null): string {
   return [error.message, error.details, error.hint].filter(Boolean).join(' ');
 }
 
+/**
+ * الوسم القديم قد يظهر في بداية النص أو نهايته (مع مسافات قبله/بعده).
+ * لا نعتمد على المظهر البصري ولا على اتجاه النص: المقارنة على حدود النص
+ * المنطقية بعد trim، فتعمل مع RTL وLTR على السواء.
+ */
+export function hasLegacyStoryReplyTag(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed) return false;
+  return trimmed.startsWith(LEGACY_STORY_REPLY_PREFIX)
+    || trimmed.endsWith(LEGACY_STORY_REPLY_PREFIX);
+}
+
+/** @deprecated استخدم hasLegacyStoryReplyTag لأن الوسم قد يظهر في النهاية أيضاً. */
 export function hasLegacyStoryReplyPrefix(content: string): boolean {
-  return content.trimStart().startsWith(LEGACY_STORY_REPLY_PREFIX);
+  return hasLegacyStoryReplyTag(content);
+}
+
+/**
+ * يحذف الوسم من بداية النص و/أو نهايته فقط، مع تقليم المسافات الزائدة.
+ * لا يُحذف أي جزء من نص المستخدم في وسط الرسالة.
+ */
+export function stripLegacyStoryReplyTag(content: string): string {
+  let text = content.trim();
+  if (text.startsWith(LEGACY_STORY_REPLY_PREFIX)) {
+    text = text.slice(LEGACY_STORY_REPLY_PREFIX.length).trim();
+  }
+  if (text.endsWith(LEGACY_STORY_REPLY_PREFIX)) {
+    text = text.slice(0, text.length - LEGACY_STORY_REPLY_PREFIX.length).trim();
+  }
+  return text;
 }
 
 export function hasStoredStoryReplyMedia(message: StoryReplyMessageLike): boolean {
@@ -75,25 +103,24 @@ export function hasStoredStoryReplyMedia(message: StoryReplyMessageLike): boolea
 
 /**
  * هل هذه الرسالة رد ستوري؟
- * العلامة الصريحة (story_reply) أو الوسم القديم. حقول المعاينة وحدها ليست كافية
- * لأن مشاركة الستوري تحمل story_id أيضاً؛ نستخدمها فقط كتوافق عرض للصفوف التي
- * كُتبت قبل إضافة العمود، ولا تُستخدم في أي قرار على مستوى قاعدة البيانات.
+ * الأولوية للعلامة الصريحة story_reply === true، ثم الوسم القديم في البداية أو
+ * النهاية، ثم حقول المعاينة المحفوظة (توافق عرض لصفوف سابقة للعمود فقط).
+ * مشاركة الستوري العادية [story:...] ليست رداً حتى لو حملت story_id.
  */
 export function isStoryReplyMessage(message: StoryReplyMessageLike): boolean {
   if (message.post_id) return false;
-  const content = message.content.trim();
-  if (hasLegacyStoryReplyPrefix(content)) return true;
   if (message.story_reply === true) return true;
+  const content = message.content.trim();
+  if (hasLegacyStoryReplyTag(content)) return true;
   if (content.startsWith(STORY_SHARE_CONTENT_PREFIX)) return false;
   return hasStoredStoryReplyMedia(message);
 }
 
-/** نص الرد وحده، دون الوسم القديم. */
+/** نص الرد وحده، دون الوسم القديم من أي طرف. */
 export function storyReplyText(message: StoryReplyMessageLike): string {
-  const content = message.content.trim();
-  return hasLegacyStoryReplyPrefix(content)
-    ? content.slice(LEGACY_STORY_REPLY_PREFIX.length).trim()
-    : content;
+  return hasLegacyStoryReplyTag(message.content)
+    ? stripLegacyStoryReplyTag(message.content)
+    : message.content.trim();
 }
 
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {

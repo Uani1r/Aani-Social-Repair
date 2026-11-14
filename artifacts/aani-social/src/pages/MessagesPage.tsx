@@ -15,7 +15,7 @@ import EmojiText from '@/components/TwemojiText';
 import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
-import { isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
+import { hasLegacyStoryReplyTag, isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
 import StoryReplyCard from '@/components/stories/StoryReplyCard';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
@@ -668,7 +668,7 @@ function isEditableTextMessage(message: MessageRow): boolean {
     && !content.startsWith(CHAT_LOCATION_MESSAGE_PREFIX)
     && !content.startsWith(CHAT_CALL_MESSAGE_PREFIX)
     && !content.startsWith('[story:')
-    && !content.startsWith('[story-reply]')
+    && !hasLegacyStoryReplyTag(content)
     && !content.startsWith('[post:');
 }
 
@@ -2108,7 +2108,11 @@ export default function MessagesPage({
   const selectedPendingMediaMessage = pendingMediaMessage?.recipientId === selectedId ? pendingMediaMessage : null;
   const threadSearchMatches = useMemo(() => {
     const needle = threadSearch.trim().toLocaleLowerCase();
-    return needle ? thread.filter(message => message.content.toLocaleLowerCase().includes(needle)) : [];
+    return needle
+      ? thread.filter(message => (
+        isStoryReplyMessage(message) ? storyReplyText(message) : message.content
+      ).toLocaleLowerCase().includes(needle))
+      : [];
   }, [thread, threadSearch]);
   const sharedMessages = thread.filter(message => Boolean(message.post_id) || message.content.trim().startsWith('[post:'));
   const forwardableConversations = conversations.filter(conversation => conversation.profile.id !== selectedId);
@@ -2633,8 +2637,8 @@ export default function MessagesPage({
         ? `مستند: ${documentMessage.name}`
       : locationMessage
         ? `موقع: ${locationMessage.latitude}, ${locationMessage.longitude}${locationMessage.note ? ` · ${locationMessage.note}` : ''}`
-        : content.startsWith('[story-reply]')
-          ? content.slice('[story-reply]'.length).trim()
+        : isStoryReplyMessage(message)
+          ? storyReplyText(message)
           : message.post_id || content.startsWith('[post:')
             ? 'مشاركة منشور'
             : content.startsWith('[story:') ? 'أرسل قصة' : content;
