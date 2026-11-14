@@ -110,6 +110,9 @@ export default function CloseFriendsSheet({ open, currentUserId, onClose }: Clos
     });
   };
 
+  // الحفظ: upsert يتجاهل الصفوف الموجودة مسبقاً (لا يُعاد إدراج صف قائم)،
+  // والحذف يقتصر على صفوف المستخدم نفسه. تُبقى الرسائل كما هي، وتُسجَّل
+  // التفاصيل التقنية في الكونسول فقط، ولا تُغلق النافذة إلا عند نجاح الحفظ.
   const save = async () => {
     if (saving || !supabaseConfigured) return;
     setSaving(true);
@@ -117,34 +120,53 @@ export default function CloseFriendsSheet({ open, currentUserId, onClose }: Clos
     const toAdd = [...selectedIds].filter(id => !originalIds.has(id));
     const toRemove = [...originalIds].filter(id => !selectedIds.has(id));
 
-    if (toAdd.length) {
-      const { error } = await supabase.from('close_friends').insert(
-        toAdd.map(friendId => ({ user_id: currentUserId, friend_id: friendId })),
-      );
-      if (error) {
-        toast.error('تعذر حفظ قائمة الأصدقاء المقربين');
-        setSaving(false);
-        return;
+    try {
+      if (toAdd.length) {
+        const { error } = await supabase
+          .from('close_friends')
+          .upsert(
+            toAdd.map(friendId => ({ user_id: currentUserId, friend_id: friendId })),
+            { onConflict: 'user_id,friend_id', ignoreDuplicates: true },
+          );
+        if (error) {
+          console.error('close_friends upsert failed', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+          });
+          toast.error('تعذر حفظ قائمة الأصدقاء المقربين');
+          return;
+        }
       }
-    }
 
-    if (toRemove.length) {
-      const { error } = await supabase
-        .from('close_friends')
-        .delete()
-        .eq('user_id', currentUserId)
-        .in('friend_id', toRemove);
-      if (error) {
-        toast.error('تعذر تحديث بعض الأصدقاء المقربين');
-        setSaving(false);
-        return;
+      if (toRemove.length) {
+        const { error } = await supabase
+          .from('close_friends')
+          .delete()
+          .eq('user_id', currentUserId)
+          .in('friend_id', toRemove);
+        if (error) {
+          console.error('close_friends delete failed', {
+            code: error.code,
+            message: error.message,
+            details: error.details,
+            hint: error.hint,
+          });
+          toast.error('تعذر تحديث بعض الأصدقاء المقربين');
+          return;
+        }
       }
-    }
 
-    setOriginalIds(new Set(selectedIds));
-    toast.success('تم حفظ قائمة الأصدقاء المقربين');
-    setSaving(false);
-    onClose();
+      setOriginalIds(new Set(selectedIds));
+      toast.success('تم حفظ قائمة الأصدقاء المقربين');
+      onClose();
+    } catch (error) {
+      console.error('close_friends save failed', error);
+      toast.error('تعذر حفظ قائمة الأصدقاء المقربين');
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (!open) return null;

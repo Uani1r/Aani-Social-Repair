@@ -417,7 +417,8 @@ export default function StoryCreationEditor({
         <span className="text-[9px] font-bold">حذف</span>
       </div>
 
-      {/* الشريط العلوي */}
+      {/* الشريط العلوي — يُخفى تماماً أثناء فتح منتقي الإشارة */}
+      {!storyMentionsOpen && (
       <div
         className="pointer-events-none fixed inset-x-0 top-0 z-[120] flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
@@ -454,8 +455,9 @@ export default function StoryCreationEditor({
         )}
         <span className="w-9" />
       </div>
+      )}
 
-      {!storyDrawingOpen && !storyCropOpen && (
+      {!storyMentionsOpen && !storyDrawingOpen && !storyCropOpen && (
         <StoryEditorToolbar
           storyToolsRef={storyToolsRef}
           storyMoreOpen={storyMoreOpen}
@@ -468,6 +470,7 @@ export default function StoryCreationEditor({
         />
       )}
 
+      {!storyMentionsOpen && (
       <StoryTextEditorPanel
         storyTextEditorOpen={storyTextEditorOpen}
         storyText={storyText}
@@ -504,8 +507,10 @@ export default function StoryCreationEditor({
         onInteract={onInteract}
       />
 
-      {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) */}
-      {!storyDrawingOpen && !storyCropOpen && (
+      )}
+
+      {/* أسفل الشاشة: قصتك (يمين) + الأصدقاء المقربون (يسار) — تُخفى أثناء فتح منتقي الإشارة */}
+      {!storyMentionsOpen && !storyDrawingOpen && !storyCropOpen && (
         <div className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
         <StoryEditorPanels
           storyFiltersOpen={storyFiltersOpen}
