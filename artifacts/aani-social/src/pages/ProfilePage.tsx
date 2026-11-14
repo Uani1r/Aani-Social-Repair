@@ -21,6 +21,7 @@ import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { useSeenStoryIds } from '@/lib/seenStories';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
@@ -196,6 +197,8 @@ export default function ProfilePage({
 }) {
   const activeUserId = targetUserId || currentUserId;
   const own = activeUserId === currentUserId;
+  // حالة المشاهدة من نفس مصدر شريط القصص (localStorage + حدثه) بلا حالة موازية.
+  const seenStoryIds = useSeenStoryIds(currentUserId);
 
   const [person, setPerson] = useState<Profile | null>(own ? profile : null);
   const [followers, setFollowers] = useState(0);
@@ -221,6 +224,8 @@ export default function ProfilePage({
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [storyHiddenFromTarget, setStoryHiddenFromTarget] = useState(false);
+  // قصص صاحب هذا الملف النشطة: تُستخدم لحلقة الصورة في الرأس فقط.
+  const [profileStoryIds, setProfileStoryIds] = useState<string[]>([]);
   const [profileActionBusy, setProfileActionBusy] = useState(false);
   const [showProfileReportDialog, setShowProfileReportDialog] = useState(false);
   const [profileReportCategory, setProfileReportCategory] = useState<ProfileReportCategory>('other');
@@ -491,6 +496,50 @@ export default function ProfilePage({
     setAvatarPreview(person?.avatar_url || null);
     setCoverPreview(person?.cover_url || null);
   }, [person?.avatar_url, person?.cover_url]);
+
+  useEffect(() => {
+    let active = true;
+    if (!supabaseConfigured || !activeUserId) {
+      setProfileStoryIds([]);
+      return () => { active = false; };
+    }
+
+    void supabase
+      .from('stories')
+      .select('id, expires_at')
+      .eq('user_id', activeUserId)
+      .gt('expires_at', new Date().toISOString())
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          console.warn('[profile stories] تعذر تحميل قصص الملف الشخصي:', error);
+          setProfileStoryIds([]);
+          return;
+        }
+        setProfileStoryIds(((data || []) as Array<{ id?: string }>)
+          .flatMap(row => (typeof row.id === 'string' ? [row.id] : [])));
+      })
+      .catch(error => {
+        if (!active) return;
+        console.warn('[profile stories] تعذر تحميل قصص الملف الشخصي:', error);
+        setProfileStoryIds([]);
+      });
+
+    return () => { active = false; };
+  }, [activeUserId]);
+
+  const profileStoryState = profileStoryIds.length === 0
+    ? null
+    : profileStoryIds.every(storyId => seenStoryIds.has(storyId))
+      ? 'is-seen'
+      : 'is-unseen';
+
+  const openProfileStories = () => {
+    if (!profileStoryIds.length || isEditingProfile) return;
+    window.dispatchEvent(new CustomEvent('aani:open-profile-stories', {
+      detail: { ownerId: activeUserId },
+    }));
+  };
 
   useEffect(() => {
     setCoverPosition({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
@@ -2067,7 +2116,20 @@ export default function ProfilePage({
 
       <div className="relative z-20 flex items-end justify-between px-4 pb-2">
         <div className="relative flex items-end gap-3">
-          <div className="relative -mt-11 h-[82px] w-[82px] shrink-0">
+          <div
+            className={`relative -mt-11 h-[82px] w-[82px] shrink-0 profile-story-ring ${profileStoryState ?? ''}`}
+            role={profileStoryIds.length ? 'button' : undefined}
+            tabIndex={profileStoryIds.length ? 0 : undefined}
+            aria-label={profileStoryIds.length ? `عرض قصص ${displayName(person)}` : undefined}
+            onClick={openProfileStories}
+            onKeyDown={event => {
+              if (!profileStoryIds.length) return;
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openProfileStories();
+              }
+            }}
+          >
             <span className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full border-4 border-black">
               {avatarPreview ? (
                 <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />

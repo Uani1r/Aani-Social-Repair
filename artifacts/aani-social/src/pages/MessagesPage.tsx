@@ -15,11 +15,14 @@ import EmojiText from '@/components/TwemojiText';
 import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
+import { hasLegacyStoryReplyTag, isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
+import StoryReplyCard from '@/components/stories/StoryReplyCard';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
+import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -31,6 +34,12 @@ interface MessageRow {
   content: string;
   post_id: string | null;
   story_id: string | null;
+  /** حقول بطاقة رد الستوري المحفوظة مع الرسالة (تظل بعد انتهاء صلاحية الستوري). */
+  story_media_url?: string | null;
+  story_thumbnail_url?: string | null;
+  story_media_type?: string | null;
+  /** علامة صريحة: true = رد ستوري، وليس مشاركة ستوري داخل DM. */
+  story_reply?: boolean | null;
   created_at: string;
   delivered_at: string | null;
   read_at: string | null;
@@ -467,6 +476,10 @@ function normalizeMessageRows(value: unknown): MessageRow[] {
       content: typeof item.content === 'string' ? item.content : '',
       post_id: typeof item.post_id === 'string' ? item.post_id : null,
       story_id: typeof item.story_id === 'string' ? item.story_id : null,
+      story_media_url: typeof item.story_media_url === 'string' ? item.story_media_url : null,
+      story_thumbnail_url: typeof item.story_thumbnail_url === 'string' ? item.story_thumbnail_url : null,
+      story_media_type: typeof item.story_media_type === 'string' ? item.story_media_type : null,
+      story_reply: item.story_reply === true,
       created_at: typeof item.created_at === 'string' ? item.created_at : '',
       delivered_at: typeof item.delivered_at === 'string' ? item.delivered_at : null,
       read_at: typeof item.read_at === 'string' ? item.read_at : null,
@@ -579,9 +592,12 @@ async function queryMessageRows(
   let includeDeliveryColumns = true;
   let includeMessageMetadata = includeMetadata;
   let includeReplyMetadata = includeMetadata;
+  let includeStoryReplyFlag = includeMetadata;
+  let includeStoryReplyMedia = includeMetadata;
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
+  // الحد الأقصى للمحاولات يغطي إسقاط كل مجموعة أعمدة اختيارية بالتتابع.
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeStoryReplyFlag ? ', story_reply' : ''}${includeStoryReplyMedia ? ', story_media_url, story_thumbnail_url, story_media_type' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
     const result = await retrySupabaseQuery(async () => await supabase
       .from('messages')
       .select(fields)
@@ -592,6 +608,14 @@ async function queryMessageRows(
     const errorText = messageDeliveryErrorText(result.error);
     if (includeDeliveryColumns && /delivered_at|read_at/i.test(errorText)) {
       includeDeliveryColumns = false;
+      continue;
+    }
+    if (includeStoryReplyMedia && /story_media_url|story_thumbnail_url|story_media_type/i.test(errorText)) {
+      includeStoryReplyMedia = false;
+      continue;
+    }
+    if (includeStoryReplyFlag && /story_reply/i.test(errorText)) {
+      includeStoryReplyFlag = false;
       continue;
     }
     if (includeReplyMetadata && /reply_to_message_id/i.test(errorText)) {
@@ -629,6 +653,10 @@ function isEditableTextMessage(message: MessageRow): boolean {
   return Boolean(content)
     && !message.post_id
     && !message.story_id
+    && message.story_reply !== true
+    && !message.story_media_url
+    && !message.story_thumbnail_url
+    && !message.story_media_type
     && !parseVoiceMessage(content)
     && !parseChatMediaMessage(content)
     && !parseChatStickerMessage(content)
@@ -640,7 +668,7 @@ function isEditableTextMessage(message: MessageRow): boolean {
     && !content.startsWith(CHAT_LOCATION_MESSAGE_PREFIX)
     && !content.startsWith(CHAT_CALL_MESSAGE_PREFIX)
     && !content.startsWith('[story:')
-    && !content.startsWith('[story-reply]')
+    && !hasLegacyStoryReplyTag(content)
     && !content.startsWith('[post:');
 }
 
@@ -680,16 +708,6 @@ function readRequestTabReadAt(userId: string): string | null {
   }
 }
 
-function readSeenStoryIds(userId: string): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(`aani:seen-story-ids:${userId}`) || '[]');
-    return Array.isArray(stored) ? new Set(stored.filter((id): id is string => typeof id === 'string')) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
 function messagePreview(message: MessageRow | null, currentUserId: string): string {
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
@@ -714,7 +732,7 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
       ? (hasOpened ? 'صورة مؤقتة · تم الفتح' : 'صورة مؤقتة')
       : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
   } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
-  else if (content.startsWith('[story-reply]')) preview = 'رد على قصة';
+  else if (isStoryReplyMessage(message)) preview = storyReplyText(message) || 'رد على قصة';
   else if (content.startsWith('[story:')) preview = 'أرسل قصة';
   else if (!preview) preview = 'رسالة';
   return message.sender_id === currentUserId ? `أنت: ${preview}` : preview;
@@ -742,7 +760,7 @@ function replyMessagePreview(message: MessageRow): string {
       ? 'صورة مؤقتة'
       : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
   } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
-  else if (content.startsWith('[story-reply]')) preview = content.slice('[story-reply]'.length).trim() || 'رد على قصة';
+  else if (isStoryReplyMessage(message)) preview = storyReplyText(message) || 'رد على قصة';
   else if (content.startsWith('[story:')) preview = 'أرسل قصة';
   else if (!preview) preview = 'رسالة';
   return preview.length > 140 ? `${preview.slice(0, 140)}…` : preview;
@@ -870,6 +888,9 @@ export default function MessagesPage({
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
+  // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
+  // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
+  const storyIdsByContactRef = useRef<Record<string, string[]>>({});
   const requestTabReadAtRef = useRef(readRequestTabReadAt(currentUserId));
   const readAtByContactRef = useRef(readAtByContact);
   readAtByContactRef.current = readAtByContact;
@@ -1191,6 +1212,9 @@ export default function MessagesPage({
         userStories.push(story);
         storyRowsByUser.set(story.user_id, userStories);
       });
+      storyIdsByContactRef.current = Object.fromEntries(
+        [...storyRowsByUser.entries()].map(([ownerId, stories]) => [ownerId, stories.map(story => story.id)]),
+      );
       const seenStoryIds = readSeenStoryIds(currentUserId);
       const mutualIdSet = new Set(mutualIds);
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
@@ -1239,6 +1263,26 @@ export default function MessagesPage({
       setMutualFollowersLoading(false);
     }
   }, [currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
+
+  // حلقة القصص حول صور المحادثات: تنطفئ فور مشاهدة القصص في شريط القصص،
+  // دون إعادة تحميل قائمة المحادثات من الشبكة.
+  useEffect(() => {
+    const syncStoryRings = () => {
+      const seenStoryIds = readSeenStoryIds(currentUserId);
+      const idsByContact = storyIdsByContactRef.current;
+      setConversations(current => current.map(conversation => {
+        const storyIds = idsByContact[conversation.profile.id] || [];
+        if (!storyIds.length) return conversation;
+        const hasUnseenStory = storyIds.some(storyId => !seenStoryIds.has(storyId));
+        return conversation.hasUnseenStory === hasUnseenStory
+          ? conversation
+          : { ...conversation, hasUnseenStory };
+      }));
+    };
+
+    window.addEventListener(SEEN_STORY_IDS_CHANGED_EVENT, syncStoryRings);
+    return () => window.removeEventListener(SEEN_STORY_IDS_CHANGED_EVENT, syncStoryRings);
+  }, [currentUserId]);
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
@@ -2064,7 +2108,11 @@ export default function MessagesPage({
   const selectedPendingMediaMessage = pendingMediaMessage?.recipientId === selectedId ? pendingMediaMessage : null;
   const threadSearchMatches = useMemo(() => {
     const needle = threadSearch.trim().toLocaleLowerCase();
-    return needle ? thread.filter(message => message.content.toLocaleLowerCase().includes(needle)) : [];
+    return needle
+      ? thread.filter(message => (
+        isStoryReplyMessage(message) ? storyReplyText(message) : message.content
+      ).toLocaleLowerCase().includes(needle))
+      : [];
   }, [thread, threadSearch]);
   const sharedMessages = thread.filter(message => Boolean(message.post_id) || message.content.trim().startsWith('[post:'));
   const forwardableConversations = conversations.filter(conversation => conversation.profile.id !== selectedId);
@@ -2589,8 +2637,8 @@ export default function MessagesPage({
         ? `مستند: ${documentMessage.name}`
       : locationMessage
         ? `موقع: ${locationMessage.latitude}, ${locationMessage.longitude}${locationMessage.note ? ` · ${locationMessage.note}` : ''}`
-        : content.startsWith('[story-reply]')
-          ? content.slice('[story-reply]'.length).trim()
+        : isStoryReplyMessage(message)
+          ? storyReplyText(message)
           : message.post_id || content.startsWith('[post:')
             ? 'مشاركة منشور'
             : content.startsWith('[story:') ? 'أرسل قصة' : content;
@@ -3048,8 +3096,11 @@ export default function MessagesPage({
                   const storyFromColumn = message.story_id ? String(message.story_id) : null;
                   const storyFromContent = content.startsWith('[story:') ? content.slice(7).split(']')[0] : null;
                   const sharedStoryId = storyFromColumn || storyFromContent;
-                  const isStoryReply = Boolean(message.story_id) && content.startsWith('[story-reply]');
+                  const isStoryReply = isStoryReplyMessage(message);
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
+                  // صاحب الستوري: إن كنت أنا الرادّ فهو الطرف الآخر، وإن كان الرادّ
+                  // الطرف الآخر فأنا صاحب الستوري.
+                  const storyReplyOwnerId = isMine ? target?.id ?? null : currentUserId;
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
                   const voiceMessage = parseVoiceMessage(content);
@@ -3239,16 +3290,36 @@ export default function MessagesPage({
                                 {isMine && <MessageDeliveryStatus message={message} />}
                               </span>
                             </div>
+                          ) : isStoryReply ? (
+                            <StoryReplyCard
+                              storyId={message.story_id ?? null}
+                              mediaUrl={message.story_media_url ?? null}
+                              thumbnailUrl={message.story_thumbnail_url ?? null}
+                              mediaType={message.story_media_type ?? null}
+                              isMine={isMine}
+                              header={replyPreview}
+                              onOpen={message.story_id && storyReplyOwnerId
+                                ? () => {
+                                  onOpenStories(storyReplyOwnerId);
+                                  setLocation('/feed');
+                                }
+                                : undefined}
+                            >
+                              <div className={`messages-bubble messages-story-reply-text${isMine ? ' is-mine' : ' is-theirs'}`}>
+                                <span className="messages-bubble-content">
+                                  <EmojiText text={storyReplyText(message)} />
+                                </span>
+                                <span className="messages-bubble-footer">
+                                  <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                  {isMine && <MessageDeliveryStatus message={message} />}
+                                </span>
+                              </div>
+                            </StoryReplyCard>
                           ) : (
                             <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}
                               <span className="messages-bubble-content">
-                                {isStoryReply ? (
-                                  <>
-                                    <span className="messages-story-reply-label">رد على الستوري</span>
-                                    <EmojiText text={content.slice('[story-reply]'.length).trim()} />
-                                  </>
-                                ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
+                                {content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}
                               </span>
                               <span className="messages-bubble-footer">
                                 <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>

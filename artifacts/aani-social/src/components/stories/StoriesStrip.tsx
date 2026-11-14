@@ -34,8 +34,16 @@ export default function StoriesStrip({
   const myStories = groupedStories[userId] || [];
   const hasMyStory = myStories.length > 0;
   const myStoryHasCloseFriends = myStories.some(story => story.is_close_friends);
-  const hasSeenAllStories = (stories: StoryRow[]) =>
-    stories.length > 0 && stories.every(story => seenStoryIds.includes(story.id));
+  // الحلقة تتبع القصص النشطة فقط: القصة المنتهية لا تُبقي الحلقة ساطعة أبداً.
+  const isActiveStory = (story: StoryRow) => {
+    if (!story.expires_at) return true;
+    const expiresAt = Date.parse(story.expires_at);
+    return Number.isFinite(expiresAt) ? expiresAt > Date.now() : true;
+  };
+  const hasSeenAllStories = (stories: StoryRow[]) => {
+    const activeStories = stories.filter(isActiveStory);
+    return activeStories.length > 0 && activeStories.every(story => seenStoryIds.includes(story.id));
+  };
   const hasSeenAllMyStories = hasSeenAllStories(myStories);
 
   return (

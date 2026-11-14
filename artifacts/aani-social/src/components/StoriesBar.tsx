@@ -7,6 +7,7 @@ import { USE_SOUND_EVENT, type StorySound } from '@/lib/sounds';
 import { pauseInstant, playInstant, resumeInstant, stopInstant } from '@/lib/instantAudio';
 import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
+import { notifySeenStoryIdsChanged, readSeenStoryIds, writeSeenStoryIds } from '@/lib/seenStories';
 import {
   clampCanvas,
   drawStoryStroke,
@@ -88,32 +89,19 @@ export default function StoriesBar({
   const [profilePreviewStories, setProfilePreviewStories] = useState<StoryRow[]>([]);
 
   // تُحفظ معرّفات القصص التي شاهدها المستخدم، لا معرّفات أصحابها.
-  const seenStoryStorageKey = `aani:seen-story-ids:${userId}`;
-  const [seenStoryIds, setSeenStoryIds] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem(seenStoryStorageKey);
-      const parsed: unknown = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter(id => typeof id === 'string') as string[] : [];
-    } catch {
-      return [];
-    }
-  });
+  // الكتابة إلى localStorage داخل useEffect كي يبقى مُحدِّث الحالة نقياً،
+  // ويُطلَق حدث التغيير لتُحدِّث شاشة الرسائل حلقات قصص المحادثات فوراً.
+  const [seenStoryIds, setSeenStoryIds] = useState<string[]>(() => [...readSeenStoryIds(userId)]);
 
   const markStorySeen = useCallback((storyId: string) => {
     if (!storyId) return;
+    setSeenStoryIds(previous => (previous.includes(storyId) ? previous : [...previous, storyId]));
+  }, []);
 
-    setSeenStoryIds(previous => {
-      if (previous.includes(storyId)) return previous;
-
-      const next = [...previous, storyId];
-      try {
-        localStorage.setItem(seenStoryStorageKey, JSON.stringify(next));
-      } catch {
-        /* التخزين المحلي غير متاح */
-      }
-      return next;
-    });
-  }, [seenStoryStorageKey]);
+  useEffect(() => {
+    writeSeenStoryIds(userId, seenStoryIds);
+    notifySeenStoryIdsChanged();
+  }, [seenStoryIds, userId]);
 
   const [showUI, setShowUI] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
@@ -1534,10 +1522,14 @@ export default function StoriesBar({
     };
   }, [currentStory?.id, isStoryOwner, userId]);
 
+  // تُسجَّل المشاهدة محلياً عند فتح القصة — بما في ذلك قصص صاحب الحساب —
+  // كي تنطفئ حلقة «غير مشاهد» بعد العرض. أما story_views فلا يُكتب فيها
+  // مشاهدة صاحب القصة (الـRPC أدناه مشروط بـisStoryOwner)، ولا تُمسّ حلقة
+  // الأرشيف لأن الأرشيف خارج نطاق هذا التأثير.
   useEffect(() => {
-    if (!currentStory || isStoryOwner || archiveViewerOpen) return;
+    if (!currentStory || archiveViewerOpen) return;
     markStorySeen(String(currentStory.id));
-  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, markStorySeen]);
+  }, [archiveViewerOpen, currentStory?.id, markStorySeen]);
 
   useEffect(() => {
     if (!currentStory || isStoryOwner || !userId || !supabaseConfigured) return;
@@ -2172,6 +2164,8 @@ export default function StoriesBar({
           onReportStory={() => { void handleReportStory(); }}
           onDeleteStory={() => void handleDeleteStory()}
           onCloseViewer={() => {
+            // تسجيل الخروج من العارض أيضاً يثبّت المشاهدة (فتح → إغلاق/تمرير).
+            if (!archiveViewerOpen && currentStory?.id) markStorySeen(String(currentStory.id));
             setArchiveViewerOpen(false);
             setActiveUserGroup(null);
           }}

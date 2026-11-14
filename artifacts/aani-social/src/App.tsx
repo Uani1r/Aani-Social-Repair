@@ -70,6 +70,17 @@ function App() {
     setPendingProfileStoryOwnerId(ownerId);
   }, []);
 
+  // فتح قصص الملف الشخصي من حلقته داخل ProfilePage عبر نفس مسار pending
+  // الذي يستخدمه شريط القصص — لا حالة عارض مستقلة.
+  useEffect(() => {
+    const handleOpenProfileStories = (event: Event) => {
+      const ownerId = (event as CustomEvent<{ ownerId?: unknown }>).detail?.ownerId;
+      if (typeof ownerId === 'string' && ownerId) openProfileStories(ownerId);
+    };
+    window.addEventListener('aani:open-profile-stories', handleOpenProfileStories);
+    return () => window.removeEventListener('aani:open-profile-stories', handleOpenProfileStories);
+  }, [openProfileStories]);
+
   useEffect(() => {
     const preventNativeTextSelection = (event: Event) => {
       const target = event.target;

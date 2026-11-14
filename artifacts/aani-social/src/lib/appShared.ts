@@ -175,6 +175,8 @@ export type NotificationItem = {
   created_at: string;
   actor_id?: string | null;
   entity_id?: string | null;
+  content_kind?: string | null;
+  metadata?: Record<string, unknown> | null;
   actor?: Profile | null;
 };
 

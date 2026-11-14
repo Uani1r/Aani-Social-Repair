@@ -9,6 +9,7 @@ import { GridSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { sendStoryReplyMessage } from '@/lib/storyReplyMessages';
 import { uploadMedia } from '@/lib/storyUpload';
 
 type HighlightMediaType = 'image' | 'video' | 'text';
@@ -1449,25 +1450,27 @@ export function ProfileHighlightViewer({
     if (!story || !currentUserId || isStoryOwner || !text || isSendingReply) return;
     setIsSendingReply(true);
     try {
-      const { error } = await supabase.from('messages').insert({
-        sender_id: currentUserId,
-        recipient_id: activeCollection.user_id,
-        content: story.source_story_id ? `[story-reply]${text}` : `رد على أبرز القصص «${activeCollection.title}»: ${text}`,
-        ...(story.source_story_id ? { story_id: story.source_story_id } : {}),
+      // رد على أبرز القصص = رسالة خاصة فقط، بلا أي إشعار reply.
+      // story_id يُملأ عندما يكون عنصر الأبرز مرتبطاً بقصة أصلية (source_story_id)،
+      // وبيانات المعاينة تُحفظ مع الرسالة كي تظل البطاقة سليمة بعد انتهاء الصلاحية.
+      const sourceStoryId = story.source_story_id ?? null;
+      const ownerId = activeCollection.user_id;
+      const thumbnailUrl = story.media_type === 'image' ? story.media_url : null;
+      const { error } = await sendStoryReplyMessage({
+        senderId: currentUserId,
+        recipientId: ownerId,
+        text,
+        storyId: sourceStoryId,
+        storyMediaUrl: story.media_url,
+        storyThumbnailUrl: thumbnailUrl,
+        storyMediaType: story.media_type,
       });
       if (error) throw error;
-      const { error: notificationError } = await supabase.from('notifications').insert({
-        user_id: activeCollection.user_id,
-        actor_id: currentUserId,
-        type: 'reply',
-        content: `رد على أبرز قصصك: ${text}`,
-        reference_id: story.source_story_id || story.id,
-      });
-      if (notificationError) console.warn('[profile highlights] تعذر إرسال إشعار الرد:', notificationError);
+
       setReplyText('');
-      toast.success('تم إرسال الرد إلى صاحب أبرز القصص');
+      toast.success('تم إرسال الرد في الرسائل الخاصة');
     } catch (error) {
-      console.error('[profile highlights] تعذر إرسال الرد:', error);
+      console.error('[profile highlights] تعذر إرسال الرد في الرسائل الخاصة:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setIsSendingReply(false);

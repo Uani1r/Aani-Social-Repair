@@ -903,6 +903,30 @@
   transform: translate(-50%, -50%);
 }
 
+.profile-story-ring {
+  border-radius: 9999px;
+}
+
+/* حلقة قصص الملف الشخصي: نفس دلالة شريط القصص (ساطعة → باهتة)،
+   بظل خارجي فقط كي لا يتغيّر حجم الصورة أو موضعها. */
+.profile-story-ring.is-unseen {
+  box-shadow: 0 0 0 2px #fff;
+}
+
+.profile-story-ring.is-seen {
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45);
+}
+
+.profile-story-ring[role='button'] {
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.profile-story-ring[role='button']:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 3px;
+}
+
 .profile-edit-avatar {
   position: relative;
   z-index: 1;
