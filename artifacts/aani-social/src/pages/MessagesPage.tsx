@@ -3291,30 +3291,32 @@ export default function MessagesPage({
                               </span>
                             </div>
                           ) : isStoryReply ? (
-                            <StoryReplyCard
-                              storyId={message.story_id ?? null}
-                              mediaUrl={message.story_media_url ?? null}
-                              thumbnailUrl={message.story_thumbnail_url ?? null}
-                              mediaType={message.story_media_type ?? null}
-                              isMine={isMine}
-                              header={replyPreview}
-                              onOpen={message.story_id && storyReplyOwnerId
-                                ? () => {
-                                  onOpenStories(storyReplyOwnerId);
-                                  setLocation('/feed');
-                                }
-                                : undefined}
-                            >
-                              <div className={`messages-bubble messages-story-reply-text${isMine ? ' is-mine' : ' is-theirs'}`}>
-                                <span className="messages-bubble-content">
-                                  <EmojiText text={storyReplyText(message)} />
-                                </span>
-                                <span className="messages-bubble-footer">
-                                  <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
-                                  {isMine && <MessageDeliveryStatus message={message} />}
-                                </span>
-                              </div>
-                            </StoryReplyCard>
+                            <div className={`messages-story-reply-align${isMine ? ' is-mine' : ' is-theirs'}`}>
+                              <StoryReplyCard
+                                storyId={message.story_id ?? null}
+                                mediaUrl={message.story_media_url ?? null}
+                                thumbnailUrl={message.story_thumbnail_url ?? null}
+                                mediaType={message.story_media_type ?? null}
+                                isMine={isMine}
+                                header={replyPreview}
+                                onOpen={message.story_id && storyReplyOwnerId
+                                  ? () => {
+                                    onOpenStories(storyReplyOwnerId);
+                                    setLocation('/feed');
+                                  }
+                                  : undefined}
+                              >
+                                <div className={`messages-bubble messages-story-reply-text${isMine ? ' is-mine' : ' is-theirs'}`}>
+                                  <span className="messages-bubble-content">
+                                    <EmojiText text={storyReplyText(message)} />
+                                  </span>
+                                  <span className="messages-bubble-footer">
+                                    <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
+                                    {isMine && <MessageDeliveryStatus message={message} />}
+                                  </span>
+                                </div>
+                              </StoryReplyCard>
+                            </div>
                           ) : (
                             <div className={`messages-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}

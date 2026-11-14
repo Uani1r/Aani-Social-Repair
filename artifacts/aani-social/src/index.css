@@ -3354,6 +3354,30 @@ body.aani-immersive .unified-top-bar {
   direction: rtl;
 }
 
+/* حاوية تخطيط فيزيائية للبطاقة: LTR هنا فقط لضمان اليسار/اليمين الفعليين،
+   بينما تبقى نصوص البطاقة نفسها RTL ومحاذاتها إلى اليمين. */
+.messages-story-reply-align {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+  direction: ltr;
+}
+
+.messages-story-reply-align.is-mine {
+  justify-content: flex-end;
+}
+
+.messages-story-reply-align.is-theirs {
+  justify-content: flex-start;
+}
+
+/* صفوف التفاعلات تتحول إلى flex body؛ نُبقي البطاقة ضمن عرضها الطبيعي. */
+.messages-message-row.has-reactions .messages-story-reply-align {
+  width: auto;
+  flex: 0 0 auto;
+}
+
 .messages-story-reply-label {
   display: block;
   padding-inline: 2px;

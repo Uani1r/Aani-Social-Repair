@@ -4,7 +4,7 @@ import { Star, Trash2, X } from 'lucide-react';
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
 import Avatar from '@/components/Avatar';
 import { StoryDrawingOverlay, StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
-import StoryCropOverlay from '@/components/StoryCropOverlay';
+import StoryCropOverlay, { type StoryCropApplyResult } from '@/components/StoryCropOverlay';
 import type { StoryDrawTool } from '@/lib/appShared';
 import StoryImageSticker from '@/components/StoryImageSticker';
 import StoryAlignmentGuides from '@/components/StoryAlignmentGuides';
@@ -123,7 +123,7 @@ type StoryCreationEditorProps = {
   onUndoDrawing: () => void;
   onCloseDrawing: () => void;
   onCloseCrop: () => void;
-  onApplyCrop: (transform: { zoom: number; offset: Point }) => void;
+  onApplyCrop: (result: StoryCropApplyResult) => void;
   onQuickPublish: (closeFriends: boolean) => void;
 };
 

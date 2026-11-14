@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { Check, X } from 'lucide-react';
+import { Check, Loader2, X } from 'lucide-react';
 
 type Point = { x: number; y: number };
 type CropFrame = { x: number; y: number; width: number; height: number };
@@ -14,6 +14,10 @@ type CropGesture = {
 };
 type CropTransform = { zoom: number; offset: Point };
 
+export type StoryCropApplyResult =
+  | { kind: 'file'; file: File; width: number; height: number }
+  | { kind: 'transform'; transform: CropTransform };
+
 type StoryCropOverlayProps = {
   mediaUrl: string;
   isVideo: boolean;
@@ -21,11 +25,15 @@ type StoryCropOverlayProps = {
   initialOffset: Point;
   initialRotation: number;
   onCancel: () => void;
-  onApply: (transform: CropTransform) => void;
+  onApply: (result: StoryCropApplyResult) => void;
 };
 
 const CROP_INSET = 8;
 const MIN_FRAME_SIZE = 64;
+const OUTPUT_MAX_WIDTH = 1080;
+const OUTPUT_MAX_HEIGHT = 1920;
+const IMAGE_LOAD_TIMEOUT_MS = 20000;
+const TO_BLOB_TIMEOUT_MS = 20000;
 const RATIO_VALUES: Record<Exclude<CropRatioKey, 'original'>, number> = {
   '9:16': 9 / 16,
   '1:1': 1,
@@ -51,6 +59,78 @@ function makeFrame(width: number, height: number, aspect: number): CropFrame {
   };
 }
 
+/** أبعاد مخرج القص: 1080×1920 كحد أقصى مع الحفاظ على نسبة الإطار. */
+function computeOutputSize(aspect: number): { width: number; height: number } {
+  const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 9 / 16;
+  let width = OUTPUT_MAX_WIDTH;
+  let height = Math.round(width / safeAspect);
+  if (height > OUTPUT_MAX_HEIGHT) {
+    height = OUTPUT_MAX_HEIGHT;
+    width = Math.round(height * safeAspect);
+  }
+  return { width: Math.max(1, width), height: Math.max(1, height) };
+}
+
+function isRemoteUrl(url: string): boolean {
+  return /^https?:/i.test(url);
+}
+
+function loadImageForCrop(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    if (isRemoteUrl(url)) image.crossOrigin = 'anonymous';
+    image.decoding = 'async';
+
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(isRemoteUrl(url)
+        ? 'تعذر قراءة الصورة من المصدر الخارجي (CORS). لا يمكن قصّها بأمان.'
+        : 'انتهت مهلة فك ترميز الصورة.'));
+    }, IMAGE_LOAD_TIMEOUT_MS);
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      image.onload = null;
+      image.onerror = null;
+    };
+
+    image.onload = () => {
+      cleanup();
+      if (!image.naturalWidth || !image.naturalHeight) {
+        reject(new Error('تعذر تحديد أبعاد الصورة الأصلية.'));
+        return;
+      }
+      resolve(image);
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error(isRemoteUrl(url)
+        ? 'تعذر تحميل صورة الستوري من مصدرها الخارجي (CORS). أعد المحاولة أو استخدم صورة محلية.'
+        : 'تعذر فك ترميز الصورة لقصّها.'));
+    };
+    image.src = url;
+  });
+}
+
+function canvasToBlobWithTimeout(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      reject(new Error('انتهت مهلة إنتاج الصورة المقصوصة.'));
+    }, TO_BLOB_TIMEOUT_MS);
+
+    try {
+      canvas.toBlob(blob => {
+        window.clearTimeout(timeout);
+        if (blob) resolve(blob);
+        else reject(new Error('تعذر إنتاج ملف الصورة المقصوصة.'));
+      }, type, quality);
+    } catch (error) {
+      window.clearTimeout(timeout);
+      reject(error instanceof Error ? error : new Error('تعذر إنتاج ملف الصورة المقصوصة.'));
+    }
+  });
+}
+
 export default function StoryCropOverlay({
   mediaUrl,
   isVideo,
@@ -65,6 +145,8 @@ export default function StoryCropOverlay({
   const [ratioKey, setRatioKey] = useState<CropRatioKey>('9:16');
   const [originalAspect, setOriginalAspect] = useState(9 / 16);
   const [frame, setFrame] = useState(() => makeFrame(window.innerWidth, window.innerHeight, RATIO_VALUES['9:16']));
+  const [cropping, setCropping] = useState(false);
+  const [cropError, setCropError] = useState<string | null>(null);
   const gestureRef = useRef<CropGesture | null>(null);
   const aspect = ratioKey === 'original' ? originalAspect : RATIO_VALUES[ratioKey];
 
@@ -102,6 +184,7 @@ export default function StoryCropOverlay({
   };
 
   const beginPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (cropping) return;
     const target = event.target as HTMLElement;
     const handle = target.closest('[data-crop-handle]')?.getAttribute('data-crop-handle') || undefined;
     const frameElement = target.closest('[data-crop-frame-edge]');
@@ -174,7 +257,7 @@ export default function StoryCropOverlay({
     }
   };
 
-  const applyCrop = () => {
+  const applyTransformOnly = () => {
     const fillScale = Math.max(viewport.width / frame.width, viewport.height / frame.height);
     const centerX = frame.x + frame.width / 2;
     const centerY = frame.y + frame.height / 2;
@@ -182,12 +265,98 @@ export default function StoryCropOverlay({
     const scaleFactor = zoom / Math.max(initialZoom, 0.001);
 
     onApply({
-      zoom,
-      offset: {
-        x: clamp(scaleFactor * (viewport.width / 2 + initialOffset.x - centerX), -viewport.width, viewport.width),
-        y: clamp(scaleFactor * (viewport.height / 2 + initialOffset.y - centerY), -viewport.height, viewport.height),
+      kind: 'transform',
+      transform: {
+        zoom,
+        offset: {
+          x: clamp(scaleFactor * (viewport.width / 2 + initialOffset.x - centerX), -viewport.width, viewport.width),
+          y: clamp(scaleFactor * (viewport.height / 2 + initialOffset.y - centerY), -viewport.height, viewport.height),
+        },
       },
     });
+  };
+
+  /**
+   * قص حقيقي: يرسم داخل إطار القص فقط إلى ملف جديد.
+   * التحويل هنا مطابق تماماً لتحويل CSS المستخدم في المعاينة:
+   *   left/top 50% + translate(-50%,-50%) + translate(offset) + scale(zoom) + rotate(deg)
+   * ثم يُقاس الفرق بين إحداثيات الشاشة وإحداثيات الصورة الأصلية عبر مصفوفة عكسية
+   * مكافئة، مع أخذ mediaCoverScale في الحسبان.
+   */
+  const buildCroppedFile = async (): Promise<{ file: File; width: number; height: number }> => {
+    if (!mediaSize.width || !mediaSize.height) {
+      throw new Error('انتظر اكتمال تحميل الصورة قبل القص.');
+    }
+
+    const image = await loadImageForCrop(mediaUrl);
+    const imageWidth = image.naturalWidth || image.width;
+    const imageHeight = image.naturalHeight || image.height;
+    if (!imageWidth || !imageHeight) throw new Error('تعذر تحديد أبعاد الصورة الأصلية.');
+
+    const quarterTurn = Math.abs(Math.round(initialRotation / 90)) % 2 === 1;
+    const cover = Math.max(
+      viewport.width / (quarterTurn ? imageHeight : imageWidth),
+      viewport.height / (quarterTurn ? imageWidth : imageHeight),
+    );
+    const drawnWidth = imageWidth * cover;
+    const drawnHeight = imageHeight * cover;
+
+    const { width: outputWidth, height: outputHeight } = computeOutputSize(frame.width / frame.height);
+    const scaleX = outputWidth / Math.max(1, frame.width);
+    const scaleY = outputHeight / Math.max(1, frame.height);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('تعذر تجهيز لوحة القص.');
+
+    context.save();
+    // screen space → output space (frame only)
+    context.setTransform(scaleX, 0, 0, scaleY, -frame.x * scaleX, -frame.y * scaleY);
+    // the same screen-space transform used by the preview <img>
+    context.translate(viewport.width / 2 + initialOffset.x, viewport.height / 2 + initialOffset.y);
+    context.rotate((initialRotation * Math.PI) / 180);
+    context.scale(initialZoom, initialZoom);
+    context.drawImage(image, -drawnWidth / 2, -drawnHeight / 2, drawnWidth, drawnHeight);
+    context.restore();
+
+    const blob = await canvasToBlobWithTimeout(canvas, 'image/jpeg', 0.92);
+    if (!blob || blob.size <= 0 || !blob.type.startsWith('image/')) {
+      throw new Error('الملف المقصوص غير صالح (فارغ أو بنوع غير مدعوم).');
+    }
+
+    const file = new File([blob], `story-crop-${Date.now()}.jpg`, {
+      type: blob.type,
+      lastModified: Date.now(),
+    });
+    if (file.size !== blob.size) throw new Error('تعذر إنشاء ملف الصورة المقصوصة.');
+
+    return { file, width: outputWidth, height: outputHeight };
+  };
+
+  const applyCrop = async () => {
+    if (cropping) return;
+    setCropError(null);
+
+    if (isVideo) {
+      // الفيديو لا يُحوّل إلى صورة: يبقى مسار emulated transform كما هو.
+      applyTransformOnly();
+      return;
+    }
+
+    setCropping(true);
+    try {
+      const cropped = await buildCroppedFile();
+      onApply({ kind: 'file', file: cropped.file, width: cropped.width, height: cropped.height });
+    } catch (error) {
+      console.warn('[story crop] stage=crop failed', {
+        code: error instanceof DOMException ? error.name : 'crop-error',
+      });
+      setCropError(error instanceof Error ? error.message : 'تعذر قص الصورة. حاول مرة أخرى.');
+    } finally {
+      setCropping(false);
+    }
   };
 
   const resizeHandles = [
@@ -257,25 +426,35 @@ export default function StoryCropOverlay({
         ))}
       </div>
 
+      {cropError && (
+        <div className="pointer-events-none fixed inset-x-4 top-1/2 z-30 -translate-y-1/2 rounded-2xl border border-red-300/40 bg-red-950/90 p-3 text-center text-xs leading-5 text-red-100 backdrop-blur-md" role="alert">
+          {cropError}
+        </div>
+      )}
+
       <div className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-center justify-between px-4 py-3" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
         <button
           type="button"
           data-crop-control="true"
           onClick={onCancel}
-          className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-md"
+          disabled={cropping}
+          className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur-md disabled:opacity-50"
           aria-label="إلغاء القص"
         >
           <X size={21} />
         </button>
-        <span className="rounded-full bg-black/45 px-3 py-1.5 text-xs font-semibold backdrop-blur-md">قص الوسيط</span>
+        <span className="rounded-full bg-black/45 px-3 py-1.5 text-xs font-semibold backdrop-blur-md">
+          {isVideo ? 'قص الوسيط' : 'قص الصورة'}
+        </span>
         <button
           type="button"
           data-crop-control="true"
-          onClick={applyCrop}
-          className="pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-white px-4 text-xs font-bold text-black"
+          onClick={() => void applyCrop()}
+          disabled={cropping}
+          className="pointer-events-auto flex h-10 items-center gap-1.5 rounded-full bg-white px-4 text-xs font-bold text-black disabled:opacity-60"
         >
-          <Check size={16} />
-          تطبيق القص
+          {cropping ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+          {cropping ? 'جارٍ القص...' : 'تطبيق القص'}
         </button>
       </div>
 
@@ -286,9 +465,10 @@ export default function StoryCropOverlay({
             <button
               key={option}
               type="button"
+              disabled={cropping}
               onClick={() => setRatioKey(option)}
               aria-pressed={ratioKey === option}
-              className={`shrink-0 rounded-full px-3 py-2 text-[11px] font-semibold transition ${ratioKey === option ? 'bg-white text-black' : 'text-white/75 hover:bg-white/10'}`}
+              className={`shrink-0 rounded-full px-3 py-2 text-[11px] font-semibold transition disabled:opacity-50 ${ratioKey === option ? 'bg-white text-black' : 'text-white/75 hover:bg-white/10'}`}
             >
               {option === 'original' ? 'الأصلية' : option}
             </button>
