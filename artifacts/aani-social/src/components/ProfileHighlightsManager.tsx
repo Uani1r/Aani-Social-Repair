@@ -1456,7 +1456,7 @@ export function ProfileHighlightViewer({
       const sourceStoryId = story.source_story_id ?? null;
       const ownerId = activeCollection.user_id;
       const thumbnailUrl = isImageStoryMediaType(story.media_type) ? story.media_url : null;
-      const { error, warning } = await sendStoryReplyMessage({
+      const result = await sendStoryReplyMessage({
         senderId: currentUserId,
         recipientId: ownerId,
         text,
@@ -1465,10 +1465,15 @@ export function ProfileHighlightViewer({
         storyThumbnailUrl: thumbnailUrl,
         storyMediaType: story.media_type,
       });
-      if (error) throw error;
+      if (result.uncertain) {
+        console.warn('[profile highlights] stage=send uncertain');
+        toast.warning('لم نتأكد من إرسال الرد. تحقق من المحادثة قبل إعادة المحاولة.', { duration: 8000 });
+        return;
+      }
+      if (result.error) throw result.error;
 
       setReplyText('');
-      if (warning === 'preview-not-saved') {
+      if (result.warning === 'preview-not-saved') {
         toast.warning('تم إرسال الرد، لكن تعذر حفظ معاينة الستوري معه.');
       } else {
         toast.success('تم إرسال الرد في الرسائل الخاصة');

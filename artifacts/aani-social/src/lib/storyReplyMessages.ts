@@ -27,6 +27,7 @@ export interface StoryReplyInsertInput {
 export interface StoryReplyInsertError {
   message?: string;
   code?: string;
+  name?: string;
   details?: string;
   hint?: string;
 }
@@ -35,6 +36,8 @@ export interface StoryReplyInsertResult {
   error: StoryReplyInsertError | null;
   /** أُرسلت الرسالة لكن تعذّر تثبيت حقول معاينة الستوري عليها. */
   warning?: 'preview-not-saved';
+  /** لم يتأكد إدراج الرسالة ولم يُنفَ (انقطاع اتصال/إلغاء)؛ تحقق من المحادثة. */
+  uncertain?: true;
 }
 
 export interface StoryReplyMessageLike {
@@ -55,6 +58,7 @@ function toStoryReplyInsertError(error: unknown): StoryReplyInsertError {
     return {
       message: typeof record.message === 'string' ? record.message : undefined,
       code: typeof record.code === 'string' ? record.code : undefined,
+      name: typeof record.name === 'string' ? record.name : undefined,
       details: typeof record.details === 'string' ? record.details : undefined,
       hint: typeof record.hint === 'string' ? record.hint : undefined,
     };
@@ -77,6 +81,36 @@ function classifyInsertFailure(error: StoryReplyInsertError): InsertFailureCateg
   if (code === '23505' || code === '23503' || code === '23502' || code === '23514') return 'constraint';
   if (code === 'PGRST301' || code === '401' || code === '403') return 'auth';
   return 'unknown';
+}
+
+/**
+ * أخطاء النقل/الشبكة قد تصل داخل { error } دون استثناء (fetch reject في
+ * مكتبة Supabase). هذه النتيجة غير محسومة، بخلاف أخطاء PostgreSQL الصريحة
+ * (RLS/قيود/مخطط) التي تحمل SQLSTATE أو رمز PGRST.
+ */
+function isTransportLikeInsertError(error: StoryReplyInsertError): boolean {
+  const code = (error.code ?? '').toUpperCase();
+  if (/^[0-9A-Z]{5}$/.test(code) || code.startsWith('PGRST')) return false;
+
+  const name = (error.name ?? '').toLowerCase();
+  if (name === 'aborterror' || name === 'networkerror') return true;
+
+  const text = [error.message, error.details, error.hint]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (!text) return false;
+
+  return text.includes('failed to fetch')
+    || text.includes('fetch failed')
+    || text.includes('networkerror')
+    || text.includes('network error')
+    || text.includes('network request failed')
+    || text.includes('load failed')
+    || text.includes('network connection was lost')
+    || text.includes('internet connection appears to be offline')
+    || text.includes('timed out')
+    || text.includes('timeout');
 }
 
 /**
@@ -161,9 +195,113 @@ export function toAbsoluteMediaUrl(value: string | null | undefined): string | n
   }
 }
 
+type MessageExistence = 'found' | 'not-found' | 'unknown';
+
+// قد يصل طلب الإدراج إلى الخادم ويُحفظ بعد انقطاع التأكيد؛ لذلك لا نعتبر
+// «عدم العثور» نهائياً إلا بعد محاولات متعددة بفواصل قصيرة متدرجة.
+const VERIFY_DELAYS_MS = [0, 250, 700, 1300, 2200] as const;
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+/** محاولة تحقق واحدة بالمعرّف الذي أُنشئ قبل الإدراج + المرسل + المستلم. */
+async function findStoryReplyMessageOnce(
+  messageId: string,
+  senderId: string,
+  recipientId: string,
+): Promise<MessageExistence> {
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('id', messageId)
+      .eq('sender_id', senderId)
+      .eq('recipient_id', recipientId)
+      .maybeSingle();
+    if (error) {
+      // فشل قراءة/اتصال: النتيجة غير محسومة، وليست دليل عدم وجود.
+      console.warn('[story reply] stage=insert-verify unreadable', { code: error.code ?? 'unknown' });
+      return 'unknown';
+    }
+    return data ? 'found' : 'not-found';
+  } catch (error) {
+    const name = error && typeof error === 'object' && 'name' in error
+      ? String((error as { name?: unknown }).name ?? 'unknown')
+      : 'unknown';
+    console.warn('[story reply] stage=insert-verify threw', { name });
+    return 'unknown';
+  }
+}
+
+/**
+ * تحقق متكرر بعد استثناء الإدراج. تعود 'found' عند أول ظهور، و'unknown'
+ * فور أي فشل قراءة/إلغاء، و'not-found' فقط بعد نجاح كل المحاولات بلا صف.
+ * لا تُعيد الإدراج ولا تُنشئ معرّفاً جديداً.
+ */
+async function waitForStoryReplyMessage(
+  messageId: string,
+  senderId: string,
+  recipientId: string,
+): Promise<MessageExistence> {
+  for (let attempt = 0; attempt < VERIFY_DELAYS_MS.length; attempt += 1) {
+    const delay = VERIFY_DELAYS_MS[attempt];
+    if (delay > 0) await wait(delay);
+
+    const existence = await findStoryReplyMessageOnce(messageId, senderId, recipientId);
+    if (existence !== 'not-found') {
+      if (existence === 'found' && attempt > 0) {
+        console.info('[story reply] stage=insert-verify found on retry', { attempt: attempt + 1 });
+      }
+      return existence;
+    }
+  }
+
+  console.warn('[story reply] stage=insert-verify not found after retries', {
+    attempts: VERIFY_DELAYS_MS.length,
+  });
+  return 'not-found';
+}
+
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {
-  const { error } = await supabase.from('messages').insert(payload);
-  return { error: toStoryReplyInsertError(error) };
+  try {
+    const { error } = await supabase.from('messages').insert(payload);
+    const insertError = toStoryReplyInsertError(error);
+    if (insertError && isTransportLikeInsertError(insertError)) {
+      // خطأ نقل وصل داخل { error } وليس استثناءً: النتيجة غير محسومة.
+      return { error: insertError, uncertain: true };
+    }
+    return { error: insertError };
+  } catch (error) {
+    // استثناء في طلب الإدراج: النتيجة غير محسومة، وتُحسم عبر التحقق بالمعرّف.
+    return { error: toStoryReplyInsertError(error), uncertain: true };
+  }
+}
+
+/** إدراج ناجح مؤكد: تحقق المعاينة غير حاجز ولا يغيّر نتيجة الإرسال. */
+async function finishSuccessfulInsert(
+  messageId: string,
+  input: StoryReplyInsertInput,
+  payload: MessageInsertPayload,
+): Promise<StoryReplyInsertResult> {
+  try {
+    const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
+    return { error: null, ...verification };
+  } catch (verificationError) {
+    const name = verificationError && typeof verificationError === 'object' && 'name' in verificationError
+      ? String((verificationError as { name?: unknown }).name ?? 'unknown')
+      : 'unknown';
+    const code = verificationError && typeof verificationError === 'object' && 'code' in verificationError
+      ? String((verificationError as { code?: unknown }).code ?? '')
+      : '';
+    console.warn('[story reply] stage=verify post-insert failed', {
+      name,
+      code: code || 'unknown',
+    });
+    return { error: null, warning: 'preview-not-saved' };
+  }
 }
 
 function createReplyMessageId(): string {
@@ -359,24 +497,34 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
           columnsInPayload: Object.keys(payload).length,
         });
       }
-      // الإدراج نجح: الإرسال ناجح نهائياً. التحقق من حقول المعاينة مرحلة
-      // لاحقة غير حاجزة؛ أي رفض/شبكة/إلغاء فيها لا يغيّر نتيجة الإرسال.
-      try {
-        const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
-        return { error: null, ...verification };
-      } catch (verificationError) {
-        const name = verificationError && typeof verificationError === 'object' && 'name' in verificationError
-          ? String((verificationError as { name?: unknown }).name ?? 'unknown')
-          : 'unknown';
-        const code = verificationError && typeof verificationError === 'object' && 'code' in verificationError
-          ? String((verificationError as { code?: unknown }).code ?? '')
-          : '';
-        console.warn('[story reply] stage=verify post-insert failed', {
-          name,
-          code: code || 'unknown',
-        });
-        return { error: null, warning: 'preview-not-saved' };
+      return finishSuccessfulInsert(messageId, input, payload);
+    }
+
+    // استثناء/انقطاع أثناء طلب الإدراج: النتيجة غير محسومة. نتحقق بالمعرّف
+    // الذي أُنشئ قبل الإدراج، ولا نُعيد الإدراج بمعرّف آخر إطلاقاً.
+    if (lastResult.uncertain) {
+      const existence = await waitForStoryReplyMessage(messageId, input.senderId, input.recipientId);
+      if (existence === 'found') {
+        console.info('[story reply] stage=insert-verify found after transport error');
+        return finishSuccessfulInsert(messageId, input, payload);
       }
+      if (existence === 'unknown') {
+        console.warn('[story reply] stage=insert-verify unknown', {
+          name: lastResult.error?.name ?? 'unknown',
+          code: lastResult.error?.code ?? 'unknown',
+        });
+        // لا نُعلن فشلاً مؤكداً ولا نجاحاً: الواجهة تعرض حالة غير مؤكدة.
+        return { error: null, uncertain: true };
+      }
+      // لم يظهر الصف بعد كل المحاولات، لكن هذا لا يثبت أن الإدراج لم يُحفظ؛
+      // فقد يكتمل الطلب بعد انتهاء التحقق. نُبقي النتيجة غير مؤكدة، ونحفظ
+      // الخطأ الأصلي في السجل التقني فقط (كود/اسم) دون أي تنبيه فشل مؤكد.
+      console.warn('[story reply] stage=insert-verify not found after retries; keeping uncertain', {
+        name: lastResult.error?.name ?? 'unknown',
+        code: lastResult.error?.code ?? 'unknown',
+        category: lastResult.error ? classifyInsertFailure(lastResult.error) : 'unknown',
+      });
+      return { error: null, uncertain: true };
     }
 
     if (!firstFailureLogged) {
