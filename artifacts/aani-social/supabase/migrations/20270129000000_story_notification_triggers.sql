@@ -1,34 +1,36 @@
 -- إشعارات الستوري من جهة قاعدة البيانات + إصلاح المخطط messages.story_id
 --
--- سبب الحاجة إلى هذا التصحيح (من قراءة تعريفات الترحيلات نفسها لا التعليقات):
---   * العمود public.messages.story_id يُضاف في ملفين فقط:
---       20261107000000_story_mentions.sql                        (سطر 53-54)
---       20261108000000_story_followers_reshare_security.sql       (سطر 15-16)
---     وملفا الأساس (schema.sql سطر 276 / fresh_schema_cloudflare_r2.sql سطر 279)
---     ينشئان public.messages بدون story_id أصلاً. والدليل على أن ملفي الإضافة
---     لم يُطبَّقا: 20261109000000_story_views.sql سطر 16-18 ينشئ فهرساً فريداً
---     على (recipient_id, story_id) وهو مستحيل بلا العمود.
---   * المشغّل aani_message_notification_after_insert أعاد ترحيل 20270129
---     السابق إنشاءه خطأً، وهو محذوف عمداً في 20261228000000 (سطر 8-9) و
---     20261229000000 (سطر 9-10) لأن إشعارات الرسائل تُرسل عبر FCM Webhook
---     وليست سجلات في public.notifications. وكان يقرأ NEW.story_id فيُفشل كل
---     إدراج رسالة بخطأ 42703 على مخطط بلا العمود.
+-- حالة قاعدة الإنتاج التي بُني عليها هذا التصحيح (فحص مباشر أجراه المالك):
+--   * public.messages.story_id غير موجود.
+--   * المشغّلان aani_message_notification_after_insert وaani_notify_story_reply_trg
+--     موجودان، ودالتاهما تقرآن NEW.story_id مباشرة ⇒ كل إدراج رسالة معرّض
+--     لخطأ 42703 "record new has no field story_id".
+--   * aani_block_message_call_notifications() غير موجودة ⇒ القاعدة على تصميم
+--     20261226000000 (إشعار عام لكل رسالة)، وليس تصميم 20261228/20261229.
+--   * aani_is_user_blocked(uuid,uuid) موجودة، والجداول والأعمدة الأساسية موجودة.
 --
--- ما يفعله هذا الملف (معاملة واحدة، وقابل لإعادة التشغيل):
---   0) يتحقق من الشروط المسبقة (جداول + دالة الحظر بتوقيعها ونوع إرجاعها)
---      ويُفشل الترحيل فوراً إن غاب شيء بدل المتابعة على أساس خاطئ.
---   1) يضيف messages.story_id (nullable) + يرفض المتابعة إن وُجدت قيم يتيمة،
---      ثم ينشئ المفتاح الأجنبي إلى public.stories(id) ON DELETE SET NULL.
---      أي فشل في إنشاء القيد يُفشل الترحيل بالكامل (لا WHEN OTHERS هنا).
---   2) يعيد تعريف دالة إشعار الرسالة العام بجسم آمن يتخطى ردود الستوري.
---   3) يزيل مشغّل/دالة إشعار الرسالة العام إذا كانت القاعدة تتبع تصميم
---      20261228/20261229 (يُكشف ذلك من وجود aani_block_message_call_notifications
---      أو مشغّله) لأن الترحيل السابق أعاد إنشاءهما خطأً.
---   4) إشعار إعجاب الستوري وإشعار رد الستوري (content_kind = 'story').
---   5) يمنع metadata trigger من تحويل مرجع الستوري إلى منشور.
+-- سبب غياب العمود: يُضاف في 20261107000000_story_mentions.sql (سطر 53-54) و
+-- 20261108000000_story_followers_reshare_security.sql (سطر 15-16) فقط، وملفا
+-- الأساس (schema.sql سطر 276 / fresh_schema_cloudflare_r2.sql سطر 279) ينشئان
+-- public.messages بدونه. والدليل على أن ملفي الإضافة لم يُطبَّقا: 20261109000000
+-- (سطر 16-18) ينشئ فهرساً فريداً على (recipient_id, story_id) وهو مستحيل بلا العمود.
 --
--- يعتمد على (موجودة فعلياً في السلسلة):
---   public.stories(id,user_id) ، public.story_likes(story_id,user_id)
+-- ما يفعله هذا الملف (معاملة واحدة، قابل لإعادة التشغيل):
+--   0) شروط مسبقة صريحة تُفشل الترحيل إن غاب جدول أو دالة أو عمود.
+--   1) يضيف messages.story_id (nullable) + يرفض القيم اليتيمة + يتحقق من المفتاح
+--      الأجنبي بدقة (public.stories(id), عمود محلي واحد هو story_id,
+--      ON DELETE SET NULL). أي قيد مخالف يشمل story_id يوقف الترحيل برسالة
+--      واضحة بدل تجاوزه بصمت. ولا يوجد أي exception handler يخفي فشل القيد.
+--   2) مسار القاعدة القديمة محفوظ: ما دام aani_block_message_call_notifications()
+--      غائباً يبقى مشغّل الرسائل العام aani_message_notification_after_insert
+--      كما هو، لكن دالته تُعاد تعريفها بجسم آمن يقرأ story_id عبر to_jsonb(new)
+--      (لا NEW.story_id مباشرة) ولا يُنشئ إشعار message لردود الستوري.
+--      وإذا وُجد تصميم 20261228/20261229 في قاعدة أخرى (دالة الحجب أو مشغّلها)
+--      تُزال كل المشغّلات التي تستدعي تلك الدالة ثم الدالة نفسها.
+--   3) إشعار إعجاب الستوري وإشعار رد الستوري (content_kind = 'story').
+--   4) metadata trigger لا يحوّل مرجع الستوري إلى منشور.
+--
+-- يعتمد على: public.stories(id,user_id) ، public.story_likes(story_id,user_id)
 --   public.messages(id,sender_id,recipient_id,content,created_at)
 --   public.notifications(reference_id, entity_id, comment_id, content_kind)
 --   public.profiles.notification_settings jsonb
@@ -107,46 +109,115 @@ begin
   end if;
 end $$;
 
--- المفتاح الأجنبي: يُنشأ فقط إن لم يكن هناك قيد FK قائم يشمل story_id.
--- لا يوجد أي exception handler هنا: أي تعذّر يُفشل الترحيل ويعيد المعاملة كاملة.
+-- المفتاح الأجنبي: تحقق دقيق من التعريف المطلوب:
+--   عمود محلي واحد هو messages.story_id
+--   → public.stories(id)
+--   → ON DELETE SET NULL (confdeltype = 'n')
+-- أي قيد FK آخر يشمل story_id (عمود إضافي، جدول/عمود مرجعي مختلف، أو سلوك حذف
+-- مختلف) يوقف الترحيل. لا exception handler يخفي فشل الإنشاء.
 do $$
+declare
+  v_story_attnum smallint;
+  v_id_attnum smallint;
+  v_mismatched_name text;
+  v_mismatched_def text;
+  v_matching boolean;
 begin
-  if not exists (
+  select att.attnum into v_story_attnum
+  from pg_catalog.pg_attribute as att
+  where att.attrelid = 'public.messages'::regclass
+    and att.attname = 'story_id'
+    and not att.attisdropped;
+
+  select att.attnum into v_id_attnum
+  from pg_catalog.pg_attribute as att
+  where att.attrelid = 'public.stories'::regclass
+    and att.attname = 'id'
+    and not att.attisdropped;
+
+  if v_story_attnum is null or v_id_attnum is null then
+    raise exception 'aani: تعذّر تحديد العمودين public.messages.story_id و public.stories.id.'
+      using errcode = '42703';
+  end if;
+
+  -- 1) أي قيد FK يشمل story_id ولا يطابق التعريف المطلوب تماماً يوقف الترحيل.
+  select con.conname, pg_get_constraintdef(con.oid)
+  into v_mismatched_name, v_mismatched_def
+  from pg_catalog.pg_constraint as con
+  join pg_catalog.pg_class as tbl on tbl.oid = con.conrelid
+  join pg_catalog.pg_namespace as ns on ns.oid = tbl.relnamespace
+  where ns.nspname = 'public'
+    and tbl.relname = 'messages'
+    and con.contype = 'f'
+    and v_story_attnum = any (con.conkey)
+    and not (
+      con.confrelid = 'public.stories'::regclass
+      and con.conkey = array[v_story_attnum]::smallint[]
+      and con.confkey = array[v_id_attnum]::smallint[]
+      and con.confdeltype = 'n'
+    )
+  limit 1;
+
+  if v_mismatched_name is not null then
+    raise exception 'aani: يوجد قيد مفتاح أجنبي على messages.story_id لا يطابق المطلوب (public.stories(id) ON DELETE SET NULL): % — %. أوقف الترحيل ونظّف القيد يدوياً.',
+      v_mismatched_name, v_mismatched_def
+      using errcode = '42804';
+  end if;
+
+  -- 2) هل القيد المطابق موجود (بأي اسم)؟
+  select exists (
     select 1
     from pg_catalog.pg_constraint as con
     join pg_catalog.pg_class as tbl on tbl.oid = con.conrelid
     join pg_catalog.pg_namespace as ns on ns.oid = tbl.relnamespace
-    join pg_catalog.pg_attribute as att
-      on att.attrelid = tbl.oid
-     and att.attnum = any (con.conkey)
     where ns.nspname = 'public'
       and tbl.relname = 'messages'
       and con.contype = 'f'
-      and att.attname = 'story_id'
-  ) then
+      and con.confrelid = 'public.stories'::regclass
+      and con.conkey = array[v_story_attnum]::smallint[]
+      and con.confkey = array[v_id_attnum]::smallint[]
+      and con.confdeltype = 'n'
+  ) into v_matching;
+
+  if not v_matching then
     alter table public.messages
       add constraint aani_messages_story_id_fkey
       foreign key (story_id) references public.stories (id) on delete set null;
   end if;
 end $$;
 
--- شرط لاحق: لا ينجح الترحيل إلا إذا كان القيد موجوداً فعلاً بعد المحاولة.
+-- شرط لاحق: لا ينجح الترحيل إلا إذا كان التعريف المطلوب موجوداً فعلاً.
 do $$
+declare
+  v_story_attnum smallint;
+  v_id_attnum smallint;
 begin
+  select att.attnum into v_story_attnum
+  from pg_catalog.pg_attribute as att
+  where att.attrelid = 'public.messages'::regclass
+    and att.attname = 'story_id'
+    and not att.attisdropped;
+
+  select att.attnum into v_id_attnum
+  from pg_catalog.pg_attribute as att
+  where att.attrelid = 'public.stories'::regclass
+    and att.attname = 'id'
+    and not att.attisdropped;
+
   if not exists (
     select 1
     from pg_catalog.pg_constraint as con
     join pg_catalog.pg_class as tbl on tbl.oid = con.conrelid
     join pg_catalog.pg_namespace as ns on ns.oid = tbl.relnamespace
-    join pg_catalog.pg_attribute as att
-      on att.attrelid = tbl.oid
-     and att.attnum = any (con.conkey)
     where ns.nspname = 'public'
       and tbl.relname = 'messages'
       and con.contype = 'f'
-      and att.attname = 'story_id'
+      and con.confrelid = 'public.stories'::regclass
+      and con.conkey = array[v_story_attnum]::smallint[]
+      and con.confkey = array[v_id_attnum]::smallint[]
+      and con.confdeltype = 'n'
   ) then
-    raise exception 'aani: لم يُنشأ مفتاح أجنبي على public.messages.story_id؛ أوقف الترحيل.'
+    raise exception 'aani: لا يوجد بعد التنفيذ مفتاح أجنبي مطابق على messages.story_id → stories(id) ON DELETE SET NULL؛ أوقف الترحيل.'
       using errcode = '42804';
   end if;
 end $$;
@@ -156,12 +227,12 @@ create index if not exists aani_messages_story_idx
 
 -- ملاحظة (لا يُنشأ هنا): الفهرس الفريد aani_messages_story_unique من
 -- 20261109000000 سطر 16-18 غير مطلوب لإشعارات الستوري، وإنشاؤه على قاعدة
--- قائمة قد يفشل إن كانت فيها بطاقات ستوري مكررة. للتحقق قبل أي إنشاء يدوي:
+-- قائمة قد يفشل إن كانت فيها بطاقات ستوري مكررة. فحص التكرارات أولاً:
 --   select recipient_id, story_id, count(*)
 --     from public.messages
 --    where story_id is not null and content not like '[story-reply]%'
 --    group by recipient_id, story_id having count(*) > 1;
--- وإن كانت النتيجة فارغة يمكن إنشاؤه بأمان:
+-- وإن كانت النتيجة فارغة يمكن إنشاؤه يدوياً:
 --   create unique index if not exists aani_messages_story_unique
 --     on public.messages (recipient_id, story_id)
 --    where story_id is not null and content not like '[story-reply]%';
@@ -255,10 +326,14 @@ before insert on public.notifications
 for each row execute function public.aani_attach_notification_content_metadata();
 
 -- ---------------------------------------------------------------------------
--- 5) إشعار الرسالة العام: جسم آمن يتخطى ردود الستوري
---    story_id يُقرأ عبر to_jsonb(new) فلا يمكن أن يفشل إدراج رسالة حتى لو
---    كان العمود غائباً في نسخة أقدم. شروط إشعارات الرسائل العادية نفسها
---    تماماً (نفس السجل الواحد لكل رسالة حيث يكون ذلك التصميم مطبَّقاً).
+-- 5) إشعار الرسالة العام (مسار القاعدة القديمة — الإنتاج الحالي)
+--    المشغّل الحالي aani_message_notification_after_insert يبقى كما هو، لكن
+--    دالته تُعاد تعريفها هنا بحيث:
+--      * لا تقرأ NEW.story_id مباشرة إطلاقاً (تقرأ to_jsonb(new) فلا تفشل
+--        أبداً على مخطط بلا العمود).
+--      * تتخطى ردود الستوري عندما يكون مستقبلها صاحب الستوري، فلا إشعار
+--        message مكرر مع إشعار الرد.
+--      * تحافظ على شروط إشعارات الرسائل العادية كما هي في 20261226000000.
 -- ---------------------------------------------------------------------------
 create or replace function public.aani_notify_on_message_insert()
 returns trigger
@@ -309,15 +384,11 @@ end;
 $$;
 revoke all on function public.aani_notify_on_message_insert() from public, anon, authenticated;
 
--- استعادة تصميم 20261228000000 + 20261229000000.
--- الكشف لا يعتمد على اسم الترحيل بل على أثر فعلي في الكتالوج:
---   * وجود الدالة aani_block_message_call_notifications() (أنشأها 20261229)، أو
---   * وجود مشغّلها aani_block_message_call_notifications على public.notifications.
--- وجود أحدهما يعني أن القاعدة تعمل بتصميم «لا سجل إشعار لكل رسالة»، وهو ما
--- يمنع أيضاً أي إشعار message مكرر لردود الستوري. عندها نحذف المشغّل والدالة
--- اللذين أعاد ترحيل 20270129 السابق إنشاءهما خطأً.
--- غيابهما يعني قاعدة قديمة على تصميم 20261226000000: لا نحذف مشغّلها القائم،
--- لكن الدالة أعلاه صارت آمنة وتتخطى ردود الستوري، فلا فشل ولا تكرار.
+-- في قاعدة الإنتاج الحالية (لا aani_block_message_call_notifications) لا يدخل
+-- هذا الفرع إطلاقاً ⇒ المشغّل يبقى. أما قاعدة تتبع تصميم 20261228/20261229
+-- فتُزال منها كل المشغّلات على messages التي تستدعي الدالة أعلاه ثم الدالة.
+-- لا نُنشئ المشغّل إن كان غائباً: قاعدة طبّقت 20261228 عمداً بلا 20261229 لا
+-- يجوز أن نُعيد فيه إشعار الرسائل.
 do $$
 declare
   v_has_block_function boolean := to_regprocedure('public.aani_block_message_call_notifications()') is not null;
@@ -336,7 +407,6 @@ begin
   end if;
 
   if v_has_block_function or v_has_block_trigger then
-    -- نحذف كل مشغّل على messages يستدعي هذه الدالة تحديداً (لا غيرها)، ثم الدالة.
     for v_message_trigger in
       select trg.tgname
       from pg_catalog.pg_trigger as trg
@@ -358,13 +428,13 @@ end $$;
 
 -- ---------------------------------------------------------------------------
 -- 6) رد على ستوري
---    كل رسالة رد حدث مستقل ⇒ ردود متعددة على الستوري نفسها = إشعار لكل رد
---    (الفهرس الجزئي aani_messages_story_unique يستثني [story-reply] صراحةً).
---    فحص الحظر يستخدم aani_is_user_blocked(uuid,uuid) الذي يُعيد true فقط
---    عندما يكون auth.uid() أحد الطرفين — وهو الحال دائماً هنا لأن المشغّل
---    يعمل بإدراج من صاحب الرد نفسه. (الإدراج من service_role بلا JWT لا
---    يُخضِع الحظر؛ الحماية المكافئة موجودة في aani_blocked_messages_trg
---    التي ترفع 42501 عند الحظر قبل الإدراج.)
+--    المشغّل الحالي aani_notify_story_reply_trg يبقى، وتُعاد دالته بجسم آمن
+--    يقرأ story_id عبر to_jsonb(new) بدل NEW.story_id.
+--    كل رسالة رد حدث مستقل ⇒ ردود متعددة على الستوري نفسها = إشعار لكل رد.
+--    فحص الحظر يستخدم aani_is_user_blocked(uuid,uuid): يُعيد true فقط عندما
+--    يكون auth.uid() أحد الطرفين — وهو الحال دائماً لأن الإدراج من صاحب الرد.
+--    (إدراج من service_role بلا JWT لا يُخضع الحظر؛ الحماية المكافئة في
+--    aani_blocked_messages_trg التي ترفع 42501 قبل الإدراج.)
 -- ---------------------------------------------------------------------------
 create or replace function public.aani_notify_story_reply()
 returns trigger
@@ -456,14 +526,47 @@ for each row execute function public.aani_notify_story_like();
 
 commit;
 
--- تحقق بعد التطبيق (اختياري):
+-- ===========================================================================
+-- استعلامات تحقق بعد التنفيذ (قراءة فقط)
+-- ===========================================================================
+-- 1) العمود موجود وnullable:
 -- select column_name, is_nullable, data_type
 --   from information_schema.columns
 --  where table_schema = 'public' and table_name = 'messages' and column_name = 'story_id';
--- select conname, pg_get_constraintdef(oid)
---   from pg_constraint
---  where conrelid = 'public.messages'::regclass and contype = 'f';
--- select tgname from pg_trigger
+--
+-- 2) المفتاح الأجنبي المطابق (يجب أن يظهر عمود محلي واحد story_id،
+--    مرجع stories(id)، وON DELETE SET NULL):
+-- select con.conname, pg_get_constraintdef(con.oid) as definition
+--   from pg_catalog.pg_constraint as con
+--   join pg_catalog.pg_class as tbl on tbl.oid = con.conrelid
+--   join pg_catalog.pg_namespace as ns on ns.oid = tbl.relnamespace
+--  where ns.nspname = 'public' and tbl.relname = 'messages' and con.contype = 'f';
+--
+-- 3) المشغّلات على messages (المتوقع على الإنتاج: aani_message_notification_after_insert
+--    يبقى موجوداً، وaani_notify_story_reply_trg موجود):
+-- select tgname, pg_get_triggerdef(oid) as definition
+--   from pg_catalog.pg_trigger
 --  where tgrelid = 'public.messages'::regclass and not tgisinternal;
--- المتوقع على قاعدة طبّقت 20261229: لا aani_message_notification_after_insert،
--- ومعها aani_notify_story_reply_trg من إشعارات هذا الملف فقط.
+--
+-- 4) لا دالة إشعار على messages تقرأ new.story_id مباشرة (المتوقع: صفر صفوف):
+-- select p.proname
+--   from pg_catalog.pg_proc as p
+--  where p.pronamespace = 'public'::regnamespace
+--    and p.proname in ('aani_notify_on_message_insert', 'aani_notify_story_reply')
+--    and p.prosrc ~* 'new\s*\.\s*story_id';
+--
+-- 5) الدالتان تقرآن to_jsonb (المتوقع: صفّان):
+-- select p.proname
+--   from pg_catalog.pg_proc as p
+--  where p.pronamespace = 'public'::regnamespace
+--    and p.proname in ('aani_notify_on_message_insert', 'aani_notify_story_reply')
+--    and p.prosrc ~* 'to_jsonb';
+--
+-- 6) اختبار دخاني اختياري داخل معاملة تُلغى (لا يترك أثراً). يختار أول حسابين
+--    موجودين؛ إن رفضه مشغّل طلبات المراسلة فتلك حماية قائمة وليست خطأً:
+-- begin;
+-- insert into public.messages (sender_id, recipient_id, content)
+-- select first_profile.id, second_profile.id, 'aani-test normal message'
+--   from (select id from public.profiles order by created_at limit 1) as first_profile
+--   cross join (select id from public.profiles order by created_at offset 1 limit 1) as second_profile;
+-- rollback;
