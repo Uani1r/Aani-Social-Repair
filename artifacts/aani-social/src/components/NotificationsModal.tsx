@@ -33,7 +33,7 @@ type NotificationEntry = NotificationItem & {
   reference_id?: string | null;
   comment_id?: string | null;
   post_id?: string | null;
-  content_kind?: string | null;
+  metadata?: Record<string, unknown> | null;
 };
 
 type NotificationDisplayEntry = NotificationEntry & {
@@ -74,11 +74,24 @@ const FILTER_TABS: Array<{ id: NotificationFilter; label: string }> = [
   { id: 'follows', label: 'المتابعات' },
 ];
 
+const storyMetadata = (item: NotificationEntry): Record<string, unknown> | null => (
+  item.metadata && typeof item.metadata === 'object' ? item.metadata : null
+);
+
+const storyMetadataString = (item: NotificationEntry, key: string): string | null => {
+  const value = storyMetadata(item)?.[key];
+  return typeof value === 'string' && value ? value : null;
+};
+
 const isStoryNotification = (item: NotificationEntry) => {
-  // content_kind = 'story' هو المصدر الصحيح (يكتبه مشغّل قاعدة البيانات)،
-  // والمطابقة النصية تبقى احتياطاً للسجلات القديمة التي كُتبت يدوياً.
+  // المصدر الأول: بيانات منظمة (metadata/content_kind)، لأن content في ردود
+  // الستوري صار نص الرد نفسه ولم يعد يحتوي كلمة "ستوري" بالضرورة.
+  const kind = storyMetadataString(item, 'kind');
+  if (kind && kind.startsWith('story')) return true;
+  if (storyMetadataString(item, 'story_id')) return true;
   if (item.content_kind === 'story') return true;
   if (item.type === 'story' || item.type === 'story_like') return true;
+  // احتياط للسجلات القديمة التي كُتبت يدوياً قبل metadata.
   return ['like', 'reply', 'mention'].includes(item.type) && /ستوري|قصة|قصتك/i.test(item.content || '');
 };
 
@@ -94,6 +107,7 @@ const isSuppressedLegacyNotification = (item: NotificationEntry): boolean => {
 };
 
 const notificationAction = (item: NotificationEntry, aggregateCount = 1) => {
+  if (storyMetadataString(item, 'kind') === 'highlight_reply') return 'ردّ على أبرز قصصك';
   if (item.type === 'like' && aggregateCount > 1) {
     const target = isStoryNotification(item)
       ? 'قصتك'
@@ -164,9 +178,19 @@ const aggregateNotifications = (items: NotificationEntry[]): NotificationDisplay
 };
 
 const getNotificationTarget = (item: NotificationEntry, currentUserId: string): NotificationTarget | null => {
-  const referenceId = item.reference_id || item.entity_id;
+  // رد على عنصر Highlight بلا قصة أصلية: نفتح ملف صاحبه بدل تمرير معرّف
+  // Highlight إلى مسار منشور/ستوري غير مطابق.
+  if (storyMetadataString(item, 'kind') === 'highlight_reply') {
+    const ownerId = storyMetadataString(item, 'story_owner_id');
+    return ownerId ? { kind: 'profile', userId: ownerId } : null;
+  }
+  // ردود/إعجابات الستوري تحمل story_id في metadata؛ نُقدّمه على reference_id.
+  const referenceId = storyMetadataString(item, 'story_id')
+    || item.reference_id
+    || item.entity_id;
   if (isStoryNotification(item) && referenceId) {
-    const ownerId = item.type === 'mention' || item.type === 'story' ? item.actor_id : currentUserId;
+    const ownerId = storyMetadataString(item, 'story_owner_id')
+      || (item.type === 'mention' || item.type === 'story' ? item.actor_id : currentUserId);
     return ownerId ? { kind: 'story', storyId: referenceId, ownerId } : null;
   }
 
@@ -290,6 +314,23 @@ function NotificationAvatar({ item }: { item: NotificationEntry }) {
   );
 }
 
+function StoryNotificationThumbnail({ url }: { url: string | null }) {
+  const [failed, setFailed] = useState(false);
+  if (!url || failed) return null;
+  return (
+    <span className="h-14 w-10 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]">
+      <img
+        src={url}
+        alt=""
+        loading="lazy"
+        draggable={false}
+        className="h-full w-full object-cover"
+        onError={() => setFailed(true)}
+      />
+    </span>
+  );
+}
+
 export default function NotificationsModal({
   isOpen,
   onClose,
@@ -358,9 +399,12 @@ export default function NotificationsModal({
           .order('id', { ascending: false })
           .range(offset, offset + PAGE_SIZE - 1);
 
-        let { data, error: queryError } = await loadRows('id,content,type,is_read,created_at,content_kind');
-        // احتياط لقاعدة لم يُطبَّق عليها ترحيل content_kind بعد: القائمة تعمل
-        // كما كانت، ويبقى التعرّف على إشعارات الستوري عبر المطابقة النصية.
+        let { data, error: queryError } = await loadRows('id,content,type,is_read,created_at,content_kind,metadata');
+        // احتياط لقاعدة لم يُطبَّق عليها ترحيل metadata بعد.
+        if (queryError && /metadata/i.test(queryError.message || '')) {
+          ({ data, error: queryError } = await loadRows('id,content,type,is_read,created_at,content_kind'));
+        }
+        // احتياط لقاعدة لم يُطبَّق عليها ترحيل content_kind بعد.
         if (queryError && /content_kind/i.test(queryError.message || '')) {
           ({ data, error: queryError } = await loadRows('id,content,type,is_read,created_at'));
         }
@@ -681,6 +725,8 @@ export default function NotificationsModal({
     const actorName = displayName(item.actor);
     const action = notificationAction(item, item.aggregateCount);
     const profileHref = item.actor_id ? `/profile/${encodeURIComponent(item.actor_id)}` : null;
+    const replyText = storyMetadataString(item, 'story_reply_text');
+    const thumbnailUrl = storyMetadataString(item, 'story_thumbnail_url');
 
     return (
       <article
@@ -740,6 +786,11 @@ export default function NotificationsModal({
               <strong className="font-bold">{actorName}</strong>{' '}
               <span>{action}</span>
             </span>
+            {replyText && (
+              <span className="mt-0.5 block whitespace-pre-wrap break-words text-[13px] leading-5 text-[#e4e4e7] [display:-webkit-box] [-webkit-line-clamp:3] [-webkit-box-orient:vertical] overflow-hidden">
+                {replyText}
+              </span>
+            )}
             <span className="mt-1 flex items-center justify-between gap-2" style={{ fontFamily: "'Tajawal', sans-serif" }}>
               {item.aggregateCount > 1 ? (
                 <span aria-label={`إجمالي ${item.aggregateCount} تفاعلات`} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-[#aaa]">
@@ -750,6 +801,7 @@ export default function NotificationsModal({
             </span>
           </span>
         </button>
+        <StoryNotificationThumbnail url={thumbnailUrl} />
       </article>
     );
   };

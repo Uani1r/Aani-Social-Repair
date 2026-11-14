@@ -6,6 +6,7 @@ import type { StoryCanvasStyle, StoryMediaTransformOverlay, StoryTextOverlay, St
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { stopInstant } from '@/lib/instantAudio';
 import { uploadStoryMedia } from '@/lib/storyUpload';
+import { createVideoPoster } from '@/lib/videoPoster';
 import { reportMediaStageFailure } from '@/lib/mediaDiagnostics';
 import type { Profile } from '@/lib/types';
 import type { StorySound } from '@/lib/sounds';
@@ -208,6 +209,38 @@ export function useStoryCreationActions({
     }
   };
 
+  // صورة مصغرة ثابتة للستوري: صورة الفيديو الأولى إن كان فيديو، وإلا صورة
+  // الستوري نفسها. عند إعادة المشاركة نُعيد استخدام مصغرة الأصل إن وُجدت.
+  const buildStoryThumbnail = async (
+    file: File | null,
+    mediaUrl: string,
+    source: StoryDmCardStory | null,
+  ): Promise<string | null> => {
+    if (source) return source.thumbnail_url ?? source.media_url ?? null;
+    if (!file) return mediaUrl || null;
+    if (!file.type.startsWith('video')) return mediaUrl || null;
+
+    try {
+      const poster = await createVideoPoster(file);
+      const extension = poster.name.split('.').pop() || 'jpg';
+      const path = `${userId}/story-thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+      await uploadStoryMedia({ file: poster, path, preset: 'storyImage' });
+      return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+    } catch (error) {
+      console.warn('[stories] تعذر إنشاء صورة مصغرة للفيديو:', error);
+      return null;
+    }
+  };
+
+  const saveStoryThumbnail = async (storyId: string, thumbnailUrl: string | null) => {
+    if (!storyId || !thumbnailUrl) return;
+    const { error } = await supabase.rpc('aani_set_story_thumbnail', {
+      p_story_id: storyId,
+      p_thumbnail_url: thumbnailUrl,
+    });
+    if (error) console.warn('[stories] تعذر حفظ الصورة المصغرة للستوري:', error);
+  };
+
   const handleUploadStory = async () => {
     // إيقاف معاينة الصوت فوراً لحظة النقر على نشر
     stopInstant();
@@ -251,6 +284,8 @@ export function useStoryCreationActions({
       }
       const storyId = created.storyId;
       if (!storyId) throw new Error('لم تُرجع قاعدة البيانات معرّف القصة المنشورة.');
+
+      await saveStoryThumbnail(storyId, await buildStoryThumbnail(storyFile, mediaUrl, sourceStory));
 
       if (storyMentions.length > 0) {
         void linkStoryMentions(storyId, currentProfile?.username || '', storyMentions);
@@ -338,6 +373,9 @@ export function useStoryCreationActions({
           throw publishError;
         }
         const storyId = created.storyId;
+        if (storyId) {
+          await saveStoryThumbnail(storyId, await buildStoryThumbnail(mediaFile, mediaUrl, sourceStory));
+        }
         if (storyId && mentions.length > 0) {
           void linkStoryMentions(storyId, currentProfile?.username || '', mentions);
         }

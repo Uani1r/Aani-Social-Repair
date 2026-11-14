@@ -436,21 +436,44 @@ export function useStoryViewerActions({
 
     setIsSendingReply(true);
     try {
-      // إشعار صاحب الستوري (type='reply' مع content_kind='story') يُنشئه
-      // مشغّل aani_notify_story_reply_trg في قاعدة البيانات، ومشغّل إشعار
-      // الرسالة العام يتخطى [story-reply] فلا يتكرر الإشعار.
-      const { error } = await supabase.from('messages').insert({
-        sender_id: userId,
-        recipient_id: currentStory.user_id,
-        content: `[story-reply]${textToSend}`,
+      // رد الستوري = إشعار فقط. لا رسالة خاصة ولا صف في messages، وبالتالي
+      // لا اعتماد على مشغّل قاعدة البيانات الذي كان يراقب رسائل الستوري.
+      const thumbnailUrl = currentStory.thumbnail_url
+        ?? (currentStory.media_type === 'image' ? currentStory.media_url : null);
+      const metadata = {
+        kind: 'story_reply',
         story_id: currentStory.id,
-      });
+        story_reply_text: textToSend,
+        story_thumbnail_url: thumbnailUrl,
+        story_media_type: currentStory.media_type,
+        story_owner_id: currentStory.user_id,
+      };
+      const payload = {
+        user_id: currentStory.user_id,
+        actor_id: userId,
+        type: 'reply',
+        content: textToSend,
+        reference_id: currentStory.id,
+        entity_id: currentStory.id,
+        content_kind: 'story',
+        metadata,
+      };
+
+      let { error } = await supabase.from('notifications').insert(payload);
+      // توافق مؤقت مع قاعدة لم يُطبَّق عليها ترحيل metadata/content_kind:
+      // نحاول من دون الحقلين بدل إفشال الرد بالكامل.
+      if (error && /metadata|content_kind/i.test(error.message || '')) {
+        const { metadata: _metadata, content_kind: _contentKind, ...legacyPayload } = payload;
+        void _metadata;
+        void _contentKind;
+        ({ error } = await supabase.from('notifications').insert(legacyPayload));
+      }
       if (error) throw error;
 
       setReplyText('');
       toast.success('تم إرسال الرد إلى صاحب الستوري');
     } catch (error) {
-      console.error('[story replies] تعذر حفظ الرد:', error);
+      console.error('[story replies] تعذر حفظ إشعار الرد:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setIsSendingReply(false);

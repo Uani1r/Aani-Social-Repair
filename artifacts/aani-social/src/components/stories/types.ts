@@ -92,6 +92,8 @@ export interface StoryRow {
   user_id: string;
   media_url: string | null;
   media_type: string;
+  /** صورة مصغرة ثابتة (إطار فيديو أول أو صورة الستوري) لبطاقات الإشعارات */
+  thumbnail_url: string | null;
   caption: string | null;
   is_close_friends: boolean;
   duration_seconds: number;
@@ -271,6 +273,7 @@ export function normalizeStoryRow(value: unknown): StoryRow | null {
     user_id: value.user_id,
     media_url: optionalString(value.media_url),
     media_type: value.media_type,
+    thumbnail_url: optionalString(value.thumbnail_url),
     caption: optionalString(value.caption),
     is_close_friends: value.is_close_friends === true,
     duration_seconds: duration,

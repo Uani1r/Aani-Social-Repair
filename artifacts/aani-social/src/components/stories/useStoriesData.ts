@@ -29,7 +29,7 @@ interface UseStoriesDataOptions {
 
 // أعمدة محددة بدل select('*') لتقليل حجم بيانات Supabase المنقولة —
 // تُغطي كل ما يستهلكه normalizeStoryRow + تضمين رابط صوت القصة.
-const STORY_COLUMNS = 'id,user_id,media_url,media_type,caption,is_close_friends,duration_seconds,timed_texts,created_at,expires_at,filter_key,original_story_id,share_type,sound_id,sound_trim_start,sound_trim_end,sounds(source_video_url)';
+const STORY_COLUMNS = 'id,user_id,media_url,media_type,thumbnail_url,caption,is_close_friends,duration_seconds,timed_texts,created_at,expires_at,filter_key,original_story_id,share_type,sound_id,sound_trim_start,sound_trim_end,sounds(source_video_url)';
 // فشل بسبب أعمدة/تضمين غير مطبق (ترحيل مفقود) — اجلب بلا تضمين الصوت
 const FALLBACK_SELECT_ERROR = /PGRST200|relation|sounds|column|does not exist/i;
 

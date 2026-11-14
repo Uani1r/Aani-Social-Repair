@@ -1449,25 +1449,43 @@ export function ProfileHighlightViewer({
     if (!story || !currentUserId || isStoryOwner || !text || isSendingReply) return;
     setIsSendingReply(true);
     try {
-      const { error } = await supabase.from('messages').insert({
-        sender_id: currentUserId,
-        recipient_id: activeCollection.user_id,
-        content: story.source_story_id ? `[story-reply]${text}` : `رد على أبرز القصص «${activeCollection.title}»: ${text}`,
-        ...(story.source_story_id ? { story_id: story.source_story_id } : {}),
-      });
-      if (error) throw error;
-      const { error: notificationError } = await supabase.from('notifications').insert({
-        user_id: activeCollection.user_id,
+      // لا رسالة خاصة بسبب الرد على عنصر Highlight: إشعار واحد فقط.
+      // إن كان العنصر مرتبطاً بقصة أصلية نربط الإشعار بها، وإلا نحفظ مرجع
+      // عنصر الـHighlight ومجموعته في metadata بدل تمرير معرّف غير ستوري.
+      const sourceStoryId = story.source_story_id ?? null;
+      const ownerId = activeCollection.user_id;
+      const metadata = {
+        kind: sourceStoryId ? 'story_reply' : 'highlight_reply',
+        story_id: sourceStoryId,
+        highlight_id: story.id,
+        collection_id: activeCollection.id,
+        story_reply_text: text,
+        story_thumbnail_url: story.media_url,
+        story_media_type: story.media_type,
+        story_owner_id: ownerId,
+      };
+      const payload = {
+        user_id: ownerId,
         actor_id: currentUserId,
         type: 'reply',
-        content: `رد على أبرز قصصك: ${text}`,
-        reference_id: story.source_story_id || story.id,
-      });
-      if (notificationError) console.warn('[profile highlights] تعذر إرسال إشعار الرد:', notificationError);
+        content: text,
+        reference_id: sourceStoryId ?? story.id,
+        entity_id: sourceStoryId ?? story.id,
+        content_kind: sourceStoryId ? 'story' : 'highlight',
+        metadata,
+      };
+      let { error } = await supabase.from('notifications').insert(payload);
+      if (error && /metadata|content_kind/i.test(error.message || '')) {
+        const { metadata: _metadata, content_kind: _contentKind, ...legacyPayload } = payload;
+        void _metadata;
+        void _contentKind;
+        ({ error } = await supabase.from('notifications').insert(legacyPayload));
+      }
+      if (error) throw error;
       setReplyText('');
       toast.success('تم إرسال الرد إلى صاحب أبرز القصص');
     } catch (error) {
-      console.error('[profile highlights] تعذر إرسال الرد:', error);
+      console.error('[profile highlights] تعذر إرسال إشعار الرد:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setIsSendingReply(false);
