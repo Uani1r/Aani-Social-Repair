@@ -54,6 +54,12 @@ Thumbs.db
 .cache/
 .local/
 
+# مسارات تقرير AANI Quality Audit (تنتجها Playwright) — لا تُرفع
+quality-audit-results/
+test-results/
+playwright-report/
+blob-report/
+
 # Local env files — server secrets must never be committed
 .env
 *.local
