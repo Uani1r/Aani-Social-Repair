@@ -359,8 +359,24 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
           columnsInPayload: Object.keys(payload).length,
         });
       }
-      const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
-      return { error: null, ...verification };
+      // الإدراج نجح: الإرسال ناجح نهائياً. التحقق من حقول المعاينة مرحلة
+      // لاحقة غير حاجزة؛ أي رفض/شبكة/إلغاء فيها لا يغيّر نتيجة الإرسال.
+      try {
+        const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
+        return { error: null, ...verification };
+      } catch (verificationError) {
+        const name = verificationError && typeof verificationError === 'object' && 'name' in verificationError
+          ? String((verificationError as { name?: unknown }).name ?? 'unknown')
+          : 'unknown';
+        const code = verificationError && typeof verificationError === 'object' && 'code' in verificationError
+          ? String((verificationError as { code?: unknown }).code ?? '')
+          : '';
+        console.warn('[story reply] stage=verify post-insert failed', {
+          name,
+          code: code || 'unknown',
+        });
+        return { error: null, warning: 'preview-not-saved' };
+      }
     }
 
     if (!firstFailureLogged) {
