@@ -106,7 +106,7 @@ export default function StoryReplyControls({
               }}
               className="w-full min-w-0 bg-transparent text-xs text-white outline-none placeholder-zinc-400 disabled:opacity-60"
             />
-            {replyText.trim() && (
+            {(replyText.trim() || isSendingReply) && (
               <button
                 type="button"
                 onClick={sendReplyOnce}
