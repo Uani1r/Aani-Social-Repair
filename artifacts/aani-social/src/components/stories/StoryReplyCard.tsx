@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ImageOff } from 'lucide-react';
+import { ImageOff, RotateCw } from 'lucide-react';
 
 import { SkeletonBlock } from '@/components/Skeletons';
+import { isImageStoryMediaType, isVideoStoryMediaType } from '@/lib/storyReplyMessages';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
 interface StoryReplyCardProps {
@@ -17,50 +18,85 @@ interface StoryReplyCardProps {
   children?: ReactNode;
 }
 
-type ResolvedStoryMedia = {
+type StoryMedia = {
   thumbnailUrl: string | null;
   mediaUrl: string | null;
   mediaType: string | null;
 };
 
-// كاش على مستوى الوحدة: عدة ردود على الستوري نفسها لا تُعيد طلب الشبكة.
-const mediaCache = new Map<string, ResolvedStoryMedia>();
-const mediaRequests = new Map<string, Promise<ResolvedStoryMedia>>();
+type StoryLookupResult =
+  | { status: 'found'; media: StoryMedia; expiresAt: string | null }
+  | { status: 'missing' };
+
+type LookupStatus = 'idle' | 'loading' | 'error' | 'missing';
+
+// كاش على مستوى الوحدة للنتائج الناجحة فقط: الفشل المؤقت (شبكة/RLS) لا يُحفظ
+// كنتيجة نهائية، فتحاول البطاقة مجدداً عند فتح المحادثة لاحقاً.
+const mediaCache = new Map<string, { media: StoryMedia; expiresAt: string | null }>();
+const mediaRequests = new Map<string, Promise<StoryLookupResult>>();
 
 function asUrl(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-async function loadStoryMedia(storyId: string): Promise<ResolvedStoryMedia> {
-  const empty: ResolvedStoryMedia = { thumbnailUrl: null, mediaUrl: null, mediaType: null };
-  if (!supabaseConfigured) return empty;
+function isPastDate(value: string | null): boolean {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed <= Date.now() : false;
+}
 
+async function queryStoryMedia(storyId: string, withExpiry: boolean): Promise<StoryLookupResult> {
+  const columns = withExpiry
+    ? 'id, media_url, media_type, thumbnail_url, expires_at'
+    : 'id, media_url, media_type, thumbnail_url';
   const { data, error } = await supabase
     .from('stories')
-    .select('id, media_url, media_type, thumbnail_url')
+    .select(columns)
     .eq('id', storyId)
     .maybeSingle();
   if (error) throw error;
-  if (!data) return empty;
+  if (!data) return { status: 'missing' };
 
   return {
-    thumbnailUrl: asUrl(data.thumbnail_url),
-    mediaUrl: asUrl(data.media_url),
-    mediaType: typeof data.media_type === 'string' ? data.media_type : null,
+    status: 'found',
+    media: {
+      thumbnailUrl: asUrl(data.thumbnail_url),
+      mediaUrl: asUrl(data.media_url),
+      mediaType: typeof data.media_type === 'string' ? data.media_type : null,
+    },
+    expiresAt: withExpiry && typeof data.expires_at === 'string' ? data.expires_at : null,
   };
 }
 
-function requestStoryMedia(storyId: string): Promise<ResolvedStoryMedia> {
+async function loadStoryMedia(storyId: string): Promise<StoryLookupResult> {
+  if (!supabaseConfigured) throw new Error('Supabase is not configured');
+  try {
+    return await queryStoryMedia(storyId, true);
+  } catch (error) {
+    // قاعدة قديمة بلا expires_at: نعيد المحاولة بالأعمدة الأساسية فقط.
+    const message = error && typeof error === 'object' && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '')
+      : '';
+    if (!/expires_at/i.test(message)) throw error;
+    return queryStoryMedia(storyId, false);
+  }
+}
+
+function requestStoryMedia(storyId: string): Promise<StoryLookupResult> {
   const cached = mediaCache.get(storyId);
-  if (cached) return Promise.resolve(cached);
+  if (cached) {
+    return Promise.resolve({ status: 'found', media: cached.media, expiresAt: cached.expiresAt });
+  }
 
   const pending = mediaRequests.get(storyId);
   if (pending) return pending;
 
   const request = loadStoryMedia(storyId)
-    .then(media => {
-      mediaCache.set(storyId, media);
-      return media;
+    .then(result => {
+      if (result.status === 'found') {
+        mediaCache.set(storyId, { media: result.media, expiresAt: result.expiresAt });
+      }
+      return result;
     })
     .finally(() => {
       mediaRequests.delete(storyId);
@@ -69,26 +105,14 @@ function requestStoryMedia(storyId: string): Promise<ResolvedStoryMedia> {
   return request;
 }
 
-function pickPrimarySource(media: ResolvedStoryMedia): string | null {
-  if (media.thumbnailUrl) return media.thumbnailUrl;
-  if (media.mediaType === 'video') return null;
-  return media.mediaUrl;
-}
-
-function pickSecondarySource(media: ResolvedStoryMedia, primary: string | null): string | null {
-  if (media.mediaType === 'video') return null;
-  if (!media.mediaUrl || media.mediaUrl === primary) return null;
-  return media.mediaUrl;
-}
-
 /**
- * بطاقة رد الستوري داخل المحادثة الخاصة (Instagram Direct style):
- * عنوان صغير + صورة عمودية 9:16 للستوري أو إطار فيديو أول + فقاعة نص الرد.
+ * بطاقة رد الستوري داخل المحادثة الخاصة:
+ * عنوان صغير + إطار معاينة 90×120 + فقاعة نص الرد.
  *
- * الصورة تأتي من البيانات المحفوظة مع الرسالة نفسها (story_thumbnail_url /
- * story_media_url)، فتبقى البطاقة سليمة بعد انتهاء صلاحية الستوري أو حذفها.
- * عند غياب البيانات المحفوظة (رسائل قديمة) نحاول قراءة الستوري من جدول stories،
- * وإن تعذّر ذلك نعرض بطاقة بديلة أنيقة بدل مساحة صورة فارغة.
+ * أولوية الوسائط: story_thumbnail_url المحفوظة مع الرسالة، ثم story_media_url
+ * المحفوظة. عند غيابهما نقرأ الستوري من جدول stories عبر story_id (وليس posts).
+ * «انتهت صلاحية الستوري» تظهر فقط عند تأكيد غياب السجل أو انتهاء وقته بلا أي
+ * وسائط؛ فشل الشبكة/RLS يظهر كحالة «تعذر تحميل المعاينة» مع إعادة المحاولة.
  */
 export default function StoryReplyCard({
   storyId,
@@ -100,94 +124,166 @@ export default function StoryReplyCard({
   header,
   children,
 }: StoryReplyCardProps) {
-  const [resolved, setResolved] = useState<ResolvedStoryMedia>(() => ({ thumbnailUrl, mediaUrl, mediaType }));
-  const [loading, setLoading] = useState(() => (
-    Boolean(storyId) && !pickPrimarySource({ thumbnailUrl, mediaUrl, mediaType })
-  ));
-  const [primaryFailed, setPrimaryFailed] = useState(false);
-  const [secondaryFailed, setSecondaryFailed] = useState(false);
+  const [found, setFound] = useState<{ media: StoryMedia; expiresAt: string | null } | null>(null);
+  const [lookupStatus, setLookupStatus] = useState<LookupStatus>('idle');
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [failedImages, setFailedImages] = useState<string[]>([]);
+  const [videoFailed, setVideoFailed] = useState(false);
 
   useEffect(() => {
-    setResolved({ thumbnailUrl, mediaUrl, mediaType });
-    setPrimaryFailed(false);
-    setSecondaryFailed(false);
-  }, [thumbnailUrl, mediaUrl, mediaType]);
+    setFound(null);
+    setLookupStatus('idle');
+    setFailedImages([]);
+    setVideoFailed(false);
+  }, [storyId, thumbnailUrl, mediaUrl, mediaType]);
 
+  const resolved = useMemo<StoryMedia>(() => ({
+    thumbnailUrl: thumbnailUrl || found?.media.thumbnailUrl || null,
+    mediaUrl: mediaUrl || found?.media.mediaUrl || null,
+    mediaType: mediaType || found?.media.mediaType || null,
+  }), [thumbnailUrl, mediaUrl, mediaType, found]);
+
+  // لا نبحث في stories إلا عند غياب أي وسائط محفوظة مع الرسالة.
   const needsLookup = useMemo(
-    () => Boolean(storyId) && !pickPrimarySource({ thumbnailUrl, mediaUrl, mediaType }),
-    [storyId, thumbnailUrl, mediaUrl, mediaType],
+    () => Boolean(storyId) && !thumbnailUrl && !mediaUrl,
+    [storyId, thumbnailUrl, mediaUrl],
   );
 
   useEffect(() => {
-    if (!needsLookup || !storyId) {
-      setLoading(false);
-      return;
-    }
+    if (!needsLookup || !storyId) return;
 
     const cached = mediaCache.get(storyId);
     if (cached) {
-      setResolved(current => ({ ...current, ...cached }));
-      setLoading(false);
+      setFound({ media: cached.media, expiresAt: cached.expiresAt });
+      setLookupStatus('idle');
       return;
     }
 
     let active = true;
-    setLoading(true);
+    setLookupStatus('loading');
     void requestStoryMedia(storyId)
-      .then(media => {
-        if (active) setResolved(current => ({ ...current, ...media }));
+      .then(result => {
+        if (!active) return;
+        if (result.status === 'missing') {
+          setLookupStatus('missing');
+          return;
+        }
+        setFound({ media: result.media, expiresAt: result.expiresAt });
+        setLookupStatus('idle');
       })
       .catch(error => {
-        console.warn('[story reply card] تعذر تحميل بيانات الستوري:', error);
-      })
-      .finally(() => {
-        if (active) setLoading(false);
+        if (!active) return;
+        console.warn('[story reply card] تعذر تحميل بيانات الستوري (شبكة أو صلاحيات):', error);
+        setLookupStatus('error');
       });
 
     return () => {
       active = false;
     };
-  }, [needsLookup, storyId]);
+  }, [needsLookup, storyId, retryNonce]);
 
-  const primarySource = pickPrimarySource(resolved);
-  const secondarySource = pickSecondarySource(resolved, primarySource);
-  const source = primaryFailed
-    ? (secondaryFailed ? null : secondarySource)
-    : primarySource;
+  const imageSources = useMemo(() => {
+    const candidates = [
+      resolved.thumbnailUrl,
+      isImageStoryMediaType(resolved.mediaType) ? resolved.mediaUrl : null,
+    ];
+    return [...new Set(candidates.filter((value): value is string => Boolean(value)))];
+  }, [resolved]);
 
-  const handleImageError = () => {
-    if (source && secondarySource && source === secondarySource && primaryFailed) {
-      setSecondaryFailed(true);
-      return;
-    }
-    setPrimaryFailed(true);
+  const usableImage = imageSources.find(source => !failedImages.includes(source)) ?? null;
+  const videoSource = !usableImage && isVideoStoryMediaType(resolved.mediaType) && resolved.mediaUrl
+    ? resolved.mediaUrl
+    : null;
+
+  const storyExpired = Boolean(found?.expiresAt && isPastDate(found.expiresAt));
+  const hasAnyMedia = imageSources.length > 0 || Boolean(videoSource) || Boolean(found?.media.mediaUrl);
+
+  let fallbackKind: 'loading' | 'error' | 'expired' = 'expired';
+  if (needsLookup && lookupStatus === 'loading') fallbackKind = 'loading';
+  else if (needsLookup && lookupStatus === 'error') fallbackKind = 'error';
+  else if (needsLookup && lookupStatus === 'missing') fallbackKind = 'expired';
+  else if (hasAnyMedia) fallbackKind = 'error';
+  else if (storyExpired) fallbackKind = 'expired';
+
+  const retry = () => {
+    setFailedImages([]);
+    setVideoFailed(false);
+    if (lookupStatus === 'error') setRetryNonce(value => value + 1);
   };
 
-  const media = loading ? (
-    <div className="messages-story-reply-media" aria-hidden="true">
-      <SkeletonBlock className="absolute inset-0 rounded-none" />
-    </div>
-  ) : source ? (
-    onOpen ? (
-      <button
-        type="button"
-        className="messages-story-reply-media is-button"
-        onClick={onOpen}
-        aria-label="عرض الستوري"
-      >
-        <img src={source} alt="" loading="lazy" onError={handleImageError} />
-      </button>
-    ) : (
-      <div className="messages-story-reply-media">
-        <img src={source} alt="" loading="lazy" onError={handleImageError} />
+  const handleImageError = (source: string) => {
+    setFailedImages(current => (current.includes(source) ? current : [...current, source]));
+  };
+
+  const openable = Boolean(onOpen) && (
+    Boolean(usableImage) || Boolean(videoSource && !videoFailed)
+  );
+
+  let media: ReactNode;
+  if (!usableImage && !videoSource && fallbackKind === 'loading') {
+    media = (
+      <div className="messages-story-reply-media" aria-hidden="true">
+        <SkeletonBlock className="absolute inset-0 rounded-none" />
       </div>
-    )
-  ) : (
-    <div className="messages-story-reply-media is-unavailable" role="img" aria-label="انتهت صلاحية الستوري">
+    );
+  } else if (usableImage) {
+    media = (
+      <img
+        src={usableImage}
+        alt=""
+        loading="lazy"
+        onError={() => handleImageError(usableImage)}
+      />
+    );
+  } else if (videoSource && !videoFailed) {
+    // إطار الفيديو الأول عبر عنصر فيديو متوقف (بلا تشغيل ولا أزرار).
+    media = (
+      <video
+        src={videoSource}
+        muted
+        playsInline
+        preload="metadata"
+        onError={() => setVideoFailed(true)}
+      />
+    );
+  } else if (fallbackKind === 'error') {
+    media = (
       <span className="messages-story-reply-fallback">
-        <ImageOff size={22} aria-hidden="true" />
+        <ImageOff size={18} aria-hidden="true" />
+        <span>تعذر تحميل المعاينة</span>
+        <button type="button" className="messages-story-reply-retry" onClick={retry}>
+          <RotateCw size={12} aria-hidden="true" />
+          إعادة المحاولة
+        </button>
+      </span>
+    );
+  } else {
+    media = (
+      <span className="messages-story-reply-fallback">
+        <ImageOff size={18} aria-hidden="true" />
         <span>انتهت صلاحية الستوري</span>
       </span>
+    );
+  }
+
+  const hasPreview = Boolean(usableImage) || Boolean(videoSource && !videoFailed);
+  const mediaClassName = `messages-story-reply-media${hasPreview ? '' : ' is-unavailable'}${openable ? ' is-button' : ''}`;
+
+  const mediaBody = openable ? (
+    <button type="button" className={mediaClassName} onClick={onOpen} aria-label="عرض الستوري">
+      {media}
+    </button>
+  ) : (
+    <div
+      className={mediaClassName}
+      role={hasPreview ? undefined : 'img'}
+      aria-label={hasPreview
+        ? undefined
+        : fallbackKind === 'error'
+          ? 'تعذر تحميل معاينة الستوري'
+          : 'انتهت صلاحية الستوري'}
+    >
+      {media}
     </div>
   );
 
@@ -195,7 +291,7 @@ export default function StoryReplyCard({
     <div className={`messages-story-reply${isMine ? ' is-mine' : ' is-theirs'}`}>
       {header}
       <span className="messages-story-reply-label">{isMine ? 'رددت على قصته' : 'ردّ على قصتك'}</span>
-      {media}
+      {mediaBody}
       {children}
     </div>
   );

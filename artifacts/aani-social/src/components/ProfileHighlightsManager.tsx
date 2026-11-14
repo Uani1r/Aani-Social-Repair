@@ -9,7 +9,7 @@ import { GridSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
-import { sendStoryReplyMessage } from '@/lib/storyReplyMessages';
+import { isImageStoryMediaType, sendStoryReplyMessage } from '@/lib/storyReplyMessages';
 import { uploadMedia } from '@/lib/storyUpload';
 
 type HighlightMediaType = 'image' | 'video' | 'text';
@@ -1455,7 +1455,7 @@ export function ProfileHighlightViewer({
       // وبيانات المعاينة تُحفظ مع الرسالة كي تظل البطاقة سليمة بعد انتهاء الصلاحية.
       const sourceStoryId = story.source_story_id ?? null;
       const ownerId = activeCollection.user_id;
-      const thumbnailUrl = story.media_type === 'image' ? story.media_url : null;
+      const thumbnailUrl = isImageStoryMediaType(story.media_type) ? story.media_url : null;
       const { error } = await sendStoryReplyMessage({
         senderId: currentUserId,
         recipientId: ownerId,
