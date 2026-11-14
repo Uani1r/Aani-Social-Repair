@@ -462,6 +462,14 @@ export function useStoryViewerActions({
         toast.success('تم إرسال الرد في الرسائل الخاصة');
       }
     } catch (error) {
+      const name = error && typeof error === 'object' && 'name' in error
+        ? String((error as { name?: unknown }).name ?? '')
+        : '';
+      if (name === 'AbortError') {
+        // إلغاء غير محسوم: لا تنبيه فشل، ولا مسح لنص الرد.
+        console.warn('[story replies] stage=send aborted');
+        return;
+      }
       console.error('[story replies] تعذر إرسال الرد في الرسائل الخاصة:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
