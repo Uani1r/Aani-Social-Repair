@@ -481,12 +481,15 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
         // لا نُعلن فشلاً مؤكداً ولا نجاحاً: الواجهة تعرض حالة غير مؤكدة.
         return { error: null, uncertain: true };
       }
-      console.warn('[story reply] stage=insert-verify not found', {
+      // لم يظهر الصف بعد كل المحاولات، لكن هذا لا يثبت أن الإدراج لم يُحفظ؛
+      // فقد يكتمل الطلب بعد انتهاء التحقق. نُبقي النتيجة غير مؤكدة، ونحفظ
+      // الخطأ الأصلي في السجل التقني فقط (كود/اسم) دون أي تنبيه فشل مؤكد.
+      console.warn('[story reply] stage=insert-verify not found after retries; keeping uncertain', {
         name: lastResult.error?.name ?? 'unknown',
         code: lastResult.error?.code ?? 'unknown',
+        category: lastResult.error ? classifyInsertFailure(lastResult.error) : 'unknown',
       });
-      // لم تُحفظ الرسالة فعلاً: نُبقي الخطأ الحقيقي للمعالجة دون تكرار الإدراج.
-      return { error: lastResult.error };
+      return { error: null, uncertain: true };
     }
 
     if (!firstFailureLogged) {
