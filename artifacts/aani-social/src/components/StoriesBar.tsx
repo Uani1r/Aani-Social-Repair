@@ -2391,9 +2391,29 @@ export default function StoriesBar({
             setStoryDrawingOpen(false);
           }}
           onCloseCrop={() => setStoryCropOpen(false)}
-          onApplyCrop={transform => {
-            setStoryMediaZoom(transform.zoom);
-            setStoryMediaOffset(transform.offset);
+          onApplyCrop={result => {
+            if (result.kind === 'file') {
+              // قص حقيقي: الملف المقصوص وحده هو ما سيُرفع لاحقاً. نستبدل ملف
+              // الستوري ومعاينته، ونصفّر تحويلات القص حتى لا تتكرر بصرياً.
+              const previous = previewStoryUrlRef.current;
+              if (previous) URL.revokeObjectURL(previous.url);
+              const url = URL.createObjectURL(result.file);
+              previewStoryUrlRef.current = { file: result.file, url };
+              setPreviewStoryUrl(url);
+              setStoryFile(result.file);
+              // الصورة المقصوصة صارت الملف الوحيد للنشر: لا نُبقي معاينة
+              // إعادة المشاركة الأصلية تتقدم على الملف الجديد.
+              setReshareStory(null);
+              setReshareScaledDown(false);
+              setStoryMediaZoom(1);
+              setStoryMediaOffset({ x: 0, y: 0 });
+              setStoryMediaRotate(0);
+              setStoryCropOpen(false);
+              toast.success('تم قص الصورة');
+              return;
+            }
+            setStoryMediaZoom(result.transform.zoom);
+            setStoryMediaOffset(result.transform.offset);
             setStoryCropOpen(false);
           }}
           onQuickPublish={closeFriends => void handleQuickPublishStory(closeFriends)}
