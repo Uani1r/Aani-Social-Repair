@@ -68,12 +68,15 @@ export function useStoriesData({
       .from('stories')
       .select(STORY_COLUMNS)
       .in('user_id', allowedUserIds)
+      // القصص المنتهية لا تظهر في شريط القصص النشطة — حتى لصاحبها
+      .gt('expires_at', new Date().toISOString())
       .order('created_at', { ascending: true });
     if (error && FALLBACK_SELECT_ERROR.test(error.message || '')) {
       ({ data, error } = await supabase
         .from('stories')
         .select('*')
         .in('user_id', allowedUserIds)
+        .gt('expires_at', new Date().toISOString())
         .order('created_at', { ascending: true }));
     }
 
@@ -187,12 +190,15 @@ export function useStoriesData({
           .from('stories')
           .select(STORY_COLUMNS)
           .eq('user_id', pendingProfileStoryOwnerId)
+          // نفس الفلتر عند فتح عارض قصص الملف الشخصي (بما في ذلك صاحب الحساب)
+          .gt('expires_at', new Date().toISOString())
           .order('created_at', { ascending: true });
         if (error && FALLBACK_SELECT_ERROR.test(error.message || '')) {
           ({ data, error } = await supabase
             .from('stories')
             .select('*')
             .eq('user_id', pendingProfileStoryOwnerId)
+            .gt('expires_at', new Date().toISOString())
             .order('created_at', { ascending: true }));
         }
         if (!active) return;
