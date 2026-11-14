@@ -396,7 +396,7 @@ begin
       select 1
       from public.profiles as recipient
       where recipient.id = new.recipient_id
-        and recipient.notification_settings->'messages' = 'false'::jsonb
+        and recipient.notification_settings::jsonb->'messages' = 'false'::jsonb
     ) then
     return new;
   end if;
