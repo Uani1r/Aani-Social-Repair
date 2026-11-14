@@ -22,6 +22,16 @@ function liveReshareStoryId(story: StoryDmCardStory | null): string | null {
   return story?.media_url && Number.isFinite(expiresAt) && expiresAt > Date.now() ? story.id : null;
 }
 
+/**
+ * نوع وسائط إعادة المشاركة: يُحفظ نوع القصة الأصلية كما هو تماماً.
+ * مهم: دالة قاعدة البيانات aani_can_reshare_story تشترط تطابق نوع الوسائط مع
+ * الأصل (original.media_type = p_media_type)، وتحويل photo إلى image يجعل
+ * إعادة المشاركة تُرفض برسالة «The original story is not available for resharing».
+ */
+function reshareMediaType(story: StoryDmCardStory | null): string {
+  return (story?.media_type || '').trim() || 'photo';
+}
+
 interface UseStoryCreationActionsOptions {
   userId: string;
   currentProfile: Profile | null;
@@ -259,9 +269,9 @@ export function useStoryCreationActions({
     setUploading(true);
     try {
       let mediaUrl = sourceStory?.media_url || '';
-      // 'image' هي القيمة القياسية في قيد stories_media_type_check بقواعد
-      // fresh_schema — 'photo' يرفضه القيد القديم؛ العرض يتعامل مع القيمتين
-      let mediaType = sourceStory?.media_type === 'video' ? 'video' : sourceStory ? 'image' : 'text';
+      // عند إعادة المشاركة يُرسل نوع القصة الأصلية كما هو (photo تبقى photo)،
+      // بلا تحويل إلى image، لأن قاعدة البيانات تطابق النوع مع الأصل.
+      let mediaType = sourceStory ? reshareMediaType(sourceStory) : 'text';
 
       if (storyFile) {
         const safeName = storyFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -344,8 +354,9 @@ export function useStoryCreationActions({
     void (async () => {
       try {
         let mediaUrl = sourceStory?.media_url || '';
-        // 'image' بدل 'photo' — القيمة المقبولة في قيد stories_media_type_check
-        let mediaType = sourceStory?.media_type === 'video' ? 'video' : 'image';
+        // نفس القاعدة: نوع القصة الأصلية كما هو (photo تبقى photo)، والرابط
+        // الأصلي لا يُغيَّر — كلاهما شرط في aani_can_reshare_story.
+        let mediaType = sourceStory ? reshareMediaType(sourceStory) : 'text';
 
         if (mediaFile) {
           const safeName = mediaFile.name.replace(/[^a-zA-Z0-9._-]/g, '-');
