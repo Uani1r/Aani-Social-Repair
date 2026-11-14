@@ -1449,43 +1449,55 @@ export function ProfileHighlightViewer({
     if (!story || !currentUserId || isStoryOwner || !text || isSendingReply) return;
     setIsSendingReply(true);
     try {
-      // لا رسالة خاصة بسبب الرد على عنصر Highlight: إشعار واحد فقط.
-      // إن كان العنصر مرتبطاً بقصة أصلية نربط الإشعار بها، وإلا نحفظ مرجع
-      // عنصر الـHighlight ومجموعته في metadata بدل تمرير معرّف غير ستوري.
+      // رد على أبرز القصص = رسالة خاصة فقط، بلا أي إشعار reply.
+      // story_id يُملأ عندما يكون عنصر الأبرز مرتبطاً بقصة أصلية (source_story_id)،
+      // وبيانات المعاينة تُحفظ مع الرسالة كي تظل البطاقة سليمة بعد انتهاء الصلاحية.
       const sourceStoryId = story.source_story_id ?? null;
       const ownerId = activeCollection.user_id;
-      const metadata = {
-        kind: sourceStoryId ? 'story_reply' : 'highlight_reply',
-        story_id: sourceStoryId,
-        highlight_id: story.id,
-        collection_id: activeCollection.id,
-        story_reply_text: text,
-        story_thumbnail_url: story.media_url,
-        story_media_type: story.media_type,
-        story_owner_id: ownerId,
-      };
-      const payload = {
-        user_id: ownerId,
-        actor_id: currentUserId,
-        type: 'reply',
+      const thumbnailUrl = story.media_type === 'image' ? story.media_url : null;
+      const basePayload = {
+        sender_id: currentUserId,
+        recipient_id: ownerId,
         content: text,
-        reference_id: sourceStoryId ?? story.id,
-        entity_id: sourceStoryId ?? story.id,
-        content_kind: sourceStoryId ? 'story' : 'highlight',
-        metadata,
+        story_id: sourceStoryId,
+        story_media_url: story.media_url,
+        story_thumbnail_url: thumbnailUrl,
+        story_media_type: story.media_type,
       };
-      let { error } = await supabase.from('notifications').insert(payload);
-      if (error && /metadata|content_kind/i.test(error.message || '')) {
-        const { metadata: _metadata, content_kind: _contentKind, ...legacyPayload } = payload;
-        void _metadata;
-        void _contentKind;
-        ({ error } = await supabase.from('notifications').insert(legacyPayload));
+
+      let { error } = await supabase.from('messages').insert(basePayload);
+      if (error && /story_media_url|story_thumbnail_url|story_media_type/i.test(error.message || '')) {
+        const {
+          story_media_url: _mediaUrl,
+          story_thumbnail_url: _thumbnailUrl,
+          story_media_type: _mediaType,
+          ...legacyReply
+        } = basePayload;
+        void _mediaUrl;
+        void _thumbnailUrl;
+        void _mediaType;
+        ({ error } = await supabase.from('messages').insert(legacyReply));
+      }
+      if (error && /story_id/i.test(error.message || '')) {
+        const {
+          story_media_url: _mediaUrl,
+          story_thumbnail_url: _thumbnailUrl,
+          story_media_type: _mediaType,
+          story_id: _storyId,
+          ...legacyReply
+        } = basePayload;
+        void _mediaUrl;
+        void _thumbnailUrl;
+        void _mediaType;
+        void _storyId;
+        ({ error } = await supabase.from('messages').insert(legacyReply));
       }
       if (error) throw error;
+
       setReplyText('');
-      toast.success('تم إرسال الرد إلى صاحب أبرز القصص');
+      toast.success('تم إرسال الرد في الرسائل الخاصة');
     } catch (error) {
-      console.error('[profile highlights] تعذر إرسال إشعار الرد:', error);
+      console.error('[profile highlights] تعذر إرسال الرد في الرسائل الخاصة:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setIsSendingReply(false);

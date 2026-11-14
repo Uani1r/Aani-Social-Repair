@@ -3344,11 +3344,91 @@ body.aani-immersive .unified-top-bar {
   max-width: min(calc(100% - 44px), 420px);
 }
 
+.messages-story-reply {
+  display: flex;
+  width: min(72vw, 268px);
+  max-width: 100%;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 6px;
+  direction: rtl;
+}
+
 .messages-story-reply-label {
   display: block;
-  margin-bottom: 4px;
-  color: rgb(255 255 255 / 70%);
+  padding-inline: 2px;
+  color: rgb(255 255 255 / 62%);
   font-size: 11px;
+  line-height: 1.4;
+}
+
+.messages-story-reply-media {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 9 / 16;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 16px;
+  background: #202020;
+  color: inherit;
+}
+
+.messages-story-reply-media.is-button {
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.messages-story-reply-media.is-button:active {
+  transform: scale(0.99);
+}
+
+.messages-story-reply-media.is-button:focus-visible {
+  outline: 2px solid #b98cff;
+  outline-offset: 2px;
+}
+
+.messages-story-reply-media img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #111;
+  object-fit: cover;
+}
+
+.messages-story-reply-media.is-unavailable {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+  border-color: rgb(255 255 255 / 16%);
+  background: rgb(255 255 255 / 5%);
+}
+
+.messages-story-reply-fallback {
+  display: flex;
+  max-width: 85%;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: rgb(255 255 255 / 55%);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.messages-story-reply .messages-bubble,
+.messages-story-reply-text {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.messages-story-reply .messages-bubble-content {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .messages-rich-message {

@@ -436,44 +436,56 @@ export function useStoryViewerActions({
 
     setIsSendingReply(true);
     try {
-      // رد الستوري = إشعار فقط. لا رسالة خاصة ولا صف في messages، وبالتالي
-      // لا اعتماد على مشغّل قاعدة البيانات الذي كان يراقب رسائل الستوري.
+      // رد الستوري = رسالة خاصة واحدة فقط، بلا أي إشعار reply من الواجهة.
+      // بيانات الستوري تُحفظ مع الرسالة نفسها كي تبقى بطاقة الرد سليمة بعد
+      // انتهاء صلاحية الستوري أو حذف سجلها/وسائطها.
       const thumbnailUrl = currentStory.thumbnail_url
         ?? (currentStory.media_type === 'image' ? currentStory.media_url : null);
-      const metadata = {
-        kind: 'story_reply',
+      const basePayload = {
+        sender_id: userId,
+        recipient_id: currentStory.user_id,
+        content: textToSend,
         story_id: currentStory.id,
-        story_reply_text: textToSend,
+        story_media_url: currentStory.media_url,
         story_thumbnail_url: thumbnailUrl,
         story_media_type: currentStory.media_type,
-        story_owner_id: currentStory.user_id,
-      };
-      const payload = {
-        user_id: currentStory.user_id,
-        actor_id: userId,
-        type: 'reply',
-        content: textToSend,
-        reference_id: currentStory.id,
-        entity_id: currentStory.id,
-        content_kind: 'story',
-        metadata,
       };
 
-      let { error } = await supabase.from('notifications').insert(payload);
-      // توافق مؤقت مع قاعدة لم يُطبَّق عليها ترحيل metadata/content_kind:
-      // نحاول من دون الحقلين بدل إفشال الرد بالكامل.
-      if (error && /metadata|content_kind/i.test(error.message || '')) {
-        const { metadata: _metadata, content_kind: _contentKind, ...legacyPayload } = payload;
-        void _metadata;
-        void _contentKind;
-        ({ error } = await supabase.from('notifications').insert(legacyPayload));
+      let { error } = await supabase.from('messages').insert(basePayload);
+      // توافق مع قاعدة لم تُطبَّق عليها أعمدة معاينة الستوري بعد.
+      if (error && /story_media_url|story_thumbnail_url|story_media_type/i.test(error.message || '')) {
+        const {
+          story_media_url: _mediaUrl,
+          story_thumbnail_url: _thumbnailUrl,
+          story_media_type: _mediaType,
+          ...legacyReply
+        } = basePayload;
+        void _mediaUrl;
+        void _thumbnailUrl;
+        void _mediaType;
+        ({ error } = await supabase.from('messages').insert(legacyReply));
+      }
+      // توافق مع قاعدة لم يُضَف إليها messages.story_id بعد.
+      if (error && /story_id/i.test(error.message || '')) {
+        const {
+          story_media_url: _mediaUrl,
+          story_thumbnail_url: _thumbnailUrl,
+          story_media_type: _mediaType,
+          story_id: _storyId,
+          ...legacyReply
+        } = basePayload;
+        void _mediaUrl;
+        void _thumbnailUrl;
+        void _mediaType;
+        void _storyId;
+        ({ error } = await supabase.from('messages').insert(legacyReply));
       }
       if (error) throw error;
 
       setReplyText('');
-      toast.success('تم إرسال الرد إلى صاحب الستوري');
+      toast.success('تم إرسال الرد في الرسائل الخاصة');
     } catch (error) {
-      console.error('[story replies] تعذر حفظ إشعار الرد:', error);
+      console.error('[story replies] تعذر إرسال الرد في الرسائل الخاصة:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
     } finally {
       setIsSendingReply(false);
