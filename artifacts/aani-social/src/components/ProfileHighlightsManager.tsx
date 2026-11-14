@@ -1456,7 +1456,7 @@ export function ProfileHighlightViewer({
       const sourceStoryId = story.source_story_id ?? null;
       const ownerId = activeCollection.user_id;
       const thumbnailUrl = isImageStoryMediaType(story.media_type) ? story.media_url : null;
-      const { error } = await sendStoryReplyMessage({
+      const { error, warning } = await sendStoryReplyMessage({
         senderId: currentUserId,
         recipientId: ownerId,
         text,
@@ -1468,7 +1468,11 @@ export function ProfileHighlightViewer({
       if (error) throw error;
 
       setReplyText('');
-      toast.success('تم إرسال الرد في الرسائل الخاصة');
+      if (warning === 'preview-not-saved') {
+        toast.warning('تم إرسال الرد، لكن تعذر حفظ معاينة الستوري معه.');
+      } else {
+        toast.success('تم إرسال الرد في الرسائل الخاصة');
+      }
     } catch (error) {
       console.error('[profile highlights] تعذر إرسال الرد في الرسائل الخاصة:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');

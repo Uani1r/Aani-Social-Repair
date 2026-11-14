@@ -444,7 +444,7 @@ export function useStoryViewerActions({
       // media_type قد يكون image أو photo، فلا نعتمد على مقارنة واحدة.
       const thumbnailUrl = currentStory.thumbnail_url
         ?? (isImageStoryMediaType(currentStory.media_type) ? currentStory.media_url : null);
-      const { error } = await sendStoryReplyMessage({
+      const { error, warning } = await sendStoryReplyMessage({
         senderId: userId,
         recipientId: currentStory.user_id,
         text: textToSend,
@@ -456,7 +456,11 @@ export function useStoryViewerActions({
       if (error) throw error;
 
       setReplyText('');
-      toast.success('تم إرسال الرد في الرسائل الخاصة');
+      if (warning === 'preview-not-saved') {
+        toast.warning('تم إرسال الرد، لكن تعذر حفظ معاينة الستوري معه.');
+      } else {
+        toast.success('تم إرسال الرد في الرسائل الخاصة');
+      }
     } catch (error) {
       console.error('[story replies] تعذر إرسال الرد في الرسائل الخاصة:', error);
       toast.error('تعذر إرسال الرد. تحقق من الاتصال وحاول مرة أخرى.');
