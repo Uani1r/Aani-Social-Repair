@@ -1301,9 +1301,15 @@ export default function StoriesBar({
   }, [groupedStories, seenStoryIds, userId]);
 
   const activeStories = useMemo(() => {
+    // الأرشيف يعرض القصص المنتهية وفق نظامه الحالي — لا يُلمس هنا
     if (archiveViewerOpen) return archiveStories;
-    if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories;
-    return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup] : [];
+    // فلتر انتهاء صارم على مستوى العرض أيضاً: أي قصة تجاوزت expires_at لا تُعرض
+    // من مسار القصص النشطة حتى لو وصلت من حالة سابقة (snapshot) لم تُحدَّث بعد،
+    // ويشمل ذلك قصص صاحب الحساب نفسه.
+    const now = Date.now();
+    const notExpired = (story: StoryRow) => !story.expires_at || Date.parse(story.expires_at) > now;
+    if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories.filter(notExpired);
+    return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup].filter(notExpired) : [];
   }, [activeUserGroup, archiveStories, archiveViewerOpen, groupedStories, profileStoryOwnerId, profilePreviewStories]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
