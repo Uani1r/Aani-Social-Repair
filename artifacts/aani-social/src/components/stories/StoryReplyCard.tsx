@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ImageOff, RotateCw } from 'lucide-react';
 
 import { SkeletonBlock } from '@/components/Skeletons';
-import { isImageStoryMediaType, isVideoStoryMediaType } from '@/lib/storyReplyMessages';
+import { isImageStoryMediaType, isVideoStoryMediaType, toAbsoluteMediaUrl } from '@/lib/storyReplyMessages';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
 interface StoryReplyCardProps {
@@ -35,20 +35,26 @@ type LookupStatus = 'idle' | 'loading' | 'error' | 'missing';
 const mediaCache = new Map<string, { media: StoryMedia; expiresAt: string | null }>();
 const mediaRequests = new Map<string, Promise<StoryLookupResult>>();
 
-function asUrl(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value : null;
-}
-
 function isPastDate(value: string | null): boolean {
   if (!value) return false;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed <= Date.now() : false;
 }
 
-async function queryStoryMedia(storyId: string, withExpiry: boolean): Promise<StoryLookupResult> {
-  const columns = withExpiry
-    ? 'id, media_url, media_type, thumbnail_url, expires_at'
-    : 'id, media_url, media_type, thumbnail_url';
+function errorCode(error: unknown): string {
+  return error && typeof error === 'object' && 'code' in error
+    ? String((error as { code?: unknown }).code ?? 'unknown')
+    : 'unknown';
+}
+
+function isMissingColumnErrorMessage(error: unknown): boolean {
+  const message = error && typeof error === 'object' && 'message' in error
+    ? String((error as { message?: unknown }).message ?? '')
+    : '';
+  return /expires_at|thumbnail_url|column .*does not exist|could not find the '[^']+' column/i.test(message);
+}
+
+async function queryStoryMedia(storyId: string, columns: string): Promise<StoryLookupResult> {
   const { data, error } = await supabase
     .from('stories')
     .select(columns)
@@ -60,26 +66,39 @@ async function queryStoryMedia(storyId: string, withExpiry: boolean): Promise<St
   return {
     status: 'found',
     media: {
-      thumbnailUrl: asUrl(data.thumbnail_url),
-      mediaUrl: asUrl(data.media_url),
+      thumbnailUrl: toAbsoluteMediaUrl(data.thumbnail_url),
+      mediaUrl: toAbsoluteMediaUrl(data.media_url),
       mediaType: typeof data.media_type === 'string' ? data.media_type : null,
     },
-    expiresAt: withExpiry && typeof data.expires_at === 'string' ? data.expires_at : null,
+    expiresAt: typeof data.expires_at === 'string' ? data.expires_at : null,
   };
 }
 
+// قواعد قديمة قد تفتقد expires_at أو thumbnail_url: نُسقط العمود غير المدعوم
+// من الاستعلام وحده، ولا نفشل قراءة الوسائط بسببه.
+const STORY_LOOKUP_COLUMNS = [
+  'id, media_url, media_type, thumbnail_url, expires_at',
+  'id, media_url, media_type, thumbnail_url',
+  'id, media_url, media_type',
+] as const;
+
 async function loadStoryMedia(storyId: string): Promise<StoryLookupResult> {
   if (!supabaseConfigured) throw new Error('Supabase is not configured');
-  try {
-    return await queryStoryMedia(storyId, true);
-  } catch (error) {
-    // قاعدة قديمة بلا expires_at: نعيد المحاولة بالأعمدة الأساسية فقط.
-    const message = error && typeof error === 'object' && 'message' in error
-      ? String((error as { message?: unknown }).message ?? '')
-      : '';
-    if (!/expires_at/i.test(message)) throw error;
-    return queryStoryMedia(storyId, false);
+
+  let lastError: unknown = null;
+  for (const columns of STORY_LOOKUP_COLUMNS) {
+    try {
+      return await queryStoryMedia(storyId, columns);
+    } catch (error) {
+      lastError = error;
+      // إسقاط عمود من الاستعلام فقط عند غيابه فعلاً؛ غير ذلك (RLS/شبكة)
+      // لا يتحسن بإعادة المحاولة بأعمدة أقل.
+      if (!isMissingColumnErrorMessage(error)) break;
+    }
   }
+
+  console.warn('[story reply card] stage=stories-lookup failed', { code: errorCode(lastError) });
+  throw lastError instanceof Error ? lastError : new Error('stories lookup failed');
 }
 
 function requestStoryMedia(storyId: string): Promise<StoryLookupResult> {
@@ -138,15 +157,15 @@ export default function StoryReplyCard({
   }, [storyId, thumbnailUrl, mediaUrl, mediaType]);
 
   const resolved = useMemo<StoryMedia>(() => ({
-    thumbnailUrl: thumbnailUrl || found?.media.thumbnailUrl || null,
-    mediaUrl: mediaUrl || found?.media.mediaUrl || null,
+    thumbnailUrl: toAbsoluteMediaUrl(thumbnailUrl) || found?.media.thumbnailUrl || null,
+    mediaUrl: toAbsoluteMediaUrl(mediaUrl) || found?.media.mediaUrl || null,
     mediaType: mediaType || found?.media.mediaType || null,
   }), [thumbnailUrl, mediaUrl, mediaType, found]);
 
-  // لا نبحث في stories إلا عند غياب أي وسائط محفوظة مع الرسالة.
+  // لا نبحث في stories إلا عند غياب وسائط محفوظة صالحة مع الرسالة.
   const needsLookup = useMemo(
-    () => Boolean(storyId) && !thumbnailUrl && !mediaUrl,
-    [storyId, thumbnailUrl, mediaUrl],
+    () => Boolean(storyId) && !resolved.thumbnailUrl && !resolved.mediaUrl,
+    [storyId, resolved.thumbnailUrl, resolved.mediaUrl],
   );
 
   useEffect(() => {
@@ -173,7 +192,7 @@ export default function StoryReplyCard({
       })
       .catch(error => {
         if (!active) return;
-        console.warn('[story reply card] تعذر تحميل بيانات الستوري (شبكة أو صلاحيات):', error);
+        console.warn('[story reply card] stage=stories-lookup failed', { code: errorCode(error) });
         setLookupStatus('error');
       });
 
@@ -215,6 +234,10 @@ export default function StoryReplyCard({
   };
 
   const handleImageError = (source: string) => {
+    // تشخيص آمن: مرحلة الفشل ونوع المصدر فقط، دون الرابط نفسه.
+    console.warn('[story reply card] stage=image-load failed', {
+      source: source === resolved.thumbnailUrl ? 'thumbnail' : 'media',
+    });
     setFailedImages(current => (current.includes(source) ? current : [...current, source]));
   };
 
@@ -246,7 +269,10 @@ export default function StoryReplyCard({
         muted
         playsInline
         preload="metadata"
-        onError={() => setVideoFailed(true)}
+        onError={() => {
+          console.warn('[story reply card] stage=video-preview failed', { code: 'media' });
+          setVideoFailed(true);
+        }}
       />
     );
   } else if (fallbackKind === 'error') {
