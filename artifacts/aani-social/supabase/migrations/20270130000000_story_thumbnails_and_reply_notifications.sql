@@ -56,6 +56,7 @@ declare
   v_missing text;
   v_bad_type text;
   v_blocked_count integer;
+  v_settings_type text;
 begin
   -- الجداول تحققت قبل أي ALTER في الكتلة 0 أعلاه.
 
@@ -129,6 +130,34 @@ begin
   ) then
     raise exception 'aani: public.story_likes يجب أن يحتوي story_id uuid وuser_id uuid.'
       using errcode = '42703';
+  end if;
+
+  -- profiles: الدالة تقرأ id وnotification_settings، ونقبل json أو jsonb
+  -- دون اشتراط jsonb وحده.
+  if not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'profiles'
+      and col.column_name = 'id'
+      and col.data_type = 'uuid'
+  ) then
+    raise exception 'aani: public.profiles.id مفقود أو ليس uuid.'
+      using errcode = '42703';
+  end if;
+
+  select col.data_type
+    into v_settings_type
+  from information_schema.columns as col
+  where col.table_schema = 'public'
+    and col.table_name = 'profiles'
+    and col.column_name = 'notification_settings';
+
+  if v_settings_type is null then
+    raise exception 'aani: public.profiles.notification_settings مفقود.'
+      using errcode = '42703';
+  elsif v_settings_type not in ('json', 'jsonb') then
+    raise exception 'aani: public.profiles.notification_settings نوعه % ويجب أن يكون json أو jsonb.', v_settings_type
+      using errcode = '42804';
   end if;
 
   select string_agg(format('%s.%s (%s)', col.table_name, col.column_name, col.data_type), ', ')
