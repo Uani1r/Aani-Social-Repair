@@ -1236,6 +1236,23 @@ export default function Shell({
         return;
       }
 
+      // إشعارات الستوري (إعجاب/رد/إشارة): تُفتح الستوري نفسها لا منشوراً.
+      // content_kind يكتبه مشغّل قاعدة البيانات (20270129000000).
+      const contentKind = String(notification.content_kind ?? '');
+      const storyReferenceId = String(notification.reference_id || notification.entity_id || '');
+      if (contentKind === 'story'
+        && storyReferenceId
+        && ['like', 'reply', 'mention', 'story', 'story_like'].includes(type)) {
+        // إشعار الإعجاب/الرد يخصّ صاحب الستوري (المستخدم الحالي)،
+        // وإشعار الإشارة يخصّ صاحب الستوري الذي أشار (actor).
+        const storyOwnerId = type === 'mention' ? actorId : userId;
+        if (storyOwnerId) {
+          onOpenStory(storyReferenceId, storyOwnerId);
+          setLocation('/feed');
+          return;
+        }
+      }
+
       let commentId = typeof notification.comment_id === 'string' ? notification.comment_id : '';
       let postId = String(notification.post_id || notification.reference_id || notification.entity_id || '');
 
@@ -1313,7 +1330,14 @@ export default function Shell({
         .maybeSingle()
         .then(({ data }) => {
           const actorName = displayName(data as { display_name?: string | null; full_name?: string | null; username?: string | null } | null) || 'مستخدم';
-          const copy = describe[type];
+          // إشعارات الستوري تُكتب بـcontent_kind='story' من قاعدة البيانات،
+          // فلا تُوصف كإعجاب/رد على منشور.
+          const isStoryNotification = notification.content_kind === 'story';
+          const copy = isStoryNotification && type === 'like'
+            ? { title: 'أعجب بقصتك', description: 'تفاعل مع ستوريك' }
+            : isStoryNotification && type === 'reply'
+              ? { title: 'رد على ستوريك', description: 'رد جديد على ستوريك' }
+              : describe[type];
           if (!copy) return;
           toast(`${actorName} ${copy.title}`, {
             description: copy.description,
@@ -1356,7 +1380,7 @@ export default function Shell({
       if (countRefreshTimer !== null) window.clearTimeout(countRefreshTimer);
       void supabase.removeChannel(channel);
     };
-  }, [profile?.notification_settings?.messages, requestOpenFollowRequests, setLocation, userId, onOpenComments]);
+  }, [profile?.notification_settings?.messages, requestOpenFollowRequests, setLocation, userId, onOpenComments, onOpenStory]);
 
   // إعادة الاتصال التلقائي: عند عودة التطبيق من الخلفية أو رجوع الشبكة
   // تُعاد القنوات للاشتراك (عبر realtimeReconnect) ويُعاد حساب كل عدّادات

@@ -15,11 +15,13 @@ import EmojiText from '@/components/TwemojiText';
 import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
+import StoryReplyPreview from '@/components/stories/StoryReplyPreview';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
+import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -680,16 +682,6 @@ function readRequestTabReadAt(userId: string): string | null {
   }
 }
 
-function readSeenStoryIds(userId: string): Set<string> {
-  if (typeof window === 'undefined') return new Set();
-  try {
-    const stored: unknown = JSON.parse(localStorage.getItem(`aani:seen-story-ids:${userId}`) || '[]');
-    return Array.isArray(stored) ? new Set(stored.filter((id): id is string => typeof id === 'string')) : new Set();
-  } catch {
-    return new Set();
-  }
-}
-
 function messagePreview(message: MessageRow | null, currentUserId: string): string {
   if (!message) return 'ابدأ محادثة جديدة';
   const content = message.content.trim();
@@ -870,6 +862,9 @@ export default function MessagesPage({
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const contactsRequestRef = useRef(0);
+  // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
+  // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
+  const storyIdsByContactRef = useRef<Record<string, string[]>>({});
   const requestTabReadAtRef = useRef(readRequestTabReadAt(currentUserId));
   const readAtByContactRef = useRef(readAtByContact);
   readAtByContactRef.current = readAtByContact;
@@ -1191,6 +1186,9 @@ export default function MessagesPage({
         userStories.push(story);
         storyRowsByUser.set(story.user_id, userStories);
       });
+      storyIdsByContactRef.current = Object.fromEntries(
+        [...storyRowsByUser.entries()].map(([ownerId, stories]) => [ownerId, stories.map(story => story.id)]),
+      );
       const seenStoryIds = readSeenStoryIds(currentUserId);
       const mutualIdSet = new Set(mutualIds);
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
@@ -1239,6 +1237,26 @@ export default function MessagesPage({
       setMutualFollowersLoading(false);
     }
   }, [currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
+
+  // حلقة القصص حول صور المحادثات: تنطفئ فور مشاهدة القصص في شريط القصص،
+  // دون إعادة تحميل قائمة المحادثات من الشبكة.
+  useEffect(() => {
+    const syncStoryRings = () => {
+      const seenStoryIds = readSeenStoryIds(currentUserId);
+      const idsByContact = storyIdsByContactRef.current;
+      setConversations(current => current.map(conversation => {
+        const storyIds = idsByContact[conversation.profile.id] || [];
+        if (!storyIds.length) return conversation;
+        const hasUnseenStory = storyIds.some(storyId => !seenStoryIds.has(storyId));
+        return conversation.hasUnseenStory === hasUnseenStory
+          ? conversation
+          : { ...conversation, hasUnseenStory };
+      }));
+    };
+
+    window.addEventListener(SEEN_STORY_IDS_CHANGED_EVENT, syncStoryRings);
+    return () => window.removeEventListener(SEEN_STORY_IDS_CHANGED_EVENT, syncStoryRings);
+  }, [currentUserId]);
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
@@ -3050,6 +3068,9 @@ export default function MessagesPage({
                   const sharedStoryId = storyFromColumn || storyFromContent;
                   const isStoryReply = Boolean(message.story_id) && content.startsWith('[story-reply]');
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
+                  // صاحب الستوري: إن كنت أنا الرادّ فهو الطرف الآخر، وإن كان الرادّ
+                  // الطرف الآخر فأنا صاحب الستوري.
+                  const storyReplyOwnerId = isMine ? target?.id ?? null : currentUserId;
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
                   const voiceMessage = parseVoiceMessage(content);
@@ -3246,6 +3267,20 @@ export default function MessagesPage({
                                 {isStoryReply ? (
                                   <>
                                     <span className="messages-story-reply-label">رد على الستوري</span>
+                                    <StoryReplyPreview
+                                      storyId={String(message.story_id)}
+                                      ownerName={
+                                        storyReplyOwnerId === currentUserId
+                                          ? displayName(currentProfile)
+                                          : target ? displayName(target) : undefined
+                                      }
+                                      onOpen={storyReplyOwnerId
+                                        ? () => {
+                                          onOpenStories(storyReplyOwnerId);
+                                          setLocation('/feed');
+                                        }
+                                        : undefined}
+                                    />
                                     <EmojiText text={content.slice('[story-reply]'.length).trim()} />
                                   </>
                                 ) : content.startsWith('[story:') ? 'أرسل لك قصة' : <EmojiText text={message.content} />}

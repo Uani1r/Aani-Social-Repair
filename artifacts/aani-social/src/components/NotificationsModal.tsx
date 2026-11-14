@@ -75,8 +75,11 @@ const FILTER_TABS: Array<{ id: NotificationFilter; label: string }> = [
 ];
 
 const isStoryNotification = (item: NotificationEntry) => {
+  // content_kind = 'story' هو المصدر الصحيح (يكتبه مشغّل قاعدة البيانات)،
+  // والمطابقة النصية تبقى احتياطاً للسجلات القديمة التي كُتبت يدوياً.
+  if (item.content_kind === 'story') return true;
   if (item.type === 'story' || item.type === 'story_like') return true;
-  return ['like', 'reply', 'mention'].includes(item.type) && /ستوري|قصة/i.test(item.content || '');
+  return ['like', 'reply', 'mention'].includes(item.type) && /ستوري|قصة|قصتك/i.test(item.content || '');
 };
 
 // تصفية سجلات قديمة لا تظهر في القائمة العامة:
@@ -346,14 +349,21 @@ export default function NotificationsModal({
       setError('');
 
       try {
-        const { data, error: queryError } = await supabase
+        const loadRows = (columns: string) => supabase
           .from('notifications')
-          .select('id,content,type,is_read,created_at')
+          .select(columns)
           .eq('user_id', currentUserId)
           .neq('type', 'follow_request')
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
           .range(offset, offset + PAGE_SIZE - 1);
+
+        let { data, error: queryError } = await loadRows('id,content,type,is_read,created_at,content_kind');
+        // احتياط لقاعدة لم يُطبَّق عليها ترحيل content_kind بعد: القائمة تعمل
+        // كما كانت، ويبقى التعرّف على إشعارات الستوري عبر المطابقة النصية.
+        if (queryError && /content_kind/i.test(queryError.message || '')) {
+          ({ data, error: queryError } = await loadRows('id,content,type,is_read,created_at'));
+        }
         if (!active) return;
         if (queryError) {
           setError(queryError.message);

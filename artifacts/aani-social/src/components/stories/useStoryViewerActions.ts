@@ -382,6 +382,7 @@ export function useStoryViewerActions({
 
   const handleToggleLike = async () => {
     if (!supabaseConfigured || !currentStory || isStoryOwner || isLikeSaving) return;
+    const storyId = currentStory.id;
     setIsLikeSaving(true);
 
     try {
@@ -389,44 +390,38 @@ export function useStoryViewerActions({
         const { error } = await supabase
           .from('story_likes')
           .delete()
-          .eq('story_id', currentStory.id)
+          .eq('story_id', storyId)
           .eq('user_id', userId);
         if (error) throw error;
         setIsLiked(false);
         toast.success('تم إلغاء الإعجاب');
-      } else {
-        const { error } = await supabase
-          .from('story_likes')
-          .upsert(
-            { story_id: currentStory.id, user_id: userId },
-            { onConflict: 'story_id,user_id', ignoreDuplicates: true },
-          );
-        if (error) throw error;
-        setIsLiked(true);
-        // كل من أعجب بالقصة يُحتسب مشاهداً: upsert مشاهدة فورية — إن كان
-        // له سجل "معاينة" قديم يُرقّى فوراً إلى مشاهدة كاملة محتسبة.
-        void supabase
-          .rpc('aani_record_story_view', { p_story_id: currentStory.id })
-          .then(({ error: viewError }) => {
-            if (viewError) console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
-          })
-          .catch(viewError => {
-            console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
-          });
-        try {
-          const { error: notificationError } = await supabase.from('notifications').insert({
-            user_id: currentStory.user_id,
-            actor_id: userId,
-            type: 'like',
-            content: 'أعجب بستوريك',
-            reference_id: currentStory.id,
-          });
-          if (notificationError) console.warn('[story likes] تعذر إرسال إشعار الإعجاب:', notificationError);
-        } catch (notificationError) {
-          console.warn('[story likes] تعذر إرسال إشعار الإعجاب:', notificationError);
-        }
-        toast.success('تم الإعجاب بالستوري');
+        return;
       }
+
+      // 1) حفظ الإعجاب أولاً: لا تُعلن الواجهة النجاح قبل تأكيد صف story_likes.
+      //    إشعار صاحب القصة يُنشئه مشغّل قاعدة البيانات (20270129000000)
+      //    بعد الإدراج، فلا إدخال يدوي هنا (كان يبتلع أي فشل بصمت).
+      const { error } = await supabase
+        .from('story_likes')
+        .upsert(
+          { story_id: storyId, user_id: userId },
+          { onConflict: 'story_id,user_id', ignoreDuplicates: true },
+        );
+      if (error) throw error;
+      setIsLiked(true);
+
+      // 2) كل من أعجب بقصة يُحتسب مشاهداً: طلب مستقل لا يُلغي الإعجاب
+      //    ولا يؤخّر تأكيده إن فشل تسجيل المشاهدة.
+      void supabase
+        .rpc('aani_record_story_view', { p_story_id: storyId })
+        .then(({ error: viewError }) => {
+          if (viewError) console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
+        })
+        .catch(viewError => {
+          console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
+        });
+
+      toast.success('تم الإعجاب بالستوري');
     } catch (error) {
       console.error('[story likes] تعذر حفظ الإعجاب:', error);
       toast.error('تعذر حفظ الإعجاب. حاول مرة أخرى.');
@@ -441,6 +436,9 @@ export function useStoryViewerActions({
 
     setIsSendingReply(true);
     try {
+      // إشعار صاحب الستوري (type='reply' مع content_kind='story') يُنشئه
+      // مشغّل aani_notify_story_reply_trg في قاعدة البيانات، ومشغّل إشعار
+      // الرسالة العام يتخطى [story-reply] فلا يتكرر الإشعار.
       const { error } = await supabase.from('messages').insert({
         sender_id: userId,
         recipient_id: currentStory.user_id,
@@ -448,19 +446,6 @@ export function useStoryViewerActions({
         story_id: currentStory.id,
       });
       if (error) throw error;
-
-      try {
-        const { error: notificationError } = await supabase.from('notifications').insert({
-          user_id: currentStory.user_id,
-          actor_id: userId,
-          type: 'reply',
-          content: `رد على ستوريك: ${textToSend}`,
-          reference_id: currentStory.id,
-        });
-        if (notificationError) console.warn('[story replies] تعذر إرسال إشعار الرد:', notificationError);
-      } catch (notificationError) {
-        console.warn('[story replies] تعذر إرسال إشعار الرد:', notificationError);
-      }
 
       setReplyText('');
       toast.success('تم إرسال الرد إلى صاحب الستوري');
