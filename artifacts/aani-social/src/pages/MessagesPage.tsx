@@ -3140,7 +3140,11 @@ export default function MessagesPage({
                         window.requestAnimationFrame(() => messageInputRef.current?.focus());
                       }}
                     >
-                      <div className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}${isStoryReply ? ' has-story-reply' : ''}`} data-message-id={message.id}>
+                      <div
+                        className={`messages-message-row${isMine ? ' is-mine' : ' is-theirs'}${messageReactions.length ? ' has-reactions' : ''}${isStoryReply ? ' has-story-reply' : ''}`}
+                        dir={isStoryReply ? 'ltr' : undefined}
+                        data-message-id={message.id}
+                      >
                         <div className="messages-message-body">
                           {isSharedPost ? (
                             <>
@@ -3306,7 +3310,7 @@ export default function MessagesPage({
                                   }
                                   : undefined}
                               >
-                                <div className={`messages-bubble messages-story-reply-text${isMine ? ' is-mine' : ' is-theirs'}`}>
+                                <div className={`messages-bubble messages-story-reply-text${isMine ? ' is-mine' : ' is-theirs'}`} dir="rtl">
                                   <span className="messages-bubble-content">
                                     <EmojiText text={storyReplyText(message)} />
                                   </span>
