@@ -7,7 +7,12 @@
 --     لخطأ 42703 "record new has no field story_id".
 --   * aani_block_message_call_notifications() غير موجودة ⇒ القاعدة على تصميم
 --     20261226000000 (إشعار عام لكل رسالة)، وليس تصميم 20261228/20261229.
---   * aani_is_user_blocked(uuid,uuid) موجودة، والجداول والأعمدة الأساسية موجودة.
+--   * aani_is_user_blocked(uuid,uuid) موجودة لكنها تشترط أن يكون auth.uid()
+--     أحد الطرفين، لذلك لا تصلح وحدها لإدراج بلا JWT. فحص الحظر في هذا الملف
+--     يقرأ public.user_blocks مباشرة (بالاتجاهين) داخل دالة SECURITY DEFINER،
+--     فيعمل سواء وُجد JWT أم لا.
+--   * لا توجد في الإنتاج مشغّلات حظر بديلة على messages أو story_likes،
+--     وفحص الحظر هنا هو الضمان الفعلي لعدم إنشاء إشعار لطرفين محظورين.
 --
 -- سبب غياب العمود: يُضاف في 20261107000000_story_mentions.sql (سطر 53-54) و
 -- 20261108000000_story_followers_reshare_security.sql (سطر 15-16) فقط، وملفا
@@ -34,7 +39,7 @@
 --   public.messages(id,sender_id,recipient_id,content,created_at)
 --   public.notifications(reference_id, entity_id, comment_id, content_kind)
 --   public.profiles.notification_settings jsonb
---   public.aani_is_user_blocked(uuid,uuid)  (20261115000000)
+--   public.user_blocks(blocker_id, blocked_user_id)
 -- لا يعتمد على 20270128000000: دالة إعدادات الستوري معرَّفة هنا باسم مستقل.
 
 begin;
@@ -44,26 +49,8 @@ begin;
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  v_block_check_oid oid;
-  v_return_type regtype;
   v_table text;
 begin
-  v_block_check_oid := to_regprocedure('public.aani_is_user_blocked(uuid,uuid)');
-
-  if v_block_check_oid is null then
-    raise exception 'aani: الدالة public.aani_is_user_blocked(uuid,uuid) غير موجودة؛ طبّق 20261115000000_story_viewer_actions.sql أولاً.'
-      using errcode = '42883';
-  end if;
-
-  select proc.prorettype into v_return_type
-  from pg_catalog.pg_proc as proc
-  where proc.oid = v_block_check_oid;
-
-  if v_return_type is distinct from 'boolean'::regtype then
-    raise exception 'aani: توقيع aani_is_user_blocked يجب أن يُعيد boolean، والموجود %.', v_return_type
-      using errcode = '42804';
-  end if;
-
   foreach v_table in array array['messages', 'stories', 'story_likes', 'profiles', 'notifications', 'user_blocks']
   loop
     if to_regclass('public.' || v_table) is null then
@@ -71,6 +58,25 @@ begin
         using errcode = '42P01';
     end if;
   end loop;
+
+  -- فحص الحظر أدناه يعتمد مباشرة على أعمدة user_blocks، لا على دالة تعتمد
+  -- على auth.uid(). نتأكد من وجود العمودين قبل تعريف الدوال.
+  if not exists (
+    select 1
+    from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'user_blocks'
+      and col.column_name = 'blocker_id'
+  ) or not exists (
+    select 1
+    from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'user_blocks'
+      and col.column_name = 'blocked_user_id'
+  ) then
+    raise exception 'aani: الجدول public.user_blocks لا يحتوي العمودين blocker_id و blocked_user_id؛ لا يمكن فحص الحظر.'
+      using errcode = '42703';
+  end if;
 
   -- دالة إعدادات الستوري تعتمد على هذا العمود.
   if not exists (
@@ -431,10 +437,9 @@ end $$;
 --    المشغّل الحالي aani_notify_story_reply_trg يبقى، وتُعاد دالته بجسم آمن
 --    يقرأ story_id عبر to_jsonb(new) بدل NEW.story_id.
 --    كل رسالة رد حدث مستقل ⇒ ردود متعددة على الستوري نفسها = إشعار لكل رد.
---    فحص الحظر يستخدم aani_is_user_blocked(uuid,uuid): يُعيد true فقط عندما
---    يكون auth.uid() أحد الطرفين — وهو الحال دائماً لأن الإدراج من صاحب الرد.
---    (إدراج من service_role بلا JWT لا يُخضع الحظر؛ الحماية المكافئة في
---    aani_blocked_messages_trg التي ترفع 42501 قبل الإدراج.)
+--    فحص الحظر يقرأ public.user_blocks مباشرة (بالاتجاهين) داخل SECURITY DEFINER
+--    فيتجاوز RLS ولا يعتمد على auth.uid()، ويعمل سواء وُجد JWT أم لا.
+--    لا توجد في الإنتاج مشغّلات حظر بديلة على messages، فهذا الفحص هو الضمان.
 -- ---------------------------------------------------------------------------
 create or replace function public.aani_notify_story_reply()
 returns trigger
@@ -465,7 +470,15 @@ begin
   if v_owner is null then return new; end if;
   if v_owner <> new.recipient_id then return new; end if;
   if v_owner = new.sender_id then return new; end if;
-  if public.aani_is_user_blocked(new.sender_id, v_owner) then return new; end if;
+  -- حظر بين المرسل وصاحب الستوري، بالاتجاهين، من الجدول مباشرة (لا auth.uid).
+  if exists (
+    select 1
+    from public.user_blocks as blk
+    where (blk.blocker_id = new.sender_id and blk.blocked_user_id = v_owner)
+       or (blk.blocker_id = v_owner and blk.blocked_user_id = new.sender_id)
+  ) then
+    return new;
+  end if;
   if not public.aani_story_notifications_enabled(v_owner) then return new; end if;
 
   insert into public.notifications
@@ -485,8 +498,8 @@ for each row execute function public.aani_notify_story_reply();
 
 -- ---------------------------------------------------------------------------
 -- 7) إعجاب بستوري
---    - لا إشعار لإعجاب صاحب الستوري بستوره (استدعاء الحظر بالترتيب
---      (المُعجِب, صاحب الستوري) مطابق لدلالة aani_is_user_blocked).
+--    - لا إشعار لإعجاب صاحب الستوري بستوره.
+--    - لا إشعار عند حظر بين المُعجِب وصاحب الستوري (فحص مباشر بـEXISTS).
 --    - story_likes: unique(story_id, user_id) ⇒ حدث واحد لكل إعجاب نشط،
 --      وإعادة الإعجاب بعد إلغائه صف جديد ⇒ إشعار جديد مشروع.
 --    - لا مشغّل على DELETE ⇒ إلغاء الإعجاب لا يُنشئ إشعاراً.
@@ -506,7 +519,15 @@ begin
 
   if v_owner is null then return new; end if;
   if v_owner = new.user_id then return new; end if;
-  if public.aani_is_user_blocked(new.user_id, v_owner) then return new; end if;
+  -- حظر بين المُعجِب وصاحب الستوري، بالاتجاهين، من الجدول مباشرة (لا auth.uid).
+  if exists (
+    select 1
+    from public.user_blocks as blk
+    where (blk.blocker_id = new.user_id and blk.blocked_user_id = v_owner)
+       or (blk.blocker_id = v_owner and blk.blocked_user_id = new.user_id)
+  ) then
+    return new;
+  end if;
   if not public.aani_story_notifications_enabled(v_owner) then return new; end if;
 
   insert into public.notifications
@@ -562,7 +583,21 @@ commit;
 --    and p.proname in ('aani_notify_on_message_insert', 'aani_notify_story_reply')
 --    and p.prosrc ~* 'to_jsonb';
 --
--- 6) اختبار دخاني اختياري داخل معاملة تُلغى (لا يترك أثراً). يختار أول حسابين
+-- 6) الدالتان تفحصان public.user_blocks مباشرة (المتوقع: صفّان):
+-- select p.proname
+--   from pg_catalog.pg_proc as p
+--  where p.pronamespace = 'public'::regnamespace
+--    and p.proname in ('aani_notify_story_reply', 'aani_notify_story_like')
+--    and p.prosrc ~* 'user_blocks';
+--
+-- 7) الدالتان لم تعودا تعتمدان على aani_is_user_blocked (المتوقع: صفر صفوف):
+-- select p.proname
+--   from pg_catalog.pg_proc as p
+--  where p.pronamespace = 'public'::regnamespace
+--    and p.proname in ('aani_notify_story_reply', 'aani_notify_story_like')
+--    and p.prosrc ~* 'aani_is_user_blocked';
+--
+-- 8) اختبار دخاني اختياري داخل معاملة تُلغى (لا يترك أثراً). يختار أول حسابين
 --    موجودين؛ إن رفضه مشغّل طلبات المراسلة فتلك حماية قائمة وليست خطأً:
 -- begin;
 -- insert into public.messages (sender_id, recipient_id, content)
