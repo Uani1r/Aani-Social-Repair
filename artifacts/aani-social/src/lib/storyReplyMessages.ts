@@ -84,6 +84,36 @@ function classifyInsertFailure(error: StoryReplyInsertError): InsertFailureCateg
 }
 
 /**
+ * أخطاء النقل/الشبكة قد تصل داخل { error } دون استثناء (fetch reject في
+ * مكتبة Supabase). هذه النتيجة غير محسومة، بخلاف أخطاء PostgreSQL الصريحة
+ * (RLS/قيود/مخطط) التي تحمل SQLSTATE أو رمز PGRST.
+ */
+function isTransportLikeInsertError(error: StoryReplyInsertError): boolean {
+  const code = (error.code ?? '').toUpperCase();
+  if (/^[0-9A-Z]{5}$/.test(code) || code.startsWith('PGRST')) return false;
+
+  const name = (error.name ?? '').toLowerCase();
+  if (name === 'aborterror' || name === 'networkerror') return true;
+
+  const text = [error.message, error.details, error.hint]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (!text) return false;
+
+  return text.includes('failed to fetch')
+    || text.includes('fetch failed')
+    || text.includes('networkerror')
+    || text.includes('network error')
+    || text.includes('network request failed')
+    || text.includes('load failed')
+    || text.includes('network connection was lost')
+    || text.includes('internet connection appears to be offline')
+    || text.includes('timed out')
+    || text.includes('timeout');
+}
+
+/**
  * الوسم القديم قد يظهر في بداية النص أو نهايته (مع مسافات قبله/بعده).
  * لا نعتمد على المظهر البصري ولا على اتجاه النص: المقارنة على حدود النص
  * المنطقية بعد trim، فتعمل مع RTL وLTR على السواء.
@@ -238,9 +268,14 @@ async function waitForStoryReplyMessage(
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {
   try {
     const { error } = await supabase.from('messages').insert(payload);
-    return { error: toStoryReplyInsertError(error) };
+    const insertError = toStoryReplyInsertError(error);
+    if (insertError && isTransportLikeInsertError(insertError)) {
+      // خطأ نقل وصل داخل { error } وليس استثناءً: النتيجة غير محسومة.
+      return { error: insertError, uncertain: true };
+    }
+    return { error: insertError };
   } catch (error) {
-    // استثناء في طلب الإدراج: النتيجة غير محسومة، وتُحسم عبر findStoryReplyMessage.
+    // استثناء في طلب الإدراج: النتيجة غير محسومة، وتُحسم عبر التحقق بالمعرّف.
     return { error: toStoryReplyInsertError(error), uncertain: true };
   }
 }
