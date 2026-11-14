@@ -177,8 +177,8 @@ const OPTIONAL_STORY_COLUMNS = [
 type OptionalStoryColumn = (typeof OPTIONAL_STORY_COLUMNS)[number];
 
 // PGRST204 يعني أن مخطط PostgREST المخزّن مؤقتاً لا يعرف العمود، وقد يكون
-// خطأً عابراً بعد إضافة أعمدة حديثاً. لا نُسقط عموداً بسبب هذا الكود وحده قبل
-// إعادة المحاولة بالحمولة نفسها (أهم من فقدان وسائط الستوري نهائياً).
+// خطأً عابراً بعد إضافة أعمدة حديثاً. نعيد المحاولة بالحمولة نفسها قبل أي حذف،
+// ولا نُسقط أي عمود بسبب هذا الكود إطلاقاً.
 const SCHEMA_CACHE_CODE = 'PGRST204';
 const MISSING_COLUMN_CODE = '42703';
 const MAX_SCHEMA_CACHE_RETRIES = 2;
@@ -187,18 +187,23 @@ function isSchemaCacheError(error: StoryReplyInsertError): boolean {
   return error.code === SCHEMA_CACHE_CODE;
 }
 
+/**
+ * دليل صريح على غياب عمود فعلياً في PostgreSQL: الكود 42703 أو نص
+ * «column ... does not exist». لا نستخدم نص PGRST204 («Could not find the
+ * '...' column ... schema cache») هنا لأنه قد يعني مخططاً مخزّناً مؤقتاً فقط.
+ */
 function isMissingColumnError(error: StoryReplyInsertError): boolean {
   if (error.code === MISSING_COLUMN_CODE) return true;
   const text = insertErrorText(error).toLowerCase();
-  return /column .*does not exist/.test(text) || /could not find the '[^']+' column/.test(text);
+  return /column .*does not exist/.test(text);
 }
 
-/** أسماء الأعمدة الاختيارية المذكورة صراحةً في خطأ عمود مفقود/مخزّن مؤقتاً. */
+/** أسماء الأعمدة الاختيارية المذكورة صراحةً في خطأ غياب عمود فعلي. */
 function namedOptionalColumns(
   error: StoryReplyInsertError,
   payload: MessageInsertPayload,
 ): OptionalStoryColumn[] {
-  if (!isMissingColumnError(error) && !isSchemaCacheError(error)) return [];
+  if (!isMissingColumnError(error)) return [];
   const text = insertErrorText(error).toLowerCase();
   return OPTIONAL_STORY_COLUMNS.filter(
     column => Object.prototype.hasOwnProperty.call(payload, column) && text.includes(column),
@@ -244,20 +249,28 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
       });
     }
 
+    // 1) مخطط مخزّن مؤقتاً: إعادة الإدراج بالحمولة الأصلية نفسها مرتين،
+    //    دون حذف أي عمود ودون تعديل المحتوى.
+    if (isSchemaCacheError(lastResult.error)) {
+      if (cacheRetries < MAX_SCHEMA_CACHE_RETRIES) {
+        cacheRetries += 1;
+        continue;
+      }
+      console.warn('[story reply] استمر خطأ مخطط PostgREST بعد إعادة المحاولة؛ إيقاف بلا إسقاط أعمدة.', {
+        code: lastResult.error.code ?? 'unknown',
+        category: classifyInsertFailure(lastResult.error),
+        retries: cacheRetries,
+      });
+      return lastResult;
+    }
+    cacheRetries = 0;
+
+    // 2) إسقاط توافقي فقط عند دليل صريح على غياب العمود (42703).
     const named = namedOptionalColumns(lastResult.error, payload);
     if (named.length === 0) {
       // صلاحيات/RLS/اتصال/قيد: ليست مشكلة عمود مفقود، فلا مسار توافقي.
       return lastResult;
     }
-
-    // خطأ مخطط مخزّن مؤقتاً: نعيد المحاولة بالحمولة نفسها قبل إسقاط أي عمود.
-    if (isSchemaCacheError(lastResult.error) && !isMissingColumnError(lastResult.error)) {
-      if (cacheRetries < MAX_SCHEMA_CACHE_RETRIES) {
-        cacheRetries += 1;
-        continue;
-      }
-    }
-    cacheRetries = 0;
 
     for (const column of named) delete payload[column];
     console.warn('[story reply] إسقاط أعمدة اختيارية من محاولة الإدراج.', {
