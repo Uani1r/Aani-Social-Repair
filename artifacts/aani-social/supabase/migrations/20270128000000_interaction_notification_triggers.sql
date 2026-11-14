@@ -50,6 +50,8 @@ revoke all on function public.aani_notification_exists(uuid, uuid, text, uuid, u
 -- 2) احترام تصنيفات إعدادات الإشعارات (default true)
 -- قراءة آمنة: قيم JSON غير الصالحة/NULL/المفاتيح الغائبة تُعيد true بدل رفع استثناء
 -- يُفشل عملية الإعجاب/التعليق/المتابعة.
+-- notification_settings قد يكون json أو jsonb، لذا نُحوِّله صراحةً إلى jsonb
+-- قبل jsonb_typeof و ->> كي تعمل الدالة مع النوعين.
 create or replace function public.aani_notifications_enabled(
   p_user_id uuid,
   p_category text
@@ -62,8 +64,8 @@ set search_path = ''
 as $$
   select coalesce(
     (
-      select case jsonb_typeof(p.notification_settings -> p_category)
-               when 'boolean' then (p.notification_settings ->> p_category)::boolean
+      select case jsonb_typeof(p.notification_settings::jsonb -> p_category)
+               when 'boolean' then (p.notification_settings::jsonb ->> p_category)::boolean
                else true
              end
       from public.profiles as p
