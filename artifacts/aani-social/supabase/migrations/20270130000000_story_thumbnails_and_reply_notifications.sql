@@ -19,8 +19,14 @@ begin;
 alter table public.stories
   add column if not exists thumbnail_url text;
 
--- 2) بيانات منظمة للإشعار (kind/story_id/story_reply_text/story_thumbnail_url/...)
+-- 2) بيانات منظمة للإشعار + ضمان الأعمدة التي يكتبها هذا الترحيل.
+--    كلها add column if not exists: لا تغيّر نوعاً قائماً ولا تحذف بيانات،
+--    وتضمن أن INSERT أدناه يعمل حتى على قاعدة تخطّت بعض ترحيلات الإشعارات.
 alter table public.notifications
+  add column if not exists reference_id uuid,
+  add column if not exists entity_id uuid,
+  add column if not exists comment_id uuid,
+  add column if not exists content_kind text,
   add column if not exists metadata jsonb;
 
 -- 3) إعداد إشعارات الستوري لصاحب الحساب (نفس تعريف 20270129000000 —
@@ -154,9 +160,38 @@ for each row execute function public.aani_notify_story_like();
 
 commit;
 
--- تحقق:
--- select column_name from information_schema.columns
---  where table_schema='public' and table_name='stories' and column_name='thumbnail_url';
--- select column_name from information_schema.columns
---  where table_schema='public' and table_name='notifications' and column_name='metadata';
--- select proname from pg_proc where proname in ('aani_set_story_thumbnail','aani_notify_story_like');
+-- تحقق (قراءة فقط) بعد التطبيق:
+-- 1) الأعمدة:
+-- select table_name, column_name, is_nullable, data_type
+--   from information_schema.columns
+--  where table_schema='public'
+--    and ((table_name='stories' and column_name='thumbnail_url')
+--      or (table_name='notifications' and column_name in
+--          ('user_id','actor_id','type','content','reference_id','entity_id','comment_id','content_kind','metadata')))
+--  order by table_name, ordinal_position;
+-- 2) مشغّلات story_likes (المتوقع: aani_blocked_story_likes_trg + aani_notify_story_like_trg فقط):
+-- select t.tgname, p.proname, t.tgenabled
+--   from pg_trigger t
+--   join pg_proc p on p.oid = t.tgfoid
+--  where t.tgrelid='public.story_likes'::regclass and not t.tgisinternal
+--  order by t.tgname;
+-- 3) الدالتان: المالك، SECURITY DEFINER، search_path، والصلاحيات:
+-- select p.oid::regprocedure as signature,
+--        pg_get_userbyid(p.proowner) as owner,
+--        p.prosecdef as security_definer,
+--        p.proconfig as settings,
+--        p.proacl as acl
+--   from pg_proc p
+--  where p.oid in ('public.aani_set_story_thumbnail(uuid,text)'::regprocedure,
+--                  'public.aani_notify_story_like()'::regprocedure,
+--                  'public.aani_story_notifications_enabled(uuid)'::regprocedure);
+-- 4) لا مسار LIKE آخر على story_likes:
+-- select t.tgname, p.proname
+--   from pg_trigger t join pg_proc p on p.oid=t.tgfoid
+--  where t.tgrelid='public.story_likes'::regclass and not t.tgisinternal
+--    and p.prosrc ~* 'notifications';
+-- 5) بنية story_likes:
+-- select column_name, data_type, is_nullable from information_schema.columns
+--  where table_schema='public' and table_name='story_likes' order by ordinal_position;
+-- select conname, pg_get_constraintdef(oid) from pg_constraint
+--  where conrelid='public.story_likes'::regclass;
