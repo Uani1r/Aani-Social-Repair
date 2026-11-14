@@ -268,6 +268,8 @@ alter table public.notifications add column if not exists content_kind text;
 -- ---------------------------------------------------------------------------
 -- 3) إعداد إشعارات الستوري لصاحب الحساب (افتراضي: نعم)
 --    قراءة آمنة لـ JSON: قيمة غير منطقية/NULL/مفتاح غائب ⇒ true
+--    notification_settings قد يكون json أو jsonb، لذا نُحوِّله صراحةً إلى jsonb
+--    قبل jsonb_typeof و ->> كي تعمل الدالة مع النوعين.
 -- ---------------------------------------------------------------------------
 create or replace function public.aani_story_notifications_enabled(p_user_id uuid)
 returns boolean
@@ -278,8 +280,8 @@ set search_path = ''
 as $$
   select coalesce(
     (
-      select case jsonb_typeof(p.notification_settings -> 'stories')
-               when 'boolean' then (p.notification_settings ->> 'stories')::boolean
+      select case jsonb_typeof(p.notification_settings::jsonb -> 'stories')
+               when 'boolean' then (p.notification_settings::jsonb ->> 'stories')::boolean
                else true
              end
       from public.profiles as p

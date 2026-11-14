@@ -226,6 +226,8 @@ end $$;
 
 -- 3) إعداد إشعارات الستوري لصاحب الحساب (نفس تعريف 20270129000000 —
 --    معرَّف هنا أيضاً كي يعمل هذا الترحيل وحده دون الاعتماد على ترتيب التطبيق).
+--    notification_settings قد يكون json أو jsonb، لذا نُحوِّله صراحةً إلى jsonb
+--    قبل jsonb_typeof و ->> كي تعمل الدالة مع النوعين.
 create or replace function public.aani_story_notifications_enabled(p_user_id uuid)
 returns boolean
 language sql
@@ -235,8 +237,8 @@ set search_path = ''
 as $$
   select coalesce(
     (
-      select case jsonb_typeof(p.notification_settings -> 'stories')
-               when 'boolean' then (p.notification_settings ->> 'stories')::boolean
+      select case jsonb_typeof(p.notification_settings::jsonb -> 'stories')
+               when 'boolean' then (p.notification_settings::jsonb ->> 'stories')::boolean
                else true
              end
       from public.profiles as p
