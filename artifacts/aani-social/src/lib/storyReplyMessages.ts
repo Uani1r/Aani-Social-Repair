@@ -478,7 +478,9 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
     content: input.text,
     story_reply: true,
   };
-  if (input.storyId) payload.story_id = input.storyId;
+
+  try {
+    if (input.storyId) payload.story_id = input.storyId;
   if (input.storyMediaUrl) payload.story_media_url = input.storyMediaUrl;
   if (input.storyThumbnailUrl) payload.story_thumbnail_url = input.storyThumbnailUrl;
   if (input.storyMediaType) payload.story_media_type = input.storyMediaType;
@@ -575,4 +577,37 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
   }
 
   return lastResult;
+  } catch (error) {
+    const sendError = toStoryReplyInsertError(error);
+    console.warn('[story reply] stage=send unexpected', {
+      name: sendError.name ?? 'unknown',
+      code: sendError.code ?? 'unknown',
+    });
+
+    // أي استثناء غير متوقع بعد إنشاء المعرّف: لا نعلن فشلاً قبل التحقق من
+    // وجود الصف نفسه بالـUUID + المرسل + المستلم. لا إعادة إدراج هنا.
+    let existence: MessageExistence = 'unknown';
+    try {
+      existence = await waitForStoryReplyMessage(messageId, input.senderId, input.recipientId);
+    } catch (verificationError) {
+      const name = verificationError && typeof verificationError === 'object' && 'name' in verificationError
+        ? String((verificationError as { name?: unknown }).name ?? 'unknown')
+        : 'unknown';
+      console.warn('[story reply] stage=send verify threw', { name });
+      existence = 'unknown';
+    }
+
+    if (existence === 'found') {
+      console.info('[story reply] stage=send unexpected but row found');
+      return finishSuccessfulInsert(messageId, input, payload);
+    }
+
+    console.warn('[story reply] stage=send uncertain after unexpected', {
+      verification: existence,
+      name: sendError.name ?? 'unknown',
+      code: sendError.code ?? 'unknown',
+    });
+    // لا فشل مؤكد ولا نجاح مؤكد: تبقى الواجهة غير مؤكدة وتحتفظ بنص المستخدم.
+    return { error: null, uncertain: true };
+  }
 }
