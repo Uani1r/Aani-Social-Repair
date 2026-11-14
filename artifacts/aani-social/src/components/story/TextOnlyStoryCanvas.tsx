@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
 import { Paintbrush, Star, Trash2, X } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
@@ -229,6 +229,11 @@ export default function TextOnlyStoryCanvas({
       && point.y >= bounds.top && point.y <= bounds.bottom);
   };
   const [backgroundPickerOpen, setBackgroundPickerOpen] = useState(false);
+  // منتقي الإشارة يحتل الطبقة العليا ويُخفي زر الخلفية ولوحته، فنغلق اللوحة
+  // عند فتحه كي لا تعود ظاهرة تلقائياً بعد إغلاق المنتقي.
+  useEffect(() => {
+    if (storyMentionsOpen) setBackgroundPickerOpen(false);
+  }, [storyMentionsOpen]);
   const lastCanvasTouchRef = useRef(0);
   const handleCanvasTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
     lastCanvasTouchRef.current = Date.now();
