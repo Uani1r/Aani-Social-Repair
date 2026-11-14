@@ -9,6 +9,7 @@ import { GridSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { sendStoryReplyMessage } from '@/lib/storyReplyMessages';
 import { uploadMedia } from '@/lib/storyUpload';
 
 type HighlightMediaType = 'image' | 'video' | 'text';
@@ -1455,43 +1456,15 @@ export function ProfileHighlightViewer({
       const sourceStoryId = story.source_story_id ?? null;
       const ownerId = activeCollection.user_id;
       const thumbnailUrl = story.media_type === 'image' ? story.media_url : null;
-      const basePayload = {
-        sender_id: currentUserId,
-        recipient_id: ownerId,
-        content: text,
-        story_id: sourceStoryId,
-        story_media_url: story.media_url,
-        story_thumbnail_url: thumbnailUrl,
-        story_media_type: story.media_type,
-      };
-
-      let { error } = await supabase.from('messages').insert(basePayload);
-      if (error && /story_media_url|story_thumbnail_url|story_media_type/i.test(error.message || '')) {
-        const {
-          story_media_url: _mediaUrl,
-          story_thumbnail_url: _thumbnailUrl,
-          story_media_type: _mediaType,
-          ...legacyReply
-        } = basePayload;
-        void _mediaUrl;
-        void _thumbnailUrl;
-        void _mediaType;
-        ({ error } = await supabase.from('messages').insert(legacyReply));
-      }
-      if (error && /story_id/i.test(error.message || '')) {
-        const {
-          story_media_url: _mediaUrl,
-          story_thumbnail_url: _thumbnailUrl,
-          story_media_type: _mediaType,
-          story_id: _storyId,
-          ...legacyReply
-        } = basePayload;
-        void _mediaUrl;
-        void _thumbnailUrl;
-        void _mediaType;
-        void _storyId;
-        ({ error } = await supabase.from('messages').insert(legacyReply));
-      }
+      const { error } = await sendStoryReplyMessage({
+        senderId: currentUserId,
+        recipientId: ownerId,
+        text,
+        storyId: sourceStoryId,
+        storyMediaUrl: story.media_url,
+        storyThumbnailUrl: thumbnailUrl,
+        storyMediaType: story.media_type,
+      });
       if (error) throw error;
 
       setReplyText('');

@@ -15,6 +15,7 @@ import EmojiText from '@/components/TwemojiText';
 import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
+import { isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
 import StoryReplyCard from '@/components/stories/StoryReplyCard';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
@@ -37,6 +38,8 @@ interface MessageRow {
   story_media_url?: string | null;
   story_thumbnail_url?: string | null;
   story_media_type?: string | null;
+  /** علامة صريحة: true = رد ستوري، وليس مشاركة ستوري داخل DM. */
+  story_reply?: boolean | null;
   created_at: string;
   delivered_at: string | null;
   read_at: string | null;
@@ -476,6 +479,7 @@ function normalizeMessageRows(value: unknown): MessageRow[] {
       story_media_url: typeof item.story_media_url === 'string' ? item.story_media_url : null,
       story_thumbnail_url: typeof item.story_thumbnail_url === 'string' ? item.story_thumbnail_url : null,
       story_media_type: typeof item.story_media_type === 'string' ? item.story_media_type : null,
+      story_reply: item.story_reply === true,
       created_at: typeof item.created_at === 'string' ? item.created_at : '',
       delivered_at: typeof item.delivered_at === 'string' ? item.delivered_at : null,
       read_at: typeof item.read_at === 'string' ? item.read_at : null,
@@ -588,11 +592,12 @@ async function queryMessageRows(
   let includeDeliveryColumns = true;
   let includeMessageMetadata = includeMetadata;
   let includeReplyMetadata = includeMetadata;
+  let includeStoryReplyFlag = includeMetadata;
   let includeStoryReplyMedia = includeMetadata;
 
   // الحد الأقصى للمحاولات يغطي إسقاط كل مجموعة أعمدة اختيارية بالتتابع.
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeStoryReplyMedia ? ', story_media_url, story_thumbnail_url, story_media_type' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeStoryReplyFlag ? ', story_reply' : ''}${includeStoryReplyMedia ? ', story_media_url, story_thumbnail_url, story_media_type' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
     const result = await retrySupabaseQuery(async () => await supabase
       .from('messages')
       .select(fields)
@@ -607,6 +612,10 @@ async function queryMessageRows(
     }
     if (includeStoryReplyMedia && /story_media_url|story_thumbnail_url|story_media_type/i.test(errorText)) {
       includeStoryReplyMedia = false;
+      continue;
+    }
+    if (includeStoryReplyFlag && /story_reply/i.test(errorText)) {
+      includeStoryReplyFlag = false;
       continue;
     }
     if (includeReplyMetadata && /reply_to_message_id/i.test(errorText)) {
@@ -644,6 +653,7 @@ function isEditableTextMessage(message: MessageRow): boolean {
   return Boolean(content)
     && !message.post_id
     && !message.story_id
+    && message.story_reply !== true
     && !message.story_media_url
     && !message.story_thumbnail_url
     && !message.story_media_type
@@ -696,36 +706,6 @@ function readRequestTabReadAt(userId: string): string | null {
   } catch {
     return null;
   }
-}
-
-const LEGACY_STORY_REPLY_PREFIX = '[story-reply]';
-
-function isLegacyStoryReplyContent(content: string): boolean {
-  return content.trimStart().startsWith(LEGACY_STORY_REPLY_PREFIX);
-}
-
-function hasStoredStoryReplyMedia(message: MessageRow): boolean {
-  return Boolean(message.story_media_url || message.story_thumbnail_url || message.story_media_type);
-}
-
-/** نص الرد وحده، دون الوسم القديم [story-reply]. */
-function storyReplyText(message: MessageRow): string {
-  const content = message.content.trim();
-  return isLegacyStoryReplyContent(content)
-    ? content.slice(LEGACY_STORY_REPLY_PREFIX.length).trim()
-    : content;
-}
-
-/**
- * رد ستوري حقيقي: الوسم القديم، أو حقول معاينة ستوري محفوظة مع الرسالة
- * (البيانات الموثوقة). مشاركة الستوري العادية [story:...] ليست رداً.
- */
-function isStoryReplyMessage(message: MessageRow): boolean {
-  if (message.post_id) return false;
-  const content = message.content.trim();
-  if (isLegacyStoryReplyContent(content)) return true;
-  if (content.startsWith('[story:')) return false;
-  return hasStoredStoryReplyMedia(message);
 }
 
 function messagePreview(message: MessageRow | null, currentUserId: string): string {

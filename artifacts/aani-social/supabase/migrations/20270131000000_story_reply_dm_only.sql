@@ -1,18 +1,24 @@
--- Story replies are DM-only.
+-- Story replies are DM-only (v2).
 --
 -- الهدف:
 --   * كل رد على ستوري يُرسل رسالة خاصة واحدة فقط (public.messages).
---   * لا يُنشأ أي إشعار reply بسبب رد الستوري (ولا إشعار message له).
+--   * لا يُنشأ أي إشعار reply بسبب رد الستوري.
+--   * لا يُنشأ إشعار message عام لرد الستوري، بينما تبقى إشعارات مشاركة
+--     الستوري العادية والرسائل العادية كما هي دون أي تغيير.
 --   * الوسم [story-reply] لا يُستخدم في الرسائل الجديدة، لكن الرسائل القديمة
 --     التي تحمله تبقى مدعومة في الواجهة.
 --   * تُحفظ بيانات معاينة الستوري مع الرسالة نفسها كي تظل بطاقة الرد سليمة
 --     بعد انتهاء صلاحية الستوري أو حذف سجله/وسائطه.
 --
--- الملف لا يحذف أي رسالة أو إشعار قائم، ولا يمسّ مشغّلات الإعجاب أو التعليق
--- أو المتابعة أو إعجاب الستوري أو أبرز القصص. يعمل على أي قاعدة طبّقت أو لم
--- تُطبّق 20270129000000 / 20270130000000 (كل شيء idempotent).
+-- التمييز الدقيق (لا يعتمد على story_id وحده، لأن مشاركة الستوري تحمله أيضاً):
+--   * رد ستوري  : messages.story_reply = true، أو الوسم القديم [story-reply].
+--   * مشاركة ستوري: content يبدأ بـ[story:...] (+ story_id)، وstory_reply غير مفعّل.
+--   * رسالة عادية : لا علامة ولا وسم.
+-- لا يُغيّر أي مشغّل آخر، ولا يحذف أي رسالة أو إشعار قائم، ولا يمسّ إشعارات
+-- الإعجاب أو التعليق أو المتابعة أو إعجاب الستوري أو أبرز القصص أو مشاركة القصص.
 --
--- ترتيب التطبيق: بعد 20270130000000.
+-- يعمل على أي قاعدة طبّقت أو لم تُطبّق 20270129000000 / 20270130000000
+-- (كل شيء idempotent). ترتيب التطبيق: بعد 20270130000000.
 
 begin;
 
@@ -35,13 +41,15 @@ end $$;
 -- ---------------------------------------------------------------------------
 -- 1) أعمدة بطاقة رد الستوري داخل الرسالة.
 --    nullable بالكامل: الرسائل العادية لا تتأثر، وكل الإضافات IF NOT EXISTS.
---    story_id قد يكون موجوداً مسبقاً من 20270129000000 فلا يُعاد إنشاؤه.
+--    story_reply هي العلامة الصريحة التي تميّز الرد عن مشاركة الستوري، لأن
+--    كلتيهما تحمل story_id.
 -- ---------------------------------------------------------------------------
 alter table public.messages
   add column if not exists story_id uuid,
   add column if not exists story_media_url text,
   add column if not exists story_thumbnail_url text,
-  add column if not exists story_media_type text;
+  add column if not exists story_media_type text,
+  add column if not exists story_reply boolean;
 
 -- تحقق من الأنواع الفعلية: عمود قائم بنوع مختلف يقبل الإدراج لكنه يكسر
 -- الاستعلامات، فنوقف الترحيل برسالة واضحة بدل افتراض النوع.
@@ -58,6 +66,7 @@ begin
       (col.column_name = 'story_id' and col.data_type <> 'uuid')
       or (col.column_name in ('story_media_url', 'story_thumbnail_url', 'story_media_type')
         and col.data_type <> 'text')
+      or (col.column_name = 'story_reply' and col.data_type <> 'boolean')
     );
 
   if v_bad_type is not null then
@@ -67,10 +76,10 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
--- 2) إيقاف مشغّل إشعار رد الستوري.
+-- 2) إيقاف مشغّل إشعار رد الستوري — هذا هو الضمان الأساسي.
 --    المشغّل الذي أنشأه 20270129000000 اسمه aani_notify_story_reply_trg ودالته
 --    aani_notify_story_reply(). نُزيل كل مشغّل على messages يستدعي تلك الدالة
---    (بأي اسم) ثم الدالة نفسها، دون المساس بأي مشغّل آخر.
+--    (بأي اسم) ثم الدالة نفسها. لا نلمس أي مشغّل آخر على messages.
 -- ---------------------------------------------------------------------------
 do $$
 declare
@@ -90,9 +99,9 @@ end $$;
 drop function if exists public.aani_notify_story_reply();
 
 -- ---------------------------------------------------------------------------
--- 3) إشعار الرسائل العامة: لا يُنشأ إشعار لرد الستوري.
---    نفس دالة 20270129000000/20261226000000 مع قراءة آمنة للأعمدة الجديدة
---    وإضافة خروج مبكر لكل رسالة تحمل بيانات رد ستوري، إضافة إلى الوسم القديم.
+-- 3) إشعار الرسائل العامة: رد الستوري فقط لا يُنشئ إشعاراً.
+--    التمييز: story_reply = true أو الوسم القديم. مشاركة الستوري ([story:...]
+--    مع story_id) والرسالة العادية تُنشئ إشعار message كما كانت تماماً.
 --    لا تُنشأ مشغّلات هنا: قاعدة أزالت aani_message_notification_after_insert
 --    عمداً لا يجوز أن تعود إليها الإشعارات.
 -- ---------------------------------------------------------------------------
@@ -105,18 +114,11 @@ as $$
 declare
   v_is_story_reply boolean;
 begin
-  begin
-    v_is_story_reply := nullif(to_jsonb(new) ->> 'story_id', '') is not null
-      or coalesce(to_jsonb(new) ->> 'story_media_url', '') <> ''
-      or coalesce(to_jsonb(new) ->> 'story_thumbnail_url', '') <> ''
-      or coalesce(to_jsonb(new) ->> 'story_media_type', '') <> ''
-      or coalesce(new.content, '') like '[story-reply]%';
-  exception
-    when others then
-      v_is_story_reply := coalesce(new.content, '') like '[story-reply]%';
-  end;
+  -- قراءة الحقول عبر to_jsonb تتفادى أي اختلاف في بنية الجدول بين البيئات.
+  v_is_story_reply := coalesce(to_jsonb(new) ->> 'story_reply', '') in ('true', 't', '1')
+    or coalesce(new.content, '') like '[story-reply]%';
 
-  -- رد الستوري: بطاقته في المحادثة نفسها، بلا إشعار عام.
+  -- رد ستوري: بطاقته في المحادثة نفسها، بلا إشعار عام.
   if v_is_story_reply then return new; end if;
 
   if new.sender_id is null
@@ -141,10 +143,18 @@ $$;
 revoke all on function public.aani_notify_on_message_insert() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 4) شبكة أمان: منع أي إشعار مرتبط برسالة رد ستوري.
---    أي مشغّل آخر (من ترحيل غير معروف) يحاول إدراج إشعار message/reply مرتبط
---    بـreference_id = messages.id لرسالة رد ستوري يُسقط الإدراج بصمت.
---    لا يمسّ الإشعارات غير المرتبطة برسالة، ولا أنواع الإشعارات الأخرى.
+-- 4) شبكة أمان متوافقة مع بنية الإشعارات الفعلية.
+--    إشعار رد الستوري القديم لم يكن يحمل messages.id: مشغّل
+--    aani_notify_story_reply() كان يضع story_id في reference_id وentity_id مع
+--    content_kind = 'story'، والواجهة كانت تكتب metadata.kind = 'story_reply'.
+--    لذلك نغطي الحالتين:
+--      أ) type = 'reply'  : إشعار يشير إلى ستوري (reference/entity) أو يحمل
+--         content_kind = 'story'/'highlight' أو metadata.kind = story_reply/
+--         highlight_reply ⇒ يُحجب.
+--      ب) type = 'message': يُحجب فقط إذا كانت الرسالة المشار إليها برد ستوري
+--         بعلامته الصريحة أو الوسم القديم. مشاركة الستوري والرسالة العادية
+--         تمرّان كما هما.
+--    الحذف في القسم 2 هو الضمان الأساسي؛ هذه شبكة دفاع ثانية لأي مسار آخر.
 -- ---------------------------------------------------------------------------
 create or replace function public.aani_block_story_reply_notifications()
 returns trigger
@@ -153,22 +163,64 @@ security definer
 set search_path = ''
 as $$
 declare
+  v_type text := coalesce(new.type, '');
+  v_content_kind text;
+  v_metadata_kind text;
+  v_reference_id uuid;
+  v_entity_id uuid;
   v_message_row jsonb;
 begin
-  if coalesce(new.type, '') not in ('message', 'reply') then return new; end if;
-  if new.reference_id is null then return new; end if;
+  if v_type not in ('message', 'reply') then return new; end if;
+
+  v_content_kind := to_jsonb(new) ->> 'content_kind';
+  v_metadata_kind := to_jsonb(new) -> 'metadata' ->> 'kind';
+
+  begin
+    v_reference_id := nullif(to_jsonb(new) ->> 'reference_id', '')::uuid;
+  exception
+    when others then
+      v_reference_id := null;
+  end;
+
+  begin
+    v_entity_id := nullif(to_jsonb(new) ->> 'entity_id', '')::uuid;
+  exception
+    when others then
+      v_entity_id := null;
+  end;
+
+  if v_type = 'reply' then
+    if coalesce(v_content_kind, '') in ('story', 'highlight')
+      or coalesce(v_metadata_kind, '') in ('story_reply', 'highlight_reply') then
+      return null;
+    end if;
+
+    if v_reference_id is not null and exists (
+      select 1 from public.stories as story where story.id = v_reference_id
+    ) then
+      return null;
+    end if;
+
+    if v_entity_id is not null and exists (
+      select 1 from public.stories as story where story.id = v_entity_id
+    ) then
+      return null;
+    end if;
+
+    return new;
+  end if;
+
+  -- type = 'message'
+  if v_reference_id is null then return new; end if;
 
   select to_jsonb(msg)
     into v_message_row
   from public.messages as msg
-  where msg.id = new.reference_id;
+  where msg.id = v_reference_id;
 
   if v_message_row is null then return new; end if;
 
-  if coalesce(v_message_row ->> 'story_id', '') <> ''
-    or coalesce(v_message_row ->> 'story_media_url', '') <> ''
-    or coalesce(v_message_row ->> 'story_thumbnail_url', '') <> ''
-    or coalesce(v_message_row ->> 'story_media_type', '') <> ''
+  if coalesce(v_message_row ->> 'story_reply', '') in ('true', 't', '1')
     or coalesce(v_message_row ->> 'content', '') like '[story-reply]%' then
     return null;
   end if;
@@ -190,7 +242,8 @@ commit;
 -- select column_name, data_type, is_nullable
 --   from information_schema.columns
 --  where table_schema = 'public' and table_name = 'messages'
---    and column_name in ('story_id', 'story_media_url', 'story_thumbnail_url', 'story_media_type')
+--    and column_name in ('story_id', 'story_media_url', 'story_thumbnail_url',
+--                        'story_media_type', 'story_reply')
 --  order by column_name;
 -- 2) مشغّلات messages (المتوقع ألا يظهر aani_notify_story_reply_trg):
 -- select t.tgname, p.proname, t.tgenabled

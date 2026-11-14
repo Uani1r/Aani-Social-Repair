@@ -6,6 +6,7 @@ import type {
 } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { pushGlobalError } from '@/lib/globalErrorStore';
+import { sendStoryReplyMessage } from '@/lib/storyReplyMessages';
 import { displayName } from '@/lib/types';
 import type { StoryRow } from './types';
 
@@ -441,45 +442,15 @@ export function useStoryViewerActions({
       // انتهاء صلاحية الستوري أو حذف سجلها/وسائطها.
       const thumbnailUrl = currentStory.thumbnail_url
         ?? (currentStory.media_type === 'image' ? currentStory.media_url : null);
-      const basePayload = {
-        sender_id: userId,
-        recipient_id: currentStory.user_id,
-        content: textToSend,
-        story_id: currentStory.id,
-        story_media_url: currentStory.media_url,
-        story_thumbnail_url: thumbnailUrl,
-        story_media_type: currentStory.media_type,
-      };
-
-      let { error } = await supabase.from('messages').insert(basePayload);
-      // توافق مع قاعدة لم تُطبَّق عليها أعمدة معاينة الستوري بعد.
-      if (error && /story_media_url|story_thumbnail_url|story_media_type/i.test(error.message || '')) {
-        const {
-          story_media_url: _mediaUrl,
-          story_thumbnail_url: _thumbnailUrl,
-          story_media_type: _mediaType,
-          ...legacyReply
-        } = basePayload;
-        void _mediaUrl;
-        void _thumbnailUrl;
-        void _mediaType;
-        ({ error } = await supabase.from('messages').insert(legacyReply));
-      }
-      // توافق مع قاعدة لم يُضَف إليها messages.story_id بعد.
-      if (error && /story_id/i.test(error.message || '')) {
-        const {
-          story_media_url: _mediaUrl,
-          story_thumbnail_url: _thumbnailUrl,
-          story_media_type: _mediaType,
-          story_id: _storyId,
-          ...legacyReply
-        } = basePayload;
-        void _mediaUrl;
-        void _thumbnailUrl;
-        void _mediaType;
-        void _storyId;
-        ({ error } = await supabase.from('messages').insert(legacyReply));
-      }
+      const { error } = await sendStoryReplyMessage({
+        senderId: userId,
+        recipientId: currentStory.user_id,
+        text: textToSend,
+        storyId: currentStory.id,
+        storyMediaUrl: currentStory.media_url,
+        storyThumbnailUrl: thumbnailUrl,
+        storyMediaType: currentStory.media_type,
+      });
       if (error) throw error;
 
       setReplyText('');
