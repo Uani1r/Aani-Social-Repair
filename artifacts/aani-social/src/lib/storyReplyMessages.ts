@@ -33,6 +33,8 @@ export interface StoryReplyInsertError {
 
 export interface StoryReplyInsertResult {
   error: StoryReplyInsertError | null;
+  /** أُرسلت الرسالة لكن تعذّر تثبيت حقول معاينة الستوري عليها. */
+  warning?: 'preview-not-saved';
 }
 
 export interface StoryReplyMessageLike {
@@ -164,6 +166,86 @@ async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<S
   return { error: toStoryReplyInsertError(error) };
 }
 
+function createReplyMessageId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, character => {
+    const random = Math.floor(Math.random() * 16);
+    return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
+  });
+}
+
+const VERIFY_COLUMNS = 'story_reply, story_id, story_media_url, story_thumbnail_url, story_media_type';
+const STORY_FIELD_KEYS = [
+  'story_reply',
+  'story_id',
+  'story_media_url',
+  'story_thumbnail_url',
+  'story_media_type',
+] as const;
+
+/**
+ * بعد نجاح الإدراج نقرأ الصف مرة واحدة ونتحقق أن الحقول التي أرسلناها فعلاً
+ * موجودة. إن كانت NULL رغم نجاح الإدراج (مشغّل، مخطط قديم، أو عميل قديم)،
+ * نثبّتها بتحديث على نفس الصف. الفشل هنا لا يُعاد كخطأ إرسال لأن الرسالة أُرسلت
+ * بالفعل، لكنه لا يُخفى: يُعاد warning صريح ويُسجّل كود الخطأ فقط.
+ */
+async function verifyStoryReplyFields(
+  messageId: string,
+  senderId: string,
+  sentPayload: MessageInsertPayload,
+): Promise<Pick<StoryReplyInsertResult, 'warning'>> {
+  const expected: MessageInsertPayload = {};
+  for (const key of STORY_FIELD_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(sentPayload, key)) expected[key] = sentPayload[key];
+  }
+  if (Object.keys(expected).length === 0) return {};
+
+  const { data, error } = await supabase
+    .from('messages')
+    .select(VERIFY_COLUMNS)
+    .eq('id', messageId)
+    .eq('sender_id', senderId)
+    .maybeSingle();
+
+  if (error || !data) {
+    // لا صلاحية قراءة أو تعذرت القراءة: لا يمكن التحقق، ولا نُفشل إرسالاً نجح.
+    if (error) {
+      console.warn('[story reply] stage=verify unreadable', { code: error.code ?? 'unknown' });
+    }
+    return {};
+  }
+
+  const row = data as unknown as Record<string, unknown>;
+  const missing: MessageInsertPayload = {};
+  for (const [key, value] of Object.entries(expected)) {
+    const actual = row[key];
+    const matches = value === true
+      ? actual === true
+      : (actual ?? null) === (value ?? null);
+    if (!matches) missing[key] = value;
+  }
+  if (Object.keys(missing).length === 0) return {};
+
+  const { data: updated, error: updateError } = await supabase
+    .from('messages')
+    .update(missing)
+    .eq('id', messageId)
+    .eq('sender_id', senderId)
+    .select('id');
+
+  if (updateError || !updated || updated.length === 0) {
+    console.warn('[story reply] stage=preview-heal failed', {
+      code: updateError?.code ?? 'no-rows',
+    });
+    return { warning: 'preview-not-saved' };
+  }
+
+  console.info('[story reply] stage=preview-heal succeeded', { fields: Object.keys(missing).length });
+  return {};
+}
+
 // أعمدة اختيارية يمكن إسقاطها منفردة عند تأكيد غيابها في قاعدة قديمة، مع
 // الاحتفاظ ببقية البيانات في كل محاولة.
 const OPTIONAL_STORY_COLUMNS = [
@@ -211,7 +293,11 @@ function namedOptionalColumns(
 }
 
 export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promise<StoryReplyInsertResult> {
+  // معرّف من العميل: يسمح بالتحقق من الصف بعد الإدراج وتثبيت الحقول عليه إن
+  // لزم، دون البحث عن الرسالة بالنص (وهو غير موثوق وقد يطابق رسالة أخرى).
+  const messageId = createReplyMessageId();
   const payload: MessageInsertPayload = {
+    id: messageId,
     sender_id: input.senderId,
     recipient_id: input.recipientId,
     content: input.text,
@@ -236,7 +322,8 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
           columnsInPayload: Object.keys(payload).length,
         });
       }
-      return lastResult;
+      const verification = await verifyStoryReplyFields(messageId, input.senderId, payload);
+      return { error: null, ...verification };
     }
 
     if (!firstFailureLogged) {

@@ -3354,6 +3354,30 @@ body.aani-immersive .unified-top-bar {
   direction: rtl;
 }
 
+/* المحاذاة الفعلية بالجهة الفيزيائية: ردّي إلى اليمين دائماً، وردّ الطرف
+   الآخر إلى اليسار دائماً، بصرف النظر عن اتجاه الحاوية أو الـflex direction. */
+.messages-story-reply.is-mine {
+  margin-left: auto;
+  margin-right: 0;
+  align-self: flex-end;
+}
+
+.messages-story-reply.is-theirs {
+  margin-right: auto;
+  margin-left: 0;
+  align-self: flex-start;
+}
+
+.messages-message-row.has-reactions.is-mine .messages-message-body {
+  align-items: flex-end;
+  margin-left: auto;
+}
+
+.messages-message-row.has-reactions.is-theirs .messages-message-body {
+  align-items: flex-start;
+  margin-right: auto;
+}
+
 .messages-story-reply-label {
   display: block;
   padding-inline: 2px;
