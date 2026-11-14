@@ -167,12 +167,18 @@ export function toAbsoluteMediaUrl(value: string | null | undefined): string | n
 
 type MessageExistence = 'found' | 'not-found' | 'unknown';
 
-/**
- * عند استثناء أثناء الإدراج (انقطاع اتصال/إلغاء) لا نعرف هل حفظته القاعدة.
- * نتحقق من الصف نفسه بمعرّف الرسالة الذي أُنشئ قبل الإدراج + المرسل + المستلم،
- * دون البحث بالنص ودون إعادة إدراج بمعرّف جديد.
- */
-async function findStoryReplyMessage(
+// قد يصل طلب الإدراج إلى الخادم ويُحفظ بعد انقطاع التأكيد؛ لذلك لا نعتبر
+// «عدم العثور» نهائياً إلا بعد محاولات متعددة بفواصل قصيرة متدرجة.
+const VERIFY_DELAYS_MS = [0, 250, 700, 1300, 2200] as const;
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+/** محاولة تحقق واحدة بالمعرّف الذي أُنشئ قبل الإدراج + المرسل + المستلم. */
+async function findStoryReplyMessageOnce(
   messageId: string,
   senderId: string,
   recipientId: string,
@@ -186,6 +192,7 @@ async function findStoryReplyMessage(
       .eq('recipient_id', recipientId)
       .maybeSingle();
     if (error) {
+      // فشل قراءة/اتصال: النتيجة غير محسومة، وليست دليل عدم وجود.
       console.warn('[story reply] stage=insert-verify unreadable', { code: error.code ?? 'unknown' });
       return 'unknown';
     }
@@ -197,6 +204,35 @@ async function findStoryReplyMessage(
     console.warn('[story reply] stage=insert-verify threw', { name });
     return 'unknown';
   }
+}
+
+/**
+ * تحقق متكرر بعد استثناء الإدراج. تعود 'found' عند أول ظهور، و'unknown'
+ * فور أي فشل قراءة/إلغاء، و'not-found' فقط بعد نجاح كل المحاولات بلا صف.
+ * لا تُعيد الإدراج ولا تُنشئ معرّفاً جديداً.
+ */
+async function waitForStoryReplyMessage(
+  messageId: string,
+  senderId: string,
+  recipientId: string,
+): Promise<MessageExistence> {
+  for (let attempt = 0; attempt < VERIFY_DELAYS_MS.length; attempt += 1) {
+    const delay = VERIFY_DELAYS_MS[attempt];
+    if (delay > 0) await wait(delay);
+
+    const existence = await findStoryReplyMessageOnce(messageId, senderId, recipientId);
+    if (existence !== 'not-found') {
+      if (existence === 'found' && attempt > 0) {
+        console.info('[story reply] stage=insert-verify found on retry', { attempt: attempt + 1 });
+      }
+      return existence;
+    }
+  }
+
+  console.warn('[story reply] stage=insert-verify not found after retries', {
+    attempts: VERIFY_DELAYS_MS.length,
+  });
+  return 'not-found';
 }
 
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {
@@ -432,7 +468,7 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
     // استثناء/انقطاع أثناء طلب الإدراج: النتيجة غير محسومة. نتحقق بالمعرّف
     // الذي أُنشئ قبل الإدراج، ولا نُعيد الإدراج بمعرّف آخر إطلاقاً.
     if (lastResult.uncertain) {
-      const existence = await findStoryReplyMessage(messageId, input.senderId, input.recipientId);
+      const existence = await waitForStoryReplyMessage(messageId, input.senderId, input.recipientId);
       if (existence === 'found') {
         console.info('[story reply] stage=insert-verify found after transport error');
         return finishSuccessfulInsert(messageId, input, payload);
