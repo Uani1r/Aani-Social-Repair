@@ -191,6 +191,44 @@ const STORY_FIELD_KEYS = [
  * نثبّتها بتحديث على نفس الصف. الفشل هنا لا يُعاد كخطأ إرسال لأن الرسالة أُرسلت
  * بالفعل، لكنه لا يُخفى: يُعاد warning صريح ويُسجّل كود الخطأ فقط.
  */
+async function readStoryReplyFields(
+  messageId: string,
+  senderId: string,
+): Promise<{ row: Record<string, unknown> | null; code: string }> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select(VERIFY_COLUMNS)
+    .eq('id', messageId)
+    .eq('sender_id', senderId)
+    .maybeSingle();
+
+  if (error) return { row: null, code: error.code ?? 'unknown' };
+  if (!data) return { row: null, code: 'no-rows' };
+  return { row: data as unknown as Record<string, unknown>, code: '' };
+}
+
+/** الحقول التي أرسلناها ولم تطابق القراءة الفعلية من الصف. */
+function mismatchedStoryFields(
+  expected: MessageInsertPayload,
+  row: Record<string, unknown>,
+): MessageInsertPayload {
+  const missing: MessageInsertPayload = {};
+  for (const [key, value] of Object.entries(expected)) {
+    const actual = row[key];
+    const matches = value === true
+      ? actual === true
+      : (actual ?? null) === (value ?? null);
+    if (!matches) missing[key] = value;
+  }
+  return missing;
+}
+
+/**
+ * بعد نجاح الإدراج نقرأ الصف ونتحقق أن الحقول التي أرسلناها فعلاً موجودة،
+ * ونثبّتها بتحديث على نفس الصف إن كانت NULL، ثم نعيد القراءة للتحقق من
+ * التثبيت. أي تعذّر في القراءة أو عدم مطابقة بعد التحديث يُعاد كتحذير صريح
+ * (رسالة أُرسلت، لكن معاينتها لم تُحفظ) ولا يُسجَّل معه محتوى أو روابط.
+ */
 async function verifyStoryReplyFields(
   messageId: string,
   senderId: string,
@@ -202,30 +240,14 @@ async function verifyStoryReplyFields(
   }
   if (Object.keys(expected).length === 0) return {};
 
-  const { data, error } = await supabase
-    .from('messages')
-    .select(VERIFY_COLUMNS)
-    .eq('id', messageId)
-    .eq('sender_id', senderId)
-    .maybeSingle();
-
-  if (error || !data) {
-    // لا صلاحية قراءة أو تعذرت القراءة: لا يمكن التحقق، ولا نُفشل إرسالاً نجح.
-    if (error) {
-      console.warn('[story reply] stage=verify unreadable', { code: error.code ?? 'unknown' });
-    }
-    return {};
+  const firstRead = await readStoryReplyFields(messageId, senderId);
+  if (!firstRead.row) {
+    // تعذر التحقق (صلاحيات/شبكة/صف غير موجود): لا نُعلن نجاحاً كاملاً.
+    console.warn('[story reply] stage=verify unreadable', { code: firstRead.code });
+    return { warning: 'preview-not-saved' };
   }
 
-  const row = data as unknown as Record<string, unknown>;
-  const missing: MessageInsertPayload = {};
-  for (const [key, value] of Object.entries(expected)) {
-    const actual = row[key];
-    const matches = value === true
-      ? actual === true
-      : (actual ?? null) === (value ?? null);
-    if (!matches) missing[key] = value;
-  }
+  const missing = mismatchedStoryFields(expected, firstRead.row);
   if (Object.keys(missing).length === 0) return {};
 
   const { data: updated, error: updateError } = await supabase
@@ -238,6 +260,21 @@ async function verifyStoryReplyFields(
   if (updateError || !updated || updated.length === 0) {
     console.warn('[story reply] stage=preview-heal failed', {
       code: updateError?.code ?? 'no-rows',
+    });
+    return { warning: 'preview-not-saved' };
+  }
+
+  // إرجاع id وحده لا يكفي: نعيد قراءة الحقول الخمسة ونتحقق من مطابقتها.
+  const secondRead = await readStoryReplyFields(messageId, senderId);
+  if (!secondRead.row) {
+    console.warn('[story reply] stage=preview-heal verify unreadable', { code: secondRead.code });
+    return { warning: 'preview-not-saved' };
+  }
+
+  const stillMismatched = mismatchedStoryFields(expected, secondRead.row);
+  if (Object.keys(stillMismatched).length > 0) {
+    console.warn('[story reply] stage=preview-heal verify mismatch', {
+      fields: Object.keys(stillMismatched).length,
     });
     return { warning: 'preview-not-saved' };
   }
