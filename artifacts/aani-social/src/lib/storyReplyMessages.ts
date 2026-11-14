@@ -144,6 +144,21 @@ export function isVideoStoryMediaType(mediaType: string | null | undefined): boo
   return mediaType === 'video';
 }
 
+/**
+ * يعيد الرابط فقط إذا كان مطلقاً http(s) كما هو محفوظ في قاعدة البيانات.
+ * لا يُعاد تكوين أي رابط ImageKit من مسار تخزين محلي أو من سجل الذاكرة المؤقت،
+ * لأن ذلك قد ينتج رابطاً غير صالح أو مختلفاً عن الرابط المحفوظ فعلاً.
+ */
+export function toAbsoluteMediaUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {
   const { error } = await supabase.from('messages').insert(payload);
   return { error: toStoryReplyInsertError(error) };
@@ -161,25 +176,35 @@ const OPTIONAL_STORY_COLUMNS = [
 
 type OptionalStoryColumn = (typeof OPTIONAL_STORY_COLUMNS)[number];
 
-// أكواد PostgREST/Postgres التي تعني «العمود غير موجود» صراحةً.
-const MISSING_COLUMN_CODES = new Set(['42703', 'PGRST204']);
+// PGRST204 يعني أن مخطط PostgREST المخزّن مؤقتاً لا يعرف العمود، وقد يكون
+// خطأً عابراً بعد إضافة أعمدة حديثاً. نعيد المحاولة بالحمولة نفسها قبل أي حذف،
+// ولا نُسقط أي عمود بسبب هذا الكود إطلاقاً.
+const SCHEMA_CACHE_CODE = 'PGRST204';
+const MISSING_COLUMN_CODE = '42703';
+const MAX_SCHEMA_CACHE_RETRIES = 2;
+
+function isSchemaCacheError(error: StoryReplyInsertError): boolean {
+  return error.code === SCHEMA_CACHE_CODE;
+}
 
 /**
- * يعيد أسماء الأعمدة الاختيارية التي يثبت غيابها من الخطأ نفسه.
- * لا يعتمد على أي خطأ عشوائي (RLS/شبكة/صيغة) كدليل على غياب عمود.
+ * دليل صريح على غياب عمود فعلياً في PostgreSQL: الكود 42703 أو نص
+ * «column ... does not exist». لا نستخدم نص PGRST204 («Could not find the
+ * '...' column ... schema cache») هنا لأنه قد يعني مخططاً مخزّناً مؤقتاً فقط.
  */
-function missingOptionalColumns(
+function isMissingColumnError(error: StoryReplyInsertError): boolean {
+  if (error.code === MISSING_COLUMN_CODE) return true;
+  const text = insertErrorText(error).toLowerCase();
+  return /column .*does not exist/.test(text);
+}
+
+/** أسماء الأعمدة الاختيارية المذكورة صراحةً في خطأ غياب عمود فعلي. */
+function namedOptionalColumns(
   error: StoryReplyInsertError,
   payload: MessageInsertPayload,
 ): OptionalStoryColumn[] {
+  if (!isMissingColumnError(error)) return [];
   const text = insertErrorText(error).toLowerCase();
-  // دليل صريح على عمود مفقود فقط: كود PostgREST/Postgres المعني، أو رسالة
-  // تقول «column ... does not exist» / «Could not find the '...' column».
-  const isMissingColumnError = MISSING_COLUMN_CODES.has(error.code ?? '')
-    || /column .*does not exist/.test(text)
-    || /could not find the '[^']+' column/.test(text);
-  if (!isMissingColumnError) return [];
-
   return OPTIONAL_STORY_COLUMNS.filter(
     column => Object.prototype.hasOwnProperty.call(payload, column) && text.includes(column),
   );
@@ -199,11 +224,20 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
 
   let legacyTagApplied = false;
   let firstFailureLogged = false;
+  let cacheRetries = 0;
   let lastResult: StoryReplyInsertResult = { error: null };
 
-  for (let attempt = 0; attempt < OPTIONAL_STORY_COLUMNS.length + 2; attempt += 1) {
+  for (let attempt = 0; attempt < OPTIONAL_STORY_COLUMNS.length + 4; attempt += 1) {
     lastResult = await insertStoryReplyPayload(payload);
-    if (!lastResult.error) return lastResult;
+    if (!lastResult.error) {
+      if (attempt > 0) {
+        console.info('[story reply] نجح الإدراج بعد محاولة توافق.', {
+          attempt,
+          columnsInPayload: Object.keys(payload).length,
+        });
+      }
+      return lastResult;
+    }
 
     if (!firstFailureLogged) {
       firstFailureLogged = true;
@@ -215,17 +249,38 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
       });
     }
 
-    const removable = missingOptionalColumns(lastResult.error, payload);
-    if (removable.length === 0) {
+    // 1) مخطط مخزّن مؤقتاً: إعادة الإدراج بالحمولة الأصلية نفسها مرتين،
+    //    دون حذف أي عمود ودون تعديل المحتوى.
+    if (isSchemaCacheError(lastResult.error)) {
+      if (cacheRetries < MAX_SCHEMA_CACHE_RETRIES) {
+        cacheRetries += 1;
+        continue;
+      }
+      console.warn('[story reply] استمر خطأ مخطط PostgREST بعد إعادة المحاولة؛ إيقاف بلا إسقاط أعمدة.', {
+        code: lastResult.error.code ?? 'unknown',
+        category: classifyInsertFailure(lastResult.error),
+        retries: cacheRetries,
+      });
+      return lastResult;
+    }
+    cacheRetries = 0;
+
+    // 2) إسقاط توافقي فقط عند دليل صريح على غياب العمود (42703).
+    const named = namedOptionalColumns(lastResult.error, payload);
+    if (named.length === 0) {
       // صلاحيات/RLS/اتصال/قيد: ليست مشكلة عمود مفقود، فلا مسار توافقي.
       return lastResult;
     }
 
-    for (const column of removable) delete payload[column];
+    for (const column of named) delete payload[column];
+    console.warn('[story reply] إسقاط أعمدة اختيارية من محاولة الإدراج.', {
+      code: lastResult.error.code ?? 'unknown',
+      columns: named.join(','),
+    });
 
     // غياب عمود story_reply فقط: نُبقي story_id وروابط الوسائط ونوعها،
     // ونستخدم الوسم القديم كعلامة بديلة.
-    if (removable.includes('story_reply') && !legacyTagApplied) {
+    if (named.includes('story_reply') && !legacyTagApplied) {
       payload.content = `${LEGACY_STORY_REPLY_PREFIX}${input.text}`;
       legacyTagApplied = true;
     }
