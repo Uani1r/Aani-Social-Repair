@@ -2,8 +2,9 @@ import { Link } from 'wouter';
 import { MoreVertical, Trash2, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import RepostIcon from '@/components/RepostIcon';
 import UserIdentity from '@/components/UserIdentity';
-import { displayName, formatDate } from '@/lib/types';
+import { cleanUsername, displayName, formatDate } from '@/lib/types';
 
 import type { StoryViewerProps } from './types';
 
@@ -31,13 +32,28 @@ export default function StoryHeader({
   onDeleteStory,
   onCloseViewer,
 }: StoryHeaderProps) {
+  // قصة معاد نشرها: تُعرض أيقونة إعادة النشر متداخلة مع أسفل صورة صاحب القصة
+  // الحالية، وبجانبها @username صاحب القصة الأصلية فقط (بلا الاسم الكامل).
+  const isReshare = Boolean(currentStory.original_story_id);
+  const originalUsername = cleanUsername(originalStoryAuthor?.username);
+
   return (
     <>
       {showUI && (
         <div className="absolute inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent" style={{ top: 'calc(1.5rem + env(safe-area-inset-top))' }}>
           <div className="flex min-w-0 flex-col items-start gap-1">
             <Link href={`/profile/${currentStory.user_id}`} className="flex min-w-0 items-center gap-4">
-              <Avatar profile={currentStory.author} storyBorder={false} />
+              <span className="relative inline-flex shrink-0">
+                <Avatar profile={currentStory.author} storyBorder={false} />
+                {isReshare && (
+                  <span
+                    className="absolute -bottom-1 -left-1 flex h-4 w-4 items-center justify-center rounded-full bg-black/85 text-white ring-1 ring-white/45"
+                    title="إعادة نشر"
+                  >
+                    <RepostIcon active={false} size={10} strokeWidth={2.6} />
+                  </span>
+                )}
+              </span>
               <div className="min-w-0 flex-1">
                 <UserIdentity
                   name={(
@@ -55,16 +71,12 @@ export default function StoryHeader({
                 <span className="mt-1 block whitespace-nowrap text-[10px] text-zinc-300">{formatDate(currentStory.created_at)}</span>
               </div>
             </Link>
-            {currentStory.original_story_id && originalStoryAuthor && (
+            {isReshare && (
               <div className="flex items-center gap-1 rounded-full bg-black/45 px-1.5 py-0.5 text-white/85 backdrop-blur-sm">
-                {originalStoryAuthor.avatar_url ? (
-                  <img src={originalStoryAuthor.avatar_url} alt="" className="h-4 w-4 rounded-full object-cover" />
-                ) : (
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[7px] font-bold">
-                    {displayName(originalStoryAuthor).replace('@', '').charAt(0)}
-                  </span>
+                <RepostIcon active={false} size={11} strokeWidth={2.4} />
+                {originalUsername && (
+                  <span dir="ltr" className="max-w-[42vw] truncate text-[9px]">@{originalUsername}</span>
                 )}
-                <span className="max-w-[42vw] truncate text-[9px]">من قصة {displayName(originalStoryAuthor)}</span>
               </div>
             )}
           </div>

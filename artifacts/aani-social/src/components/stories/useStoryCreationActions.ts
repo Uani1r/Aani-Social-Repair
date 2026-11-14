@@ -11,6 +11,7 @@ import { reportMediaStageFailure } from '@/lib/mediaDiagnostics';
 import type { Profile } from '@/lib/types';
 import type { StorySound } from '@/lib/sounds';
 import { encodeStoryFilterKey, type StoryAdjustments } from '@/lib/storyFilters';
+import { STORY_MENTION_CONTENT_MARKER } from '@/lib/storyReplyMessages';
 import type { StoryRow as StoryDmCardStory } from '../StoryDmCard';
 import type { MentionCandidate } from '../StoryMentionPicker';
 
@@ -201,7 +202,7 @@ export function useStoryCreationActions({
       const message = {
         sender_id: userId,
         recipient_id: person.id,
-        content: `[story:${storyId}] تمت الإشارة إليك بواسطة ${authorName} في قصته.`,
+        content: `[story:${storyId}] ${STORY_MENTION_CONTENT_MARKER} تمت الإشارة إليك بواسطة ${authorName} في قصته.`,
         story_id: storyId,
       };
 

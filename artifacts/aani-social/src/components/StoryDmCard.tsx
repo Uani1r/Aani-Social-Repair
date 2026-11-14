@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 
+import RepostIcon from '@/components/RepostIcon';
 import UserIdentity from '@/components/UserIdentity';
 import { SkeletonBlock } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -24,11 +25,31 @@ interface StoryDmCardProps {
   storyId: string;
   currentUserId: string;
   senderName?: string;
+  /** رسالة إشارة: عنوان «تمت الإشارة إليك» ومعاينة مصغّرة وزر «إضافة إلى القصة». */
+  mention?: boolean;
+  /** عنوان بطاقة الإشارة (يختلف للمُرسل عن المُشار إليه). */
+  mentionLabel?: string;
+  /** فتح القصة الأصلية بمعرّفها — يُمرَّر فقط عندما تبقى القصة نشطة ومتاحة. */
+  onOpenStory?: () => void;
   onAddToStory: (story: StoryRow) => void;
 }
 
-/** بطاقة ستوري عمودية داخل المحادثة الخاصة (شبيهة ببطاقة ريلز إنستغرام) */
-export default function StoryDmCard({ storyId, currentUserId, senderName, onAddToStory }: StoryDmCardProps) {
+/**
+ * بطاقة ستوري عمودية داخل المحادثة الخاصة (شبيهة ببطاقة ريلز إنستغرام).
+ * تُستخدم لحالتين من نفس نظام الرسائل والقصص، بلا أي جدول أو نظام جديد:
+ *   - مشاركة ستوري عادية داخل DM.
+ *   - رسالة إشارة: تُعرض بمعاينة مصغّرة بعنوان «تمت الإشارة إليك»، والضغط على
+ *     المعاينة يفتح القصة الأصلية بمعرّفها عبر onOpenStory.
+ */
+export default function StoryDmCard({
+  storyId,
+  currentUserId,
+  senderName,
+  mention = false,
+  mentionLabel,
+  onOpenStory,
+  onAddToStory,
+}: StoryDmCardProps) {
   const [story, setStory] = useState<StoryRow | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -77,12 +98,25 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
   const expiresAt = story?.expires_at ? Date.parse(story.expires_at) : Number.NaN;
   const expired = !story || !Number.isFinite(expiresAt) || expiresAt <= Date.now();
   const canReshare = Boolean(story && !expired && story.user_id !== currentUserId && story.media_url);
+  // فتح القصة بمعرّفها متاح فقط عندما تكون نشطة ومتاحة؛ غير ذلك يبقى النص التوضيحي.
+  const canOpen = Boolean(onOpenStory && story && !expired && story.media_url);
 
   const authorLabel = story?.author ? displayName(story.author) : senderName || '';
 
   return (
-    <div className="w-[78%] max-w-[260px] overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl">
-      <div className="relative aspect-[9/16] w-full bg-zinc-800">
+    <div
+      className={`overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl ${
+        mention ? 'w-[64%] max-w-[210px]' : 'w-[78%] max-w-[260px]'
+      }`}
+    >
+      {mention && (
+        <div className="flex items-center gap-1 border-b border-white/10 px-2.5 py-1.5 text-[10px] font-bold text-white/85">
+          <RepostIcon active={false} size={11} strokeWidth={2.4} />
+          <span>{mentionLabel ?? 'تمت الإشارة إليك'}</span>
+        </div>
+      )}
+
+      <div className={`relative w-full bg-zinc-800 ${mention ? 'aspect-[3/4]' : 'aspect-[9/16]'}`}>
         {loading ? (
           <SkeletonBlock className="absolute inset-0 rounded-none" />
         ) : !story || !story.media_url ? (
@@ -104,23 +138,33 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
           <img src={story.media_url} alt="" className="h-full w-full object-cover" />
         )}
 
-        <div className="absolute inset-x-0 top-0 flex items-center gap-4 bg-gradient-to-b from-black/70 to-transparent p-2">
-          {story?.author?.avatar_url ? (
-            <img src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
-          ) : (
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
-              {(cleanUsername(story?.author?.username).charAt(0) || 'A').toUpperCase()}
-            </span>
-          )}
-          <UserIdentity
-            name={authorLabel}
-            username={story?.author?.username}
-            className="min-w-0 flex-1"
-            nameClassName="text-[10px] font-bold text-white"
-            usernameClassName="text-[9px] text-white/70"
-          />
-        </div>
+        {!loading && story && !expired && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-4 bg-gradient-to-b from-black/70 to-transparent p-2">
+            {story.author?.avatar_url ? (
+              <img src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+            ) : (
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
+                {(cleanUsername(story.author?.username).charAt(0) || 'A').toUpperCase()}
+              </span>
+            )}
+            <UserIdentity
+              name={authorLabel}
+              username={story.author?.username}
+              className="min-w-0 flex-1"
+              nameClassName="text-[10px] font-bold text-white"
+              usernameClassName="text-[9px] text-white/70"
+            />
+          </div>
+        )}
 
+        {canOpen && (
+          <button
+            type="button"
+            onClick={onOpenStory}
+            aria-label="عرض القصة الأصلية"
+            className="absolute inset-0 z-10 rounded-2xl transition active:scale-[0.99]"
+          />
+        )}
       </div>
 
       <div className="p-2.5">
@@ -130,7 +174,7 @@ export default function StoryDmCard({ storyId, currentUserId, senderName, onAddT
             onClick={() => onAddToStory(story)}
             className="flex w-full items-center justify-center gap-1.5 rounded-full bg-white px-3 py-2 text-[12px] font-bold text-zinc-900 shadow-lg transition active:scale-[0.98]"
           >
-            <Plus size={14} /> إضافة إلى قصتك
+            <Plus size={14} /> {mention ? 'إضافة إلى القصة' : 'إضافة إلى قصتك'}
           </button>
         ) : (
           <p className="truncate text-center text-[11px] text-zinc-400">
