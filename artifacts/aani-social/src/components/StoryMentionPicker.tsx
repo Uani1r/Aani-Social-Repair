@@ -132,8 +132,16 @@ export default function StoryMentionPicker({ open, currentUserId, onClose, onCon
 
   if (!open) return null;
 
+  // أعلى طبقة في محرّر القصة (z-200) مع تعتيم يغطي الشاشة بالكامل:
+  // يمنع النقر على شريط الأدوات أو أزرار النشر أو زر الإغلاق خلف المنتقي
   return (
-    <div className="fixed inset-0 z-[78] flex items-center justify-center bg-black/60 p-3" dir="rtl">
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm"
+      dir="rtl"
+      role="dialog"
+      aria-modal="true"
+      aria-label="الإشارة إلى أشخاص"
+    >
       <div className="flex h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl border border-white/10 bg-[#141519] text-white shadow-2xl">
         <div className="flex items-center justify-between px-4 pt-4 pb-2">
           <div className="flex items-center gap-2">

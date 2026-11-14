@@ -361,6 +361,8 @@ export default function TextOnlyStoryCanvas({
         <span className="text-[9px] font-bold">حذف</span>
       </div>
 
+      {/* الشريط العلوي — يُخفى تماماً أثناء فتح منتقي الإشارة */}
+      {!storyMentionsOpen && (
       <div
         className="pointer-events-none fixed inset-x-0 top-0 z-[120] flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
@@ -376,7 +378,10 @@ export default function TextOnlyStoryCanvas({
           <X size={22} />
         </button>
       </div>
+      )}
 
+      {/* زر تغيير الخلفية — يُخفى مع لوحته أثناء فتح منتقي الإشارة */}
+      {!storyMentionsOpen && (
       <button
         type="button"
         onClick={() => setBackgroundPickerOpen(open => !open)}
@@ -386,7 +391,9 @@ export default function TextOnlyStoryCanvas({
       >
         <Paintbrush size={17} />
       </button>
-      {backgroundPickerOpen && (
+      )}
+
+      {!storyMentionsOpen && backgroundPickerOpen && (
         <div
           className="fixed left-4 top-[calc(7.25rem+env(safe-area-inset-top))] z-[120] w-52 rounded-2xl border border-white/15 bg-[#101014]/95 p-3 shadow-2xl backdrop-blur-xl"
           dir="rtl"
@@ -417,7 +424,7 @@ export default function TextOnlyStoryCanvas({
         </div>
       )}
 
-      {!storyDrawingOpen && (
+      {!storyMentionsOpen && !storyDrawingOpen && (
         <StoryEditorToolbar
           storyToolsRef={storyToolsRef}
           storyMoreOpen={storyMoreOpen}
@@ -430,7 +437,7 @@ export default function TextOnlyStoryCanvas({
         />
       )}
 
-      {(storyFiltersOpen || storyMusicTrack) && (
+      {!storyMentionsOpen && (storyFiltersOpen || storyMusicTrack) && (
         <div
           className="fixed inset-x-3 z-[120] pointer-events-none"
           style={{ bottom: `calc(5.35rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
@@ -451,6 +458,7 @@ export default function TextOnlyStoryCanvas({
         </div>
       )}
 
+      {!storyMentionsOpen && (
       <StoryTextEditorPanel
         storyTextEditorOpen={editorOpen}
         storyText={storyText}
@@ -487,7 +495,10 @@ export default function TextOnlyStoryCanvas({
         onInteract={onInteract}
       />
 
-      {!storyDrawingOpen && (
+      )}
+
+      {/* أزرار النشر — تُخفى أثناء فتح منتقي الإشارة */}
+      {!storyMentionsOpen && !storyDrawingOpen && (
         <div
           className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2"
           style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
