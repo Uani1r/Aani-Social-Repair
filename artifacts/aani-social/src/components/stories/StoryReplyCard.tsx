@@ -316,9 +316,9 @@ export default function StoryReplyCard({
   );
 
   return (
-    <div className={`messages-story-reply${isMine ? ' is-mine' : ' is-theirs'}`}>
+    <div className={`messages-story-reply${isMine ? ' is-mine' : ' is-theirs'}`} dir="ltr">
       {header}
-      <span className="messages-story-reply-label">{isMine ? 'رددت على قصته' : 'ردّ على قصتك'}</span>
+      <span className="messages-story-reply-label" dir="rtl">{isMine ? 'رددت على قصته' : 'ردّ على قصتك'}</span>
       {mediaBody}
       {children}
     </div>
