@@ -39,7 +39,7 @@
 --   public.messages(id,sender_id,recipient_id,content,created_at)
 --   public.notifications(reference_id, entity_id, comment_id, content_kind)
 --   public.profiles.notification_settings jsonb
---   public.user_blocks(blocker_id, blocked_user_id)
+--   public.user_blocks(blocker_id, blocked_id)
 -- لا يعتمد على 20270128000000: دالة إعدادات الستوري معرَّفة هنا باسم مستقل.
 
 begin;
@@ -72,9 +72,9 @@ begin
     from information_schema.columns as col
     where col.table_schema = 'public'
       and col.table_name = 'user_blocks'
-      and col.column_name = 'blocked_user_id'
+      and col.column_name = 'blocked_id'
   ) then
-    raise exception 'aani: الجدول public.user_blocks لا يحتوي العمودين blocker_id و blocked_user_id؛ لا يمكن فحص الحظر.'
+    raise exception 'aani: الجدول public.user_blocks لا يحتوي العمودين blocker_id و blocked_id؛ لا يمكن فحص الحظر.'
       using errcode = '42703';
   end if;
 
@@ -474,8 +474,8 @@ begin
   if exists (
     select 1
     from public.user_blocks as blk
-    where (blk.blocker_id = new.sender_id and blk.blocked_user_id = v_owner)
-       or (blk.blocker_id = v_owner and blk.blocked_user_id = new.sender_id)
+    where (blk.blocker_id = new.sender_id and blk.blocked_id = v_owner)
+       or (blk.blocker_id = v_owner and blk.blocked_id = new.sender_id)
   ) then
     return new;
   end if;
@@ -523,8 +523,8 @@ begin
   if exists (
     select 1
     from public.user_blocks as blk
-    where (blk.blocker_id = new.user_id and blk.blocked_user_id = v_owner)
-       or (blk.blocker_id = v_owner and blk.blocked_user_id = new.user_id)
+    where (blk.blocker_id = new.user_id and blk.blocked_id = v_owner)
+       or (blk.blocker_id = v_owner and blk.blocked_id = new.user_id)
   ) then
     return new;
   end if;
