@@ -13,48 +13,58 @@
 --   public.aani_is_mutual_follow(user_id, friend_id) والدالة غير موجودة في
 --   قاعدة الإنتاج، ففشل إنشاء السياسات.
 --
--- ما يفعله هذا الملف:
---   1) يتأكد من وجود الجدول بالبنية نفسها (user_id + friend_id + created_at
---      والمفتاح الأساسي (user_id, friend_id)) — لا يغيّر أي عمود قائم.
---   2) ينشئ دالة public.aani_is_mutual_follow(uuid, uuid) بنفس تعريفها
---      الأصلي في الترحيلات (تحتاجها سياسة الإضافة، وتحتاجها دوال رؤية
---      القصص أيضاً).
---   3) يتأكد من صلاحيات authenticated: select, insert, delete فقط.
---   4) ينشئ ثلاث سياسات: قراءة صفوف المستخدم نفسه، وإضافته لنفسه فقط
---      لصديق متبادل غير محظور، وحذف صفوفه.
+-- المبادئ المتبعة في هذا الملف (مطابقة للبنية المعتمدة في الترحيلات):
+--   1) لا تغيير في بنية قاعدة البيانات: لا CREATE TABLE ولا CREATE INDEX
+--      ولا ALTER COLUMN. الجدول والعمودان user_id/friend_id والمفتاح
+--      الأساسي (user_id, friend_id) تبقى كما هي.
+--   2) دالة public.aani_is_mutual_follow تبقى SECURITY INVOKER (وليست
+--      DEFINER) — تعمل تحت RLS الخاصة بالمستخدم المستدعي، وسياسة القراءة
+--      على public.follows تسمح للمستخدم المصادق بقراءتها، فلا حاجة لتعريف
+--      متجاوز للصلاحيات.
+--   3) سياسات RLS الأربع المعتمدة تبقى كما هي ولا تُحذف ولا تُستبدل ولا
+--      تُوضعف، وتُنشأ فقط إن كانت غائبة (لا DROP POLICY إطلاقاً):
+--        - aani_close_friends_select_own     (SELECT)
+--        - aani_close_friends_insert_mutual  (INSERT)
+--        - aani_close_friends_delete_own     (DELETE)
+--        - aani_close_friends_block_guard    (INSERT — RESTRICTIVE)
 --      لا سياسة UPDATE: العميل يستخدم insert ... on conflict do nothing
---      (upsert مع ignoreDuplicates) فلا يحتاجها.
+--      (upsert مع ignoreDuplicates) ولا يحتاجها.
+--   4) لا تُنشأ سياسات مكررة: كل سياسة تُنشأ مرة واحدة فقط عند غيابها.
 --
 -- آمن لإعادة التشغيل: كل الخطوات create or replace / if not exists /
--- drop policy if exists.
+-- if not exists (select … from pg_policies).
 -- =====================================================================
 
 begin;
 
 -- =====================================================================
--- 1) الجدول — موجود في الإنتاج؛ الإنشاء هنا احتياط فقط ولا يغيّر بنيته
+-- 1) فحوص مسبقة — قراءة فقط، بلا أي تعديل
+--    إن غاب الجدول أو دالة الحظر يتوقف الملف برسالة واضحة بدل إنشاء
+--    سياسات لا تعمل.
 -- =====================================================================
 
-create table if not exists public.close_friends (
-  user_id uuid not null references public.profiles(id) on delete cascade,
-  friend_id uuid not null references public.profiles(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  primary key (user_id, friend_id),
-  constraint aani_close_friends_not_self check (user_id <> friend_id)
-);
+do $$
+begin
+  if to_regclass('public.close_friends') is null then
+    raise exception 'public.close_friends غير موجود — راجع الترحيلات قبل تنفيذ هذا الملف';
+  end if;
 
-create index if not exists aani_close_friends_friend_idx
-  on public.close_friends (friend_id, user_id);
+  if to_regprocedure('public.aani_is_user_blocked(uuid, uuid)') is null then
+    raise exception 'public.aani_is_user_blocked(uuid, uuid) غير موجود — نفّذ ملف إصلاحه أولاً (APPLY_MANUALLY_story_views_likes.sql)';
+  end if;
+end $$;
 
 -- =====================================================================
--- 2) دالة المتابعة المتبادلة — غائبة في الإنتاج (سبقت في الترحيلات)
+-- 2) دالة المتابعة المتبادلة — SECURITY INVOKER
+--    نفس تعريفها المعتمد في الترحيلات، مع إبقاء صلاحية المستدعي بدل
+--    SECURITY DEFINER.
 -- =====================================================================
 
 create or replace function public.aani_is_mutual_follow(p_user_id uuid, p_friend_id uuid)
 returns boolean
 language sql
 stable
-security definer
+security invoker
 set search_path = ''
 as $$
   select exists (
@@ -67,11 +77,12 @@ as $$
       and outgoing.following_id = p_friend_id
   );
 $$;
+
 revoke all on function public.aani_is_mutual_follow(uuid, uuid) from public;
 grant execute on function public.aani_is_mutual_follow(uuid, uuid) to authenticated;
 
 -- =====================================================================
--- 3) RLS والصلاحيات
+-- 3) RLS والصلاحيات — RLS مفعّل أصلاً؛ الأمر التالي بلا أثر إن كان مفعّلاً
 -- =====================================================================
 
 alter table public.close_friends enable row level security;
@@ -79,31 +90,72 @@ alter table public.close_friends enable row level security;
 grant select, insert, delete on public.close_friends to authenticated;
 
 -- =====================================================================
--- 4) السياسات
+-- 4) السياسات الأربع — تُنشأ فقط إن كانت غائبة (بلا DROP وبلا تكرار)
 -- =====================================================================
 
--- قراءة: صفوف المستخدم نفسه فقط (النافذة تقرأ friend_id بالمعرّف الحالي)
-drop policy if exists aani_close_friends_select_own on public.close_friends;
-create policy aani_close_friends_select_own on public.close_friends
-  for select to authenticated
-  using (user_id = (select auth.uid()));
+do $$
+begin
+  -- (1) قراءة: صفوف المستخدم نفسه فقط (النافذة تقرأ friend_id بالمعرّف الحالي)
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'close_friends'
+      and policyname = 'aani_close_friends_select_own'
+  ) then
+    execute $policy$
+      create policy aani_close_friends_select_own on public.close_friends
+        for select to authenticated
+        using (user_id = (select auth.uid()))
+    $policy$;
+  end if;
 
--- إضافة: المستخدم يضيف نفسه هو فقط، لصديق متبادل المتابعة وغير محظور
-drop policy if exists aani_close_friends_insert_mutual on public.close_friends;
-create policy aani_close_friends_insert_mutual on public.close_friends
-  for insert to authenticated
-  with check (
-    user_id = (select auth.uid())
-    and friend_id <> (select auth.uid())
-    and public.aani_is_mutual_follow(user_id, friend_id)
-    and not public.aani_is_user_blocked(user_id, friend_id)
-  );
+  -- (2) إضافة: المستخدم يضيف نفسه هو فقط، لصديق متبادل المتابعة
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'close_friends'
+      and policyname = 'aani_close_friends_insert_mutual'
+  ) then
+    execute $policy$
+      create policy aani_close_friends_insert_mutual on public.close_friends
+        for insert to authenticated
+        with check (
+          user_id = (select auth.uid())
+          and friend_id <> (select auth.uid())
+          and public.aani_is_mutual_follow(user_id, friend_id)
+        )
+    $policy$;
+  end if;
 
--- حذف: صفوف المستخدم نفسه فقط
-drop policy if exists aani_close_friends_delete_own on public.close_friends;
-create policy aani_close_friends_delete_own on public.close_friends
-  for delete to authenticated
-  using (user_id = (select auth.uid()));
+  -- (3) حذف: صفوف المستخدم نفسه فقط
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'close_friends'
+      and policyname = 'aani_close_friends_delete_own'
+  ) then
+    execute $policy$
+      create policy aani_close_friends_delete_own on public.close_friends
+        for delete to authenticated
+        using (user_id = (select auth.uid()))
+    $policy$;
+  end if;
+
+  -- (4) حارس الحظر (RESTRICTIVE): لا إضافة لصديق محظور في أي اتجاه.
+  --     سياسة منفصلة كما في الترحيلات، وليست شرطاً مدمجاً في سياسة الإضافة.
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'close_friends'
+      and policyname = 'aani_close_friends_block_guard'
+  ) then
+    execute $policy$
+      create policy aani_close_friends_block_guard on public.close_friends
+        as restrictive for insert to authenticated
+        with check (not public.aani_is_user_blocked(user_id, friend_id))
+    $policy$;
+  end if;
+end $$;
 
 -- =====================================================================
 -- 5) تحديث كاش PostgREST فوراً
@@ -114,14 +166,24 @@ notify pgrst, 'reload schema';
 commit;
 
 -- =====================================================================
--- للتحقق بعد التنفيذ (اختياري — تنفيذه منفصلاً بعد الـ commit):
+-- للتحقق بعد التنفيذ (اختياري — يُنفَّذ منفصلاً بعد الـ commit):
 --
---   select policyname, cmd, roles::text
+--   select policyname, permissive, cmd, roles::text
 --   from pg_policies
---   where schemaname = 'public' and tablename = 'close_friends';
+--   where schemaname = 'public' and tablename = 'close_friends'
+--   order by policyname;
 --
--- يجب أن تظهر ثلاث سياسات:
---   aani_close_friends_select_own   | SELECT
---   aani_close_friends_insert_mutual | INSERT
---   aani_close_friends_delete_own   | DELETE
+-- المتوقع أربع سياسات، بلا تكرار:
+--   aani_close_friends_block_guard    | RESTRICTIVE | INSERT
+--   aani_close_friends_delete_own     | PERMISSIVE  | DELETE
+--   aani_close_friends_insert_mutual  | PERMISSIVE  | INSERT
+--   aani_close_friends_select_own     | PERMISSIVE  | SELECT
+--
+-- وللتحقق من صلاحية الدالة (يجب أن تكون INVOKER):
+--
+--   select proname, prosecdef
+--   from pg_proc
+--   where proname = 'aani_is_mutual_follow';
+--
+-- prosecdef = false تعني SECURITY INVOKER.
 -- =====================================================================
