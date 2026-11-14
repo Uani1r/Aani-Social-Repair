@@ -65,6 +65,18 @@ function insertErrorText(error: StoryReplyInsertError | null): string {
   return [error.message, error.details, error.hint].filter(Boolean).join(' ');
 }
 
+type InsertFailureCategory = 'schema' | 'permission' | 'constraint' | 'auth' | 'unknown';
+
+/** تصنيف عام للفشل يُستخدم في السجل بدل نص رسالة PostgREST. */
+function classifyInsertFailure(error: StoryReplyInsertError): InsertFailureCategory {
+  const code = error.code ?? '';
+  if (code === '42703' || code === 'PGRST204') return 'schema';
+  if (code === '42501') return 'permission';
+  if (code === '23505' || code === '23503' || code === '23502' || code === '23514') return 'constraint';
+  if (code === 'PGRST301' || code === '401' || code === '403') return 'auth';
+  return 'unknown';
+}
+
 /**
  * الوسم القديم قد يظهر في بداية النص أو نهايته (مع مسافات قبله/بعده).
  * لا نعتمد على المظهر البصري ولا على اتجاه النص: المقارنة على حدود النص
@@ -123,49 +135,101 @@ export function storyReplyText(message: StoryReplyMessageLike): string {
     : message.content.trim();
 }
 
+/** قاعدة البيانات تستخدم image وphoto معاً لوسائط الصور. */
+export function isImageStoryMediaType(mediaType: string | null | undefined): boolean {
+  return mediaType === 'image' || mediaType === 'photo';
+}
+
+export function isVideoStoryMediaType(mediaType: string | null | undefined): boolean {
+  return mediaType === 'video';
+}
+
 async function insertStoryReplyPayload(payload: MessageInsertPayload): Promise<StoryReplyInsertResult> {
   const { error } = await supabase.from('messages').insert(payload);
   return { error: toStoryReplyInsertError(error) };
 }
 
+// أعمدة اختيارية يمكن إسقاطها منفردة عند تأكيد غيابها في قاعدة قديمة، مع
+// الاحتفاظ ببقية البيانات في كل محاولة.
+const OPTIONAL_STORY_COLUMNS = [
+  'story_reply',
+  'story_id',
+  'story_media_url',
+  'story_thumbnail_url',
+  'story_media_type',
+] as const;
+
+type OptionalStoryColumn = (typeof OPTIONAL_STORY_COLUMNS)[number];
+
+// أكواد PostgREST/Postgres التي تعني «العمود غير موجود» صراحةً.
+const MISSING_COLUMN_CODES = new Set(['42703', 'PGRST204']);
+
+/**
+ * يعيد أسماء الأعمدة الاختيارية التي يثبت غيابها من الخطأ نفسه.
+ * لا يعتمد على أي خطأ عشوائي (RLS/شبكة/صيغة) كدليل على غياب عمود.
+ */
+function missingOptionalColumns(
+  error: StoryReplyInsertError,
+  payload: MessageInsertPayload,
+): OptionalStoryColumn[] {
+  const text = insertErrorText(error).toLowerCase();
+  // دليل صريح على عمود مفقود فقط: كود PostgREST/Postgres المعني، أو رسالة
+  // تقول «column ... does not exist» / «Could not find the '...' column».
+  const isMissingColumnError = MISSING_COLUMN_CODES.has(error.code ?? '')
+    || /column .*does not exist/.test(text)
+    || /could not find the '[^']+' column/.test(text);
+  if (!isMissingColumnError) return [];
+
+  return OPTIONAL_STORY_COLUMNS.filter(
+    column => Object.prototype.hasOwnProperty.call(payload, column) && text.includes(column),
+  );
+}
+
 export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promise<StoryReplyInsertResult> {
-  const basePayload: MessageInsertPayload = {
+  const payload: MessageInsertPayload = {
     sender_id: input.senderId,
     recipient_id: input.recipientId,
     content: input.text,
     story_reply: true,
   };
-  if (input.storyId) basePayload.story_id = input.storyId;
-  if (input.storyMediaUrl) basePayload.story_media_url = input.storyMediaUrl;
-  if (input.storyThumbnailUrl) basePayload.story_thumbnail_url = input.storyThumbnailUrl;
-  if (input.storyMediaType) basePayload.story_media_type = input.storyMediaType;
+  if (input.storyId) payload.story_id = input.storyId;
+  if (input.storyMediaUrl) payload.story_media_url = input.storyMediaUrl;
+  if (input.storyThumbnailUrl) payload.story_thumbnail_url = input.storyThumbnailUrl;
+  if (input.storyMediaType) payload.story_media_type = input.storyMediaType;
 
-  let payload: MessageInsertPayload = { ...basePayload };
-  let result = await insertStoryReplyPayload(payload);
+  let legacyTagApplied = false;
+  let firstFailureLogged = false;
+  let lastResult: StoryReplyInsertResult = { error: null };
 
-  // قاعدة لم تُطبَّق عليها أعمدة معاينة الستوري بعد: نُبقي العلامة story_reply.
-  if (result.error && /story_media_url|story_thumbnail_url|story_media_type/i.test(insertErrorText(result.error))) {
-    delete payload.story_media_url;
-    delete payload.story_thumbnail_url;
-    delete payload.story_media_type;
-    result = await insertStoryReplyPayload(payload);
+  for (let attempt = 0; attempt < OPTIONAL_STORY_COLUMNS.length + 2; attempt += 1) {
+    lastResult = await insertStoryReplyPayload(payload);
+    if (!lastResult.error) return lastResult;
+
+    if (!firstFailureLogged) {
+      firstFailureLogged = true;
+      // تشخيص بلا نص رسالة PostgREST وبلا أي محتوى أو بيانات شخصية:
+      // كود الخطأ وتصنيفه العام فقط.
+      console.warn('[story reply] تعذر إدراج الرد في messages؛ فحص إمكانية تراجع توافقي.', {
+        code: lastResult.error.code ?? 'unknown',
+        category: classifyInsertFailure(lastResult.error),
+      });
+    }
+
+    const removable = missingOptionalColumns(lastResult.error, payload);
+    if (removable.length === 0) {
+      // صلاحيات/RLS/اتصال/قيد: ليست مشكلة عمود مفقود، فلا مسار توافقي.
+      return lastResult;
+    }
+
+    for (const column of removable) delete payload[column];
+
+    // غياب عمود story_reply فقط: نُبقي story_id وروابط الوسائط ونوعها،
+    // ونستخدم الوسم القديم كعلامة بديلة.
+    if (removable.includes('story_reply') && !legacyTagApplied) {
+      payload.content = `${LEGACY_STORY_REPLY_PREFIX}${input.text}`;
+      legacyTagApplied = true;
+    }
   }
 
-  // قاعدة بلا messages.story_id: العلامة تبقى، والبطاقة تعتمد على وسائط محفوظة.
-  if (result.error && /story_id/i.test(insertErrorText(result.error))) {
-    delete payload.story_id;
-    result = await insertStoryReplyPayload(payload);
-  }
-
-  // قاعدة بلا عمود story_reply: البديل الوحيد الآمن هو الوسم القديم، مموّه في
-  // الواجهة، وليس نصاً عادياً يُعامل كرسالة عادية.
-  if (result.error && /story_reply/i.test(insertErrorText(result.error))) {
-    result = await insertStoryReplyPayload({
-      sender_id: input.senderId,
-      recipient_id: input.recipientId,
-      content: `${LEGACY_STORY_REPLY_PREFIX}${input.text}`,
-    });
-  }
-
-  return result;
+  return lastResult;
 }

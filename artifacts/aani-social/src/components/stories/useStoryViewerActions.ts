@@ -6,7 +6,7 @@ import type {
 } from '@/lib/appShared';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { pushGlobalError } from '@/lib/globalErrorStore';
-import { sendStoryReplyMessage } from '@/lib/storyReplyMessages';
+import { isImageStoryMediaType, sendStoryReplyMessage } from '@/lib/storyReplyMessages';
 import { displayName } from '@/lib/types';
 import type { StoryRow } from './types';
 
@@ -440,8 +440,10 @@ export function useStoryViewerActions({
       // رد الستوري = رسالة خاصة واحدة فقط، بلا أي إشعار reply من الواجهة.
       // بيانات الستوري تُحفظ مع الرسالة نفسها كي تبقى بطاقة الرد سليمة بعد
       // انتهاء صلاحية الستوري أو حذف سجلها/وسائطها.
+      // الصورة المصغرة: من الستوري إن وُجدت، وإلا رابط الصورة نفسها.
+      // media_type قد يكون image أو photo، فلا نعتمد على مقارنة واحدة.
       const thumbnailUrl = currentStory.thumbnail_url
-        ?? (currentStory.media_type === 'image' ? currentStory.media_url : null);
+        ?? (isImageStoryMediaType(currentStory.media_type) ? currentStory.media_url : null);
       const { error } = await sendStoryReplyMessage({
         senderId: userId,
         recipientId: currentStory.user_id,
