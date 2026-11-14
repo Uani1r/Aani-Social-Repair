@@ -11,6 +11,11 @@
 --     أحد الطرفين، لذلك لا تصلح وحدها لإدراج بلا JWT. فحص الحظر في هذا الملف
 --     يقرأ public.user_blocks مباشرة (بالاتجاهين) داخل دالة SECURITY DEFINER،
 --     فيعمل سواء وُجد JWT أم لا.
+--   * أعمدة public.user_blocks تختلف بين البيئات: الإنتاج يستخدم
+--     (blocker_id, blocked_id, created_at) بينما 20261115000000 في المستودع
+--     يستخدم blocked_user_id. هذا الملف يقبل المخططين: يفحص وجود أحدهما
+--     ويتوقف إن وُجدا معاً (التباس) أو غابا معاً، ويقرأ الحظر عبر to_jsonb
+--     فلا يُثبَّت اسم عمود واحد في جسم الدالة.
 --   * لا توجد في الإنتاج مشغّلات حظر بديلة على messages أو story_likes،
 --     وفحص الحظر هنا هو الضمان الفعلي لعدم إنشاء إشعار لطرفين محظورين.
 --
@@ -39,7 +44,7 @@
 --   public.messages(id,sender_id,recipient_id,content,created_at)
 --   public.notifications(reference_id, entity_id, comment_id, content_kind)
 --   public.profiles.notification_settings jsonb
---   public.user_blocks(blocker_id, blocked_id)
+--   public.user_blocks(blocker_id, blocked_id) أو (blocker_id, blocked_user_id)
 -- لا يعتمد على 20270128000000: دالة إعدادات الستوري معرَّفة هنا باسم مستقل.
 
 begin;
@@ -60,22 +65,37 @@ begin
   end loop;
 
   -- فحص الحظر أدناه يعتمد مباشرة على أعمدة user_blocks، لا على دالة تعتمد
-  -- على auth.uid(). نتأكد من وجود العمودين قبل تعريف الدوال.
+  -- على auth.uid(). العمود الثاني يختلف بين المخططين، فنقبل أياً منهما
+  -- ونرفض الالتباس (وجود الاثنين) أو غيابهما.
   if not exists (
     select 1
     from information_schema.columns as col
     where col.table_schema = 'public'
       and col.table_name = 'user_blocks'
       and col.column_name = 'blocker_id'
-  ) or not exists (
-    select 1
+  ) then
+    raise exception 'aani: الجدول public.user_blocks لا يحتوي العمود blocker_id؛ لا يمكن فحص الحظر.'
+      using errcode = '42703';
+  end if;
+
+  if (
+    select count(*)
     from information_schema.columns as col
     where col.table_schema = 'public'
       and col.table_name = 'user_blocks'
-      and col.column_name = 'blocked_id'
-  ) then
-    raise exception 'aani: الجدول public.user_blocks لا يحتوي العمودين blocker_id و blocked_id؛ لا يمكن فحص الحظر.'
+      and col.column_name in ('blocked_id', 'blocked_user_id')
+  ) = 0 then
+    raise exception 'aani: الجدول public.user_blocks لا يحتوي أي عمود من (blocked_id, blocked_user_id)؛ لا يمكن فحص الحظر.'
       using errcode = '42703';
+  elsif (
+    select count(*)
+    from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'user_blocks'
+      and col.column_name in ('blocked_id', 'blocked_user_id')
+  ) > 1 then
+    raise exception 'aani: الجدول public.user_blocks يحتوي العمودين blocked_id و blocked_user_id معاً؛ مخطط ملتبس. أوقف الترحيل وحدّد العمود الصحيح يدوياً.'
+      using errcode = '42702';
   end if;
 
   -- دالة إعدادات الستوري تعتمد على هذا العمود.
@@ -439,6 +459,7 @@ end $$;
 --    كل رسالة رد حدث مستقل ⇒ ردود متعددة على الستوري نفسها = إشعار لكل رد.
 --    فحص الحظر يقرأ public.user_blocks مباشرة (بالاتجاهين) داخل SECURITY DEFINER
 --    فيتجاوز RLS ولا يعتمد على auth.uid()، ويعمل سواء وُجد JWT أم لا.
+--    العمود الثاني يُقرأ عبر to_jsonb فيقبل blocked_id وblocked_user_id.
 --    لا توجد في الإنتاج مشغّلات حظر بديلة على messages، فهذا الفحص هو الضمان.
 -- ---------------------------------------------------------------------------
 create or replace function public.aani_notify_story_reply()
@@ -471,11 +492,17 @@ begin
   if v_owner <> new.recipient_id then return new; end if;
   if v_owner = new.sender_id then return new; end if;
   -- حظر بين المرسل وصاحب الستوري، بالاتجاهين، من الجدول مباشرة (لا auth.uid).
+  -- العمود الثاني يُقرأ عبر to_jsonb فيعمل مع blocked_id وblocked_user_id معاً.
   if exists (
     select 1
     from public.user_blocks as blk
-    where (blk.blocker_id = new.sender_id and blk.blocked_id = v_owner)
-       or (blk.blocker_id = v_owner and blk.blocked_id = new.sender_id)
+    where (
+      blk.blocker_id = new.sender_id
+      and coalesce(to_jsonb(blk) ->> 'blocked_id', to_jsonb(blk) ->> 'blocked_user_id') = v_owner::text
+    ) or (
+      blk.blocker_id = v_owner
+      and coalesce(to_jsonb(blk) ->> 'blocked_id', to_jsonb(blk) ->> 'blocked_user_id') = new.sender_id::text
+    )
   ) then
     return new;
   end if;
@@ -520,11 +547,17 @@ begin
   if v_owner is null then return new; end if;
   if v_owner = new.user_id then return new; end if;
   -- حظر بين المُعجِب وصاحب الستوري، بالاتجاهين، من الجدول مباشرة (لا auth.uid).
+  -- العمود الثاني يُقرأ عبر to_jsonb فيعمل مع blocked_id وblocked_user_id معاً.
   if exists (
     select 1
     from public.user_blocks as blk
-    where (blk.blocker_id = new.user_id and blk.blocked_id = v_owner)
-       or (blk.blocker_id = v_owner and blk.blocked_id = new.user_id)
+    where (
+      blk.blocker_id = new.user_id
+      and coalesce(to_jsonb(blk) ->> 'blocked_id', to_jsonb(blk) ->> 'blocked_user_id') = v_owner::text
+    ) or (
+      blk.blocker_id = v_owner
+      and coalesce(to_jsonb(blk) ->> 'blocked_id', to_jsonb(blk) ->> 'blocked_user_id') = new.user_id::text
+    )
   ) then
     return new;
   end if;
@@ -583,12 +616,14 @@ commit;
 --    and p.proname in ('aani_notify_on_message_insert', 'aani_notify_story_reply')
 --    and p.prosrc ~* 'to_jsonb';
 --
--- 6) الدالتان تفحصان public.user_blocks مباشرة (المتوقع: صفّان):
+-- 6) الدالتان تفحصان public.user_blocks وتقرآن العمودين المحتملين (المتوقع: صفّان):
 -- select p.proname
 --   from pg_catalog.pg_proc as p
 --  where p.pronamespace = 'public'::regnamespace
 --    and p.proname in ('aani_notify_story_reply', 'aani_notify_story_like')
---    and p.prosrc ~* 'user_blocks';
+--    and p.prosrc ~* 'user_blocks'
+--    and p.prosrc ~* 'blocked_id'
+--    and p.prosrc ~* 'blocked_user_id';
 --
 -- 7) الدالتان لم تعودا تعتمدان على aani_is_user_blocked (المتوقع: صفر صفوف):
 -- select p.proname
