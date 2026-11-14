@@ -196,14 +196,17 @@ export default function StoryReplyCard({
     : null;
 
   const storyExpired = Boolean(found?.expiresAt && isPastDate(found.expiresAt));
-  const hasAnyMedia = imageSources.length > 0 || Boolean(videoSource) || Boolean(found?.media.mediaUrl);
+  const hasPreview = Boolean(usableImage) || Boolean(videoSource && !videoFailed);
 
-  let fallbackKind: 'loading' | 'error' | 'expired' = 'expired';
+  // «انتهت صلاحية الستوري» لا تُعرض إلا عند تأكيد غياب السجل، أو عند ثبوت
+  // انتهاء expires_at مع عدم وجود أي معاينة قابلة للعرض. وجود سجل بلا وسائط
+  // (أو بلا expires_at) حالة فشل تحميل: «تعذر تحميل المعاينة».
+  let fallbackKind: 'loading' | 'error' | 'expired' = 'error';
   if (needsLookup && lookupStatus === 'loading') fallbackKind = 'loading';
   else if (needsLookup && lookupStatus === 'error') fallbackKind = 'error';
   else if (needsLookup && lookupStatus === 'missing') fallbackKind = 'expired';
-  else if (hasAnyMedia) fallbackKind = 'error';
-  else if (storyExpired) fallbackKind = 'expired';
+  else if (found && storyExpired && !hasPreview) fallbackKind = 'expired';
+  else fallbackKind = 'error';
 
   const retry = () => {
     setFailedImages([]);
@@ -266,7 +269,6 @@ export default function StoryReplyCard({
     );
   }
 
-  const hasPreview = Boolean(usableImage) || Boolean(videoSource && !videoFailed);
   const mediaClassName = `messages-story-reply-media${hasPreview ? '' : ' is-unavailable'}${openable ? ' is-button' : ''}`;
 
   const mediaBody = openable ? (

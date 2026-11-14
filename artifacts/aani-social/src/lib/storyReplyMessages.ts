@@ -65,6 +65,18 @@ function insertErrorText(error: StoryReplyInsertError | null): string {
   return [error.message, error.details, error.hint].filter(Boolean).join(' ');
 }
 
+type InsertFailureCategory = 'schema' | 'permission' | 'constraint' | 'auth' | 'unknown';
+
+/** تصنيف عام للفشل يُستخدم في السجل بدل نص رسالة PostgREST. */
+function classifyInsertFailure(error: StoryReplyInsertError): InsertFailureCategory {
+  const code = error.code ?? '';
+  if (code === '42703' || code === 'PGRST204') return 'schema';
+  if (code === '42501') return 'permission';
+  if (code === '23505' || code === '23503' || code === '23502' || code === '23514') return 'constraint';
+  if (code === 'PGRST301' || code === '401' || code === '403') return 'auth';
+  return 'unknown';
+}
+
 /**
  * الوسم القديم قد يظهر في بداية النص أو نهايته (مع مسافات قبله/بعده).
  * لا نعتمد على المظهر البصري ولا على اتجاه النص: المقارنة على حدود النص
@@ -195,11 +207,11 @@ export async function sendStoryReplyMessage(input: StoryReplyInsertInput): Promi
 
     if (!firstFailureLogged) {
       firstFailureLogged = true;
-      // تشخيص بلا محتوى الرسالة ولا أي بيانات شخصية: الكود فقط، والرسالة
-      // مختصرة إلى أول 200 حرف لأن أخطاء القيود قد تذكر قيماً.
+      // تشخيص بلا نص رسالة PostgREST وبلا أي محتوى أو بيانات شخصية:
+      // كود الخطأ وتصنيفه العام فقط.
       console.warn('[story reply] تعذر إدراج الرد في messages؛ فحص إمكانية تراجع توافقي.', {
         code: lastResult.error.code ?? 'unknown',
-        message: (lastResult.error.message ?? '').slice(0, 200),
+        category: classifyInsertFailure(lastResult.error),
       });
     }
 
