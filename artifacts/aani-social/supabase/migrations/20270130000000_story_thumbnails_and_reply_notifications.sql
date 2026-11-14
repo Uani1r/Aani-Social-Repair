@@ -12,6 +12,10 @@
 -- صارت تُسجَّل في notifications من الواجهة مباشرة، دون إنشاء رسالة خاصة.
 -- يعتمد على: public.stories(id,user_id,media_url,media_type) ، public.notifications
 --   public.user_blocks(blocker_id + blocked_id أو blocked_user_id) ، public.profiles.
+--
+-- ترتيب التطبيق: 20270129000000 ثم 20270130000000.
+-- إعادة تطبيق 20270129000000 بعد هذا الملف تستبدل دالة الإعجاب بنسخة بلا
+-- metadata؛ إن حدث ذلك فأعد تطبيق هذا الملف بعده لإرجاع نسخة metadata.
 
 begin;
 
@@ -28,6 +32,107 @@ alter table public.notifications
   add column if not exists comment_id uuid,
   add column if not exists content_kind text,
   add column if not exists metadata jsonb;
+
+-- 2.1) تحقق صريح من وجود الأعمدة ومن أنواعها الفعلية. ADD COLUMN IF NOT EXISTS
+--      لا يكفي: عمود قائم بنوع مختلف (text بدل uuid مثلاً) سيقبل الإدراج لكنه
+--      يكسر الاستعلامات لاحقاً. نوقف الترحيل عند أي غياب أو نوع غير متوقع،
+--      ولا نفترض بنية user_blocks: عمود حظر واحد فقط بالضبط.
+do $$
+declare
+  v_missing text;
+  v_bad_type text;
+  v_blocked_count integer;
+begin
+  if to_regclass('public.stories') is null
+     or to_regclass('public.notifications') is null
+     or to_regclass('public.user_blocks') is null
+     or to_regclass('public.profiles') is null
+     or to_regclass('public.story_likes') is null then
+    raise exception 'aani: جدول أساسي مفقود (stories/notifications/user_blocks/profiles/story_likes).'
+      using errcode = '42P01';
+  end if;
+
+  select string_agg(required.column_name, ', ')
+    into v_missing
+  from (
+    values ('user_id'), ('actor_id'), ('type'), ('content'),
+           ('reference_id'), ('entity_id'), ('comment_id'),
+           ('content_kind'), ('metadata')
+  ) as required(column_name)
+  where not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'notifications'
+      and col.column_name = required.column_name
+  );
+
+  if v_missing is not null then
+    raise exception 'aani: أعمدة notifications المطلوبة غير موجودة: %', v_missing
+      using errcode = '42703';
+  end if;
+
+  if not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'stories'
+      and col.column_name = 'thumbnail_url'
+  ) then
+    raise exception 'aani: العمود public.stories.thumbnail_url غير موجود.'
+      using errcode = '42703';
+  end if;
+
+  select string_agg(format('%s.%s (%s)', col.table_name, col.column_name, col.data_type), ', ')
+    into v_bad_type
+  from information_schema.columns as col
+  where col.table_schema = 'public'
+    and (
+      (col.table_name = 'notifications'
+        and col.column_name in ('user_id', 'actor_id', 'reference_id', 'entity_id', 'comment_id')
+        and col.data_type <> 'uuid')
+      or (col.table_name = 'notifications'
+        and col.column_name in ('type', 'content', 'content_kind')
+        and col.data_type <> 'text')
+      or (col.table_name = 'notifications'
+        and col.column_name = 'metadata'
+        and col.data_type <> 'jsonb')
+      or (col.table_name = 'stories'
+        and col.column_name = 'thumbnail_url'
+        and col.data_type <> 'text')
+    );
+
+  if v_bad_type is not null then
+    raise exception 'aani: أنواع أعمدة غير متوقعة، أصلح الأنواع يدوياً قبل الترحيل: %', v_bad_type
+      using errcode = '42804';
+  end if;
+
+  -- user_blocks: يجب وجود blocker_id uuid، وعمود حظر واحد فقط من الاثنين.
+  if not exists (
+    select 1 from information_schema.columns as col
+    where col.table_schema = 'public'
+      and col.table_name = 'user_blocks'
+      and col.column_name = 'blocker_id'
+      and col.data_type = 'uuid'
+  ) then
+    raise exception 'aani: public.user_blocks.blocker_id مفقود أو ليس uuid.'
+      using errcode = '42703';
+  end if;
+
+  select count(*)
+    into v_blocked_count
+  from information_schema.columns as col
+  where col.table_schema = 'public'
+    and col.table_name = 'user_blocks'
+    and col.column_name in ('blocked_id', 'blocked_user_id')
+    and col.data_type = 'uuid';
+
+  if v_blocked_count = 0 then
+    raise exception 'aani: public.user_blocks لا يحتوي blocked_id ولا blocked_user_id (uuid).'
+      using errcode = '42703';
+  elsif v_blocked_count > 1 then
+    raise exception 'aani: public.user_blocks يحتوي العمودين blocked_id و blocked_user_id معاً؛ مخطط ملتبس.'
+      using errcode = '42702';
+  end if;
+end $$;
 
 -- 3) إعداد إشعارات الستوري لصاحب الحساب (نفس تعريف 20270129000000 —
 --    معرَّف هنا أيضاً كي يعمل هذا الترحيل وحده دون الاعتماد على ترتيب التطبيق).
@@ -175,16 +280,20 @@ commit;
 --   join pg_proc p on p.oid = t.tgfoid
 --  where t.tgrelid='public.story_likes'::regclass and not t.tgisinternal
 --  order by t.tgname;
--- 3) الدالتان: المالك، SECURITY DEFINER، search_path، والصلاحيات:
+-- 3) الدوال (لا تفشل الاستعلامات عند غياب دالة: to_regprocedure يعيد NULL):
 -- select p.oid::regprocedure as signature,
 --        pg_get_userbyid(p.proowner) as owner,
 --        p.prosecdef as security_definer,
 --        p.proconfig as settings,
 --        p.proacl as acl
---   from pg_proc p
---  where p.oid in ('public.aani_set_story_thumbnail(uuid,text)'::regprocedure,
---                  'public.aani_notify_story_like()'::regprocedure,
---                  'public.aani_story_notifications_enabled(uuid)'::regprocedure);
+--   from pg_catalog.pg_proc as p
+--  where p.oid = any (
+--    array_remove(array[
+--      to_regprocedure('public.aani_set_story_thumbnail(uuid,text)'),
+--      to_regprocedure('public.aani_notify_story_like()'),
+--      to_regprocedure('public.aani_story_notifications_enabled(uuid)')
+--    ]::oid[], null::oid)
+--  );
 -- 4) لا مسار LIKE آخر على story_likes:
 -- select t.tgname, p.proname
 --   from pg_trigger t join pg_proc p on p.oid=t.tgfoid

@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+
 // مصدر واحد لمفتاح "القصص المشاهدة" في التخزين المحلي ولحدث تغييره،
 // كي تتزامن حلقة شريط القصص مع حلقة صور المحادثات في شاشة الرسائل.
 export const SEEN_STORY_IDS_STORAGE_PREFIX = 'aani:seen-story-ids:';
@@ -28,8 +30,29 @@ export function writeSeenStoryIds(userId: string, storyIds: string[]): void {
   }
 }
 
-/** يُبلّغ بقية الشاشات (الرسائل) لتحديث حلقات القصص دون إعادة تحميل الشبكة. */
+/** يُبلّغ بقية الشاشات (الرسائل، الملف الشخصي) لتحديث حلقات القصص دون إعادة تحميل الشبكة. */
 export function notifySeenStoryIdsChanged(): void {
   if (typeof window === 'undefined') return;
   window.dispatchEvent(new Event(SEEN_STORY_IDS_CHANGED_EVENT));
+}
+
+/**
+ * حالة مشاهدة القصص للمستخدم الحالي، مستمدة من نفس مفتاح localStorage
+ * وحدثه الذي يستخدمه شريط القصص — بلا نظام حالة مستقل.
+ */
+export function useSeenStoryIds(userId: string): Set<string> {
+  const [seenIds, setSeenIds] = useState<Set<string>>(() => readSeenStoryIds(userId));
+
+  useEffect(() => {
+    const sync = () => setSeenIds(readSeenStoryIds(userId));
+    sync();
+    window.addEventListener(SEEN_STORY_IDS_CHANGED_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => {
+      window.removeEventListener(SEEN_STORY_IDS_CHANGED_EVENT, sync);
+      window.removeEventListener('storage', sync);
+    };
+  }, [userId]);
+
+  return seenIds;
 }
