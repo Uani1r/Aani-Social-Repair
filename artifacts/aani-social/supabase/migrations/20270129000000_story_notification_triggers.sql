@@ -79,7 +79,9 @@ begin
       using errcode = '42703';
   end if;
 
-  select count(*) into v_blocked_column_count
+  -- count(*) — أي "عدد كل الصفوف" — يحسب عمودَي الحظر المحتملين الموجودين فعلاً.
+  select count(*)
+  into v_blocked_column_count
   from information_schema.columns as col
   where col.table_schema = 'public'
     and col.table_name = 'user_blocks'
@@ -597,12 +599,18 @@ commit;
 --   from pg_catalog.pg_trigger
 --  where tgrelid = 'public.messages'::regclass and not tgisinternal;
 --
--- 4) لا دالة إشعار على messages تقرأ new.story_id مباشرة (المتوقع: صفر صفوف):
--- select p.proname
---   from pg_catalog.pg_proc as p
---  where p.pronamespace = 'public'::regnamespace
---    and p.proname in ('aani_notify_on_message_insert', 'aani_notify_story_reply')
---    and p.prosrc ~* 'new\s*\.\s*story_id';
+-- 4) كل دالة مرتبطة بمشغّل على messages، وهل تقرأ NEW.story_id مباشرة؟
+--    الفحص يُعيد صفاً لكل مشغّل مع قيمة منطقية، فلا يمكن أن تُقرأ "صفر صفوف"
+--    كنجاح. التعبير ~* يتجاهل حالة الأحرف و\s* يسمح بأي مسافات أو أسطر جديدة
+--    بين new و . و story_id. المتوقع: كل القيم false.
+-- select t.tgname,
+--        p.proname,
+--        (p.prosrc ~* 'new\s*\.\s*story_id') as reads_new_story_id_directly
+--   from pg_catalog.pg_trigger as t
+--   join pg_catalog.pg_proc as p on p.oid = t.tgfoid
+--  where t.tgrelid = 'public.messages'::regclass
+--    and not t.tgisinternal
+--  order by t.tgname;
 --
 -- 5) الدالتان تقرآن to_jsonb (المتوقع: صفّان):
 -- select p.proname
