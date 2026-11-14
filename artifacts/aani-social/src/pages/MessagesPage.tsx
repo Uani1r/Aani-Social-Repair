@@ -15,7 +15,7 @@ import EmojiText from '@/components/TwemojiText';
 import MessageSwipeReply from '@/components/MessageSwipeReply';
 import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
-import { hasLegacyStoryReplyTag, isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
+import { hasLegacyStoryReplyTag, isStoryMentionMessage, isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
 import StoryReplyCard from '@/components/stories/StoryReplyCard';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
@@ -733,6 +733,7 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
       : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
   } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
   else if (isStoryReplyMessage(message)) preview = storyReplyText(message) || 'رد على قصة';
+  else if (isStoryMentionMessage(content)) preview = 'أشار إليك في قصة';
   else if (content.startsWith('[story:')) preview = 'أرسل قصة';
   else if (!preview) preview = 'رسالة';
   return message.sender_id === currentUserId ? `أنت: ${preview}` : preview;
@@ -761,6 +762,7 @@ function replyMessagePreview(message: MessageRow): string {
       : mediaMessage.caption || (mediaMessage.urls.length > 1 ? 'صور' : 'صورة');
   } else if (message.post_id || content.startsWith('[post:')) preview = 'مشاركة منشور';
   else if (isStoryReplyMessage(message)) preview = storyReplyText(message) || 'رد على قصة';
+  else if (isStoryMentionMessage(content)) preview = 'أشار إليك في قصة';
   else if (content.startsWith('[story:')) preview = 'أرسل قصة';
   else if (!preview) preview = 'رسالة';
   return preview.length > 140 ? `${preview.slice(0, 140)}…` : preview;
@@ -815,11 +817,14 @@ export default function MessagesPage({
   selectedId,
   onReshareStory,
   onOpenStories,
+  onOpenStory,
 }: {
   currentUserId: string;
   selectedId?: string;
   onReshareStory: (story: StoryDmCardStory) => void;
   onOpenStories: (profileId: string) => void;
+  /** فتح القصة الأصلية بمعرّفها (رسائل الإشارة) عبر مسار العارض الحالي. */
+  onOpenStory?: (storyId: string, ownerId: string) => void;
 }) {
   const [, setLocation] = useLocation();
   const [initialConversationCache] = useState(() => readConversationCache(currentUserId));
@@ -2641,7 +2646,9 @@ export default function MessagesPage({
           ? storyReplyText(message)
           : message.post_id || content.startsWith('[post:')
             ? 'مشاركة منشور'
-            : content.startsWith('[story:') ? 'أرسل قصة' : content;
+            : isStoryMentionMessage(content)
+              ? 'أشار إليك في قصة'
+              : content.startsWith('[story:') ? 'أرسل قصة' : content;
     try {
       if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable');
       await navigator.clipboard.writeText(textToCopy);
@@ -3098,6 +3105,8 @@ export default function MessagesPage({
                   const sharedStoryId = storyFromColumn || storyFromContent;
                   const isStoryReply = isStoryReplyMessage(message);
                   const isSharedStory = Boolean(sharedStoryId) && !isSharedPost && !isStoryReply;
+                  // رسالة إشارة: نفس بطاقة الستوري لكن بمعاينة مصغّرة بعنوان «تمت الإشارة إليك».
+                  const isStoryMention = isSharedStory && isStoryMentionMessage(content);
                   // صاحب الستوري: إن كنت أنا الرادّ فهو الطرف الآخر، وإن كان الرادّ
                   // الطرف الآخر فأنا صاحب الستوري.
                   const storyReplyOwnerId = isMine ? target?.id ?? null : currentUserId;
@@ -3159,6 +3168,11 @@ export default function MessagesPage({
                                   storyId={String(sharedStoryId)}
                                   currentUserId={currentUserId}
                                   senderName={target ? displayName(target) : undefined}
+                                  mention={isStoryMention}
+                                  mentionLabel={isMine ? 'أشرت إلى صديق في قصتك' : 'تمت الإشارة إليك'}
+                                  onOpenStory={isStoryMention && sharedStoryId
+                                    ? () => onOpenStory?.(String(sharedStoryId), message.sender_id)
+                                    : undefined}
                                   onAddToStory={story => {
                                     onReshareStory(story);
                                     setLocation('/feed');

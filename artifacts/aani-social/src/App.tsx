@@ -155,7 +155,7 @@ function App() {
               <Route path="/reels"><ReelsPage userId={user.id} onOpenComments={openComments} /></Route>
               <Route path="/search"><SearchPage userId={user.id} /></Route>
               <Route path="/messages">
-                <MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} onOpenStories={openProfileStories} />
+                <MessagesPage currentUserId={user.id} onReshareStory={setPendingStoryReshare} onOpenStories={openProfileStories} onOpenStory={openNotificationStory} />
               </Route>
               <Route path="/messages/:userId">
                 {params => (
@@ -164,6 +164,7 @@ function App() {
                     selectedId={params.userId}
                     onReshareStory={setPendingStoryReshare}
                     onOpenStories={openProfileStories}
+                    onOpenStory={openNotificationStory}
                   />
                 )}
               </Route>

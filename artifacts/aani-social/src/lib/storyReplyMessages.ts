@@ -13,6 +13,23 @@ export const LEGACY_STORY_REPLY_PREFIX = '[story-reply]';
 
 export const STORY_SHARE_CONTENT_PREFIX = '[story:';
 
+/**
+ * وسم صريح لرسالة الإشارة داخل الستوري، يُضاف بعد [story:ID].
+ * الرسائل القديمة لا تحمله، فتُعرَّف بنصّها المعتمد «تمت الإشارة إليك».
+ */
+export const STORY_MENTION_CONTENT_MARKER = '[mention]';
+
+/**
+ * هل هذه الرسالة إشارة إلى المستخدم داخل ستوري (وليس مشاركة ستوري عادية)؟
+ * كلتاهما تبدأ بـ[story:ID] وتحمل story_id، فالتمييز بالوسم أو بنص الإشارة.
+ */
+export function isStoryMentionMessage(content: string | null | undefined): boolean {
+  const text = (content || '').trim();
+  if (!text.startsWith(STORY_SHARE_CONTENT_PREFIX)) return false;
+  if (text.includes(STORY_MENTION_CONTENT_MARKER)) return true;
+  return /تمت الإشارة إليك/.test(text);
+}
+
 export interface StoryReplyInsertInput {
   senderId: string;
   recipientId: string;
