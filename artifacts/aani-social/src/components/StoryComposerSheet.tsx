@@ -3,6 +3,7 @@ import { Archive, Camera, Check, ImagePlus, Play, X } from 'lucide-react';
 
 import StoryImageSticker from '@/components/StoryImageSticker';
 import { GridSkeleton } from '@/components/Skeletons';
+import { SignedImage, SignedVideo } from '@/components/SignedMedia';
 import EmptyState from '@/components/EmptyState';
 import type { StoryImageOverlay, StoryMediaTransformOverlay, StoryRow, StoryTextOverlay, StoryCanvasStyleOverlay } from '@/components/stories/types';
 
@@ -208,9 +209,9 @@ const StoryComposerSheet: React.FC<StoryComposerSheetProps> = ({
                       >
                         {story.media_url && story.media_type !== 'text' ? (
                           story.media_type === 'video' ? (
-                            <video src={story.media_url} muted playsInline className="h-full w-full object-cover" style={{ transform: mediaTransformCss, transformOrigin: 'center' }} />
+                            <SignedVideo src={story.media_url} muted playsInline className="h-full w-full object-cover" style={{ transform: mediaTransformCss, transformOrigin: 'center' }} />
                           ) : (
-                            <img src={story.media_url} alt="" className="h-full w-full object-cover" style={{ transform: mediaTransformCss, transformOrigin: 'center' }} />
+                            <SignedImage src={story.media_url} alt="" className="h-full w-full object-cover" style={{ transform: mediaTransformCss, transformOrigin: 'center' }} />
                           )
                         ) : (
                           <div className="absolute inset-0" style={{ background: canvasStyle?.background || '#1f1f27' }} />

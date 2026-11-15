@@ -10,6 +10,7 @@ import type { ProfileHighlight, ProfileHighlightCollectionSummary } from '@/comp
 import { decodeStoryFilterKey, getStoryFilterOverlay } from '@/lib/storyFilters';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { GridSkeleton, ListSkeleton } from '@/components/Skeletons';
+import { SignedImage, SignedVideo } from '@/components/SignedMedia';
 import EmptyState from '@/components/EmptyState';
 
 type HighlightCollectionOption = Pick<ProfileHighlightCollectionSummary, 'id' | 'title'>;
@@ -255,9 +256,9 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
               className="relative aspect-[3/4] overflow-hidden rounded-xl border border-[#262626] bg-[#171717] text-right"
             >
               {story.media_url && story.media_type !== 'text' ? story.media_type === 'video' ? (
-                <video src={story.media_url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                <SignedVideo src={story.media_url} muted playsInline preload="metadata" className="h-full w-full object-cover" />
               ) : (
-                <img src={story.media_url} alt="" className="h-full w-full object-cover" />
+                <SignedImage src={story.media_url} alt="" className="h-full w-full object-cover" />
               ) : (
                 <span className="absolute inset-0 flex items-center justify-center px-3 text-center text-xs leading-5 text-white">
                   {story.caption || 'قصة نصية'}

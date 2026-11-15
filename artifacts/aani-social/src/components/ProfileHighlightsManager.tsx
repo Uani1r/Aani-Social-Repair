@@ -9,6 +9,7 @@ import { GridSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { isImageStoryMediaType, sendStoryReplyMessage } from '@/lib/storyReplyMessages';
 import { uploadMedia } from '@/lib/storyUpload';
 
@@ -1486,6 +1487,10 @@ export function ProfileHighlightViewer({
     }
   };
 
+  // وسائط أبرز القصص قد تكون محمية (bucket خاص أو ImageKit موقّع): تُحوَّل قبل العرض.
+  // يُستدعى قبل أي return مبكر حتى يبقى ترتيب الخطافات ثابتاً.
+  const signedMediaUrl = useMediaUrl(story?.media_url);
+
   if (!story) return null;
 
   return createPortal(
@@ -1560,11 +1565,11 @@ export function ProfileHighlightViewer({
       </div>
       {!isCleanScreen && <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40 bg-gradient-to-b from-black/70 via-black/25 to-transparent" />}
 
-      {story.media_url && story.media_type === 'video' ? (
+      {signedMediaUrl && story.media_type === 'video' ? (
         <video
           key={story.id}
           ref={videoRef}
-          src={story.media_url}
+          src={signedMediaUrl}
           className="absolute inset-0 z-0 h-full w-full object-contain"
           playsInline
           preload="metadata"
@@ -1597,10 +1602,10 @@ export function ProfileHighlightViewer({
             setMediaReadyStoryId(story.id);
           }}
         />
-      ) : story.media_url ? (
+      ) : signedMediaUrl ? (
         <img
           key={story.id}
-          src={story.media_url}
+          src={signedMediaUrl}
           className="absolute inset-0 z-0 h-full w-full object-contain"
           data-duration={storyDuration}
           alt={story.caption || activeCollection.title}

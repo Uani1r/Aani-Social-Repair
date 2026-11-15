@@ -3,6 +3,7 @@ import { ImageOff, RotateCw } from 'lucide-react';
 
 import { SkeletonBlock } from '@/components/Skeletons';
 import { isImageStoryMediaType, isVideoStoryMediaType, toAbsoluteMediaUrl } from '@/lib/storyReplyMessages';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
 interface StoryReplyCardProps {
@@ -201,17 +202,21 @@ export default function StoryReplyCard({
     };
   }, [needsLookup, storyId, retryNonce]);
 
+  // وسائط القصة قد تكون محمية (bucket خاص أو ImageKit موقّع): تُحوَّل قبل العرض.
+  const signedThumbnailUrl = useMediaUrl(resolved.thumbnailUrl);
+  const signedMediaUrl = useMediaUrl(resolved.mediaUrl);
+
   const imageSources = useMemo(() => {
     const candidates = [
-      resolved.thumbnailUrl,
-      isImageStoryMediaType(resolved.mediaType) ? resolved.mediaUrl : null,
+      signedThumbnailUrl,
+      isImageStoryMediaType(resolved.mediaType) ? signedMediaUrl : null,
     ];
     return [...new Set(candidates.filter((value): value is string => Boolean(value)))];
-  }, [resolved]);
+  }, [signedThumbnailUrl, signedMediaUrl, resolved.mediaType]);
 
   const usableImage = imageSources.find(source => !failedImages.includes(source)) ?? null;
-  const videoSource = !usableImage && isVideoStoryMediaType(resolved.mediaType) && resolved.mediaUrl
-    ? resolved.mediaUrl
+  const videoSource = !usableImage && isVideoStoryMediaType(resolved.mediaType) && signedMediaUrl
+    ? signedMediaUrl
     : null;
 
   const storyExpired = Boolean(found?.expiresAt && isPastDate(found.expiresAt));
