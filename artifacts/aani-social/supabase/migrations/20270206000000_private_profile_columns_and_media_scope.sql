@@ -127,14 +127,16 @@ declare
 begin
   -- أ) كل دور يملك SELECT على الجدول (بما فيه PUBLIC و anon و authenticated
   --    و authenticator و service_role و أي دور مخصص)، مع استثناء أدوار الإدارة.
+  --    الاسم المستعار rtg لا grant: grant كلمة محجوزة في PostgreSQL، واستخدامها
+  --    اسماً مستعاراً يُفشل الترحيل بـ syntax error at or near "grant".
   for grantee_name in
-    select distinct grant.grantee
-    from information_schema.role_table_grants as grant
-    where grant.table_schema = 'public'
-      and grant.table_name = 'profiles'
-      and grant.privilege_type = 'SELECT'
-      and grant.grantee <> current_user
-      and grant.grantee <> all(protected_roles)
+    select distinct rtg.grantee
+    from information_schema.role_table_grants as rtg
+    where rtg.table_schema = 'public'
+      and rtg.table_name = 'profiles'
+      and rtg.privilege_type = 'SELECT'
+      and rtg.grantee <> current_user
+      and rtg.grantee <> all(protected_roles)
   loop
     if grantee_name = 'PUBLIC' then
       execute 'revoke select on table public.profiles from public';
