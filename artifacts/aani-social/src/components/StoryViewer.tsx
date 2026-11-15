@@ -56,6 +56,8 @@ export default function StoryViewer({
   onCloseViewer,
   onNextStory,
   onPreviousStory,
+  onPreviousUser,
+  onNextUser,
   onToggleShowUI,
   onPauseChange,
   onVideoMetadata,
@@ -89,6 +91,8 @@ export default function StoryViewer({
   const longPressShowUIBeforeRef = useRef(true);
   const longPressMouseStartRef = useRef<{ x: number; y: number } | null>(null);
   const ignoreMouseUntilRef = useRef(0);
+  // يمنع تنفيذ أكثر من انتقال واحد بسبب حركة سحب واحدة.
+  const horizontalSwipeHandledRef = useRef(false);
 
   const suppressStoryClick = () => {
     const suppressUntil = Date.now() + 700;
@@ -155,6 +159,7 @@ export default function StoryViewer({
 
   const handleStoryViewerTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
     suppressStoryClickUntilRef.current = 0;
+    horizontalSwipeHandledRef.current = false;
     ignoreMouseUntilRef.current = Date.now() + 800;
     storyViewerPausedBeforeTouchRef.current = isPaused;
     if (event.touches.length !== 1) {
@@ -201,6 +206,13 @@ export default function StoryViewer({
     };
     storyViewerTouchStartRef.current = updatedStart;
     if (updatedStart.pathLength > 12) clearLongPressTimer();
+
+    // سحب أفقي واضح: يُلغي الضغط المطول فوراً حتى لا يتداخل مع التنقل
+    const totalDeltaX = touch.clientX - start.x;
+    const totalDeltaY = touch.clientY - start.y;
+    if (Math.abs(totalDeltaX) >= 24 && Math.abs(totalDeltaX) >= Math.abs(totalDeltaY) * 1.2) {
+      clearLongPressTimer();
+    }
   };
 
   const handleStoryViewerTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
@@ -213,8 +225,35 @@ export default function StoryViewer({
     if (!start || !touch) return;
 
     const deltaY = touch.clientY - start.y;
+    const deltaX = touch.clientX - start.x;
     const finalSegment = Math.hypot(touch.clientX - start.lastX, touch.clientY - start.lastY);
     const totalTravel = start.pathLength + finalSegment;
+
+    // ===== السحب الأفقي بين مجموعات المستخدمين =====
+    // يُعالج أولاً ويُنهي اللمسة: فلا ينفّذ انتقالاً عمودياً ولا نقراً بعده.
+    const horizontalTravel = Math.abs(deltaX);
+    const isHorizontalSwipe = horizontalTravel >= 56
+      && horizontalTravel >= Math.abs(deltaY) * 1.25
+      && totalTravel >= 64;
+    if (isHorizontalSwipe) {
+      suppressStoryClick();
+      const blocked = storyViewsOpen
+        || showMenu
+        || Boolean(viewerReportTarget)
+        || viewerRowMenuOpen
+        || isArchivedStory
+        || start.startedInViewersPanel;
+      // انتقال واحد فقط لكل حركة سحب واحدة
+      if (!blocked && !horizontalSwipeHandledRef.current) {
+        horizontalSwipeHandledRef.current = true;
+        // السحب من اليمين إلى اليسار: بداية قصص الشخص السابق.
+        // السحب من اليسار إلى اليمين: بداية قصص الشخص التالي (أو إغلاق العارض).
+        if (deltaX < 0) onPreviousUser();
+        else onNextUser();
+      }
+      return;
+    }
+
     const isClearSwipe = Math.abs(deltaY) >= 64 && totalTravel >= 72;
 
     if (storyViewsOpen) {
@@ -250,6 +289,7 @@ export default function StoryViewer({
   const handleStoryViewerTouchCancel = () => {
     finishLongPress();
     storyViewerTouchStartRef.current = null;
+    horizontalSwipeHandledRef.current = false;
   };
 
   return (
