@@ -216,6 +216,12 @@ export default function NearbyUsersSheet({
   }, [refresh]);
 
   // ===== استعادة المنطقة: كاش فوري ثم إعادة تحقق من profiles =====
+  // القاعدة:
+  //   - عند الفتح: تُقرأ المدينة من localStorage وتُعرض فوراً إن وُجدت.
+  //   - فشل الاتصال/تعذر التحقق: تُحتفظ المدينة الموجودة في الكاش ولا تُمسح.
+  //   - نجاح الاستعلام مع city أو location: تُحدَّث المدينة والكاش بالقيمة الجديدة.
+  //   - نجاح الاستعلام وتأكّد أن city و location فارغان معاً: يُمسح مفتاح المدينة
+  //     من localStorage، وتُصفَّر المدينة المعروضة، وتظهر حالة «لا توجد منطقة».
   useEffect(() => {
     if (!open) return undefined;
     let active = true;
@@ -229,6 +235,7 @@ export default function NearbyUsersSheet({
 
     void (async () => {
       if (!supabaseConfigured) {
+        // تعذّر التحقق (لا إعدادات اتصال): لا نمسح الكاش
         if (!active || cached) return;
         setState({ status: 'error', people: [], errorText: 'إعدادات الاتصال بقاعدة البيانات غير مكتملة.' });
         return;
@@ -243,9 +250,17 @@ export default function NearbyUsersSheet({
         if (error) throw error;
         if (!active) return;
 
-        const row = (data || null) as NearbyProfileRow | null;
-        const confirmed = pickCity(row);
+        // null = لم تُرجع القاعدة صفاً: هذه ليست شهادة بأن المدينة محذوفة
+        if (!data) {
+          if (!cached) {
+            setState({ status: 'error', people: [], errorText: 'تعذر التحقق من منطقتك. تحقق من الاتصال ثم أعد المحاولة.' });
+          }
+          return;
+        }
 
+        const confirmed = pickCity(data as NearbyProfileRow);
+
+        // (3) نجاح الاستعلام مع مدينة/موقع صالح → تحديث المدينة والكاش
         if (confirmed) {
           writeCachedCity(currentUserId, confirmed);
           cityRef.current = confirmed;
@@ -254,17 +269,15 @@ export default function NearbyUsersSheet({
           return;
         }
 
-        if (cached) {
-          // استعلام ناجح بلا مدينة، لكن لدينا منطقة محفوظة: لا نستبدلها بقيمة فارغة
-          return;
-        }
-
-        // استعلام ناجح ومؤكَّد أن الحساب بلا city ولا location صالحين
+        // (4) نجاح الاستعلام وتأكّد أن city و location فارغان معاً
+        writeCachedCity(currentUserId, null);
         cityRef.current = null;
+        requestSeqRef.current += 1; // تجاهل أي نتيجة جلب سابقة لمنطقة قديمة
+        hasPeopleRef.current = false;
         setResolvedCity(null);
         setState({ status: 'no-city', people: [], errorText: '' });
       } catch (error) {
-        // فشل الشبكة/RLS ليس دليلاً على انعدام المنطقة: نحتفظ بالكاش والقائمة
+        // (2) فشل الشبكة/RLS ليس دليلاً على انعدام المنطقة: نحتفظ بالكاش والقائمة
         if (!active) return;
         console.warn('[nearby] تعذر إعادة التحقق من منطقة الحساب:', error);
         if (!cached) {
