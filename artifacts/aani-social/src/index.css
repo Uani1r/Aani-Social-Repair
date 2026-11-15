@@ -8324,23 +8324,22 @@ select,
   text-align: center;
 }
 
-/* مفتاح الظهور في قائمة الأشخاص القريبين — بجانب عنوان الشاشة */
+/* مفتاح الظهور في قائمة الأشخاص القريبين — حاوية مستقلة (div) بجانب العنوان.
+   النص والمفتاح منفصلان بمسافة صريحة، ولا يتداخلان ولا يلتفان. */
 .nearby-users-toggle {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex-shrink: 0;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   margin-inline-start: 2px;
   color: #c9c9cf;
   font-size: 12px;
   line-height: 1;
-  /* النص والمفتاح لا يلتفان ولا يتداخلان */
   white-space: nowrap;
-  cursor: pointer;
   user-select: none;
 }
 
-.nearby-users-toggle > span {
+.nearby-users-toggle-label {
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -8363,7 +8362,7 @@ select,
   }
 
   .nearby-users-toggle {
-    gap: 5px;
+    gap: 6px;
     font-size: 11px;
   }
 
@@ -8374,8 +8373,23 @@ select,
   }
 }
 
+/* ===== مفتاح الظهور: قياسات ثابتة لا تعتمد على أي قاعدة أخرى =====
+   44×24 مع box-sizing: border-box وpadding 2px، ودائرة 20×20 تتحرك 20px
+   عند التفعيل و0 عند الإيقاف — فتبقى داخل الحدود في الحالتين:
+   2 + 20 + 20 + 2 = 44. */
 .nearby-users-switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  width: 44px;
+  height: 24px;
+  padding: 2px;
+  box-sizing: border-box;
   border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 180ms ease;
 }
 
 .nearby-users-switch[data-state="checked"] {
@@ -8386,8 +8400,36 @@ select,
   background-color: rgba(255, 255, 255, 0.25);
 }
 
+.nearby-users-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* الدائرة: 20×20، بيضاء بظل وانتقال سلس.
+   translate: none يلغي أي utility ترجمة قادمة من المكوّن (translate-x-4)
+   حتى لا يُضاف إزاحة مضاعفة فوق transform، فتبقى الدائرة داخل الحدود. */
 .nearby-users-switch > span {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  border-radius: 50%;
   background-color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+  transition: transform 180ms ease;
+  translate: none;
+  transform: translateX(0);
+}
+
+/* عند التفعيل: translateX(20px) — والمفتاح dir="ltr" فيبقى الاتجاه ثابتاً */
+.nearby-users-switch[data-state="checked"] > span {
+  translate: none;
+  transform: translateX(20px);
+}
+
+.nearby-users-switch[data-state="unchecked"] > span {
+  translate: none;
+  transform: translateX(0);
 }
 
 /* Temporary video-test mode: suppress noisy nonessential fetch fallbacks. */
