@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 
 import { drawStoryStroke, type StoryDrawStroke } from '@/lib/appShared';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import StoryImageSticker from '@/components/StoryImageSticker';
 import type { StoryCanvasStyleOverlay, StoryImageOverlay, StoryMediaTransformOverlay, StoryTextOverlay } from '@/components/stories/types';
 import type { StoryViewerProps } from './types';
@@ -62,6 +63,10 @@ export default function StoryMediaStage({
       && currentTimeSec <= item.endTime,
   );
 
+  // وسائط القصة قد تكون في bucket خاص أو على ImageKit محمي: تُحوَّل إلى رابط
+  // موقّع، ويبقى الرابط الأصلي معروضاً حتى يصل الموقّع (أو عند تعذّره).
+  const storyMediaUrl = useMediaUrl(currentStory.media_url);
+
   useEffect(() => {
     const video = storyVideoRef.current;
     if (!video) return;
@@ -88,12 +93,12 @@ export default function StoryMediaStage({
 
   return (
     <div className="absolute inset-0 flex h-full w-full items-center justify-center bg-zinc-950">
-      {currentStory.media_url ? (
+      {storyMediaUrl ? (
         currentStory.media_type === 'video' ? (
           <video
             ref={storyVideoRef}
             key={currentStory.id}
-            src={currentStory.media_url}
+            src={storyMediaUrl}
             playsInline
             preload="metadata"
             className="h-full w-full object-contain"
@@ -110,7 +115,7 @@ export default function StoryMediaStage({
             onEnded={() => onVideoEnded(currentStory.id)}
           />
         ) : (
-          <img src={currentStory.media_url} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }} />
+          <img src={storyMediaUrl} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }} />
         )
       ) : (
         <div

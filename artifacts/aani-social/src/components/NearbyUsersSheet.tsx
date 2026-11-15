@@ -86,46 +86,28 @@ function pickCity(row: NearbyProfileRow | null | undefined): string | null {
 
 /**
  * جلب القائمة من المصدر المعتمد aani_nearby_people (يحترم المدينة والظهور
- * والحسابات المعطلة وRLS)، مع رجوع للاستعلام المباشر إن لم يُطبَّق الترحيل.
+ * والحسابات المعطلة وRLS).
+ *
+ * لم يبقَ رجوع للاستعلام المباشر على profiles: منذ ترحيل 20270206000000
+ * سُحبت قراءة city و location و city_key من المستخدم المسجّل (لأنها محكومة
+ * بـ show_city)، فأي استعلام مباشر عليها يفشل بـ42501. الدالة هي المصدر
+ * الوحيد، وهي تُعيد city فارغة لمن أخفى مدينته وتستثنيه من القائمة.
  */
 async function fetchNearbyPeople(city: string, currentUserId: string): Promise<NearbyUser[]> {
   const { data: rpcData, error: rpcError } = await supabase.rpc('aani_nearby_people', { p_limit: 200 });
-  if (!rpcError) {
-    return ((rpcData || []) as NearbyUser[]).filter(person => Boolean(person?.id));
+  if (rpcError) {
+    const rpcMissing = rpcError.code === 'PGRST202'
+      || rpcError.code === '42883'
+      || /aani_nearby_people|could not find the function|schema cache/i.test(rpcError.message || '');
+    if (rpcMissing) {
+      throw new Error('ميزة «الأشخاص القريبون» تحتاج تطبيق ترحيل قاعدة البيانات 20270201000000 (أو 20270206000000 إن سبقه).');
+    }
+    throw rpcError;
   }
 
-  const rpcMissing = rpcError.code === 'PGRST202'
-    || /aani_nearby_people|could not find the function|schema cache/i.test(rpcError.message || '');
-  if (!rpcMissing) throw rpcError;
-
-  const columns = 'id, username, full_name, display_name, avatar_url, city, is_deactivated';
-  let result = await supabase
-    .from('profiles')
-    .select(columns)
-    .eq('city', city)
-    .neq('id', currentUserId)
-    .eq('is_deactivated', false)
-    .eq('is_nearby_visible', true)
-    .order('created_at', { ascending: false })
-    .limit(200);
-
-  // قاعدة بيانات بلا عمود is_deactivated أو is_nearby_visible بعد → أعد المحاولة بلا الأعمدة الناقصة
-  if (result.error && (result.error.code === '42703' || result.error.code === 'PGRST204')) {
-    const missing = result.error.message || '';
-    let retry = supabase
-      .from('profiles')
-      .select('id, username, full_name, display_name, avatar_url, city')
-      .eq('city', city)
-      .neq('id', currentUserId)
-      .order('created_at', { ascending: false })
-      .limit(200);
-    if (!/is_deactivated/i.test(missing)) retry = retry.eq('is_deactivated', false);
-    if (!/is_nearby_visible/i.test(missing)) retry = retry.eq('is_nearby_visible', true);
-    result = await retry;
-  }
-
-  if (result.error) throw result.error;
-  return ((result.data || []) as NearbyUser[]).filter(person => Boolean(person?.id));
+  void city;
+  void currentUserId;
+  return ((rpcData || []) as NearbyUser[]).filter(person => Boolean(person?.id));
 }
 
 /**
@@ -242,23 +224,24 @@ export default function NearbyUsersSheet({
       }
 
       try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('city, location, is_nearby_visible')
-          .eq('id', currentUserId)
-          .maybeSingle();
+        // city و location لم تعودا ممنوحتين للقراءة المباشرة (ترحيل 20270206000000
+        // لأنهما محكومتان بـ show_city)، فتُقرأ مدينة المستخدم نفسه عبر الدالة
+        // المصرّح بها التي تُعيدها له دائماً.
+        const { data, error } = await supabase.rpc('aani_public_profile', { p_user_id: currentUserId });
         if (error) throw error;
         if (!active) return;
 
+        const row = (Array.isArray(data) ? data[0] : data) as NearbyProfileRow | null;
+
         // null = لم تُرجع القاعدة صفاً: هذه ليست شهادة بأن المدينة محذوفة
-        if (!data) {
+        if (!row) {
           if (!cached) {
             setState({ status: 'error', people: [], errorText: 'تعذر التحقق من منطقتك. تحقق من الاتصال ثم أعد المحاولة.' });
           }
           return;
         }
 
-        const confirmed = pickCity(data as NearbyProfileRow);
+        const confirmed = pickCity(row);
 
         // (3) نجاح الاستعلام مع مدينة/موقع صالح → تحديث المدينة والكاش
         if (confirmed) {

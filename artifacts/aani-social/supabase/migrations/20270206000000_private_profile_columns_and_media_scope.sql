@@ -1,5 +1,5 @@
--- ترحيل: حجب أعمدة profiles الشخصية عن REST، وتثبيت حارس الحجب بعد توفّر
--- دالته، وإضافة قرار قراءة كائن وسائط واحد على Storage.
+-- ترحيل: حجب أعمدة profiles الشخصية والمشروطة بأعلام الظهور، وتثبيت حارس
+-- الحجب بعد توفّر دالته، وإضافة قرار قراءة كائن وسائط واحد على Storage.
 --
 -- 1) أعمدة profiles الشخصية
 --    20261227000000 (سطر 7-13) وschema.sql (سطر 494-500) يمنحان authenticated
@@ -7,21 +7,26 @@
 --    و hd_uploads و data_saver و font_preference على كل الصفوف، لا على صف
 --    المستخدم نفسه. فأي مستخدم يقرأ تفضيلات غيره. و RLS لا تحجب عموداً عن صف،
 --    فالحل سحب منح الأعمدة وإتاحتها لصاحبها عبر دالة.
---    الأعمدة العامة (الاسم، اليوزر، الصورة، الغلاف، النبذة، الوظيفة، المدينة،
---    تاريخ الميلاد، الموقع، أعلام show_*، الجنس، is_private، is_nearby_visible،
---    is_deactivated، created_at/updated_at) تبقى ممنوحة كما هي.
+--
+--    كذلك birth_date و city و location: صاحب الحساب يتحكم بإظهارها عبر
+--    show_birth_date و show_city، لكن الواجهة كانت تخفيها فقط بينما تبقى
+--    مقروءة عبر REST لكل مستخدم. تُسحب هنا أيضاً، وتُقرأ قيمتها الفعلية عبر
+--    aani_public_profile() التي تُعيدها فارغة (null) عندما يكون العلم مُطفأ.
+--
+--    الأعمدة العامة التي تبقى ممنوحة مباشرة: id, username, full_name,
+--    display_name, avatar_url, cover_url, cover_position_x, cover_position_y,
+--    bio, job, website, gender, is_private, is_nearby_visible, is_deactivated,
+--    created_at, updated_at، وأعلام show_* نفسها (ضرورية للعميل ليعرف ما يُعرض).
 --
 -- 2) حارس الحجب على posts: 20270203000000 ينشئه فقط إن وُجدت
 --    aani_is_user_blocked، و20270204000000 هو من ينشئها عند غيابها. هنا
 --    يُعاد إنشاؤه بعد أن صارت الدالة متاحة، فلا يبقى مسار بلا حماية.
 --
--- 3) وسائط Storage: الـbucket aani-media عام (schema.sql سطر 510-514) وسياسته
---    "Aani media is readable by signed-in users" تسمح بقراءة كل كائناته لكل
---    مسجّل. تُضاف هنا دالة قرار aani_can_read_media_object(name) وسياسة
---    restrictive تستخدمها. تنفذ السياسة فور تحويل الـbucket إلى private؛
---    أما في bucket عام فمسار /object/public/ لا يمرّ بـRLS، لذا التحويل خطوة
---    يدوية في APPLY_MANUALLY_20270206000000_media_bucket_private.sql لأن
---    تحويله الآن يقطع كل روابط الوسائط المخزّنة قبل نشر عميل يدعم الروابط الموقّعة.
+-- 3) وسائط Storage و ImageKit: bucket aani-media عام وسياسته تسمح بقراءة كل
+--    كائناته لكل مسجّل. تُضاف دالة قرار aani_can_read_media_object(name)
+--    وسياسة restrictive تستخدمها، ويُضاف أصل ImageKit إلى نفس القرار حتى
+--    يستخدمه خادم التوقيع. الحماية الكاملة بالرابط المباشر تحتاج bucket خاصاً
+--    و Restricted access في ImageKit — ملفان يدويان منفصلان.
 --
 -- لا يعدّل جداول ولا بيانات ولا سياسات القصص ولا واجهة التطبيق.
 -- يعتمد على 20270203000000 و20270204000000. آمن للتكرار.
@@ -68,68 +73,266 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- 1) سحب قراءة الأعمدة الشخصية (منح العمود قائم، فالسحب على مستوى العمود نافذ)
+-- 1) سحب قراءة الأعمدة الخاصة والمشروطة بأعلام الظهور — سحب شامل
+--
+--    لا يكفي سحب الأعمدة: قد يكون SELECT ممنوحاً على مستوى الجدول أو لـ PUBLIC
+--    أو لدور آخر (anon / authenticator / custom roles). لذلك:
+--      أ) يُسحب SELECT على الجدول من PUBLIC و anon و authenticated و كل دور
+--         يملكه فعلاً (فحص information_schema.column_privileges و role_table_grants).
+--      ب) تُمنح قائمة الأعمدة العامة صراحةً لـ authenticated فقط.
+--      ج) تُسحب الأعمدة الخاصة من كل دور آخر يملكها، بمن فيه service_role
+--         ما لم يكن هو مالك الجدول (service_role يتجاوز RLS لكنه لا يُستخدم
+--         في المتصفح؛ إبقاء منحه لا يضر، لكن السحب يمنع أي عميل مسرَّب).
+--
+--    الأعمدة المسحوبة: التفضيلات الشخصية + fcm_token + birth_date + city +
+--    location (الأخيران محكومان بـ show_city، و birth_date بـ show_birth_date).
 -- ---------------------------------------------------------------------
 do $$
 declare
+  private_column_names text[] := array[
+    'notification_settings', 'appearance_preference', 'language_preference',
+    'hd_uploads', 'data_saver', 'font_preference', 'fcm_token',
+    'birth_date', 'city', 'location'
+  ];
+  grantee_name text;
   private_columns text;
   public_columns text;
 begin
+  -- أ) كل دور يملك SELECT على الجدول (بما فيه PUBLIC و anon و authenticated
+  --    و authenticator و أي دور مخصص). PUBLIC يظهر باسم PUBLIC في هذه الجداول.
+  for grantee_name in
+    select distinct grant.grantee
+    from information_schema.role_table_grants as grant
+    where grant.table_schema = 'public'
+      and grant.table_name = 'profiles'
+      and grant.privilege_type = 'SELECT'
+      and grant.grantee <> current_user
+  loop
+    if grantee_name = 'PUBLIC' then
+      execute 'revoke select on table public.profiles from public';
+    else
+      execute format('revoke select on table public.profiles from %I', grantee_name);
+    end if;
+  end loop;
+
+  -- ب) سحب الأعمدة الخاصة من أي دور يملكها على مستوى العمود
+  for grantee_name in
+    select distinct privilege.grantee
+    from information_schema.column_privileges as privilege
+    where privilege.table_schema = 'public'
+      and privilege.table_name = 'profiles'
+      and privilege.privilege_type = 'SELECT'
+      and privilege.column_name = any(private_column_names)
+      and privilege.grantee <> current_user
+  loop
+    select string_agg(quote_ident(privilege.column_name), ', ' order by privilege.column_name)
+    into private_columns
+    from information_schema.column_privileges as privilege
+    where privilege.table_schema = 'public'
+      and privilege.table_name = 'profiles'
+      and privilege.privilege_type = 'SELECT'
+      and privilege.column_name = any(private_column_names)
+      and privilege.grantee = grantee_name;
+
+    if private_columns is not null then
+      if grantee_name = 'PUBLIC' then
+        execute format('revoke select (%s) on table public.profiles from public', private_columns);
+      else
+        execute format('revoke select (%s) on table public.profiles from %I', private_columns, grantee_name);
+      end if;
+    end if;
+  end loop;
+
+  -- ج) منح قائمة الأعمدة العامة صراحةً لـ authenticated
+  --    city و location و birth_date و city_key ليست هنا عمداً: الأولى محكومة
+  --    بـ show_city والثانية بـ show_birth_date، و city_key يشتق من المدينة.
   select string_agg(quote_ident(column_name), ', ' order by column_name)
-  into private_columns
+  into public_columns
   from information_schema.columns
   where table_schema = 'public'
     and table_name = 'profiles'
     and column_name in (
-      'notification_settings', 'appearance_preference', 'language_preference',
-      'hd_uploads', 'data_saver', 'font_preference', 'fcm_token'
+      'id', 'username', 'full_name', 'display_name', 'avatar_url',
+      'cover_url', 'cover_position_x', 'cover_position_y',
+      'bio', 'job', 'website', 'gender',
+      'is_private', 'is_nearby_visible', 'is_deactivated',
+      'show_city', 'show_job', 'show_birth_date',
+      'created_at', 'updated_at'
     );
 
-  if private_columns is not null then
-    execute format('revoke select (%s) on table public.profiles from anon', private_columns);
-    execute format('revoke select (%s) on table public.profiles from authenticated', private_columns);
+  if public_columns is null then
+    raise exception 'لم يُعثر على أي عمود عام في public.profiles — راجع المخطط';
   end if;
 
-  -- لو كان الجدول ممنوحاً بالكامل (grant select on table) فسحب الأعمدة لا يكفي:
-  -- في هذه الحالة يُسحب منح الجدول ويُعاد منح الأعمدة العامة فقط.
-  if exists (
-    select 1
-    from information_schema.role_table_grants
-    where table_schema = 'public'
-      and table_name = 'profiles'
-      and grantee = 'authenticated'
-      and privilege_type = 'SELECT'
-  ) then
-    execute 'revoke select on table public.profiles from anon, authenticated';
+  execute format('grant select (%s) on table public.profiles to authenticated', public_columns);
 
-    select string_agg(quote_ident(column_name), ', ' order by column_name)
-    into public_columns
-    from information_schema.columns
-    where table_schema = 'public'
-      and table_name = 'profiles'
-      and column_name in (
-        'id', 'username', 'full_name', 'display_name', 'avatar_url',
-        'cover_url', 'cover_position_x', 'cover_position_y',
-        'bio', 'job', 'city', 'location', 'birth_date',
-        'show_city', 'show_job', 'show_birth_date', 'website',
-        'gender', 'is_private', 'is_nearby_visible', 'is_deactivated',
-        'city_key', 'created_at', 'updated_at'
-      );
-
-    if public_columns is null then
-      raise exception 'لم يُعثر على أي عمود عام في public.profiles — راجع المخطط';
-    end if;
-
-    execute format('grant select (%s) on table public.profiles to authenticated', public_columns);
-  end if;
+  raise notice 'أعمدة profiles العامة الممنوحة: %', public_columns;
 end $$;
 
--- التحديث على الأعمدة الشخصية يبقى لصاحب الصف وحده (سياسة UPDATE تشترط
--- id = auth.uid())، ويُمنح صراحةً حتى لا يعتمد على منح جدول قد يُسحب.
+-- لا تُمنح city/location/birth_date لأي دور عبر REST: منح العمود في PostgreSQL
+-- يشمل كل الصفوف لا صف المالك، فمنحها للمالك يمنحها للجميع. صاحب الحساب يقرأها
+-- عبر aani_public_profile() التي تُعيدها له دائماً وتُخفيها عن غيره حسب الأعلام.
+-- التحديث عليها يبقى محكوماً بسياسة UPDATE (id = auth.uid()).
 grant update (
   notification_settings, appearance_preference, language_preference,
-  hd_uploads, data_saver, font_preference, fcm_token
+  hd_uploads, data_saver, font_preference, fcm_token,
+  birth_date, city, location
 ) on table public.profiles to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 1ب) قراءة الملف العام مع احترام أعلام الظهور
+--     RLS لا تحجب عموداً عن صف، وسحب birth_date/city/location يمنع صاحبها
+--     أيضاً من قراءتها مباشرة في نموذج التحرير. هذه الدالة تُعيد الصف كاملاً
+--     لصاحبه، ولغيره تُعيد birth_date و city و location فارغة عندما يكون
+--     show_birth_date أو show_city مُطفأً. SECURITY DEFINER مع search_path = ''
+--     وتأهيل كامل، ولا تقبل معرّفاً خارجياً: تُعيد صف auth.uid() أو صفاً عاماً.
+-- ---------------------------------------------------------------------
+create or replace function public.aani_public_profile(p_user_id uuid)
+returns table (
+  id uuid,
+  username text,
+  full_name text,
+  display_name text,
+  avatar_url text,
+  cover_url text,
+  cover_position_x real,
+  cover_position_y real,
+  bio text,
+  job text,
+  website text,
+  gender text,
+  is_private boolean,
+  is_deactivated boolean,
+  show_city boolean,
+  show_job boolean,
+  show_birth_date boolean,
+  city text,
+  location text,
+  birth_date date,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select
+    profile.id,
+    profile.username,
+    profile.full_name,
+    profile.display_name,
+    profile.avatar_url,
+    profile.cover_url,
+    profile.cover_position_x,
+    profile.cover_position_y,
+    profile.bio,
+    profile.job,
+    profile.website,
+    profile.gender,
+    profile.is_private,
+    profile.is_deactivated,
+    profile.show_city,
+    profile.show_job,
+    profile.show_birth_date,
+    -- المدينة/الموقع وتاريخ الميلاد: لصاحب الحساب دائماً، ولغيره فقط عند إظهارهما.
+    case
+      when profile.id = auth.uid() or coalesce(profile.show_city, true) then profile.city
+      else null
+    end as city,
+    case
+      when profile.id = auth.uid() or coalesce(profile.show_city, true) then profile.location
+      else null
+    end as location,
+    case
+      when profile.id = auth.uid() or coalesce(profile.show_birth_date, false) then profile.birth_date
+      else null
+    end as birth_date,
+    profile.created_at,
+    profile.updated_at
+  from public.profiles as profile
+  where profile.id = p_user_id
+    and (
+      profile.id = auth.uid()
+      -- ملفات الحسابات الخاصة تُقرأ معلوماتها العامة فقط، والمنع الفعلي
+      -- لمنشوراتها في سياسة posts. لا نمنع صف الملف نفسه لأن صفحة الحساب
+      -- الخاص تحتاج الاسم والصورة والنبذة وزر طلب المتابعة.
+      or auth.uid() is not null
+    );
+$$;
+
+revoke all on function public.aani_public_profile(uuid) from public, anon;
+grant execute on function public.aani_public_profile(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 1ج) إعادة تعريف aani_nearby_people بعد سحب city و city_key
+--     التعريف السابق (20270201000000 سطر 100-140) SECURITY INVOKER ويقرأ
+--     city و city_key بصلاحيات المستدعي، فكان سيفشل بـ42501 بعد السحب.
+--     يُعاد تعريفه هنا SECURITY DEFINER (search_path = '') بنفس الدلالة،
+--     مع شرط إضافي: من أخفى مدينته (show_city = false) لا يظهر في القائمة،
+--     لأن إخفاء المدينة يجب أن يمنع الاستدلال عليها من القائمة.
+--     يُعيد city فقط عندما يكون show_city مُفعّلاً.
+-- ---------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('public.profiles') is null then
+    raise warning 'public.profiles غير موجود — تم تخطي إعادة تعريف aani_nearby_people';
+    return;
+  end if;
+
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'city_key'
+  ) then
+    raise warning 'العمود profiles.city_key غير موجود — تم تخطي إعادة تعريف aani_nearby_people';
+    return;
+  end if;
+
+  execute $fn$
+    create or replace function public.aani_nearby_people(p_limit integer default 200)
+    returns table (
+      id uuid,
+      username text,
+      full_name text,
+      display_name text,
+      avatar_url text,
+      city text
+    )
+    language sql
+    stable
+    security definer
+    set search_path = ''
+    as $body$
+      with me as (
+        select profile.id, profile.city_key
+        from public.profiles as profile
+        where profile.id = (select auth.uid())
+          and coalesce(profile.show_city, true)
+      )
+      select
+        other.id,
+        other.username,
+        other.full_name,
+        other.display_name,
+        other.avatar_url,
+        case when coalesce(other.show_city, true) then other.city else null end
+      from public.profiles as other
+      cross join me
+      where (select auth.uid()) is not null
+        and other.id <> me.id
+        and me.city_key is not null
+        and other.city_key = me.city_key
+        and coalesce(other.show_city, true)
+        and coalesce(other.is_nearby_visible, true)
+        and not coalesce(other.is_deactivated, false)
+      order by other.created_at desc
+      limit least(greatest(coalesce(p_limit, 200), 1), 500);
+    $body$;
+  $fn$;
+
+  execute 'revoke all on function public.aani_nearby_people(integer) from public, anon';
+  execute 'grant execute on function public.aani_nearby_people(integer) to authenticated';
+end $$;
 
 -- ---------------------------------------------------------------------
 -- 2) تفضيلات المستخدم الحالي فقط
@@ -304,10 +507,23 @@ begin
       and privilege_type = 'SELECT'
       and column_name in (
         'notification_settings', 'appearance_preference', 'language_preference',
-        'hd_uploads', 'data_saver', 'font_preference', 'fcm_token'
+        'hd_uploads', 'data_saver', 'font_preference', 'fcm_token',
+        'birth_date', 'city', 'location'
       )
   ) then
-    raise exception 'ما زالت أعمدة profiles الشخصية ممنوحة للقراءة';
+    raise exception 'ما زالت أعمدة profiles الخاصة أو المشروطة ممنوحة للقراءة';
+  end if;
+
+  -- ولا منح على مستوى الجدول يعيد كل الأعمدة
+  if exists (
+    select 1
+    from information_schema.role_table_grants
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and grantee in ('anon', 'authenticated', 'PUBLIC')
+      and privilege_type = 'SELECT'
+  ) then
+    raise exception 'ما زال SELECT على جدول public.profiles ممنوحاً على مستوى الجدول';
   end if;
 end $$;
 
@@ -318,18 +534,27 @@ commit;
 -- =====================================================================
 -- استعلامات تحقق يدوية بعد التطبيق (شغّلها في SQL Editor — ليست جزءاً من الترحيل)
 -- =====================================================================
--- 1) الأعمدة الممنوحة للمستخدم المسجّل (يجب ألا تظهر الأعمدة الشخصية)
+-- 1) الأعمدة الممنوحة للمستخدم المسجّل (يجب ألا تظهر الخاصة ولا المشروطة)
 --    select column_name
 --    from information_schema.column_privileges
 --    where table_schema = 'public' and table_name = 'profiles'
 --      and grantee = 'authenticated' and privilege_type = 'SELECT'
 --    order by column_name;
 --
--- 2) قراءة تفضيلات مستخدم آخر يجب أن تفشل (42501)
+-- 2) لا منح SELECT على مستوى الجدول (المتوقع: صفر صفوف)
+--    select grantee, privilege_type
+--    from information_schema.role_table_grants
+--    where table_schema = 'public' and table_name = 'profiles' and privilege_type = 'SELECT';
+--
+-- 3) قراءة تفضيلات أو مدينة مستخدم آخر يجب أن تفشل (42501)
 --    select notification_settings from public.profiles where id = '<other_user>';
+--    select city from public.profiles where id = '<other_user>';
 --
--- 3) تفضيلات المستخدم نفسه تعمل عبر الدالة
+-- 4) الدوال تعمل للمستخدم نفسه
 --    select * from public.aani_my_preferences();
+--    select * from public.aani_public_profile('<my_user_id>');
+--    -- ولحساب أخفى مدينته: city و location و birth_date فارغة
+--    select * from public.aani_public_profile('<hidden_city_user_id>');
 --
--- 4) قرار الوسائط لحساب خاص A (بصفتك غير متابع)
+-- 5) قرار الوسائط لحساب خاص A (بصفتك غير متابع)
 --    select public.aani_can_read_media_object('<object_path_of_A_post>');  -- false

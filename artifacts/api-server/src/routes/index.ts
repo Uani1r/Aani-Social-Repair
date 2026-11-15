@@ -1,6 +1,7 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
 import imagekitAuthRouter from "./imagekitAuth";
+import imagekitSignRouter from "./imagekitSign";
 import mediaCleanupRouter from "./mediaCleanup";
 import mediaProcessingRouter from "./mediaProcessing";
 import mediaUploadRouter from "./mediaUpload";
@@ -10,6 +11,7 @@ const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(imagekitAuthRouter);
+router.use(imagekitSignRouter);
 router.use(mediaCleanupRouter);
 router.use(mediaProcessingRouter);
 router.use(mediaUploadRouter);

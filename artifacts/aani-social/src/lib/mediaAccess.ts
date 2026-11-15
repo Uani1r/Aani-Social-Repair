@@ -1,17 +1,18 @@
 /**
- * وصول موحّد إلى وسائط التخزين: مسار → رابط قابل للعرض.
+ * وصول موحّد إلى وسائط التخزين و ImageKit: قيمة مخزّنة → رابط قابل للعرض.
  *
- * المشكلة: bucket aani-media عام، فأي شخص يملك رابط الملف يفتحه ولو لم يكن
- * يحق له قراءة المنشور. إخفاء المنشور في الواجهة لا يحمي الملف نفسه.
- * الحل: bucket خاص + سياسة قراءة على storage.objects تتحقق من حق المشاهد في
- * المحتوى (aani_can_read_media_object)، ثم روابط موقّعة قصيرة العمر.
+ * نوعان من الوسائط في هذا المشروع:
+ *   1. ImageKit (كل الرفع الحالي): الرابط عام بطبيعته. توقيعه لا يفيد إلا إذا
+ *      كانت الملفات مضبوطة على Restricted access أو رُفعت بـ isPrivateFile.
+ *   2. Supabase Storage (الصفوف القديمة): bucket عام، فرابط /object/public/
+ *      يفتح الملف لأي شخص يعرفه. الحماية تحتاج bucket خاصاً + روابط موقّعة.
  *
- * هذه الوحدة تُبقي العرض كما هو في بقية التطبيق:
- *   - رابط خارجي (ImageKit، R2، أي مضيف) → يُعاد كما هو بلا أي طلب شبكة.
- *   - blob:/data: → يُعاد كما هو.
- *   - مسار داخل bucket أو رابط Supabase عام → رابط موقّع، وإن تعذّر التوقيع
- *     (bucket ما زال عاماً أو لا صلاحية) يُعاد الرابط العام كما كان سابقاً.
- * فالسلوك قبل تحويل الـbucket وبعده متطابق من جهة الواجهة.
+ * هذه الوحدة:
+ *   - ImageKit: تطلب توقيعاً من الخادم (الخادم يتحقق من الجلسة ومن حق المشاهد
+ *     في المحتوى) عند تفعيل VITE_IMAGEKIT_SIGNED_URLS=true، وإلا تُعيد الرابط كما هو.
+ *   - مسار تخزين أو رابط Supabase: رابط موقّع، وإن تعذّر التوقيع يُعاد الرابط
+ *     العام كما كان (فلا ينكسر العرض قبل تحويل الـbucket إلى private).
+ *   - blob:/data:/أي مضيف آخر: يُعاد كما هو بلا أي طلب شبكة.
  */
 
 import { useEffect, useState } from 'react';
@@ -23,12 +24,27 @@ const SIGNED_URL_TTL_SECONDS = 60 * 60;
 /** تجديد قبل الانتهاء بهامش حتى لا ينتهي الرابط أثناء العرض. */
 const SIGNED_URL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
+/**
+ * توقيع روابط ImageKit لا يُفعَّل افتراضياً: بدون Restricted access على حساب
+ * ImageKit يبقى الرابط العادي صالحاً ويصبح التوقيع بلا فائدة.
+ * راجع docs/PRIVATE_MEDIA_AR.md لخطوات التفعيل.
+ */
+const IMAGEKIT_SIGNING_ENABLED = ((): boolean => {
+  try {
+    const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+    return String(env?.VITE_IMAGEKIT_SIGNED_URLS || '').toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+})();
+
 type CacheEntry = { url: string; expiresAt: number | null };
 
 const urlCache = new Map<string, CacheEntry>();
 const pendingRequests = new Map<string, Promise<string | null>>();
 
 const STORAGE_PUBLIC_PATH = /\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)$/;
+const IMAGEKIT_HOST = /(^|\.)ik\.imagekit\.io$/i;
 
 /** يستخرج (bucket, path) من قيمة مخزّنة في قاعدة البيانات، أو null لغير التخزين. */
 export function parseStorageRef(raw: string | null | undefined): { bucket: string; path: string } | null {
@@ -53,6 +69,20 @@ export function parseStorageRef(raw: string | null | undefined): { bucket: strin
   return objectPath ? { bucket: storageBucket, path: objectPath } : null;
 }
 
+/** مسار ImageKit (بلا استعلام) إن كان الرابط من ImageKit، وإلا null. */
+export function parseImageKitPath(raw: string | null | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const value = raw.trim();
+  if (!/^https?:\/\//i.test(value)) return null;
+  try {
+    const parsed = new URL(value);
+    if (!IMAGEKIT_HOST.test(parsed.hostname)) return null;
+    return parsed.pathname || null;
+  } catch {
+    return null;
+  }
+}
+
 function cacheKeyOf(bucket: string, path: string): string {
   return `${bucket}/${path}`;
 }
@@ -65,6 +95,42 @@ function readCached(key: string): string | null {
 }
 
 /**
+ * يطلب من الخادم رابط ImageKit موقّعاً. الخادم يتحقق من الجلسة ومن حق المشاهد
+ * في المحتوى (aani_can_read_media_object) قبل التوقيع بالمفتاح الخاص.
+ * عند أي فشل يُعاد الرابط الأصلي — لا تعطيل للعرض.
+ */
+async function signImageKitUrl(raw: string): Promise<string> {
+  if (!IMAGEKIT_SIGNING_ENABLED || !supabaseConfigured) return raw;
+
+  const path = parseImageKitPath(raw);
+  if (!path) return raw;
+
+  const key = `imagekit:${path}`;
+  const cached = readCached(key);
+  if (cached) return cached;
+
+  try {
+    const { data: session } = await supabase.auth.getSession();
+    const accessToken = session.session?.access_token;
+    if (!accessToken) return raw;
+
+    const response = await fetch(`/api/media/imagekit-sign?path=${encodeURIComponent(path)}`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) return raw;
+
+    const payload = await response.json().catch(() => null) as { url?: unknown; expire?: unknown } | null;
+    if (typeof payload?.url !== 'string') return raw;
+
+    const expiresAt = typeof payload.expire === 'number' ? payload.expire * 1000 : null;
+    urlCache.set(key, { url: payload.url, expiresAt });
+    return payload.url;
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * رابط قابل للعرض لقيمة وسائط مخزّنة.
  * يُعيد القيمة كما هي لغير مسارات التخزين، وnull للقيم الفارغة.
  */
@@ -73,8 +139,11 @@ export async function resolveMediaUrl(raw: string | null | undefined): Promise<s
   const value = raw.trim();
   if (!value) return null;
 
+  // ImageKit: توقيع عبر الخادم عند تفعيله، وإلا الرابط كما هو.
+  if (parseImageKitPath(value)) return signImageKitUrl(value);
+
   const ref = parseStorageRef(value);
-  // ليس مسار تخزين (ImageKit مثلاً): لا تحويل ولا طلب شبكة.
+  // ليس مسار تخزين: لا تحويل ولا طلب شبكة.
   if (!ref) return value;
   if (!supabaseConfigured) return value;
 
@@ -132,14 +201,16 @@ export function resolveMediaUrlSync(raw: string | null | undefined): string | nu
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   if (!value) return null;
+  const imageKitPath = parseImageKitPath(value);
+  if (imageKitPath) return readCached(`imagekit:${imageKitPath}`) || value;
   const ref = parseStorageRef(value);
   if (!ref) return value;
   return readCached(cacheKeyOf(ref.bucket, ref.path)) || value;
 }
 
 /**
- * نسخة React للوسائط المفردة (صورة ملف، غلاف): تُعرض القيمة الأصلية فوراً
- * ثم تُستبدل بالرابط الموقّع عند وصوله.
+ * نسخة React للوسائط المفردة (صورة ملف، غلاف، قصة): تُعرض القيمة الأصلية
+ * فوراً ثم تُستبدل بالرابط الموقّع عند وصوله.
  */
 export function useMediaUrl(raw: string | null | undefined): string | null {
   const [resolved, setResolved] = useState<string | null>(() => resolveMediaUrlSync(raw));

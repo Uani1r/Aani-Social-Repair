@@ -5,6 +5,7 @@ import RepostIcon from '@/components/RepostIcon';
 import UserIdentity from '@/components/UserIdentity';
 import { SkeletonBlock } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { cleanUsername, displayName } from '@/lib/types';
 
 export interface StoryRow {
@@ -102,6 +103,8 @@ export default function StoryDmCard({
   const canOpen = Boolean(onOpenStory && story && !expired && story.media_url);
 
   const authorLabel = story?.author ? displayName(story.author) : senderName || '';
+  // وسائط القصة قد تكون محمية (bucket خاص أو ImageKit موقّع).
+  const storyMediaUrl = useMediaUrl(story?.media_url);
 
   return (
     <div
@@ -127,7 +130,7 @@ export default function StoryDmCard({
           </div>
         ) : story.media_type === 'video' ? (
           <video
-            src={story.media_url}
+            src={storyMediaUrl || undefined}
             className="h-full w-full object-cover"
             muted
             loop
@@ -135,7 +138,7 @@ export default function StoryDmCard({
             autoPlay
           />
         ) : (
-          <img src={story.media_url} alt="" className="h-full w-full object-cover" />
+          <img src={storyMediaUrl || undefined} alt="" className="h-full w-full object-cover" />
         )}
 
         {!loading && story && !expired && (

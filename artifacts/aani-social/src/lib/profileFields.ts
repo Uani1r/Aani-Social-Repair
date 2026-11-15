@@ -18,11 +18,52 @@ import type { Profile } from '@/lib/types';
 export const PUBLIC_PROFILE_COLUMNS = [
   'id', 'username', 'full_name', 'display_name', 'avatar_url',
   'cover_url', 'cover_position_x', 'cover_position_y',
-  'bio', 'job', 'city', 'location',
-  'birth_date', 'show_city', 'show_job', 'show_birth_date', 'website',
-  'gender', 'is_private', 'is_nearby_visible', 'is_deactivated',
+  'bio', 'job', 'website', 'gender',
+  'is_private', 'is_nearby_visible', 'is_deactivated',
+  'show_city', 'show_job', 'show_birth_date',
   'created_at', 'updated_at',
 ].join(',');
+
+/**
+ * الحقول المشروطة بأعلام الظهور (city/location محكومان بـ show_city،
+ * وbirth_date بـ show_birth_date). لا تُقرأ مباشرة من الجدول: يُعيدها
+ * aani_public_profile فارغة عندما يختار صاحب الحساب إخفاءها.
+ */
+export type ConditionalProfileFields = Pick<Profile, 'city' | 'location' | 'birth_date'>;
+
+/**
+ * يقرأ حقول الملف المشروطة بأعلام الظهور عبر الدالة المصرّح بها.
+ * تُعيد null عند فشل الطلب أو غياب الجلسة، فلا يعرض العميل قيمة مخفية.
+ */
+export async function fetchConditionalProfileFields(
+  userId: string,
+): Promise<ConditionalProfileFields | null> {
+  if (!supabaseConfigured || !userId) return null;
+
+  try {
+    const { data, error } = await supabase.rpc('aani_public_profile', { p_user_id: userId });
+    if (error) {
+      if (error.code !== '42883' && error.code !== 'PGRST202') {
+        console.warn('[profile] تعذر تحميل حقول الملف المشروطة:', error.message);
+      }
+      return null;
+    }
+
+    const row = (Array.isArray(data) ? data[0] : data) as
+      | { city?: unknown; location?: unknown; birth_date?: unknown }
+      | null;
+    if (!row) return null;
+
+    return {
+      city: typeof row.city === 'string' ? row.city : null,
+      location: typeof row.location === 'string' ? row.location : null,
+      birth_date: typeof row.birth_date === 'string' ? row.birth_date : null,
+    };
+  } catch (error) {
+    console.warn('[profile] فشل طلب حقول الملف المشروطة:', error);
+    return null;
+  }
+}
 
 export type MyPreferences = Pick<
   Profile,

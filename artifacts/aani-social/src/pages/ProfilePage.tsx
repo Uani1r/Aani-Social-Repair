@@ -25,7 +25,7 @@ import { useSeenStoryIds } from '@/lib/seenStories';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
-import { fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
+import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
@@ -772,8 +772,15 @@ export default function ProfilePage({
         // أعمدة التفضيلات الشخصية لم تعد ممنوحة للقراءة عبر REST، فتُقرأ
         // لصاحب الملف نفسه عبر aani_my_preferences (ترحيل 20270206000000).
         const preferences = own ? await fetchMyPreferences() : null;
+        // city/location/birth_date مشروطة بأعلام الظهور: تُقرأ عبر الدالة
+        // المصرّح بها التي تُعيدها فارغة إن اختار صاحب الحساب إخفاءها.
+        const conditionalFields = await fetchConditionalProfileFields(activeUserId);
         if (!active) return;
-        setPerson({ ...(prof as Profile), ...(preferences || {}) } as Profile);
+        setPerson({
+          ...(prof as Profile),
+          ...(conditionalFields || {}),
+          ...(preferences || {}),
+        } as Profile);
       }
       setFollowers(fCount || 0);
       setFollowing(fingCount || 0);
