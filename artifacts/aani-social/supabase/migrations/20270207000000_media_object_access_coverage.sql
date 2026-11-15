@@ -5,7 +5,8 @@
 -- (أو VITE_IMAGEKIT_SIGNED_URLS في الواجهة) يعني رفض كل وسيط خارج تلك الأنواع
 -- بـ403 — أي صور المحادثات والرسائل الصوتية والمستندات ومرفقات التعليقات
 -- والملصقات وأصوات الستوري. وهذا الترحيل يُغلق تلك الفجوات دون توسيع الصلاحيات:
--- كل فرع جديد مربوط بنفس صلاحية قراءة المحتوى الذي يستخدم الملف.
+-- لا يُفتح مسار جديد بمجرد معرفة الرابط: كل فرع جديد يربط الملف بصلاحية قراءة
+-- المحتوى الذي يستخدمه **وبصاحب الملف** (انظر القاعدة الحاكمة في القسم 3).
 --
 -- 1) aani_media_path: تطبيع أوسع
 --    * يحذف أي مقطع تحويلات `tr:...` (تحويلات ImageKit) قبل المقارنة، فلا
@@ -21,29 +22,37 @@
 --    (storyUpload.ts: folder = `/aani/${cleanPath}`). التعريف السابق كان
 --    يقارن المقطع الأول بـauth.uid()، أي بمعرّف حساب ImageKit — فلا يتحقق أبداً.
 --
--- 3) aani_can_read_media_object: يُعاد بناؤها بأفرع مشروطة بالجداول الموجودة
---    فعلاً (قاعدة بُنيت من schema.sql تفتقد بعضها).
+-- 3) aani_can_read_media_object: يُعاد بناؤها بأفرع مشروطة بالجداول والأعمدة
+--    الموجودة فعلاً (قاعدة بُنيت من schema.sql تفتقد بعضها)، ويُبنى جسمها في
+--    بلوك DO بدل نص ثابت — فلا يُشار إلى عمود غائب فيُفشل الترحيل كله.
 --
 --    القاعدة الحاكمة في كل فرع: **صلاحية قراءة المحتوى + صاحب الملف**.
 --    الشرط الثاني ليس تحصيلاً حاصلاً: بدونه يكفي أن يضع مستخدم مسار ملف شخص
---    آخر في تعليقه أو في رسالة يرسلها لنفسه ليحصل على توقيع الملف.
+--    آخر في تعليق، أو في رسالة يرسلها لنفسه، أو في منشور عام، ليحصل على
+--    توقيع الملف.
 --
 --      * الملفات      : صاحب المسار = المشاهد (بنية الرفع الفعلية أدناه).
---      * الملفات      : أو صورة/غلاف ملف شخصي (معلومة عامة لكل مسجّل).
---      * المنشورات    : media_url / media_urls / audio_url + media_assets
---                       عبر aani_can_read_post (خصوصية + حجب).
---      * القصص        : media_url / thumbnail_url عبر aani_can_view_story.
---      * أبرز القصص   : via aani_can_view_profile_highlight + أغلفة المجموعات.
+--      * الملفات      : أو صورة/غلاف ملف شخصي (معلومة عامة لكل مسجّل عمداً).
+--      * المنشورات    : media_url / media_urls / audio_url عبر aani_can_read_post
+--                       **و** صاحب الملف = صاحب المنشور.
+--      * media_assets : سجلّات المعالجة عبر منشورها **و** صاحب الملف صاحب
+--                       السجل أو صاحب المنشور، أو مسار الناتج المعالَج
+--                       processed/<userId>/<assetId>.mp4 المشتق من السجل.
+--      * القصص        : media_url / thumbnail_url عبر aani_can_view_story
+--                       **و** صاحب الملف = صاحب القصة.
+--      * أبرز القصص   : aani_can_view_profile_highlight **و** الملكية لصاحب
+--                       العنصر، وغلاف المجموعة لصاحب المجموعة.
 --      * التعليقات    : comments.image_url عبر aani_can_view_post_comments
 --                       **و** الملف من رفع كاتب التعليق.
---      * المحادثات    : المستدعي طرف في الرسالة، والرابط مذكور في content،
---                       **و** صاحب الملف أحد طرفيها — يغطي [aani-image]
---                       و[aani-voice] و[aani-document] و[aani-sticker]
---                       وردود الستوري بصورة.
+--      * المحادثات    : المستدعي طرف في الرسالة، والملف مذكور في content أو
+--                       image_url أو story_media_url / story_thumbnail_url،
+--                       **و** صاحب الملف أحد طرفيها. الستوري الذي يملكه طرف
+--                       ثالث تُقبل فقط إن كان المستدعي يرى الستوري عبر story_id.
 --      * الإشعارات    : metadata إشعار يملكه المستدعي **و** الملف من رفعه.
 --      * الأصوات      : preview_url/cover_url/audio_url مكتبة عامة لكل مسجّل
 --                       (سياسة sounds نفسها using(true))، أما source_video_url
---                       فيتبع صلاحية منشوره الأصلي أو منشورات تستخدمه.
+--                       فيتبع صلاحية منشوره/المنشورات التي تستخدمه **و** ملكية
+--                       صاحب الصوت.
 --
 -- لا يغيّر أي جدول أو عمود أو سياسة، ولا يمس RLS، ولا يطبّق إعداداً على
 -- ImageKit. آمن للتكرار.
@@ -129,9 +138,11 @@ grant execute on function public.aani_media_path(text) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 2) صاحب الملف من بنية الرفع الفعلية
---    <endpointId>/aani/<userId>/... أو /aani/<userId>/... (بلا البادئة)
---    يُعيد null لأي مسار لا يطابق ذلك، فلا تُمنح أولوية بالخطأ.
---    مقارنة المعرّف بـauth.uid() تجري في الدالة الكبرى.
+--    <endpointId>/aani/<userId>/…  |  /aani/<userId>/…  |  <userId>/…
+--    (الأخيرة لمسار التخزين القديم المرفوع قبل توحيد المجلدات).
+--    يُعيد المعرّف **فقط إن كان UUID**، وإلا null — فلا تُنسب ملفات مثل
+--    processed/<userId>/<assetId>.mp4 إلى أحد بهذه القاعدة.
+--    مقارنة المعرّف بـauth.uid() أو بصاحب السجل تجري في الدالة الكبرى.
 -- ---------------------------------------------------------------------
 create or replace function public.aani_media_owner_id(p_value text)
 returns text
@@ -171,7 +182,10 @@ declare
   checks text := '';
   has_column boolean;
   url_columns text[];
-  column_name text;
+  -- اسم مختلف عن اسم العمود `column_name` في information_schema.columns:
+  -- استخدام الاسم نفسه داخل استعلام يُنتج «column reference is ambiguous»
+  -- ويفشل تنفيذ البلوك (الجدولان media_assets و sounds موجودان في الإنتاج).
+  candidate_column text;
   match_terms text[];
   term text;
 
@@ -183,6 +197,10 @@ declare
   has_highlight_collections boolean := false;
   has_comment_attachments boolean := false;
   has_messages boolean := false;
+  has_messages_image_url boolean := false;
+  has_messages_story_media boolean := false;
+  has_messages_story_thumbnail boolean := false;
+  has_messages_content boolean := false;
   has_notification_metadata boolean := false;
   has_sounds boolean := false;
   has_sounds_source_post boolean := false;
@@ -242,6 +260,34 @@ begin
 
   select to_regclass('public.messages') is not null into has_messages;
 
+  -- حقول وسائط المحادثات: تُفحص أعمدةً فعلية، فلا يُبنى شرط على عمود غائب
+  -- (قاعدة بُنيت من schema.sql لا تحتوي story_* ولا image_url).
+  if has_messages then
+    select exists (
+      select 1 from information_schema.columns as cols
+      where cols.table_schema = 'public' and cols.table_name = 'messages'
+        and cols.column_name = 'content'
+    ) into has_messages_content;
+
+    select exists (
+      select 1 from information_schema.columns as cols
+      where cols.table_schema = 'public' and cols.table_name = 'messages'
+        and cols.column_name = 'image_url'
+    ) into has_messages_image_url;
+
+    select exists (
+      select 1 from information_schema.columns as cols
+      where cols.table_schema = 'public' and cols.table_name = 'messages'
+        and cols.column_name = 'story_media_url'
+    ) into has_messages_story_media;
+
+    select exists (
+      select 1 from information_schema.columns as cols
+      where cols.table_schema = 'public' and cols.table_name = 'messages'
+        and cols.column_name = 'story_thumbnail_url'
+    ) into has_messages_story_thumbnail;
+  end if;
+
   select
     to_regclass('public.notifications') is not null
     and exists (
@@ -268,13 +314,18 @@ begin
   end if;
   $chunk$;
 
-  -- ((ب)) صورة أو غلاف ملف شخصي: معلومة عامة لكل مستخدم مسجّل
+  -- ((ب)) صورة أو غلاف ملف شخصي: معلومة عامة لكل مستخدم مسجّل، بشرط أن يكون
+  --    الملف من رفع صاحب الملف نفسه — وإلا صار بإمكان أي مستخدم وضع مسار ملف
+  --    غيره في avatar_url الخاص به ليحصل على توقيعه لكل مسجّل.
   checks := checks || $chunk$
   if exists (
     select 1
     from public.profiles as profile
-    where public.aani_media_path(profile.avatar_url) = v_target
-       or public.aani_media_path(profile.cover_url) = v_target
+    where (
+        public.aani_media_path(profile.avatar_url) = v_target
+        or public.aani_media_path(profile.cover_url) = v_target
+      )
+      and public.aani_media_owner_id(p_object_name) = profile.id::text
   ) then
     return true;
   end if;
@@ -297,6 +348,7 @@ begin
     from public.posts as post
     where (%s)
       and public.aani_can_read_post(post.id, v_viewer)
+      and public.aani_media_owner_id(p_object_name) = post.user_id::text
   ) then
     return true;
   end if;
@@ -305,21 +357,26 @@ begin
   -- ((د)) سجلّات معالجة الوسائط المرتبطة بمنشور
   if has_media_asset_field then
     match_terms := array[]::text[];
-    foreach column_name in array array[
+    foreach candidate_column in array array[
       'video_url', 'poster_url', 'original_path', 'storage_path', 'processed_path'
     ]
     loop
       select exists (
-        select 1 from information_schema.columns
-        where table_schema = 'public' and table_name = 'media_assets' and column_name = column_name
+        select 1 from information_schema.columns as cols
+        where cols.table_schema = 'public'
+          and cols.table_name = 'media_assets'
+          and cols.column_name = candidate_column
       ) into has_column;
       if has_column then
         match_terms := match_terms
-          || format('public.aani_media_path(asset.%I) = v_target', column_name);
+          || format('public.aani_media_path(asset.%I) = v_target', candidate_column);
       end if;
     end loop;
 
     if cardinality(match_terms) > 0 then
+      -- ملكية الملف: مرفوعات صاحب السجل أو صاحب المنشور، أو الناتج المعالَج
+      -- الذي يكتبه عامل الخادم في مسار التخزين `processed/<userId>/<assetId>.mp4`
+      -- (mediaProcessing.ts) — مسار مُشتق من السجل نفسه، ليس مساراً حراً.
       checks := checks || format($chunk$
   if exists (
     select 1
@@ -327,6 +384,15 @@ begin
     join public.media_assets as asset on asset.id = post.media_asset_id
     where (%s)
       and public.aani_can_read_post(post.id, v_viewer)
+      and (
+        public.aani_media_owner_id(p_object_name) in (
+          asset.user_id::text,
+          post.user_id::text
+        )
+        or public.aani_media_path(p_object_name) = (
+          'processed/' || asset.user_id::text || '/' || asset.id::text || '.mp4'
+        )
+      )
   ) then
     return true;
   end if;
@@ -348,13 +414,14 @@ begin
     from public.stories as story
     where (%s)
       and public.aani_can_view_story(story.id, v_viewer)
+      and public.aani_media_owner_id(p_object_name) = story.user_id::text
   ) then
     return true;
   end if;
   $chunk$, array_to_string(match_terms, ' or '));
   end if;
 
-  -- ((و)) أبرز القصص: العنصر ثم غلاف المجموعة
+  -- ((و)) أبرز القصص: العنصر ثم غلاف المجموعة — والملكية لصاحب العنصر/المجموعة
   if has_highlight then
     checks := checks || $chunk$
   if exists (
@@ -362,6 +429,7 @@ begin
     from public.profile_highlights as highlight
     where public.aani_media_path(highlight.media_url) = v_target
       and public.aani_can_view_profile_highlight(highlight.user_id, highlight.is_close_friends)
+      and public.aani_media_owner_id(p_object_name) = highlight.user_id::text
   ) then
     return true;
   end if;
@@ -374,6 +442,7 @@ begin
     select 1
     from public.profile_highlight_collections as collection
     where public.aani_media_path(collection.cover_url) = v_target
+      and public.aani_media_owner_id(p_object_name) = collection.user_id::text
       and (
         collection.user_id = v_viewer
         or exists (
@@ -406,35 +475,83 @@ begin
     $chunk$;
   end if;
 
-  -- ((ح)) المحادثات: المستدعي طرف في الرسالة، والرابط مذكور في content،
+  -- ((ح)) المحادثات: المستدعي طرف في الرسالة، والملف مذكور في أحد حقول وسائطها،
   --    وصاحب الملف أحد طرفي المحادثة.
-  --    كل وسائط المحادثات تُخزَّن كروابط داخل messages.content:
-  --    [aani-image:v1]{urls:[...]} / [aani-voice:v1]{url} /
-  --    [aani-document:v1]{url} / [aani-sticker:v1]{url} / ردود ستوري بصورة.
-  --    تُستخرج كل روابط https من المحتوى، تُطبَّع، ثم تُقارن بالتساوي مع المسار
-  --    المطلوب — لا مطابقة جزئية. وشرط صاحب الملف ضروري: بدونه يكفي أن يرسل
-  --    مستخدم لنفسه رابط ملف شخص آخر ليحصل على توقيعه.
-  --    (regexp_matches بلا مجموعات التقاط تُعيد مصفوفة نصية: [1] هي المطابقة.)
+  --    الحقول التي تحمل وسائط فعلاً في الإنتاج:
+  --      * content — وسائط مرمّزة: [aani-image:v1]{urls:[...]} / [aani-voice:v1]{url}
+  --        / [aani-document:v1]{url} / [aani-sticker:v1]{url}.
+  --      * image_url — عمود صورة مباشر (يُفحص إن وُجد).
+  --      * story_media_url و story_thumbnail_url — بطاقة رد الستوري المحفوظة مع
+  --        الرسالة (20270131000000). ملفهما يخصّ صاحب الستوري، وهو هنا أحد
+  --        الطرفين في الرد، أو يبقى مقروءاً إن كان المستدعي يرى الستوري نفسها
+  --        عبر story_id (مشاركة ستوري إلى صديق ثالث).
+  --    روابط content تُستخرج بـregexp_matches ثم تُطبَّع وتُقارن بالتساوي —
+  --    لا مطابقة جزئية. وشرط صاحب الملف ضروري: بدونه يكفي أن يرسل مستخدم
+  --    لنفسه رابط ملف شخص آخر ليحصل على توقيعه.
   if has_messages then
-    checks := checks || $chunk$
+    match_terms := array[]::text[];
+
+    if has_messages_image_url then
+      match_terms := match_terms
+        || 'public.aani_media_path(message.image_url) = v_target'::text;
+    end if;
+
+    if has_messages_story_media then
+      match_terms := match_terms
+        || 'public.aani_media_path(message.story_media_url) = v_target'::text;
+    end if;
+
+    if has_messages_story_thumbnail then
+      match_terms := match_terms
+        || 'public.aani_media_path(message.story_thumbnail_url) = v_target'::text;
+    end if;
+
+    if has_messages_content then
+      match_terms := match_terms || $term$
+        exists (
+          select 1
+          from regexp_matches(message.content, 'https?://[^[:space:]"<>]+', 'g') as found(match)
+          where public.aani_media_path(found.match[1]) = v_target
+        )$term$::text;
+    end if;
+
+    if cardinality(match_terms) = 0 then
+      raise warning 'لا عمود وسائط معروف في public.messages: وسائط المحادثات خارج قرار الوسائط';
+    else
+      -- شرط الملكية: صاحب الملف أحد طرفي المحادثة. بلا "and" بادئة، لأن
+      -- الشرط يُركَّب داخل قوسين: and ( owner in (...) [or (ستوري مرئية)] ).
+      term := $term$public.aani_media_owner_id(p_object_name) in (
+          message.sender_id::text,
+          message.recipient_id::text
+        )$term$;
+
+      -- الستوري المعاد إرسالها داخل المحادثة: صاحبها قد يكون طرفاً ثالثاً،
+      -- فيُسمح فقط إذا كان المستدعي يملك حق رؤية الستوري نفسها عبر story_id.
+      if has_messages_story_media and has_messages_story_thumbnail then
+        term := term || $term$
+        or (
+          (
+            public.aani_media_path(message.story_media_url) = v_target
+            or public.aani_media_path(message.story_thumbnail_url) = v_target
+          )
+          and public.aani_can_view_story(message.story_id, v_viewer)
+        )$term$;
+      end if;
+
+      -- لا مُرشِّح نصي مسبق هنا: كل مطابقة تجري بالتساوي على المسار المطبَّع،
+      -- ونطاق البحث محصور بصفوف المستدعي (sender/recipient).
+      checks := checks || format($chunk$
   if exists (
     select 1
     from public.messages as message
     where (message.sender_id = v_viewer or message.recipient_id = v_viewer)
-      and message.content like '%' || v_file_name || '%'
-      and exists (
-        select 1
-        from regexp_matches(message.content, 'https?://[^[:space:]"<>]+', 'g') as found(match)
-        where public.aani_media_path(found.match[1]) = v_target
-      )
-      and public.aani_media_owner_id(p_object_name) in (
-        message.sender_id::text,
-        message.recipient_id::text
-      )
+      and (%s)
+      and (%s)
   ) then
     return true;
   end if;
-    $chunk$;
+    $chunk$, array_to_string(match_terms, ' or '), term);
+    end if;
   end if;
 
   -- ((ط)) بيانات إشعار يملكه المستدعي، والملف من رفعه (مصغّرة ستوري صاحب
@@ -446,7 +563,6 @@ begin
     from public.notifications as notification
     where notification.user_id = v_viewer
       and public.aani_media_owner_id(p_object_name) = notification.user_id::text
-      and coalesce(notification.metadata, '{}'::jsonb)::text like '%' || v_file_name || '%'
       and exists (
         select 1
         from regexp_matches(coalesce(notification.metadata, '{}'::jsonb)::text, 'https?://[^[:space:]"<>]+', 'g') as found(match)
@@ -459,18 +575,21 @@ begin
   end if;
 
   -- ((ي)) الأصوات: المعاينة والغلاف مكتبة عامة لكل مسجّل (سياسة sounds using(true))،
-  --    أما فيديو المصدر فيتبع صلاحية منشوره الأصلي أو المنشورات التي تستخدمه.
+  --    أما فيديو المصدر فيتبع صلاحية منشوره الأصلي أو المنشورات التي تستخدمه،
+  --    **و** الملكية: ملف الفيديو من رفع صاحب الصوت.
   if has_sounds then
     url_columns := array[]::text[];
-    foreach column_name in array array['preview_url', 'cover_url', 'audio_url']
+    foreach candidate_column in array array['preview_url', 'cover_url', 'audio_url']
     loop
       select exists (
-        select 1 from information_schema.columns
-        where table_schema = 'public' and table_name = 'sounds' and column_name = column_name
+        select 1 from information_schema.columns as cols
+        where cols.table_schema = 'public'
+          and cols.table_name = 'sounds'
+          and cols.column_name = candidate_column
       ) into has_column;
       if has_column then
         url_columns := url_columns
-          || format('public.aani_media_path(sound.%I) = v_target', column_name);
+          || format('public.aani_media_path(sound.%I) = v_target', candidate_column);
       end if;
     end loop;
 
@@ -486,17 +605,21 @@ begin
       $chunk$, array_to_string(url_columns, ' or '));
     end if;
 
-    if exists (
-      select 1 from information_schema.columns
-      where table_schema = 'public' and table_name = 'sounds' and column_name = 'source_video_url'
-    ) then
+    select exists (
+      select 1 from information_schema.columns as cols
+      where cols.table_schema = 'public' and cols.table_name = 'sounds'
+        and cols.column_name = 'source_video_url'
+    ) into has_column;
+
+    if has_column then
       term := 'sound.creator_id = v_viewer';
       if has_sounds_source_post then
         term := term || ' or public.aani_can_read_post(sound.source_post_id, v_viewer)';
       end if;
       if exists (
-        select 1 from information_schema.columns
-        where table_schema = 'public' and table_name = 'posts' and column_name = 'sound_id'
+        select 1 from information_schema.columns as cols
+        where cols.table_schema = 'public' and cols.table_name = 'posts'
+          and cols.column_name = 'sound_id'
       ) then
         term := term || $term$
         or exists (
@@ -512,6 +635,7 @@ begin
     select 1
     from public.sounds as sound
     where public.aani_media_path(sound.source_video_url) = v_target
+      and public.aani_media_owner_id(p_object_name) = sound.creator_id::text
       and (%s)
   ) then
     return true;
@@ -539,11 +663,6 @@ begin
     declare
       v_target text := public.aani_media_path(p_object_name);
       v_viewer uuid := auth.uid();
-      -- اسم الملف وحده: مُرشِّح رخيص قبل مسح حقول النصوص الطويلة
-      -- (content و metadata)، ثم تُجرى المطابقة الدقيقة على المسار الكامل.
-      v_file_name text := regexp_replace(
-        coalesce(public.aani_media_path(p_object_name), ''), '^.*/', ''
-      );
     begin
       if v_viewer is null or v_target is null then
         return false;
@@ -606,13 +725,41 @@ begin
   end if;
 
   -- كل نوع طُلب في هذا الترحيل لا بد أن يظهر في الجسم متى كانت جدوله موجودة،
-  -- وأن يحمل شرط صاحب الملف حيث يلزم (وإلا صار إدراج رابط الغير طريقاً للوصول).
+  -- **وأن يحمل شرط صاحب الملف**: وجود اسم الدالة وحده لا يكفي، وإلا صار
+  -- إدراج رابط ملف الغير في سجل عام طريقاً للحصول على توقيعه.
   if to_regclass('public.messages') is not null then
     if source not like '%public.messages%' then
       raise exception 'وسائط المحادثات غير مشمولة في قرار الوسائط';
     end if;
     if source not like '%message.sender_id::text%' then
       raise exception 'المحادثات بلا تحقق من صاحب الملف — يمكن إدراج رابط غيره في رسالة';
+    end if;
+
+    -- كل حقل وسائط موجود في messages يجب أن يكون مشمولاً
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'messages' and column_name = 'image_url'
+    ) and source not like '%message.image_url%' then
+      raise exception 'عمود messages.image_url غير مشمول في قرار الوسائط';
+    end if;
+
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'messages' and column_name = 'story_media_url'
+    ) and source not like '%message.story_media_url%' then
+      raise exception 'عمود messages.story_media_url غير مشمول في قرار الوسائط';
+    end if;
+
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'messages' and column_name = 'story_thumbnail_url'
+    ) and source not like '%message.story_thumbnail_url%' then
+      raise exception 'عمود messages.story_thumbnail_url غير مشمول في قرار الوسائط';
+    end if;
+
+    -- مشاركة ستوري بطرف ثالث: لا تُقبل إلا بصلاحية رؤية الستوري نفسها
+    if source not like '%aani_can_view_story(message.story_id%' then
+      raise exception 'مشاركة الستوري في المحادثة بلا فحص صلاحية رؤية الستوري';
     end if;
   end if;
 
@@ -629,8 +776,58 @@ begin
     end if;
   end if;
 
-  if to_regclass('public.sounds') is not null and source not like '%public.sounds%' then
-    raise exception 'أصوات القصص غير مشمولة في قرار الوسائط';
+  -- الملكية في كل فرع آخر: صاحب الملف = صاحب السجل
+  if source not like '%aani_media_owner_id(p_object_name) = profile.id::text%' then
+    raise exception 'فرع صورة/غلاف الملف بلا تحقق من ملكية الملف لصاحب الملف';
+  end if;
+
+  if source not like '%aani_media_owner_id(p_object_name) = post.user_id::text%' then
+    raise exception 'فرع المنشورات بلا تحقق من ملكية الملف لصاحب المنشور';
+  end if;
+
+  if to_regclass('public.media_assets') is not null
+     and exists (
+       select 1 from information_schema.columns
+       where table_schema = 'public' and table_name = 'posts' and column_name = 'media_asset_id'
+     ) then
+    if source not like '%asset.user_id::text%' then
+      raise exception 'فرع media_assets بلا تحقق من ملكية الملف لصاحب السجل';
+    end if;
+    if source not like '%processed/%' then
+      raise exception 'فرع media_assets لا يقبل ناتج المعالجة processed/<userId>/<assetId>.mp4';
+    end if;
+  end if;
+
+  if to_regclass('public.stories') is not null
+     and exists (
+       select 1 from pg_proc as proc
+       join pg_namespace as namespace on namespace.oid = proc.pronamespace
+       where namespace.nspname = 'public' and proc.proname = 'aani_can_view_story'
+     )
+     and source not like '%aani_media_owner_id(p_object_name) = story.user_id::text%' then
+    raise exception 'فرع القصص بلا تحقق من ملكية الملف لصاحب القصة';
+  end if;
+
+  if to_regclass('public.profile_highlights') is not null
+     and source not like '%aani_media_owner_id(p_object_name) = highlight.user_id::text%' then
+    raise exception 'فرع أبرز القصص بلا تحقق من ملكية الملف لصاحب العنصر';
+  end if;
+
+  if to_regclass('public.profile_highlight_collections') is not null
+     and source not like '%aani_media_owner_id(p_object_name) = collection.user_id::text%' then
+    raise exception 'فرع أغلفة المجموعات بلا تحقق من ملكية الملف لصاحب المجموعة';
+  end if;
+
+  if to_regclass('public.sounds') is not null then
+    if source not like '%public.sounds%' then
+      raise exception 'أصوات القصص غير مشمولة في قرار الوسائط';
+    end if;
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'sounds' and column_name = 'source_video_url'
+    ) and source not like '%aani_media_owner_id(p_object_name) = sound.creator_id::text%' then
+      raise exception 'فيديو مصدر الصوت بلا تحقق من ملكية الملف لصاحب الصوت';
+    end if;
   end if;
 
   if to_regclass('public.notifications') is not null
@@ -690,18 +887,24 @@ commit;
 -- =====================================================================
 -- استعلامات تحقق يدوية بعد التطبيق (شغّلها في SQL Editor — ليست جزءاً من الترحيل)
 -- =====================================================================
--- 1) الأفرع المشمولة في الجسم
---    select p.prosrc ~* 'aani_media_owner_id'   as owner_rule,
---           p.prosrc ~* 'public.messages'       as messages_rule,
---           p.prosrc ~* 'message.sender_id'     as messages_owner_rule,
---           p.prosrc ~* 'comment_row.image_url' as comments_rule,
---           p.prosrc ~* 'comment_row.user_id'   as comments_owner_rule,
---           p.prosrc ~* 'public.sounds'         as sounds_rule,
---           p.prosrc ~* 'aani_can_read_post'    as posts_rule,
---           p.prosrc ~* 'aani_can_view_story'   as stories_rule
+-- 1) الأفرع المشمولة في قرار الوسائط، ومعها شرط الملكية لكل فرع
+--    select p.prosrc ~* 'aani_media_owner_id'                  as owner_rule,
+--           p.prosrc ~* '= post.user_id::text'                 as posts_owner,
+--           p.prosrc ~* 'asset.user_id::text'                  as assets_owner,
+--           p.prosrc ~* 'processed/'                           as processed_asset,
+--           p.prosrc ~* '= story.user_id::text'                as stories_owner,
+--           p.prosrc ~* '= highlight.user_id::text'            as highlights_owner,
+--           p.prosrc ~* '= collection.user_id::text'           as collections_owner,
+--           p.prosrc ~* '= comment_row.user_id::text'          as comments_owner,
+--           p.prosrc ~* '= sound.creator_id::text'             as sounds_owner,
+--           p.prosrc ~* 'message.sender_id::text'              as messages_owner,
+--           p.prosrc ~* 'message.image_url'                    as messages_image,
+--           p.prosrc ~* 'message.story_media_url'              as messages_story_media,
+--           p.prosrc ~* 'message.story_thumbnail_url'          as messages_story_thumb,
+--           p.prosrc ~* 'aani_can_view_story\(message.story_id' as messages_story_perm
 --    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --    where n.nspname = 'public' and p.proname = 'aani_can_read_media_object';
---    -- المتوقع: كل الأعمدة true (عدا ما غاب جدوله فعلاً).
+--    -- المتوقع: true في كل عمود (عدا ما غاب عموده/جدوله فعلاً).
 --
 -- 2) التطبيع
 --    select public.aani_media_path('https://ik.imagekit.io/<id>/tr:w-200/aani/<uid>/a.jpg?tr=q-auto');
@@ -714,21 +917,34 @@ commit;
 --    نفس المسار بحساب ثالث لا يشارك:                                        -- false
 --    ثم بحساب أرسل لنفسه مسار ملف شخص آخر:                                  -- false
 --      (يجب أن يبقى false لأن صاحب الملف ليس طرفاً في تلك الرسالة)
+--    وبصفتك طرفاً في رسالة رد ستوري: story_media_url و story_thumbnail_url  -- true
+--      ولمشاركة ستوري بطرف ثالث: true فقط إن كنت ترى الستوري عبر story_id.
 --
 -- 4) بصفتك غير متابع لحساب خاص A: كل ما يلي false
 --    select public.aani_can_read_media_object('<A_post_media>');
 --    select public.aani_can_read_media_object('<A_story_media>');
+--    select public.aani_can_read_media_object('<A_highlight_media>');
+--    select public.aani_can_read_media_object('<A_collection_cover>');
 --    select public.aani_can_read_media_object('<A_comment_image>');
 --    select public.aani_can_read_media_object('<A_voice_message>');
 --    select public.aani_can_read_media_object('<A_document>');
 --    select public.aani_can_read_media_object('<A_custom_sticker>');
 --
+-- 4ب) الملكية: سجل عام يشير إلى ملف حساب خاص
+--    بصفتك مالكاً لمنشور عام أدرجت فيه رابط ملف يملكه A (حساب خاص):
+--      المنشور مقروء لك، لكن الملكية لا تطابقك → النتيجة يجب أن تبقى false.
+--    والأمر نفسه لقصة/أبرز قصة/غلاف مجموعة/فيديو مصدر صوت/مرفق تعليق.
+--
 -- 5) معاينة صوت عامة (مكتبة الأصوات) لكل مسجّل: true
 --    select public.aani_can_read_media_object('<sound_preview_path>');
---    وفيديو مصدر الصوت لمنشور خاص لحساب آخر: false
+--    وفيديو مصدر الصوت: true فقط لمن يقرأ المنشور أو يستخدمه، وصاحبه هو رافعه
+--    لمنشور خاص لحساب آخر: false
 --
 -- 6) مصغّرة فيديو خاصة: نفس قرار الفيديو نفسه
 --    select public.aani_can_read_media_object('<private_video_path>/ik-thumbnail.jpg'); -- false
 --
 -- 7) تحويلات المسار لا تفتح تجاوزاً
 --    select public.aani_can_read_media_object('<private_video_path>?tr=w-100');          -- false
+--
+-- 8) ناتج المعالجة processed/<ownerId>/<assetId>.mp4
+--    يُقبل فقط عبر سجل media_assets لمنشور يقرأه المستدعي، وليس كمسار حر.
