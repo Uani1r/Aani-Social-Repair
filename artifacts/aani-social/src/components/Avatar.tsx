@@ -1,8 +1,8 @@
 import type { Profile } from '@/lib/types';
 import DefaultAvatar from '@/components/DefaultAvatar';
 
-export default function Avatar({ profile, large = false, storyBorder = false, isCloseFriends = false, extraLarge = false }: { profile?: Partial<Profile> | null; large?: boolean; storyBorder?: boolean; isCloseFriends?: boolean; extraLarge?: boolean }) {
-  const sizeClass = extraLarge ? 'w-16 h-16 text-lg' : large ? 'w-12 h-12 text-base' : 'w-8 h-8 text-xs';
+export default function Avatar({ profile, large = false, small = false, storyBorder = false, isCloseFriends = false, extraLarge = false }: { profile?: Partial<Profile> | null; large?: boolean; small?: boolean; storyBorder?: boolean; isCloseFriends?: boolean; extraLarge?: boolean }) {
+  const sizeClass = extraLarge ? 'w-16 h-16 text-lg' : large ? 'w-12 h-12 text-base' : small ? 'w-5 h-5 text-[8px]' : 'w-8 h-8 text-xs';
   const borderClass = isCloseFriends || storyBorder
     ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-900'
     : '';
