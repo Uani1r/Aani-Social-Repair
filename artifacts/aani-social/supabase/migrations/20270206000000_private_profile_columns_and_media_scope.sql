@@ -84,7 +84,9 @@ end $$;
 --      ج) تُسحب الأعمدة الخاصة من كل دور آخر يملكها.
 --
 --    الأعمدة المسحوبة: التفضيلات الشخصية + fcm_token + birth_date + city +
---    location (الأخيران محكومان بـ show_city، و birth_date بـ show_birth_date).
+--    location (الأخيران محكومان بـ show_city، و birth_date بـ show_birth_date)
+--    + city_key (العمود المولَّد المشتق من city في 20270201000000: قراءته
+--    تكشف تطبيع المدينة ولو أخفاها صاحبها، فهو من نفس نطاق city).
 --
 --    service_role: يُسحب منه منح الجدول أيضاً — قاعدة الإنتاج تمنحه SELECT على
 --    profiles بالكامل، وهذا ما يجعله يقرأ كل الأعمدة. يُسحب منح الجدول، وتُسحب
@@ -96,8 +98,8 @@ end $$;
 --        supabase/functions/login-with-username/index.ts
 --      * avatar_url, cover_url — فحص مراجع الوسائط قبل حذفها:
 --        api-server/src/lib/mediaDb.ts (mediaInActiveUse)
---    أي عمود آخر (birth_date, city, location, التفضيلات، الجنس، النبذة...)
---    لم يعد مقروءاً حتى بمفتاح الخدمة، فلا يمكن تسريبه من أي مسار خلفي.
+--    أي عمود آخر (birth_date, city, city_key, location، التفضيلات، الجنس،
+--    النبذة...) لم يعد مقروءاً حتى بمفتاح الخدمة، فلا يمكن تسريبه من أي مسار خلفي.
 --    مالك الجدول و postgres و supabase_admin لا تُمس.
 -- ---------------------------------------------------------------------
 do $$
@@ -105,7 +107,11 @@ declare
   private_column_names text[] := array[
     'notification_settings', 'appearance_preference', 'language_preference',
     'hd_uploads', 'data_saver', 'font_preference', 'fcm_token',
-    'birth_date', 'city', 'location'
+    'birth_date', 'city', 'location',
+    -- city_key مولَّد من city (20270201000000) ويسرّب تطبيع المدينة حتى مع
+    -- show_city = false، فيُسحب مع city. لا يستخدمه العميل: aani_nearby_people
+    -- SECURITY DEFINER ويقرأه بنفسه.
+    'city_key'
   ];
   -- ما تحتاجه الخوادم فعلياً (مُوثّق أعلاه بالملفات).
   server_column_names text[] := array[
@@ -661,10 +667,25 @@ begin
       and column_name in (
         'notification_settings', 'appearance_preference', 'language_preference',
         'hd_uploads', 'data_saver', 'font_preference', 'fcm_token',
-        'birth_date', 'city', 'location'
+        'birth_date', 'city', 'location',
+        -- city_key مشتق من city: بقاء قراءته يعني بقاء تسريب المدينة.
+        'city_key'
       )
   ) then
     raise exception 'ما زالت أعمدة profiles الخاصة أو المشروطة ممنوحة للقراءة';
+  end if;
+
+  -- city_key بالصلاحية الفعلية أيضاً (تحسب الموروثة عبر عضوية الأدوار،
+  -- وقد تكون الصلاحية ممنوحة عبر دور أب لا يظهر في الفحص أعلاه).
+  -- يُفحص فقط إن كان العمود موجوداً: قاعدة بُنيت من schema.sql لا تحتويه.
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'city_key'
+  ) and (
+    has_column_privilege('authenticated', 'public.profiles', 'city_key', 'SELECT')
+    or has_column_privilege('anon', 'public.profiles', 'city_key', 'SELECT')
+  ) then
+    raise exception 'ما زال العمود profiles.city_key مقروءاً فعلياً لـauthenticated أو anon — تسريب المدينة قائم';
   end if;
 
   -- ولا منح على مستوى الجدول يعيد كل الأعمدة
@@ -795,12 +816,18 @@ commit;
 -- =====================================================================
 -- استعلامات تحقق يدوية بعد التطبيق (شغّلها في SQL Editor — ليست جزءاً من الترحيل)
 -- =====================================================================
--- 1) الأعمدة الممنوحة للمستخدم المسجّل (يجب ألا تظهر الخاصة ولا المشروطة)
+-- 1) الأعمدة الممنوحة للمستخدم المسجّل (يجب ألا تظهر الخاصة ولا المشروطة،
+--    ومنها city_key)
 --    select column_name
 --    from information_schema.column_privileges
 --    where table_schema = 'public' and table_name = 'profiles'
 --      and grantee = 'authenticated' and privilege_type = 'SELECT'
 --    order by column_name;
+--    -- المتوقع: لا city ولا location ولا birth_date ولا city_key ولا أي تفضيل
+--
+-- 1ب) city_key بالصلاحية الفعلية (تحسب الموروثة عبر العضوية) — المتوقع false, false
+--    select has_column_privilege('authenticated', 'public.profiles', 'city_key', 'SELECT') as auth_city_key,
+--           has_column_privilege('anon', 'public.profiles', 'city_key', 'SELECT') as anon_city_key;
 --
 -- 2) لا منح SELECT على مستوى الجدول لأي دور متصل (المتوقع: صفر صفوف،
 --    أو صف postgres فقط إن كان ممنوحاً صراحةً)
@@ -816,11 +843,12 @@ commit;
 --    order by column_name;
 --    -- المتوقع: avatar_url, cover_url, fcm_token, id, notification_settings
 --
--- 2ب-2) الصلاحيات الفعلية (تحسب الموروثة عبر العضوية) — المتوقع false, true
+-- 2ب-2) الصلاحيات الفعلية (تحسب الموروثة عبر العضوية) — المتوقع false, true, false, false
 --    select has_table_privilege('service_role', 'public.profiles', 'SELECT') as table_select,
 --           has_column_privilege('service_role', 'public.profiles', 'fcm_token', 'SELECT') as fcm_select,
---           has_column_privilege('service_role', 'public.profiles', 'city', 'SELECT') as city_select;
---    -- المتوقع: table_select=false، fcm_select=true، city_select=false
+--           has_column_privilege('service_role', 'public.profiles', 'city', 'SELECT') as city_select,
+--           has_column_privilege('service_role', 'public.profiles', 'city_key', 'SELECT') as city_key_select;
+--    -- المتوقع: table_select=false، fcm_select=true، city_select=false، city_key_select=false
 --
 -- 2ب-3) عضويات service_role (يجب ألا تكون عضواً في دور يملك SELECT على profiles)
 --    select parent.rolname
@@ -831,11 +859,13 @@ commit;
 -- 2ج) service_role لا يقرأ عموداً شخصياً (يجب أن يفشل 42501)
 --    set role service_role;
 --    select city from public.profiles limit 1;
+--    select city_key from public.profiles limit 1;
 --    reset role;
 --
 -- 3) قراءة تفضيلات أو مدينة مستخدم آخر يجب أن تفشل (42501)
 --    select notification_settings from public.profiles where id = '<other_user>';
 --    select city from public.profiles where id = '<other_user>';
+--    select city_key from public.profiles where id = '<other_user>';
 --
 -- 4) الدوال تعمل للمستخدم نفسه
 --    select * from public.aani_my_preferences();
