@@ -203,16 +203,17 @@ export default function NearbyUsersSheet({
           <ArrowRight size={24} />
         </button>
         <h1 className="nearby-users-title">الأشخاص القريبون</h1>
-        <label className="nearby-users-toggle">
-          <span>الظهور</span>
+        <div className="nearby-users-toggle">
+          <span className="nearby-users-toggle-label">الظهور</span>
           <Switch
-            className="nearby-users-switch"
+            dir="ltr"
+            className="nearby-users-switch relative inline-flex h-6 w-11 shrink-0 items-center rounded-full p-0.5 transition-colors"
             checked={nearbyVisible}
             disabled={togglingVisible || !supabaseConfigured}
             onCheckedChange={value => void handleToggleNearbyVisible(value)}
             aria-label="الظهور في قائمة الأشخاص القريبين"
           />
-        </label>
+        </div>
         {currentCity?.trim() ? (
           <span className="nearby-users-city">
             <MapPin size={12} aria-hidden="true" />
