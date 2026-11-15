@@ -8375,7 +8375,7 @@ select,
 
 /* ===== مفتاح الظهور: قياسات ثابتة لا تعتمد على أي قاعدة أخرى =====
    44×24 مع box-sizing: border-box وpadding 2px، ودائرة 20×20 تتحرك 20px
-   عند التفعيل و0 عند الإيقاف — فتبقى داخل الحدود في الحالتين:
+   عند الإيقاف و0 عند التفعيل — فتبقى داخل الحدود في الحالتين:
    2 + 20 + 20 + 2 = 44. */
 .nearby-users-switch {
   position: relative;
@@ -8421,15 +8421,17 @@ select,
   transform: translateX(0);
 }
 
-/* عند التفعيل: translateX(20px) — والمفتاح dir="ltr" فيبقى الاتجاه ثابتاً */
+/* عند التفعيل: translateX(0) — تبقى الدائرة داخل المستطيل ولا تخرج منه
+   ولا تلامس كلمة «الظهور». المفتاح dir="ltr" فالاتجاه ثابت في الواجهة العربية. */
 .nearby-users-switch[data-state="checked"] > span {
   translate: none;
-  transform: translateX(20px);
+  transform: translateX(0);
 }
 
+/* عند الإيقاف: translateX(20px) — أقصى اليمين داخل حدود الزر */
 .nearby-users-switch[data-state="unchecked"] > span {
   translate: none;
-  transform: translateX(0);
+  transform: translateX(20px);
 }
 
 /* Temporary video-test mode: suppress noisy nonessential fetch fallbacks. */
