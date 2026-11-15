@@ -43,7 +43,8 @@
 -- لا يعدّل جداول ولا بيانات ولا سياسات القصص (aani_can_view_story تتحقق من
 -- is_private أصلاً وتُترك كما هي)، ولا واجهة التطبيق، ولا جداول البلاغات.
 --
--- يعتمد على 20270203000000 (aani_can_read_post) و20261108000000 و20261115000000.
+-- يعتمد على 20270203000000 (aani_can_read_post) و20270204000000
+-- (aani_is_user_blocked — شرط إلزامي، لا تحذير) و20261108000000 و20261115000000.
 -- آمن للتكرار.
 begin;
 
@@ -76,6 +77,22 @@ begin
       and proc.proname = 'aani_can_read_post'
   ) then
     raise exception 'الدالة public.aani_can_read_post مفقودة — طبّق 20270203000000 أولاً';
+  end if;
+
+  -- aani_is_user_blocked شرط إلزامي: قاعدة القراءة المشتركة للتفاعلات تفحص
+  -- الحظر بها، وهي التي تحمي likes و comment_likes و comment_dislikes
+  -- و aani_post_interaction_rows. غيابها كان يُنتج حراساً بلا فحص حظر.
+  -- يُتحقق من التوقيع (uuid, uuid) أيضاً، لا من الاسم وحده.
+  if not exists (
+    select 1
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public'
+      and proc.proname = 'aani_is_user_blocked'
+      and pg_catalog.oidvectortypes(proc.proargtypes) = 'uuid, uuid'
+  ) then
+    raise exception
+      'الدالة public.aani_is_user_blocked(uuid, uuid) مفقودة — طبّق 20270204000000 أولاً. هذا الترحيل لا يطبّق حراس التفاعل بلا فحص حظر.';
   end if;
 end $$;
 
@@ -229,10 +246,12 @@ grant execute on function public.aani_can_comment_on_post(uuid, uuid) to authent
 --       * aani_post_interaction_rows (القسم 4)،
 --       * حراس قراءة likes و comment_likes و comment_dislikes (القسم 7ب).
 --
---     تُنشأ أولاً بلا فحص الحظر (aani_is_user_blocked قد تكون غائبة في قاعدة
---     بُنيت من schema.sql)، ثم تُستبدل بنسخة تفحص الحظر إن كانت موجودة.
+--     تعتمد على aani_is_user_blocked(uuid, uuid) بلا تفريعات: القسم 0 يفشل
+--     الترحيل إن غابت، فلا تُنشأ هنا نسخة بلا فحص حظر.
 --     SECURITY DEFINER لأنها تقرأ posts و follows و user_blocks بغض النظر عن
 --     RLS، ومحدودة الصلاحيات: تُعيد boolean فقط ولا تكشف أي صف.
+--     لا تُمنح لـanon: لا سياسة anon تستدعيها (حراس الجداول الثلاثة
+--     to authenticated وحدهم)، و anon لا يقرأ تفاعلات في هذا التطبيق.
 -- ---------------------------------------------------------------------
 create or replace function public.aani_can_read_post_interactions(
   p_post_id uuid,
@@ -244,50 +263,17 @@ stable
 security definer
 set search_path = ''
 as $$
-  select coalesce(public.aani_can_read_post(p_post_id, p_viewer_id), false);
+  select public.aani_can_read_post(p_post_id, p_viewer_id)
+    and not public.aani_is_user_blocked(
+      p_viewer_id,
+      (select post.user_id from public.posts as post where post.id = p_post_id)
+    );
 $$;
 
 revoke all on function public.aani_can_read_post_interactions(uuid, uuid)
   from public, anon, authenticated;
 grant execute on function public.aani_can_read_post_interactions(uuid, uuid)
-  to authenticated, anon;
-
-do $$
-begin
-  if not exists (
-    select 1
-    from pg_proc as proc
-    join pg_namespace as namespace on namespace.oid = proc.pronamespace
-    where namespace.nspname = 'public'
-      and proc.proname = 'aani_is_user_blocked'
-  ) then
-    raise warning
-      'الدالة aani_is_user_blocked غائبة — حُرّاس التفاعل تعتمد على aani_can_read_post بلا فحص حظر. طبّق 20270204000000 ثم أعد تشغيل هذا الترحيل.';
-    return;
-  end if;
-
-  execute $fn$
-    create or replace function public.aani_can_read_post_interactions(
-      p_post_id uuid,
-      p_viewer_id uuid
-    )
-    returns boolean
-    language sql
-    stable
-    security definer
-    set search_path = ''
-    as $body$
-      select public.aani_can_read_post(p_post_id, p_viewer_id)
-        and not public.aani_is_user_blocked(
-          p_viewer_id,
-          (select post.user_id from public.posts as post where post.id = p_post_id)
-        );
-    $body$;
-  $fn$;
-
-  execute 'revoke all on function public.aani_can_read_post_interactions(uuid, uuid) from public, anon, authenticated';
-  execute 'grant execute on function public.aani_can_read_post_interactions(uuid, uuid) to authenticated, anon';
-end $$;
+  to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 4) ملخصات التفاعل: لا صفوف لمنشور لا يحق للمشاهد رؤيته
@@ -657,8 +643,9 @@ begin
   end if;
 
   -- -------------------------------------------------------------------
-  -- قاعدة القراءة المشتركة للتفاعلات: موجودة، وتعتمد فعلاً على
-  -- aani_can_read_post (خصوصية الحساب والمنشور) — لا نسخة محلية ناقصة.
+  -- قاعدة القراءة المشتركة للتفاعلات: موجودة، definer، وتعتمد فعلاً على
+  -- aani_can_read_post (خصوصية الحساب والمنشور) وعلى aani_is_user_blocked
+  -- (الحظر). فحص الجسم يمنع بقاء نسخة قديمة بلا فحص حظر.
   -- -------------------------------------------------------------------
   if not exists (
     select 1 from pg_proc as proc
@@ -667,8 +654,19 @@ begin
       and proc.proname = 'aani_can_read_post_interactions'
       and proc.prosecdef
       and proc.prosrc like '%aani_can_read_post%'
+      and proc.prosrc like '%aani_is_user_blocked%'
   ) then
-    raise exception 'الدالة aani_can_read_post_interactions مفقودة أو لا تعتمد على aani_can_read_post';
+    raise exception 'الدالة aani_can_read_post_interactions مفقودة أو جسمها لا يستدعي aani_can_read_post و aani_is_user_blocked معاً';
+  end if;
+
+  -- الصلاحيات: authenticated وحدها. anon لا سياسة له على جداول التفاعل،
+  -- فلا سبب لمنحها له، وسحبها يقلّص سطح الاستدعاء.
+  if has_function_privilege('anon', 'public.aani_can_read_post_interactions(uuid, uuid)', 'execute') then
+    raise exception 'aani_can_read_post_interactions ما زالت ممنوحة لـanon';
+  end if;
+
+  if not has_function_privilege('authenticated', 'public.aani_can_read_post_interactions(uuid, uuid)', 'execute') then
+    raise exception 'aani_can_read_post_interactions غير ممنوحة لـauthenticated — حراس التفاعل ستفشل';
   end if;
 
   -- aani_post_interaction_rows صارت تستدعي الدالة المشتركة بدل تكرار شرط
@@ -778,8 +776,14 @@ commit;
 --    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --    where n.nspname = 'public'
 --      and p.proname in ('aani_can_read_post_interactions', 'aani_post_interaction_rows');
---    -- المتوقع: uses_read_rule = true للصفين، checks_blocks = true للصف الأول
---    -- (وإن ظهر false مع تحذير aani_is_user_blocked فالسبب أن الدالة غائبة).
+--    -- المتوقع: uses_read_rule = true للصفين، checks_blocks = true للصف الأول.
+--    -- الترحيل يفشل أصلاً إن غابت aani_is_user_blocked(uuid, uuid) أو إن كان
+--    -- جسم الدالة المشتركة لا يستدعيها.
+--
+-- 1ج) صلاحية الدالة المشتركة: authenticated فقط
+--    select has_function_privilege('anon', 'public.aani_can_read_post_interactions(uuid, uuid)', 'execute') as anon_ok,
+--           has_function_privilege('authenticated', 'public.aani_can_read_post_interactions(uuid, uuid)', 'execute') as auth_ok;
+--    -- المتوقع: anon_ok = false، auth_ok = true
 --
 -- 2) الزائر لا يستطيع استدعاء ملخصات التفاعل (المتوقع: false للثلاث)
 --    select has_function_privilege('anon', 'public.post_interaction_summaries(uuid[])', 'execute'),
