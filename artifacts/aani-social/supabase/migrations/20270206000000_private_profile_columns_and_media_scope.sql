@@ -633,6 +633,14 @@ end $$;
 -- 6) تحقق داخل الترحيل
 -- ---------------------------------------------------------------------
 do $$
+declare
+  -- ما تحتاجه الخوادم فعلياً، مطابق للقائمة المستخدمة في القسم 1.
+  server_columns text[] := array[
+    'id', 'fcm_token', 'notification_settings', 'avatar_url', 'cover_url'
+  ];
+  column_row record;
+  granting_roles text;
+  owner_name text;
 begin
   if not exists (
     select 1 from pg_policies
@@ -671,51 +679,99 @@ begin
     raise exception 'ما زال SELECT على جدول public.profiles ممنوحاً على مستوى الجدول';
   end if;
 
-  -- خادم الإشعارات يجب أن يبقى قادراً على قراءة العمودين اللذين يحتاجهما
+  -- -------------------------------------------------------------------
+  -- service_role: تحقق بالصلاحيات الفعلية (has_table_privilege /
+  -- has_column_privilege) لا بجداول information_schema وحدها، لأن هذين
+  -- التابعين يحسبان الصلاحيات الموروثة عبر عضوية الأدوار أيضاً.
+  -- -------------------------------------------------------------------
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    -- لا منح SELECT جدولي لـservice_role (وإلا قرأ كل الأعمدة)
-    if exists (
-      select 1
-      from information_schema.role_table_grants
-      where table_schema = 'public'
-        and table_name = 'profiles'
-        and grantee = 'service_role'
-        and privilege_type = 'SELECT'
-    ) then
-      raise exception 'service_role ما زال يملك SELECT على جدول public.profiles بالكامل';
+    -- (0) دور فائق يتجاوز كل سحب: لا معنى للتحقق بعده.
+    if (select rolsuper from pg_roles where rolname = 'service_role') then
+      raise exception 'service_role دور فائق (superuser): يقرأ كل الأعمدة مهما سُحبت. أزل صفة superuser قبل تطبيق هذا الترحيل.';
     end if;
 
-    -- الأعمدة الممنوحة له هي المطلوبة بالضبط: لا أكثر ولا أقل
-    if exists (
-      select 1
-      from information_schema.column_privileges
-      where table_schema = 'public'
-        and table_name = 'profiles'
-        and grantee = 'service_role'
-        and privilege_type = 'SELECT'
-        and column_name <> all(array[
-          'id', 'fcm_token', 'notification_settings', 'avatar_url', 'cover_url'
-        ])
-    ) then
-      raise exception 'service_role يملك قراءة أعمدة profiles إضافية غير مطلوبة';
+    -- (1) لا صلاحية قراءة فعلية على مستوى الجدول، مباشرة أو موروثة.
+    if has_table_privilege('service_role', 'public.profiles', 'SELECT') then
+      -- الملكية تمنح كل الصلاحيات ولا يمكن سحبها: حالة مختلفة تحتاج رسالة مختلفة.
+      select pg_get_userbyid(relation.relowner)
+      into owner_name
+      from pg_class as relation
+      join pg_namespace as namespace on namespace.oid = relation.relnamespace
+      where namespace.nspname = 'public' and relation.relname = 'profiles';
+
+      if owner_name = 'service_role' then
+        raise exception 'service_role هو مالك الجدول public.profiles: الملكية تمنحه كل الأعمدة ولا تُسحب بـREVOKE. غيّر مالك الجدول (ALTER TABLE ... OWNER TO postgres) قبل تطبيق هذا الترحيل.';
+      end if;
+
+      select string_agg(distinct parent.rolname, ', ' order by parent.rolname)
+      into granting_roles
+      from pg_auth_members as membership
+      join pg_roles as parent on parent.oid = membership.roleid
+      join pg_roles as member on member.oid = membership.member
+      where member.rolname = 'service_role'
+        and (
+          parent.rolsuper
+          or has_table_privilege(parent.oid, 'public.profiles', 'SELECT')
+        );
+
+      if granting_roles is not null then
+        raise exception 'service_role يقرأ public.profiles على مستوى الجدول عبر عضوية الأدوار: %. اسحب SELECT من تلك الأدوار أو أزل العضوية قبل تطبيق هذا الترحيل.', granting_roles;
+      end if;
+
+      raise exception 'service_role يملك SELECT فعلياً على جدول public.profiles (منح صريح أو عبر PUBLIC باقٍ). اسحبه يدوياً ثم أعد تطبيق الترحيل.';
     end if;
 
-    if (
-      select count(distinct column_name)
-      from information_schema.column_privileges
+    -- (2) كل عمود خارج القائمة المسموحة يجب ألا يكون مقروءاً فعلياً،
+    --     بما في ذلك عبر عضوية الأدوار أو منح PUBLIC.
+    for column_row in
+      select column_name
+      from information_schema.columns
       where table_schema = 'public'
         and table_name = 'profiles'
-        and grantee = 'service_role'
-        and privilege_type = 'SELECT'
-        and column_name in (
-          'id', 'fcm_token', 'notification_settings', 'avatar_url', 'cover_url'
-        )
-    ) <> 5 then
-      raise exception 'service_role فقد قراءة عمود يحتاجه الخادم (fcm_token/notification_settings/id/avatar_url/cover_url) — الإشعارات أو تسجيل الدخول أو حذف الوسائط ستتعطل';
-    end if;
+        and column_name <> all(server_columns)
+      order by column_name
+    loop
+      if has_column_privilege('service_role', 'public.profiles', column_row.column_name, 'SELECT') then
+        select string_agg(distinct parent.rolname, ', ' order by parent.rolname)
+        into granting_roles
+        from pg_auth_members as membership
+        join pg_roles as parent on parent.oid = membership.roleid
+        join pg_roles as member on member.oid = membership.member
+        where member.rolname = 'service_role'
+          and (
+            parent.rolsuper
+            or has_column_privilege(parent.oid, 'public.profiles', column_row.column_name, 'SELECT')
+          );
+
+        raise exception 'service_role يستطيع قراءة العمود % من public.profiles وهو خارج الأعمدة المسموحة%. أزل الصلاحية (مباشرة، أو عبر PUBLIC، أو عبر عضوية دور) قبل تطبيق هذا الترحيل.',
+          column_row.column_name,
+          case when granting_roles is not null then ' عبر الأدوار: ' || granting_roles else '' end;
+      end if;
+    end loop;
+
+    -- (3) الأعمدة الخمسة المطلوبة يجب أن تكون مقروءة فعلياً، وإلا تعطلت
+    --     الإشعارات أو تسجيل الدخول أو عامل حذف الوسائط.
+    for column_row in
+      select unnest(server_columns) as column_name
+    loop
+      if not has_column_privilege('service_role', 'public.profiles', column_row.column_name, 'SELECT') then
+        raise exception 'service_role لا يستطيع قراءة العمود % من public.profiles — الإشعارات أو تسجيل الدخول أو حذف الوسائط سيتعطل.', column_row.column_name;
+      end if;
+    end loop;
   end if;
 
-  -- أدوار الإدارة ومالك الجدول لم تتأثر
+  -- مالك الجدول لم يتأثر (الملكية تمنح الصلاحية دائماً؛ هذا تأكيد لا تعديل).
+  select pg_get_userbyid(relation.relowner)
+  into owner_name
+  from pg_class as relation
+  join pg_namespace as namespace on namespace.oid = relation.relnamespace
+  where namespace.nspname = 'public' and relation.relname = 'profiles';
+
+  if owner_name is not null and not has_table_privilege(owner_name, 'public.profiles', 'SELECT') then
+    raise exception 'مالك الجدول public.profiles (%) فقد SELECT — يجب ألا يتأثر.', owner_name;
+  end if;
+
+  -- أدوار الإدارة لم تتأثر
   if exists (select 1 from pg_roles where rolname = 'postgres') then
     if not has_table_privilege('postgres', 'public.profiles', 'SELECT') then
       raise exception 'postgres فقد SELECT على public.profiles — يجب ألا يتأثر';
@@ -759,6 +815,18 @@ commit;
 --      and grantee = 'service_role' and privilege_type = 'SELECT'
 --    order by column_name;
 --    -- المتوقع: avatar_url, cover_url, fcm_token, id, notification_settings
+--
+-- 2ب-2) الصلاحيات الفعلية (تحسب الموروثة عبر العضوية) — المتوقع false, true
+--    select has_table_privilege('service_role', 'public.profiles', 'SELECT') as table_select,
+--           has_column_privilege('service_role', 'public.profiles', 'fcm_token', 'SELECT') as fcm_select,
+--           has_column_privilege('service_role', 'public.profiles', 'city', 'SELECT') as city_select;
+--    -- المتوقع: table_select=false، fcm_select=true، city_select=false
+--
+-- 2ب-3) عضويات service_role (يجب ألا تكون عضواً في دور يملك SELECT على profiles)
+--    select parent.rolname
+--    from pg_auth_members m join pg_roles parent on parent.oid = m.roleid
+--    join pg_roles member on member.oid = m.member
+--    where member.rolname = 'service_role';
 --
 -- 2ج) service_role لا يقرأ عموداً شخصياً (يجب أن يفشل 42501)
 --    set role service_role;
