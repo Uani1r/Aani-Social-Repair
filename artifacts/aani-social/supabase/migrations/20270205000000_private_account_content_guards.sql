@@ -27,6 +27,18 @@
 --      قائمتا «المتابعون» و«متابع» لحساب خاص لغير المتابع المعتمد.
 --   5) جدول reposts سياسة قراءته using (true) (20261027000000 سطر 10-13) وجدول
 --      post_shares مثلها، فيكشفان إعادة النشر والمشاركة لمنشور حساب خاص.
+--   6) جداول التفاعل likes و comment_likes و comment_dislikes: سياساتها
+--      المتساهلة using (true) (schema.sql سطر 362-378)، فلا شيء يمنع قراءة
+--      صفوفها لمنشور لا يحق للمشاهد رؤيته إلا حارس restrictive، وحارس likes
+--      الحالي يفحص visibility و hide_likes فقط ولا يعرف profiles.is_private
+--      ولا الحظر، وحارسا comment_likes و comment_dislikes يعتمدان على
+--      aani_can_view_post_comments وحدها. تعديل الدالة وحده لا يكفي لأن
+--      السياسات السارية في القاعدة الحيّة ليست مضمونة المطابقة للملف. هنا
+--      تُحذف الحراس الثلاثة وتُعاد إنشاؤها على aani_can_read_post_interactions.
+--   7) aani_post_interaction_rows كانت تكرر شرط الخصوصية بنفسها (visibility و
+--      is_private فقط، بلا حظر)، فأي تصحيح في قاعدة القراءة لا يصل إليها.
+--      صارت تعتمد على aani_can_read_post_interactions: aani_can_read_post
+--      (خصوصية الحساب والمنشور) + aani_is_user_blocked (الحظر).
 --
 -- لا يعدّل جداول ولا بيانات ولا سياسات القصص (aani_can_view_story تتحقق من
 -- is_private أصلاً وتُترك كما هي)، ولا واجهة التطبيق، ولا جداول البلاغات.
@@ -206,9 +218,83 @@ revoke all on function public.aani_can_comment_on_post(uuid, uuid) from public, 
 grant execute on function public.aani_can_comment_on_post(uuid, uuid) to authenticated;
 
 -- ---------------------------------------------------------------------
--- 4) ملخصات التفاعل: لا صفوف لمنشور حساب خاص لغير المتابع المعتمد
+-- 3ب) قاعدة واحدة لقراءة تفاعلات منشور: هل يحق للمشاهد رؤية هذا المنشور؟
+--
+--     aani_can_read_post (20270203000000) تحسم خصوصية المنشور وخصوصية الحساب
+--     والمتابعة المعتمدة، لكنها لا تعرف الحظر — الحظر حارس restrictive منفصل
+--     على posts (aani_posts_block_guard). الدالة SECURITY DEFINER لا تخضع لتلك
+--     السياسة، فلو اعتمدت عليها وحدها لقرأت تفاعلات منشور مستخدم حاجبها.
+--
+--     لذلك تُجمع القاعدتان هنا في دالة واحدة صغيرة، وتُستدعى من:
+--       * aani_post_interaction_rows (القسم 4)،
+--       * حراس قراءة likes و comment_likes و comment_dislikes (القسم 7ب).
+--
+--     تُنشأ أولاً بلا فحص الحظر (aani_is_user_blocked قد تكون غائبة في قاعدة
+--     بُنيت من schema.sql)، ثم تُستبدل بنسخة تفحص الحظر إن كانت موجودة.
+--     SECURITY DEFINER لأنها تقرأ posts و follows و user_blocks بغض النظر عن
+--     RLS، ومحدودة الصلاحيات: تُعيد boolean فقط ولا تكشف أي صف.
+-- ---------------------------------------------------------------------
+create or replace function public.aani_can_read_post_interactions(
+  p_post_id uuid,
+  p_viewer_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(public.aani_can_read_post(p_post_id, p_viewer_id), false);
+$$;
+
+revoke all on function public.aani_can_read_post_interactions(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.aani_can_read_post_interactions(uuid, uuid)
+  to authenticated, anon;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public'
+      and proc.proname = 'aani_is_user_blocked'
+  ) then
+    raise warning
+      'الدالة aani_is_user_blocked غائبة — حُرّاس التفاعل تعتمد على aani_can_read_post بلا فحص حظر. طبّق 20270204000000 ثم أعد تشغيل هذا الترحيل.';
+    return;
+  end if;
+
+  execute $fn$
+    create or replace function public.aani_can_read_post_interactions(
+      p_post_id uuid,
+      p_viewer_id uuid
+    )
+    returns boolean
+    language sql
+    stable
+    security definer
+    set search_path = ''
+    as $body$
+      select public.aani_can_read_post(p_post_id, p_viewer_id)
+        and not public.aani_is_user_blocked(
+          p_viewer_id,
+          (select post.user_id from public.posts as post where post.id = p_post_id)
+        );
+    $body$;
+  $fn$;
+
+  execute 'revoke all on function public.aani_can_read_post_interactions(uuid, uuid) from public, anon, authenticated';
+  execute 'grant execute on function public.aani_can_read_post_interactions(uuid, uuid) to authenticated, anon';
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 4) ملخصات التفاعل: لا صفوف لمنشور لا يحق للمشاهد رؤيته
 --    (وإلا كشفت الدالة SECURITY DEFINER أعداد إعجابات وتعليقات وريبوستات)
---    نفس الأعمدة ونفس الدلالات السابقة مع شرط الخصوصية فقط.
+--    نفس الأعمدة ونفس الدلالات السابقة، والشرط الوحيد هو
+--    aani_can_read_post_interactions: خصوصية المنشور + خصوصية الحساب +
+--    المتابعة المعتمدة + الحظر، بدل تكرار الشرط هنا بنسخة ناقصة.
 -- ---------------------------------------------------------------------
 create or replace function public.aani_post_interaction_rows(p_post_ids uuid[])
 returns table (
@@ -257,21 +343,7 @@ as $$
     from public.posts as p
     join public.profiles as owner on owner.id = p.user_id
     where p.id = any(coalesce(p_post_ids, '{}'::uuid[]))
-      and (
-        p.user_id = auth.uid()
-        or (
-          coalesce(p.visibility, 'public') <> 'private'
-          and (
-            not owner.is_private
-            or exists (
-              select 1
-              from public.follows as accepted
-              where accepted.follower_id = auth.uid()
-                and accepted.following_id = p.user_id
-            )
-          )
-        )
-      )
+      and public.aani_can_read_post_interactions(p.id, auth.uid())
   )
   select
     s.post_id,
@@ -459,6 +531,90 @@ create policy aani_post_shares_private_read_guard on public.post_shares
   using (public.aani_can_read_post(post_id, (select auth.uid())));
 
 -- ---------------------------------------------------------------------
+-- 7ب) حراس قراءة restrictive فعلية على جداول التفاعل
+--     likes و comment_likes و comment_dislikes
+--
+--     سياسات القراءة المتساهلة على الجداول الثلاثة هي using (true)
+--     (schema.sql سطر 362-378)، فكل مستخدم مسجّل يقرأ كل صفوفها، ولا شيء
+--     يمنع قراءة تفاعلات منشور لا يحق له رؤيته إلا حارس restrictive. تعديل
+--     aani_can_view_post_comments وحده لا يكفي: السياسات السارية في القاعدة
+--     الحيّة ليست مضمونة المطابقة للملف، وحارس likes لا يستدعيها أصلاً (يفحص
+--     visibility و hide_likes فقط، بلا profiles.is_private).
+--
+--     لذلك تُحذف الحراس الثلاثة وتُعاد إنشاؤها على
+--     aani_can_read_post_interactions، فتصبح القاعدة واحدة على كل الجداول:
+--     خصوصية المنشور + خصوصية الحساب + المتابعة المعتمدة + الحظر.
+--
+--     hide_likes يبقى كما هو: صاحب المنشور يرى كل الإعجابات، وغيره يرى إعجابه
+--     فقط. و hide_comments يبقى على تفاعلات التعليقات عبر
+--     aani_can_view_post_comments (المعاد تعريفها في القسم 2 لتعرف is_private).
+--     الجداول قد تكون غائبة في قاعدة قديمة، فيُتخطى الحارس بتحذير لا بفشل.
+-- ---------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('public.likes') is null then
+    raise warning 'الجدول public.likes غير موجود — تم تخطي حارس قراءته';
+  else
+    execute 'drop policy if exists aani_likes_privacy_read_guard on public.likes';
+    execute $policy$
+      create policy aani_likes_privacy_read_guard on public.likes
+        as restrictive for select to authenticated
+        using (
+          public.aani_can_read_post_interactions(post_id, (select auth.uid()))
+          and (
+            likes.user_id = (select auth.uid())
+            or not exists (
+              select 1
+              from public.posts as post
+              where post.id = likes.post_id
+                and post.hide_likes
+                and post.user_id is distinct from (select auth.uid())
+            )
+          )
+        )
+    $policy$;
+  end if;
+
+  if to_regclass('public.comment_likes') is null then
+    raise warning 'الجدول public.comment_likes غير موجود — تم تخطي حارس قراءته';
+  else
+    execute 'drop policy if exists aani_comment_likes_privacy_read_guard on public.comment_likes';
+    execute $policy$
+      create policy aani_comment_likes_privacy_read_guard on public.comment_likes
+        as restrictive for select to authenticated
+        using (
+          exists (
+            select 1
+            from public.comments as c
+            where c.id = comment_likes.comment_id
+              and public.aani_can_view_post_comments(c.post_id, (select auth.uid()))
+              and public.aani_can_read_post_interactions(c.post_id, (select auth.uid()))
+          )
+        )
+    $policy$;
+  end if;
+
+  if to_regclass('public.comment_dislikes') is null then
+    raise warning 'الجدول public.comment_dislikes غير موجود — تم تخطي حارس قراءته';
+  else
+    execute 'drop policy if exists aani_comment_dislikes_privacy_read_guard on public.comment_dislikes';
+    execute $policy$
+      create policy aani_comment_dislikes_privacy_read_guard on public.comment_dislikes
+        as restrictive for select to authenticated
+        using (
+          exists (
+            select 1
+            from public.comments as c
+            where c.id = comment_dislikes.comment_id
+              and public.aani_can_view_post_comments(c.post_id, (select auth.uid()))
+              and public.aani_can_read_post_interactions(c.post_id, (select auth.uid()))
+          )
+        )
+    $policy$;
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
 -- 8) تحقق داخل الترحيل
 -- ---------------------------------------------------------------------
 do $$
@@ -498,6 +654,60 @@ begin
       and permissive = 'RESTRICTIVE' and cmd = 'SELECT'
   ) then
     raise exception 'حارس قراءة مشاركات المنشور غير مفعّل';
+  end if;
+
+  -- -------------------------------------------------------------------
+  -- قاعدة القراءة المشتركة للتفاعلات: موجودة، وتعتمد فعلاً على
+  -- aani_can_read_post (خصوصية الحساب والمنشور) — لا نسخة محلية ناقصة.
+  -- -------------------------------------------------------------------
+  if not exists (
+    select 1 from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public'
+      and proc.proname = 'aani_can_read_post_interactions'
+      and proc.prosecdef
+      and proc.prosrc like '%aani_can_read_post%'
+  ) then
+    raise exception 'الدالة aani_can_read_post_interactions مفقودة أو لا تعتمد على aani_can_read_post';
+  end if;
+
+  -- aani_post_interaction_rows صارت تستدعي الدالة المشتركة بدل تكرار شرط
+  -- خصوصية ناقص بلا حظر.
+  if exists (
+    select 1 from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public'
+      and proc.proname = 'aani_post_interaction_rows'
+      and proc.prosrc not like '%aani_can_read_post_interactions%'
+  ) then
+    raise exception 'aani_post_interaction_rows ما زالت تفحص الخصوصية بنفسها بدل aani_can_read_post_interactions';
+  end if;
+
+  -- -------------------------------------------------------------------
+  -- حراس جداول التفاعل: restrictive على SELECT، ونصّها يستدعي الدالة
+  -- المشتركة. الفحص على qual يمنع «سياسة موجودة بالاسم لكن بلا فحص».
+  -- الجدول الغائب يُتخطى (كما في الإنشاء أعلاه).
+  -- -------------------------------------------------------------------
+  if exists (
+    select 1
+    from (values
+      ('likes', 'aani_likes_privacy_read_guard'),
+      ('comment_likes', 'aani_comment_likes_privacy_read_guard'),
+      ('comment_dislikes', 'aani_comment_dislikes_privacy_read_guard')
+    ) as expected(tbl, pol)
+    where to_regclass('public.' || expected.tbl) is not null
+      and not exists (
+        select 1
+        from pg_policies as existing
+        where existing.schemaname = 'public'
+          and existing.tablename = expected.tbl
+          and existing.policyname = expected.pol
+          and existing.permissive = 'RESTRICTIVE'
+          and existing.cmd = 'SELECT'
+          and coalesce(existing.qual, '') like '%aani_can_read_post_interactions%'
+      )
+  ) then
+    raise exception 'أحد حراس قراءة جداول التفاعل (likes, comment_likes, comment_dislikes) غير مفعّل كـRESTRICTIVE أو لا يستدعي aani_can_read_post_interactions';
   end if;
 
   -- -------------------------------------------------------------------
@@ -549,11 +759,27 @@ commit;
 -- استعلامات تحقق يدوية بعد التطبيق (شغّلها في SQL Editor — ليست جزءاً من الترحيل)
 -- =====================================================================
 -- 1) الحُرّاس موجودون كـRESTRICTIVE
---    select tablename, policyname, permissive, cmd
+--    select tablename, policyname, permissive, cmd, qual
 --    from pg_policies
 --    where schemaname = 'public'
---      and tablename in ('posts', 'follows', 'reposts', 'post_shares')
+--      and tablename in (
+--        'posts', 'follows', 'reposts', 'post_shares',
+--        'likes', 'comment_likes', 'comment_dislikes'
+--      )
 --    order by tablename, permissive, policyname;
+--    -- المتوقع: حارس واحد على الأقل لكل جدول بـpermissive = RESTRICTIVE وcmd = SELECT،
+--    -- و qual يحتوي aani_can_read_post_interactions في likes و comment_likes
+--    -- و comment_dislikes.
+--
+-- 1ب) قاعدة القراءة المشتركة للتفاعلات (خصوصية + حظر)
+--    select p.proname, p.prosecdef, p.proconfig,
+--           p.prosrc ~* 'aani_can_read_post' as uses_read_rule,
+--           p.prosrc ~* 'aani_is_user_blocked' as checks_blocks
+--    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--    where n.nspname = 'public'
+--      and p.proname in ('aani_can_read_post_interactions', 'aani_post_interaction_rows');
+--    -- المتوقع: uses_read_rule = true للصفين، checks_blocks = true للصف الأول
+--    -- (وإن ظهر false مع تحذير aani_is_user_blocked فالسبب أن الدالة غائبة).
 --
 -- 2) الزائر لا يستطيع استدعاء ملخصات التفاعل (المتوقع: false للثلاث)
 --    select has_function_privilege('anon', 'public.post_interaction_summaries(uuid[])', 'execute'),
@@ -586,9 +812,18 @@ commit;
 --    select count(*) from public.likes where post_id = '<post_of_A>';      -- 0
 --    select count(*) from public.reposts where post_id = '<post_of_A>';    -- 0
 --    select count(*) from public.follows where following_id = '<A>';       -- 0
+--    select count(*) from public.comment_likes
+--      where comment_id in (select id from public.comments where post_id = '<post_of_A>');   -- 0
+--    select count(*) from public.comment_dislikes
+--      where comment_id in (select id from public.comments where post_id = '<post_of_A>');   -- 0
 --    select count(*) from public.post_interaction_summaries(array['<post_of_A>'::uuid]); -- 0
 --    select count(*) from public.get_post_interactions(array['<post_of_A>'::uuid]);      -- 0 (الاسم القديم محمي أيضاً)
+--    select count(*) from public.aani_post_interaction_rows(array['<post_of_A>'::uuid]); -- 0 (الدالة الداخلية محمية أيضاً)
 --    insert into public.comments (post_id, user_id, content) values ('<post_of_A>', auth.uid(), 'test'); -- يفشل
+--
+-- 3ب) بصفتك مستخدماً حجبك صاحب منشور عام (أو حجبته أنت): كل ما سبق يُعيد 0
+--    للحساب المحجوب رغم أن المنشور غير خاص ورغم أن الحساب غير خاص — هذا هو
+--    فحص الحظر الذي كان غائباً عن aani_post_interaction_rows.
 --
 -- 4) بصفتك متابعاً معتمداً لـA: كل ما سبق يُعيد قيمه الطبيعية، ومنشور A
 --    بـvisibility = 'private' يبقى بصفر صفوف للمتابع أيضاً.
