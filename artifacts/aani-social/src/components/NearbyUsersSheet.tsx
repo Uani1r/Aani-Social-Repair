@@ -82,6 +82,20 @@ export default function NearbyUsersSheet({
     }
 
     const load = async () => {
+      // المسار المعتمد: دالة خادم متناظرة تقارن مفتاح المدينة المُطبَّع
+      // (city_key) للطرفين، فلا يختلف الظهور بين حسابين في نفس المدينة بسبب
+      // اختلاف المسافات أو التشكيل أو همزات الألف/الياء/التاء المربوطة.
+      const { data: rpcData, error: rpcError } = await supabase.rpc('aani_nearby_people', { p_limit: 200 });
+      if (!rpcError) {
+        return { data: (rpcData || []) as NearbyUser[], error: null };
+      }
+      // قاعدة بيانات لم يُطبَّق عليها الترحيل بعد → الرجوع للاستعلام المباشر
+      const rpcMissing = rpcError.code === 'PGRST202'
+        || /aani_nearby_people|could not find the function|schema cache/i.test(rpcError.message || '');
+      if (!rpcMissing) {
+        return { data: null, error: rpcError };
+      }
+
       const columns = 'id, username, full_name, display_name, avatar_url, city, is_deactivated';
       let result = await supabase
         .from('profiles')
@@ -91,7 +105,7 @@ export default function NearbyUsersSheet({
         .eq('is_deactivated', false)
         .eq('is_nearby_visible', true)
         .order('created_at', { ascending: false })
-        .limit(60);
+        .limit(200);
 
       // قاعدة بيانات بلا عمود is_deactivated أو is_nearby_visible بعد → أعد المحاولة بلا الأعمدة الناقصة
       if (result.error && (result.error.code === '42703' || result.error.code === 'PGRST204')) {
@@ -102,7 +116,7 @@ export default function NearbyUsersSheet({
           .eq('city', city)
           .neq('id', currentUserId)
           .order('created_at', { ascending: false })
-          .limit(60);
+          .limit(200);
         if (!/is_deactivated/i.test(missing)) retry = retry.eq('is_deactivated', false);
         if (!/is_nearby_visible/i.test(missing)) retry = retry.eq('is_nearby_visible', true);
         result = await retry;
