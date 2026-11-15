@@ -423,13 +423,17 @@ export default function StoryCreationEditor({
         className="pointer-events-none fixed inset-x-0 top-0 z-[120] flex items-center justify-between px-4 py-3"
         style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
       >
+        {/* زر الإغلاق: نفس حجم وشكل الأزرار الدائرية في العمود أسفله (36×36،
+            rounded-full)، بإزاحة 6px يميناً ليطابق مركز العمود تماماً
+            (right-2.5 + 36/2) — بلا تغيير في أي زر آخر. */}
         <button
           type="button"
           onClick={onClose}
           aria-label="إغلاق معاينة القصة"
-          className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-xl border border-red-300/35 bg-red-500/20 text-red-100 shadow-lg backdrop-blur-md transition hover:bg-red-500/30 active:scale-95"
+          style={{ marginRight: -6, flexShrink: 0 }}
+          className="pointer-events-auto flex h-9 w-9 items-center justify-center rounded-full border border-red-300/35 bg-red-500/20 text-red-100 shadow-lg backdrop-blur-md transition hover:bg-red-500/30 active:scale-95"
         >
-          <X size={22} />
+          <X size={20} />
         </button>
         {reshareStory ? (
           <div className="flex min-w-0 flex-col items-center gap-1">

@@ -42,6 +42,10 @@ export type StoryViewerProps = {
   onCloseViewer: () => void;
   onNextStory: () => void;
   onPreviousStory: () => void;
+  /** سحب أفقي: بداية قصص الشخص السابق (تخطي بقية قصص الشخص الحالي). */
+  onPreviousUser: () => void;
+  /** سحب أفقي: بداية قصص الشخص التالي، أو إغلاق العارض إن لم يوجد تالٍ. */
+  onNextUser: () => void;
   onToggleShowUI: () => void;
   onPauseChange: (paused: boolean) => void;
   onVideoMetadata: (storyId: string, durationSeconds: number) => void;

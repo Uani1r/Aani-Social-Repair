@@ -1790,6 +1790,42 @@ export default function StoriesBar({
     }
   };
 
+  // ===== التنقل بالسحب الأفقي بين مجموعات المستخدمين =====
+  // يستخدم نفس حالة التنقل الحالية (activeUserGroup + activeStoryIndex + الترتيب
+  // orderedStoryUserIds) بلا أي نظام موازٍ لإدارة القصص.
+  const goToPreviousUserStart = () => {
+    if (archiveViewerOpen) return;
+    const userIds = orderedStoryUserIds;
+    const currentIdx = userIds.indexOf(activeUserGroup || '');
+    // لا يوجد شخص سابق: لا تنفيذ انتقال
+    if (currentIdx <= 0) return;
+    const previousUser = userIds[currentIdx - 1];
+    if (!groupedStories[previousUser]?.length) return;
+    setActiveUserGroup(previousUser);
+    setActiveStoryIndex(0); // بداية قصص الشخص السابق — تخطي بقية قصص الحالي
+    setProgress(0);
+    setCurrentTimeSec(0);
+  };
+
+  const goToNextUserStart = () => {
+    if (archiveViewerOpen) return;
+    const userIds = orderedStoryUserIds;
+    const currentIdx = userIds.indexOf(activeUserGroup || '');
+    if (currentIdx === -1) return;
+    const nextUser = userIds[currentIdx + 1];
+    if (!nextUser) {
+      // لا يوجد شخص تالٍ: إغلاق العارض بنفس مسار الإغلاق المعتمد
+      if (currentStory?.id) markStorySeen(String(currentStory.id));
+      setArchiveViewerOpen(false);
+      setActiveUserGroup(null);
+      return;
+    }
+    setActiveUserGroup(nextUser);
+    setActiveStoryIndex(0); // بداية قصص الشخص التالي — تخطي بقية قصص الحالي
+    setProgress(0);
+    setCurrentTimeSec(0);
+  };
+
   const handleDeleteStory = async () => {
     if (!supabaseConfigured || !currentStory) return;
     if (currentStory.user_id !== userId) return;
@@ -2220,6 +2256,8 @@ export default function StoriesBar({
           }}
           onNextStory={handleNextStory}
           onPreviousStory={handlePrevStory}
+          onPreviousUser={goToPreviousUserStart}
+          onNextUser={goToNextUserStart}
           onToggleShowUI={() => setShowUI(!showUI)}
           onPauseChange={setIsPaused}
           onVideoMetadata={handleStoryVideoMetadata}
