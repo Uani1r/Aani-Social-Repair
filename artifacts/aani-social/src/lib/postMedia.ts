@@ -1,4 +1,5 @@
 import { supabase, storageBucket } from '@/lib/supabase';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 
 type PostMediaRecord = {
   media_url: string | null;
@@ -119,17 +120,21 @@ function toPublicMediaUrl(value: unknown): string | null {
 export async function resolvePostMediaUrls<T extends PostMediaRecord>(posts: T[]): Promise<T[]> {
   if (posts.length === 0) return posts;
 
-  const normalized = posts.map(post => {
-    const mediaUrls = Array.isArray(post.media_urls)
+  const normalized = await Promise.all(posts.map(async post => {
+    const mediaUrls = (Array.isArray(post.media_urls)
       ? post.media_urls.map(toPublicMediaUrl).filter((url): url is string => Boolean(url))
-      : [];
-    const mediaUrl = toPublicMediaUrl(post.media_url) || mediaUrls[0] || null;
+      : []);
+    // التوقيع هنا لا التوليد: إن كان الـbucket خاصاً صار الرابط موقّعاً،
+    // وإن كان عاماً بقي كما هو (mediaAccess يجرّب التوقيع ثم يسقط للعام).
+    const signedUrls = await Promise.all(mediaUrls.map(url => resolveMediaUrl(url)));
+    const resolvedList = signedUrls.filter((url): url is string => Boolean(url));
+    const mediaUrl = await resolveMediaUrl(toPublicMediaUrl(post.media_url)) || resolvedList[0] || null;
     return {
       ...post,
       media_url: mediaUrl,
-      media_urls: mediaUrls.length > 0 ? mediaUrls : mediaUrl ? [mediaUrl] : null,
+      media_urls: resolvedList.length > 0 ? resolvedList : mediaUrl ? [mediaUrl] : null,
     };
-  });
+  }));
 
   const assetIds = Array.from(new Set(normalized
     .filter(post => !post.media_url && !post.media_urls?.length && post.media_asset_id)
@@ -150,13 +155,15 @@ export async function resolvePostMediaUrls<T extends PostMediaRecord>(posts: T[]
       if (typeof asset.id === 'string') assetsById.set(asset.id, asset);
     });
 
-    return normalized.map(post => {
+    const resolvedAssets = await Promise.all(normalized.map(async post => {
       if (post.media_url || post.media_urls?.length || !post.media_asset_id) return post;
       const asset = assetsById.get(post.media_asset_id);
-      const mediaUrl = toPublicMediaUrl(asset?.video_url)
-        || toPublicMediaUrl(asset?.original_path);
+      const mediaUrl = await resolveMediaUrl(toPublicMediaUrl(asset?.video_url))
+        || await resolveMediaUrl(toPublicMediaUrl(asset?.original_path));
       return mediaUrl ? { ...post, media_url: mediaUrl, media_urls: [mediaUrl] } : post;
-    }) as T[];
+    }));
+
+    return resolvedAssets as T[];
   } catch {
     // Posts still render when the optional media-assets lookup is unavailable.
     return normalized as T[];

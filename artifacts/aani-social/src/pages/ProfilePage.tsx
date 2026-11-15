@@ -25,6 +25,8 @@ import { useSeenStoryIds } from '@/lib/seenStories';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
+import { fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
@@ -259,6 +261,10 @@ export default function ProfilePage({
   const [profileSaving, setProfileSaving] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(person?.avatar_url || null);
   const [coverPreview, setCoverPreview] = useState<string | null>(person?.cover_url || null);
+  // صورة الملف والغلاف قد تكونان في bucket خاص: تُحوَّلان إلى رابط موقّع،
+  // ويبقى الرابط الأصلي معروضاً حتى يصل الموقّع. معاينات التحرير (blob:) تمرّ كما هي.
+  const resolvedAvatarPreview = useMediaUrl(avatarPreview);
+  const resolvedCoverPreview = useMediaUrl(coverPreview);
   const [avatarCropFile, setAvatarCropFile] = useState<File | null>(null);
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
@@ -741,7 +747,7 @@ export default function ProfilePage({
       };
 
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
-        supabase.from('profiles').select('id,username,full_name,display_name,avatar_url,gender,cover_url,cover_position_x,cover_position_y,location,city,job,birth_date,show_city,show_job,show_birth_date,website,bio,is_private,is_deactivated,notification_settings,appearance_preference,language_preference,hd_uploads,data_saver,font_preference,created_at,updated_at').eq('id', activeUserId).maybeSingle(),
+        supabase.from('profiles').select(PUBLIC_PROFILE_COLUMNS).eq('id', activeUserId).maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),
@@ -762,7 +768,13 @@ export default function ProfilePage({
         toast.error(`تعذر تحميل قصص أبرز القصص: ${highlightsError.message}`);
       }
 
-      if (prof) setPerson(prof as Profile);
+      if (prof) {
+        // أعمدة التفضيلات الشخصية لم تعد ممنوحة للقراءة عبر REST، فتُقرأ
+        // لصاحب الملف نفسه عبر aani_my_preferences (ترحيل 20270206000000).
+        const preferences = own ? await fetchMyPreferences() : null;
+        if (!active) return;
+        setPerson({ ...(prof as Profile), ...(preferences || {}) } as Profile);
+      }
       setFollowers(fCount || 0);
       setFollowing(fingCount || 0);
       setIsFollowing(Boolean(checkFollow));
@@ -2095,9 +2107,9 @@ export default function ProfilePage({
         onPointerCancel={handleCoverPointerEnd}
         style={{ touchAction: isEditingProfile ? 'none' : 'auto' }}
       >
-        {coverPreview && (
+        {resolvedCoverPreview && (
           <img
-            src={coverPreview}
+            src={resolvedCoverPreview}
             className="h-full w-full select-none object-cover"
             style={{ objectPosition: `${coverPosition.x}% ${coverPosition.y}%` }}
             alt=""
@@ -2137,8 +2149,8 @@ export default function ProfilePage({
             }}
           >
             <span className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full border-4 border-black">
-              {avatarPreview ? (
-                <img src={avatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
+              {resolvedAvatarPreview ? (
+                <img src={resolvedAvatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
               ) : (
                 <span className="flex h-full w-full items-center justify-center rounded-full bg-neutral-800">
                   <svg className="h-8 w-8 text-neutral-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
