@@ -254,24 +254,24 @@ export default function FollowRequestsSection({
     setBusyRequestId(requesterId);
     setError('');
 
-    if (accept) {
-      const { error: followError } = await supabase
-        .from('follows')
-        .insert({ follower_id: requesterId, following_id: currentUserId });
-      if (followError && followError.code !== '23505') {
-        setError('تعذر قبول طلب المتابعة. حاول مرة أخرى.');
-        setBusyRequestId(null);
-        return;
-      }
-    }
-
-    const { error: deleteError } = await supabase
-      .from('follow_requests')
-      .delete()
-      .eq('requester_id', requesterId)
-      .eq('recipient_id', currentUserId);
-    if (deleteError) {
-      setError(accept ? 'تم قبول الطلب لكن تعذر إزالته من القائمة.' : 'تعذر رفض طلب المتابعة. حاول مرة أخرى.');
+    // القبول والرفض يمرّان عبر دالة واحدة على مستوى قاعدة البيانات:
+    // هي وحدها تستطيع إنشاء صف follows لحساب خاص (بعد التحقق من وجود الطلب
+    // ومن أن المستدعي هو صاحب الطلب)، وتحذف الطلب في نفس المعاملة.
+    // الإدراج المباشر من العميل ممنوع بسياسة الإدخال على public.follows.
+    const { error: respondError } = await supabase.rpc('aani_respond_to_follow_request', {
+      p_requester_id: requesterId,
+      p_accept: accept,
+    });
+    if (respondError) {
+      console.error('[follow requests] تعذر الرد على طلب المتابعة:', respondError);
+      const missingFunction = respondError.code === '42883'
+        || respondError.code === 'PGRST202'
+        || /could not find the function|function .* does not exist/i.test(respondError.message || '');
+      setError(missingFunction
+        ? 'تعذر الرد على طلب المتابعة: دالة القبول غير مثبّتة في قاعدة البيانات. طبّق ملف الترحيل 20270204000000.'
+        : accept
+          ? 'تعذر قبول طلب المتابعة. حاول مرة أخرى.'
+          : 'تعذر رفض طلب المتابعة. حاول مرة أخرى.');
       setBusyRequestId(null);
       return;
     }
