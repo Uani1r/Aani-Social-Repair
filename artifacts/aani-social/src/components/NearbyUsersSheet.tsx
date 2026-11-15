@@ -290,13 +290,18 @@ export default function NearbyUsersSheet({
       if (disposed) return;
       channel = supabase
         .channel(`aani-nearby-${currentUserId}`)
+        // INSERT وUPDATE فقط: تغييرات الملف التي تُدخل شخصاً في القائمة أو تُخرجه
+        // منها (مدينة/ظهور/تعطيل). أحداث DELETE لا تُشترك عمداً — الفحص الدوري
+        // كل 6 ثوانٍ هو ما يلتقط الحذف واختفاء من أوقف الظهور.
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'profiles' },
-          () => {
-            // INSERT/UPDATE/DELETE على profiles → إعادة جلب من المصدر المعتمد
-            scheduleRefresh();
-          },
+          { event: 'INSERT', schema: 'public', table: 'profiles' },
+          () => scheduleRefresh(),
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'profiles' },
+          () => scheduleRefresh(),
         )
         .subscribe(status => {
           // فشل القناة صامت: الفحص الدوري يستمر، ونعيد بناء الاشتراك عند الحاجة

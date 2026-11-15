@@ -5,6 +5,12 @@
 --   artifacts/aani-social/supabase/migrations/20270202000000_profiles_realtime_nearby.sql
 --
 -- لم يُنفَّذ على أي قاعدة. آمن لإعادة التطبيق. لا يغيّر RLS ولا الصلاحيات.
+--
+-- يضيف public.profiles إلى منشور supabase_realtime لتصل أحداث INSERT وUPDATE
+-- التي تُدخل شخصاً في «الأشخاص القريبون» أو تُخرجه منها.
+--
+-- لا يضبط replica identity: العميل لا يشترك في أحداث DELETE، والحذف (وكذلك
+-- اختفاء من أوقف الظهور) يلتقطه الفحص الدوري في الشاشة كل 6 ثوانٍ.
 -- =====================================================================
 
 begin;
@@ -23,8 +29,6 @@ begin
   end if;
 end $$;
 
-alter table public.profiles replica identity full;
-
 notify pgrst, 'reload schema';
 
 commit;
@@ -38,13 +42,15 @@ select schemaname, tablename
 from pg_publication_tables
 where pubname = 'supabase_realtime' and tablename = 'profiles';
 
--- (2) replica identity؟ المتوقع: f (full)
+-- (2) تأكيد أن RLS ما زال مفعّلاً على profiles (لم يُمسّ)
+-- المتوقع: relrowsecurity = true
+select relname, relrowsecurity
+from pg_class
+where relname = 'profiles';
+
+-- (3) تأكيد أن replica identity لم تُغيَّر (d = default)
+-- هذا الملف لا يغيّرها؛ القيمة قد تكون d أو f من إعداد سابق مستقل.
 select c.relname, c.relreplident
 from pg_class c
 join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'public' and c.relname = 'profiles';
-
--- (3) تأكيد أن RLS ما زال مفعّلاً على profiles (لم يُمسّ)
-select relname, relrowsecurity
-from pg_class
-where relname = 'profiles';
