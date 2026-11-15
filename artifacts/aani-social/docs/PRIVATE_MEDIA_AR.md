@@ -123,18 +123,38 @@ select column_name from information_schema.column_privileges
 where table_schema = 'public' and table_name = 'profiles'
   and grantee = 'authenticated' and privilege_type = 'SELECT'
 order by column_name;
--- منح service_role التي يحتاجها خادم الإشعارات (fcm_token, notification_settings)
+-- أعمدة service_role (المتوقع خمسة فقط: avatar_url, cover_url, fcm_token, id, notification_settings)
 select column_name from information_schema.column_privileges
 where table_schema = 'public' and table_name = 'profiles'
   and grantee = 'service_role' and privilege_type = 'SELECT'
 order by column_name;
+-- ولا منح جدولي (المتوقع: صفر صفوف، أو postgres فقط)
+select grantee, privilege_type from information_schema.role_table_grants
+where table_schema = 'public' and table_name = 'profiles' and privilege_type = 'SELECT';
 ```
 
-## 5) ما تحتاجه service_role (ولا يُسحب)
+## 5) ما تحتاجه service_role (ويُقيَّد بدقة)
 
-`api-server/src/lib/supabaseAdmin.ts` يقرأ `fcm_token` و`notification_settings`
-من `profiles` بمفتاح `service_role` لإرسال إشعارات الدفع. ترحيل
-`20270206000000` يسحب منح الأعمدة من كل الأدوار المتصلة، ثم **يُعيد منح هذين
-العمودين لـ`service_role` صراحةً** حتى لا يعتمد على منح جدول مسحوب. لا يُمنح
-أي عمود آخر له، ولا يُمنح `anon` أو `authenticated` أي منهما.
+قاعدة الإنتاج تمنح `service_role` SELECT على `profiles` **بالكامل**، وهذا ما
+كان يجعله يقرأ كل الأعمدة. ترحيل `20270206000000` الآن:
+
+1. يسحب **منح الجدول** من `service_role` (كما من `anon` و`authenticated` و`PUBLIC`).
+2. يسحب **كل الأعمدة** منه.
+3. يُعيد منح خمسة أعمدة فقط، هي ما تستخدمه الخوادم فعلياً:
+
+| العمود | المستخدم |
+|---|---|
+| `fcm_token`, `notification_settings` | `api-server/src/lib/supabaseAdmin.ts` و`supabase/functions/send-push-notification/index.ts` — إشعارات الدفع |
+| `id` | `supabase/functions/login-with-username/index.ts` — تسجيل الدخول باسم المستخدم |
+| `avatar_url`, `cover_url` | `api-server/src/lib/mediaDb.ts` (`mediaInActiveUse`) — فحص مراجع الوسائط قبل حذفها |
+
+4. يفشل الترحيل إن بقي لـ`service_role` منح جدولي، أو ظهر عمود زائد، أو فُقد
+   أحد الخمسة، أو فقد `postgres` صلاحيته.
+
+**الأثر على الخادم:** لا شيء — كل استعلام خلفي حالي يستخدم هذه الأعمدة فقط.
+أي كود خلفي جديد يقرأ عموداً آخر من `profiles` بمفتاح الخدمة سيفشل بـ`42501`
+حتى يُضاف إلى القائمة أعلاه عمداً.
+
+**ملاحظة على التجاوز:** `service_role` يتجاوز RLS لا الصلاحيات. لذلك تقييد
+الأعمدة ينفذ عليه فعلاً، بخلاف سياسات RLS.
 

@@ -76,21 +76,29 @@ end $$;
 -- 1) سحب قراءة الأعمدة الخاصة والمشروطة بأعلام الظهور — سحب شامل
 --
 --    لا يكفي سحب الأعمدة: قد يكون SELECT ممنوحاً على مستوى الجدول أو لـ PUBLIC
---    أو لدور آخر (anon / authenticator / custom roles). لذلك:
---      أ) يُسحب SELECT على الجدول من PUBLIC و anon و authenticated و كل دور
---         يملكه فعلاً (فحص information_schema.column_privileges و role_table_grants).
+--    أو لدور آخر (anon / authenticator / service_role / custom roles). لذلك:
+--      أ) يُسحب SELECT على الجدول من PUBLIC و anon و authenticated و service_role
+--         وكل دور يملكه فعلاً (فحص information_schema.role_table_grants)،
+--         مع استثناء مالك الجدول و postgres و supabase_admin.
 --      ب) تُمنح قائمة الأعمدة العامة صراحةً لـ authenticated فقط.
---      ج) تُسحب الأعمدة الخاصة من كل دور آخر يملكها، بمن فيه service_role
---         ما لم يكن هو مالك الجدول (service_role يتجاوز RLS لكنه لا يُستخدم
---         في المتصفح؛ إبقاء منحه لا يضر، لكن السحب يمنع أي عميل مسرَّب).
+--      ج) تُسحب الأعمدة الخاصة من كل دور آخر يملكها.
 --
 --    الأعمدة المسحوبة: التفضيلات الشخصية + fcm_token + birth_date + city +
 --    location (الأخيران محكومان بـ show_city، و birth_date بـ show_birth_date).
 --
---    service_role مستثنى عمداً: خادم api-server يقرأ fcm_token و
---    notification_settings به لدعم إشعارات الدفع (api-server/src/lib/
---    supabaseAdmin.ts)، وهو لا يُستخدم في المتصفح. يُمنح العمودين صراحةً
---    بعده حتى لا يعتمد على منح جدول مسحوب.
+--    service_role: يُسحب منه منح الجدول أيضاً — قاعدة الإنتاج تمنحه SELECT على
+--    profiles بالكامل، وهذا ما يجعله يقرأ كل الأعمدة. يُسحب منح الجدول، وتُسحب
+--    كل الأعمدة، ثم يُمنح **فقط** ما تحتاجه الخوادم فعلياً:
+--      * fcm_token, notification_settings — إشعارات الدفع:
+--        api-server/src/lib/supabaseAdmin.ts و
+--        supabase/functions/send-push-notification/index.ts
+--      * id — تسجيل الدخول باسم المستخدم:
+--        supabase/functions/login-with-username/index.ts
+--      * avatar_url, cover_url — فحص مراجع الوسائط قبل حذفها:
+--        api-server/src/lib/mediaDb.ts (mediaInActiveUse)
+--    أي عمود آخر (birth_date, city, location, التفضيلات، الجنس، النبذة...)
+--    لم يعد مقروءاً حتى بمفتاح الخدمة، فلا يمكن تسريبه من أي مسار خلفي.
+--    مالك الجدول و postgres و supabase_admin لا تُمس.
 -- ---------------------------------------------------------------------
 do $$
 declare
@@ -99,14 +107,20 @@ declare
     'hd_uploads', 'data_saver', 'font_preference', 'fcm_token',
     'birth_date', 'city', 'location'
   ];
-  -- أدوار الخادم التي تحتاج وصولاً كاملاً، لا تُمس.
-  protected_roles text[] := array['service_role', 'postgres', 'supabase_admin'];
+  -- ما تحتاجه الخوادم فعلياً (مُوثّق أعلاه بالملفات).
+  server_column_names text[] := array[
+    'id', 'fcm_token', 'notification_settings', 'avatar_url', 'cover_url'
+  ];
+  -- مالك الجدول و أدوار الإدارة فقط. service_role ليس محمياً: يُقيَّد صراحةً.
+  protected_roles text[] := array['postgres', 'supabase_admin'];
   grantee_name text;
   private_columns text;
   public_columns text;
+  server_columns text;
+  other_columns text;
 begin
   -- أ) كل دور يملك SELECT على الجدول (بما فيه PUBLIC و anon و authenticated
-  --    و authenticator و أي دور مخصص)، مع استثناء أدوار الخادم.
+  --    و authenticator و service_role و أي دور مخصص)، مع استثناء أدوار الإدارة.
   for grantee_name in
     select distinct grant.grantee
     from information_schema.role_table_grants as grant
@@ -176,6 +190,39 @@ begin
   execute format('grant select (%s) on table public.profiles to authenticated', public_columns);
 
   raise notice 'أعمدة profiles العامة الممنوحة: %', public_columns;
+
+  -- د) service_role: لا منح جدولي، ولا أعمدة إلا ما تحتاجه الخوادم.
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    -- منح الجدول قد يكون عاد من الدور أعلاه أو من منح سابق: يُسحب صراحةً.
+    execute 'revoke select on table public.profiles from service_role';
+
+    select string_agg(quote_ident(column_name), ', ' order by column_name)
+    into server_columns
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and column_name = any(server_column_names);
+
+    if server_columns is null then
+      raise exception 'أعمدة الخادم المطلوبة مفقودة في public.profiles — راجع المخطط';
+    end if;
+
+    -- كل عمود لا يحتاجه الخادم يُسحب من service_role.
+    select string_agg(quote_ident(column_name), ', ' order by column_name)
+    into other_columns
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'profiles'
+      and column_name <> all(server_column_names);
+
+    if other_columns is not null then
+      execute format('revoke select (%s) on table public.profiles from service_role', other_columns);
+    end if;
+
+    execute format('grant select (%s) on table public.profiles to service_role', server_columns);
+
+    raise notice 'أعمدة profiles الممنوحة لـservice_role: %', server_columns;
+  end if;
 end $$;
 
 -- لا تُمنح city/location/birth_date لأي دور عبر REST: منح العمود في PostgreSQL
@@ -188,15 +235,9 @@ grant update (
   birth_date, city, location
 ) on table public.profiles to authenticated;
 
--- service_role: العمودان الوحيدان اللذان يقرأهما خادم الإشعارات
--- (api-server/src/lib/supabaseAdmin.ts → select=fcm_token,notification_settings).
--- يُمنحان صراحةً حتى لا يعتمد الخادم على منح جدول مسحوب، ولا يُمنح أي عمود آخر.
-do $$
-begin
-  if exists (select 1 from pg_roles where rolname = 'service_role') then
-    execute 'grant select (fcm_token, notification_settings) on table public.profiles to service_role';
-  end if;
-end $$;
+-- service_role مُقيَّد في القسم 1 (منح الجدول مسحوب، وكل عمود غير مطلوب
+-- مسحوب، ثم مُنح ما تحتاجه الخوادم فقط). لا منح إضافي هنا حتى لا يوجد
+-- مصدران للحقيقة يتعارضان عند إعادة التشغيل.
 
 -- ---------------------------------------------------------------------
 -- 1ب) قراءة الملف العام مع احترام أعلام الظهور
@@ -631,18 +672,54 @@ begin
   end if;
 
   -- خادم الإشعارات يجب أن يبقى قادراً على قراءة العمودين اللذين يحتاجهما
-  if exists (select 1 from pg_roles where rolname = 'service_role')
-     and (
-       select count(distinct column_name)
-       from information_schema.column_privileges
-       where table_schema = 'public'
-         and table_name = 'profiles'
-         and grantee = 'service_role'
-         and privilege_type = 'SELECT'
-         and column_name in ('fcm_token', 'notification_settings')
-     ) <> 2
-  then
-    raise exception 'service_role فقد قراءة fcm_token أو notification_settings — إشعارات الدفع ستتوقف';
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    -- لا منح SELECT جدولي لـservice_role (وإلا قرأ كل الأعمدة)
+    if exists (
+      select 1
+      from information_schema.role_table_grants
+      where table_schema = 'public'
+        and table_name = 'profiles'
+        and grantee = 'service_role'
+        and privilege_type = 'SELECT'
+    ) then
+      raise exception 'service_role ما زال يملك SELECT على جدول public.profiles بالكامل';
+    end if;
+
+    -- الأعمدة الممنوحة له هي المطلوبة بالضبط: لا أكثر ولا أقل
+    if exists (
+      select 1
+      from information_schema.column_privileges
+      where table_schema = 'public'
+        and table_name = 'profiles'
+        and grantee = 'service_role'
+        and privilege_type = 'SELECT'
+        and column_name <> all(array[
+          'id', 'fcm_token', 'notification_settings', 'avatar_url', 'cover_url'
+        ])
+    ) then
+      raise exception 'service_role يملك قراءة أعمدة profiles إضافية غير مطلوبة';
+    end if;
+
+    if (
+      select count(distinct column_name)
+      from information_schema.column_privileges
+      where table_schema = 'public'
+        and table_name = 'profiles'
+        and grantee = 'service_role'
+        and privilege_type = 'SELECT'
+        and column_name in (
+          'id', 'fcm_token', 'notification_settings', 'avatar_url', 'cover_url'
+        )
+    ) <> 5 then
+      raise exception 'service_role فقد قراءة عمود يحتاجه الخادم (fcm_token/notification_settings/id/avatar_url/cover_url) — الإشعارات أو تسجيل الدخول أو حذف الوسائط ستتعطل';
+    end if;
+  end if;
+
+  -- أدوار الإدارة ومالك الجدول لم تتأثر
+  if exists (select 1 from pg_roles where rolname = 'postgres') then
+    if not has_table_privilege('postgres', 'public.profiles', 'SELECT') then
+      raise exception 'postgres فقد SELECT على public.profiles — يجب ألا يتأثر';
+    end if;
   end if;
 
   -- الدالة تقرأ مسارات الملفات وتحتاج المساعد
@@ -669,10 +746,24 @@ commit;
 --      and grantee = 'authenticated' and privilege_type = 'SELECT'
 --    order by column_name;
 --
--- 2) لا منح SELECT على مستوى الجدول (المتوقع: صفر صفوف)
+-- 2) لا منح SELECT على مستوى الجدول لأي دور متصل (المتوقع: صفر صفوف،
+--    أو صف postgres فقط إن كان ممنوحاً صراحةً)
 --    select grantee, privilege_type
 --    from information_schema.role_table_grants
 --    where table_schema = 'public' and table_name = 'profiles' and privilege_type = 'SELECT';
+--
+-- 2ب) service_role: الأعمدة الخمسة فقط (لا جدول، لا أعمدة زائدة)
+--    select column_name
+--    from information_schema.column_privileges
+--    where table_schema = 'public' and table_name = 'profiles'
+--      and grantee = 'service_role' and privilege_type = 'SELECT'
+--    order by column_name;
+--    -- المتوقع: avatar_url, cover_url, fcm_token, id, notification_settings
+--
+-- 2ج) service_role لا يقرأ عموداً شخصياً (يجب أن يفشل 42501)
+--    set role service_role;
+--    select city from public.profiles limit 1;
+--    reset role;
 --
 -- 3) قراءة تفضيلات أو مدينة مستخدم آخر يجب أن تفشل (42501)
 --    select notification_settings from public.profiles where id = '<other_user>';

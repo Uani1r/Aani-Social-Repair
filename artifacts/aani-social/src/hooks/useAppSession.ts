@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
+import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
 import { flushUploadLedgerQueue } from '@/lib/uploadLedgerQueue';
 import type { Profile } from '@/lib/types';
@@ -121,16 +121,22 @@ export default function useAppSession() {
 
     (async () => {
       try {
-        // الأعمدة العامة فقط: أعمدة التفضيلات الشخصية لم تعد ممنوحة للقراءة
-        // عبر REST (ترحيل 20270206000000)، وتُقرأ بعدها لملف المستخدم نفسه.
+        // الأعمدة العامة فقط: أعمدة التفضيلات الشخصية و city/location/birth_date
+        // لم تعد ممنوحة للقراءة عبر REST (ترحيل 20270206000000)، وتُقرأ لصاحب
+        // الحساب عبر الدالتين المصرّح بهما أدناه.
         const { data, error } = await supabase.from('profiles').select(PUBLIC_PROFILE_COLUMNS).eq('id', user.id).maybeSingle();
         if (error) throw error;
         if (!active) return;
 
-        const preferences = await fetchMyPreferences();
+        const [preferences, conditionalFields] = await Promise.all([
+          fetchMyPreferences(),
+          fetchConditionalProfileFields(user.id),
+        ]);
         if (!active) return;
 
-        applyProfile(data ? ({ ...(data as Profile), ...(preferences || {}) } as Profile) : null);
+        applyProfile(data
+          ? ({ ...(data as Profile), ...(conditionalFields || {}), ...(preferences || {}) } as Profile)
+          : null);
       } catch (profileError) {
         // فشل تحميل الملف الشخصي (شبكة/RLS/انقطاع) لا يمنع رسم التطبيق
         console.warn('[app] تعذر تحميل الملف الشخصي — استخدام بيانات الجلسة:', profileError);
