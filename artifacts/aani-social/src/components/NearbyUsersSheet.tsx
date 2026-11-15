@@ -204,7 +204,7 @@ export default function NearbyUsersSheet({
         </button>
         <h1 className="nearby-users-title">الأشخاص القريبون</h1>
         <label className="nearby-users-toggle">
-          <span>ظهورك في القائمة</span>
+          <span>الظهور</span>
           <Switch
             className="nearby-users-switch"
             checked={nearbyVisible}
@@ -215,8 +215,8 @@ export default function NearbyUsersSheet({
         </label>
         {currentCity?.trim() ? (
           <span className="nearby-users-city">
-            <MapPin size={13} />
-            {currentCity}
+            <MapPin size={12} aria-hidden="true" />
+            <span className="nearby-users-city-name">{currentCity}</span>
           </span>
         ) : null}
       </header>
