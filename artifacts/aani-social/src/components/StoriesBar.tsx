@@ -39,6 +39,7 @@ import type {
   StoryTextOverlay,
   StoryTimedText,
 } from '@/components/stories/types';
+import { normalizeStoryAuthor } from '@/components/stories/types';
 import { useStoriesData } from '@/components/stories/useStoriesData';
 import { useStoryCreationActions } from '@/components/stories/useStoryCreationActions';
 import { useStoryViewerActions } from '@/components/stories/useStoryViewerActions';
@@ -61,6 +62,61 @@ import {
 // --- شريط القصص الموحد ---
 
 type Point = { x: number; y: number };
+
+// أعمدة ملف صاحب القصة الأصلية — avatar_url مطلوب صريحاً لصورة المتداخلة
+const ORIGINAL_AUTHOR_COLUMNS = 'id, username, full_name, display_name, avatar_url, gender';
+
+async function fetchProfileAuthor(profileId: string): Promise<StoryAuthor | null> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select(ORIGINAL_AUTHOR_COLUMNS)
+    .eq('id', profileId)
+    .maybeSingle();
+  if (error) {
+    console.warn('[stories] تعذر تحميل ملف صاحب القصة الأصلية:', error.message);
+    return null;
+  }
+  return normalizeStoryAuthor(data);
+}
+
+/**
+ * صاحب القصة الأصلية لقصة معاد نشرها.
+ * نحاول جلب القصة مع ملف صاحبها في استجابة واحدة (فلا تُفقد avatar_url في
+ * التحويل)، ونعود إلى طلبين منفصلين إن لم يدعم الخادم التضمين. تُعاد null
+ * فقط عند تعذّر الوصول فعلاً — والواجهة تعرض أيقونة افتراضية في هذه الحالة.
+ */
+async function fetchOriginalStoryAuthor(originalStoryId: string): Promise<StoryAuthor | null> {
+  const { data: embedded, error: embeddedError } = await supabase
+    .from('stories')
+    .select(`user_id, author:profiles(${ORIGINAL_AUTHOR_COLUMNS})`)
+    .eq('id', originalStoryId)
+    .maybeSingle();
+
+  const embeddedRow = embedded as { user_id?: unknown; author?: unknown } | null;
+  if (!embeddedError && embeddedRow) {
+    const embeddedAuthor = normalizeStoryAuthor(embeddedRow.author);
+    if (embeddedAuthor) return embeddedAuthor;
+    return typeof embeddedRow.user_id === 'string'
+      ? fetchProfileAuthor(embeddedRow.user_id)
+      : null;
+  }
+  if (embeddedError) {
+    console.warn('[stories] تعذر تضمين صاحب القصة الأصلية:', embeddedError.message);
+  }
+
+  // احتياط: طلبان منفصلان (قصة ثم ملف شخصي)
+  const { data: originalStory, error: storyError } = await supabase
+    .from('stories')
+    .select('user_id')
+    .eq('id', originalStoryId)
+    .maybeSingle();
+  if (storyError) {
+    console.warn('[stories] تعذر تحميل القصة الأصلية:', storyError.message);
+    return null;
+  }
+  const ownerId = (originalStory as { user_id?: unknown } | null)?.user_id;
+  return typeof ownerId === 'string' ? fetchProfileAuthor(ownerId) : null;
+}
 
 export default function StoriesBar({
   userId,
@@ -1323,41 +1379,34 @@ export default function StoriesBar({
     ? videoDurationForStory?.durationSeconds ?? 5
     : null;
   const currentStoryFilter = decodeStoryFilterKey(currentStory?.filter_key ?? undefined);
+  // صاحب القصة الأصلية لقصص إعادة المشاركة: يُجلب مرة واحدة لكل معرّف أصل
+  // ويُحفظ في كاش، فلا يختفي (ولا تُفقد صورته) عند كل تحديث لبيانات القصص.
+  const originalAuthorCacheRef = useRef<Map<string, StoryAuthor | null>>(new Map());
+  const currentOriginalStoryId = currentStory?.original_story_id ?? null;
   useEffect(() => {
-    const originalStoryId = currentStory?.original_story_id;
-    if (!originalStoryId || !supabaseConfigured) {
+    if (!currentOriginalStoryId || !supabaseConfigured) {
       setOriginalStoryAuthor(null);
       return;
     }
 
-    let active = true;
-    setOriginalStoryAuthor(null);
-    void (async () => {
-      try {
-        const { data: originalStory, error } = await supabase
-          .from('stories')
-          .select('user_id')
-          .eq('id', originalStoryId)
-          .maybeSingle();
-        if (error) throw error;
-        if (!originalStory) return;
+    const cached = originalAuthorCacheRef.current.get(currentOriginalStoryId);
+    if (cached !== undefined) {
+      setOriginalStoryAuthor(cached);
+      return;
+    }
 
-        const { data: author, error: authorError } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url, gender')
-          .eq('id', originalStory.user_id)
-          .maybeSingle();
-        if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة الأصلية:', authorError);
-        if (active) setOriginalStoryAuthor(normalizeStoryAuthor(author));
-      } catch (error) {
-        if (active) console.warn('[stories] تعذر تحميل بيانات القصة الأصلية:', error);
-      }
+    let active = true;
+    void (async () => {
+      const author = await fetchOriginalStoryAuthor(currentOriginalStoryId);
+      if (!active) return;
+      originalAuthorCacheRef.current.set(currentOriginalStoryId, author);
+      setOriginalStoryAuthor(author);
     })();
 
     return () => {
       active = false;
     };
-  }, [currentStory]);
+  }, [currentOriginalStoryId]);
   const currentStoryFilterOverlay = getStoryFilterOverlay(currentStoryFilter.id);
   const { loadStoryViewerEntries } = useStoryViewerData({
     userId,
