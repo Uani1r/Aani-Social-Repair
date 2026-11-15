@@ -27,9 +27,23 @@
 --   * إعادة إنشاء الحارس restrictive aani_follows_private_guard بنفس القاعدة،
 --     بلا اختصار «وجود طلب» الذي كان يسمح بالمتابعة قبل الموافقة.
 --
--- لا يعدّل: جداول، بيانات، سياسات القراءة للمنشورات، القصص، الإشعارات،
--- أو أي ميزة أخرى. الملف السابق 20270203000000 يبقى مرجع حماية القراءة،
--- ويعتمد الآن على صفوف follows التي لا تُنشأ إلا بموافقة.
+-- لا يغيّر سلوك ميزة أخرى: سياسات قراءة المنشورات، القصص، الإشعارات، أو أي
+-- جدول آخر تبقى كما هي. التعديل الوحيد على بنية جدول هو توافق أعمدة
+-- public.user_blocks (إضافة blocked_user_id ونقل البيانات ومزامنتها)، ولا
+-- يحذف صفاً ولا يغيّر مفتاحاً أساسياً قائماً. الملف السابق 20270203000000
+-- يبقى مرجع حماية القراءة، ويعتمد الآن على صفوف follows التي لا تُنشأ إلا بموافقة.
+--
+-- توافق مع قاعدة الإنتاج (لا مع قاعدة جديدة فقط):
+--   * public.user_blocks في الإنتاج أُنشئ بعمود blocked_id وبمفتاح أساسي
+--     (blocker_id, blocked_id) — راجع APPLY_MANUALLY_story_views_likes.sql
+--     سطر 7-13. `create table if not exists` لا يضيف أعمدة، فكان الفهرس على
+--     blocked_user_id يفشل هناك. صار الترتيب: توافق الأعمدة أولاً، ثم الفهارس.
+--     يُضاف blocked_user_id، تُنقل إليه كل الصفوف، ويُزامَن العمودان بمشغّل
+--     BEFORE حتى تعمل الكتابة بأي من الاسمين دون المساس بالمفتاح الأساسي.
+--   * public.follow_requests غير موجود في الإنتاج؛ يُنشأ هنا. وإن وُجد بمخطط
+--     ناقص، يُضاف created_at ويُوقف الترحيل برسالة واضحة إن غاب عمودا الطلب.
+--   * مشغّلات إشعار الطلب تُنشأ فقط إذا كان public.notifications يحوي كل
+--     الأعمدة التي تكتبها؛ وإلا تُتخطى بتحذير بدل إسقاط كل إدخال طلب.
 --
 -- آمن للتكرار. لا يُنفَّذ تلقائياً من التطبيق.
 begin;
@@ -62,6 +76,16 @@ begin
 end $$;
 
 -- user_blocks + aani_is_user_blocked (تعريف 20261115000000)
+--
+-- توافق مع قاعدة الإنتاج: الإنتاج أنشأ الجدول بعمود اسمه blocked_id
+-- (APPLY_MANUALLY_story_views_likes.sql سطر 7-13) بمفتاح أساسي
+-- (blocker_id, blocked_id). و`create table if not exists` لا يضيف أعمدة،
+-- فكان إنشاء الفهرس على blocked_user_id يفشل هناك. لذلك الترتيب الآن:
+--   1) إنشاء الجدول بالشكل القياسي إن غاب.
+--   2) معالجة التوافق: إضافة blocked_user_id ونقل البيانات من blocked_id.
+--   3) مزامنة العمودين بمشغّل حتى تعمل الكتابة بأي من الاسمين.
+--   4) الفهارس (بعد ضمان وجود الأعمدة).
+--   5) RLS والصلاحيات.
 create table if not exists public.user_blocks (
   blocker_id uuid not null references public.profiles(id) on delete cascade,
   blocked_user_id uuid not null references public.profiles(id) on delete cascade,
@@ -70,30 +94,132 @@ create table if not exists public.user_blocks (
   constraint aani_user_blocks_not_self check (blocker_id <> blocked_user_id)
 );
 
+-- ---------------------------------------------------------------------
+-- 0أ) توافق الأعمدة: blocked_id (الإنتاج) → blocked_user_id (القياسي)
+--     لا صف يُفقد، ولا تكرار، ولا مساس بالمفتاح الأساسي القائم.
+-- ---------------------------------------------------------------------
+do $$
+declare
+  has_blocked_user_id boolean;
+  has_blocked_id boolean;
+  null_rows bigint;
+  duplicate_pairs bigint;
+begin
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_user_id'
+  ) into has_blocked_user_id;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_id'
+  ) into has_blocked_id;
+
+  if not has_blocked_user_id and not has_blocked_id then
+    raise exception 'public.user_blocks لا يحتوي blocked_user_id ولا blocked_id — راجع مخطط الجدول قبل التطبيق';
+  end if;
+
+  if not has_blocked_user_id then
+    -- عمود بلا NOT NULL أولاً، حتى لا يفشل الإضافة على صفوف قائمة.
+    -- لا نضيف مفتاحاً أجنبياً هنا: blocked_id يحمل أصلاً FK بـON DELETE CASCADE،
+    -- فحذف الملف الشخصي يحذف الصف كاملاً قبل أن يهمّ العمود الجديد.
+    execute 'alter table public.user_blocks add column blocked_user_id uuid';
+
+    -- نقل كل الصفوف: القيمة مصدرها عمود فريد داخل (blocker_id)، فلا تكرار.
+    execute 'update public.user_blocks set blocked_user_id = blocked_id where blocked_user_id is null';
+  else
+    -- عمود موجود مسبقاً (ترحيل جزئي سابق): أكمل ما بقي فارغاً من blocked_id.
+    if has_blocked_id then
+      execute 'update public.user_blocks set blocked_user_id = blocked_id where blocked_user_id is null';
+    end if;
+  end if;
+
+  -- لا صف بلا قيمة بعد النقل (وإلا فُقدت علاقة حظر بصمت).
+  execute 'select count(*) from public.user_blocks where blocked_user_id is null' into null_rows;
+  if null_rows > 0 then
+    raise exception 'public.user_blocks: % صفاً بلا blocked_user_id بعد النقل — أوقف الترحيل وراجع البيانات يدوياً', null_rows;
+  end if;
+
+  -- لا تكرار لـ(blocker_id, blocked_user_id): الفهرس الفريد أدناه يفشل بصمت غامض بدونه.
+  execute $q$
+    select count(*) from (
+      select 1 from public.user_blocks group by blocker_id, blocked_user_id having count(*) > 1
+    ) as duplicates
+  $q$ into duplicate_pairs;
+  if duplicate_pairs > 0 then
+    raise exception 'public.user_blocks: % زوجاً مكرراً (blocker_id, blocked_user_id) — أوقف الترحيل وعالج التكرار يدوياً', duplicate_pairs;
+  end if;
+
+  -- الآن يمكن فرض NOT NULL على العمود القياسي.
+  execute 'alter table public.user_blocks alter column blocked_user_id set not null';
+
+  if has_blocked_id then
+    raise warning 'public.user_blocks يحتوي العمودين blocked_id و blocked_user_id: تم نقل البيانات ومزامنتها بمشغّل. لا تُعِد تطبيق 20270129000000 أو 20270130000000 بعدهما (يرفضان وجود العمودين معاً).';
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 0أ-2) مزامنة العمودين عند الكتابة
+--     الكتابة القياسية تستخدم blocked_user_id (aani_block_user في
+--     20261115000000)، والإنتاج يفرض NOT NULL على blocked_id عبر المفتاح
+--     الأساسي. مشغّل BEFORE يملأ الآخر قبل فحص القيود، فتعمل الكتابة بأي اسم
+--     ولا يحدث تعارض بين العمودين. blocked_user_id هو المرجع عند الاختلاف.
+-- ---------------------------------------------------------------------
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_id'
+  ) then
+    -- لا عمود قديم: لا حاجة لمزامنة.
+    return;
+  end if;
+
+  execute $fn$
+    create or replace function public.aani_user_blocks_sync_blocked_columns()
+    returns trigger
+    language plpgsql
+    set search_path = ''
+    as $body$
+    begin
+      if tg_op = 'INSERT' then
+        -- أي من الاسمين يكفي عند الإدراج: يُملأ الآخر قبل فحص NOT NULL والمفتاح.
+        new.blocked_user_id := coalesce(new.blocked_user_id, new.blocked_id);
+        new.blocked_id := new.blocked_user_id;
+      elsif new.blocked_user_id is distinct from old.blocked_user_id then
+        -- العمود القياسي تغيّر: هو المرجع.
+        new.blocked_id := new.blocked_user_id;
+      elsif new.blocked_id is distinct from old.blocked_id then
+        -- عميل قديم يكتب blocked_id: انقل التغيير إلى القياسي.
+        new.blocked_user_id := new.blocked_id;
+      end if;
+      return new;
+    end;
+    $body$;
+  $fn$;
+
+  execute 'revoke all on function public.aani_user_blocks_sync_blocked_columns() from public, anon, authenticated';
+
+  execute 'drop trigger if exists aani_user_blocks_sync_blocked_columns_trg on public.user_blocks';
+  execute $trg$
+    create trigger aani_user_blocks_sync_blocked_columns_trg
+      before insert or update on public.user_blocks
+      for each row execute function public.aani_user_blocks_sync_blocked_columns()
+  $trg$;
+end $$;
+
+-- فهرس فريد يخدم `on conflict (blocker_id, blocked_user_id)` في aani_block_user.
+-- على قاعدة الإنتاج المفتاح الأساسي هو (blocker_id, blocked_id)، فلا يوجد قيد
+-- فريد على الاسم القياسي بدونه، ويفشل الإدراج برسالة "no unique constraint".
+create unique index if not exists aani_user_blocks_blocker_blocked_user_uidx
+  on public.user_blocks (blocker_id, blocked_user_id);
+
+-- فهرس البحث — بعد ضمان وجود blocked_user_id (سبب فشل التطبيق سابقاً).
 create index if not exists aani_user_blocks_blocked_user_idx
   on public.user_blocks (blocked_user_id, blocker_id);
 
 alter table public.user_blocks enable row level security;
 grant select, insert, delete on public.user_blocks to authenticated;
-
--- قاعدة قديمة أنشأت عمود الحجب باسم blocked_id بدل blocked_user_id.
-do $$
-begin
-  if not exists (
-    select 1 from information_schema.columns
-    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_user_id'
-  ) then
-    if exists (
-      select 1 from information_schema.columns
-      where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_id'
-    ) then
-      execute 'alter table public.user_blocks add column blocked_user_id uuid references public.profiles(id) on delete cascade';
-      execute 'update public.user_blocks set blocked_user_id = blocked_id where blocked_user_id is null';
-    else
-      raise exception 'public.user_blocks لا يحتوي blocked_user_id ولا blocked_id — راجع مخطط الجدول قبل التطبيق';
-    end if;
-  end if;
-end $$;
 
 create or replace function public.aani_is_user_blocked(p_user_a uuid, p_user_b uuid)
 returns boolean
@@ -135,6 +261,29 @@ create table if not exists public.follow_requests (
   primary key (requester_id, recipient_id),
   constraint aani_follow_requests_not_self check (requester_id <> recipient_id)
 );
+
+-- توافق: إن كان الجدول موجوداً بمخطط ناقص (نسخة قديمة/جزئية)، `create table
+-- if not exists` لا يضيف شيئاً. نضيف created_at لأنه آمن (له افتراضي)، ونوقف
+-- الترحيل برسالة واضحة إن غاب عمودا الطلب نفسه — لا يمكن اختراع بياناتهما.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'follow_requests' and column_name = 'created_at'
+  ) then
+    execute 'alter table public.follow_requests add column created_at timestamptz not null default now()';
+  end if;
+
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'follow_requests' and column_name = 'requester_id'
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'follow_requests' and column_name = 'recipient_id'
+  ) then
+    raise exception 'public.follow_requests يفتقد requester_id أو recipient_id — راجع المخطط يدوياً قبل التطبيق';
+  end if;
+end $$;
 
 create index if not exists aani_follow_requests_recipient_created_idx
   on public.follow_requests (recipient_id, created_at desc);
@@ -182,10 +331,35 @@ create policy aani_follow_requests_block_guard on public.follow_requests
   with check (not public.aani_is_user_blocked(requester_id, recipient_id));
 
 -- إشعار صاحب الحساب عند وصول الطلب: لا يُنشأ إلا إذا كان جدول notifications
--- موجوداً (بعض القواعد لا تحتويه). لا يُفشل الترحيل إذا غاب.
+-- موجوداً ويحوي كل الأعمدة التي تكتبها الدالة. مشغّل يكتب عموداً مفقوداً يفشل
+-- عند كل إدخال طلب، فيُسقط إدراج follow_requests كله (المعاملة تُرجع)، لذلك
+-- الفحص هنا شرط لإنشاء المشغّل لا تحسيناً.
 do $$
+declare
+  notifications_ready boolean := false;
+  required_columns text[] := array['user_id', 'actor_id', 'type', 'content', 'reference_id', 'is_read', 'created_at'];
+  missing_columns text;
 begin
   if to_regclass('public.notifications') is not null then
+    select string_agg(required.column_name, ', ' order by required.column_name)
+    into missing_columns
+    from unnest(required_columns) as required(column_name)
+    where not exists (
+      select 1 from information_schema.columns as col
+      where col.table_schema = 'public'
+        and col.table_name = 'notifications'
+        and col.column_name = required.column_name
+    );
+
+    notifications_ready := missing_columns is null;
+
+    if not notifications_ready then
+      raise warning 'public.notifications يفتقد الأعمدة (%): تم تخطي مشغّلي إشعار طلب المتابعة. الإشعارات غير مفعّلة، وطلبات المتابعة تعمل.',
+        missing_columns;
+    end if;
+  end if;
+
+  if notifications_ready then
     create or replace function public.aani_notify_follow_request()
     returns trigger
     language plpgsql
@@ -462,6 +636,25 @@ commit;
 -- =====================================================================
 -- استعلامات تحقق يدوية بعد التطبيق (شغّلها في SQL Editor — ليست جزءاً من الترحيل)
 -- =====================================================================
+-- 0) توافق user_blocks: العمودان، لا صف بلا قيمة، لا تكرار، والفهرس موجود
+--    select column_name from information_schema.columns
+--    where table_schema = 'public' and table_name = 'user_blocks' order by column_name;
+--    -- المتوقع أن يظهر blocked_user_id دائماً، و blocked_id فقط على قاعدة الإنتاج القديمة
+--
+--    select count(*) as rows_total,
+--           count(*) filter (where blocked_user_id is null) as missing,
+--           count(distinct (blocker_id, blocked_user_id)) as distinct_pairs
+--    from public.user_blocks;
+--    -- المتوقع: missing = 0، و distinct_pairs = rows_total
+--
+--    select indexname, indexdef from pg_indexes
+--    where schemaname = 'public' and tablename = 'user_blocks' order by indexname;
+--    -- المتوقع: aani_user_blocks_blocked_user_idx و aani_user_blocks_blocker_blocked_user_uidx
+--
+--    -- العمودان متزامنان (المتوقع: صفر صفوف)
+--    select count(*) from public.user_blocks
+--    where blocked_id is not null and blocked_id <> blocked_user_id;
+--
 -- 1) سياسات follows: سياستان متساهلتان (SELECT و INSERT) + حارسان restrictive
 --    select policyname, permissive, cmd, qual, with_check
 --    from pg_policies
@@ -494,3 +687,8 @@ commit;
 --    insert into public.follows (follower_id, following_id) values ('<B>', '<D>');
 --    -- B يستدعي الدالة بمعرّف طلب ليس له: يجب أن يفشل
 --    select public.aani_respond_to_follow_request('<C>', true);  -- exception 22023
+--
+-- 5) الحظر يعمل بالعمود القياسي بعد المزامنة (المتوقع: صف واحد ثم صفر)
+--    select public.aani_block_user('<B>');
+--    select count(*) from public.user_blocks where blocker_id = auth.uid() and blocked_user_id = '<B>';
+--    select public.aani_unblock_user('<B>');
