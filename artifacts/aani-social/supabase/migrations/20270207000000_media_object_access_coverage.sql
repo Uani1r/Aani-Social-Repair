@@ -201,6 +201,7 @@ declare
   has_messages_story_media boolean := false;
   has_messages_story_thumbnail boolean := false;
   has_messages_content boolean := false;
+  has_story_view_function boolean := false;
   has_notification_metadata boolean := false;
   has_sounds boolean := false;
   has_sounds_source_post boolean := false;
@@ -259,6 +260,12 @@ begin
   into has_comment_attachments;
 
   select to_regclass('public.messages') is not null into has_messages;
+
+  select exists (
+    select 1 from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public' and proc.proname = 'aani_can_view_story'
+  ) into has_story_view_function;
 
   -- حقول وسائط المحادثات: تُفحص أعمدةً فعلية، فلا يُبنى شرط على عمود غائب
   -- (قاعدة بُنيت من schema.sql لا تحتوي story_* ولا image_url).
@@ -526,8 +533,9 @@ begin
         )$term$;
 
       -- الستوري المعاد إرسالها داخل المحادثة: صاحبها قد يكون طرفاً ثالثاً،
-      -- فيُسمح فقط إذا كان المستدعي يملك حق رؤية الستوري نفسها عبر story_id.
-      if has_messages_story_media and has_messages_story_thumbnail then
+      -- فيُسمح فقط إذا كان المستدعي يملك حق رؤية الستوري نفسها عبر story_id
+      -- (وبوجود دالة رؤية القصص فعلاً).
+      if has_messages_story_media and has_messages_story_thumbnail and has_story_view_function then
         term := term || $term$
         or (
           (
@@ -757,8 +765,18 @@ begin
       raise exception 'عمود messages.story_thumbnail_url غير مشمول في قرار الوسائط';
     end if;
 
-    -- مشاركة ستوري بطرف ثالث: لا تُقبل إلا بصلاحية رؤية الستوري نفسها
-    if source not like '%aani_can_view_story(message.story_id%' then
+    -- مشاركة ستوري بطرف ثالث: لا تُقبل إلا بصلاحية رؤية الستوري نفسها،
+    -- ويُشترط ذلك فقط عند وجود أعمدة الستوري ودالة رؤية القصص.
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'messages' and column_name = 'story_media_url'
+    )
+    and exists (
+      select 1 from pg_proc as proc
+      join pg_namespace as namespace on namespace.oid = proc.pronamespace
+      where namespace.nspname = 'public' and proc.proname = 'aani_can_view_story'
+    )
+    and source not like '%aani_can_view_story(message.story_id%' then
       raise exception 'مشاركة الستوري في المحادثة بلا فحص صلاحية رؤية الستوري';
     end if;
   end if;
