@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { Link } from 'wouter';
 import { MoreVertical, Trash2, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
+import DefaultAvatar from '@/components/DefaultAvatar';
 import UserIdentity from '@/components/UserIdentity';
 import { cleanUsername, displayName, formatDate } from '@/lib/types';
 
@@ -20,6 +22,32 @@ type StoryHeaderProps = Pick<
   | 'onCloseViewer'
 >;
 
+/** قطر صورة الناشر في وضع إعادة المشاركة (بكسل). */
+const MAIN_AVATAR_SIZE = 44;
+/** حجم الصورة المتداخلة كنسبة من الصورة الرئيسية. */
+const MINI_AVATAR_RATIO = 0.42;
+
+/**
+ * صورة داخل دائرة: تعرض الصورة إن وُجدت، وإلا — أو عند فشل تحميلها —
+ * تعرض الأيقونة الرمادية الافتراضية. لا تبقى الدائرة فارغة أبداً.
+ */
+function AvatarFill({ src, alt = '' }: { src: string | null; alt?: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (!src || failed) {
+    return <DefaultAvatar className="h-full w-full" />;
+  }
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+    />
+  );
+}
+
 export default function StoryHeader({
   currentStory,
   originalStoryAuthor,
@@ -31,8 +59,9 @@ export default function StoryHeader({
   onDeleteStory,
   onCloseViewer,
 }: StoryHeaderProps) {
-  // قصة معاد نشرها: تظهر صورة صاحب القصة الأصلية مصغّرة ومتداخلة أسفل صورة
-  // الناشر وتفتح ملفه الشخصي — بلا شريط ريبوست سفلي وبلا أيقونة ثانية.
+  // قصة معاد نشرها: صورة صاحب القصة الأصلية متداخلة أسفل صورة الناشر.
+  // الدائرة الصغيرة تظهر دائماً في وضع إعادة المشاركة، حتى لو غاب avatar_url
+  // أو تعذّر جلب صاحب القصة الأصلية (تُعرض أيقونة رمادية افتراضية).
   const isReshare = Boolean(currentStory.original_story_id);
   const originalAuthorId = originalStoryAuthor?.id ?? null;
   const originalAuthorName = displayName(originalStoryAuthor) || 'صاحب القصة الأصلية';
@@ -41,11 +70,84 @@ export default function StoryHeader({
   return (
     <>
       {showUI && (
-        <div className="absolute inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent" style={{ top: 'calc(1.5rem + env(safe-area-inset-top))' }}>
-          <div className="flex min-w-0 flex-col items-start gap-1">
-            <div className="flex min-w-0 items-center gap-4">
-              {/* صورة الناشر: رابط مستقل لملفه الشخصي */}
-              <span className="relative inline-flex shrink-0">
+        <div
+          className="absolute inset-x-0 z-30 flex items-center justify-between px-3 pt-2 text-white bg-gradient-to-b from-black/80 via-black/40 to-transparent"
+          style={{ top: 'calc(1.5rem + env(safe-area-inset-top))', overflow: 'visible' }}
+        >
+          <div className="flex min-w-0 flex-col items-start gap-1" style={{ overflow: 'visible' }}>
+            <div className="flex min-w-0 items-center gap-4" style={{ overflow: 'visible' }}>
+              {isReshare ? (
+                // حاوية مستقلة: صورة الناشر + صورة صاحب القصة الأصلية المتداخلة.
+                <div
+                  style={{
+                    position: 'relative',
+                    width: MAIN_AVATAR_SIZE,
+                    height: MAIN_AVATAR_SIZE,
+                    flexShrink: 0,
+                    overflow: 'visible',
+                  }}
+                >
+                  <Link
+                    href={`/profile/${currentStory.user_id}`}
+                    aria-label={`ملف ${displayName(currentStory.author) || 'ناشر القصة'}`}
+                    style={{ display: 'block', width: '100%', height: '100%' }}
+                  >
+                    <span
+                      style={{
+                        display: 'block',
+                        width: '100%',
+                        height: '100%',
+                        borderRadius: '50%',
+                        overflow: 'hidden',
+                        border: '2px solid #333',
+                        backgroundColor: '#0f0f13',
+                        boxSizing: 'border-box',
+                      }}
+                    >
+                      <AvatarFill
+                        key={currentStory.author?.avatar_url ?? 'no-avatar'}
+                        src={currentStory.author?.avatar_url ?? null}
+                      />
+                    </span>
+                  </Link>
+
+                  {/* الصورة المصغّرة: 42% من الرئيسية، أسفل-يسار، بإطار وخلفية داكنة */}
+                  <span
+                    style={{
+                      position: 'absolute',
+                      bottom: -2,
+                      left: -2,
+                      width: `${MINI_AVATAR_RATIO * 100}%`,
+                      height: `${MINI_AVATAR_RATIO * 100}%`,
+                      borderRadius: '50%',
+                      overflow: 'hidden',
+                      backgroundColor: '#0f0f13',
+                      border: '2px solid #0f0f13',
+                      boxSizing: 'border-box',
+                      zIndex: 2,
+                      display: 'block',
+                    }}
+                  >
+                    {originalAuthorId ? (
+                      <Link
+                        href={`/profile/${originalAuthorId}`}
+                        aria-label={`ملف ${originalAuthorName}`}
+                        title={originalAuthorName}
+                        style={{ display: 'block', width: '100%', height: '100%' }}
+                      >
+                        <AvatarFill
+                          key={originalStoryAuthor?.avatar_url ?? 'no-avatar'}
+                          src={originalStoryAuthor?.avatar_url ?? null}
+                          alt={originalAuthorName}
+                        />
+                      </Link>
+                    ) : (
+                      <AvatarFill src={null} />
+                    )}
+                  </span>
+                </div>
+              ) : (
+                // القصص العادية: صورة الناشر كما هي بلا أي تغيير.
                 <Link
                   href={`/profile/${currentStory.user_id}`}
                   aria-label={`ملف ${displayName(currentStory.author) || 'ناشر القصة'}`}
@@ -53,19 +155,7 @@ export default function StoryHeader({
                 >
                   <Avatar profile={currentStory.author} storyBorder={false} />
                 </Link>
-                {isReshare && originalAuthorId && (
-                  // صورة صاحب القصة الأصلية: دائرية صغيرة بإطار أبيض، متداخلة أسفل
-                  // صورة الناشر، وتفتح ملفه الشخصي (رابط مستقل بلا تداخل HTML).
-                  <Link
-                    href={`/profile/${originalAuthorId}`}
-                    aria-label={`ملف ${originalAuthorName}`}
-                    title={originalAuthorName}
-                    className="absolute -bottom-1 -left-1 z-10 inline-flex overflow-hidden rounded-full bg-white ring-2 ring-white shadow-md"
-                  >
-                    <Avatar profile={originalStoryAuthor} storyBorder={false} small />
-                  </Link>
-                )}
-              </span>
+              )}
               {/* اسم الناشر واسم المستخدم والتاريخ: رابط مستقل لملف الناشر */}
               <Link href={`/profile/${currentStory.user_id}`} className="min-w-0 flex-1">
                 <div className="min-w-0 flex-1">
