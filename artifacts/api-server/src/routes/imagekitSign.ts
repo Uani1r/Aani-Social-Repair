@@ -6,7 +6,7 @@ import { readSupabaseAdminConfig } from "../lib/supabaseAdmin";
 
 const router = Router();
 
-/** صلاحية الرابط الموقّع: ساعة واحدة (الحد الأقصى المقبول من ImageKit). */
+/** صلاحية الرابط الموقّع: ساعة واحدة. */
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 
 function readImageKitConfig() {
@@ -69,14 +69,74 @@ async function canReadMediaObject(
 }
 
 /**
- * رابط ImageKit موقّع (Signed URL).
- * الصيغة الرسمية: signature = HMAC-SHA1(privateKey, path + expire).
- * لا يفيد التوقيع إلا إذا كانت الملفات على Restricted access في ImageKit،
- * وإلا بقي الرابط العادي صالحاً. راجع docs/PRIVATE_MEDIA_AR.md.
+ * يبني رابط ImageKit موقّعاً بالصيغة الرسمية:
+ *   {urlEndpoint}/{relativePath}?ik-t={expire}&ik-s={signature}
+ *
+ * signature = HMAC-SHA1(privateKey, relativePath + expire) بصيغة hex صغيرة،
+ * حيث relativePath هو المسار **بعد** حذف الـendpoint، ويشمل بادئة التحويلات
+ * (`tr:w-400,h-300/`) إن وُجدت، ويُرمَّز percent-encoding قبل التوقيع لأن
+ * ImageKit تتحقق من المسار كما يصلها مرمّزاً (أسماء غير لاتينية، مسافات).
+ *
+ * ملاحظة صريحة: إنشاء الرابط لا يُثبت صحته. الصحة تُختبر بفتحه فعلياً مع
+ * تفعيل "Restrict unsigned URLs" في ImageKit: الرابط بلا توقيع يُرفض 401،
+ * والموقّع يُقبل، والموقّع المنتهي يُرفض. راجع docs/PRIVATE_MEDIA_AR.md.
  */
-function buildSignedUrl(urlEndpoint: string, privateKey: string, objectPath: string, expire: number): string {
-  const signature = crypto.createHmac("sha1", privateKey).update(`${objectPath}${expire}`).digest("hex");
-  return `${urlEndpoint}${objectPath}?expire=${expire}&signature=${signature}`;
+export function buildImageKitSignedUrl(
+  urlEndpoint: string,
+  privateKey: string,
+  objectPath: string,
+  expire: number,
+): string {
+  const endpoint = urlEndpoint.replace(/\/+$/, "");
+  // الـendpoint قد يحمل معرّف الحساب في مساره (/abc123)؛ يُحذف قبل التوقيع
+  // لأن ImageKit توقّع المسار **بعد** الـendpoint فقط.
+  let endpointPath = "";
+  try {
+    endpointPath = new URL(endpoint).pathname.replace(/\/+$/, "");
+  } catch {
+    endpointPath = "";
+  }
+
+  let relativePath = objectPath.replace(/^\/+/, "");
+  if (endpointPath && endpointPath !== "/") {
+    const prefix = endpointPath.replace(/^\/+/, "");
+    if (relativePath === prefix) relativePath = "";
+    else if (relativePath.startsWith(`${prefix}/`)) relativePath = relativePath.slice(prefix.length + 1);
+  }
+
+  // فك أي ترميز وصل من العميل ثم إعادة ترميزه مرة واحدة، حتى لا يُرمَّز مرتين
+  // (%20 يصبح %2520) وحتى يبقى الفاصل / كما هو.
+  const encodedPath = relativePath
+    .split("/")
+    .filter(Boolean)
+    .map(segment => {
+      let decoded = segment;
+      try {
+        decoded = decodeURIComponent(segment);
+      } catch {
+        // مقطع بترميز غير صالح: يُرمَّز كما وصل.
+      }
+      return encodeURIComponent(decoded);
+    })
+    .join("/");
+
+  const signature = crypto
+    .createHmac("sha1", privateKey)
+    .update(`${encodedPath}${expire}`)
+    .digest("hex")
+    .toLowerCase();
+
+  return `${endpoint}/${encodedPath}?ik-t=${expire}&ik-s=${signature}`;
+}
+
+/** مسار ImageKit صالح: مطلق، بلا مخطط/مضيف/استعلام/شرطة مزدوجة/خروج من الجذر. */
+function isSafeImageKitPath(value: string): boolean {
+  if (!value.startsWith("/") || value.startsWith("//")) return false;
+  if (value.length > 1024) return false;
+  if (/[?#\\\s]/.test(value)) return false;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value)) return false;
+  if (value.split("/").includes("..")) return false;
+  return true;
 }
 
 /**
@@ -103,9 +163,8 @@ router.get("/media/imagekit-sign", (req: Request, res: Response) => {
     }
 
     const rawPath = typeof req.query["path"] === "string" ? req.query["path"] : "";
-    // مسار فقط: بلا مخطط ولا نطاق، فلا يمكن توقيع رابط مضيف آخر.
     const objectPath = rawPath.trim();
-    if (!objectPath.startsWith("/") || objectPath.startsWith("//") || objectPath.length > 1024) {
+    if (!isSafeImageKitPath(objectPath)) {
       return res.status(400).json({ success: false, error: "A single absolute ImageKit path is required." });
     }
 
@@ -122,7 +181,7 @@ router.get("/media/imagekit-sign", (req: Request, res: Response) => {
         .set({ "Cache-Control": "private, no-store" })
         .json({
           success: true,
-          url: buildSignedUrl(imagekit.urlEndpoint, imagekit.privateKey, objectPath, expire),
+          url: buildImageKitSignedUrl(imagekit.urlEndpoint, imagekit.privateKey, objectPath, expire),
           expire,
         });
     } catch (error) {

@@ -1,56 +1,76 @@
 -- =====================================================================
 -- تحويل bucket الوسائط إلى private — خطوة يدوية، لا تُنفَّذ تلقائياً.
 --
--- لماذا يدوياً: bucket aani-media عام (schema.sql سطر 510-514). في bucket عام
--- تُخدم الملفات من مسار /storage/v1/object/public/... بلا RLS، فأي شخص يملك
--- الرابط المباشر يفتح الملف ولو لم يكن يحق له قراءة المنشور. سياسة
--- aani_media_objects_read_guard (20270206000000) تحمي مسار Storage API فقط،
--- ولا تنفذ على المسار العام.
+-- تنبيه مهم: القاعدة الحيّة لا تحتوي bucket باسم aani-media (كل الرفع الحالي
+-- يذهب إلى ImageKit). تنفيذ هذا الملف على قاعدة بلا هذا الـbucket لا يفعل
+-- شيئاً: UPDATE يطابق صفر صفوف، و CREATE POLICY على storage.objects ينجح لكنه
+-- لا يحمي أي ملف. لذلك يبدأ الملف بفحص وجود الـbucket ويُعلن النتيجة بوضوح،
+-- ولا يدّعي نجاح التحويل إن لم يوجد.
 --
--- تنفيذ هذا الملف يقفل الرابط المباشر نهائياً، لكنه يُبطل كل الروابط
--- المخزّنة في قاعدة البيانات (media_url, media_urls, audio_url, avatar_url,
--- cover_url, stories.media_url, profile_highlights.media_url, ...) لأنها
--- مكتوبة بصيغة /object/public/. فلا تُنفّذه قبل أن يكون العميل المنشور
--- قادراً على تحويل المسارات إلى روابط موقّعة.
+-- لماذا هذا الملف مطلوب أصلاً: bucket aani-media (إن وُجد، من schema.sql سطر
+-- 510-514) عام، وفي bucket عام تُخدم الملفات من /storage/v1/object/public/...
+-- بلا RLS. سياسة aani_media_objects_read_guard (20270206000000) تحمي مسار
+-- Storage API فقط، ولا تنفّذ على المسار العام.
+--
+-- تنفيذ هذا الملف (على قاعدة فيها الـbucket) يقفل الرابط المباشر، لكنه يُبطل
+-- كل الروابط المخزّنة بصيغة /object/public/ (media_url, media_urls, audio_url,
+-- avatar_url, cover_url, stories.media_url, profile_highlights.media_url ...).
+-- فلا تُنفّذه قبل أن يكون العميل الذي يوقّع المسارات (resolveMediaUrl في
+-- src/lib/mediaAccess.ts) منشوراً للمستخدمين.
 --
 -- الترتيب الآمن:
---   1. طبّق 20270206000000 (الدالة والسياسة).
---   2. تأكد أن العميل الجديد (createSignedUrl عبر resolveMediaUrl) منشور
---      للمستخدمين، وأنه يُعيد الروابط الموقّعة لكل عرض وسائط.
---   3. بعدها نفّذ هذا الملف.
+--   1. طبّق 20270206000000 (الدوال والسياسات).
+--   2. انشر العميل الذي يعرض روابط موقّعة.
+--   3. نفّذ هذا الملف — ويخبرك صراحةً هل الـbucket موجود أم لا.
 --   4. اختبر: صورة منشور عادي تُعرض، ووسائط منشور حساب خاص لا تُفتح لغير
 --      المتابع المعتمد ولو بالرابط القديم.
---   5. إن احتجت التراجع: set public = true في الخطوة 1 بالعكس.
+--   5. للتراجع: update storage.buckets set public = true where id = 'aani-media';
 -- =====================================================================
 
 begin;
 
--- 1) اجعل الـbucket خاصاً
-update storage.buckets
-set public = false
-where id = 'aani-media';
+do $$
+declare
+  bucket_exists boolean;
+begin
+  select exists (select 1 from storage.buckets where id = 'aani-media') into bucket_exists;
 
--- 2) سياسة القراءة: تبقى aani_media_objects_read_guard restrictive من
---    20270206000000، وتُضاف سياسة متساهلة صريحة حتى لا تعتمد القراءة على
---    سياسات أخرى قد تُحذف. (سياسة restrictive وحدها لا تمنح شيئاً.)
-drop policy if exists "Aani media is readable by signed-in users" on storage.objects;
-create policy "Aani media is readable by signed-in users"
-  on storage.objects for select to authenticated
-  using (
-    bucket_id = 'aani-media'
-    and public.aani_can_read_media_object(name)
-  );
+  if not bucket_exists then
+    raise warning
+      'لا يوجد bucket باسم aani-media في هذه القاعدة: لم يُحوَّل أي شيء. الوسائط كلها على ImageKit — راجع docs/PRIVATE_MEDIA_AR.md (توقيع ImageKit) بدل هذا الملف.';
+    return;
+  end if;
+
+  -- 1) اجعل الـbucket خاصاً
+  update storage.buckets
+  set public = false
+  where id = 'aani-media';
+
+  -- 2) سياسة قراءة متساهلة صريحة تعتمد على القرار الأمني.
+  --    (سياسة restrictive وحدها لا تمنح شيئاً.)
+  execute 'drop policy if exists "Aani media is readable by signed-in users" on storage.objects';
+  execute $policy$
+    create policy "Aani media is readable by signed-in users"
+      on storage.objects for select to authenticated
+      using (
+        bucket_id = 'aani-media'
+        and public.aani_can_read_media_object(name)
+      )
+  $policy$;
+
+  raise notice 'تم تحويل bucket aani-media إلى private وتحديث سياسة القراءة.';
+end $$;
 
 commit;
 
 -- =====================================================================
 -- تحقق بعد التنفيذ
 -- =====================================================================
--- 1) الـbucket خاص
+-- 1) هل الـbucket موجود، وهل أصبح خاصاً؟ (صفر صفوف = لا bucket)
 --    select id, public from storage.buckets where id = 'aani-media';
 --
--- 2) رابط قديم بصيغة /object/public/ لم يعد يفتح الملف (يُعيد 400/404)
+-- 2) إن وُجد: رابط قديم بصيغة /object/public/ يجب أن يُرفض (400/404)
 --    curl -I "https://<project>.supabase.co/storage/v1/object/public/aani-media/<path>"
 --
--- 3) رابط موقّع يعمل لحساب يملك حق القراءة
+-- 3) إن وُجد: رابط موقّع يعمل لحساب يملك حق القراءة
 --    select storage.create_signed_url('aani-media', '<path>', 60);

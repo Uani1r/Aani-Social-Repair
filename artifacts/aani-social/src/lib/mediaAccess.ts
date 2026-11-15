@@ -69,18 +69,39 @@ export function parseStorageRef(raw: string | null | undefined): { bucket: strin
   return objectPath ? { bucket: storageBucket, path: objectPath } : null;
 }
 
-/** مسار ImageKit (بلا استعلام) إن كان الرابط من ImageKit، وإلا null. */
+/**
+ * مسار ImageKit الكامل (بلا استعلام/جزء)، مع معرّف الحساب كما في الرابط المخزّن.
+ *
+ *   https://ik.imagekit.io/abc/u1/a b.jpg?tr=q-auto  →  /abc/u1/a%20b.jpg
+ *
+ * إبقاء معرّف الحساب يجعل المقارنة مع القيمة المخزّنة في قاعدة البيانات دقيقة
+ * (نفس الشكل بعد تطبيع المسار)، والخادم هو من يحذف الـendpoint قبل التوقيع.
+ */
 export function parseImageKitPath(raw: string | null | undefined): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   if (!/^https?:\/\//i.test(value)) return null;
+
+  let parsed: URL;
   try {
-    const parsed = new URL(value);
-    if (!IMAGEKIT_HOST.test(parsed.hostname)) return null;
-    return parsed.pathname || null;
+    parsed = new URL(value);
   } catch {
     return null;
   }
+  if (!IMAGEKIT_HOST.test(parsed.hostname)) return null;
+
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  if (segments.length < 2) return null;
+
+  const encoded = segments.map(segment => {
+    try {
+      return encodeURIComponent(decodeURIComponent(segment));
+    } catch {
+      return encodeURIComponent(segment);
+    }
+  });
+
+  return `/${encoded.join('/')}`;
 }
 
 function cacheKeyOf(bucket: string, path: string): string {

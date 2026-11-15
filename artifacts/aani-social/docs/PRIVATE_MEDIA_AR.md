@@ -40,12 +40,15 @@
 
 ### ب) bucket `aani-media` في Supabase Storage
 
-- الـbucket عام (`schema.sql` سطر 510–514). في bucket عام تُخدم الملفات من
-  `/storage/v1/object/public/...` **بلا RLS**، فالسياسة `aani_media_objects_read_guard`
-  (restrictive، في `20270206000000`) تحمي مسار Storage API فقط.
+- **القاعدة الحيّة لا تحتوي bucket باسم `aani-media`**: كل الرفع الحالي يذهب
+  إلى ImageKit. فملف التحويل اليدوي لا يفعل شيئاً هناك ويقول ذلك صراحةً.
+- إن أُنشئ الـbucket لاحقاً من `schema.sql` (سطر 510–514) فسيكون عاماً، وفي
+  bucket عام تُخدم الملفات من `/storage/v1/object/public/...` **بلا RLS**،
+  فالسياسة `aani_media_objects_read_guard` (restrictive، في `20270206000000`)
+  تحمي مسار Storage API فقط.
 - الحماية الكاملة بالرابط المباشر تحتاج تحويل الـbucket إلى private:
-  `supabase/APPLY_MANUALLY_20270206000000_media_bucket_private.sql`.
-  **لم يُنفَّذ** لأنه يُبطل كل الروابط المخزّنة دفعة واحدة.
+  `supabase/APPLY_MANUALLY_20270206000000_media_bucket_private.sql` — يفحص
+  وجوده أولاً ويُعلن النتيجة. **لم يُنفَّذ** لأنه يُبطل كل الروابط المخزّنة.
 - عميل هذا الفرع يوقّع مسارات التخزين تلقائياً ويسقط إلى الرابط العام عند
   تعذّر التوقيع، فيمكن التحويل بعد نشر هذا العميل.
 
@@ -56,13 +59,30 @@
 
 ## 3) خطوات تفعيل الحماية الكاملة لوسائط ImageKit
 
-1. في ImageKit: **Settings → Security → Restricted access** (أو ارفع كل ملف
-   جديد بـ `isPrivateFile: true`). بعدها لا يُخدم أي ملف بلا توقيع.
+1. في ImageKit: **Settings → Security → Restrict unsigned URLs** للصور
+   والفيديو (أو ارفع كل ملف جديد بـ `isPrivateFile: true`). بعدها لا يُخدم أي
+   ملف بلا توقيع.
 2. أضف `VITE_IMAGEKIT_SIGNED_URLS=true` إلى بيئة الواجهة.
 3. تأكد أن `/api/media/imagekit-sign` منشور على الخادم (يحتاج
    `IMAGEKIT_URL_ENDPOINT` و`IMAGEKIT_PRIVATE_KEY` و`SUPABASE_*` للمشرف).
-4. اختبر: افتح رابط ملف قصة لحساب خاص بلا توقيع → يجب أن يُرفض (401/403)،
-   ثم افتحه بحساب متابع معتمد → يظهر.
+4. **اختبر الصحة فعلياً، لا وجود الرابط**: طلب التوقيع قد ينجح ويُنتج رابطاً
+   مرفوضاً إن كانت الصيغة خاطئة. الاختبار الحقيقي:
+   - رابط ملف قصة لحساب خاص **بلا** توقيع → 401.
+   - الرابط الذي يُعيده `/api/media/imagekit-sign` بحساب متابع معتمد → 200.
+   - نفس الرابط بعد تعديل `ik-t` إلى قيمة ماضية → 401.
+   - نفس الرابط بعد تغيير حرف في المسار → 401 (التوقيع يغطي المسار).
+
+### صيغة التوقيع المستخدمة
+
+```
+{urlEndpoint}/{relativePath}?ik-t={expire}&ik-s={signature}
+signature = HMAC-SHA1(privateKey, relativePath + expire)  // hex صغير
+relativePath = مسار الملف بعد حذف الـendpoint، مع بادئة التحويلات مثل tr:w-400/
+```
+
+مأخوذة من توثيق ImageKit الرسمي (Basic security features → How to generate
+signed URLs). المسار يُرمَّز percent-encoding قبل التوقيع، والـendpoint قد
+يحمل معرّف الحساب فيُحذف كاملاً قبل الحساب.
 
 ## 4) اختلاف القاعدة الحيّة عن الترحيلات — مسار التهيئة
 
@@ -103,4 +123,18 @@ select column_name from information_schema.column_privileges
 where table_schema = 'public' and table_name = 'profiles'
   and grantee = 'authenticated' and privilege_type = 'SELECT'
 order by column_name;
+-- منح service_role التي يحتاجها خادم الإشعارات (fcm_token, notification_settings)
+select column_name from information_schema.column_privileges
+where table_schema = 'public' and table_name = 'profiles'
+  and grantee = 'service_role' and privilege_type = 'SELECT'
+order by column_name;
 ```
+
+## 5) ما تحتاجه service_role (ولا يُسحب)
+
+`api-server/src/lib/supabaseAdmin.ts` يقرأ `fcm_token` و`notification_settings`
+من `profiles` بمفتاح `service_role` لإرسال إشعارات الدفع. ترحيل
+`20270206000000` يسحب منح الأعمدة من كل الأدوار المتصلة، ثم **يُعيد منح هذين
+العمودين لـ`service_role` صراحةً** حتى لا يعتمد على منح جدول مسحوب. لا يُمنح
+أي عمود آخر له، ولا يُمنح `anon` أو `authenticated` أي منهما.
+

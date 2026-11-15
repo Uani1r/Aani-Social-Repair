@@ -86,6 +86,11 @@ end $$;
 --
 --    الأعمدة المسحوبة: التفضيلات الشخصية + fcm_token + birth_date + city +
 --    location (الأخيران محكومان بـ show_city، و birth_date بـ show_birth_date).
+--
+--    service_role مستثنى عمداً: خادم api-server يقرأ fcm_token و
+--    notification_settings به لدعم إشعارات الدفع (api-server/src/lib/
+--    supabaseAdmin.ts)، وهو لا يُستخدم في المتصفح. يُمنح العمودين صراحةً
+--    بعده حتى لا يعتمد على منح جدول مسحوب.
 -- ---------------------------------------------------------------------
 do $$
 declare
@@ -94,12 +99,14 @@ declare
     'hd_uploads', 'data_saver', 'font_preference', 'fcm_token',
     'birth_date', 'city', 'location'
   ];
+  -- أدوار الخادم التي تحتاج وصولاً كاملاً، لا تُمس.
+  protected_roles text[] := array['service_role', 'postgres', 'supabase_admin'];
   grantee_name text;
   private_columns text;
   public_columns text;
 begin
   -- أ) كل دور يملك SELECT على الجدول (بما فيه PUBLIC و anon و authenticated
-  --    و authenticator و أي دور مخصص). PUBLIC يظهر باسم PUBLIC في هذه الجداول.
+  --    و authenticator و أي دور مخصص)، مع استثناء أدوار الخادم.
   for grantee_name in
     select distinct grant.grantee
     from information_schema.role_table_grants as grant
@@ -107,6 +114,7 @@ begin
       and grant.table_name = 'profiles'
       and grant.privilege_type = 'SELECT'
       and grant.grantee <> current_user
+      and grant.grantee <> all(protected_roles)
   loop
     if grantee_name = 'PUBLIC' then
       execute 'revoke select on table public.profiles from public';
@@ -124,6 +132,7 @@ begin
       and privilege.privilege_type = 'SELECT'
       and privilege.column_name = any(private_column_names)
       and privilege.grantee <> current_user
+      and privilege.grantee <> all(protected_roles)
   loop
     select string_agg(quote_ident(privilege.column_name), ', ' order by privilege.column_name)
     into private_columns
@@ -178,6 +187,16 @@ grant update (
   hd_uploads, data_saver, font_preference, fcm_token,
   birth_date, city, location
 ) on table public.profiles to authenticated;
+
+-- service_role: العمودان الوحيدان اللذان يقرأهما خادم الإشعارات
+-- (api-server/src/lib/supabaseAdmin.ts → select=fcm_token,notification_settings).
+-- يُمنحان صراحةً حتى لا يعتمد الخادم على منح جدول مسحوب، ولا يُمنح أي عمود آخر.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute 'grant select (fcm_token, notification_settings) on table public.profiles to service_role';
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- 1ب) قراءة الملف العام مع احترام أعلام الظهور
@@ -383,77 +402,162 @@ create policy aani_posts_block_guard on public.posts
 --      * مجلد المستدعي نفسه (رفعاته).
 --      * صورة أو غلاف ملف شخصي: معلومة عامة لكل مسجّل.
 --      * وسائط منشور: عبر aani_can_read_post (خصوصية الحساب + الحجب).
---      * وسائط قصة: عبر aani_can_view_story (تتحقق من is_private أصلاً).
---      * وسائط أبرز القصص: عبر aani_can_view_profile_highlight.
---    كل ما عدا ذلك false. search_path = '' وتأهيل كامل للأسماء.
+--      * وسائط قصة: عبر aani_can_view_story (إن وُجدت).
+--      * وسائط أبرز القصص: عبر aani_can_view_profile_highlight — **فقط إن
+--        كانت جداولها ودالتها موجودة**، لأن قاعدة بُنيت من schema.sql لا
+--        تحتوي profile_highlights ولا profile_highlight_collections.
+--    كل ما عدا ذلك false.
+--
+--    المطابقة على مسار الملف بالضبط لا بـLIKE: تُطبَّع القيمة المخزّنة
+--    (رابط كامل أو مسار) إلى مسار بلا مخطط/مضيف/استعلام، ثم تُقارن بالتساوي،
+--    فلا يمكن لـ % أو _ في p_object_name أن يطابق ملفات أخرى.
 -- ---------------------------------------------------------------------
-create or replace function public.aani_can_read_media_object(p_object_name text)
-returns boolean
+
+-- يُطبّع رابطاً أو مساراً إلى مسار كائن قابل للمقارنة:
+--   https://ik.imagekit.io/abc/posts/a.jpg?tr=q-auto          → abc/posts/a.jpg
+--   https://<proj>.supabase.co/storage/v1/object/public/aani-media/u/a.jpg → u/a.jpg
+--   /u/a.jpg                                                  → u/a.jpg
+create or replace function public.aani_media_path(p_value text)
+returns text
 language sql
-stable
-security definer
+immutable
 set search_path = ''
 as $$
-  select coalesce(
-    auth.uid() is not null
-    and coalesce(nullif(btrim(p_object_name), ''), '') <> ''
-    and (
-      -- رفعات المستخدم نفسه: أول مقطع من المسار هو معرّفه
-      split_part(ltrim(p_object_name, '/'), '/', 1) = auth.uid()::text
-      -- صورة أو غلاف ملف شخصي (معلومة عامة)
-      or exists (
-        select 1
-        from public.profiles as profile
-        where coalesce(profile.avatar_url, '') like '%' || p_object_name
-           or coalesce(profile.cover_url, '') like '%' || p_object_name
-      )
-      -- وسائط منشور (صورة، فيديو، أو صوته)
-      or exists (
-        select 1
-        from public.posts as post
-        where (
-            coalesce(post.media_url, '') like '%' || p_object_name
-            or exists (
-              select 1
-              from unnest(coalesce(post.media_urls, '{}'::text[])) as url
-              where url like '%' || p_object_name
-            )
-            or coalesce(post.audio_url, '') like '%' || p_object_name
-          )
-          and public.aani_can_read_post(post.id, auth.uid())
-      )
-      -- وسائط قصة أو إعادة مشاركتها
-      or exists (
-        select 1
-        from public.stories as story
-        where coalesce(story.media_url, '') like '%' || p_object_name
-          and public.aani_can_view_story(story.id, auth.uid())
-      )
-      -- وسائط أبرز القصص وأغلفة مجموعاتها
-      or exists (
-        select 1
-        from public.profile_highlights as highlight
-        where coalesce(highlight.media_url, '') like '%' || p_object_name
-          and public.aani_can_view_profile_highlight(highlight.user_id, highlight.is_close_friends)
-      )
-      or exists (
-        select 1
-        from public.profile_highlight_collections as collection
-        where coalesce(collection.cover_url, '') like '%' || p_object_name
-          and (
-            collection.user_id = auth.uid()
-            or exists (
-              select 1
-              from public.profile_highlights as item
-              where item.collection_id = collection.id
-                and public.aani_can_view_profile_highlight(item.user_id, item.is_close_friends)
-            )
-          )
-      )
+  select nullif(
+    ltrim(
+      regexp_replace(
+        regexp_replace(
+          split_part(split_part(btrim(coalesce(p_value, '')), '#', 1), '?', 1),
+          '^[a-zA-Z][a-zA-Z0-9+.-]*://[^/]+',
+          ''
+        ),
+        '^/?storage/v1/object/(public|sign)/[^/]+/',
+        ''
+      ),
+      '/'
     ),
-    false
+    ''
   );
 $$;
+
+revoke all on function public.aani_media_path(text) from public, anon;
+grant execute on function public.aani_media_path(text) to authenticated;
+
+do $$
+declare
+  body text;
+  has_story_check boolean;
+  has_highlight_check boolean;
+  has_highlight_collections boolean;
+begin
+  select to_regclass('public.stories') is not null
+     and exists (
+       select 1 from pg_proc as proc
+       join pg_namespace as namespace on namespace.oid = proc.pronamespace
+       where namespace.nspname = 'public' and proc.proname = 'aani_can_view_story'
+     )
+  into has_story_check;
+
+  select to_regclass('public.profile_highlights') is not null
+     and exists (
+       select 1 from pg_proc as proc
+       join pg_namespace as namespace on namespace.oid = proc.pronamespace
+       where namespace.nspname = 'public' and proc.proname = 'aani_can_view_profile_highlight'
+     )
+  into has_highlight_check;
+
+  has_highlight_collections := has_highlight_check
+    and to_regclass('public.profile_highlight_collections') is not null;
+
+  body := $body$
+    select coalesce(
+      auth.uid() is not null
+      and public.aani_media_path(p_object_name) is not null
+      and (
+        -- رفعات المستخدم نفسه: أول مقطع من المسار هو معرّفه
+        split_part(public.aani_media_path(p_object_name), '/', 1) = auth.uid()::text
+        -- صورة أو غلاف ملف شخصي (معلومة عامة)
+        or exists (
+          select 1
+          from public.profiles as profile
+          where public.aani_media_path(profile.avatar_url) = public.aani_media_path(p_object_name)
+             or public.aani_media_path(profile.cover_url) = public.aani_media_path(p_object_name)
+        )
+        -- وسائط منشور (صورة، فيديو، أو صوته)
+        or exists (
+          select 1
+          from public.posts as post
+          where (
+              public.aani_media_path(post.media_url) = public.aani_media_path(p_object_name)
+              or public.aani_media_path(post.audio_url) = public.aani_media_path(p_object_name)
+              or exists (
+                select 1
+                from unnest(coalesce(post.media_urls, '{}'::text[])) as media_url
+                where public.aani_media_path(media_url) = public.aani_media_path(p_object_name)
+              )
+            )
+            and public.aani_can_read_post(post.id, auth.uid())
+        )
+  $body$;
+
+  if has_story_check then
+    body := body || $body$
+        -- وسائط قصة
+        or exists (
+          select 1
+          from public.stories as story
+          where public.aani_media_path(story.media_url) = public.aani_media_path(p_object_name)
+            and public.aani_can_view_story(story.id, auth.uid())
+        )
+    $body$;
+  end if;
+
+  if has_highlight_check then
+    body := body || $body$
+        -- وسائط أبرز القصص
+        or exists (
+          select 1
+          from public.profile_highlights as highlight
+          where public.aani_media_path(highlight.media_url) = public.aani_media_path(p_object_name)
+            and public.aani_can_view_profile_highlight(highlight.user_id, highlight.is_close_friends)
+        )
+    $body$;
+  end if;
+
+  if has_highlight_collections then
+    body := body || $body$
+        -- أغلفة مجموعات أبرز القصص
+        or exists (
+          select 1
+          from public.profile_highlight_collections as collection
+          where public.aani_media_path(collection.cover_url) = public.aani_media_path(p_object_name)
+            and (
+              collection.user_id = auth.uid()
+              or exists (
+                select 1
+                from public.profile_highlights as item
+                where item.collection_id = collection.id
+                  and public.aani_can_view_profile_highlight(item.user_id, item.is_close_friends)
+              )
+            )
+        )
+    $body$;
+  end if;
+
+  body := body || '      ), false);';
+
+  if not has_story_check then
+    raise warning 'stories أو aani_can_view_story غائبة: وسائط القصص خارج قرار الوسائط';
+  end if;
+  if not has_highlight_check then
+    raise warning 'جداول أبرز القصص غائبة: aani_can_read_media_object لا تغطّي وسائطها';
+  end if;
+
+  execute format(
+    'create or replace function public.aani_can_read_media_object(p_object_name text) returns boolean language sql stable security definer set search_path = '''' as %L',
+    body
+  );
+end $$;
 
 revoke all on function public.aani_can_read_media_object(text) from public, anon;
 grant execute on function public.aani_can_read_media_object(text) to authenticated;
@@ -524,6 +628,30 @@ begin
       and privilege_type = 'SELECT'
   ) then
     raise exception 'ما زال SELECT على جدول public.profiles ممنوحاً على مستوى الجدول';
+  end if;
+
+  -- خادم الإشعارات يجب أن يبقى قادراً على قراءة العمودين اللذين يحتاجهما
+  if exists (select 1 from pg_roles where rolname = 'service_role')
+     and (
+       select count(distinct column_name)
+       from information_schema.column_privileges
+       where table_schema = 'public'
+         and table_name = 'profiles'
+         and grantee = 'service_role'
+         and privilege_type = 'SELECT'
+         and column_name in ('fcm_token', 'notification_settings')
+     ) <> 2
+  then
+    raise exception 'service_role فقد قراءة fcm_token أو notification_settings — إشعارات الدفع ستتوقف';
+  end if;
+
+  -- الدالة تقرأ مسارات الملفات وتحتاج المساعد
+  if not exists (
+    select 1 from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public' and proc.proname = 'aani_media_path'
+  ) then
+    raise exception 'الدالة المساعدة public.aani_media_path مفقودة';
   end if;
 end $$;
 
