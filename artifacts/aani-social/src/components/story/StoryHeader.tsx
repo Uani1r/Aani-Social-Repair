@@ -3,7 +3,7 @@ import { MoreVertical, Trash2, X } from 'lucide-react';
 
 import Avatar from '@/components/Avatar';
 import UserIdentity from '@/components/UserIdentity';
-import { displayName, formatDate } from '@/lib/types';
+import { cleanUsername, displayName, formatDate } from '@/lib/types';
 
 import type { StoryViewerProps } from './types';
 
@@ -36,6 +36,7 @@ export default function StoryHeader({
   const isReshare = Boolean(currentStory.original_story_id);
   const originalAuthorId = originalStoryAuthor?.id ?? null;
   const originalAuthorName = displayName(originalStoryAuthor) || 'صاحب القصة الأصلية';
+  const originalUsername = cleanUsername(originalStoryAuthor?.username);
 
   return (
     <>
@@ -85,6 +86,16 @@ export default function StoryHeader({
                 </div>
               </Link>
             </div>
+            {/* @username صاحب القصة الأصلية — نص صغير واضح أسفل معلومات الناشر،
+                بلا أيقونة ريبوست وبلا رابط (الصورة المصغّرة وحدها تفتح ملفه). */}
+            {isReshare && originalUsername && (
+              <span
+                dir="ltr"
+                className="max-w-[52vw] truncate rounded-full bg-black/45 px-2 py-0.5 text-[9px] font-medium text-white/80 backdrop-blur-sm"
+              >
+                @{originalUsername}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
