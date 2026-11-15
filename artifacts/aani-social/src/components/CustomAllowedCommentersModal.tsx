@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Check, Search, X } from 'lucide-react';
 
 import UserIdentity from '@/components/UserIdentity';
+import { SignedImage } from '@/components/SignedMedia';
 import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -164,7 +165,7 @@ export default function CustomAllowedCommentersModal({
                 className="mb-1 flex w-full items-center gap-3 rounded-2xl px-2.5 py-2.5 text-right transition hover:bg-white/[0.07]"
               >
                 {person.avatar_url ? (
-                  <img src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                  <SignedImage src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
                 ) : (
                   <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-white/10 text-sm font-bold text-white/70">
                     {displayName(person).slice(0, 1)}

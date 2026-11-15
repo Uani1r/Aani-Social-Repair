@@ -6,6 +6,7 @@ import { Check, ChevronLeft, Heart, ImagePlus, Loader2, MoreVertical, Pencil, Pl
 import Avatar from '@/components/Avatar';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import { GridSkeleton } from '@/components/Skeletons';
+import { SignedImage } from '@/components/SignedMedia';
 import EmptyState from '@/components/EmptyState';
 import { formatDate } from '@/lib/types';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
@@ -137,6 +138,9 @@ export default function ProfileHighlightsManager({
   const [archiveError, setArchiveError] = useState('');
   const [selectedArchiveStory, setSelectedArchiveStory] = useState<ArchiveStory | null>(null);
   const [previewingArchiveStory, setPreviewingArchiveStory] = useState<ArchiveStory | null>(null);
+  // وسائط القصة المؤرشفة قد تكون ImageKit محمياً: تُوقَّع قبل العرض، ولا يُطلب
+  // الرابط العام إطلاقاً عند تفعيل التوقيع الإلزامي.
+  const archivePreviewMediaUrl = useMediaUrl(previewingArchiveStory?.media_url ?? null);
   const [storyDurationSeconds, setStoryDurationSeconds] = useState<number | null>(null);
   const [studioFile, setStudioFile] = useState<File | null>(null);
   const [studioPreviewUrl, setStudioPreviewUrl] = useState<string | null>(null);
@@ -712,12 +716,12 @@ export default function ProfileHighlightsManager({
               <div id="storyProgress" ref={storyProgressRef} className="h-full w-0 bg-white" />
             </div>
             <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-40 bg-gradient-to-b from-black/75 via-black/30 to-transparent" />
-            {previewingArchiveStory.media_url && previewingArchiveStory.media_type === 'video' ? (
+            {archivePreviewMediaUrl && previewingArchiveStory.media_type === 'video' ? (
               <video
                 id="storyImage"
                 key={previewingArchiveStory.id}
                 ref={storyVideoRef}
-                src={previewingArchiveStory.media_url}
+                src={archivePreviewMediaUrl}
                 className="absolute inset-0 z-0 h-full w-full object-cover"
                 data-duration={getArchiveStoryDurationSeconds(previewingArchiveStory)}
                 muted
@@ -727,11 +731,11 @@ export default function ProfileHighlightsManager({
                 onError={handleStoryVideoError}
                 onEnded={closeStoryPreview}
               />
-            ) : previewingArchiveStory.media_url ? (
+            ) : archivePreviewMediaUrl ? (
               <img
                 id="storyImage"
                 key={previewingArchiveStory.id}
-                src={previewingArchiveStory.media_url}
+                src={archivePreviewMediaUrl}
                 className="absolute inset-0 z-0 h-full w-full object-cover"
                 data-duration={getArchiveStoryDurationSeconds(previewingArchiveStory)}
                 alt={previewingArchiveStory.caption || 'قصة محفوظة'}
@@ -1726,7 +1730,7 @@ export function ProfileHighlightViewer({
                     {editCoverFile && editCoverPreviewUrl ? (
                       <img src={editCoverPreviewUrl} alt="معاينة غلاف المجموعة" className="h-full w-full object-cover" />
                     ) : activeCollection.cover_url ? (
-                      <img src={activeCollection.cover_url} alt="غلاف المجموعة الحالي" className="h-full w-full object-cover" />
+                      <SignedImage src={activeCollection.cover_url} alt="غلاف المجموعة الحالي" className="h-full w-full object-cover" />
                     ) : (
                       <span className="grid h-full w-full place-items-center text-neutral-400"><ImagePlus size={27} /></span>
                     )}

@@ -4,11 +4,13 @@ import { toast } from 'sonner';
 import { useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { postShareUrl } from '@/lib/interactions';
 import { displayName, normalizePostMetadata, type PostMetadataTag, type Profile } from '@/lib/types';
 import PostMetadataChips from '@/components/PostMetadataChips';
 import PostImagePreview from '@/components/PostImagePreview';
 import PostVideoPreview from '@/components/PostVideoPreview';
+import { SignedImage } from '@/components/SignedMedia';
 import { SkeletonBlock, SkeletonCircle, SkeletonLine } from '@/components/Skeletons';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '@/lib/videoMedia';
 
@@ -65,8 +67,13 @@ export default function SharedPostPreview({
         if (!active) return;
 
         const raw = p as { media_urls?: string[] | null; media_url?: string | null; content?: string; type?: string; post_metadata?: unknown };
-        const mediaUrls = (Array.isArray(raw.media_urls) ? raw.media_urls.filter((url): url is string => typeof url === 'string' && Boolean(url)) : []);
-        if (!mediaUrls.length && raw.media_url) mediaUrls.push(raw.media_url);
+        const rawMediaUrls = (Array.isArray(raw.media_urls) ? raw.media_urls.filter((url): url is string => typeof url === 'string' && Boolean(url)) : []);
+        if (!rawMediaUrls.length && raw.media_url) rawMediaUrls.push(raw.media_url);
+
+        // التوقيع عند الجلب: كل ما يُعرض لاحقاً (فيديو/صورة/غلاف) رابط موقّع،
+        // وفشل التوقيع يُسقط الوسيط بدل طلب الرابط العام.
+        const mediaUrls = (await Promise.all(rawMediaUrls.map(url => resolveMediaUrl(url))))
+          .filter((url): url is string => Boolean(url));
 
         setInfo({
           author: (a || null) as Profile | null,
@@ -138,7 +145,7 @@ export default function SharedPostPreview({
       <article className="messages-shared-post-preview" dir="rtl">
         <header className="messages-shared-post-preview-header">
           {info?.author?.avatar_url ? (
-            <img src={info.author.avatar_url} alt="" />
+            <SignedImage src={info.author.avatar_url} alt="" />
           ) : loading ? (
             <SkeletonCircle className="messages-shared-post-preview-avatar" />
           ) : (
@@ -185,7 +192,7 @@ export default function SharedPostPreview({
       {/* صورة الناشر خارج الفقاعة يميناً، بمحاذاة وسط كرت الوسائط */}
       <span className="flex h-full shrink-0 items-center">
         {info?.author?.avatar_url ? (
-          <img src={info.author.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover" />
+          <SignedImage src={info.author.avatar_url} alt="" className="h-8 w-8 rounded-full object-cover" />
         ) : (
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-pink-500 to-violet-600 text-[10px] font-bold text-white">
             {info?.author ? displayName(info.author).replace('@', '').charAt(0) : 'آ'}

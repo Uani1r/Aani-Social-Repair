@@ -112,6 +112,11 @@ router.post("/media/upload", express.raw({ type: "*/*", limit: "30mb" }), (req: 
       form.append("fileName", fileName);
       form.append("folder", folder);
       form.append("useUniqueFileName", "true");
+      // Restricted access: نفس سلوك الرفع المباشر من المتصفح. يُضبط من بيئة
+      // الخادم (IMAGEKIT_PRIVATE_UPLOADS=true) فقط بعد التحقق من التوقيع.
+      if ((process.env["IMAGEKIT_PRIVATE_UPLOADS"] || "").trim().toLowerCase() === "true") {
+        form.append("isPrivateFile", "true");
+      }
 
       const uploadResponse = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
         method: "POST",

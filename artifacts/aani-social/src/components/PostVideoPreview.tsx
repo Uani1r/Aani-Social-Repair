@@ -11,6 +11,7 @@ import {
 import { appendVideoTrimFragment, getVideoCropTransform, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
 import { isFeedVideoSelected, subscribeFeedVideoPool, updateFeedVideoCandidate } from '@/lib/feedVideoPool';
 import { releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
+import { useMediaUrl } from '@/lib/mediaAccess';
 
 type PostVideoPreviewProps = {
   src: string;
@@ -65,6 +66,9 @@ export default function PostVideoPreview({
   trimRange,
   onExpand,
 }: PostVideoPreviewProps) {
+  // الغلاف (poster) قد يكون رابط ImageKit: يُوقَّع مثل الفيديو، وإن تعذّر
+  // توقيعه لا يُطلب الرابط العام إطلاقاً (يصبح undefined = بلا غلاف).
+  const signedPoster = useMediaUrl(poster);
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const replacementAudioRef = useRef<HTMLAudioElement>(null);
@@ -401,9 +405,9 @@ export default function PostVideoPreview({
       tabIndex={showCustomControls ? 0 : undefined}
       aria-label={showCustomControls ? 'الفيديو وعناصر التحكم' : undefined}
     >
-      {poster && (feedVideo || showCustomControls) && (
+      {signedPoster && (feedVideo || showCustomControls) && (
         <img
-          src={poster}
+          src={signedPoster}
           alt=""
           aria-hidden="true"
           draggable={false}
@@ -417,7 +421,7 @@ export default function PostVideoPreview({
           src={feedVideo && backgroundMediaSuspended ? undefined : mediaSrc}
           data-aani-background-media={feedVideo ? '' : undefined}
           data-aani-video-id={feedVideo ? videoId : undefined}
-          poster={poster || undefined}
+          poster={signedPoster || undefined}
           controls={!showCustomControls && controls}
           muted={hasReplacementAudio || (showMuteToggle ? videoMuted : muted)}
           autoPlay={autoPlay && !autoPlayWhenVisible && !backgroundMediaSuspended}

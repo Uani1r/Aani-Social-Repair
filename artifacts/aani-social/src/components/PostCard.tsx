@@ -9,6 +9,7 @@ import PostMetadataChips from './PostMetadataChips';
 import ExpandablePostText from './ExpandablePostText';
 import PostImagePreview from './PostImagePreview';
 import PostVideoPreview from './PostVideoPreview';
+import { SignedImage } from './SignedMedia';
 import LikesListSheet from './LikesListSheet';
 import { getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop } from '../lib/videoMedia';
 import { baseVideoUrl } from '../lib/sounds';
@@ -80,7 +81,7 @@ export default function PostCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           {post.author?.avatar_url ? (
-            <img
+            <SignedImage
               src={post.author.avatar_url}
               alt={displayName(post.author)}
               className="h-10 w-10 rounded-full object-cover ring-1 ring-zinc-700"

@@ -4,6 +4,8 @@ import { Eye, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import EmojiText from '@/components/TwemojiText';
+import { SignedImage } from '@/components/SignedMedia';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 
 type ChatMediaPayload = {
   urls: string[];
@@ -118,7 +120,16 @@ export default function ChatImageMessage({
     const requestId = ++viewerOpenRequestRef.current;
     viewerFetchAbortRef.current?.abort();
     setViewerOpening(true);
-    let nextUrls = payload.urls;
+    // التوقيع أولاً: لا يُطلب ملف ImageKit بلا توقيع (ولا يُكشف ملف خاص).
+    // فشل التوقيع يمنع الفتح برسالة واضحة بدل صورة مكسورة أو رابط عام.
+    const signedUrls = (await Promise.all(payload.urls.map(url => resolveMediaUrl(url))))
+      .filter((url): url is string => Boolean(url));
+    if (!signedUrls.length) {
+      setViewerOpening(false);
+      toast.error('تعذر تجهيز الصورة. تحقق من الاتصال وحاول مرة أخرى.');
+      return;
+    }
+    let nextUrls = signedUrls;
 
     if (payload.viewOnce) {
       const abortController = new AbortController();
@@ -128,7 +139,7 @@ export default function ChatImageMessage({
       setViewerOpen(true);
       const temporaryUrls: string[] = [];
       try {
-        for (const url of payload.urls) {
+        for (const url of signedUrls) {
           const response = await fetch(url, { cache: 'no-store', referrerPolicy: 'no-referrer', signal: abortController.signal });
           if (!response.ok) throw new Error('تعذر تحميل الصورة المؤقتة');
           const blob = await response.blob();
@@ -233,7 +244,7 @@ export default function ChatImageMessage({
         <div className={`messages-image-grid${payload.urls.length > 1 ? ' has-multiple' : ''}`}>
           {payload.urls.map((url, index) => (
             <button key={`${messageId}-${index}`} type="button" onClick={() => void openViewer()} aria-label={`عرض الصورة ${index + 1}`}>
-              <img src={url} alt={`صورة مرسلة ${index + 1}`} loading="lazy" />
+              <SignedImage src={url} alt={`صورة مرسلة ${index + 1}`} loading="lazy" />
             </button>
           ))}
         </div>

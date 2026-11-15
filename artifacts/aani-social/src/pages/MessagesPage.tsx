@@ -17,6 +17,7 @@ import SharedPostPreview from '@/components/SharedPostPreview';
 import StoryDmCard, { type StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import { hasLegacyStoryReplyTag, isStoryMentionMessage, isStoryReplyMessage, storyReplyText } from '@/lib/storyReplyMessages';
 import StoryReplyCard from '@/components/stories/StoryReplyCard';
+import { SignedImage, SignedVideo } from '@/components/SignedMedia';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
@@ -3381,7 +3382,7 @@ export default function MessagesPage({
                     <div className="messages-image-message messages-media-pending" aria-label={selectedPendingMediaMessage.isUploading ? 'جارٍ رفع الصور' : 'تم رفع الصور'}>
                       <div className={`messages-image-grid messages-media-pending-grid${selectedPendingMediaMessage.urls.length > 1 ? ' has-multiple' : ''}`}>
                         {selectedPendingMediaMessage.urls.map((url, index) => (
-                          <img key={`${selectedPendingMediaMessage.id}-${index}`} src={url} alt={`صورة مرسلة ${index + 1}`} onLoad={scrollThreadToBottom} />
+                          <SignedImage key={`${selectedPendingMediaMessage.id}-${index}`} src={url} alt={`صورة مرسلة ${index + 1}`} onLoad={scrollThreadToBottom} />
                         ))}
                         <span
                           className={`messages-media-pending-indicator${selectedPendingMediaMessage.isUploading ? '' : ' is-complete'}`}
@@ -3776,9 +3777,9 @@ export default function MessagesPage({
               {galleryPreview.kind === 'media' ? (
                 <figure className="messages-gallery-preview-media">
                   {isVideoMediaUrl(galleryPreview.url) ? (
-                    <video src={galleryPreview.url} controls playsInline preload="metadata" aria-label="معاينة فيديو مشترك" />
+                    <SignedVideo src={galleryPreview.url} controls playsInline preload="metadata" aria-label="معاينة فيديو مشترك" />
                   ) : (
-                    <img src={galleryPreview.url} alt="معاينة صورة مشتركة" />
+                    <SignedImage src={galleryPreview.url} alt="معاينة صورة مشتركة" />
                   )}
                   {galleryPreview.caption && <figcaption>{galleryPreview.caption}</figcaption>}
                 </figure>
@@ -3803,11 +3804,11 @@ export default function MessagesPage({
                       >
                         {isVideoMediaUrl(url) ? (
                           <>
-                            <video src={url} muted playsInline preload="metadata" aria-hidden="true" />
+                            <SignedVideo src={url} muted playsInline preload="metadata" aria-hidden="true" />
                             <span className="messages-gallery-video-badge"><Play size={13} fill="currentColor" /></span>
                           </>
                         ) : (
-                          <img src={url} alt="صورة مشتركة في المحادثة" loading="lazy" />
+                          <SignedImage src={url} alt="صورة مشتركة في المحادثة" loading="lazy" />
                         )}
                       </button>
                     ))}

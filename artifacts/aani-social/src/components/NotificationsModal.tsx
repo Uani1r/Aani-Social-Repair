@@ -7,6 +7,7 @@ import {
 
 import FollowRequestsSection from '@/components/FollowRequestsSection';
 import PushNotificationsControl from '@/components/PushNotificationsControl';
+import { SignedImage } from '@/components/SignedMedia';
 import { NotificationsSkeleton } from '@/components/Skeletons';
 import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
@@ -300,7 +301,7 @@ function NotificationAvatar({ item }: { item: NotificationEntry }) {
   return (
     <span className="relative mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
       {item.actor?.avatar_url ? (
-        <img
+        <SignedImage
           src={item.actor.avatar_url}
           alt=""
           className="w-11 h-11 rounded-full object-cover shrink-0"

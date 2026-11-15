@@ -30,6 +30,7 @@ import type { PendingPost } from '@/lib/pendingPosts';
 import { getVideoAspectRatio, getVideoCropTransform, appendVideoTrimFragment, parseVideoCrop, parseVideoTimeRange, stripVideoEditFragment, type VideoTimeRange } from '@/lib/videoMedia';
 import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
 import { getImageKitVideoThumbnailUrl } from '@/lib/postMedia';
+import { useMediaUrl } from '@/lib/mediaAccess';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -548,6 +549,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   // صورة مصغرة تلقائية من ImageKit (/ik-thumbnail.jpg) كposter للفيديو
   // لمنع الشاشة السوداء قبل تحميل أول إطار — تُستخدم فقط عند غياب غلاف مختار
   const videoStillUrl = postCoverUrl || getImageKitVideoThumbnailUrl(post.media_url) || null;
+  // الغلاف قد يكون رابط ImageKit محمياً: يُوقَّع، وإن تعذّر توقيعه لا يُطلب
+  // الرابط العام (يبقى الفيديو بلا غلاف بدل كشف الملف أو كسر الصورة).
+  const signedStillUrl = useMediaUrl(videoStillUrl);
 
   return (
     <section
@@ -577,9 +581,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
             />
           ) : (
             <>
-              {videoStillUrl && (
+              {signedStillUrl && (
                 <img
-                  src={videoStillUrl}
+                  src={signedStillUrl}
                   alt=""
                   aria-hidden="true"
                   draggable={false}
@@ -592,7 +596,7 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
                 src={backgroundMediaSuspended ? undefined : videoSrc}
                 data-aani-background-media=""
                 data-aani-video-id={post.id}
-                poster={videoStillUrl || undefined}
+                poster={signedStillUrl || undefined}
                 loop={!videoTimeRange}
                 autoPlay={isOverlayOpen && isVisible && !backgroundMediaSuspended}
                 muted={Boolean(backgroundSoundUrl) || muted}

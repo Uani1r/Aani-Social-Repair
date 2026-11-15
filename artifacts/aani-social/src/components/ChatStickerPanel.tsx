@@ -4,6 +4,7 @@ import { ArrowRight, Clock, ImagePlus, Plus, Store } from 'lucide-react';
 import { toast } from 'sonner';
 
 import StickerStudio from '@/components/StickerStudio';
+import { SignedImage } from '@/components/SignedMedia';
 import EmptyState from '@/components/EmptyState';
 import emojiCatalog from '@/data/emoji-catalog.json';
 import { EMOJI_CATEGORY_LABELS, normalizeEmojiCatalog, TwemojiEmoji, type EmojiChoice } from '@/components/TwemojiText';
@@ -367,7 +368,7 @@ export default function ChatStickerPanel({
                   <div className="messages-sticker-grid">
                     {customStickers.map(sticker => (
                       <button key={sticker.id} type="button" aria-label={`إرسال ${sticker.label}`} title={sticker.label} onClick={() => selectCustomSticker(sticker)}>
-                        <img src={sticker.url} alt="" loading="lazy" />
+                        <SignedImage src={sticker.url} alt="" loading="lazy" />
                       </button>
                     ))}
                   </div>

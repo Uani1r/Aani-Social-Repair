@@ -2,6 +2,7 @@ import { Plus, Star } from 'lucide-react';
 
 import Avatar from '../Avatar';
 import UserIdentity from '../UserIdentity';
+import { SignedImage } from '../SignedMedia';
 import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import type { StoriesByUser, StoryRow } from './types';
@@ -61,7 +62,7 @@ export default function StoriesStrip({
           >
             <span className="unified-story-avatar flex h-full w-full items-center justify-center overflow-hidden rounded-full">
               {currentProfile?.avatar_url ? (
-                <img
+                <SignedImage
                   src={currentProfile.avatar_url}
                   alt=""
                   className="h-full w-full rounded-full object-cover"

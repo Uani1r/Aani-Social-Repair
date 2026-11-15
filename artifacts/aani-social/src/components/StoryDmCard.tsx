@@ -3,6 +3,7 @@ import { Plus } from 'lucide-react';
 
 import RepostIcon from '@/components/RepostIcon';
 import UserIdentity from '@/components/UserIdentity';
+import { SignedImage } from '@/components/SignedMedia';
 import { SkeletonBlock } from '@/components/Skeletons';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { useMediaUrl } from '@/lib/mediaAccess';
@@ -144,7 +145,7 @@ export default function StoryDmCard({
         {!loading && story && !expired && (
           <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-4 bg-gradient-to-b from-black/70 to-transparent p-2">
             {story.author?.avatar_url ? (
-              <img src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+              <SignedImage src={story.author.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
             ) : (
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white/20 text-[10px] font-bold">
                 {(cleanUsername(story.author?.username).charAt(0) || 'A').toUpperCase()}

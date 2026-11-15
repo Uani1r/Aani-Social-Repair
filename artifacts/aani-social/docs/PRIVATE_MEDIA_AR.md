@@ -168,3 +168,102 @@ where table_schema = 'public' and table_name = 'profiles' and privilege_type = '
 **ملاحظة على التجاوز:** `service_role` يتجاوز RLS لا الصلاحيات. لذلك تقييد
 الأعمدة ينفذ عليه فعلاً، بخلاف سياسات RLS.
 
+
+
+## 6) جاهزية تفعيل توقيع ImageKit (VITE_IMAGEKIT_SIGNED_URLS)
+
+هذا القسم يصف حالة الكود كما هو الآن، وما يلزم قبل قلب المتغير إلى `true`.
+لم يُفعَّل شيء، ولم يُغيّر أي إعداد في ImageKit أو Supabase.
+
+### 6.1) ما صار مضموناً في الكود
+
+**الفشل مغلق.** `src/lib/mediaAccess.ts` لم يبقَ فيه رجوع صامت إلى الرابط العام:
+
+| الحالة | قبل | الآن |
+|---|---|---|
+| لا جلسة | الرابط العام | `null` (لا عرض) |
+| 401/403 من `/api/media/imagekit-sign` | الرابط العام | `null` + تهدئة 30 ثانية لنفس المسار |
+| فشل شبكة أو استجابة بلا `url` | الرابط العام | `null` |
+| أول رسم قبل وصول التوقيع | الرابط العام فوراً | `null` (يُعرض بدل الصورة بكسل شفاف) |
+
+`SignedImage` يرسم `<img>` ببكسل شفاف مضمّن حين لا يوجد توقيع: لا طلب لـImageKit،
+ولا أيقونة صورة مكسورة، ولا تغيّر في الحجم. `SignedVideo` لا يرسم عنصراً بلا توقيع.
+
+**الخادم هو الحكم.** `/api/media/imagekit-sign` لا يوقّع إلا بعد:
+1. التحقق من الجلسة عبر `/auth/v1/user`،
+2. `aani_can_read_media_object(path)` بجلسة المستخدم نفسه،
+3. مسار مطلق آمن بلا `..` ولا مخطط ولا استعلام.
+
+أي فشل في (2) يعني 403 و`null` في الواجهة — لا رابط عام بديل.
+
+### 6.2) مواضع العرض المغطاة الآن
+
+| السطح | المكوّن | الطريقة |
+|---|---|---|
+| صور المنشورات وفيديوهاتها | `usePosts`/`ProfileReelsPlayer` → `resolvePostMediaUrls` | توقيع عند الجلب |
+| غلاف الفيديو (poster) | `PostVideoPreview`, `ReelSlide` | `useMediaUrl` |
+| الريلز | `ReelSlide` | `resolvePostMediaUrls` + توقيع الغلاف |
+| القصص وعارضها | `StoryMediaStage`, `StoryComposerSheet`, `ProfileStoryArchiveView` | `SignedImage`/`SignedVideo` |
+| أبرز القصص ومعاينتها | `ProfileHighlightsManager` | `useMediaUrl` + `SignedImage` |
+| الصور الشخصية والأغلفة | `Avatar`, `ProfilePage`, `StoryHeader`, `StoriesStrip`, `TextOnlyStoryCanvas` | `useMediaUrl`/`SignedImage` |
+| صور المشاركين والقوائم | `ShareRecipientList`, `FollowRequestsSection`, `CloseFriendsSheet`, `StoryMentionPicker`, `CustomAllowedCommentersModal`, `CommentMentionSuggestions`, `NotificationsModal` | `SignedImage` |
+| التعليقات ومرفقاتها | `CommentItem` (الصورة والمكبَّرة) | `SignedImage` |
+| المحادثات | `ChatImageMessage`, `MessagesPage` (المعرض والمعاينة)، `SharedPostPreview` | توقيع قبل `fetch`/العرض |
+| الملصقات المخصصة | `ChatStickerMessage`, `ChatStickerPanel` | `SignedImage` |
+| معاينات محلية (blob/data) | منتقيات الملفات والمحرّرات | لا تُوقَّع: ليست وسائط مخزّنة |
+
+### 6.3) الرفع الجديد و Restricted access
+
+- الرفع المباشر (`src/lib/storyUpload.ts`) يرسل `isPrivateFile=true` عندما
+  يكون `VITE_IMAGEKIT_SIGNED_URLS=true` **و** `VITE_IMAGEKIT_PRIVATE_UPLOADS=true`.
+- الرفع الاحتياطي عبر الخادم (`POST /api/media/upload`) يفعل الشيء نفسه عندما
+  يكون `IMAGEKIT_PRIVATE_UPLOADS=true` في بيئة الخادم.
+- الشرطان في الواجهة مقصودان: ملف خاص بلا توقيع في الواجهة لا يُعرض أبداً.
+- الملفات المرفوعة **قبل** التفعيل تبقى عامة ولا يسحبها هذا التغيير.
+
+### 6.4) متغيرات البيئة وأماكن ضبطها
+
+| المتغير | الطرف | القيمة | مكان الضبط |
+|---|---|---|---|
+| `VITE_IMAGEKIT_SIGNED_URLS` | الواجهة | `false` افتراضياً | بيئة بناء `artifacts/aani-social` (Vite: تُدمج وقت البناء، فإعادة بناء مطلوبة) |
+| `VITE_IMAGEKIT_PRIVATE_UPLOADS` | الواجهة | `false` افتراضياً | نفس المكان |
+| `IMAGEKIT_URL_ENDPOINT` | الخادم | `https://ik.imagekit.io/<id>` | أسرار `artifacts/api-server` |
+| `IMAGEKIT_PRIVATE_KEY` | الخادم | سرّي | أسرار الخادم (لا يُوضع في الواجهة أبداً) |
+| `IMAGEKIT_PUBLIC_KEY` | الخادم | عام | أسرار الخادم (يُعاد للعميل لتوقيع الرفع) |
+| `IMAGEKIT_PRIVATE_UPLOADS` | الخادم | `false` افتراضياً | بيئة الخادم |
+| `SUPABASE_URL` (أو `VITE_SUPABASE_URL`) | الخادم | رابط المشروع | بيئة الخادم |
+| `SUPABASE_SERVICE_ROLE_KEY` | الخادم | سرّي | أسرار الخادم |
+
+`VITE_IMAGEKIT_SIGNED_URLS` يُقرأ مرة واحدة عند تحميل الحزمة، فتبديله يحتاج
+إعادة بناء ونشر الواجهة، لا إعادة تشغيل الخادم.
+
+### 6.5) ما يمنع التفعيل الآن (يحتاج قراراً/عملاً خارج هذا الفرع)
+
+1. **`aani_can_read_media_object` لا تغطّي كل أنواع الوسائط.** المغطّى: صور/أغلفة
+   الملفات، وسائط المنشورات وصوتها، القصص، أبرز القصص وأغلفتها. **غير المغطّى:**
+   صور المحادثات وفيديوهاتها والرسائل الصوتية والمستندات (`messages`)، ومرفقات
+   التعليقات (`comments.image_url`)، والملصقات المخصصة، وأغلفة الأصوات.
+   التفعيل قبل تغطيتها يعني أن هذه الوسائط ستُرفض (403) وتظهر فارغة.
+2. **فرع «رفعات المستخدم نفسه» في نفس الدالة لا يطابق الواقع.** الرفع يضع الملف
+   في `<accountId>/aani/<userId>/...`، والفحص يقارن `split_part(path,'/',1)` بـ
+   `auth.uid()`، أي بمقطع معرّف الحساب لا معرّف المستخدم — فلا يتحقق أبداً.
+3. **الروابط المشتقة لا تُوقَّع.** `.../ik-thumbnail.jpg` (غلاف الفيديو التلقائي)
+   ومسارات `?tr=` ليست في قاعدة البيانات، فمطابقة المسار تفشل. المعالجة الحالية:
+   الغلاف لا يُعرض بدل أن يُطلب بلا توقيع.
+4. **الملفات القديمة عامة.** لا شيء يسحبها إلا Restricted access على مستوى
+   الحساب أو إعادة الرفع.
+
+البند 1 و2 و3 إصلاحها في SQL (دالة `aani_can_read_media_object`)، ولم يُنفَّذ
+شيء منها هنا.
+
+### 6.6) خطوات يدوية في ImageKit (لا تُنفَّذ من الكود)
+
+1. التحقق أولاً بملف تجريبي واحد: ارفعه خاصاً، وأكّد أن رابطه بلا توقيع يُرجع 401،
+   وأن رابط `/api/media/imagekit-sign` بحساب مصرّح يُرجع 200.
+2. تفعيل **Restrict unsigned URLs** للصور والفيديو إن أردت حماية الملفات القديمة
+   أيضاً (يؤثر على كل الملفات فوراً).
+3. تفعيل `VITE_IMAGEKIT_SIGNED_URLS=true` بعد نشر الكود الحالي، ثم
+   `VITE_IMAGEKIT_PRIVATE_UPLOADS=true` و`IMAGEKIT_PRIVATE_UPLOADS=true` بعد
+   التأكد من العرض.
+4. مراقبة سجل الخادم لرسائل `ImageKit sign: media access check failed` — ظهورها
+   يعني أن نوع وسيط ما ما زال خارج تغطية الدالة.

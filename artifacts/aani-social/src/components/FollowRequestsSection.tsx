@@ -4,6 +4,7 @@ import { ChevronLeft, UserPlus, UserRound, X } from 'lucide-react';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 import { ListSkeleton } from '@/components/Skeletons';
+import { SignedImage } from '@/components/SignedMedia';
 import EmptyState from '@/components/EmptyState';
 
 type FollowRequestEntry = {
@@ -364,7 +365,7 @@ export default function FollowRequestsSection({
               <article key={request.requester_id} className="flex min-h-[96px] items-center gap-3 rounded-[20px] bg-[#141414] p-4">
                 <span className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full bg-[#222] text-[#555]">
                   {request.profile?.avatar_url
-                    ? <img src={request.profile.avatar_url} alt="" className="h-full w-full object-cover" />
+                    ? <SignedImage src={request.profile.avatar_url} alt="" className="h-full w-full object-cover" />
                     : <UserRound size={28} strokeWidth={1.8} />}
                 </span>
                 <span className="flex min-w-0 flex-1 flex-col gap-1">

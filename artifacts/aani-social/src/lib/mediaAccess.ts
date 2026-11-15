@@ -8,10 +8,12 @@
  *      يفتح الملف لأي شخص يعرفه. الحماية تحتاج bucket خاصاً + روابط موقّعة.
  *
  * هذه الوحدة:
- *   - ImageKit: تطلب توقيعاً من الخادم (الخادم يتحقق من الجلسة ومن حق المشاهد
- *     في المحتوى) عند تفعيل VITE_IMAGEKIT_SIGNED_URLS=true، وإلا تُعيد الرابط كما هو.
+ *   - ImageKit عند VITE_IMAGEKIT_SIGNED_URLS=true: الرابط الموقّع وحده. لا رجوع
+ *     إلى الرابط العام إطلاقاً — فشل التوقيع (بلا جلسة، 401، 403، انقطاع)
+ *     يعني null: لا يُطلب الملف ولا يُعرض. عند إطفاء المتغير يعمل الرابط العام
+ *     كما كان، فالتفعيل وحده يقلب السلوك إلى «الفشل مغلق».
  *   - مسار تخزين أو رابط Supabase: رابط موقّع، وإن تعذّر التوقيع يُعاد الرابط
- *     العام كما كان (فلا ينكسر العرض قبل تحويل الـbucket إلى private).
+ *     العام (الـbucket ما يزال عاماً، وتوقيعه لا يزيد حماية بعد).
  *   - blob:/data:/أي مضيف آخر: يُعاد كما هو بلا أي طلب شبكة.
  */
 
@@ -23,6 +25,11 @@ import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
 const SIGNED_URL_TTL_SECONDS = 60 * 60;
 /** تجديد قبل الانتهاء بهامش حتى لا ينتهي الرابط أثناء العرض. */
 const SIGNED_URL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+/**
+ * تهدئة بعد فشل التوقيع: لا يُعاد الطلب لنفس المسار قبل انقضائها، فلا تتحول
+ * صورة ممنوعة واحدة إلى سيل من 403 مع كل إعادة رسم.
+ */
+const SIGN_FAILURE_BACKOFF_MS = 30 * 1000;
 
 /**
  * توقيع روابط ImageKit لا يُفعَّل افتراضياً: بدون Restricted access على حساب
@@ -38,10 +45,38 @@ const IMAGEKIT_SIGNING_ENABLED = ((): boolean => {
   }
 })();
 
+/** هل التوقيع الإلزامي مفعّل في هذه النسخة؟ (للواجهة والتشخيص) */
+export function isImageKitSigningEnabled(): boolean {
+  return IMAGEKIT_SIGNING_ENABLED;
+}
+
+/**
+ * هل تُرفع الملفات الجديدة كخاصة (isPrivateFile)؟
+ *
+ * لا يُفعَّل إلا مع التوقيع الإلزامي: ملف خاص بلا توقيع في الواجهة = ملف لا
+ * يُعرض أبداً. تفعيله منفرداً خطأ إعداد، لذلك يُشترط الاثنان معاً.
+ */
+const IMAGEKIT_PRIVATE_UPLOADS = ((): boolean => {
+  try {
+    const env = (import.meta as { env?: Record<string, string | undefined> }).env;
+    return String(env?.VITE_IMAGEKIT_PRIVATE_UPLOADS || '').toLowerCase() === 'true';
+  } catch {
+    return false;
+  }
+})();
+
+export function isImageKitPrivateUploadEnabled(): boolean {
+  return IMAGEKIT_SIGNING_ENABLED && IMAGEKIT_PRIVATE_UPLOADS;
+}
+
 type CacheEntry = { url: string; expiresAt: number | null };
 
 const urlCache = new Map<string, CacheEntry>();
 const pendingRequests = new Map<string, Promise<string | null>>();
+/** طلبات توقيع ImageKit الجارية، مفتاحها المسار — تمنع تكرار الطلب نفسه. */
+const pendingImageKitRequests = new Map<string, Promise<string | null>>();
+/** مسارات فشل توقيعها ImageKit مؤخراً → وقت الفشل (ms). */
+const signFailures = new Map<string, number>();
 
 const STORAGE_PUBLIC_PATH = /\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)$/;
 const IMAGEKIT_HOST = /(^|\.)ik\.imagekit\.io$/i;
@@ -118,49 +153,75 @@ function readCached(key: string): string | null {
 /**
  * يطلب من الخادم رابط ImageKit موقّعاً. الخادم يتحقق من الجلسة ومن حق المشاهد
  * في المحتوى (aani_can_read_media_object) قبل التوقيع بالمفتاح الخاص.
- * عند أي فشل يُعاد الرابط الأصلي — لا تعطيل للعرض.
+ *
+ * عند التفعيل: **لا رجوع إلى الرابط العام**. أي فشل (بلا جلسة، 401، 403،
+ * شبكة، استجابة بلا رابط) يُعيد null فلا يُطلب الملف من ImageKit إطلاقاً،
+ * ولا يُكشف وجود ملف خاص. النتيجة السلبية تُحفظ 30 ثانية لتفادي تكرار الطلب.
  */
-async function signImageKitUrl(raw: string): Promise<string> {
-  if (!IMAGEKIT_SIGNING_ENABLED || !supabaseConfigured) return raw;
-
+async function signImageKitUrl(raw: string): Promise<string | null> {
   const path = parseImageKitPath(raw);
   if (!path) return raw;
+  if (!IMAGEKIT_SIGNING_ENABLED) return raw;
+  if (!supabaseConfigured) return null;
 
   const key = `imagekit:${path}`;
   const cached = readCached(key);
   if (cached) return cached;
 
-  try {
-    const { data: session } = await supabase.auth.getSession();
-    const accessToken = session.session?.access_token;
-    if (!accessToken) return raw;
+  const failedAt = signFailures.get(key);
+  if (failedAt !== undefined && Date.now() - failedAt < SIGN_FAILURE_BACKOFF_MS) return null;
 
-    const response = await fetch(`/api/media/imagekit-sign?path=${encodeURIComponent(path)}`, {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    if (!response.ok) return raw;
+  const pending = pendingImageKitRequests.get(key);
+  if (pending) return pending;
 
-    const payload = await response.json().catch(() => null) as { url?: unknown; expire?: unknown } | null;
-    if (typeof payload?.url !== 'string') return raw;
+  const request = (async (): Promise<string | null> => {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const accessToken = session.session?.access_token;
+      // بلا جلسة لا يوجد توقيع: فشل مغلق لا رابط عام.
+      if (!accessToken) return null;
 
-    const expiresAt = typeof payload.expire === 'number' ? payload.expire * 1000 : null;
-    urlCache.set(key, { url: payload.url, expiresAt });
-    return payload.url;
-  } catch {
-    return raw;
-  }
+      const response = await fetch(`/api/media/imagekit-sign?path=${encodeURIComponent(path)}`, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) {
+        signFailures.set(key, Date.now());
+        return null;
+      }
+
+      const payload = await response.json().catch(() => null) as { url?: unknown; expire?: unknown } | null;
+      if (typeof payload?.url !== 'string' || !payload.url) {
+        signFailures.set(key, Date.now());
+        return null;
+      }
+
+      const expiresAt = typeof payload.expire === 'number' ? payload.expire * 1000 : null;
+      signFailures.delete(key);
+      urlCache.set(key, { url: payload.url, expiresAt });
+      return payload.url;
+    } catch {
+      signFailures.set(key, Date.now());
+      return null;
+    } finally {
+      pendingImageKitRequests.delete(key);
+    }
+  })();
+
+  pendingImageKitRequests.set(key, request);
+  return request;
 }
 
 /**
  * رابط قابل للعرض لقيمة وسائط مخزّنة.
- * يُعيد القيمة كما هي لغير مسارات التخزين، وnull للقيم الفارغة.
+ * يُعيد القيمة كما هي لغير مسارات التخزين، وnull للقيم الفارغة — وnull أيضاً
+ * لوسيط ImageKit تعذّر توقيعه عند تفعيل التوقيع الإلزامي.
  */
 export async function resolveMediaUrl(raw: string | null | undefined): Promise<string | null> {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   if (!value) return null;
 
-  // ImageKit: توقيع عبر الخادم عند تفعيله، وإلا الرابط كما هو.
+  // ImageKit: عند التفعيل الرابط الموقّع وحده، وإلا الرابط كما هو.
   if (parseImageKitPath(value)) return signImageKitUrl(value);
 
   const ref = parseStorageRef(value);
@@ -215,23 +276,29 @@ export async function resolveMediaUrl(raw: string | null | undefined): Promise<s
 }
 
 /**
- * نسخة متزامنة: تُعيد الرابط الموقّع إن كان في الذاكرة، وإلا القيمة الأصلية
- * حتى يصل الموقّع — تُستخدم لعرض فوري بلا وميض.
+ * نسخة متزامنة: تُعيد الرابط الموقّع إن كان في الذاكرة.
+ * لوسائط ImageKit عند تفعيل التوقيع: تُعيد null بدل الرابط العام إن لم يكن
+ * الموقّع جاهزاً — لا يُطلب الملف من ImageKit بلا توقيع في أي لحظة.
  */
 export function resolveMediaUrlSync(raw: string | null | undefined): string | null {
   if (typeof raw !== 'string') return null;
   const value = raw.trim();
   if (!value) return null;
   const imageKitPath = parseImageKitPath(value);
-  if (imageKitPath) return readCached(`imagekit:${imageKitPath}`) || value;
+  if (imageKitPath) {
+    if (!IMAGEKIT_SIGNING_ENABLED) return value;
+    return readCached(`imagekit:${imageKitPath}`);
+  }
   const ref = parseStorageRef(value);
   if (!ref) return value;
   return readCached(cacheKeyOf(ref.bucket, ref.path)) || value;
 }
 
 /**
- * نسخة React للوسائط المفردة (صورة ملف، غلاف، قصة): تُعرض القيمة الأصلية
- * فوراً ثم تُستبدل بالرابط الموقّع عند وصوله.
+ * نسخة React للوسائط المفردة (صورة ملف، غلاف، قصة، رسالة).
+ * عند تفعيل التوقيع الإلزامي تكون القيمة null حتى يصل الموقّع، وتبقى null إن
+ * فشل التوقيع — فيُعرض بدل الوسيط عنصر محايد (انظر SignedImage) بدل طلب
+ * الرابط العام أو كسر الصورة.
  */
 export function useMediaUrl(raw: string | null | undefined): string | null {
   const [resolved, setResolved] = useState<string | null>(() => resolveMediaUrlSync(raw));
@@ -240,7 +307,8 @@ export function useMediaUrl(raw: string | null | undefined): string | null {
     let active = true;
     setResolved(resolveMediaUrlSync(raw));
     void resolveMediaUrl(raw).then(url => {
-      if (active && url) setResolved(url);
+      // null يعني فشل التوقيع: يُثبَّت null ولا يُستبدل بالرابط العام.
+      if (active) setResolved(url);
     });
     return () => {
       active = false;
