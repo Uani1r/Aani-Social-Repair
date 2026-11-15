@@ -8140,12 +8140,13 @@ select,
 
 /* ===== زر «الأشخاص القريبون» في الشريط العلوي — الشاشة الرئيسية فقط =====
    أول عنصر في صف الهيدر (flex) = أقصى اليمين في RTL، مصفوف على نفس خط الوسط
-   مع الشعار وأزرار (+ وجرس) عبر align-items: center — أيقونة شفافة بلا فقاعة. */
+   مع الشعار وأزرار (+ وجرس) عبر align-items: center — أيقونة شفافة بلا فقاعة.
+   الحجم 36×36 مطابق لزر (+) في أقصى اليسار، مع مساحة لمس مريحة. */
 .unified-nearby-button {
   display: flex;
-  width: 32px;
-  height: 32px;
-  flex: 0 0 32px;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
   align-items: center;
   justify-content: center;
   padding: 0;
