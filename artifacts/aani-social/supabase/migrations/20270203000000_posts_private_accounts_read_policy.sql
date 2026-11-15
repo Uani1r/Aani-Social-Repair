@@ -82,7 +82,10 @@ begin
     where namespace.nspname = 'public'
       and proc.proname = 'aani_is_user_blocked'
   ) then
-    raise exception 'الدالة public.aani_is_user_blocked مفقودة — طبّق 20261115000000 أولاً';
+    -- لا يُفشل الترحيل: الحارس يُنشأ في القسم 4 فقط عند وجود الدالة،
+    -- والترحيل 20270204000000 يُنشئ الدالة إن غابت.
+    raise warning
+      'الدالة aani_is_user_blocked غائبة — سيُتخطى حارس الحجب. طبّق 20270204000000 ثم أعد تشغيل هذا الترحيل.';
   end if;
 end $$;
 
@@ -174,11 +177,33 @@ create policy "Public can read public posts"
 --    ولا تُعيد true إلا إذا كان auth.uid() أحد طرفي العلاقة، فهي آمنة داخل
 --    السياسة ولا تكشف حجب مستخدمين آخرين.
 --    السياسة restrictive: تُجمع بـ AND مع كل السياسات المتساهلة أعلاه.
+--
+--    يُنشأ الحارس فقط إذا كانت الدالة موجودة: قاعدة بُنيت من schema.sql لا
+--    تحتوي user_blocks ولا aani_is_user_blocked، وسياسة تشير إلى دالة مفقودة
+--    تُفشل الترحيل كله. الترحيل 20270204000000 يُنشئ الاثنين إن غابا، وبعده
+--    يعمل هذا الحارس (أعد تشغيل هذا الملف بعد 20270204000000 إن لم يكن الحارس موجوداً).
 -- ---------------------------------------------------------------------
-drop policy if exists aani_posts_block_guard on public.posts;
-create policy aani_posts_block_guard on public.posts
-  as restrictive for select to authenticated
-  using (not public.aani_is_user_blocked((select auth.uid()), user_id));
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public'
+      and proc.proname = 'aani_is_user_blocked'
+  ) then
+    raise warning
+      'الدالة aani_is_user_blocked غائبة: تم تخطي حارس الحجب على public.posts. طبّق 20270204000000 ثم أعد تشغيل هذا الترحيل.';
+    return;
+  end if;
+
+  execute 'drop policy if exists aani_posts_block_guard on public.posts';
+  execute $policy$
+    create policy aani_posts_block_guard on public.posts
+      as restrictive for select to authenticated
+      using (not public.aani_is_user_blocked((select auth.uid()), user_id))
+  $policy$;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- 5) تحقق داخل الترحيل
@@ -191,7 +216,13 @@ do $$
 declare
   extra_policies text;
 begin
-  if not exists (
+  if exists (
+    select 1
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'public'
+      and proc.proname = 'aani_is_user_blocked'
+  ) and not exists (
     select 1
     from pg_policies
     where schemaname = 'public'

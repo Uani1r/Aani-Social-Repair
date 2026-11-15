@@ -35,16 +35,19 @@
 begin;
 
 -- ---------------------------------------------------------------------
--- 0) التحقق من المتطلبات المسبقة قبل أي تغيير
+-- 0) المتطلبات المسبقة، وتهيئة الأساس إن غاب
+--
+-- سبب الاختلاف مع القاعدة الحيّة: schema.sql (الملف الذي يُعاد تشغيله كاملاً
+-- لبناء القاعدة) لا يحتوي follow_requests ولا user_blocks ولا
+-- aani_is_user_blocked — كلها في 20261108000000 و20261115000000 فقط. فقاعدة
+-- بُنيت من schema.sql لا تحتوي أيّاً منها، ولذلك لا توجد دالة قبول الطلب ولا
+-- سياسة إدخال صارمة على follows. تُنشأ هنا بتعريفاتها الأصلية بدل إفشال
+-- الترحيل، بلا حذف أي شيء وبلا تغيير تعريف موجود.
 -- ---------------------------------------------------------------------
 do $$
 begin
-  if to_regclass('public.follows') is null then
-    raise exception 'public.follows غير موجود — لا يمكن تطبيق هذا الترحيل';
-  end if;
-
-  if to_regclass('public.follow_requests') is null then
-    raise exception 'public.follow_requests غير موجود — طبّق 20261108000000 أولاً';
+  if to_regclass('public.follows') is null or to_regclass('public.profiles') is null then
+    raise exception 'public.follows أو public.profiles غير موجود — لا يمكن تطبيق هذا الترحيل';
   end if;
 
   if not exists (
@@ -56,15 +59,206 @@ begin
   ) then
     raise exception 'العمود profiles.is_private مفقود — طبّق 20261108000000 أولاً';
   end if;
+end $$;
 
+-- user_blocks + aani_is_user_blocked (تعريف 20261115000000)
+create table if not exists public.user_blocks (
+  blocker_id uuid not null references public.profiles(id) on delete cascade,
+  blocked_user_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (blocker_id, blocked_user_id),
+  constraint aani_user_blocks_not_self check (blocker_id <> blocked_user_id)
+);
+
+create index if not exists aani_user_blocks_blocked_user_idx
+  on public.user_blocks (blocked_user_id, blocker_id);
+
+alter table public.user_blocks enable row level security;
+grant select, insert, delete on public.user_blocks to authenticated;
+
+-- قاعدة قديمة أنشأت عمود الحجب باسم blocked_id بدل blocked_user_id.
+do $$
+begin
   if not exists (
-    select 1
-    from pg_proc as proc
-    join pg_namespace as namespace on namespace.oid = proc.pronamespace
-    where namespace.nspname = 'public'
-      and proc.proname = 'aani_is_user_blocked'
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_user_id'
   ) then
-    raise exception 'الدالة public.aani_is_user_blocked مفقودة — طبّق 20261115000000 أولاً';
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'user_blocks' and column_name = 'blocked_id'
+    ) then
+      execute 'alter table public.user_blocks add column blocked_user_id uuid references public.profiles(id) on delete cascade';
+      execute 'update public.user_blocks set blocked_user_id = blocked_id where blocked_user_id is null';
+    else
+      raise exception 'public.user_blocks لا يحتوي blocked_user_id ولا blocked_id — راجع مخطط الجدول قبل التطبيق';
+    end if;
+  end if;
+end $$;
+
+create or replace function public.aani_is_user_blocked(p_user_a uuid, p_user_b uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    auth.uid() is not null
+    and auth.uid() in (p_user_a, p_user_b)
+    and exists (
+      select 1
+      from public.user_blocks as blocked
+      where (blocked.blocker_id = p_user_a and blocked.blocked_user_id = p_user_b)
+         or (blocked.blocker_id = p_user_b and blocked.blocked_user_id = p_user_a)
+    ),
+    false
+  );
+$$;
+revoke all on function public.aani_is_user_blocked(uuid, uuid) from public;
+grant execute on function public.aani_is_user_blocked(uuid, uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 0ب) تهيئة public.follow_requests إن كانت غائبة
+--
+-- سبب الاختلاف مع القاعدة الحيّة: جدول follow_requests يُنشأ في
+-- 20261108000000 فقط، وهو غير موجود إطلاقاً في schema.sql ولا في
+-- fresh_schema_cloudflare_r2.sql. وبما أن schema.sql هو الملف الذي يُعاد
+-- تشغيله كاملاً لبناء القاعدة، فقاعدة بُنيت منه لا تحتوي follow_requests،
+-- وكل ما يعتمد عليه (سياسة إدخال follows، حارس الحجب، إشعار الطلب، ودالة
+-- القبول) غير موجود أو غير مفعّل. لذلك يُنشأ هنا بشكل مطابق لتعريف
+-- 20261108000000، بلا حذف أي شيء، وقبل أي استخدام له.
+-- ---------------------------------------------------------------------
+create table if not exists public.follow_requests (
+  requester_id uuid not null references public.profiles(id) on delete cascade,
+  recipient_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (requester_id, recipient_id),
+  constraint aani_follow_requests_not_self check (requester_id <> recipient_id)
+);
+
+create index if not exists aani_follow_requests_recipient_created_idx
+  on public.follow_requests (recipient_id, created_at desc);
+
+alter table public.follow_requests enable row level security;
+grant select, insert, delete on public.follow_requests to authenticated;
+
+drop policy if exists aani_follow_requests_select_participant on public.follow_requests;
+create policy aani_follow_requests_select_participant on public.follow_requests
+  for select to authenticated
+  using (
+    requester_id = (select auth.uid())
+    or recipient_id = (select auth.uid())
+  );
+
+drop policy if exists aani_follow_requests_insert_private on public.follow_requests;
+create policy aani_follow_requests_insert_private on public.follow_requests
+  for insert to authenticated
+  with check (
+    requester_id = (select auth.uid())
+    and requester_id <> recipient_id
+    and exists (
+      select 1 from public.profiles as recipient
+      where recipient.id = recipient_id and recipient.is_private
+    )
+    and not exists (
+      select 1 from public.follows as accepted
+      where accepted.follower_id = requester_id
+        and accepted.following_id = recipient_id
+    )
+  );
+
+drop policy if exists aani_follow_requests_delete_participant on public.follow_requests;
+create policy aani_follow_requests_delete_participant on public.follow_requests
+  for delete to authenticated
+  using (
+    requester_id = (select auth.uid())
+    or recipient_id = (select auth.uid())
+  );
+
+-- حارس الحجب على الطلبات (تعريفه في 20261115000000) — يُعاد دفاعياً.
+drop policy if exists aani_follow_requests_block_guard on public.follow_requests;
+create policy aani_follow_requests_block_guard on public.follow_requests
+  as restrictive for insert to authenticated
+  with check (not public.aani_is_user_blocked(requester_id, recipient_id));
+
+-- إشعار صاحب الحساب عند وصول الطلب: لا يُنشأ إلا إذا كان جدول notifications
+-- موجوداً (بعض القواعد لا تحتويه). لا يُفشل الترحيل إذا غاب.
+do $$
+begin
+  if to_regclass('public.notifications') is not null then
+    create or replace function public.aani_notify_follow_request()
+    returns trigger
+    language plpgsql
+    security definer
+    set search_path = ''
+    as $fn$
+    begin
+      insert into public.notifications (user_id, actor_id, type, content, reference_id, is_read, created_at)
+      values (
+        new.recipient_id,
+        new.requester_id,
+        'follow_request',
+        'أرسل طلب متابعة',
+        new.requester_id,
+        false,
+        new.created_at
+      );
+      return new;
+    end;
+    $fn$;
+
+    revoke all on function public.aani_notify_follow_request() from public, anon, authenticated;
+
+    drop trigger if exists aani_follow_request_notification_trg on public.follow_requests;
+    create trigger aani_follow_request_notification_trg
+    after insert on public.follow_requests
+    for each row execute function public.aani_notify_follow_request();
+
+    create or replace function public.aani_resolve_follow_request_notification()
+    returns trigger
+    language plpgsql
+    security definer
+    set search_path = ''
+    as $fn$
+    begin
+      update public.notifications
+      set is_read = true
+      where user_id = old.recipient_id
+        and actor_id = old.requester_id
+        and type = 'follow_request'
+        and reference_id = old.requester_id
+        and is_read = false;
+      return old;
+    end;
+    $fn$;
+
+    revoke all on function public.aani_resolve_follow_request_notification() from public, anon, authenticated;
+
+    drop trigger if exists aani_follow_request_resolved_notification_trg on public.follow_requests;
+    create trigger aani_follow_request_resolved_notification_trg
+    after delete on public.follow_requests
+    for each row execute function public.aani_resolve_follow_request_notification();
+  end if;
+
+  -- بثّ التغييرات للواجهة (قائمة الطلبات الحيّة) — عضو واحد فقط في المنشور.
+  if exists (select 1 from pg_publication where pubname = 'supabase_realtime')
+     and not exists (
+       select 1 from pg_publication_tables
+       where pubname = 'supabase_realtime'
+         and schemaname = 'public'
+         and tablename = 'follow_requests'
+     ) then
+    execute 'alter publication supabase_realtime add table public.follow_requests';
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- 0ج) تأكيد وجود الجدول بعد التهيئة
+-- ---------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('public.follow_requests') is null then
+    raise exception 'public.follow_requests غير موجود بعد التهيئة — راجع صلاحيات المخطط';
   end if;
 end $$;
 

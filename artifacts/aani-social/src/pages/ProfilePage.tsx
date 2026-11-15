@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Flag, MapPin, MessageCircle, Play, X } from 'lucide-react';
+import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Copy, Eye, EyeOff, Flag, Lock, MapPin, MessageCircle, Play, X } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 import FollowButton from '@/components/FollowButton';
@@ -299,6 +299,12 @@ export default function ProfilePage({
     .filter(post => post.reposter_id === activeUserId)
     .sort((first, second) => Date.parse(second.created_at || '') - Date.parse(first.created_at || ''));
 
+  // حساب خاص لا يتابعه المشاهد (أو زائر بلا حساب): تُعرض المعلومات العامة فقط،
+  // ويُمنع عرض المنشورات والريلز والريبوست والإشارات والقصص وأبرز القصص
+  // وقائمتي المتابعة. المنع الفعلي في قاعدة البيانات عبر RLS و aani_can_read_post،
+  // وهذا العلم يمنع عرض واجهات فارغة أو أقسام لا معنى لها.
+  const isPrivateLocked = Boolean(person?.is_private) && !own && !isFollowing;
+
   // تبويب المنشورات المشار فيها: تُعرَّف حالتها قبل أي تأثير يستخدمها
   // (taggedPosts) لتفادي ReferenceError: Cannot access before initialization.
   const [taggedPosts, setTaggedPosts] = useState<Post[]>(() => []);
@@ -327,7 +333,7 @@ export default function ProfilePage({
   // والإشارات تُقرأ من post_metadata (kind: mention + profileId)
   // في متن/وصف المنشور الأصلي — إشارات التعليقات مستبعدة كلياً.
   useEffect(() => {
-    if (profileContentTab !== 'tagged' || !supabaseConfigured) return;
+    if (profileContentTab !== 'tagged' || !supabaseConfigured || isPrivateLocked) return;
     let active = true;
     void (async () => {
       setTaggedLoading(true);
@@ -448,7 +454,7 @@ export default function ProfilePage({
     return () => {
       active = false;
     };
-  }, [profileContentTab, activeUserId, person?.username]);
+  }, [profileContentTab, activeUserId, person?.username, isPrivateLocked]);
   const username = cleanUsername(person?.username);
   const profileCity = person?.city?.trim() || person?.location?.trim() || '';
   const profileJob = person?.job?.trim() || '';
@@ -2183,23 +2189,27 @@ export default function ProfilePage({
               </Link>
             </div>
           )}
-          <div dir="rtl" className="flex items-center gap-2 text-xs sm:gap-3 sm:text-sm">
-            <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedPostCount}</span> <span className="text-[#71767B]">المنشورات</span></div>
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('aani:open-follow-list', { detail: { kind: 'following', targetUserId: activeUserId } }))}
-              className="cursor-pointer whitespace-nowrap transition hover:opacity-80"
-            >
-              <span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => window.dispatchEvent(new CustomEvent('aani:open-follow-list', { detail: { kind: 'followers', targetUserId: activeUserId } }))}
-              className="cursor-pointer whitespace-nowrap transition hover:opacity-80"
-            >
-              <span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span>
-            </button>
-          </div>
+          {/* حساب خاص لا يتابعه المشاهد: تُخفى الإحصاءات وقائمتا المتابعة معاً،
+              فلا يبقى سوى المعلومات العامة وزر «طلب متابعة». */}
+          {!isPrivateLocked && (
+            <div dir="rtl" className="flex items-center gap-2 text-xs sm:gap-3 sm:text-sm">
+              <div className="whitespace-nowrap"><span className="font-bold text-white">{formattedPostCount}</span> <span className="text-[#71767B]">المنشورات</span></div>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('aani:open-follow-list', { detail: { kind: 'following', targetUserId: activeUserId } }))}
+                className="cursor-pointer whitespace-nowrap transition hover:opacity-80"
+              >
+                <span className="font-bold text-white">{formattedFollowing}</span> <span className="text-[#71767B]">متابع</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('aani:open-follow-list', { detail: { kind: 'followers', targetUserId: activeUserId } }))}
+                className="cursor-pointer whitespace-nowrap transition hover:opacity-80"
+              >
+                <span className="font-bold text-white">{formattedFollowers}</span> <span className="text-[#71767B]">المتابعون</span>
+              </button>
+            </div>
+          )}
         </div>
 
         <div id="bioSection" className="mb-3 mt-2">
@@ -2227,7 +2237,7 @@ export default function ProfilePage({
         )}
       </div>
 
-      {(own || profileHighlights.length > 0) && (
+      {!isPrivateLocked && (own || profileHighlights.length > 0) && (
         <div className="mb-2 mt-6 px-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold text-[#F7F9F9]">أبرز القصص</h2>
@@ -2268,12 +2278,26 @@ export default function ProfilePage({
         </div>
       )}
 
-      <ProfileTabs activeTab={profileContentTab} onChange={setProfileContentTab} />
+      {isPrivateLocked && (
+        <div className="mt-6 px-4">
+          <div className="flex flex-col items-center gap-3 rounded-2xl border border-[#2F3336] bg-[#111] px-6 py-10 text-center">
+            <span aria-hidden="true" className="grid h-14 w-14 place-items-center rounded-full border border-[#53575B] text-white">
+              <Lock size={26} strokeWidth={1.8} />
+            </span>
+            <p className="text-[15px] font-bold text-white">هذا الحساب خاص</p>
+            <p className="max-w-xs text-[13px] leading-6 text-[#71767B]">
+              لا تُعرض المنشورات والريلز والقصص وأبرز القصص إلا للمتابعين الذين وافق صاحب الحساب على طلبهم.
+            </p>
+          </div>
+        </div>
+      )}
 
-      {loading && (
+      {!isPrivateLocked && <ProfileTabs activeTab={profileContentTab} onChange={setProfileContentTab} />}
+
+      {!isPrivateLocked && loading && (
         <GridSkeleton count={9} className="mt-4 gap-[2px] rounded-none" />
       )}
-      {profileContentTab === 'tagged' && taggedLoading && (
+      {!isPrivateLocked && profileContentTab === 'tagged' && taggedLoading && (
         <GridSkeleton count={9} className="mt-4 gap-[2px] rounded-none" />
       )}
       {!loading && error && (
@@ -2284,10 +2308,10 @@ export default function ProfilePage({
           </div>
         </div>
       )}
-      {!loading && !error && posts.length === 0 && profileContentTab !== 'tagged' && (
+      {!isPrivateLocked && !loading && !error && posts.length === 0 && profileContentTab !== 'tagged' && (
         <EmptyState className="mt-4 min-h-64" />
       )}
-      {!loading && !error && (posts.length > 0 || profileContentTab === 'tagged') && (() => {
+      {!isPrivateLocked && !loading && !error && (posts.length > 0 || profileContentTab === 'tagged') && (() => {
         // شبكة إنستغرام: 3 أعمدة — الصور والفيديوهات والريلز فقط،
         // والمنشورات الكتابية (text) مستبعدة كلياً من الشبكة.
         // تبويب الفيديوهات: نفس الشبكة والحجم بالضبط لكن بقائمة
@@ -2435,7 +2459,7 @@ export default function ProfilePage({
           </div>
         );
       })()}
-      {feedViewerPostId && (feedViewerSource === 'reposts'
+      {!isPrivateLocked && feedViewerPostId && (feedViewerSource === 'reposts'
         ? profileReposts.some(post => post.id === feedViewerPostId && !isProfileReel(post))
         : feedViewerSource === 'tagged'
           ? taggedPosts.some(post => post.id === feedViewerPostId && !isProfileReel(post))
@@ -2453,7 +2477,7 @@ export default function ProfilePage({
           onClose={() => setFeedViewerPostId(null)}
         />
       )}
-      {reelsPlayerPostId && (reelsPlayerSource === 'videos'
+      {!isPrivateLocked && reelsPlayerPostId && (reelsPlayerSource === 'videos'
         ? profileVideoPosts.some(post => post.id === reelsPlayerPostId)
         : reelsPlayerSource === 'reposts'
           ? profileReposts.some(post => post.id === reelsPlayerPostId && isProfileReel(post))
