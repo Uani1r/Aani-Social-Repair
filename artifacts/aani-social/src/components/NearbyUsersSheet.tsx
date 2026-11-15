@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, MapPin } from 'lucide-react';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { useLocation } from 'wouter';
 import { toast } from 'sonner';
 
@@ -11,6 +12,7 @@ import EmptyState from '@/components/EmptyState';
 import { Switch } from '@/components/ui/switch';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
+import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -31,17 +33,112 @@ type NearbyUser = Pick<
   'id' | 'username' | 'full_name' | 'display_name' | 'avatar_url' | 'city'
 >;
 
+type NearbyProfileRow = {
+  city?: string | null;
+  location?: string | null;
+  is_nearby_visible?: boolean | null;
+};
+
 type NearbyUsersState =
   | { status: 'loading'; people: NearbyUser[]; errorText: '' }
   | { status: 'ready'; people: NearbyUser[]; errorText: '' }
   | { status: 'no-city'; people: NearbyUser[]; errorText: '' }
   | { status: 'error'; people: NearbyUser[]; errorText: string };
 
+// مفتاح الكاش المحلي لمنطقة المستخدم — لكل حساب على حدة.
+// الغرض: استعادة المنطقة فوراً عند فتح الشاشة أو العودة إليها، دون انتظار الشبكة.
+const CITY_CACHE_PREFIX = 'aani_nearby_city_';
+
+// فحص دوري صامت أثناء فتح الشاشة والتبويب ظاهر.
+const REFRESH_INTERVAL_MS = 6000;
+// جمع تحديثات Realtime المتقاربة في طلب واحد.
+const REALTIME_DEBOUNCE_MS = 600;
+// أقل مدة بين محاولتي إعادة بناء قناة Realtime.
+const CHANNEL_REBUILD_COOLDOWN_MS = 5000;
+
+function readCachedCity(userId: string): string | null {
+  try {
+    const value = window.localStorage.getItem(`${CITY_CACHE_PREFIX}${userId}`);
+    const trimmed = value?.trim() || '';
+    return trimmed || null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedCity(userId: string, city: string | null): void {
+  try {
+    const key = `${CITY_CACHE_PREFIX}${userId}`;
+    if (city) window.localStorage.setItem(key, city);
+    else window.localStorage.removeItem(key);
+  } catch {
+    /* التخزين المحلي اختياري — لا يفشل الشاشة */
+  }
+}
+
+/** مدينة الصف: city أولاً ثم location (نفس مصدر مدينة التسجيل). */
+function pickCity(row: NearbyProfileRow | null | undefined): string | null {
+  for (const value of [row?.city, row?.location]) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+/**
+ * جلب القائمة من المصدر المعتمد aani_nearby_people (يحترم المدينة والظهور
+ * والحسابات المعطلة وRLS)، مع رجوع للاستعلام المباشر إن لم يُطبَّق الترحيل.
+ */
+async function fetchNearbyPeople(city: string, currentUserId: string): Promise<NearbyUser[]> {
+  const { data: rpcData, error: rpcError } = await supabase.rpc('aani_nearby_people', { p_limit: 200 });
+  if (!rpcError) {
+    return ((rpcData || []) as NearbyUser[]).filter(person => Boolean(person?.id));
+  }
+
+  const rpcMissing = rpcError.code === 'PGRST202'
+    || /aani_nearby_people|could not find the function|schema cache/i.test(rpcError.message || '');
+  if (!rpcMissing) throw rpcError;
+
+  const columns = 'id, username, full_name, display_name, avatar_url, city, is_deactivated';
+  let result = await supabase
+    .from('profiles')
+    .select(columns)
+    .eq('city', city)
+    .neq('id', currentUserId)
+    .eq('is_deactivated', false)
+    .eq('is_nearby_visible', true)
+    .order('created_at', { ascending: false })
+    .limit(200);
+
+  // قاعدة بيانات بلا عمود is_deactivated أو is_nearby_visible بعد → أعد المحاولة بلا الأعمدة الناقصة
+  if (result.error && (result.error.code === '42703' || result.error.code === 'PGRST204')) {
+    const missing = result.error.message || '';
+    let retry = supabase
+      .from('profiles')
+      .select('id, username, full_name, display_name, avatar_url, city')
+      .eq('city', city)
+      .neq('id', currentUserId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (!/is_deactivated/i.test(missing)) retry = retry.eq('is_deactivated', false);
+    if (!/is_nearby_visible/i.test(missing)) retry = retry.eq('is_nearby_visible', true);
+    result = await retry;
+  }
+
+  if (result.error) throw result.error;
+  return ((result.data || []) as NearbyUser[]).filter(person => Boolean(person?.id));
+}
+
 /**
  * شاشة «الأشخاص القريبون»: تعرض مستخدمي نفس المدينة المسجلة في الملف الشخصي
  * (profiles.city) الذين يسمحون بالظهور في القائمة (is_nearby_visible = true).
  * تفتح من زر الدبوس في أعلى الشاشة الرئيسية، ويظهر بجانب عنوانها مفتاح
  * تشغيل/إيقاف يتحكم بظهور المستخدم الحالي في قائمة الآخرين.
+ *
+ * المنطقة: تُستعاد فوراً من الكاش المحلي ثم يُعاد التحقق منها من profiles بنفس
+ * معرّف المستخدم؛ ولا تُصفَّر منطقة محفوظة بسبب تأخر الطلب أو خطأ اتصال مؤقت.
+ *
+ * القائمة: اشتراك Realtime على public.profiles + فحص دوري صامت كل 6 ثوانٍ
+ * أثناء الفتح والتبويب ظاهر، مع تجميع التحديثات وتجاهل نتائج الطلبات القديمة.
  */
 export default function NearbyUsersSheet({
   open,
@@ -55,9 +152,17 @@ export default function NearbyUsersSheet({
   useOverlayBack(open, onClose);
   const [, navigate] = useLocation();
   const [state, setState] = useState<NearbyUsersState>({ status: 'loading', people: [], errorText: '' });
+  // المنطقة المستخدمة فعلياً في العرض والجلب (كاش ← ملف محمّل ← تأكيد من profiles)
+  const [resolvedCity, setResolvedCity] = useState<string | null>(() => currentCity?.trim() || null);
   // مفتاح الظهور في قائمة الأشخاص القريبين (profiles.is_nearby_visible)
   const [nearbyVisible, setNearbyVisible] = useState(() => currentProfile?.is_nearby_visible !== false);
   const [togglingVisible, setTogglingVisible] = useState(false);
+
+  // القيمة الحالية للمنطقة في مرجع، حتى لا تُغلق الطلبات المتأخرة على قيمة قديمة
+  const cityRef = useRef<string | null>(currentCity?.trim() || null);
+  const hasPeopleRef = useRef(false);
+  const requestSeqRef = useRef(0);
+  const debounceRef = useRef<number | null>(null);
 
   // مزامنة المفتاح مع الملف الشخصي إذا تغيّر من مكان آخر
   useEffect(() => {
@@ -65,75 +170,105 @@ export default function NearbyUsersSheet({
     setNearbyVisible(currentProfile?.is_nearby_visible !== false);
   }, [currentProfile?.is_nearby_visible, togglingVisible]);
 
+  const commitPeople = useCallback((people: NearbyUser[]) => {
+    hasPeopleRef.current = people.length > 0;
+    // تحديث مباشر للقائمة دون إعادة الشاشة إلى loading — فلا يهتز التمرير
+    setState({ status: 'ready', people, errorText: '' });
+  }, []);
+
+  const refresh = useCallback(async () => {
+    if (!supabaseConfigured) {
+      setState(previous => previous.status === 'ready'
+        ? previous
+        : { status: 'error', people: [], errorText: 'إعدادات الاتصال بقاعدة البيانات غير مكتملة.' });
+      return;
+    }
+
+    const city = cityRef.current;
+    if (!city) return;
+
+    // رقم متزايد: أي نتيجة تصل بعد طلب أحدث تُتجاهل
+    const seq = requestSeqRef.current + 1;
+    requestSeqRef.current = seq;
+
+    try {
+      const people = await fetchNearbyPeople(city, currentUserId);
+      if (seq !== requestSeqRef.current) return;
+      commitPeople(people);
+    } catch (error) {
+      if (seq !== requestSeqRef.current) return;
+      console.warn('[nearby] تعذر تحديث قائمة الأشخاص القريبين:', error);
+      // فشل التحديث لا يمسح قائمة معروضة، ولا يحوّل الصفحة إلى «لا توجد منطقة»
+      if (!hasPeopleRef.current) {
+        setState(previous => previous.status === 'ready'
+          ? previous
+          : { status: 'error', people: [], errorText: 'تعذر تحميل الأشخاص القريبين. حاول مرة أخرى.' });
+      }
+    }
+  }, [commitPeople, currentUserId]);
+
+  const scheduleRefresh = useCallback(() => {
+    if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+    debounceRef.current = window.setTimeout(() => {
+      debounceRef.current = null;
+      void refresh();
+    }, REALTIME_DEBOUNCE_MS);
+  }, [refresh]);
+
+  // ===== استعادة المنطقة: كاش فوري ثم إعادة تحقق من profiles =====
   useEffect(() => {
     if (!open) return undefined;
     let active = true;
-    setState({ status: 'loading', people: [], errorText: '' });
 
-    const city = currentCity?.trim() || '';
-
-    if (!supabaseConfigured) {
-      setState({ status: 'error', people: [], errorText: 'إعدادات الاتصال بقاعدة البيانات غير مكتملة.' });
-      return undefined;
-    }
-    if (!city) {
-      setState({ status: 'no-city', people: [], errorText: '' });
-      return undefined;
-    }
-
-    const load = async () => {
-      // المسار المعتمد: دالة خادم متناظرة تقارن مفتاح المدينة المُطبَّع
-      // (city_key) للطرفين، فلا يختلف الظهور بين حسابين في نفس المدينة بسبب
-      // اختلاف المسافات أو التشكيل أو همزات الألف/الياء/التاء المربوطة.
-      const { data: rpcData, error: rpcError } = await supabase.rpc('aani_nearby_people', { p_limit: 200 });
-      if (!rpcError) {
-        return { data: (rpcData || []) as NearbyUser[], error: null };
-      }
-      // قاعدة بيانات لم يُطبَّق عليها الترحيل بعد → الرجوع للاستعلام المباشر
-      const rpcMissing = rpcError.code === 'PGRST202'
-        || /aani_nearby_people|could not find the function|schema cache/i.test(rpcError.message || '');
-      if (!rpcMissing) {
-        return { data: null, error: rpcError };
-      }
-
-      const columns = 'id, username, full_name, display_name, avatar_url, city, is_deactivated';
-      let result = await supabase
-        .from('profiles')
-        .select(columns)
-        .eq('city', city)
-        .neq('id', currentUserId)
-        .eq('is_deactivated', false)
-        .eq('is_nearby_visible', true)
-        .order('created_at', { ascending: false })
-        .limit(200);
-
-      // قاعدة بيانات بلا عمود is_deactivated أو is_nearby_visible بعد → أعد المحاولة بلا الأعمدة الناقصة
-      if (result.error && (result.error.code === '42703' || result.error.code === 'PGRST204')) {
-        const missing = result.error.message || '';
-        let retry = supabase
-          .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url, city')
-          .eq('city', city)
-          .neq('id', currentUserId)
-          .order('created_at', { ascending: false })
-          .limit(200);
-        if (!/is_deactivated/i.test(missing)) retry = retry.eq('is_deactivated', false);
-        if (!/is_nearby_visible/i.test(missing)) retry = retry.eq('is_nearby_visible', true);
-        result = await retry;
-      }
-      return result;
-    };
+    const cached = readCachedCity(currentUserId) || currentCity?.trim() || null;
+    cityRef.current = cached;
+    setResolvedCity(cached);
+    // لا نُعيد الحالة إلى loading إذا كانت هناك قائمة معروضة بالفعل
+    setState(previous => (previous.status === 'ready' ? previous : { status: 'loading', people: [], errorText: '' }));
+    if (cached) void refresh();
 
     void (async () => {
+      if (!supabaseConfigured) {
+        if (!active || cached) return;
+        setState({ status: 'error', people: [], errorText: 'إعدادات الاتصال بقاعدة البيانات غير مكتملة.' });
+        return;
+      }
+
       try {
-        const { data, error } = await load();
-        if (!active) return;
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('city, location, is_nearby_visible')
+          .eq('id', currentUserId)
+          .maybeSingle();
         if (error) throw error;
-        const people = ((data || []) as NearbyUser[]).filter(person => Boolean(person.id));
-        setState({ status: 'ready', people, errorText: '' });
-      } catch {
-        if (active) {
-          setState({ status: 'error', people: [], errorText: 'تعذر تحميل الأشخاص القريبين. حاول مرة أخرى.' });
+        if (!active) return;
+
+        const row = (data || null) as NearbyProfileRow | null;
+        const confirmed = pickCity(row);
+
+        if (confirmed) {
+          writeCachedCity(currentUserId, confirmed);
+          cityRef.current = confirmed;
+          setResolvedCity(confirmed);
+          void refresh();
+          return;
+        }
+
+        if (cached) {
+          // استعلام ناجح بلا مدينة، لكن لدينا منطقة محفوظة: لا نستبدلها بقيمة فارغة
+          return;
+        }
+
+        // استعلام ناجح ومؤكَّد أن الحساب بلا city ولا location صالحين
+        cityRef.current = null;
+        setResolvedCity(null);
+        setState({ status: 'no-city', people: [], errorText: '' });
+      } catch (error) {
+        // فشل الشبكة/RLS ليس دليلاً على انعدام المنطقة: نحتفظ بالكاش والقائمة
+        if (!active) return;
+        console.warn('[nearby] تعذر إعادة التحقق من منطقة الحساب:', error);
+        if (!cached) {
+          setState({ status: 'error', people: [], errorText: 'تعذر التحقق من منطقتك. تحقق من الاتصال ثم أعد المحاولة.' });
         }
       }
     })();
@@ -141,7 +276,71 @@ export default function NearbyUsersSheet({
     return () => {
       active = false;
     };
-  }, [open, currentCity, currentUserId]);
+  }, [open, currentUserId, currentCity, refresh]);
+
+  // ===== التحديث التلقائي: Realtime + فحص دوري صامت + عودة التبويب =====
+  useEffect(() => {
+    if (!open || !supabaseConfigured) return undefined;
+
+    let disposed = false;
+    let channel: RealtimeChannel | null = null;
+    let lastRebuildAt = 0;
+
+    const buildChannel = () => {
+      if (disposed) return;
+      channel = supabase
+        .channel(`aani-nearby-${currentUserId}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'profiles' },
+          () => {
+            // INSERT/UPDATE/DELETE على profiles → إعادة جلب من المصدر المعتمد
+            scheduleRefresh();
+          },
+        )
+        .subscribe(status => {
+          // فشل القناة صامت: الفحص الدوري يستمر، ونعيد بناء الاشتراك عند الحاجة
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') rebuildChannel();
+        });
+    };
+
+    const rebuildChannel = () => {
+      if (disposed) return;
+      if (channel && (channel.state === 'SUBSCRIBED' || channel.state === 'JOINING')) return;
+      const now = Date.now();
+      if (now - lastRebuildAt < CHANNEL_REBUILD_COOLDOWN_MS) return;
+      lastRebuildAt = now;
+      if (channel) void supabase.removeChannel(channel);
+      channel = null;
+      buildChannel();
+    };
+
+    buildChannel();
+
+    // إعادة الاتصال وإعادة الفحص فوراً عند العودة للتبويب أو عودة الشبكة
+    const offReconnect = registerRealtimeReconnect(() => {
+      rebuildChannel();
+      void refresh();
+    });
+
+    const isVisible = () => typeof document === 'undefined' || document.visibilityState === 'visible';
+    const interval = window.setInterval(() => {
+      // الفحص الدوري يعمل فقط والتبويب ظاهر
+      if (!isVisible()) return;
+      void refresh();
+    }, REFRESH_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      offReconnect();
+      window.clearInterval(interval);
+      if (debounceRef.current !== null) {
+        window.clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+      if (channel) void supabase.removeChannel(channel);
+    };
+  }, [open, currentUserId, refresh, scheduleRefresh]);
 
   // مفتاح الظهور: إيقافه يخفي ملف المستخدم من قائمة الأشخاص القريبين عند الجميع
   const handleToggleNearbyVisible = async (next: boolean) => {
@@ -214,10 +413,10 @@ export default function NearbyUsersSheet({
             aria-label="الظهور في قائمة الأشخاص القريبين"
           />
         </div>
-        {currentCity?.trim() ? (
+        {resolvedCity ? (
           <span className="nearby-users-city">
             <MapPin size={12} aria-hidden="true" />
-            <span className="nearby-users-city-name">{currentCity}</span>
+            <span className="nearby-users-city-name">{resolvedCity}</span>
           </span>
         ) : null}
       </header>
