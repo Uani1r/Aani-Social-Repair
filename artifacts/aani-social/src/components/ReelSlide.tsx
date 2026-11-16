@@ -31,6 +31,7 @@ import { getVideoAspectRatio, getVideoCropTransform, appendVideoTrimFragment, pa
 import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } from '@/lib/sounds';
 import { getImageKitVideoThumbnailUrl } from '@/lib/postMedia';
 import { useMediaUrl } from '@/lib/mediaAccess';
+import { useReelViewTracking } from '@/lib/reelViews';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -111,6 +112,19 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   }, [backgroundMediaSuspended, videoSrc]);
   // ريلز بصري (صورة مدمجة مع صوت): تُعرض كصورة بدل عنصر فيديو
   const isImageMedia = post.type === 'photo' || /\.(jpeg|jpg|png|webp|gif|avif)(\?|#|$)/i.test(videoSrc);
+  // تتبع مشاهدة الريل (المرحلة الثالثة): قياس صامت مستقل تماماً عن التشغيل.
+  // لا ينشئ مراقب IntersectionObserver ثانياً ولا يغيّر playExclusive أو
+  // الإيقاف أو الصوت — يستقبل نتيجة الظهور الحالية (isVisible، عتبة 0.6) فقط.
+  // المنشورات المؤقتة (Pending) والريلز المصوّرة (بلا فيديو) لا تُحتسب مشاهدة.
+  useReelViewTracking({
+    videoRef,
+    postId: post.id,
+    userId: currentUserId,
+    active: isVisible,
+    enabled: !isImageMedia && !pendingState,
+    trimStartSec: videoTimeRange?.start ?? 0,
+    trimEndSec: videoTimeRange?.end,
+  });
   // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
   const soundLabel = post.audio_title || (post.sound_id ? defaultSoundTitle(displayName(post.author)) : '');
   const backgroundSoundUrl = post.sound_id && post.audio_url && mediaUrl
