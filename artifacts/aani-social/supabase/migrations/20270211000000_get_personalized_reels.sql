@@ -10,8 +10,18 @@
 -- المخرجات أربعة أعمدة متوافقة مع إسناد إعادة النشر في واجهة التطبيق:
 --   post_id, reposter_id, reposted_at, rank_position
 --
--- reposter_id / reposted_at: أحدث إعادة نشر مرئية للمستخدم لكل post_id،
+-- reposter_id / reposted_at: أحدث إعادة نشر **للمستخدم الحالي** لكل post_id،
 -- سواء وصل المنشور إلى المرشحين من المتابعات أو الاستكشاف أو إعادة النشر.
+--
+-- قيد RLS الحالي على public.reposts:
+--   * aani_reposts_select_own هي سياسة SELECT المتساهلة الوحيدة، وشرطها
+--     auth.uid() = user_id.
+--   * aani_reposts_private_read_guard سياسة RESTRICTIVE تُضاف إليها بـAND.
+--   لذلك لا يقرأ المستخدم إلا سجلات إعادة نشره هو، ولا يستطيع قراءة إعادة
+--   نشر المستخدمين الآخرين. يعتمد المصدر الثالث (repost_slice) وإسناد
+--   reposter_id / reposted_at على هذا القيد صراحةً، ويُصفّى كل منهما بـ
+--   repost.user_id = v_viewer بدل الاعتماد على RLS وحده.
+--   هذا الملف لا يوسّع السياسات ولا يمنح أي صلاحية جديدة على reposts.
 --
 -- إزالة التكرار: تُدمج المصادر الثلاثة ثم يُختار صف واحد لكل post_id
 -- قبل تطبيق الحصص والإشارات والترتيب النهائي.
@@ -168,6 +178,10 @@ begin
       from public.reposts as repost
       join public.posts as post on post.id = repost.post_id
       where repost.created_at >= now() - interval '30 days'
+        -- إعادة نشر المستخدم الحالي فقط: aani_reposts_select_own هي سياسة
+        -- SELECT المتساهلة الوحيدة على reposts، فلا تُقرأ إعادات الآخرين.
+        -- الشرط صريح هنا بدل الاعتماد على RLS وحده، ولا يوسّع أي صلاحية.
+        and repost.user_id = v_viewer
         and (post.type = 'reel' or post.destination = 'reels')
         -- لا تستهلك إعادة النشر حصة مستقلة إذا كان المنشور مؤهلاً
         -- بالفعل لمصدر المتابعات أو الاكتشاف وفق قواعد الأهلية نفسها.
@@ -372,7 +386,11 @@ begin
       and feedback.post_id in (select candidate.post_id from candidates as candidate)
     group by feedback.post_id
   ),
-  -- أحدث إسناد إعادة نشر مرئي للمستخدم لكل منشور مرشح.
+  -- أحدث إسناد إعادة نشر **للمستخدم الحالي** لكل منشور مرشح.
+  -- مقروء تحت سياسة reposts الحالية (aani_reposts_select_own وحدها متساهلة،
+  -- مع الحارس restrictive)، ولذلك يُصفّى صراحةً بـ repost.user_id = v_viewer:
+  -- فإسناد reposter_id / reposted_at لا يكون إلا لإعادة نشر المستخدم نفسه،
+  -- ولا تُقرأ إعادات الآخرين ولا يُمنح أي صلاحية جديدة.
   -- هذا CTE لا يغيّر هوية المنشور ولا يكرر الصفوف.
   repost_latest as (
     select ranked.post_id, ranked.reposter_id, ranked.reposted_at
@@ -386,7 +404,8 @@ begin
           order by repost.created_at desc, repost.user_id asc, repost.post_id asc
         ) as repost_position
       from public.reposts as repost
-      where repost.post_id in (select candidate.post_id from candidates as candidate)
+      where repost.user_id = v_viewer
+        and repost.post_id in (select candidate.post_id from candidates as candidate)
     ) as ranked
     where ranked.repost_position = 1
   ),
