@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
+import ImageKitSignDiagnostics from '@/components/ImageKitSignDiagnostics';
 import PublishErrorPanel, { PublishErrorBadge } from '@/components/PublishErrorPanel';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
@@ -110,6 +111,10 @@ function App() {
     <TooltipProvider>
       <WouterRouter base={import.meta.env.BASE_URL ? import.meta.env.BASE_URL.replace(/\/$/, '') : ''}>
         {user ? (
+          <>
+          {/* أداة تشخيص مؤقتة لاختبار توقيع ImageKit — تُعرض للمستخدم المسجل فقط.
+              للحذف: احذف هذا العنصر وسطر الاستيراد أعلاه والملفين المرتبطين. */}
+          <ImageKitSignDiagnostics userId={user.id} />
           <Shell
             userId={user.id}
             profile={profile}
@@ -208,6 +213,7 @@ function App() {
               />
             )}
           </Shell>
+          </>
         ) : (
           <Switch>
             <Route path="/signup"><AuthPage mode="signup" afterAuth={() => undefined} /></Route>
