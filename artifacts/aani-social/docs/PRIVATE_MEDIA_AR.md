@@ -256,6 +256,7 @@ where table_schema = 'public' and table_name = 'profiles' and privilege_type = '
 | رفعات المستخدم نفسه | — | `aani_media_owner_id = auth.uid()` |
 | صورة/غلاف ملف | معلومة عامة لكل مسجّل | `= profile.id` |
 | منشور (`media_url`, `media_urls`, `audio_url`) | `aani_can_read_post` | `= post.user_id` |
+| غلاف فيديو المنشور (`post_metadata` وسم `cover`) | `aani_can_read_post` | `= post.user_id` |
 | سجلّات `media_assets` | `aani_can_read_post` | `in (asset.user_id, post.user_id)` أو مسار `processed/<asset.user_id>/<asset.id>.mp4` |
 | قصة (`media_url`, `thumbnail_url`) | `aani_can_view_story` | `= story.user_id` |
 | أبرز قصة / غلاف مجموعة | `aani_can_view_profile_highlight` | `= highlight.user_id` / `= collection.user_id` |
@@ -270,7 +271,27 @@ where table_schema = 'public' and table_name = 'profiles' and privilege_type = '
 مقاطع تحويلات `tr:`، ويحذف `ik-thumbnail.jpg` الأخير (فتُقاس المصغّرة بصلاحية
 الفيديو نفسه). المقارنة بالتساوي لا بـ`LIKE`.
 
-### 6.6) ما بقي مفتوحاً بعد الترحيل (فشل مغلق، لكنه يعني فقدان عرض)
+### 6.6) غلاف فيديو المنشور — أين يُحفظ وكيف يُقرأ
+
+- عند النشر يُرفع الغلاف إلى ImageKit ويُحفظ رابطه في مكانين: `media_assets.poster_url`
+  (سجل الوسائط) ووسم `{kind:'cover', label:'غلاف', href}` داخل `posts.post_metadata`.
+  `Shell.tsx` يكتب الوسم دائماً، ويكتب سجل `media_assets` بعد الرفع و«فشله لا يعطّل النشر».
+- **فرع الغلاف موجود في ترحيل تصحيحي مستقل: `20270208000000_post_cover_media_access.sql`.**
+  لم يُعدَّل `20270207000000` لأنه سبق دمجه وتطبيقه على الإنتاج، وتعديل ملف مطبَّق
+  لا يضمن إعادة تنفيذه. الترحيل الجديد يعيد بناء `aani_can_read_media_object` بنفس
+  أفرع `20270207000000` وحراسها، ويضيف فرع الغلاف وحده.
+- الآن يُقبل الغلاف عبر فرع مستقل: مطابقة `href` بعد التطبيع + `aani_can_read_post`
+  + الملكية (`= post.user_id`). فلا يُفتح غلاف منشور خاص أو محذوف، ولا غلاف حساب
+  آخر مدسوس في `post_metadata` منشور عام.
+- **حل بديل مُقيَّم ولم يُطبَّق:** مصغّرة ImageKit المشتقة `<video>/ik-thumbnail.jpg`.
+  مقبولة صلاحياً لأن `aani_media_path` يطبّعها إلى مسار الفيديو فيمرّ فرع المنشورات،
+  لكنها تعتمد على ميزة thumbnails للفيديو في ImageKit (مستخدمة اليوم في `ReelSlide`
+  فقط) وتضيف طلباً لكل فيديو في الفيد، و404 منها يعطي صورة مكسورة. البديل المعتمد
+  هو `post_metadata` لأنه مصدر الحقيقة المحفوظ مع المنشور.
+- **بيانات قديمة:** منشورات فيديو لها وسم `cover` بلا `media_assets.poster_url`
+  صارت تُخدم بلا تغيير في البيانات. الاستعلام 9ب في نهاية الترحيل يسردها للفحص.
+
+### 6.7) ما بقي مفتوحاً بعد الترحيل (فشل مغلق، لكنه يعني فقدان عرض)
 
 1. **ملفات رُفعت قبل التفعيل تبقى عامة.** لا شيء يسحبها إلا Restricted access
    على مستوى الحساب أو إعادة الرفع.
@@ -285,7 +306,7 @@ where table_schema = 'public' and table_name = 'profiles' and privilege_type = '
 6. **تسخين كاش الصوت** (`warmAudioCache`/`warmPreviewClip`) يطلب الرابط الخام
    مسبقاً؛ فشله لا يكسر التشغيل لأن التشغيل نفسه يستخدم رابطاً موقّعاً.
 
-### 6.7) خطوات يدوية في ImageKit (لا تُنفَّذ من الكود)
+### 6.8) خطوات يدوية في ImageKit (لا تُنفَّذ من الكود)
 
 1. التحقق أولاً بملف تجريبي واحد: ارفعه خاصاً، وأكّد أن رابطه بلا توقيع يُرجع 401،
    وأن رابط `/api/media/imagekit-sign` بحساب مصرّح يُرجع 200.
