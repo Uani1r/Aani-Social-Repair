@@ -16,8 +16,10 @@
 //
 // حالتان منفصلتان تماماً لكل حدث:
 //   * معلّق (pending): في الطابور ولم يُؤكَّد إرساله بعد. محفوظ في sessionStorage
-//     حتى لا يضيع عند إعادة تحميل الصفحة.
-//   * مسجَّل (recorded): أُرسل بنجاح. عندها فقط يُضاف مفتاح منع التكرار.
+//     حتى لا يضيع عند إعادة تحميل الصفحة، وكل حدث صحيح مستعاد يبقى بلا قصّ
+//     ويُرسل تدريجياً على دفعات لا تتجاوز عشرة أحداث.
+//   * مسجَّل (recorded): أُرسل بنجاح. عندها فقط يُضاف مفتاح منع التكرار، ويبقى
+//     هذا المفتاح طوال جلسة التصفح الحالية بلا سقف يحذفه.
 // لا يُعتبر المنشور مسجَّلاً بمجرد إضافته إلى الطابور.
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -47,17 +49,17 @@ const DRAIN_DELAY_MS = 250;
 /** تأخير إعادة المحاولة بعد فشل الإرسال (ms). */
 const RETRY_DELAY_MS = 15000;
 /**
- * سقف الأحداث المعلّقة. عند بلوغه لا تُقبل أحداث جديدة ولا تُحذف معلّقة:
- * الأحداث المعلّقة لا تُمحى أبداً، والحدث الذي لم يُقبل لا يُخزَّن له مفتاح
- * منع تكرار، فيمكن احتسابه لاحقاً بعد أن يفرغ الطابور.
+ * الحد التشغيلي للأحداث المعلّقة: عند بلوغه لا تُقبل أحداث جديدة ولا تُحذف
+ * معلّقة أبداً. الأحداث المستعادة من التخزين تبقى كلها ولو تجاوزت هذا الحد،
+ * وتُرسل تدريجياً على دفعات لا تتجاوز BATCH_MAX.
  */
 const MAX_PENDING = 100;
-/** سقف قائمة المنشورات المسجّلة في الجلسة داخل sessionStorage. */
-const MAX_RECORDED = 500;
 /** أقصى عدد دفعات في محاولة الإرسال عند مغادرة الصفحة. */
 const EXIT_MAX_BATCHES = 5;
 /** ميزانية زمنية لمحاولة الإرسال عند مغادرة الصفحة (ms). */
 const EXIT_BUDGET_MS = 1200;
+/** إعادة محاولة قبول Impression رُفض لأن الطابور ممتلئ (ms). */
+const FULL_RETRY_MS = 5000;
 
 const SESSION_STORAGE_KEY = 'aani:impression-session-id';
 const RECORDED_STORAGE_KEY = 'aani:impression-recorded';
@@ -153,10 +155,12 @@ function loadRecordedImpressions(): void {
 function persistRecordedImpressions(): void {
   if (typeof window === 'undefined') return;
   try {
-    const list = Array.from(recordedImpressions).slice(-MAX_RECORDED);
-    window.sessionStorage.setItem(RECORDED_STORAGE_KEY, JSON.stringify(list));
+    // كل المفاتيح المسجّلة في هذه الجلسة، بلا سقف: قصّها كان يعيد السماح
+    // بتسجيل المنشور نفسه مرة أخرى في نفس الجلسة.
+    window.sessionStorage.setItem(RECORDED_STORAGE_KEY, JSON.stringify(Array.from(recordedImpressions)));
   } catch {
-    // التخزين ممتلئ أو غير متاح: الذاكرة وحدها تكفي لهذه الصفحة
+    // التخزين ممتلئ أو غير متاح: الذاكرة وحدها تحفظ المفاتيح لهذه الصفحة،
+    // فلا يُضمن منع التكرار بعد إعادة التحميل في هذه الحالة.
   }
 }
 
@@ -204,9 +208,11 @@ function loadPending(): void {
       if (!isImpressionEvent(value)) continue;
       // حدث أُرسل فعلاً في جلسة سابقة لنفس التبويب: لا يُعاد إرساله.
       if (recordedImpressions.has(dedupeKeyOf(value))) continue;
+      // لا قصّ ولا تجاهل: كل حدث صحيح في التخزين يبقى، ويُرسل تدريجياً.
+      if (restored.some(event => event.event_id === value.event_id)) continue;
       restored.push(value);
     }
-    pending = restored.slice(0, MAX_PENDING);
+    pending = restored;
   } catch {
     // بيانات تالفة: نتجاهلها
   }
@@ -312,27 +318,38 @@ function installFlushListeners(): void {
   }
 }
 
+/** نتيجة محاولة قبول Impression في الطابور. */
+type EnqueueOutcome =
+  /** قُبل فعلاً وصار معلّقاً. */
+  | 'accepted'
+  /** مسجَّل سابقاً أو معلّق بالفعل: لا تكرار. */
+  | 'duplicate'
+  /** الطابور بلغ الحد التشغيلي: لم يُقبل، ولم يُخزَّن له مفتاح منع تكرار. */
+  | 'full'
+  /** التتبع غير متاح (لا عميل Supabase أو مدخلات ناقصة). */
+  | 'unavailable';
+
 function enqueueImpression(input: {
   userId: string;
   postId: string;
   contentType: ImpressionContentType;
-}): void {
+}): EnqueueOutcome {
   try {
-    if (!input.userId || !input.postId) return;
-    if (!supabaseConfigured) return;
+    if (!input.userId || !input.postId) return 'unavailable';
+    if (!supabaseConfigured) return 'unavailable';
 
     loadPending();
     const sessionId = readSessionId();
     const key = `${sessionId}:${input.userId}:${input.postId}`;
     // مسجَّل سابقاً: لا تكرار.
-    if (recordedImpressions.has(key)) return;
+    if (recordedImpressions.has(key)) return 'duplicate';
     // معلّق بالفعل: لا حدث ثانٍ لنفس المنشور، ولا يُفقد الأول.
-    if (pending.some(event => dedupeKeyOf(event) === key)) return;
-    // الطابور ممتلئ: لا نقبل حدثاً جديداً (ولا نخزّن له مفتاح منع تكرار)،
-    // ولا نحذف شيئاً من المعلّق. يمكن احتسابه لاحقاً بعد أن يفرغ الطابور.
+    if (pending.some(event => dedupeKeyOf(event) === key)) return 'duplicate';
+    // الطابور بلغ الحد: لا نقبل الحدث ولا نخزّن له مفتاح منع تكرار، ولا نحذف
+    // شيئاً من المعلّق. يُعاد الاحتساب لاحقاً ما دامت البطاقة ظاهرة.
     if (pending.length >= MAX_PENDING) {
-      scheduleFlush(RETRY_DELAY_MS);
-      return;
+      scheduleFlush(DRAIN_DELAY_MS);
+      return 'full';
     }
 
     pending.push({
@@ -348,8 +365,10 @@ function enqueueImpression(input: {
     installFlushListeners();
     if (pending.length >= BATCH_MAX) void flushImpressions();
     else scheduleFlush(BATCH_DELAY_MS);
+    return 'accepted';
   } catch {
     // التتبع لا يكسر العرض أبداً
+    return 'unavailable';
   }
 }
 
@@ -380,6 +399,8 @@ export function observeFeedImpression(
   if (!input.userId || !input.postId) return () => undefined;
 
   let timer: number | null = null;
+  /** مؤقّت إعادة المحاولة بعد رفض الطابور الممتلئ. */
+  let retryTimer: number | null = null;
   /** آخر نسبة ظهور معروفة للبطاقة — تُستخدم عند العودة من الإخفاء. */
   let lastRatio = 0;
 
@@ -390,20 +411,48 @@ export function observeFeedImpression(
     }
   };
 
+  const clearRetryTimer = () => {
+    if (retryTimer !== null) {
+      window.clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  };
+
+  /**
+   * محاولة قبول الاحتساب. إن رفض الطابورُ الممتلئ الحدث، يُعاد التخطيط لمحاولة
+   * أخرى ما دامت البطاقة لا تزال مستوفية شرط الظهور ولم تُصبح الصفحة مخفية —
+   * فلا يُفقد Impression بعد انتهاء 500ms بسبب الامتلاء وحده.
+   */
+  const attempt = () => {
+    if (isHidden() || lastRatio < MIN_VISIBLE_RATIO) return;
+    if (enqueueImpression(input) === 'full') scheduleRetry();
+  };
+
+  const scheduleRetry = () => {
+    if (retryTimer !== null || typeof window === 'undefined') return;
+    retryTimer = window.setTimeout(() => {
+      retryTimer = null;
+      attempt();
+    }, FULL_RETRY_MS);
+  };
+
   const startTimer = () => {
     if (timer !== null) return;
     if (isHidden()) return;
     timer = window.setTimeout(() => {
       timer = null;
-      if (isHidden()) return;
-      enqueueImpression(input);
+      attempt();
     }, MIN_VISIBLE_MS);
   };
 
   const applyRatio = (ratio: number) => {
     lastRatio = ratio;
-    if (ratio >= MIN_VISIBLE_RATIO) startTimer();
-    else clearTimer();
+    if (ratio >= MIN_VISIBLE_RATIO) {
+      startTimer();
+    } else {
+      clearTimer();
+      clearRetryTimer();
+    }
   };
 
   let observer: IntersectionObserver | null = null;
@@ -420,11 +469,14 @@ export function observeFeedImpression(
 
   const onVisibilityChange = () => {
     if (isHidden()) {
-      // إخفاء الصفحة: إلغاء المحاولة الجارية، فلا تُحتسب مدة الإخفاء.
+      // إخفاء الصفحة: إلغاء المحاولة الجارية وإعادة المحاولة المعلّقة، فلا
+      // تُحتسب مدة الإخفاء ولا يُحاول القبول والصفحة مخفية.
       clearTimer();
+      clearRetryTimer();
       return;
     }
     // العودة للظهور: إعادة تقييم بآخر نسبة معروفة، وعدّ جديد كامل.
+    clearRetryTimer();
     applyRatio(lastRatio);
   };
 
@@ -438,6 +490,7 @@ export function observeFeedImpression(
   const activeObserver = observer;
   return () => {
     clearTimer();
+    clearRetryTimer();
     try {
       document.removeEventListener('visibilitychange', onVisibilityChange);
     } catch {
