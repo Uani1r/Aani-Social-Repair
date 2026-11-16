@@ -5,6 +5,7 @@ import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
 import ImageKitSignDiagnostics from '@/components/ImageKitSignDiagnostics';
+import PublishErrorPanel, { PublishErrorBadge } from '@/components/PublishErrorPanel';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
 import NotificationsModal from '@/components/NotificationsModal';
@@ -223,6 +224,9 @@ function App() {
         )}
       </WouterRouter>
       <GlobalErrorToast />
+      {/* تشخيص فشل النشر في الإنتاج: زر يظهر بعد أول فشل، ولوحة تفاصيل مع نسخ. */}
+      <PublishErrorBadge />
+      <PublishErrorPanel />
       <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
     </TooltipProvider>
   );

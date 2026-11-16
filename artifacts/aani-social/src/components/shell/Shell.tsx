@@ -22,6 +22,7 @@ import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
+import { reportPublishFailure, type PublishPhase } from '@/lib/publishDiagnostics';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -1866,6 +1867,14 @@ export default function Shell({
           setCreateError('انتهت مهلة النشر (90 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.');
         }
       }, PUBLISH_TIMEOUT_MS);
+      // مرحلة النشر الحالية — للتشخيص فقط (تُقرأ عند الفشل لتصنيفه: رفع ImageKit
+      // أم كتابة Supabase). لا تؤثر في أي قرار ولا في تدفق المحاولة.
+      let diagnosticPhase: PublishPhase = 'بدء النشر';
+      const setPhase = (phase: PublishPhase) => {
+        diagnosticPhase = phase;
+      };
+      // هل سُجّل فشل حفظ المنشور في مكانه (فرع postError)؟ يمنع تكرار السجل.
+      let saveFailureReported = false;
       // فحص المحاولة الحيّة: يُستدعى قبل كل مرحلة مهمة وبعد كل await، فلا تتابع
       // محاولة انتهت مهلتها إلى الحفظ.
       const ensureAttemptAlive = () => {
@@ -1937,6 +1946,44 @@ export default function Shell({
         }
         return raw;
       };
+      // المرحلة الخاصة بكل ملف مرفوع على حدة. الرفع متوازٍ (Promise.all)،
+      // فمرحلة واحدة مشتركة تُكتب من ملف آخر بينما يفشل ملف مختلف — فتُنسب
+      // المرحلة الخطأ. المفتاح هو مسار الرفع (فريد لكل ملف ولكل غلاف).
+      const uploadTracker = (() => {
+        // ترتيب مراحل الرفع: لا رجوع للخلف. الرفع الاحتياطي عبر الخادم يعيد
+        // إطلاق حدث 'uploading' بعد أن بدأ الإرسال، فلا تُنسب مرحلته (وهي رفع
+        // فعلي) إلى «جلب التوقيع».
+        const RANK: Record<string, number> = {
+          'ضغط وتجهيز الملف': 0,
+          'جلب توقيع الرفع من الخادم': 1,
+          'الرفع الفعلي إلى ImageKit': 2,
+        };
+        const phases = new Map<string, PublishPhase>();
+        let failed: PublishPhase | null = null;
+        return {
+          set(key: string, phase: PublishPhase) {
+            const current = phases.get(key);
+            if (current && (RANK[phase] ?? 0) < (RANK[current] ?? 0)) return;
+            phases.set(key, phase);
+          },
+          /** يُثبّت مرحلة أول ملف فاشل فقط — لا تُستبدل بفشل ملف آخر لاحق. */
+          markFailed(key: string) {
+            if (failed) return;
+            failed = phases.get(key) ?? null;
+          },
+          failedPhase(): PublishPhase | null {
+            return failed;
+          },
+        };
+      })();
+      /** يحوّل حدث uploadMedia إلى مرحلة تشخيص لهذا الملف وحده. */
+      const phaseForUploadEvent = (phase: 'compressing' | 'extracting-audio' | 'uploading'): PublishPhase => {
+        if (phase === 'compressing') return 'ضغط وتجهيز الملف';
+        if (phase === 'extracting-audio') return 'استخراج الصوت وربط سجل الأصوات';
+        // 'uploading' يُطلق قبل fetchImageKitAuth مباشرة؛ أول حدث تقدّم فعلي
+        // (onProgress > 0) يرفعها إلى «الرفع الفعلي» لأن البايتات بدأت تُرسل.
+        return 'جلب توقيع الرفع من الخادم';
+      };
       const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
         // محاولة قديمة لا تكتب في بطاقة المنشور المملوكة لمحاولة أحدث
         if (!isCurrentAttempt()) return;
@@ -1950,6 +1997,7 @@ export default function Shell({
       };
       updatePendingPost(postId, { stage: 'uploading', progress: 0, error: null });
       try {
+        setPhase('التحقق من جلسة الحساب');
         const { data: authData, error: authError } = await supabase.auth.getUser();
         if (authError) throw new Error('تعذر التحقق من جلسة الحساب. أعد تسجيل الدخول ثم حاول مجدداً.');
         const authenticatedUserId = authData.user?.id;
@@ -1972,6 +2020,7 @@ export default function Shell({
         }
         ensureAttemptAlive();
         // استيقاظ الخادم قبل الرفع (توقيع ImageKit يمر بخادمنا) — صامت ومحدود
+        setPhase('إيقاظ الخادم وفحص الجاهزية');
         await waitForBackendAwake();
 
         const effectiveCoverFile = mediaType === 'video'
@@ -2002,36 +2051,58 @@ export default function Shell({
         const jobProgress = uploadJobs.map(() => 0);
         const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
 
+        // الرفع يبدأ بالضغط محلياً ثم بجلب التوقيع ثم بالإرسال. كل ملف يتتبّع
+        // مرحلته بنفسه في uploadTracker، فلا يغيّر تقدّم ملف مرحلة ملف آخر.
+        setPhase('ضغط وتجهيز الملف');
         await Promise.all(uploadJobs.map(async (job, jobIndex) => {
-          // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
-          const publicUrl = await uploadMedia({
-            file: job.file,
-            path: job.path,
-            preset: job.kind === 'poster'
-              ? 'feedImage'
-              : mediaType === 'video' ? 'video' : 'feedImage',
-            signal: attemptSignal,
-            onPhase: onUploadPhase,
-            onProgress: percent => {
-              // محاولة قديمة لا تعدّل تقدّم بطاقة المنشور المملوكة لمحاولة أحدث
-              if (!isCurrentAttempt()) return;
-              jobProgress[jobIndex] = percent;
-              const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
-                sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)
-              ), 0);
-              updatePendingPost(postId, {
-                progress: totalBytes > 0 ? Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)) : 0,
-              });
-            },
-          });
-          if (job.kind === 'poster') {
-            posterUploadUrl = publicUrl;
-            coverTag = { kind: 'cover', label: 'غلاف', href: publicUrl };
-          } else if (job.mediaIndex !== undefined) {
-            const file = files[job.mediaIndex];
-            uploadedUrls[job.mediaIndex] = mediaType === 'video'
-              ? buildVideoMediaUrl(publicUrl, trim, crop)
-              : appendImageMediaAspect(publicUrl, file.name);
+          const jobKey = job.path;
+          const setJobPhase = (next: PublishPhase) => {
+            uploadTracker.set(jobKey, next);
+          };
+          setJobPhase('ضغط وتجهيز الملف');
+          try {
+            // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
+            const publicUrl = await uploadMedia({
+              file: job.file,
+              path: job.path,
+              preset: job.kind === 'poster'
+                ? 'feedImage'
+                : mediaType === 'video' ? 'video' : 'feedImage',
+              signal: attemptSignal,
+              onPhase: (phase, percent) => {
+                // المرحلة تُسجَّل لهذا الملف وحده، ثم يُحدَّث نص البطاقة المشترك.
+                setJobPhase(phaseForUploadEvent(phase));
+                onUploadPhase(phase, percent);
+              },
+              onProgress: percent => {
+                // محاولة قديمة لا تعدّل تقدّم بطاقة المنشور المملوكة لمحاولة أحدث
+                if (!isCurrentAttempt()) return;
+                // أول تقدّم فعلي لهذا الملف = بايتات أُرسلت إلى ImageKit فعلاً،
+                // فمرحلته الآن «الرفع الفعلي» لا «جلب التوقيع». (تشخيص فقط.)
+                if (percent > 0) setJobPhase('الرفع الفعلي إلى ImageKit');
+                jobProgress[jobIndex] = percent;
+                const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
+                  sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)
+                ), 0);
+                updatePendingPost(postId, {
+                  progress: totalBytes > 0 ? Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)) : 0,
+                });
+              },
+            });
+            if (job.kind === 'poster') {
+              posterUploadUrl = publicUrl;
+              coverTag = { kind: 'cover', label: 'غلاف', href: publicUrl };
+            } else if (job.mediaIndex !== undefined) {
+              const file = files[job.mediaIndex];
+              uploadedUrls[job.mediaIndex] = mediaType === 'video'
+                ? buildVideoMediaUrl(publicUrl, trim, crop)
+                : appendImageMediaAspect(publicUrl, file.name);
+            }
+          } catch (jobError) {
+            // المرحلة المسجَّلة هي مرحلة هذا الملف تحديداً، لا آخر ما كتبه غيره.
+            // الخطأ نفسه يُعاد كما هو: منطق النشر لا يتغيّر.
+            uploadTracker.markFailed(jobKey);
+            throw jobError;
           }
         }));
 
@@ -2041,6 +2112,7 @@ export default function Shell({
         // سجل أصول الوسائط: يُنشأ بعد الرفع لأن الرابط النهائي (ImageKit)
         // لا يكون معروفاً قبله. فشله لا يعطل النشر — المنشور يحمل الرابط نفسه.
         if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
+          setPhase('إنشاء سجل media_assets');
           const { error: mediaAssetError } = await attachAbortSignal(
             supabase.from('media_assets').insert({
               id: mediaAssetId,
@@ -2134,6 +2206,7 @@ export default function Shell({
         if (mediaType === 'video' && !pendingSound && uploadedUrls[0] && files[0]) {
           let extractedSoundUrl: string | null = null;
           try {
+            setPhase('استخراج الصوت وربط سجل الأصوات');
             onUploadPhase('extracting-audio');
             const audioFile = await extractAudio(files[0], {
               kind: 'extractedSound',
@@ -2287,6 +2360,7 @@ export default function Shell({
         };
 
         ensureAttemptAlive();
+        setPhase('حفظ المنشور في Supabase (posts.upsert)');
         let postError = (await upsertPostWithRetry(postPayloadForSave)).error;
         // بعد اكتمال الحفظ: توقّف إن أُبطلت المحاولة أو بدأت محاولة أحدث.
         // (الكتابة قد تكون وصلت فعلاً؛ الفحص يمنع متابعة المسار ولا يمسّ الحالة.)
@@ -2331,6 +2405,15 @@ export default function Shell({
 
         if (postError) {
           handleAppError('فشل حفظ المنشور', postError, 'تعذر حفظ المنشور. راجع التفاصيل التشخيصية.');
+          // تشخيص في الإنتاج: رمز/رسالة/details/hint ومرحلة الفشل في لوحة قابلة
+          // للنسخ. التصنيف هنا supabase-write لأن الرفع كان قد اكتمل بنجاح.
+          // (العلم أدناه يمنع تسجيل الفشل نفسه مرتين عند وصوله إلى catch.)
+          saveFailureReported = true;
+          reportPublishFailure({
+            phase: 'حفظ المنشور في Supabase (posts.upsert)',
+            error: postError,
+            userMessage: 'رفضت قاعدة البيانات حفظ صف المنشور.',
+          });
           let publishError: Error;
           if (isPostsPermissionError(postError)) {
             publishError = new Error('رفضت قاعدة البيانات حفظ المنشور بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated؛ لم يتم تجاوز الحماية.');
@@ -2358,6 +2441,7 @@ export default function Shell({
         // ويظهر على الشاشة بدل أن يختفي الريل بصمت.
         try {
           ensureAttemptAlive();
+          setPhase('التحقق من الصف المحفوظ');
           const { data: savedRow, error: verifyError } = await attachAbortSignal(
             supabase
               .from('posts')
@@ -2396,6 +2480,7 @@ export default function Shell({
         const isSupabaseStorageMedia = typeof publishedPost.media_url === 'string'
           && /\/storage\/v1\/object\//.test(publishedPost.media_url);
         if (mediaType === 'video' && mediaAssetId && isSupabaseStorageMedia) {
+          setPhase('معالجة الفيديو بعد الحفظ');
           updatePendingPost(postId, { stage: 'processing', progress: 98, error: null });
           try {
             const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -2488,6 +2573,19 @@ export default function Shell({
         }
         if (!wasAppErrorReported(error)) {
           handleAppError('فشل نشر المنشور', error, 'تعذر نشر المنشور. راجع التفاصيل التشخيصية ثم أعد المحاولة.');
+        }
+        // تسجيل تشخيصي دائماً (إنتاج أيضاً): المرحلة الحقيقية ورمز الخطأ ورسالته
+        // وتفاصيله وتلميحه — في لوحة قابلة للفتح والنسخ، بلا أسرار.
+        // هذا لا يغيّر مسار الفشل: الرسالة والقفل والحالة تبقى كما هي أدناه.
+        if (!saveFailureReported) {
+          reportPublishFailure({
+            // فشل أثناء الرفع المتوازي: مرحلة الملف الذي فشل تحديداً. وإلا فالمرحلة
+            // المشتركة (جلسة/إيقاظ/حفظ) لأن الرفع إما لم يبدأ أو اكتمل.
+            phase: uploadTracker.failedPhase() ?? diagnosticPhase,
+            error,
+            timedOut: timedOutNow,
+            userMessage: toUserFacingPublishMessage(error, timedOutNow),
+          });
         }
         // خطأ اتصال/خادم عابر: أبطِل حالة الاستيقاظ ليُعاد فحص الصحة في المحاولة
         // التالية بدل افتراض أن الخادم ما زال مستيقظاً.
