@@ -9,8 +9,10 @@
 //   * الشريحة تُعتبر ظاهرة عند 60% على الأقل — وهي نفس عتبة
 //     IntersectionObserver الموجود في ReelSlide (threshold 0.6). لا يُنشأ
 //     مراقب ثانٍ هنا؛ المكوّن يمرّر النتيجة عبر `active`.
-//   * تُسجَّل **مدة الظهور الفعلية فقط**: عدّاد زمن حائطي يعمل حين تكون
-//     الشريحة ظاهرة والصفحة visible. لا تُحتسب أي مدة والصفحة مخفية.
+//   * تُسجَّل **مدة الظهور الفعلية فقط**: عدّاد بساعة أحادية الاتجاه
+//     (performance.now) يعمل حين تكون الشريحة ظاهرة والصفحة visible. لا
+//     تُحتسب أي مدة والصفحة مخفية، ويُحتسب الشوط الأخير حتى لحظة الإخفاء
+//     نفسها ثم يتوقف العدّ فوراً.
 //   * التحميل المسبق ليس ظهوراً: لا تبدأ الجلسة عند تركيب المكوّن ولا عند
 //     preload أو تحميل البيانات أو الصورة، بل عند أول لحظة تكون فيها الشريحة
 //     ظاهرة فعلاً والصفحة visible.
@@ -23,9 +25,15 @@
 // منع التكرار: مفتاح واحد لكل منشور في جلسة التصفح، يُضاف عند قبول الحدث في
 // الطابور، فلا يتكرر الحدث مهما أُعيد تركيب المكوّن أو تكرّرت أحداث الظهور.
 //
-// الإرسال غير متزامن: طابور محفوظ في sessionStorage، دفعات بحد عشرة أحداث،
-// وإعادة محاولة عند الفشل بنفس event_id، مع upsert على (user_id, event_id)
-// و ignoreDuplicates — فلا تكرار على الخادم ولا حجب للعرض.
+// الحفظ: الطابور ومفاتيح منع التكرار في سجل واحد داخل sessionStorage، يُكتب
+// بكتابة واحدة، فإمّا يُحفظ الاثنان معاً أو لا يُحفظ شيء — فلا يمكن أن تُحذف
+// أحداث أُرسلت ويبقى المنشور قابلاً لإعادة التسجيل بعد إعادة التحميل. وحين
+// يتعذّر التخزين يعمل السجل في الذاكرة لهذه الصفحة وحدها، ولا يُدَّعى في هذه
+// الحالة منع تكرار بعد إعادة التحميل.
+//
+// الإرسال غير متزامن: دفعات بحد عشرة أحداث، وإعادة محاولة عند الفشل بنفس
+// event_id، مع upsert على (user_id, event_id) و ignoreDuplicates — فلا تكرار
+// على الخادم ولا حجب للعرض.
 //
 // ما لا يفعله هذا الملف:
 //   * لا يلمس reelViews.ts (تتبع الفيديو) ولا impressions.ts (المرحلة الثانية).
@@ -106,12 +114,14 @@ const EXIT_BUDGET_MS = 1200;
 const MAX_DURATION_MS = 86400000;
 
 /**
- * مفاتيح تخزين خاصة بهذا المسار، منفصلة عن مفاتيح reelViews.ts
- * (`aani:reelview-*`) حتى لا يتداخل تتبع الفيديو والصورة.
+ * مفاتيح تخزين هذا المسار، منفصلة عن مفاتيح reelViews.ts (`aani:reelview-*`)
+ * حتى لا يتداخل تتبع الفيديو والصورة.
+ *
+ * الطابور ومفاتيح منع التكرار يُكتبان في سجل واحد تحت STATE_STORAGE_KEY
+ * بكتابة واحدة، فإمّا يُحفظ الاثنان معاً أو لا يُحفظ شيء.
  */
 const SESSION_STORAGE_KEY = 'aani:reelimage-session-id';
-const RECORDED_STORAGE_KEY = 'aani:reelimage-recorded';
-const PENDING_STORAGE_KEY = 'aani:reelimage-pending';
+const STATE_STORAGE_KEY = 'aani:reelimage-state';
 
 /** UUID v4 بلا اعتماد على وجود crypto.randomUUID. */
 function randomUuid(): string {
@@ -201,87 +211,89 @@ function dedupeKeyOf(event: { session_id: string; user_id: string; post_id: stri
 }
 
 // ---------------------------------------------------------------------
-// المفاتيح المسجّلة: تُضاف عند قبول الحدث في الطابور (لا عند الإرسال)، فتمنع
-// أي حدث ثانٍ لنفس المنشور في الجلسة نفسها مهما أُعيد تركيب المكوّن.
+// سجل واحد: مفاتيح منع التكرار + الطابور.
+//
+// المفاتيح تُضاف عند قبول الحدث في الطابور (لا عند الإرسال)، فتمنع أي حدث
+// ثانٍ لنفس المنشور في الجلسة نفسها مهما أُعيد تركيب المكوّن.
+//
+// السجلان يُحفظان معاً بكتابة واحدة تحت STATE_STORAGE_KEY: لا تُكتب مفاتيح
+// بلا طابور ولا طابور بلا مفاتيح، فلا تنشأ حالة يُرسَل فيها الحدث ويُحذف من
+// الطابور ثم يُعاد تسجيل المنشور نفسه بعد إعادة تحميل الصفحة.
 // ---------------------------------------------------------------------
 const recordedImpressions = new Set<string>();
-let recordedLoaded = false;
+let pending: ReelImageImpression[] = [];
+let stateLoaded = false;
+let flushTimer: number | null = null;
+let flushing = false;
+let flushListenersInstalled = false;
 
-function loadRecordedImpressions(): void {
-  if (recordedLoaded) return;
-  recordedLoaded = true;
-  if (typeof window === 'undefined') return;
-  try {
-    const raw = window.sessionStorage.getItem(RECORDED_STORAGE_KEY);
-    if (!raw) return;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return;
-    for (const value of parsed) {
-      if (typeof value === 'string' && value) recordedImpressions.add(value);
-    }
-  } catch {
-    // قائمة تالفة: نتجاهلها ونبدأ من جديد
-  }
-}
+/** شكل السجل المحفوظ في sessionStorage. */
+type StoredState = {
+  recorded: string[];
+  pending: ReelImageImpression[];
+};
 
 /**
- * حفظ المفاتيح المسجّلة. تُعيد true فقط إذا تأكدت الكتابة.
- * عند تعذّر التخزين تبقى المفاتيح في الذاكرة لهذه الصفحة وحدها — **ولا
- * يُدَّعى منع تكرار بعد إعادة التحميل في هذه الحالة**.
+ * حفظ السجل كاملاً (المفاتيح والطابور) بكتابة واحدة.
+ *
+ * تُعيد true فقط إذا تأكدت الكتابة. عند تعذّر التخزين (امتلاء أو وضع خاص)
+ * تبقى المفاتيح والأحداث في الذاكرة لهذه الصفحة وحدها، **ولا يُدَّعى منع
+ * تكرار بعد إعادة التحميل في هذه الحالة** — فما لم يُحفظ لا يُستعاد.
  */
-function persistRecordedImpressions(): boolean {
+function persistState(): boolean {
   if (typeof window === 'undefined') return false;
   try {
-    window.sessionStorage.setItem(RECORDED_STORAGE_KEY, JSON.stringify(Array.from(recordedImpressions)));
+    if (pending.length === 0 && recordedImpressions.size === 0) {
+      window.sessionStorage.removeItem(STATE_STORAGE_KEY);
+      return true;
+    }
+    const state: StoredState = {
+      recorded: Array.from(recordedImpressions),
+      pending,
+    };
+    window.sessionStorage.setItem(STATE_STORAGE_KEY, JSON.stringify(state));
     return true;
   } catch {
     return false;
   }
 }
 
-// ---------------------------------------------------------------------
-// الطابور: انطباعات معلّقة محفوظة في sessionStorage.
-// ---------------------------------------------------------------------
-let pending: ReelImageImpression[] = [];
-let pendingLoaded = false;
-let flushTimer: number | null = null;
-let flushing = false;
-let flushListenersInstalled = false;
-
-function persistPending(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    if (pending.length === 0) {
-      window.sessionStorage.removeItem(PENDING_STORAGE_KEY);
-      return;
-    }
-    window.sessionStorage.setItem(PENDING_STORAGE_KEY, JSON.stringify(pending));
-  } catch {
-    // تعذّر الحفظ (امتلاء أو وضع خاص): تبقى الأحداث في الذاكرة وتُرسل عادةً
-  }
-}
-
-/** استعادة الطابور بعد إعادة تحميل الصفحة، بنفس event_id. */
+/** استعادة السجل بعد إعادة تحميل الصفحة، بنفس event_id. */
 function loadQueue(): void {
-  if (pendingLoaded) return;
-  pendingLoaded = true;
-  loadRecordedImpressions();
+  if (stateLoaded) return;
+  stateLoaded = true;
   if (typeof window === 'undefined') return;
   try {
-    const raw = window.sessionStorage.getItem(PENDING_STORAGE_KEY);
+    const raw = window.sessionStorage.getItem(STATE_STORAGE_KEY);
     if (!raw) return;
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return;
+    const record = parsed as Record<string, unknown>;
+
+    // الطابور: تحقق صارم من كل حدث، وبلا قصّ ولا تجاهل لصحيح.
     const restored: ReelImageImpression[] = [];
-    for (const value of parsed) {
-      if (!isReelImageImpression(value)) continue;
-      // لا قصّ ولا تجاهل: كل حدث صحيح في التخزين يبقى، ويُرسل تدريجياً.
-      if (restored.some(event => event.event_id === value.event_id)) continue;
-      restored.push(value);
+    if (Array.isArray(record.pending)) {
+      for (const value of record.pending) {
+        if (!isReelImageImpression(value)) continue;
+        if (restored.some(event => event.event_id === value.event_id)) continue;
+        restored.push(value);
+      }
     }
+
+    // المفاتيح: نصوص غير فارغة فقط.
+    const restoredKeys = new Set<string>();
+    if (Array.isArray(record.recorded)) {
+      for (const value of record.recorded) {
+        if (typeof value === 'string' && value) restoredKeys.add(value);
+      }
+    }
+    // حدث معلّق يُعتبر مسجّلاً ولو غاب مفتاحه، فلا يُقبل له حدث ثانٍ.
+    for (const event of restored) restoredKeys.add(dedupeKeyOf(event));
+
     pending = restored;
+    for (const key of restoredKeys) recordedImpressions.add(key);
   } catch {
-    // بيانات تالفة: نتجاهلها
+    // بيانات تالفة: نتجاهلها ونبدأ من جديد
   }
   if (pending.length > 0) {
     installFlushListeners();
@@ -306,6 +318,22 @@ function isPageHidden(): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * ساعة أحادية الاتجاه لقياس المدد: performance.now لا يتأثر بتغيير ساعة
+ * الجهاز ولا بالقفزات، وله دقة أعلى من Date.now. نسقط إلى Date.now فقط حين
+ * لا تتوفر performance.
+ */
+function nowMs(): number {
+  try {
+    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+      return performance.now();
+    }
+  } catch {
+    // نسقط إلى Date.now أدناه
+  }
+  return Date.now();
 }
 
 /**
@@ -336,7 +364,10 @@ async function flushReelImageImpressions(): Promise<boolean> {
     } else {
       const sentEventIds = new Set(batch.map(event => event.event_id));
       pending = pending.filter(event => !sentEventIds.has(event.event_id));
-      persistPending();
+      // حذف المُرسل يُحفظ مع المفاتيح في الكتابة نفسها: لا يبقى المنشور قابلاً
+      // لإعادة التسجيل بعد إعادة التحميل. عند فشل الكتابة يبقى السجل القديم في
+      // التخزين، وهو آمن: إعادة إرسال نفس event_id لا تُنشئ صفاً مكرراً.
+      persistState();
       sent = true;
       if (pending.length > 0) nextDelay = DRAIN_DELAY_MS;
     }
@@ -356,10 +387,10 @@ async function flushReelImageImpressions(): Promise<boolean> {
  * sessionStorage ليُرسل عند العودة.
  */
 async function flushReelImageImpressionsOnExit(): Promise<void> {
-  const startedAt = Date.now();
+  const startedAt = nowMs();
   for (let index = 0; index < EXIT_MAX_BATCHES; index += 1) {
     if (pending.length === 0) return;
-    if (Date.now() - startedAt > EXIT_BUDGET_MS) return;
+    if (nowMs() - startedAt > EXIT_BUDGET_MS) return;
     if (flushing) return;
     // eslint-disable-next-line no-await-in-loop
     const sent = await flushReelImageImpressions();
@@ -401,9 +432,11 @@ function enqueueReelImageImpression(event: ReelImageImpression): EnqueueOutcome 
     }
 
     pending.push(event);
-    persistPending();
+    // المفتاح يُضاف في الذاكرة قبل الكتابة، ويُحفظ مع الحدث في كتابة واحدة.
+    // إن فشلت الكتابة لم يُحفظ أيٌّ منهما: يمنع المفتاح تكراراً في هذه الصفحة،
+    // ولا يُدَّعى منع تكرار بعد إعادة التحميل لأن الحدث نفسه لم يُحفظ أيضاً.
     recordedImpressions.add(key);
-    persistRecordedImpressions();
+    persistState();
 
     installFlushListeners();
     if (pending.length >= BATCH_MAX) void flushReelImageImpressions();
@@ -524,48 +557,53 @@ export function useReelImageImpression(input: {
     }
 
     /**
-     * نقطة بداية القياس. تُضبط عند دخول هذه الدورة (أي عند الانتقال إلى
-     * ظاهر فعلاً) وعند العودة من إخفاء الصفحة، فلا يُضاف زمن سبق الظهور
-     * ولا زمن قضته الصفحة مخفية.
+     * نقطة بداية القياس على ساعة أحادية الاتجاه. تُضبط عند دخول هذه الدورة
+     * (أي عند الانتقال إلى ظاهر فعلاً) وعند العودة من إخفاء الصفحة، فلا يُضاف
+     * زمن سبق الظهور ولا زمن قضته الصفحة مخفية.
      */
-    let lastSampleAt = Date.now();
+    let lastSampleAt = nowMs();
     /** هل العدّ جارٍ الآن؟ يتوقف عند إخفاء الصفحة ويستأنف عند العودة. */
     let measuring = !isPageHidden();
 
     /**
      * يضيف الزمن المنقضي منذ آخر نقطة قياس، ثم يحرّك نقطة القياس إلى الآن.
-     * لا يُضاف شيء إن لم يكن العدّ جارياً، ولا والصفحة مخفية.
+     *
+     * لا يُضاف شيء إن لم يكن العدّ جارياً. والحاجز `isPageHidden()` يمنع
+     * احتساب أي زمن والصفحة مخفية — إلا في الاستدعاء الأخير قبل الإخفاء
+     * (force = true)، فهو الشوط الوحيد المسموح به بين آخر نبضة ولحظة الإخفاء
+     * نفسها، ويُستدعى مرة واحدة ثم يتوقف العدّ فوراً.
      */
-    const accumulate = () => {
-      const now = Date.now();
+    const accumulate = (force = false) => {
+      const now = nowMs();
       const elapsed = now - lastSampleAt;
       lastSampleAt = now;
       if (!measuring) return;
-      if (isPageHidden()) return;
+      if (!force && isPageHidden()) return;
       const session = ensureSession();
       if (!session) return;
       // الفجوة تُقصّ حتى لا يُضاف زمن تجمّد الخيط الرئيسي دفعة واحدة.
       session.visibleMs += Math.min(elapsed, MAX_TICK_GAP_MS);
     };
 
-    const ticker = window.setInterval(accumulate, TICK_MS);
+    const ticker = window.setInterval(() => accumulate(), TICK_MS);
 
     const onVisibilityChange = () => {
       if (isPageHidden()) {
-        // إخفاء الصفحة: يُضاف ما مضى حتى لحظة الإخفاء فقط، ثم يتوقف العدّ
-        // وتُغلق الجلسة بأفضل محاولة حفظ. لا يُحتسب زمن الإخفاء.
-        accumulate();
+        // إخفاء الصفحة: يُحتسب ما مضى حتى لحظة الإخفاء نفسها (force يتجاوز
+        // حاجز الإخفاء لهذا الشوط فقط)، ثم يتوقف العدّ وتُغلق الجلسة بأفضل
+        // محاولة حفظ. لا يُحتسب زمن الإخفاء لأنه يقع بعد هذه اللحظة.
+        accumulate(true);
         measuring = false;
         closeSession();
         void flushReelImageImpressionsOnExit();
         return;
       }
       // العودة للظهور: إعادة ضبط نقطة البداية، فلا يُضاف زمن الإخفاء.
-      lastSampleAt = Date.now();
+      lastSampleAt = nowMs();
       measuring = true;
     };
     const onPageHide = () => {
-      accumulate();
+      accumulate(true);
       measuring = false;
       closeSession();
       void flushReelImageImpressionsOnExit();
@@ -580,6 +618,8 @@ export function useReelImageImpression(input: {
 
     return () => {
       // آخر احتساب قبل الإغلاق: الزمن الممتد حتى مغادرة الظهور، لا بعده.
+      // بلا force: إن كانت الصفحة مخفية هنا فلا يُضاف شيء، لأن زمن الإخفاء
+      // ليس ظهوراً — والشوط حتى لحظة الإخفاء سبق احتسابه في مستمعها.
       accumulate();
       measuring = false;
       window.clearInterval(ticker);
