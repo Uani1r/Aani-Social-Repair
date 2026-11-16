@@ -79,16 +79,65 @@ function getArchiveStoryDurationSeconds(story: Pick<ArchiveStory, 'duration_seco
     : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
 }
 
-function mediaPreview(mediaUrl: string | null, mediaType: string, caption: string | null, className: string, controls = true, durationSeconds = DEFAULT_ARCHIVE_STORY_DURATION_SECONDS) {
+/**
+ * معاينة وسائط أبرز القصص (صورة أو فيديو).
+ *
+ * كل رابط مخزَّن قد يكون ImageKit محمياً، فيُمرَّر عبر useMediaUrl قبل العرض:
+ * عند تفعيل VITE_IMAGEKIT_SIGNED_URLS لا يُطلب الرابط العام إطلاقاً، وفشل
+ * التوقيع يعني عدم العرض (مساحة سوداء) بدل صورة مكسورة أو كشف الملف.
+ *
+ * مكوّن مستقل — لا خطافات داخل دالة عادية — لأن mediaPreview أدناه يُستدعى
+ * داخل map في شبكات الأرشيف والمجموعات.
+ *
+ * معاينات الملفات المحلية (blob:/data:) تمر كما هي: resolveMediaUrl لا يمسّها،
+ * فمحرر القصص (studioPreviewUrl) واختيار الغلاف (editCoverPreviewUrl) كما هما.
+ */
+function HighlightMediaPreview({
+  mediaUrl,
+  mediaType,
+  caption,
+  className,
+  controls = true,
+  durationSeconds = DEFAULT_ARCHIVE_STORY_DURATION_SECONDS,
+}: {
+  mediaUrl: string | null | undefined;
+  mediaType: string | null | undefined;
+  caption: string | null;
+  className: string;
+  controls?: boolean;
+  durationSeconds?: number;
+}) {
+  const signedUrl = useMediaUrl(mediaUrl);
   const safeDuration = Number.isFinite(durationSeconds) && durationSeconds > 0
     ? Math.min(durationSeconds, 120)
     : DEFAULT_ARCHIVE_STORY_DURATION_SECONDS;
+
   if (mediaUrl && mediaType === 'video') {
-    return <video src={mediaUrl} className={className} controls={controls} muted={!controls} playsInline preload="metadata" data-duration={safeDuration} />;
+    if (!signedUrl) return <div className={`${className} bg-black`} aria-hidden="true" data-duration={safeDuration} />;
+    return <video src={signedUrl} className={className} controls={controls} muted={!controls} playsInline preload="metadata" data-duration={safeDuration} />;
   }
-  if (mediaUrl) return <img src={mediaUrl} className={className} alt="معاينة القصة" data-duration={safeDuration} />;
+  if (mediaUrl) {
+    return signedUrl
+      ? <img src={signedUrl} className={className} alt="معاينة القصة" data-duration={safeDuration} />
+      : <div className={`${className} bg-black`} aria-hidden="true" data-duration={safeDuration} />;
+  }
   return <div className={`${className} flex items-center justify-center whitespace-pre-wrap break-words bg-gradient-to-br from-[#30303a] to-[#111116] p-6 text-center text-lg font-bold text-white`}>{caption || 'قصة نصية'}</div>;
 }
+
+/** غلاف رقيق حول المكوّن أعلاه كي تبقى كل مواضع الاستدعاء كما هي. */
+function mediaPreview(mediaUrl: string | null | undefined, mediaType: string | null | undefined, caption: string | null, className: string, controls = true, durationSeconds = DEFAULT_ARCHIVE_STORY_DURATION_SECONDS) {
+  return (
+    <HighlightMediaPreview
+      mediaUrl={mediaUrl}
+      mediaType={mediaType}
+      caption={caption}
+      className={className}
+      controls={controls}
+      durationSeconds={durationSeconds}
+    />
+  );
+}
+
 
 function getHighlightStoragePath(mediaUrl: string | null | undefined, userId: string) {
   if (!mediaUrl || typeof URL === 'undefined') return null;

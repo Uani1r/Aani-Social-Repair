@@ -208,7 +208,7 @@ where table_schema = 'public' and table_name = 'profiles' and privilege_type = '
 | شبكة الصور ومكبَّرها | `PostImagePreview` | `useMediaUrl` داخلياً (يغطي كل مستدعٍ) |
 | الريلز والمحفوظات | `ReelSlide`, `SavedPostsView` | توقيع عند الجلب + `SignedImage` |
 | القصص وعارضها | `StoryMediaStage`, `StoryComposerSheet`, `ProfileStoryArchiveView`, `StoryReplyCard` | `SignedImage`/`SignedVideo`/`useMediaUrl` |
-| أبرز القصص ومعاينتها | `ProfileHighlightsManager` | `useMediaUrl` + `SignedImage` |
+| أبرز القصص ومعاينتها | `ProfileHighlightsManager` (`HighlightMediaPreview` يوقّع كل صورة/فيديو عبر `useMediaUrl`، و`SignedImage` للأغلفة) | `useMediaUrl` + `SignedImage` |
 | الصور الشخصية والأغلفة | `Avatar`, `ProfilePage`, `StoryHeader`, `StoriesStrip`, `TextOnlyStoryCanvas` | `useMediaUrl`/`SignedImage` |
 | صور المشاركين والقوائم | `ShareRecipientList`, `FollowRequestsSection`, `CloseFriendsSheet`, `StoryMentionPicker`, `CustomAllowedCommentersModal`, `CommentMentionSuggestions`, `NotificationsModal` | `SignedImage`/`useMediaUrl` |
 | التعليقات ومرفقاتها | `CommentItem` (الصورة والمكبَّرة) | `SignedImage` |
