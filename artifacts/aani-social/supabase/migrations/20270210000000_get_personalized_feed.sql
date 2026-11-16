@@ -318,6 +318,17 @@ begin
   --    source_rank يحدد أولوية الإسناد عند التداخل:
   --        1) المتابعات   2) الاستكشاف   3) إعادات النشر
   --
+  --    **الوجهة: التغذية الرئيسية فقط** — يُشترط في المصادر الثلاثة على
+  --    المنشور الأصلي: coalesce(post.destination, 'feed') = 'feed'.
+  --    الدليل من التطبيق: usePosts.ts سطر 75 يطبّع أي قيمة غير 'reels' إلى
+  --    'feed'، وسطر 363 يعرض في الرئيسية ما وجهته 'feed'، وسطر 516 يجعل
+  --    الريلز مساراً مستقلاً (destination = 'reels' أو type = 'reel').
+  --    ولذلك لا تُستبعد منشورات type = 'reel' إذا كانت وجهتها 'feed'،
+  --    لأن التطبيق نفسه يعرضها في الرئيسية؛ الشرط على الوجهة وحدها.
+  --    ويحكم هذا القيد قيدٌ في القاعدة: posts_destination_check يحصر
+  --    destination في ('feed','reels') (20270119000000 سطر 52-58)، أُضيف
+  --    `not valid` فلا يشمل الصفوف القديمة — التفصيل في ملاحظة أسفل القسم.
+  --
   --    **الفصل بالأهلية لا بالشريحة** — وهذا هو الإصلاح الأساسي:
   --    الاعتماد على «استبعاد ما ورد في follow_slice» كان يترك منشوراً من
   --    حساب أتابعه (لم يقع في أول v_bound_follow صفاً) يستهلك حصة
@@ -347,6 +358,16 @@ begin
   --      * post_created_at : تاريخ نشر المنشور الأصلي — لا يُغيَّر أبداً.
   --      * candidate_at    : حداثة المرشح؛ post.created_at للمتابعة
   --                          والاستكشاف، وrepost.created_at لإعادة النشر.
+  --
+  --    ملاحظة على قيد الوجهة (`not valid`): أحدث تعريف لـ
+  --    posts_destination_check في 20270119000000 أُضيف `not valid`، أي أن
+  --    الصفوف السابقة لم تُفحص. لو وُجد صف قديم بقيمة وجهة ثالثة (أو NULL)
+  --    فالتطبيق يعرضه في الرئيسية (لأن كل ما ليس 'reels' يصبح 'feed')، بينما
+  --    الشرط هنا `= 'feed'` يستبعده. أثر ذلك محصور في صفوف قديمة مخالفة
+  --    للقيد، ولم أغيّره لأن المطلوب نصّاً هو `= 'feed'`. لمطابقة تامة مع
+  --    usePosts.ts في هذه الحالة الاستثنائية يصبح الشرط
+  --    `coalesce(post.destination, 'feed') <> 'reels'` — تعديل سطر واحد
+  --    ينتظر اعتمادك.
   -- -------------------------------------------------------------------
   follow_slice as (
     select
@@ -360,6 +381,10 @@ begin
     from public.posts as post
     join followed_authors as followed on followed.author_id = post.user_id
     where post.created_at >= now() - interval '30 days'
+      -- الوجهة: التغذية الرئيسية فقط. مطابقة لسلوك usePosts.ts الذي يطابق
+      -- أي قيمة غير 'reels' بـ'feed' (سطر 75) ويعرض في الرئيسية ما وجهته
+      -- 'feed' (سطر 363). الريلز لها مسار مستقل ولا تدخل هنا.
+      and coalesce(post.destination, 'feed') = 'feed'
       -- لا فحص لـ is_deactivated هنا بقصد: التعطيل مؤقت ويُخرج الحساب من
       -- واجهات الاكتشاف فقط، بينما aani_can_read_post و usePosts لا يفحصانه،
       -- فمنشورات الحساب المتابَع المعطّل تبقى ظاهرة لمتابعيه. التفصيل في رأس
@@ -382,6 +407,8 @@ begin
       and owner.is_private = false
       and owner.is_deactivated = false
       and post.created_at >= now() - interval '14 days'
+      -- الوجهة: التغذية الرئيسية فقط، بنفس شرط follow_slice.
+      and coalesce(post.destination, 'feed') = 'feed'
       -- كل منشورات الحسابات المتابَعة تخصّ مصدر المتابعات، سواء وقعت في
       -- شريحته المقصوصة أو لم تقع. الفصل بالأهلية لا بالشريحة.
       and not exists (
@@ -418,6 +445,11 @@ begin
       join public.posts as post on post.id = repost.post_id
       join public.profiles as post_owner on post_owner.id = post.user_id
       where repost.created_at >= now() - interval '30 days'
+        -- الوجهة: المنشور الأصلي يجب أن يكون في التغذية الرئيسية فقط.
+        -- هذا الشرط يقع قبل شرطي الأهلية أدناه، فكل ما يمرّ إلى المقارنة
+        -- وجهته 'feed'، ويبقى الشرطان مطابقين حرفياً لشروط follow_slice
+        -- و discovery_slice. الريلز لا تدخل هذا المصدر مهما كان عمرها.
+        and coalesce(post.destination, 'feed') = 'feed'
         -- استبعاد المؤهل لمصدر المتابعات: صاحب متابَع ومنشور ضمن 30 يوماً.
         and not (
           post.created_at >= now() - interval '30 days'
