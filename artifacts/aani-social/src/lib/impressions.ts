@@ -245,24 +245,35 @@ function isHidden(): boolean {
 /**
  * إرسال دفعة واحدة بحجم BATCH_MAX على الأكثر.
  *
- * عند النجاح: تُحذف أحداث الدفعة من المعلّق، وتُضاف مفاتيحها إلى المسجَّل
- * (وهذه هي اللحظة الوحيدة التي يُعتبر فيها الحدث مسجَّلاً)، ثم تُجدول الدفعة
- * التالية فوراً إن بقي شيء.
+ * ترتيب الحفظ عند النجاح مقصود:
+ *   1) تُحفظ مفاتيح أحداث الدفعة في المسجَّل (وهذه هي اللحظة الوحيدة التي
+ *      يُعتبر فيها الحدث مسجَّلاً).
+ *   2) ثم تُحذف أحداث الدفعة من المعلّق ويُحفظ الطابور.
+ * لو انعكس الترتيب أو توقفت الصفحة بين عمليتي التخزين لضاع مفتاح منع التكرار.
+ * بالترتيب الحالي يبقى الحدث في الطابور ومفتاحه في المسجَّل معاً، فتتجاهله
+ * الاستعادة (`loadPending` يفحص المسجَّل) ولا يُرسل مرتين.
+ * ولا يُدَّعى أي ضمان إن تعذّر التخزين (امتلاء أو وضع خاص): المفاتيح تبقى في
+ * الذاكرة وحدها لهذه الصفحة، ولا يُضمن منع التكرار بعد إعادة التحميل.
  *
  * عند الفشل: تبقى الأحداث كما هي بنفس event_id وتُعاد المحاولة لاحقاً.
  *
  * upsert مع ignoreDuplicates: إعادة إرسال نفس event_id (بعد مهلة وصل طلبها
  * فعلاً) لا تُفشل الدفعة، لأن القيد الفريد (user_id, event_id) يمنع التكرار
  * على الخادم. مسار DO NOTHING لا يحتاج سياسة UPDATE.
+ *
+ * تُعيد true فقط إذا تأكد قبول الدفعة من الخادم (أو لم يبقَ شيء لإرساله)،
+ * وfalse عند أي فشل — وبهذا يتوقف flushOnExit عند أول فشل.
  */
-async function flushImpressions(): Promise<void> {
-  if (flushing || !supabaseConfigured) return;
+async function flushImpressions(): Promise<boolean> {
+  if (flushing || !supabaseConfigured) return false;
   loadPending();
-  if (pending.length === 0) return;
+  if (pending.length === 0) return true;
   flushing = true;
   const batch = pending.slice(0, BATCH_MAX);
   /** التأخير المطلوب بعد نهاية المحاولة (null = لا جدولة). */
   let nextDelay: number | null = null;
+  /** هل تأكد قبول الدفعة فعلاً؟ */
+  let sent = false;
   try {
     const { error } = await supabase
       .from('post_impressions')
@@ -270,10 +281,13 @@ async function flushImpressions(): Promise<void> {
     if (error) {
       nextDelay = RETRY_DELAY_MS;
     } else {
+      // 1) المسجَّل أولاً: المفاتيح تُحفظ قبل حذف الأحداث من الطابور.
+      markRecorded(batch);
+      // 2) ثم إزالة أحداث الدفعة من المعلّق وحفظ الطابور.
       const sentEventIds = new Set(batch.map(event => event.event_id));
       pending = pending.filter(event => !sentEventIds.has(event.event_id));
       persistPending();
-      markRecorded(batch);
+      sent = true;
       // أحداث معلّقة متبقية: تُرسل في دفعة تالية قريبة بحدود BATCH_MAX.
       if (pending.length > 0) nextDelay = DRAIN_DELAY_MS;
     }
@@ -284,12 +298,17 @@ async function flushImpressions(): Promise<void> {
   }
   // الجدولة بعد إنهاء الإرسال: scheduleFlush لا يجدول أثناء flushing.
   if (nextDelay !== null) scheduleFlush(nextDelay);
+  return sent;
 }
 
 /**
  * محاولة إرسال عند مغادرة الصفحة أو إخفائها: دفعات متتالية ضمن ميزانية
- * زمنية قصيرة. أفضل محاولة ممكنة فقط — لا ضمان تسليم عند إغلاق المتصفح،
- * والمعلّق يبقى محفوظاً في sessionStorage ليُرسل عند العودة.
+ * زمنية قصيرة، وتتوقف **عند أول فشل** فلا تتكرر الطلبات الفاشلة فوراً.
+ * لا تُرسل الدفعة التالية إلا إذا تأكد قبول السابقة، وضمن حدود الخروج نفسها
+ * (EXIT_MAX_BATCHES و EXIT_BUDGET_MS).
+ * الأحداث التي لم تُقبل تبقى معلّقة بنفس event_id في sessionStorage، لتُرسل
+ * عند العودة أو بعد مهلة إعادة المحاولة العادية.
+ * أفضل محاولة ممكنة فقط — لا ضمان تسليم عند إغلاق المتصفح.
  */
 async function flushOnExit(): Promise<void> {
   const startedAt = Date.now();
@@ -298,7 +317,10 @@ async function flushOnExit(): Promise<void> {
     if (Date.now() - startedAt > EXIT_BUDGET_MS) return;
     if (flushing) return;
     // eslint-disable-next-line no-await-in-loop
-    await flushImpressions();
+    const sent = await flushImpressions();
+    // فشل الدفعة: توقّف الآن — الباقي يُترك لإعادة المحاولة العادية، لا طلبات
+    // فاشلة متتالية.
+    if (!sent) return;
     if (pending.length === 0) return;
   }
 }
