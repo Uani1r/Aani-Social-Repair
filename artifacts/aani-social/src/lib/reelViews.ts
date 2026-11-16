@@ -20,10 +20,25 @@
 //     التلقائي. كل مستمعاته إضافية ومستقلة.
 //   * لا يمسّ post_impressions ولا منطق المرحلة الثانية (impressions.ts).
 //
-// الحمولة: الأعمدة العشرة التالية فقط، بلا أي عمود آخر:
-//   event_id, user_id, post_id, session_id, visible_duration_ms,
-//   played_duration_ms, media_duration_ms, completion_ratio, replay_count,
-//   early_skip
+// الحمولة: أحد عشر عموداً فقط، بلا أي عمود آخر، ومطابقة حرفياً لقيود الجدول
+// في Production:
+//   event_id, user_id, post_id, surface ('reels'), content_type ('video'),
+//   session_id, visible_duration_ms, played_duration_ms, media_duration_ms,
+//   completion_ratio, replay_count, early_skip
+//
+// قيود Production التي تحكم هذه الحمولة (من
+// supabase/migrations/20261116113304_create_post_recommendation_telemetry_tables.sql):
+//   * surface text not null check (surface in ('feed','reels')) — بلا قيمة افتراضية
+//   * content_type text not null check (content_type in ('text','image','video')) — بلا قيمة افتراضية
+//   * session_id uuid not null
+//   * visible_duration_ms integer not null default 0 check (between 0 and 86400000)
+//   * played_duration_ms  integer not null default 0 check (between 0 and 86400000)
+//   * media_duration_ms   integer null check (is null or between 1 and 86400000)
+//   * completion_ratio    numeric(6,5) null check (is null or between 0 and 1)
+//   * replay_count        integer not null default 0 check (between 0 and 1000)
+//   * early_skip          boolean not null default false
+// ولذلك: المدة غير المعروفة تُرسل null ولا تُحوَّل إلى 0 (الصفر يخالف القيد)،
+// ونسبة الإكمال تكون null حين لا تُعرف المدة، وكل الأعداد تُقصّ على حدودها.
 
 import { useCallback, useEffect, useRef, type RefObject } from 'react';
 
@@ -34,11 +49,17 @@ type ReelViewEvent = {
   event_id: string;
   user_id: string;
   post_id: string;
+  /** العمود NOT NULL في الإنتاج وبلا قيمة افتراضية: 'reels' دائماً. */
+  surface: 'reels';
+  /** العمود NOT NULL في الإنتاج وبلا قيمة افتراضية: 'video' دائماً. */
+  content_type: 'video';
   session_id: string;
   visible_duration_ms: number;
   played_duration_ms: number;
-  media_duration_ms: number;
-  completion_ratio: number;
+  /** null حين لا تُعرف مدة الفيديو — القاعدة لا تقبل 0 هنا. */
+  media_duration_ms: number | null;
+  /** null حين لا تُعرف المدة، فلا تُدَّعى نسبة إكمال. */
+  completion_ratio: number | null;
   replay_count: number;
   early_skip: boolean;
 };
@@ -66,10 +87,22 @@ const MIN_RECORDED_PLAYED_MS = 500;
 const RESTART_EPSILON_SEC = 0.5;
 /**
  * نسبة الموضع السابق من المقطع التي تجعل العودة إلى البداية إعادة تشغيل
- * حقيقية. قاعدة واحدة تغطي الحالتين الموجودتين: loop=true (المتصفح يعيد من
- * الصفر بعد النهاية) والقص الزمني (إعادة التشغيل من trim_start بعد trim_end).
+ * حقيقية. قاعدة واحدة تغطي الحالتين التلقائيتين الموجودتين في ReelSlide:
+ * loop=true (المتصفح يعيد من الصفر بعد النهاية) والقص الزمني (إعادة التشغيل
+ * من trim_start بعد trim_end).
  */
 const REPLAY_NEAR_END_RATIO = 0.9;
+/**
+ * نافذة اعتبار القفزة ناتجة عن سحب المستخدم لشريط التقدم (ms). أحداث
+ * input/change على input[type=range] تُحدّث الطابع الزمني، فأي عودة إلى
+ * البداية خلال هذه النافذة تُعدّ بحثاً يدوياً لا إعادة تشغيل.
+ */
+const USER_SEEK_WINDOW_MS = 1000;
+/**
+ * نافذة دمج إعادة التشغيل الواحدة (ms): loop الأصلي قد يُنتج timeupdate
+ * و seeked لنفس الإعادة، فلا تُحتسب مرتين.
+ */
+const RESTART_DEDUPE_MS = 300;
 /**
  * تعريف early_skip الثابت في هذا الملف:
  * مشاهدة انتهت بتشغيل فعلي أقل من 3000ms **و** نسبة إكمال أقل من 0.3.
@@ -117,17 +150,51 @@ function randomUuid(): string {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** حدود أعمدة الجدول كما هي في Production. */
+const MAX_DURATION_MS = 86400000;
+const MAX_REPLAY_COUNT = 1000;
+
+/** مدة تشغيل/ظهور صحيحة الشكل ضمن حدود العمود (0..86400000). */
+function clampDurationMs(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(MAX_DURATION_MS, Math.round(value));
+}
+
+/**
+ * مدة المقطع: null حين لا تُعرف (أو أقل من 1ms)، وإلا بين 1 و86400000.
+ * لا تُحوَّل مدة مجهولة إلى صفر: القاعدة ترفض 0 في هذا العمود.
+ */
+function clampMediaDurationMs(value: number | null): number | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  const rounded = Math.round(value);
+  if (rounded < 1) return null;
+  return Math.min(MAX_DURATION_MS, rounded);
+}
+
+/** نسبة إكمال بين 0 و1 بخمس منازل عشرية — مطابقة لـnumeric(6,5). */
+function clampCompletionRatio(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, Math.round(value * 100000) / 100000));
+}
+
 function isReelViewEvent(value: unknown): value is ReelViewEvent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
+  const mediaDurationValid = row.media_duration_ms === null
+    || (typeof row.media_duration_ms === 'number' && Number.isFinite(row.media_duration_ms));
+  const completionRatioValid = row.completion_ratio === null
+    || (typeof row.completion_ratio === 'number' && Number.isFinite(row.completion_ratio));
   return typeof row.event_id === 'string' && UUID_PATTERN.test(row.event_id)
     && typeof row.user_id === 'string' && row.user_id.length > 0
     && typeof row.post_id === 'string' && row.post_id.length > 0
+    // العمودان NOT NULL وبلا قيمة افتراضية في الإنتاج: أي حدث مستعاد بغيرهما تالف.
+    && row.surface === 'reels'
+    && row.content_type === 'video'
     && typeof row.session_id === 'string' && UUID_PATTERN.test(row.session_id)
     && typeof row.visible_duration_ms === 'number' && Number.isFinite(row.visible_duration_ms)
     && typeof row.played_duration_ms === 'number' && Number.isFinite(row.played_duration_ms)
-    && typeof row.media_duration_ms === 'number' && Number.isFinite(row.media_duration_ms)
-    && typeof row.completion_ratio === 'number' && Number.isFinite(row.completion_ratio)
+    && mediaDurationValid
+    && completionRatioValid
     && typeof row.replay_count === 'number' && Number.isFinite(row.replay_count)
     && typeof row.early_skip === 'boolean';
 }
@@ -276,6 +343,42 @@ function isPageHidden(): boolean {
   }
 }
 
+// ---------------------------------------------------------------------
+// تمييز البحث اليدوي عن إعادة التشغيل التلقائية.
+//
+// المسار اليدوي الوحيد للبحث في ReelSlide هو شريط التقدم: input[type=range]
+// في الأسفل، onChange يضبط video.currentTime مباشرة. أما إعادة التشغيل
+// التلقائية فتأتي من loop الأصلي في المتصفح أو من seekToTrimStart التي
+// يستدعيها ReelSlide برمجياً عند بلوغ trim_end.
+//
+// لذلك يُسجَّل هنا وقت آخر تفاعل للمستخدم مع أي input[type=range] في الصفحة،
+// وأي عودة إلى بداية المقطع خلال USER_SEEK_WINDOW_MS منه تُعدّ بحثاً يدوياً
+// ولا تُحتسب إعادة تشغيل. المستمع واحد للصفحة كلها، ولا يغيّر سلوك أي عنصر.
+// ---------------------------------------------------------------------
+let lastUserSeekAt = 0;
+let userSeekListenerInstalled = false;
+
+function installUserSeekListener(): void {
+  if (userSeekListenerInstalled || typeof document === 'undefined') return;
+  userSeekListenerInstalled = true;
+  const markUserSeek = (event: Event) => {
+    const target = event.target;
+    if (target instanceof HTMLInputElement && target.type === 'range') {
+      lastUserSeekAt = Date.now();
+    }
+  };
+  try {
+    document.addEventListener('input', markUserSeek, true);
+    document.addEventListener('change', markUserSeek, true);
+  } catch {
+    // بلا مستمع: البحث اليدوي قد يُحتسب إعادة تشغيل، وهو الاحتياط الآمن الوحيد
+  }
+}
+
+function isRecentUserSeek(): boolean {
+  return Date.now() - lastUserSeekAt <= USER_SEEK_WINDOW_MS;
+}
+
 /**
  * إرسال دفعة واحدة بحجم BATCH_MAX على الأكثر.
  *
@@ -400,13 +503,15 @@ type ViewSession = {
   trimStartSec: number;
   /** نهاية المقطع بالثواني، أو null إن كان الفيديو كاملاً. */
   trimEndSec: number | null;
-  /** مدة المقطع بالثواني وقت بدء التشغيل (احتياط عند تعذّر قراءتها لاحقاً). */
-  mediaDurationSec: number;
+  /** مدة المقطع بالثواني وقت بدء التشغيل، أو null إن لم تُعرف بعد. */
+  mediaDurationSec: number | null;
   visibleMs: number;
   playedMs: number;
   /** أقصى موضع وصل إليه التشغيل داخل المقطع (ms) — أساس completion_ratio. */
   maxPositionMs: number;
   replayCount: number;
+  /** آخر لحظة احتُسبت فيها إعادة تشغيل، لدمج timeupdate و seeked لنفس الإعادة. */
+  lastRestartAtMs: number;
   /** آخر موضع معروف للفيديو (ثواني) لكشف العودة إلى البداية. */
   lastKnownTimeSec: number | null;
   /** الموضع قبل قفزة جارية، يُستهلك عند seeked. */
@@ -414,19 +519,25 @@ type ViewSession = {
   closed: boolean;
 };
 
-/** مدة المقطع الفعلي بالثواني، مع مراعاة القص الزمني. */
+/**
+ * مدة المقطع الفعلي بالثواني، مع مراعاة القص الزمني.
+ *
+ * تُعيد null إذا كانت المدة مجهولة فعلاً: لا duration صالحة من المتصفح ولا
+ * نهاية قصّ معروفة. لا تُصنع قيمة افتراضية، لأن العمود في الإنتاج يرفض 0.
+ */
 function resolveMediaDurationSec(
   video: HTMLVideoElement | null,
   trimStartSec: number,
   trimEndSec: number | null,
-): number {
+): number | null {
   const rawDuration = video && Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
   const start = Math.max(0, trimStartSec);
   const end = trimEndSec !== null && trimEndSec > start
     ? (rawDuration > 0 ? Math.min(trimEndSec, rawDuration) : trimEndSec)
     : rawDuration;
   const span = end - start;
-  return span > 0 ? span : 0;
+  if (!Number.isFinite(span) || span <= 0) return null;
+  return span;
 }
 
 /**
@@ -464,31 +575,35 @@ export function useReelViewTracking(input: {
     if (session.playedMs < MIN_RECORDED_PLAYED_MS) return;
 
     const video = videoRef.current;
+    // المدة المجهولة تبقى null ولا تُحوَّل إلى 0 — القاعدة ترفض 0 في هذا العمود.
     const mediaDurationSec = resolveMediaDurationSec(video, session.trimStartSec, session.trimEndSec)
-      || session.mediaDurationSec;
-    const mediaDurationMs = Math.round(mediaDurationSec * 1000);
-    // أقصى موضع وصل إليه التشغيل، لا مجموع المدد: إعادة التشغيل لا تُضخّم
-    // نسبة الإكمال.
-    const completionRatio = mediaDurationMs > 0
-      ? Math.min(1, Math.max(0, session.maxPositionMs / mediaDurationMs))
-      : 0;
-    const roundedRatio = Math.round(completionRatio * 10000) / 10000;
-    const playedMs = Math.round(session.playedMs);
+      ?? session.mediaDurationSec;
+    const mediaDurationMs = clampMediaDurationMs(
+      mediaDurationSec === null ? null : mediaDurationSec * 1000,
+    );
+    // بلا مدة معروفة لا تُدَّعى نسبة إكمال: null بدل رقم مضلّل.
+    const completionRatio = mediaDurationMs !== null
+      ? clampCompletionRatio(session.maxPositionMs / mediaDurationMs)
+      : null;
+    const playedMs = clampDurationMs(session.playedMs);
+    const visibleMs = clampDurationMs(session.visibleMs);
 
     enqueueReelView({
       event_id: session.eventId,
       user_id: session.userId,
       post_id: session.postId,
+      surface: 'reels',
+      content_type: 'video',
       session_id: readSessionId(),
-      visible_duration_ms: Math.round(session.visibleMs),
+      visible_duration_ms: visibleMs,
       played_duration_ms: playedMs,
       media_duration_ms: mediaDurationMs,
-      completion_ratio: roundedRatio,
-      replay_count: session.replayCount,
-      // early_skip يحتاج مدة مقطع معروفة، وإلا فلا حكم على الإكمال.
-      early_skip: mediaDurationMs > 0
+      completion_ratio: completionRatio,
+      replay_count: Math.min(MAX_REPLAY_COUNT, Math.max(0, Math.round(session.replayCount))),
+      // early_skip يحتاج نسبة إكمال حقيقية؛ بلا مدة معروفة يبقى false.
+      early_skip: completionRatio !== null
         && playedMs < EARLY_SKIP_PLAYED_MS
-        && roundedRatio < EARLY_SKIP_COMPLETION_RATIO,
+        && completionRatio < EARLY_SKIP_COMPLETION_RATIO,
     });
   }, [videoRef]);
 
@@ -521,6 +636,7 @@ export function useReelViewTracking(input: {
         playedMs: 0,
         maxPositionMs: 0,
         replayCount: 0,
+        lastRestartAtMs: 0,
         lastKnownTimeSec: element.currentTime,
         preSeekTimeSec: null,
         closed: false,
@@ -536,16 +652,28 @@ export function useReelViewTracking(input: {
     };
 
     /**
-     * إعادة تشغيل فعلية: عودة من قرب نهاية المقطع إلى بدايته. تغطي loop
-     * (المتصفح يعيد من الصفر) والقص الزمني (إعادة من trim_start).
+     * إعادة تشغيل فعلية: عودة من قرب نهاية المقطع إلى بدايته.
+     *
+     * تُحتسب في الحالتين التلقائيتين فقط:
+     *   * loop الأصلي (videoTimeRange == null): المتصفح يعيد من الصفر.
+     *   * إعادة القص البرمجية: seekToTrimStart بعد بلوغ trim_end.
+     * ولا تُحتسب إذا كان المستخدم قد سحب شريط التقدم خلال USER_SEEK_WINDOW_MS،
+     * فسحب المؤشر من قرب النهاية إلى البداية بحثٌ يدوي لا إعادة تشغيل.
+     * وتُدمج timeupdate و seeked لنفس الإعادة عبر RESTART_DEDUPE_MS.
      */
     const countRestartIfAny = (session: ViewSession, previousTimeSec: number | null, currentTimeSec: number) => {
       if (previousTimeSec === null) return;
       // بلا مدة مقطع معروفة لا يمكن الحكم على "قرب النهاية"، فلا إعادة تشغيل.
-      if (session.mediaDurationSec <= 0) return;
+      if (session.mediaDurationSec === null || session.mediaDurationSec <= 0) return;
       const nearStart = currentTimeSec <= session.trimStartSec + RESTART_EPSILON_SEC;
       const wasNearEnd = previousTimeSec >= session.trimStartSec + session.mediaDurationSec * REPLAY_NEAR_END_RATIO;
-      if (nearStart && wasNearEnd) session.replayCount += 1;
+      if (!nearStart || !wasNearEnd) return;
+      // سحب المستخدم شريط التقدم: بحث يدوي، ليس إعادة تشغيل.
+      if (isRecentUserSeek()) return;
+      const now = Date.now();
+      if (now - session.lastRestartAtMs < RESTART_DEDUPE_MS) return;
+      session.lastRestartAtMs = now;
+      if (session.replayCount < MAX_REPLAY_COUNT) session.replayCount += 1;
     };
 
     const onPlaying = (event: Event) => {
@@ -567,28 +695,31 @@ export function useReelViewTracking(input: {
       if (previous !== null && current + RESTART_EPSILON_SEC * 0.02 < previous) {
         // قفزة إلى الخلف (loop أصلي أو إعادة قصّ بلا حدث seeked).
         countRestartIfAny(session, previous, current);
-        // القفزة ليست مدة تشغيل.
+        // القفزة ليست مدة تشغيل ولا موضعاً مشاهداً.
         session.lastKnownTimeSec = current;
-        trackPosition(session, current);
         return;
       }
 
       if (previous !== null && !element.paused) {
         const deltaMs = (current - previous) * 1000;
-        // فقط التقدّم الطبيعي: البحث اليدوي والقفزات الكبيرة لا تُحتسب.
-        if (deltaMs > 0 && deltaMs <= MAX_PLAY_DELTA_MS) session.playedMs += deltaMs;
+        // فقط التقدّم الطبيعي: البحث اليدوي والقفزات الكبيرة لا تُحتسب مدةً
+        // تشغيل ولا موضعاً مشاهداً.
+        if (deltaMs > 0 && deltaMs <= MAX_PLAY_DELTA_MS) {
+          session.playedMs += deltaMs;
+          // الموضع المشاهد يتقدّم بالتشغيل الفعلي فقط، لا بسحب الشريط.
+          trackPosition(session, current);
+        }
       }
 
       session.lastKnownTimeSec = current;
-      trackPosition(session, current);
     };
 
-    const onSeeking = (event: Event) => {
+    const onSeeking = () => {
       const session = sessionRef.current;
       if (!session || session.closed) return;
+      // يُحفظ الموضع قبل القفزة لتمييز إعادة التشغيل عن البحث اليدوي عند seeked.
+      // هدف القفزة نفسه ليس موضعاً مشاهداً: لا يُرفع maxPositionMs هنا.
       if (session.preSeekTimeSec === null) session.preSeekTimeSec = session.lastKnownTimeSec;
-      const element = event.currentTarget as HTMLVideoElement;
-      trackPosition(session, element.currentTime);
     };
 
     const onSeeked = (event: Event) => {
@@ -598,15 +729,16 @@ export function useReelViewTracking(input: {
       countRestartIfAny(session, session.preSeekTimeSec, element.currentTime);
       session.preSeekTimeSec = null;
       // الموضع بعد القفزة هو نقطة البداية الجديدة: القفزة نفسها لا تُحتسب مدة
-      // تشغيل، ولا تُنتج فرقاً سالباً في timeupdate التالي.
+      // تشغيل ولا موضعاً مشاهداً، ولا تُنتج فرقاً سالباً في timeupdate التالي.
       session.lastKnownTimeSec = element.currentTime;
-      trackPosition(session, element.currentTime);
     };
 
     video.addEventListener('playing', onPlaying);
     video.addEventListener('timeupdate', onTimeUpdate);
     video.addEventListener('seeking', onSeeking);
     video.addEventListener('seeked', onSeeked);
+    // لتمييز سحب شريط التقدم اليدوي عن إعادة التشغيل التلقائية.
+    installUserSeekListener();
 
     // عدّاد مدة الظهور: زمن حائطي فقط عندما تكون الشريحة ظاهرة والصفحة visible
     // وبعد بدء التشغيل الفعلي.
