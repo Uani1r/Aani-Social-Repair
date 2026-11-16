@@ -218,8 +218,9 @@ function isReelViewEvent(value: unknown): value is ReelViewEvent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
   return typeof row.event_id === 'string' && UUID_PATTERN.test(row.event_id)
-    && typeof row.user_id === 'string' && row.user_id.length > 0
-    && typeof row.post_id === 'string' && row.post_id.length > 0
+    // user_id و post_id عمودان uuid في الإنتاج: التحقق المحلي يطابق نوع القاعدة.
+    && typeof row.user_id === 'string' && UUID_PATTERN.test(row.user_id)
+    && typeof row.post_id === 'string' && UUID_PATTERN.test(row.post_id)
     // العمودان NOT NULL وبلا قيمة افتراضية في الإنتاج: أي حدث مستعاد بغيرهما تالف.
     && row.surface === 'reels'
     && row.content_type === 'video'
