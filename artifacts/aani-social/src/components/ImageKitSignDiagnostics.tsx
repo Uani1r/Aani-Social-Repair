@@ -14,6 +14,7 @@ import {
   collectOwnImageKitCandidates,
   runImageKitSignCheck,
   toCandidateFromInput,
+  toPrivateTestFileCandidate,
   type ImageKitSignCandidate,
   type ImageKitSignCheckResult,
   type ImageKitSignStep,
@@ -54,6 +55,8 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
   const [collected, setCollected] = useState(false);
   const [manualPath, setManualPath] = useState('');
   const [manualError, setManualError] = useState('');
+  const [testFilePath, setTestFilePath] = useState('');
+  const [testFileError, setTestFileError] = useState('');
 
   const updateRow = (index: number, patch: Partial<Row>) => {
     setRows(previous => previous.map((row, rowIndex) => (rowIndex === index ? { ...row, ...patch } : row)));
@@ -80,9 +83,18 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
     if (collecting) return;
     setCollecting(true);
     setManualError('');
+    setTestFileError('');
     const outcome = await collectOwnImageKitCandidates(userId);
     setProblems(outcome.problems);
-    setRows(outcome.candidates.map(candidate => ({ candidate, running: false, result: null })));
+    // صفوف ملف الاختبار الخاص لا تُمسح بالجمع: هي الدليل، وتُبقى في المقدمة.
+    setRows(previous => {
+      const kept = previous.filter(row => row.candidate.isPrivateTestFile);
+      const keptPaths = new Set(kept.map(row => row.candidate.path));
+      const added = outcome.candidates
+        .filter(candidate => !keptPaths.has(candidate.path))
+        .map(candidate => ({ candidate, running: false, result: null }));
+      return [...kept, ...added];
+    });
     setCollected(true);
     setCollecting(false);
   };
@@ -97,6 +109,26 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
     setManualPath('');
     setRows(previous => [...previous, { candidate, running: false, result: null }]);
   };
+
+  const addPrivateTestFile = () => {
+    const candidate = toPrivateTestFileCandidate(testFilePath);
+    if (!candidate) {
+      setTestFileError('ألصق رابط ملف الاختبار الخاص أو مساره: /<endpointId>/aani/<userId>/test/ik-sign-test.jpg');
+      return;
+    }
+    setTestFileError('');
+    setTestFilePath('');
+    // ملف الاختبار أول الصفوف دائماً: هو الدليل الوحيد القاطع. لا تكرار لنفس المسار.
+    setRows(previous =>
+      previous.some(row => row.candidate.path === candidate.path)
+        ? previous
+        : [{ candidate, running: false, result: null }, ...previous],
+    );
+  };
+
+  const privateTestRows = rows.filter(row => row.result?.provesSigning);
+  const signedOnlyRows = rows.filter(row => row.result && !row.result.provesSigning && !row.result.isPublicFile);
+  const publicRows = rows.filter(row => row.result?.isPublicFile);
 
   const signingEnabled = isImageKitSigningEnabled();
 
@@ -185,7 +217,13 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
 
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: 14 }}>
           <p style={{ margin: 0, color: '#a1a1aa', lineHeight: 1.7 }}>
-            أداة مؤقتة — تُحذف بعد الاختبار. تعرض فقط حالة الاستجابة: لا مفاتيح ولا رموز جلسة ولا روابط موقّعة.
+            أداة مؤقتة — تُحذف بعد الاختبار. تعرض حالة الاستجابة فقط: لا مفاتيح ولا رموز جلسة ولا روابط موقّعة.
+          </p>
+          <p style={{ margin: '8px 0 0', color: '#fbbf24', lineHeight: 1.7 }}>
+            ملفاتك الحالية <strong>عامة</strong>، فرابط موقّع يعيد 200 لا يثبت شيئاً (الرابط العام يعمل أيضاً). الدليل
+            الوحيد هو <strong>ملف اختبار خاص</strong> (Private file) في ImageKit: يُرفض بلا توقيع ويُفتح بالتوقيع.
+            جهّزه مرة واحدة داخل مجلدك <span dir="ltr">/aani/&lt;userId&gt;/test</span> بعلامة Private، ثم ألصق رابط
+            مساره أدناه. لا ترفع الأداة أي ملف، ولا تفعّل Restrict unsigned URLs على الحساب.
           </p>
           <p style={{ margin: '8px 0 0', color: signingEnabled ? '#4ade80' : '#a1a1aa', lineHeight: 1.7 }}>
             {signingEnabled
@@ -235,6 +273,51 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
             </button>
           </div>
 
+          <div
+            style={{
+              marginTop: 12,
+              padding: 10,
+              borderRadius: 12,
+              border: '1px solid rgba(56,189,248,0.35)',
+              background: 'rgba(56,189,248,0.08)',
+            }}
+          >
+            <div style={{ marginBottom: 6, fontWeight: 700, color: '#7dd3fc' }}>ملف الاختبار الخاص (Private)</div>
+            <input
+              value={testFilePath}
+              onChange={event => setTestFilePath(event.target.value)}
+              placeholder="/<endpointId>/aani/<userId>/test/ik-sign-test.jpg"
+              dir="ltr"
+              style={{
+                width: '100%',
+                padding: '9px 11px',
+                borderRadius: 11,
+                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'rgba(255,255,255,0.04)',
+                color: '#f4f4f5',
+                fontSize: 11,
+              }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+              <button
+                type="button"
+                onClick={addPrivateTestFile}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(56,189,248,0.35)',
+                  background: 'rgba(56,189,248,0.14)',
+                  color: '#7dd3fc',
+                  fontSize: 11,
+                  fontWeight: 700,
+                }}
+              >
+                أضف ملف الاختبار
+              </button>
+              {testFileError ? <span style={{ color: '#fb7185', lineHeight: 1.6 }}>{testFileError}</span> : null}
+            </div>
+          </div>
+
           <div style={{ marginTop: 12 }}>
             <input
               value={manualPath}
@@ -270,6 +353,38 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
               {manualError ? <span style={{ color: '#fb7185', lineHeight: 1.6 }}>{manualError}</span> : null}
             </div>
           </div>
+
+          {(privateTestRows.length > 0 || signedOnlyRows.length > 0 || publicRows.length > 0) && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 10,
+                borderRadius: 11,
+                border: privateTestRows.length > 0 ? '1px solid rgba(74,222,128,0.35)' : '1px solid rgba(251,191,36,0.3)',
+                background: privateTestRows.length > 0 ? 'rgba(74,222,128,0.08)' : 'rgba(251,191,36,0.07)',
+                color: privateTestRows.length > 0 ? '#4ade80' : '#fbbf24',
+                lineHeight: 1.75,
+              }}
+            >
+              {privateTestRows.length > 0 ? (
+                <>
+                  <strong>دليل قاطع:</strong> {privateTestRows.length} ملف خاص رُفض بلا توقيع وفُتح بالتوقيع — التوقيع
+                  يعمل على الخادم وImageKit يقبله. يمكن الانتقال إلى تفعيل التوقيع الإلزامي بعد ضبط الملفات.
+                </>
+              ) : (
+                <>
+                  <strong>لا دليل بعد:</strong>
+                  {publicRows.length > 0
+                    ? ` ${publicRows.length} ملف أُضيف عام (يُفتح بلا توقيع)، فـ200 عليه لا يثبت صحة التوقيع.`
+                    : ''}
+                  {signedOnlyRows.length > 0
+                    ? ` و${signedOnlyRows.length} ملف أعاد توقيعاً لكن لم يثبت أنه خاص — راجع سطر «بلا توقيع».`
+                    : ''}
+                  {' '}أضف مسار ملف اختبار خاص (Private) داخل مجلدك ليصبح الحكم قاطعاً.
+                </>
+              )}
+            </div>
+          )}
 
           {problems.length > 0 && (
             <div
@@ -346,7 +461,22 @@ export default function ImageKitSignDiagnostics({ userId }: { userId: string }) 
                 {row.result && (
                   <div style={{ marginTop: 6 }}>
                     <StepLine label="التوقيع" step={row.result.sign} />
-                    <StepLine label="الفتح" step={row.result.open} />
+                    <StepLine label="الفتح (موقّع)" step={row.result.open} />
+                    <StepLine label="الفتح (بلا توقيع)" step={row.result.unsigned} />
+                    <div
+                      style={{
+                        marginTop: 6,
+                        fontWeight: 700,
+                        color: row.result.provesSigning ? '#4ade80' : row.result.isPublicFile ? '#fbbf24' : '#a1a1aa',
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      {row.result.provesSigning
+                        ? 'النتيجة: دليل — ملف خاص، رُفض بلا توقيع وفُتح بالتوقيع.'
+                        : row.result.isPublicFile
+                          ? 'النتيجة: لا دليل — الملف عام، فـ200 هنا لا يثبت صحة التوقيع.'
+                          : 'النتيجة: غير حاسمة — راجع الأسطر أعلاه.'}
+                    </div>
                   </div>
                 )}
               </div>
