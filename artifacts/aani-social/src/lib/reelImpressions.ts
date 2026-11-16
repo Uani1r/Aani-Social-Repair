@@ -505,40 +505,68 @@ export function useReelImageImpression(input: {
     });
   }, []);
 
-  // الخروج من الظهور أو تعطيل الشريحة يُغلق الجلسة فوراً.
+  // مزامنة حالتَي الظهور والتفعيل في مراجع، حتى يقرأهما العدّاد والمستمعات
+  // دون إعادة تركيبها. لا تُغلق الجلسة هنا: الإغلاق عند الخروج من الظهور
+  // تتولاه الدورة أدناه عبر cleanup، فتكون نقطة القياس واضحة.
   useEffect(() => {
     activeRef.current = active;
     enabledRef.current = enabled;
-    if (!active || !enabled) closeSession();
-  }, [active, enabled, closeSession]);
+  }, [active, enabled]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
 
-    // عدّاد مدة الظهور: زمن حائطي فقط، والصفحة visible، والشريحة ظاهرة.
-    let lastTickAt = Date.now();
-    const tick = () => {
+    // لا قياس إلا حين تكون الشريحة ظاهرة فعلاً ومفعّلة. الخروج المبكر يعني
+    // عدم بدء أي عدّاد، فلا يُحتسب زمن التحميل المسبق أو التركيب أو الاختفاء.
+    if (!active || !enabled) {
+      closeSession();
+      return undefined;
+    }
+
+    /**
+     * نقطة بداية القياس. تُضبط عند دخول هذه الدورة (أي عند الانتقال إلى
+     * ظاهر فعلاً) وعند العودة من إخفاء الصفحة، فلا يُضاف زمن سبق الظهور
+     * ولا زمن قضته الصفحة مخفية.
+     */
+    let lastSampleAt = Date.now();
+    /** هل العدّ جارٍ الآن؟ يتوقف عند إخفاء الصفحة ويستأنف عند العودة. */
+    let measuring = !isPageHidden();
+
+    /**
+     * يضيف الزمن المنقضي منذ آخر نقطة قياس، ثم يحرّك نقطة القياس إلى الآن.
+     * لا يُضاف شيء إن لم يكن العدّ جارياً، ولا والصفحة مخفية.
+     */
+    const accumulate = () => {
       const now = Date.now();
-      // الفجوة تُقصّ حتى لا يُضاف زمن تجمّد الخيط الرئيسي.
-      const gap = Math.min(now - lastTickAt, MAX_TICK_GAP_MS);
-      lastTickAt = now;
+      const elapsed = now - lastSampleAt;
+      lastSampleAt = now;
+      if (!measuring) return;
+      if (isPageHidden()) return;
       const session = ensureSession();
       if (!session) return;
-      session.visibleMs += gap;
+      // الفجوة تُقصّ حتى لا يُضاف زمن تجمّد الخيط الرئيسي دفعة واحدة.
+      session.visibleMs += Math.min(elapsed, MAX_TICK_GAP_MS);
     };
-    const ticker = window.setInterval(tick, TICK_MS);
+
+    const ticker = window.setInterval(accumulate, TICK_MS);
 
     const onVisibilityChange = () => {
-      if (!isPageHidden()) {
-        // العودة للظهور: العدّاد يستأنف من نفسه في الدورة التالية.
-        lastTickAt = Date.now();
+      if (isPageHidden()) {
+        // إخفاء الصفحة: يُضاف ما مضى حتى لحظة الإخفاء فقط، ثم يتوقف العدّ
+        // وتُغلق الجلسة بأفضل محاولة حفظ. لا يُحتسب زمن الإخفاء.
+        accumulate();
+        measuring = false;
+        closeSession();
+        void flushReelImageImpressionsOnExit();
         return;
       }
-      // إخفاء الصفحة: لا تُحتسب مدة الإخفاء، وتُغلق الجلسة بأفضل محاولة حفظ.
-      closeSession();
-      void flushReelImageImpressionsOnExit();
+      // العودة للظهور: إعادة ضبط نقطة البداية، فلا يُضاف زمن الإخفاء.
+      lastSampleAt = Date.now();
+      measuring = true;
     };
     const onPageHide = () => {
+      accumulate();
+      measuring = false;
       closeSession();
       void flushReelImageImpressionsOnExit();
     };
@@ -551,6 +579,9 @@ export function useReelImageImpression(input: {
     }
 
     return () => {
+      // آخر احتساب قبل الإغلاق: الزمن الممتد حتى مغادرة الظهور، لا بعده.
+      accumulate();
+      measuring = false;
       window.clearInterval(ticker);
       try {
         document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -562,5 +593,5 @@ export function useReelImageImpression(input: {
       closeSession();
       void flushReelImageImpressionsOnExit();
     };
-  }, [closeSession, ensureSession]);
+  }, [active, enabled, closeSession, ensureSession]);
 }

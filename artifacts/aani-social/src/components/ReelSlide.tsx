@@ -193,15 +193,22 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   }, [post.id, post.feedback_by_me]);
 
   useEffect(() => {
-    const video = videoRef.current;
     const container = containerRef.current;
-    if (!video || !container || typeof IntersectionObserver === 'undefined') return;
+    // المراقب يعمل على الحاوية لا على عنصر الفيديو: الريل المصوّر يعرض img
+    // بلا عنصر video، وكان اشتراط videoRef.current يمنع إنشاء المراقب
+    // وتحديث isVisible له. الآن isVisible يُحدَّث للصورة والفيديو معاً،
+    // وأي تعامل مع التشغيل يقع فقط عند وجود عنصر الفيديو.
+    if (!container || typeof IntersectionObserver === 'undefined') return;
 
     const observer = new IntersectionObserver(
       entries => {
         entries.forEach(entry => {
           const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.6;
           setIsVisible(isVisible);
+          // عنصر الفيديو يُقرأ وقت الحدث: قد يكون غائباً (ريل صورة) وقد
+          // يتغيّر بين إعادة التركيب. بلا عنصر فيديو لا تشغيل ولا إيقاف.
+          const video = videoRef.current;
+          if (!video) return;
           if (isVisible && !backgroundMediaSuspended && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
             // تشغيل مع حصرية المدير الموحد: يوقف أي فيديو آخر يعمل في التطبيق
             playExclusive(post.id, video);
@@ -218,7 +225,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     observer.observe(container);
     return () => {
       observer.disconnect();
-      video.pause();
+      // نفس سلوك الإيقاف السابق، محصوراً بوجود عنصر الفيديو.
+      const video = videoRef.current;
+      if (video) video.pause();
       releaseActiveVideo(post.id);
     };
   }, [backgroundMediaSuspended, videoSrc]);
