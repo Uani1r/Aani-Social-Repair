@@ -1946,16 +1946,47 @@ export default function Shell({
         }
         return raw;
       };
+      // المرحلة الخاصة بكل ملف مرفوع على حدة. الرفع متوازٍ (Promise.all)،
+      // فمرحلة واحدة مشتركة تُكتب من ملف آخر بينما يفشل ملف مختلف — فتُنسب
+      // المرحلة الخطأ. المفتاح هو مسار الرفع (فريد لكل ملف ولكل غلاف).
+      const uploadTracker = (() => {
+        // ترتيب مراحل الرفع: لا رجوع للخلف. الرفع الاحتياطي عبر الخادم يعيد
+        // إطلاق حدث 'uploading' بعد أن بدأ الإرسال، فلا تُنسب مرحلته (وهي رفع
+        // فعلي) إلى «جلب التوقيع».
+        const RANK: Record<string, number> = {
+          'ضغط وتجهيز الملف': 0,
+          'جلب توقيع الرفع من الخادم': 1,
+          'الرفع الفعلي إلى ImageKit': 2,
+        };
+        const phases = new Map<string, PublishPhase>();
+        let failed: PublishPhase | null = null;
+        return {
+          set(key: string, phase: PublishPhase) {
+            const current = phases.get(key);
+            if (current && (RANK[phase] ?? 0) < (RANK[current] ?? 0)) return;
+            phases.set(key, phase);
+          },
+          /** يُثبّت مرحلة أول ملف فاشل فقط — لا تُستبدل بفشل ملف آخر لاحق. */
+          markFailed(key: string) {
+            if (failed) return;
+            failed = phases.get(key) ?? null;
+          },
+          failedPhase(): PublishPhase | null {
+            return failed;
+          },
+        };
+      })();
+      /** يحوّل حدث uploadMedia إلى مرحلة تشخيص لهذا الملف وحده. */
+      const phaseForUploadEvent = (phase: 'compressing' | 'extracting-audio' | 'uploading'): PublishPhase => {
+        if (phase === 'compressing') return 'ضغط وتجهيز الملف';
+        if (phase === 'extracting-audio') return 'استخراج الصوت وربط سجل الأصوات';
+        // 'uploading' يُطلق قبل fetchImageKitAuth مباشرة؛ أول حدث تقدّم فعلي
+        // (onProgress > 0) يرفعها إلى «الرفع الفعلي» لأن البايتات بدأت تُرسل.
+        return 'جلب توقيع الرفع من الخادم';
+      };
       const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
         // محاولة قديمة لا تكتب في بطاقة المنشور المملوكة لمحاولة أحدث
         if (!isCurrentAttempt()) return;
-        // نفس الأحداث تقود التشخيص أيضاً، فلا يُنسب فشل الضغط أو فشل جلب
-        // التوقيع إلى ImageKit: الضغط محلي، والتوقيع من خادمنا.
-        if (phase === 'compressing') setPhase('ضغط وتجهيز الملف');
-        else if (phase === 'extracting-audio') setPhase('استخراج الصوت وربط سجل الأصوات');
-        // 'uploading' يُطلق قبل fetchImageKitAuth مباشرة؛ أول حدث تقدّم فعلي
-        // (أدناه) يرفع المرحلة إلى «الرفع الفعلي» لأن البايتات بدأت تُرسل.
-        else setPhase('جلب توقيع الرفع من الخادم');
         updatePendingPost(postId, {
           phaseLabel: phase === 'compressing'
             ? `جارٍ تحسين الجودة...${typeof percent === 'number' ? ` ${percent}%` : ''}`
@@ -2020,42 +2051,58 @@ export default function Shell({
         const jobProgress = uploadJobs.map(() => 0);
         const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
 
-        // الرفع يبدأ بالضغط محلياً ثم بجلب التوقيع ثم بالإرسال — المرحلة تُضبط
-        // من أحداث uploadMedia أدناه، والبداية «ضغط وتجهيز الملف» لأنها أول ما يحدث.
+        // الرفع يبدأ بالضغط محلياً ثم بجلب التوقيع ثم بالإرسال. كل ملف يتتبّع
+        // مرحلته بنفسه في uploadTracker، فلا يغيّر تقدّم ملف مرحلة ملف آخر.
         setPhase('ضغط وتجهيز الملف');
         await Promise.all(uploadJobs.map(async (job, jobIndex) => {
-          // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
-          const publicUrl = await uploadMedia({
-            file: job.file,
-            path: job.path,
-            preset: job.kind === 'poster'
-              ? 'feedImage'
-              : mediaType === 'video' ? 'video' : 'feedImage',
-            signal: attemptSignal,
-            onPhase: onUploadPhase,
-            onProgress: percent => {
-              // محاولة قديمة لا تعدّل تقدّم بطاقة المنشور المملوكة لمحاولة أحدث
-              if (!isCurrentAttempt()) return;
-              // أول تقدّم فعلي = بايتات أُرسلت إلى ImageKit فعلاً، فالمرحلة الآن
-              // «الرفع الفعلي» لا «جلب التوقيع». (تشخيص فقط، لا يغيّر أي قرار.)
-              if (percent > 0) setPhase('الرفع الفعلي إلى ImageKit');
-              jobProgress[jobIndex] = percent;
-              const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
-                sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)
-              ), 0);
-              updatePendingPost(postId, {
-                progress: totalBytes > 0 ? Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)) : 0,
-              });
-            },
-          });
-          if (job.kind === 'poster') {
-            posterUploadUrl = publicUrl;
-            coverTag = { kind: 'cover', label: 'غلاف', href: publicUrl };
-          } else if (job.mediaIndex !== undefined) {
-            const file = files[job.mediaIndex];
-            uploadedUrls[job.mediaIndex] = mediaType === 'video'
-              ? buildVideoMediaUrl(publicUrl, trim, crop)
-              : appendImageMediaAspect(publicUrl, file.name);
+          const jobKey = job.path;
+          const setJobPhase = (next: PublishPhase) => {
+            uploadTracker.set(jobKey, next);
+          };
+          setJobPhase('ضغط وتجهيز الملف');
+          try {
+            // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
+            const publicUrl = await uploadMedia({
+              file: job.file,
+              path: job.path,
+              preset: job.kind === 'poster'
+                ? 'feedImage'
+                : mediaType === 'video' ? 'video' : 'feedImage',
+              signal: attemptSignal,
+              onPhase: (phase, percent) => {
+                // المرحلة تُسجَّل لهذا الملف وحده، ثم يُحدَّث نص البطاقة المشترك.
+                setJobPhase(phaseForUploadEvent(phase));
+                onUploadPhase(phase, percent);
+              },
+              onProgress: percent => {
+                // محاولة قديمة لا تعدّل تقدّم بطاقة المنشور المملوكة لمحاولة أحدث
+                if (!isCurrentAttempt()) return;
+                // أول تقدّم فعلي لهذا الملف = بايتات أُرسلت إلى ImageKit فعلاً،
+                // فمرحلته الآن «الرفع الفعلي» لا «جلب التوقيع». (تشخيص فقط.)
+                if (percent > 0) setJobPhase('الرفع الفعلي إلى ImageKit');
+                jobProgress[jobIndex] = percent;
+                const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
+                  sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)
+                ), 0);
+                updatePendingPost(postId, {
+                  progress: totalBytes > 0 ? Math.min(94, Math.floor((uploadedBytes / totalBytes) * 94)) : 0,
+                });
+              },
+            });
+            if (job.kind === 'poster') {
+              posterUploadUrl = publicUrl;
+              coverTag = { kind: 'cover', label: 'غلاف', href: publicUrl };
+            } else if (job.mediaIndex !== undefined) {
+              const file = files[job.mediaIndex];
+              uploadedUrls[job.mediaIndex] = mediaType === 'video'
+                ? buildVideoMediaUrl(publicUrl, trim, crop)
+                : appendImageMediaAspect(publicUrl, file.name);
+            }
+          } catch (jobError) {
+            // المرحلة المسجَّلة هي مرحلة هذا الملف تحديداً، لا آخر ما كتبه غيره.
+            // الخطأ نفسه يُعاد كما هو: منطق النشر لا يتغيّر.
+            uploadTracker.markFailed(jobKey);
+            throw jobError;
           }
         }));
 
@@ -2532,7 +2579,9 @@ export default function Shell({
         // هذا لا يغيّر مسار الفشل: الرسالة والقفل والحالة تبقى كما هي أدناه.
         if (!saveFailureReported) {
           reportPublishFailure({
-            phase: diagnosticPhase,
+            // فشل أثناء الرفع المتوازي: مرحلة الملف الذي فشل تحديداً. وإلا فالمرحلة
+            // المشتركة (جلسة/إيقاظ/حفظ) لأن الرفع إما لم يبدأ أو اكتمل.
+            phase: uploadTracker.failedPhase() ?? diagnosticPhase,
             error,
             timedOut: timedOutNow,
             userMessage: toUserFacingPublishMessage(error, timedOutNow),
