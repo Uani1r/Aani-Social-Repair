@@ -31,6 +31,8 @@ const ALLOWED_OUTCOMES = new Set([
   "personalized_success",
   "rpc_error",
   "rpc_timeout",
+  // خطأ غير متوقع بعد نجاح الـRPC (تطبيع أو جلب منشورات أو ملفات أو تجهيز).
+  "feed_processing_failed",
   "rpc_empty_or_invalid",
   "posts_fetch_failed",
   "no_usable_posts",

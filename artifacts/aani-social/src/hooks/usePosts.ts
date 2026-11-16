@@ -388,6 +388,8 @@ type FeedRankingOutcome =
   | 'personalized_success'
   | 'rpc_error'
   | 'rpc_timeout'
+  /** خطأ غير متوقع بعد نجاح الـRPC: تطبيع أو جلب منشورات أو ملفات أو تجهيز. */
+  | 'feed_processing_failed'
   | 'rpc_empty_or_invalid'
   | 'posts_fetch_failed'
   | 'no_usable_posts'
@@ -490,6 +492,11 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
   let rpcRows = 0;
   let requestedPosts = 0;
   let matchedPosts = 0;
+  /**
+   * مرحلة التنفيذ الحالية: true فقط داخل استدعاء الـRPC. كل خطأ غير متوقع
+   * بعد نجاح الـRPC (تطبيع، جلب منشورات، تجهيز) لا يُصنَّف rpc_error.
+   */
+  let rpcPhase = false;
 
   /**
    * يسجّل الخروج الحالي ثم يُعيد القيمة كما هي بلا تغيير.
@@ -517,6 +524,8 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
   const fallBack = (outcome: FeedRankingOutcome): null => finish(null, outcome, outcome);
 
   try {
+    // المرحلة الأولى: استدعاء الـRPC فقط. أي خطأ هنا (أو مهلة) يُصنَّف rpc_*.
+    rpcPhase = true;
     const rpcResult = await withTimeout(
       Promise.resolve(supabase.rpc('get_personalized_feed', {
         p_limit: PERSONALIZED_FEED_LIMIT,
@@ -524,6 +533,7 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
       })),
       PERSONALIZED_FEED_TIMEOUT_MS,
     );
+    rpcPhase = false;
 
     if (rpcResult.error) {
       console.warn('[feed] تعذر استدعاء get_personalized_feed — الانتقال إلى الترتيب الزمني', {
@@ -627,10 +637,13 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
       return fallBack('hydration_failed');
     }
   } catch (caughtError) {
-    // انتهاء المهلة له حالة مستقلة؛ أي خطأ آخر يُسجّل rpc_error.
+    // انتهاء المهلة له حالة مستقلة، وخطأ أثناء الـRPC نفسِه يُصنَّف rpc_error.
+    // أي خطأ بعد نجاح الـRPC (تطبيع، جلب منشورات، ملفات، تجهيز) ليس خطأ RPC،
+    // ويُسجَّل feed_processing_failed. القرار نفسه في كل الحالات: fallback.
     const timedOut = caughtError instanceof Error && caughtError.message === 'personalized feed timeout';
     console.warn('[feed] فشل المسار الشخصي — الانتقال إلى الترتيب الزمني', caughtError);
-    return fallBack(timedOut ? 'rpc_timeout' : 'rpc_error');
+    if (timedOut) return fallBack('rpc_timeout');
+    return fallBack(rpcPhase ? 'rpc_error' : 'feed_processing_failed');
   }
 }
 
