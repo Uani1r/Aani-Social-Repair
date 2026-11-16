@@ -27,9 +27,11 @@
 --   * set search_path = '' مع تأهيل كامل: public.* للجداول و auth.uid().
 --   * الهوية من auth.uid() فقط. لا تُقبل user_id من الواجهة ولا من المدخلات.
 --     إن كانت الهوية NULL تُعيد الدالة صفر صفوف فوراً.
---   * revoke all من public و anon، و grant execute إلى authenticated فقط.
---     (PostgreSQL يمنح EXECUTE إلى PUBLIC افتراضياً لكل دالة جديدة، فالسحب
---     من PUBLIC ليس تجميلياً.)
+--   * revoke all من public و anon و authenticated و service_role، ثم
+--     grant execute إلى authenticated فقط. المالك يبقى قادراً بحكم الملكية.
+--     (PostgreSQL يمنح EXECUTE إلى PUBLIC افتراضياً لكل دالة جديدة، وDefault
+--     Privileges في Supabase يمنح service_role صلاحيات على الدوال الجديدة،
+--     فالسحب من الاثنين ليس تجميلياً.)
 --   * لا تُمنح أي صلاحية إضافية على أي جدول، ولا تُنشأ أو تُعدَّل سياسة.
 --
 -- ---------------------------------------------------------------------
@@ -868,10 +870,23 @@ $$;
 
 -- ---------------------------------------------------------------------
 -- الصلاحيات: EXECUTE إلى authenticated فقط.
---   PostgreSQL يمنح EXECUTE إلى PUBLIC تلقائياً على الدوال الجديدة، فالسحب
---   من public و anon صريح ومقصود. لا تُمنح أي صلاحية على أي جدول هنا.
+--
+--   PostgreSQL يمنح EXECUTE إلى PUBLIC تلقائياً على كل دالة جديدة. وإلى ذلك،
+--   Default Privileges في مشروع Supabase يمنح service_role صلاحيات على
+--   الدوال الجديدة أيضاً، و service_role عضو في المجموعات التي قد ترث
+--   EXECUTE. لذلك تُسحب الصلاحية صراحةً من:
+--     * public        — المنح التلقائي لكل الأدوار
+--     * anon          — الزائر بلا تسجيل
+--     * authenticated — لإعادة منحها بشكل مضبوط في السطر التالي
+--     * service_role  — منح Default Privileges التلقائي
+--
+--   ثم تُمنح EXECUTE إلى authenticated وحدها. المالك يبقى قادراً على التنفيذ
+--   بحكم الملكية لا بمنح صريح، وهذا استثناء مقصود في فحص الأمان أدناه.
+--
+--   لا تُمنح أي صلاحية على أي جدول هنا، ولا يُعدَّل أي Default Privileges.
 -- ---------------------------------------------------------------------
-revoke all on function public.get_personalized_feed(integer, integer) from public, anon, authenticated;
+revoke all on function public.get_personalized_feed(integer, integer)
+  from public, anon, authenticated, service_role;
 grant execute on function public.get_personalized_feed(integer, integer) to authenticated;
 
 -- ---------------------------------------------------------------------
