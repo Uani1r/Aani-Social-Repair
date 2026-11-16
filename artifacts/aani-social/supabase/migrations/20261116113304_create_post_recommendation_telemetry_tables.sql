@@ -1,20 +1,34 @@
 -- =====================================================================
 -- توثيق بنية جداول تسجيل الظهور والمشاهدة (توصيات المنشورات)
 --
--- حالة هذا الملف: **توثيقي، وليس ترحيلاً مطلوباً تشغيله**.
+-- حالة هذا الملف: **مرجع لاستعادة البنية في بيئة جديدة — لا يُعاد تشغيله
+-- على قاعدة الإنتاج**.
+--
 --   الترحيل 20261116113304_create_post_recommendation_telemetry_tables سبق
 --   تنفيذه مباشرة على Supabase Production، والجدولان post_impressions
---   و post_view_events موجودان هناك بالفعل. هذا الملف يُضاف الآن إلى
---   المستودع لتوثيق مصدر البنية (كانت غائبة عن supabase/migrations تماماً)
---   وليُعيد إنشاءها في بيئة جديدة عند الحاجة فقط.
+--   و post_view_events موجودان هناك بالفعل. هذا الملف يُضاف إلى المستودع
+--   لتوثيق مصدر البنية (كانت غائبة عن supabase/migrations تماماً) وليُعيد
+--   إنشاءها في بيئة جديدة فقط.
 --
---   لا تُشغّله على قاعدة الإنتاج الحالية: لن يغيّر شيئاً هناك (كل الأوامر
---   محميّة بـ if not exists / drop policy if exists)، لكن لا حاجة له ولا
---   فائدة، وقد يوهم بأن الترحيل لم يكن مطبَّقاً. لا يوجد سجل مطابق لهذا
---   الترحيل في schema_migrations داخل المستودع.
+--   تحذير صريح: لا تُشغّله على قاعدة الإنتاج الحالية.
+--   إعادة تشغيله هناك ليست بلا أثر: فيه `drop policy if exists` ثم
+--   `create policy` لكل سياسة من سياستَي الجدولين، فيُسقط السياسات القائمة
+--   ويعيد إنشاءها بتعريف هذا الملف. وأي اختلاف بين هذا التعريف وما هو مطبَّق
+--   فعلاً في الإنتاج سينتقل إلى الإنتاج بلا رجعة. كذلك `revoke all` أدناه
+--   يسحب كل الصلاحيات ثم يعيد منحها، فتمرّ الجداول بلحظة بلا صلاحيات.
+--   والجداول نفسها محميّة بـ`if not exists` فلا تُمسّ، لكن السياسات والصلاحيات
+--   تُمسّ. إن احتجت إعادة إنشاء السياسات على الإنتاج فاستخدم أوامر مراجَعة
+--   مستخرجة من Production، لا هذا الملف.
+--
+--   ولا يوجد سجل مطابق لهذا الترحيل في schema_migrations داخل المستودع.
 --
 -- المصدر: بنية Production كما استُخرجت منها مباشرة (أعمدة، قيود، فهارس،
 --   سياسات، صلاحيات). لم يُضف أي تحسين أو قيد غير موجود هناك.
+--
+-- Default Privileges: schema public في الإنتاج يمنح anon و authenticated
+--   صلاحيات واسعة تلقائياً على الجداول الجديدة، فمجرد grant select, insert
+--   لا يعيد إنتاج صلاحيات الإنتاج بدقة. لذلك يبدأ كل جدول بـ`revoke all`
+--   من PUBLIC و anon و authenticated قبل منح ما هو مطلوب فقط.
 --
 -- ملاحظات على ما لم يُستخرج حرفياً:
 --   * أسماء قيود CHECK والمفاتيح الأجنبية لم تُستخرج؛ كُتبت داخل تعريف
@@ -64,9 +78,12 @@ create index if not exists post_impressions_user_time_idx
 
 alter table public.post_impressions enable row level security;
 
--- لا توجد سياسات anon ولا PUBLIC على الجدولين، ولا صلاحيات لهما.
+-- Default Privileges على schema public تمنح anon و authenticated صلاحيات
+-- تلقائياً على الجداول الجديدة، فيُسحب الكل أولاً ثم يُمنح المطلوب فقط.
+revoke all privileges on table public.post_impressions from public, anon, authenticated;
+
 grant select, insert on public.post_impressions to authenticated;
-grant all on public.post_impressions to service_role;
+grant all privileges on public.post_impressions to service_role;
 
 drop policy if exists "Users can read their own post impressions" on public.post_impressions;
 create policy "Users can read their own post impressions"
@@ -129,8 +146,10 @@ create index if not exists post_view_events_user_time_idx
 
 alter table public.post_view_events enable row level security;
 
+revoke all privileges on table public.post_view_events from public, anon, authenticated;
+
 grant select, insert on public.post_view_events to authenticated;
-grant all on public.post_view_events to service_role;
+grant all privileges on public.post_view_events to service_role;
 
 drop policy if exists "Users can read their own post view events" on public.post_view_events;
 create policy "Users can read their own post view events"
