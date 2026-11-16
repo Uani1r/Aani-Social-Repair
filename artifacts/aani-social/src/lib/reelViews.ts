@@ -152,7 +152,10 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 /** حدود أعمدة الجدول كما هي في Production. */
 const MAX_DURATION_MS = 86400000;
+const MIN_MEDIA_DURATION_MS = 1;
 const MAX_REPLAY_COUNT = 1000;
+/** عدد منازل `completion_ratio numeric(6,5)`. */
+const COMPLETION_RATIO_SCALE = 100000;
 
 /** مدة تشغيل/ظهور صحيحة الشكل ضمن حدود العمود (0..86400000). */
 function clampDurationMs(value: number): number {
@@ -174,16 +177,46 @@ function clampMediaDurationMs(value: number | null): number | null {
 /** نسبة إكمال بين 0 و1 بخمس منازل عشرية — مطابقة لـnumeric(6,5). */
 function clampCompletionRatio(value: number): number {
   if (!Number.isFinite(value)) return 0;
-  return Math.min(1, Math.max(0, Math.round(value * 100000) / 100000));
+  return Math.min(1, Math.max(0, Math.round(value * COMPLETION_RATIO_SCALE) / COMPLETION_RATIO_SCALE));
+}
+
+// ---------------------------------------------------------------------
+// تحقق صارم من الأحداث المستعادة من sessionStorage مقابل قيود الجدول:
+// كل حقل رقمي يُفحص نوعه وحدوده، لا مجرد كونه رقماً منتهياً. الحدث الذي لا
+// يطابق القيود يُرفض ولا يُرسل، فلا يصل صف مخالف إلى القاعدة.
+// ---------------------------------------------------------------------
+
+/** عدد صحيح فعلاً (لا كسور، ولا NaN/Infinity) ضمن حدود مغلقة. */
+function isIntegerWithin(value: unknown, min: number, max: number): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max;
+}
+
+/**
+ * media_duration_ms: `integer null check (is null or between 1 and 86400000)`.
+ * الصفر مرفوض لأن القاعدة ترفضه.
+ */
+function isMediaDurationMs(value: unknown): value is number | null {
+  if (value === null) return true;
+  return isIntegerWithin(value, MIN_MEDIA_DURATION_MS, MAX_DURATION_MS);
+}
+
+/**
+ * completion_ratio: `numeric(6,5) null check (is null or between 0 and 1)`.
+ * يشترط أن يكون رقماً منتهياً بين 0 و1، وبلا كسور تتجاوز خمس منازل عشرية
+ * (دقة العمود)، فلا يُرسل ما قد يقرّبه الخادم أو يرفضه.
+ */
+function isCompletionRatio(value: unknown): value is number | null {
+  if (value === null) return true;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+  if (value < 0 || value > 1) return false;
+  const scaled = value * COMPLETION_RATIO_SCALE;
+  // سماحية صغيرة لتمثيل الفاصلة العائمة: 0.12345 * 100000 قد لا يكون صحيحاً تماماً.
+  return Math.abs(scaled - Math.round(scaled)) < 1e-3;
 }
 
 function isReelViewEvent(value: unknown): value is ReelViewEvent {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const row = value as Record<string, unknown>;
-  const mediaDurationValid = row.media_duration_ms === null
-    || (typeof row.media_duration_ms === 'number' && Number.isFinite(row.media_duration_ms));
-  const completionRatioValid = row.completion_ratio === null
-    || (typeof row.completion_ratio === 'number' && Number.isFinite(row.completion_ratio));
   return typeof row.event_id === 'string' && UUID_PATTERN.test(row.event_id)
     && typeof row.user_id === 'string' && row.user_id.length > 0
     && typeof row.post_id === 'string' && row.post_id.length > 0
@@ -191,11 +224,14 @@ function isReelViewEvent(value: unknown): value is ReelViewEvent {
     && row.surface === 'reels'
     && row.content_type === 'video'
     && typeof row.session_id === 'string' && UUID_PATTERN.test(row.session_id)
-    && typeof row.visible_duration_ms === 'number' && Number.isFinite(row.visible_duration_ms)
-    && typeof row.played_duration_ms === 'number' && Number.isFinite(row.played_duration_ms)
-    && mediaDurationValid
-    && completionRatioValid
-    && typeof row.replay_count === 'number' && Number.isFinite(row.replay_count)
+    // integer not null check (between 0 and 86400000)
+    && isIntegerWithin(row.visible_duration_ms, 0, MAX_DURATION_MS)
+    && isIntegerWithin(row.played_duration_ms, 0, MAX_DURATION_MS)
+    && isMediaDurationMs(row.media_duration_ms)
+    && isCompletionRatio(row.completion_ratio)
+    // integer not null check (between 0 and 1000)
+    && isIntegerWithin(row.replay_count, 0, MAX_REPLAY_COUNT)
+    // boolean not null
     && typeof row.early_skip === 'boolean';
 }
 
