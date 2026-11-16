@@ -32,6 +32,7 @@ import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } fr
 import { getImageKitVideoThumbnailUrl } from '@/lib/postMedia';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { useReelViewTracking } from '@/lib/reelViews';
+import { useReelImageImpression } from '@/lib/reelImpressions';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -124,6 +125,17 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     enabled: !isImageMedia && !pendingState,
     trimStartSec: videoTimeRange?.start ?? 0,
     trimEndSec: videoTimeRange?.end,
+  });
+  // انطباع الريل المصوّر (المرحلة 5-B2): مسار مستقل عن تتبع الفيديو، يسجّل
+  // مدة الظهور الفعلية فقط في post_view_events بـ surface='reels'
+  // و content_type='image'. يستقبل نتيجة الظهور الحالية (isVisible، عتبة 0.6)
+  // ولا يلمس التشغيل أو الصوت أو المراقب أو روابط ImageKit الموقّعة.
+  // المنشورات المؤقتة والريلز غير المصوّرة لا تُحتسب انطباعاً.
+  useReelImageImpression({
+    postId: post.id,
+    userId: currentUserId,
+    active: isVisible,
+    enabled: isImageMedia && !pendingState,
   });
   // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
   const soundLabel = post.audio_title || (post.sound_id ? defaultSoundTitle(displayName(post.author)) : '');
