@@ -22,6 +22,7 @@ import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
+import { reportPublishFailure, type PublishPhase } from '@/lib/publishDiagnostics';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -1866,6 +1867,14 @@ export default function Shell({
           setCreateError('انتهت مهلة النشر (90 ثانية) قبل اكتمال الرفع أو الحفظ. بقيت بيانات المنشور في النموذج — يمكنك إعادة المحاولة.');
         }
       }, PUBLISH_TIMEOUT_MS);
+      // مرحلة النشر الحالية — للتشخيص فقط (تُقرأ عند الفشل لتصنيفه: رفع ImageKit
+      // أم كتابة Supabase). لا تؤثر في أي قرار ولا في تدفق المحاولة.
+      let diagnosticPhase: PublishPhase = 'بدء النشر';
+      const setPhase = (phase: PublishPhase) => {
+        diagnosticPhase = phase;
+      };
+      // هل سُجّل فشل حفظ المنشور في مكانه (فرع postError)؟ يمنع تكرار السجل.
+      let saveFailureReported = false;
       // فحص المحاولة الحيّة: يُستدعى قبل كل مرحلة مهمة وبعد كل await، فلا تتابع
       // محاولة انتهت مهلتها إلى الحفظ.
       const ensureAttemptAlive = () => {
@@ -1950,6 +1959,7 @@ export default function Shell({
       };
       updatePendingPost(postId, { stage: 'uploading', progress: 0, error: null });
       try {
+        setPhase('التحقق من جلسة الحساب');
         const { data: authData, error: authError } = await supabase.auth.getUser();
         if (authError) throw new Error('تعذر التحقق من جلسة الحساب. أعد تسجيل الدخول ثم حاول مجدداً.');
         const authenticatedUserId = authData.user?.id;
@@ -1972,6 +1982,7 @@ export default function Shell({
         }
         ensureAttemptAlive();
         // استيقاظ الخادم قبل الرفع (توقيع ImageKit يمر بخادمنا) — صامت ومحدود
+        setPhase('إيقاظ الخادم وفحص الجاهزية');
         await waitForBackendAwake();
 
         const effectiveCoverFile = mediaType === 'video'
@@ -2002,6 +2013,7 @@ export default function Shell({
         const jobProgress = uploadJobs.map(() => 0);
         const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
 
+        setPhase('رفع الوسائط إلى ImageKit');
         await Promise.all(uploadJobs.map(async (job, jobIndex) => {
           // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
           const publicUrl = await uploadMedia({
@@ -2041,6 +2053,7 @@ export default function Shell({
         // سجل أصول الوسائط: يُنشأ بعد الرفع لأن الرابط النهائي (ImageKit)
         // لا يكون معروفاً قبله. فشله لا يعطل النشر — المنشور يحمل الرابط نفسه.
         if (mediaType === 'video' && mediaAssetId && assetPaths && !mediaAssetRecordCreated) {
+          setPhase('إنشاء سجل media_assets');
           const { error: mediaAssetError } = await attachAbortSignal(
             supabase.from('media_assets').insert({
               id: mediaAssetId,
@@ -2134,6 +2147,7 @@ export default function Shell({
         if (mediaType === 'video' && !pendingSound && uploadedUrls[0] && files[0]) {
           let extractedSoundUrl: string | null = null;
           try {
+            setPhase('استخراج الصوت وربط سجل الأصوات');
             onUploadPhase('extracting-audio');
             const audioFile = await extractAudio(files[0], {
               kind: 'extractedSound',
@@ -2287,6 +2301,7 @@ export default function Shell({
         };
 
         ensureAttemptAlive();
+        setPhase('حفظ المنشور في Supabase (posts.upsert)');
         let postError = (await upsertPostWithRetry(postPayloadForSave)).error;
         // بعد اكتمال الحفظ: توقّف إن أُبطلت المحاولة أو بدأت محاولة أحدث.
         // (الكتابة قد تكون وصلت فعلاً؛ الفحص يمنع متابعة المسار ولا يمسّ الحالة.)
@@ -2331,6 +2346,15 @@ export default function Shell({
 
         if (postError) {
           handleAppError('فشل حفظ المنشور', postError, 'تعذر حفظ المنشور. راجع التفاصيل التشخيصية.');
+          // تشخيص في الإنتاج: رمز/رسالة/details/hint ومرحلة الفشل في لوحة قابلة
+          // للنسخ. التصنيف هنا supabase-write لأن الرفع كان قد اكتمل بنجاح.
+          // (العلم أدناه يمنع تسجيل الفشل نفسه مرتين عند وصوله إلى catch.)
+          saveFailureReported = true;
+          reportPublishFailure({
+            phase: 'حفظ المنشور في Supabase (posts.upsert)',
+            error: postError,
+            userMessage: 'رفضت قاعدة البيانات حفظ صف المنشور.',
+          });
           let publishError: Error;
           if (isPostsPermissionError(postError)) {
             publishError = new Error('رفضت قاعدة البيانات حفظ المنشور بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated؛ لم يتم تجاوز الحماية.');
@@ -2358,6 +2382,7 @@ export default function Shell({
         // ويظهر على الشاشة بدل أن يختفي الريل بصمت.
         try {
           ensureAttemptAlive();
+          setPhase('التحقق من الصف المحفوظ');
           const { data: savedRow, error: verifyError } = await attachAbortSignal(
             supabase
               .from('posts')
@@ -2396,6 +2421,7 @@ export default function Shell({
         const isSupabaseStorageMedia = typeof publishedPost.media_url === 'string'
           && /\/storage\/v1\/object\//.test(publishedPost.media_url);
         if (mediaType === 'video' && mediaAssetId && isSupabaseStorageMedia) {
+          setPhase('معالجة الفيديو بعد الحفظ');
           updatePendingPost(postId, { stage: 'processing', progress: 98, error: null });
           try {
             const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
@@ -2488,6 +2514,17 @@ export default function Shell({
         }
         if (!wasAppErrorReported(error)) {
           handleAppError('فشل نشر المنشور', error, 'تعذر نشر المنشور. راجع التفاصيل التشخيصية ثم أعد المحاولة.');
+        }
+        // تسجيل تشخيصي دائماً (إنتاج أيضاً): المرحلة الحقيقية ورمز الخطأ ورسالته
+        // وتفاصيله وتلميحه — في لوحة قابلة للفتح والنسخ، بلا أسرار.
+        // هذا لا يغيّر مسار الفشل: الرسالة والقفل والحالة تبقى كما هي أدناه.
+        if (!saveFailureReported) {
+          reportPublishFailure({
+            phase: diagnosticPhase,
+            error,
+            timedOut: timedOutNow,
+            userMessage: toUserFacingPublishMessage(error, timedOutNow),
+          });
         }
         // خطأ اتصال/خادم عابر: أبطِل حالة الاستيقاظ ليُعاد فحص الصحة في المحاولة
         // التالية بدل افتراض أن الخادم ما زال مستيقظاً.
