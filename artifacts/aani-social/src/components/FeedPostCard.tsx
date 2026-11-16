@@ -32,6 +32,7 @@ import {
   playBackgroundMedia,
   subscribeBackgroundMediaSuspension,
 } from '@/lib/activeVideo';
+import { impressionContentTypeForPost, observeFeedImpression } from '@/lib/impressions';
 
 /** عنوان الصوت المعروض للمنشور: الموسيقى المرفقة أو الصوت الأصلي باسم صاحبه */
 const postSoundLabel = (post: Post): string =>
@@ -123,6 +124,8 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   );
   const photoAudioBlockedRef = useRef(false);
   const [photoAudioPlaying, setPhotoAudioPlaying] = useState(false);
+  // مرجع البطاقة كاملة — يُراقَب لتسجيل Impression صامت في الـFeed الرئيسي فقط.
+  const impressionCardRef = useRef<HTMLElement>(null);
   const interactions = usePostInteractions(post, currentUserId);
   const liked = interactions.liked;
   const likesCount = interactions.likes;
@@ -142,6 +145,21 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const [showMainFeedReel, setShowMainFeedReel] = useState(false);
   const likesVisible = !post.hide_likes || post.user_id === currentUserId;
   const commentsVisible = !post.hide_comments || post.user_id === currentUserId;
+
+  // Impression tracking (المرحلة الثانية من خوارزمية آني):
+  // يُراقَب عنصر البطاقة كاملاً في الـFeed الرئيسي فقط، ولا يُسجَّل للمنشورات
+  // المؤقتة التي لم تُنشر فعلياً. منطق الصوت أدناه مستقل تماماً ولا علاقة له
+  // بهذا الأثر. عند إعادة تركيب المكوّن أو إعادة ظهور البطاقة يمنع مخزن
+  // التتبع تسجيل المنشور نفسه مرتين في نفس الجلسة.
+  const impressionContentType = impressionContentTypeForPost(post.type);
+  useEffect(() => {
+    if (!isMainFeed || pendingState) return undefined;
+    return observeFeedImpression(impressionCardRef.current, {
+      userId: currentUserId,
+      postId: post.id,
+      contentType: impressionContentType,
+    });
+  }, [isMainFeed, pendingState, currentUserId, post.id, impressionContentType]);
 
   const urls = useMemo(() => {
     if (post.media_urls && post.media_urls.length > 0) return post.media_urls;
@@ -445,7 +463,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   };
 
   return (
-    <article className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''} ${isMainFeedImage ? 'main-feed-image-post' : ''}`}>
+    <article ref={impressionCardRef} className={`post-card fade-up relative ${isMainFeedVideo ? 'video-post-card' : ''} ${isMainFeedImage ? 'main-feed-image-post' : ''}`}>
       {post.repost_attribution && (
         <div className={`flex items-center gap-1.5 pt-2 text-[11px] text-zinc-500 ${isMainFeedImage ? 'px-4' : 'px-1'}`}>
           <Repeat size={12} aria-hidden="true" />
