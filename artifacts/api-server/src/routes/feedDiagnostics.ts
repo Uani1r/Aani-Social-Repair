@@ -36,6 +36,10 @@ const ALLOWED_OUTCOMES = new Set([
   "no_usable_posts",
   "incomplete_match",
   "hydration_failed",
+  // تجهيز التفاعلات فشل داخلياً بلا استثناء (أعاد نفس المصفوفة).
+  "hydration_incomplete",
+  // تجهيز التفاعلات لم يُشغَّل (بلا جلسة أو بلا منشورات) — ليس فشلاً.
+  "hydration_skipped",
 ]);
 
 /** حدود معقولة للأعداد والزمن: تمنع قيماً شاذة من تلويث السجل. */

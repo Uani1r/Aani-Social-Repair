@@ -392,7 +392,11 @@ type FeedRankingOutcome =
   | 'posts_fetch_failed'
   | 'no_usable_posts'
   | 'incomplete_match'
-  | 'hydration_failed';
+  | 'hydration_failed'
+  /** تجهيز التفاعلات أعاد نفس المصفوفة: فشل داخلي ابتلعته hydratePostRows. */
+  | 'hydration_incomplete'
+  /** تجهيز التفاعلات لم يُشغَّل أصلاً (بلا جلسة أو بلا منشورات). ليس فشلاً. */
+  | 'hydration_skipped';
 
 /** ملخص تشخيصي واحد لكل محاولة تحديث للرئيسية. أعداد وزمن فقط، بلا محتوى. */
 type FeedRankingDiagnostic = {
@@ -402,7 +406,11 @@ type FeedRankingDiagnostic = {
   requestedPosts: number;
   matchedPosts: number;
   durationMs: number;
-  /** سبب الانتقال إلى المسار الزمني، أو null عند النجاح. */
+  /**
+   * سبب الانتقال الفعلي إلى الجلب الزمني، أو null إن لم يحدث انتقال.
+   * منفصل عن outcome عن قصد: فشل التجهيز لا يعود إلى الزمني في هذا الإصدار،
+   * فيُسجَّل outcome = hydration_incomplete مع fallbackReason = null.
+   */
   fallbackReason: FeedRankingOutcome | null;
 };
 
@@ -483,8 +491,16 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
   let requestedPosts = 0;
   let matchedPosts = 0;
 
-  /** يسجّل الخروج الحالي ثم يُعيد القيمة كما هي بلا تغيير. */
-  const finish = <T>(posts: T, outcome: FeedRankingOutcome): T => {
+  /**
+   * يسجّل الخروج الحالي ثم يُعيد القيمة كما هي بلا تغيير.
+   * `fallbackReason` منفصل عن `outcome`: الانتقال إلى الزمني فقط هو ما يُسجَّل
+   * كـfallback، أما فشل التجهيز الذي لا يعود إلى الزمني فيُسجَّل بـnull.
+   */
+  const finish = <T>(
+    posts: T,
+    outcome: FeedRankingOutcome,
+    fallbackReason: FeedRankingOutcome | null,
+  ): T => {
     reportFeedDiagnostic({
       operationId,
       outcome,
@@ -492,10 +508,13 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
       requestedPosts,
       matchedPosts,
       durationMs: Math.min(MAX_DIAGNOSTIC_DURATION_MS, Math.max(0, Date.now() - startedAt)),
-      fallbackReason: outcome === 'personalized_success' ? null : outcome,
+      fallbackReason,
     });
     return posts;
   };
+
+  /** خروج مع انتقال فعلي إلى الجلب الزمني: النتيجة نفسها هي سبب الانتقال. */
+  const fallBack = (outcome: FeedRankingOutcome): null => finish(null, outcome, outcome);
 
   try {
     const rpcResult = await withTimeout(
@@ -511,23 +530,25 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
         code: rpcResult.error.code,
         message: rpcResult.error.message,
       });
-      return finish(null, 'rpc_error');
+      return fallBack('rpc_error');
     }
 
+    // rpcRows = الصفوف الخام كما وصلت قبل التطبيع، لكشف ما أُسقط أو تكرّر.
+    rpcRows = Array.isArray(rpcResult.data) ? rpcResult.data.length : 0;
     const ranked = normalizePersonalizedFeedRows(rpcResult.data);
-    rpcRows = ranked.length;
     // نتيجة فارغة أو غير صالحة بالكامل: المسار الزمني هو الإجراء الاحتياطي.
     if (ranked.length === 0) {
       console.info('[feed] نتيجة الترتيب الشخصي فارغة — الانتقال إلى الترتيب الزمني');
-      return finish(null, 'rpc_empty_or_invalid');
+      return fallBack('rpc_empty_or_invalid');
     }
 
+    // requestedPosts = الصفوف الصالحة بعد التطبيع (ما طُلب تحميله فعلاً).
     const requestedIds = ranked.map(row => row.post_id);
     requestedPosts = requestedIds.length;
     const postData = await fetchPersonalizedPostRows(requestedIds);
     if (postData === null) {
       console.warn('[feed] تعذر جلب منشورات الترتيب الشخصي — الانتقال إلى الترتيب الزمني');
-      return finish(null, 'posts_fetch_failed');
+      return fallBack('posts_fetch_failed');
     }
 
     const rawPosts = (await normalizePostRowsWithVisibility(postData))
@@ -535,7 +556,7 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
     const postsById = new Map(rawPosts.map(post => [post.id, post] as const));
     if (postsById.size === 0) {
       console.warn('[feed] لا صفوف منشورات قابلة للاستخدام في الترتيب الشخصي — الانتقال إلى الترتيب الزمني');
-      return finish(null, 'no_usable_posts');
+      return fallBack('no_usable_posts');
     }
 
     // إسناد إعادة النشر: reposter_id و reposted_at من نتيجة الـRPC نفسها،
@@ -581,23 +602,35 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
         requested: ranked.length,
         matched: ordered.length,
       });
-      return finish(null, 'incomplete_match');
+      return fallBack('incomplete_match');
     }
-    if (ordered.length === 0) return finish(null, 'no_usable_posts');
+    if (ordered.length === 0) return fallBack('no_usable_posts');
 
-    // التجهيز داخل نفس الـtry: فشله يعود إلى المسار الزمني بدل صفحة فارغة.
+    // تجهيز التفاعلات: hydratePostRows تلتقط أخطاءها داخلياً وتُعيد **نفس**
+    // المصفوفة التي وصلتها (سطر 385 و400-403 في hydration.ts)، فلا يصل أي
+    // استثناء إلى catch أدناه. لذلك نكشف النجاح بمقارنة المرجع: مصفوفة جديدة
+    // = التجهيز تمّ فعلاً، ونفس المرجع = لم يُطبَّق شيء.
+    //
+    // لا تغيير في السلوك: نُعيد `hydrated` كما هو في الحالتين، فالمنشورات
+    // تُعرض من المسار الشخصي حتى لو فشل التجهيز، ولا انتقال إلى الزمني هنا.
+    const hydrationApplicable = supabaseConfigured && Boolean(currentUserId) && ordered.length > 0;
     try {
       const hydrated = await hydratePostInteractions(ordered, currentUserId);
-      return finish(hydrated, 'personalized_success');
+      if (!hydrationApplicable) return finish(hydrated, 'hydration_skipped', null);
+      if (hydrated === ordered) {
+        console.warn('[feed] تجهيز التفاعلات لم يُطبَّق (فشل داخلي) — المنشورات تُعرض بلا تجهيز');
+        return finish(hydrated, 'hydration_incomplete', null);
+      }
+      return finish(hydrated, 'personalized_success', null);
     } catch (hydrationError) {
       console.warn('[feed] فشل تجهيز الترتيب الشخصي — الانتقال إلى الترتيب الزمني', hydrationError);
-      return finish(null, 'hydration_failed');
+      return fallBack('hydration_failed');
     }
   } catch (caughtError) {
     // انتهاء المهلة له حالة مستقلة؛ أي خطأ آخر يُسجّل rpc_error.
     const timedOut = caughtError instanceof Error && caughtError.message === 'personalized feed timeout';
     console.warn('[feed] فشل المسار الشخصي — الانتقال إلى الترتيب الزمني', caughtError);
-    return finish(null, timedOut ? 'rpc_timeout' : 'rpc_error');
+    return fallBack(timedOut ? 'rpc_timeout' : 'rpc_error');
   }
 }
 
