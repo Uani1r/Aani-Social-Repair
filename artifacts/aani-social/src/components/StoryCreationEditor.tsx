@@ -13,6 +13,7 @@ import { displayName, type Profile } from '@/lib/types';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import StoryErrorDiagnosticPanel from '@/components/story/StoryErrorDiagnosticPanel';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -231,6 +232,9 @@ export default function StoryCreationEditor({
   onApplyCrop,
   onQuickPublish,
 }: StoryCreationEditorProps) {
+  // وسيط التحرير: قد يكون رابط ImageKit محمياً (إعادة نشر قصة أو اختيار من
+  // المكتبة)، أو blob محلياً — التوقيع لا يغيّر المحلي ويعيد null للفشل.
+  const signedEditorMediaUrl = useMediaUrl(editorMediaUrl);
   const stickerDeleteZoneRef = useRef<HTMLDivElement | null>(null);
   const isPointerOverDeleteZone = (point: Point) => {
     const bounds = stickerDeleteZoneRef.current?.getBoundingClientRect();
@@ -281,7 +285,7 @@ export default function StoryCreationEditor({
             {/* الصورة: تُقفل الإيماءة عليها إذا بدأ اللمس منها */}
             {editorIsVideo ? (
               <video
-                src={editorMediaUrl}
+                src={signedEditorMediaUrl || undefined}
                 autoPlay
                 loop
                 playsInline
@@ -298,7 +302,7 @@ export default function StoryCreationEditor({
               />
             ) : (
               <img
-                src={editorMediaUrl}
+                src={signedEditorMediaUrl || undefined}
                 alt=""
                 data-story-media="true"
                 className="h-full w-full object-cover"
@@ -519,7 +523,7 @@ export default function StoryCreationEditor({
         <div className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
         <StoryEditorPanels
           storyFiltersOpen={storyFiltersOpen}
-          editorMediaUrl={editorMediaUrl}
+          editorMediaUrl={signedEditorMediaUrl || editorMediaUrl || ''}
           editorIsVideo={editorIsVideo}
           storyFilterId={storyFilterId}
           storyFilterAdjustments={storyFilterAdjustments}
@@ -570,9 +574,9 @@ export default function StoryCreationEditor({
         onUndo={onUndoDrawing}
         onDone={onCloseDrawing}
       />
-      {storyCropOpen && editorMediaUrl && (
+      {storyCropOpen && signedEditorMediaUrl && (
         <StoryCropOverlay
-          mediaUrl={editorMediaUrl}
+          mediaUrl={signedEditorMediaUrl}
           isVideo={editorIsVideo}
           initialZoom={storyMediaZoom}
           initialOffset={storyMediaOffset}

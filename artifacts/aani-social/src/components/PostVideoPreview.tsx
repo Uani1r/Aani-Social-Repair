@@ -92,6 +92,8 @@ export default function PostVideoPreview({
   const cropTransform = getVideoCropTransform(parseVideoCrop(src));
   const hasReplacementAudio = Boolean(replacementAudioSrc);
   const replacementAudioRange = replacementAudioSrc ? parseVideoTimeRange(replacementAudioSrc) : null;
+  // الصوت البديل رابط ImageKit أيضاً: يُوقَّع قبل التشغيل، ولا يُطلب عاماً.
+  const signedReplacementAudioSrc = useMediaUrl(replacementAudioSrc);
   // تمرير المقطع للمتصفح بترميز HTML5 (#t=start,end) — يقيّد التشغيل للمقطع المختار
   const mediaSrc = timeRange
     ? appendVideoTrimFragment(src, timeRange)
@@ -491,13 +493,13 @@ export default function PostVideoPreview({
         <div
           className={className}
           aria-hidden="true"
-          style={{ backgroundColor: '#101014', backgroundImage: poster ? `url("${poster}")` : undefined, backgroundPosition: 'center', backgroundSize: 'cover' }}
+          style={{ backgroundColor: '#101014', backgroundImage: signedPoster ? `url("${signedPoster}")` : undefined, backgroundPosition: 'center', backgroundSize: 'cover' }}
         />
       )}
       {hasReplacementAudio && hasVideoPlayer && (
         <audio
           ref={replacementAudioRef}
-          src={backgroundMediaSuspended ? undefined : replacementAudioSrc || undefined}
+          src={backgroundMediaSuspended ? undefined : signedReplacementAudioSrc || undefined}
           data-aani-background-media=""
           loop={!replacementAudioRange}
           preload="none"

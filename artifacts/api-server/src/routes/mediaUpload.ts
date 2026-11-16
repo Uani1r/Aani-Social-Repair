@@ -112,9 +112,17 @@ router.post("/media/upload", express.raw({ type: "*/*", limit: "30mb" }), (req: 
       form.append("fileName", fileName);
       form.append("folder", folder);
       form.append("useUniqueFileName", "true");
-      // Restricted access: نفس سلوك الرفع المباشر من المتصفح. يُضبط من بيئة
-      // الخادم (IMAGEKIT_PRIVATE_UPLOADS=true) فقط بعد التحقق من التوقيع.
-      if ((process.env["IMAGEKIT_PRIVATE_UPLOADS"] || "").trim().toLowerCase() === "true") {
+      // Restricted access: ملف خاص لا يُعرض إلا برابط موقّع، فلا يُرفع خاصاً
+      // إلا إذا كان العميل المنشور يوقّع إلزامياً. لذلك يُشترط علمان معاً:
+      //   IMAGEKIT_SIGNED_URLS_ENABLED=true  → النسخة المنشورة توقّع كل وسائطها
+      //   IMAGEKIT_PRIVATE_UPLOADS=true      → ارفع الملفات الجديدة كخاصة
+      // تفعيل الثاني وحده ينتج ملفات لا يمكن عرضها، فيُتجاهل مع تحذير.
+      const signedUrlsEnabled = (process.env["IMAGEKIT_SIGNED_URLS_ENABLED"] || "").trim().toLowerCase() === "true";
+      const privateUploadsRequested = (process.env["IMAGEKIT_PRIVATE_UPLOADS"] || "").trim().toLowerCase() === "true";
+      if (privateUploadsRequested && !signedUrlsEnabled) {
+        logger.warn("IMAGEKIT_PRIVATE_UPLOADS is set without IMAGEKIT_SIGNED_URLS_ENABLED — uploading public files instead");
+      }
+      if (privateUploadsRequested && signedUrlsEnabled) {
         form.append("isPrivateFile", "true");
       }
 

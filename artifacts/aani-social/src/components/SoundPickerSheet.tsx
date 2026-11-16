@@ -12,6 +12,7 @@ import { getClipDuration, getClipPeaks, playInstant, seekInstant, stopInstant, w
 import { setSoundLibraryState } from '@/audio/SoundLibraryStore';
 import { resumeBackgroundMedia, suspendBackgroundMedia } from '@/lib/activeVideo';
 import { useSoundPicker } from '@/hooks/useSoundPicker';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, type Profile, type Sound } from '@/lib/types';
 
@@ -224,8 +225,11 @@ export default function SoundPickerSheet() {
     setTrimDraft({ start: 0, end: MAX_TRIM_SECONDS });
     trimDurationLoadedRef.current = false;
     if (sound.source_video_url) warmAudioCache(sound.source_video_url);
-    // عنصر قياس المدة يُصيَّر مع شاشة الاقتصاص عبر probeSrc (state)
-    setProbeSrc(sound.source_video_url || '');
+    // عنصر قياس المدة يُصيَّر مع شاشة الاقتصاص عبر probeSrc (state)، ويُوقَّع
+    // أولاً عند تفعيل التوقيع — لا يُطلب رابط ImageKit عام.
+    void resolveMediaUrl(sound.source_video_url || '').then(resolved => {
+      setProbeSrc(resolved || '');
+    });
   };
 
   // يبدأ الاستماع فوراً من زمن البداية المحدد بالمقبض (يُستدعى لحظة بدء السحب أيضاً)
