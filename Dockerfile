@@ -19,9 +19,19 @@ COPY . .
 ARG VITE_SUPABASE_URL=
 ARG VITE_SUPABASE_ANON_KEY=
 ARG VITE_SUPABASE_PUBLISHABLE_KEY=
+
+# ImageKit signed-URL switches (booleans, not secrets: Vite inlines them into
+# the client bundle). Default false, so a build without these args keeps the
+# current public-URL behaviour. Render has to pass "true" explicitly for the
+# front end to start requesting signatures.
+ARG VITE_IMAGEKIT_SIGNED_URLS=false
+ARG VITE_IMAGEKIT_PRIVATE_UPLOADS=false
+
 ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
     VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY \
+    VITE_IMAGEKIT_SIGNED_URLS=$VITE_IMAGEKIT_SIGNED_URLS \
+    VITE_IMAGEKIT_PRIVATE_UPLOADS=$VITE_IMAGEKIT_PRIVATE_UPLOADS \
     NODE_ENV=production \
     CI=true
 
