@@ -265,6 +265,216 @@ export async function hydratePostInteractions(
   return hydratePostRows(posts, currentUserId);
 }
 
+// =====================================================================
+// المرحلة 4-B: ترتيب الرئيسية من دالة get_personalized_feed
+// =====================================================================
+// الدالة على Supabase تُعيد ترتيباً فقط (post_id, reposter_id, reposted_at,
+// rank_position). صفوف المنشورات تبقى من جدول posts عبر نفس آليات التجهيز
+// الحالية، فلا شكل بيانات جديد ولا استبدال لصفوف posts ببيانات RPC.
+// أي فشل هنا يُعيد null فيعود المسار الزمني الحالي كما هو (fallback).
+// =====================================================================
+
+/** أقصى عدد عناصر يطلبه الـRPC، وأقصى مرشحين قبل الترتيب. */
+const PERSONALIZED_FEED_LIMIT = 40;
+const PERSONALIZED_FEED_CANDIDATES = 160;
+/** مهلة قصوى لاستدعاء الـRPC قبل الانتقال إلى المسار الزمني (ms). */
+const PERSONALIZED_FEED_TIMEOUT_MS = 6000;
+/**
+ * أعمدة المنشورات في المسار الشخصي — نفس قائمة المسار الزمني للرئيسية،
+ * بلا display_order (خاصة بالملف الشخصي).
+ */
+const PERSONALIZED_POST_COLUMNS = [
+  'id', 'user_id', 'content', 'post_metadata', 'media_url', 'media_urls',
+  'media_asset_id', 'type', 'destination', 'visibility', 'created_at',
+  'likes_count', 'comments_count', 'reposts_count', 'shares_count',
+  'comments_disabled', 'audio_url', 'audio_title', 'sound_id',
+  'sound_trim_start', 'sound_trim_end', 'trim_start', 'trim_end',
+  'hide_likes', 'hide_comments', 'comment_privacy',
+];
+
+/** صف واحد من نتيجة get_personalized_feed بعد التحقق. */
+type PersonalizedFeedRow = {
+  post_id: string;
+  reposter_id: string | null;
+  reposted_at: string | null;
+  rank_position: number;
+};
+
+/**
+ * يتحقق من صفوف الـRPC: post_id نص غير فارغ، rank_position رقم منتهٍ،
+ * reposter_id و reposted_at إمّا null أو نص. يمنع تكرار post_id ويحتفظ
+ * بترتيب rank_position تصاعدياً. أي صف لا يطابق يُسقَط.
+ */
+function normalizePersonalizedFeedRows(value: unknown): PersonalizedFeedRow[] {
+  if (!Array.isArray(value)) return [];
+
+  const byPostId = new Map<string, PersonalizedFeedRow>();
+  (value as unknown[]).forEach((item: unknown) => {
+    if (!isRecord(item)) return;
+    const postId = item.post_id;
+    const rank = item.rank_position;
+    if (typeof postId !== 'string' || !postId) return;
+    if (typeof rank !== 'number' || !Number.isFinite(rank)) return;
+    const reposterId = typeof item.reposter_id === 'string' && item.reposter_id
+      ? item.reposter_id
+      : null;
+    const repostedAt = typeof item.reposted_at === 'string' && item.reposted_at
+      ? item.reposted_at
+      : null;
+    const row: PersonalizedFeedRow = {
+      post_id: postId,
+      reposter_id: reposterId,
+      reposted_at: repostedAt,
+      rank_position: rank,
+    };
+    // عند تكرار post_id نُبقي أفضل ترتيب (الأصغر) — لا صفوف مكررة في النتيجة.
+    const existing = byPostId.get(postId);
+    if (!existing || row.rank_position < existing.rank_position) byPostId.set(postId, row);
+  });
+
+  return [...byPostId.values()].sort((first, second) => first.rank_position - second.rank_position);
+}
+
+/** يرفض الوعد بعد المهلة، ليبقى المسار الشخصي محكوماً بزمن. */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('personalized feed timeout')), timeoutMs);
+    promise.then(
+      value => { window.clearTimeout(timer); resolve(value); },
+      error => { window.clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/**
+ * يجلب صفوف المنشورات بمعرّفاتها، بنفس آلية الأعمدة الحالية: قائمة صريحة،
+ * ثم تقليص عند أول عمود مفقود (42703/PGRST204)، ثم (*) كحل أخير.
+ * يُعيد null عند فشل الجلب كاملاً ليتولّى المسار الزمني الأمر.
+ */
+async function fetchPersonalizedPostRows(postIds: string[]): Promise<unknown[] | null> {
+  const buildQuery = (selected: string) => supabase
+    .from('posts')
+    .select(selected)
+    .in('id', postIds)
+    .limit(PERSONALIZED_FEED_LIMIT);
+
+  let columns = [...PERSONALIZED_POST_COLUMNS];
+  let result = await buildQuery(columns.join(', '));
+  for (let attempt = 0; attempt < 10 && result.error; attempt += 1) {
+    const missingColumn = missingSelectColumn(result.error, columns);
+    if (!missingColumn) break;
+    console.warn('[feed] عمود مفقود في جدول posts — أُعيد استعلام الترتيب الشخصي بدونه', missingColumn);
+    columns = columns.filter(column => column !== missingColumn);
+    result = await buildQuery(columns.join(', '));
+  }
+  if (result.error) {
+    console.warn('[feed] فشل استعلام الترتيب الشخصي بالأعمدة الصريحة — إعادة المحاولة بكل الأعمدة (*)', {
+      code: result.error.code,
+      message: result.error.message,
+    });
+    result = await buildQuery('*');
+  }
+  if (result.error || !Array.isArray(result.data)) return null;
+  return result.data as unknown[];
+}
+
+/**
+ * المسار الشخصي للرئيسية. يُعيد مصفوفة Post[] جاهزة بترتيب rank_position عند
+ * النجاح، أو null عند أي فشل — بما فيه نتيجة فارغة أو فشل التجهيز — ليستخدم
+ * المستدعي الجلب الزمني الحالي بدل إظهار صفحة فارغة أو رسالة خطأ.
+ *
+ * يمرّ كل شيء عبر الآليات القائمة: normalizePostRowsWithVisibility
+ * (ومعها resolvePostMediaUrls)، normalizePostRow، جلب ملفات المؤلفين، ثم
+ * hydratePostInteractions — فحقول الوسائط والصوت والروابط الموقعة تبقى كما
+ * هي بلا إعادة بناء.
+ *
+ * التجهيز النهائي (hydratePostInteractions) يقع داخل هذا الـtry عن قصد:
+ * فشله يجب أن يعود إلى المسار الزمني، لا أن يصل إلى catch المستدعي فيُفرغ
+ * الصفحة ويعرض خطأً.
+ */
+async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[] | null> {
+  try {
+    const rpcResult = await withTimeout(
+      Promise.resolve(supabase.rpc('get_personalized_feed', {
+        p_limit: PERSONALIZED_FEED_LIMIT,
+        p_candidate_limit: PERSONALIZED_FEED_CANDIDATES,
+      })),
+      PERSONALIZED_FEED_TIMEOUT_MS,
+    );
+
+    if (rpcResult.error) {
+      console.warn('[feed] تعذر استدعاء get_personalized_feed — الانتقال إلى الترتيب الزمني', {
+        code: rpcResult.error.code,
+        message: rpcResult.error.message,
+      });
+      return null;
+    }
+
+    const ranked = normalizePersonalizedFeedRows(rpcResult.data);
+    // نتيجة فارغة أو غير صالحة بالكامل: المسار الزمني هو الإجراء الاحتياطي.
+    if (ranked.length === 0) {
+      console.info('[feed] نتيجة الترتيب الشخصي فارغة — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+
+    const requestedIds = ranked.map(row => row.post_id);
+    const postData = await fetchPersonalizedPostRows(requestedIds);
+    if (postData === null) {
+      console.warn('[feed] تعذر جلب منشورات الترتيب الشخصي — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+
+    const rawPosts = (await normalizePostRowsWithVisibility(postData))
+      .filter(post => post.destination === 'feed');
+    const postsById = new Map(rawPosts.map(post => [post.id, post] as const));
+    if (postsById.size === 0) {
+      console.warn('[feed] لا صفوف منشورات قابلة للاستخدام في الترتيب الشخصي — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+
+    // إسناد إعادة النشر: reposter_id و reposted_at من نتيجة الـRPC نفسها،
+    // بلا خلط مع ترتيب المنشورات العادية.
+    const reposterIds = ranked
+      .map(row => row.reposter_id)
+      .filter((id): id is string => typeof id === 'string' && Boolean(id));
+
+    const authorIds = [...new Set(rawPosts.map(post => post.user_id))];
+    const profileIds = [...new Set([...authorIds, ...reposterIds])];
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('id, username, full_name, display_name, avatar_url, gender')
+      .in('id', profileIds);
+    const profMap = profileMap(profileData);
+
+    // الترتيب من rank_position: نمرّ على الصفوف المرتّبة، ونأخذ كل منشور مرة
+    // واحدة. المنشورات التي لم تُعد صفوفها (محذوفة أو محجوبة بـRLS) تُسقَط
+    // ولا تُستبدل بمنشورات خارج قائمة الـRPC.
+    const ordered: Post[] = [];
+    for (const row of ranked) {
+      const post = postsById.get(row.post_id);
+      if (!post) continue;
+      ordered.push({
+        ...post,
+        author: profMap.get(post.user_id) || fallbackProfile(post.user_id, ''),
+        reposter_id: row.reposter_id,
+        reposted_at: row.reposted_at,
+        repost_attribution: row.reposter_id
+          ? (profMap.get(row.reposter_id) || fallbackProfile(row.reposter_id, ''))
+          : null,
+        likes: [],
+        comments: [],
+      });
+    }
+
+    if (ordered.length === 0) return null;
+    // التجهيز داخل نفس الـtry: فشله يعود إلى المسار الزمني بدل صفحة فارغة.
+    return await hydratePostInteractions(ordered, currentUserId);
+  } catch (caughtError) {
+    console.warn('[feed] فشل المسار الشخصي — الانتقال إلى الترتيب الزمني', caughtError);
+    return null;
+  }
+}
+
 export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, currentUserId = '') {
   const cacheKey = `${query}:${targetUserId || ''}`;
   const hadCachedPosts = postsCache.has(cacheKey);
@@ -355,6 +565,15 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       };
 
       if (query === 'feed') {
+        // 4-B: نحاول أولاً ترتيب get_personalized_feed. أي فشل أو نتيجة
+        // فارغة — بما فيه فشل التجهيز — يُعيد null، فينفّذ المسار الزمني
+        // الحالي كما هو تماماً بدل صفحة فارغة أو رسالة خطأ.
+        const personalizedPosts = await fetchPersonalizedFeedPosts(currentUserId);
+        if (personalizedPosts) {
+          setPosts(personalizedPosts);
+          return;
+        }
+
         const { data: postData, error: postsErr } = await fetchPostRows('feed');
 
         if (postsErr) throw postsErr;
