@@ -1949,6 +1949,13 @@ export default function Shell({
       const onUploadPhase = (phase: 'compressing' | 'extracting-audio' | 'uploading', percent?: number) => {
         // محاولة قديمة لا تكتب في بطاقة المنشور المملوكة لمحاولة أحدث
         if (!isCurrentAttempt()) return;
+        // نفس الأحداث تقود التشخيص أيضاً، فلا يُنسب فشل الضغط أو فشل جلب
+        // التوقيع إلى ImageKit: الضغط محلي، والتوقيع من خادمنا.
+        if (phase === 'compressing') setPhase('ضغط وتجهيز الملف');
+        else if (phase === 'extracting-audio') setPhase('استخراج الصوت وربط سجل الأصوات');
+        // 'uploading' يُطلق قبل fetchImageKitAuth مباشرة؛ أول حدث تقدّم فعلي
+        // (أدناه) يرفع المرحلة إلى «الرفع الفعلي» لأن البايتات بدأت تُرسل.
+        else setPhase('جلب توقيع الرفع من الخادم');
         updatePendingPost(postId, {
           phaseLabel: phase === 'compressing'
             ? `جارٍ تحسين الجودة...${typeof percent === 'number' ? ` ${percent}%` : ''}`
@@ -2013,7 +2020,9 @@ export default function Shell({
         const jobProgress = uploadJobs.map(() => 0);
         const totalBytes = uploadJobs.reduce((sum, job) => sum + Math.max(1, job.file.size), 0);
 
-        setPhase('رفع الوسائط إلى ImageKit');
+        // الرفع يبدأ بالضغط محلياً ثم بجلب التوقيع ثم بالإرسال — المرحلة تُضبط
+        // من أحداث uploadMedia أدناه، والبداية «ضغط وتجهيز الملف» لأنها أول ما يحدث.
+        setPhase('ضغط وتجهيز الملف');
         await Promise.all(uploadJobs.map(async (job, jobIndex) => {
           // الرفع مباشرة إلى ImageKit بعد الضغط المحلي — يعيد الرابط العام النهائي
           const publicUrl = await uploadMedia({
@@ -2027,6 +2036,9 @@ export default function Shell({
             onProgress: percent => {
               // محاولة قديمة لا تعدّل تقدّم بطاقة المنشور المملوكة لمحاولة أحدث
               if (!isCurrentAttempt()) return;
+              // أول تقدّم فعلي = بايتات أُرسلت إلى ImageKit فعلاً، فالمرحلة الآن
+              // «الرفع الفعلي» لا «جلب التوقيع». (تشخيص فقط، لا يغيّر أي قرار.)
+              if (percent > 0) setPhase('الرفع الفعلي إلى ImageKit');
               jobProgress[jobIndex] = percent;
               const uploadedBytes = uploadJobs.reduce((sum, currentJob, currentIndex) => (
                 sum + Math.max(1, currentJob.file.size) * (jobProgress[currentIndex] / 100)

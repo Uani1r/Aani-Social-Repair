@@ -87,8 +87,19 @@ const styles = {
 
 function kindColor(kind: PublishFailureEntry['kind']): string {
   if (kind === 'imagekit-upload') return '#7dd3fc';
+  if (kind === 'upload-signature') return '#c4b5fd';
+  if (kind === 'media-prepare') return '#f9a8d4';
   if (kind === 'supabase-write') return '#fbbf24';
   return '#a1a1aa';
+}
+
+/** شارة قصيرة على كل صف — تفصل المراحل الثلاث داخل خطوة الرفع. */
+function kindBadge(kind: PublishFailureEntry['kind']): string {
+  if (kind === 'imagekit-upload') return 'ImageKit';
+  if (kind === 'upload-signature') return 'توقيع الرفع (خادمنا)';
+  if (kind === 'media-prepare') return 'ضغط/تجهيز';
+  if (kind === 'supabase-write') return 'Supabase';
+  return 'قبل الرفع/الحفظ';
 }
 
 function Field({ name, value, mono = false }: { name: string; value: string; mono?: boolean }) {
@@ -137,7 +148,7 @@ export default function PublishErrorPanel() {
 
         <div style={styles.body}>
           <p style={{ margin: 0, color: '#a1a1aa', lineHeight: 1.7 }}>
-            آخر محاولات النشر الفاشلة في هذه الجلسة. التفاصيل هنا للحجب الآمن: لا رموز جلسة ولا مفاتيح ولا توقيعات.
+            آخر محاولات النشر الفاشلة في هذه الجلسة. النصوص المعروضة هنا وهذه اللوحة وزر النسخ تمر جميعها على حجب الأسرار قبل العرض. لا تُنسخ رموز جلسة ولا مفاتيح ولا توقيعات.
           </p>
 
           <div style={{ display: 'flex', gap: 8, margin: '12px 0', flexWrap: 'wrap' }}>
@@ -172,7 +183,7 @@ export default function PublishErrorPanel() {
                     fontWeight: 700,
                   }}
                 >
-                  {entry.kind === 'imagekit-upload' ? 'ImageKit' : entry.kind === 'supabase-write' ? 'Supabase' : 'قبل الرفع/الحفظ'}
+                  {kindBadge(entry.kind)}
                 </span>
               </div>
               <div style={{ marginTop: 4, color: '#a1a1aa', lineHeight: 1.6 }}>{describePublishKind(entry.kind)}</div>

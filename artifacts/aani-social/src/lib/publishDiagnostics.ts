@@ -11,22 +11,47 @@ import { redactSecrets, redactValue } from '@/lib/errorRedaction';
 import { isImageKitSigningEnabled } from '@/lib/mediaAccess';
 
 /**
- * مرحلة النشر. التمييز بين «رفع الوسائط إلى ImageKit» و«حفظ المنشور في Supabase»
- * هو الفرق الجوهري في التشخيص: الأول فشل تخزين ملفات، والثاني رفض صف في القاعدة.
+ * مرحلة النشر.
+ *
+ * المراحل الثلاث داخل خطوة الرفع مفصولة عمداً، لأن خلطها يجعل التشخيص مضلِّلاً:
+ *   - «ضغط وتجهيز الملف»: عمل محلي في المتصفح (Canvas/mediabunny). فشله ليس
+ *     فشل ImageKit ولا فشل شبكة — ملف غير مدعوم أو ذاكرة غير كافية.
+ *   - «جلب توقيع الرفع من الخادم»: طلب إلى /api/media/imagekit-auth على خادمنا
+ *     (يحتاج IMAGEKIT_PUBLIC_KEY/PRIVATE_KEY وجلسة صالحة). فشله فشل خدمتنا، لا
+ *     رفض من ImageKit.
+ *   - «الرفع الفعلي إلى ImageKit»: طلب XHR إلى upload.imagekit.io بعد الحصول على
+ *     التوقيع. هنا فقط يُنسب الفشل إلى ImageKit.
+ *
+ * والتمييز بين «رفع الوسائط» و«حفظ المنشور في Supabase» هو الفرق الجوهري الآخر:
+ * الأول فشل تخزين ملفات، والثاني رفض صف في القاعدة.
  */
 export type PublishPhase =
   | 'بدء النشر'
   | 'التحقق من جلسة الحساب'
   | 'إيقاظ الخادم وفحص الجاهزية'
-  | 'رفع الوسائط إلى ImageKit'
+  | 'ضغط وتجهيز الملف'
+  | 'جلب توقيع الرفع من الخادم'
+  | 'الرفع الفعلي إلى ImageKit'
   | 'إنشاء سجل media_assets'
   | 'استخراج الصوت وربط سجل الأصوات'
   | 'حفظ المنشور في Supabase (posts.upsert)'
   | 'معالجة الفيديو بعد الحفظ'
   | 'التحقق من الصف المحفوظ';
 
-/** هل هذه المرحلة فشل رفع وسائط (ImageKit) أم فشل كتابة في Supabase؟ */
-export type PublishFailureKind = 'imagekit-upload' | 'supabase-write' | 'unknown';
+/**
+ * تصنيف الفشل:
+ *   imagekit-upload  — رفض/انقطاع من ImageKit نفسه (XHR الرفع)
+ *   upload-signature — فشل نقطة التوقيع على خادمنا قبل أي إرسال إلى ImageKit
+ *   media-prepare    — فشل محلي في الضغط/التجهيز قبل الشبكة
+ *   supabase-write   — رفض صف/قراءة في قاعدة البيانات
+ *   unknown          — جلسة/شبكة/إيقاظ خادم أو مرحلة غير مصنَّفة
+ */
+export type PublishFailureKind =
+  | 'imagekit-upload'
+  | 'upload-signature'
+  | 'media-prepare'
+  | 'supabase-write'
+  | 'unknown';
 
 export interface PublishFailureEntry {
   id: string;
@@ -54,8 +79,16 @@ const listeners = new Set<(entries: PublishFailureEntry[]) => void>();
 let panelListeners = new Set<(open: boolean) => void>();
 let sequence = 0;
 
-const UPLOAD_PHASES: ReadonlySet<PublishPhase> = new Set<PublishPhase>([
-  'رفع الوسائط إلى ImageKit',
+const IMAGEKIT_UPLOAD_PHASES: ReadonlySet<PublishPhase> = new Set<PublishPhase>([
+  'الرفع الفعلي إلى ImageKit',
+]);
+
+const SIGNATURE_PHASES: ReadonlySet<PublishPhase> = new Set<PublishPhase>([
+  'جلب توقيع الرفع من الخادم',
+]);
+
+const PREPARE_PHASES: ReadonlySet<PublishPhase> = new Set<PublishPhase>([
+  'ضغط وتجهيز الملف',
   'استخراج الصوت وربط سجل الأصوات',
 ]);
 
@@ -65,17 +98,43 @@ const WRITE_PHASES: ReadonlySet<PublishPhase> = new Set<PublishPhase>([
   'التحقق من الصف المحفوظ',
 ]);
 
-/** تصنيف المرحلة: رفع ImageKit أم كتابة Supabase. */
+/** تصنيف المرحلة وحدها، بلا النظر إلى نص الخطأ. */
 export function classifyPublishPhase(phase: PublishPhase): PublishFailureKind {
-  if (UPLOAD_PHASES.has(phase)) return 'imagekit-upload';
+  if (IMAGEKIT_UPLOAD_PHASES.has(phase)) return 'imagekit-upload';
+  if (SIGNATURE_PHASES.has(phase)) return 'upload-signature';
+  if (PREPARE_PHASES.has(phase)) return 'media-prepare';
   if (WRITE_PHASES.has(phase)) return 'supabase-write';
   return 'unknown';
 }
 
+/**
+ * نص يخص نقطة توقيع الرفع على خادمنا (storyUpload.fetchImageKitAuth).
+ * يُستخدم لتصحيح التصنيف حين لا يصل حدث تقدّم قبل الفشل (ملف صغير)، فتبقى
+ * المرحلة المسجَّلة «جلب التوقيع» بينما الخطأ جاء من الرفع أو العكس.
+ */
+const SIGNATURE_ERROR_PATTERN = /توقيع رفع الوسائط|imagekit-auth|تسجيل الدخول قبل رفع الوسائط/i;
+/** نص يخص رفض/انقطاع ImageKit نفسه أو الرفع عبر الخادم الاحتياطي. */
+const IMAGEKIT_UPLOAD_ERROR_PATTERN = /فشل رفع الوسائط|خدمة رفع الوسائط|فشل الرفع عبر الخادم|لم يُرجَع رابط الملف|رابط الملف بعد الرفع/i;
+
+/**
+ * التصنيف النهائي: المرحلة أساساً، ثم نص الخطأ يصحّح بين مرحلتي الرفع
+ * (التوقيع مقابل الرفع) فقط — لا يغيّر تصنيف الكتابة في القاعدة ولا التجهيز.
+ */
+export function classifyPublishFailure(phase: PublishPhase, message: string): PublishFailureKind {
+  const byPhase = classifyPublishPhase(phase);
+  if (byPhase === 'supabase-write' || byPhase === 'media-prepare') return byPhase;
+  const text = typeof message === 'string' ? message : '';
+  if (SIGNATURE_ERROR_PATTERN.test(text)) return 'upload-signature';
+  if (IMAGEKIT_UPLOAD_ERROR_PATTERN.test(text)) return 'imagekit-upload';
+  return byPhase;
+}
+
 export function describePublishKind(kind: PublishFailureKind): string {
-  if (kind === 'imagekit-upload') return 'فشل رفع الوسائط إلى ImageKit (تخزين الملفات)';
-  if (kind === 'supabase-write') return 'فشل كتابة المنشور في Supabase (قاعدة البيانات)';
-  return 'فشل قبل مرحلة الرفع أو الحفظ (جلسة/شبكة/خادم)';
+  if (kind === 'imagekit-upload') return 'فشل الرفع الفعلي إلى ImageKit (رفض أو انقطاع من ImageKit)';
+  if (kind === 'upload-signature') return 'فشل جلب توقيع الرفع من الخادم (/api/media/imagekit-auth) — قبل أي إرسال إلى ImageKit';
+  if (kind === 'media-prepare') return 'فشل ضغط/تجهيز الملف محلياً في المتصفح — قبل أي شبكة';
+  if (kind === 'supabase-write') return 'فشل كتابة/قراءة المنشور في Supabase (قاعدة البيانات)';
+  return 'فشل قبل مرحلة الرفع أو الحفظ (جلسة/شبكة/إيقاظ خادم)';
 }
 
 /** يستخرج حقول الخطأ من أي شكل: Supabase PostgrestError، Error، نص، أو خطأ HTTP. */
@@ -126,13 +185,14 @@ export function reportPublishFailure(input: {
 }): void {
   try {
     const fields = readErrorFields(input.error);
+    const message = fields.message || (input.timedOut ? 'انتهت مهلة النشر قبل اكتمال الرفع أو الحفظ.' : 'خطأ بلا رسالة');
     const entry: PublishFailureEntry = {
       id: `pub-${Date.now()}-${(sequence += 1)}`,
       at: Date.now(),
       phase: input.phase,
-      kind: classifyPublishPhase(input.phase),
+      kind: classifyPublishFailure(input.phase, message),
       code: fields.code || (input.timedOut ? 'TIMEOUT' : 'غير مصنَّف'),
-      message: fields.message || (input.timedOut ? 'انتهت مهلة النشر قبل اكتمال الرفع أو الحفظ.' : 'خطأ بلا رسالة'),
+      message,
       details: fields.details,
       hint: fields.hint,
       userMessage: redactSecrets(input.userMessage || ''),
@@ -191,7 +251,11 @@ export function subscribePublishPanelOpen(listener: (open: boolean) => void): ()
   };
 }
 
-/** تقرير نصي جاهز للنسخ — بلا أسرار، ومقروء لصقاً في دردشة الدعم. */
+/**
+ * تقرير نصي جاهز للنسخ — محجوب الأسرار.
+ * كل سطر يُمرَّر عبر redactSecrets مرة أخرى عند البناء، فلا يعتمد الحجب على
+ * لحظة التخزين وحدها.
+ */
 export function buildPublishFailureReport(entries: PublishFailureEntry[] = getPublishFailures()): string {
   const lines: string[] = [];
   lines.push('تقرير فشل نشر المنشور — آني');
@@ -211,9 +275,9 @@ export function buildPublishFailureReport(entries: PublishFailureEntry[] = getPu
   }
   if (entries.length === 0) lines.push('لا يوجد فشل نشر مسجل في هذه الجلسة.');
   try {
-    lines.push(`المتصفح: ${redactSecrets(navigator.userAgent.slice(0, 160))}`);
+    lines.push(`المتصفح: ${navigator.userAgent.slice(0, 160)}`);
   } catch {
     // غير متاح
   }
-  return lines.join('\n');
+  return redactSecrets(lines.join('\n'));
 }
