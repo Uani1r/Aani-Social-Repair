@@ -32,6 +32,7 @@ import { baseVideoUrl, defaultSoundTitle, openSoundDetail, useExistingSound } fr
 import { getImageKitVideoThumbnailUrl } from '@/lib/postMedia';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { useReelViewTracking } from '@/lib/reelViews';
+import { useReelImageImpression } from '@/lib/reelImpressions';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -125,6 +126,17 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     trimStartSec: videoTimeRange?.start ?? 0,
     trimEndSec: videoTimeRange?.end,
   });
+  // انطباع الريل المصوّر (المرحلة 5-B2): مسار مستقل عن تتبع الفيديو، يسجّل
+  // مدة الظهور الفعلية فقط في post_view_events بـ surface='reels'
+  // و content_type='image'. يستقبل نتيجة الظهور الحالية (isVisible، عتبة 0.6)
+  // ولا يلمس التشغيل أو الصوت أو المراقب أو روابط ImageKit الموقّعة.
+  // المنشورات المؤقتة والريلز غير المصوّرة لا تُحتسب انطباعاً.
+  useReelImageImpression({
+    postId: post.id,
+    userId: currentUserId,
+    active: isVisible,
+    enabled: isImageMedia && !pendingState,
+  });
   // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
   const soundLabel = post.audio_title || (post.sound_id ? defaultSoundTitle(displayName(post.author)) : '');
   const backgroundSoundUrl = post.sound_id && post.audio_url && mediaUrl
@@ -181,15 +193,22 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   }, [post.id, post.feedback_by_me]);
 
   useEffect(() => {
-    const video = videoRef.current;
     const container = containerRef.current;
-    if (!video || !container || typeof IntersectionObserver === 'undefined') return;
+    // المراقب يعمل على الحاوية لا على عنصر الفيديو: الريل المصوّر يعرض img
+    // بلا عنصر video، وكان اشتراط videoRef.current يمنع إنشاء المراقب
+    // وتحديث isVisible له. الآن isVisible يُحدَّث للصورة والفيديو معاً،
+    // وأي تعامل مع التشغيل يقع فقط عند وجود عنصر الفيديو.
+    if (!container || typeof IntersectionObserver === 'undefined') return;
 
     const observer = new IntersectionObserver(
       entries => {
         entries.forEach(entry => {
           const isVisible = entry.isIntersecting && entry.intersectionRatio >= 0.6;
           setIsVisible(isVisible);
+          // عنصر الفيديو يُقرأ وقت الحدث: قد يكون غائباً (ريل صورة) وقد
+          // يتغيّر بين إعادة التركيب. بلا عنصر فيديو لا تشغيل ولا إيقاف.
+          const video = videoRef.current;
+          if (!video) return;
           if (isVisible && !backgroundMediaSuspended && !manuallyPausedRef.current && !hasOpenFeedDialog()) {
             // تشغيل مع حصرية المدير الموحد: يوقف أي فيديو آخر يعمل في التطبيق
             playExclusive(post.id, video);
@@ -206,7 +225,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     observer.observe(container);
     return () => {
       observer.disconnect();
-      video.pause();
+      // نفس سلوك الإيقاف السابق، محصوراً بوجود عنصر الفيديو.
+      const video = videoRef.current;
+      if (video) video.pause();
       releaseActiveVideo(post.id);
     };
   }, [backgroundMediaSuspended, videoSrc]);
