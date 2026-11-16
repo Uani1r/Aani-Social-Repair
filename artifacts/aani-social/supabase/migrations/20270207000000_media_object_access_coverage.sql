@@ -35,10 +35,6 @@
 --      * الملفات      : أو صورة/غلاف ملف شخصي (معلومة عامة لكل مسجّل عمداً).
 --      * المنشورات    : media_url / media_urls / audio_url عبر aani_can_read_post
 --                       **و** صاحب الملف = صاحب المنشور.
---      * غلاف الفيديو : posts.post_metadata وسم {kind:'cover', href} — بنفس شرط
---                       المنشور (قراءة مسموحة + الملكية). يغطي الأغلفة التي لا
---                       سجل media_assets.poster_url لها (منشورات قديمة أو سجل
---                       وسائط فشل إدراجه)، فلا تظهر خلفية سوداء بعد التفعيل.
 --      * media_assets : سجلّات المعالجة عبر منشورها **و** صاحب الملف صاحب
 --                       السجل أو صاحب المنشور، أو مسار الناتج المعالَج
 --                       processed/<userId>/<assetId>.mp4 المشتق من السجل.
@@ -199,7 +195,6 @@ declare
   term text;
 
   has_audio_url boolean := false;
-  has_post_metadata boolean := false;
   has_media_asset_field boolean := false;
   has_story boolean := false;
   has_story_thumbnail boolean := false;
@@ -220,13 +215,6 @@ begin
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'posts' and column_name = 'audio_url'
   ) into has_audio_url;
-
-  -- غلاف الفيديو المحفوظ كوسم cover داخل posts.post_metadata (20261122000000).
-  select exists (
-    select 1 from information_schema.columns as cols
-    where cols.table_schema = 'public' and cols.table_name = 'posts'
-      and cols.column_name = 'post_metadata'
-  ) into has_post_metadata;
 
   -- وسائط سجلّات المعالجة (video_url/poster_url/original_path...) — عبر المنشور
   select
@@ -365,33 +353,6 @@ begin
           from unnest(coalesce(post.media_urls, '{}'::text[])) as media_url
           where public.aani_media_path(media_url) = v_target
         )$term$::text;
-
-  -- غلاف الفيديو: يُحفظ رابطه في posts.post_metadata كوسم {kind:'cover', href}
-  -- (Shell.tsx عند النشر)، وقد لا يوجد له سجل media_assets.poster_url — خصوصاً
-  -- في المنشورات القديمة أو حين يفشل إدراج سجل الوسائط. يُقبل الغلاف هنا فقط
-  -- بنفس شرط المنشور: قراءة مسموحة + الملف من رفع صاحب المنشور، فلا يُفتح
-  -- غلاف منشور خاص أو محذوف لأحد.
-  if has_post_metadata then
-    checks := checks || $chunk$
-  -- aani-guard:post-cover-metadata — غلاف الفيديو المحفوظ كوسم cover
-  if exists (
-    select 1
-    from public.posts as post
-    cross join lateral jsonb_array_elements(
-      case
-        when jsonb_typeof(post.post_metadata) = 'array' then post.post_metadata
-        else '[]'::jsonb
-      end
-    ) as meta_tag
-    where meta_tag->>'kind' = 'cover'
-      and public.aani_media_path(meta_tag->>'href') = v_target
-      and public.aani_can_read_post(post.id, v_viewer)
-      and public.aani_media_owner_id(p_object_name) = post.user_id::text
-  ) then
-    return true;
-  end if;
-    $chunk$;
-  end if;
 
   checks := checks || format($chunk$
   if exists (
@@ -883,25 +844,6 @@ begin
     raise exception 'فرع المنشورات بلا تحقق من ملكية الملف لصاحب المنشور';
   end if;
 
-  -- غلاف الفيديو المحفوظ في post_metadata (وسم cover): يجب أن يكون مقروءاً عبر
-  -- فرع المنشورات نفسه. غيابه يعني رفض توقيع الأغلفة التي لا سجل media_assets
-  -- لها (منشورات قديمة أو سجل وسائط فشل إدراجه) وظهور الفيديو بخلفية سوداء.
-  if exists (
-    select 1 from information_schema.columns as cols
-    where cols.table_schema = 'public' and cols.table_name = 'posts'
-      and cols.column_name = 'post_metadata'
-  ) then
-    if position('aani-guard:post-cover-metadata' in source) = 0 then
-      raise exception 'غلاف post_metadata غير مشمول في قرار الوسائط — أغلفة الفيديو القديمة ستُرفض';
-    end if;
-    if position($needle$meta_tag->>'kind' = 'cover'$needle$ in source) = 0 then
-      raise exception 'فرع الغلاف لا يفلتر على وسم kind = cover';
-    end if;
-    if position($needle$public.aani_media_path(meta_tag->>'href') = v_target$needle$ in source) = 0 then
-      raise exception 'فرع الغلاف لا يطابق href الوسم مع المسار المطلوب';
-    end if;
-  end if;
-
   if to_regclass('public.media_assets') is not null
      and exists (
        select 1 from information_schema.columns
@@ -1056,8 +998,7 @@ commit;
 --           p.prosrc ~* 'shared_story.id = message.story_id'   as messages_story_linked,
 --           p.prosrc ~* 'aani_can_view_story\(shared_story.id' as messages_story_perm,
 --           p.prosrc ~* 'aani-guard:sounds-urls-owner'         as sounds_urls_owner,
---           p.prosrc ~* 'aani-guard:story-share-linked'        as story_share_linked,
---           p.prosrc ~* 'aani-guard:post-cover-metadata'       as post_cover_metadata
+--           p.prosrc ~* 'aani-guard:story-share-linked'        as story_share_linked
 --    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --    where n.nspname = 'public' and p.proname = 'aani_can_read_media_object';
 --    -- المتوقع: true في كل عمود (عدا ما غاب عموده/جدوله فعلاً).
@@ -1121,33 +1062,3 @@ commit;
 --
 -- 8) ناتج المعالجة processed/<ownerId>/<assetId>.mp4
 --    يُقبل فقط عبر سجل media_assets لمنشور يقرأه المستدعي، وليس كمسار حر.
---
--- 9) غلاف الفيديو المحفوظ في post_metadata (وسم cover)
---    بصفتك مالك منشور فيديو بغلاف:                                    -- true
---      select public.aani_can_read_media_object('<cover_path_of_your_post>');
---    بصفتك غير متابع لحساب خاص A، غلاف فيديو A:                        -- false
---      select public.aani_can_read_media_object('<A_post_cover>');
---    وغلاف منشور محذوف (الصف غير موجود):                               -- false
---    والغلاف نفسه بعد إضافة مسار فيديو آخر إلى وسم cover لمنشورك:       -- false
---      (الملكية تُقرأ من المسار: مسار A لا يطابق post.user_id = أنت)
---
--- 9ب) بيانات قديمة: منشورات فيديو لها غلاف في post_metadata بلا سجل
---     media_assets.poster_url — هذه هي الحالة التي كان الترحيل يرفض أغلفتها.
---     استعلام فحص (قراءة فقط):
---      select p.id, p.user_id, tag->>'href' as cover_href
---      from public.posts as p
---      cross join lateral jsonb_array_elements(
---        case when jsonb_typeof(p.post_metadata) = 'array' then p.post_metadata else '[]'::jsonb end
---      ) as tag
---      where tag->>'kind' = 'cover'
---        and not exists (
---          select 1 from public.media_assets as asset
---          where asset.id = p.media_asset_id
---            and asset.poster_url is not null
---        )
---      order by p.created_at desc;
---    -- كل صف يظهر هنا يجب أن يُعيد aani_can_read_media_object لرابطه true
---    -- لصاحب المنشور ولمن يقرأ المنشور، وfalse لغيرهما.
---
--- 9ج) غلاف بلا مسار صالح (href فارغ أو ليس رابط ImageKit/تخزين): يُتخطى،
---     ولا يُفتح بسببه أي شيء — الترحيل يطابق href بعد التطبيع فقط.
