@@ -46,13 +46,17 @@
 --                       **و** الملف من رفع كاتب التعليق.
 --      * المحادثات    : المستدعي طرف في الرسالة، والملف مذكور في content أو
 --                       image_url أو story_media_url / story_thumbnail_url،
---                       **و** صاحب الملف أحد طرفيها. الستوري الذي يملكه طرف
---                       ثالث تُقبل فقط إن كان المستدعي يرى الستوري عبر story_id.
+--                       **و** صاحب الملف أحد طرفيها. والستوري الذي يملكه طرف
+--                       ثالث تُقبل معاينته فقط إذا طابق الرابطُ وسائطَ صف
+--                       stories نفسه (media_url/thumbnail_url) وكان المستدعي
+--                       يرى ذلك الصف — لا يكفي وجود story_id مرئية.
 --      * الإشعارات    : metadata إشعار يملكه المستدعي **و** الملف من رفعه.
 --      * الأصوات      : preview_url/cover_url/audio_url مكتبة عامة لكل مسجّل
---                       (سياسة sounds نفسها using(true))، أما source_video_url
---                       فيتبع صلاحية منشوره/المنشورات التي تستخدمه **و** ملكية
---                       صاحب الصوت.
+--                       (سياسة sounds نفسها using(true)) **و** الملف من رفع
+--                       صاحب الصوت — لا يكفي وجود السجل، لأن سياسة INSERT
+--                       تسمح لأي مستخدم بإنشاء سجل صوت باسمه. أما
+--                       source_video_url فيتبع صلاحية منشوره/المنشورات التي
+--                       تستخدمه **و** ملكية صاحب الصوت.
 --
 -- لا يغيّر أي جدول أو عمود أو سياسة، ولا يمس RLS، ولا يطبّق إعداداً على
 -- ImageKit. آمن للتكرار.
@@ -187,6 +191,7 @@ declare
   -- ويفشل تنفيذ البلوك (الجدولان media_assets و sounds موجودان في الإنتاج).
   candidate_column text;
   match_terms text[];
+  story_match_terms text[];
   term text;
 
   has_audio_url boolean := false;
@@ -201,7 +206,7 @@ declare
   has_messages_story_media boolean := false;
   has_messages_story_thumbnail boolean := false;
   has_messages_content boolean := false;
-  has_story_view_function boolean := false;
+  has_messages_story_id boolean := false;
   has_notification_metadata boolean := false;
   has_sounds boolean := false;
   has_sounds_source_post boolean := false;
@@ -261,12 +266,6 @@ begin
 
   select to_regclass('public.messages') is not null into has_messages;
 
-  select exists (
-    select 1 from pg_proc as proc
-    join pg_namespace as namespace on namespace.oid = proc.pronamespace
-    where namespace.nspname = 'public' and proc.proname = 'aani_can_view_story'
-  ) into has_story_view_function;
-
   -- حقول وسائط المحادثات: تُفحص أعمدةً فعلية، فلا يُبنى شرط على عمود غائب
   -- (قاعدة بُنيت من schema.sql لا تحتوي story_* ولا image_url).
   if has_messages then
@@ -293,6 +292,12 @@ begin
       where cols.table_schema = 'public' and cols.table_name = 'messages'
         and cols.column_name = 'story_thumbnail_url'
     ) into has_messages_story_thumbnail;
+
+    select exists (
+      select 1 from information_schema.columns as cols
+      where cols.table_schema = 'public' and cols.table_name = 'messages'
+        and cols.column_name = 'story_id'
+    ) into has_messages_story_id;
   end if;
 
   select
@@ -532,18 +537,29 @@ begin
           message.recipient_id::text
         )$term$;
 
-      -- الستوري المعاد إرسالها داخل المحادثة: صاحبها قد يكون طرفاً ثالثاً،
-      -- فيُسمح فقط إذا كان المستدعي يملك حق رؤية الستوري نفسها عبر story_id
-      -- (وبوجود دالة رؤية القصص فعلاً).
-      if has_messages_story_media and has_messages_story_thumbnail and has_story_view_function then
-        term := term || $term$
-        or (
-          (
-            public.aani_media_path(message.story_media_url) = v_target
-            or public.aani_media_path(message.story_thumbnail_url) = v_target
-          )
-          and public.aani_can_view_story(message.story_id, v_viewer)
-        )$term$;
+      -- الستوري المعاد إرسالها داخل المحادثة: صاحبها قد يكون طرفاً ثالثاً.
+      -- لا يكفي أن تكون story_id مرئية للمستدعي: يجب أن يطابق الرابط المطلوب
+      -- وسائط تلك الستوري **نفسها** (media_url أو thumbnail_url) في صف stories.
+      -- بدون هذا الربط يستطيع أي مستخدم وضع رابط ملف طرف ثالث في
+      -- story_media_url مع معرّف ستوري أخرى مرئية ليحصل على توقيعه.
+      -- النتيجة المقصودة: ستوري محذوفة لا تُخدم معاينتها — لا استثناء بلا إثبات
+      -- موثوق محفوظ من الخادم، والفشل مغلق.
+      if has_story and has_messages_story_id and has_messages_story_media then
+        story_match_terms := array['public.aani_media_path(shared_story.media_url) = v_target'];
+        if has_story_thumbnail then
+          story_match_terms := story_match_terms
+            || 'public.aani_media_path(shared_story.thumbnail_url) = v_target'::text;
+        end if;
+
+        term := term || format($term$
+        -- aani-guard:story-share-linked — الرابط يجب أن يطابق وسائط الستوري نفسها
+        or exists (
+          select 1
+          from public.stories as shared_story
+          where shared_story.id = message.story_id
+            and public.aani_can_view_story(shared_story.id, v_viewer)
+            and (%s)
+        )$term$, array_to_string(story_match_terms, ' or '));
       end if;
 
       -- لا مُرشِّح نصي مسبق هنا: كل مطابقة تجري بالتساوي على المسار المطبَّع،
@@ -582,9 +598,10 @@ begin
     $chunk$;
   end if;
 
-  -- ((ي)) الأصوات: المعاينة والغلاف مكتبة عامة لكل مسجّل (سياسة sounds using(true))،
-  --    أما فيديو المصدر فيتبع صلاحية منشوره الأصلي أو المنشورات التي تستخدمه،
-  --    **و** الملكية: ملف الفيديو من رفع صاحب الصوت.
+  -- ((ي)) الأصوات: المعاينة والغلاف والتسجيل مكتبة عامة لكل مسجّل (سياسة
+  --    sounds نفسها using(true)) — لكن وجود السجل لا يكفي: يُشترط أن يكون
+  --    الملف من رفع صاحب الصوت. وفيديو المصدر يتبع، إضافةً إلى ذلك، صلاحية
+  --    منشوره الأصلي أو المنشورات التي تستخدمه.
   if has_sounds then
     url_columns := array[]::text[];
     foreach candidate_column in array array['preview_url', 'cover_url', 'audio_url']
@@ -602,11 +619,18 @@ begin
     end loop;
 
     if cardinality(url_columns) > 0 then
+      -- سياسة INSERT على sounds تسمح لأي مستخدم بإنشاء سجل صوت باسمه، فيستطيع
+      -- وضع رابط ملف مستخدم آخر في preview_url / cover_url / audio_url. وجود
+      -- السجل وحده لا يثبت أن الوسيط منشور ومصرَّح به، ولا يكفي أن يكون السجل
+      -- مقروءاً للجميع. لذلك يُشترط أن يكون الملف من رفع صاحب الصوت نفسه —
+      -- وإلا رُفض، حتى لو كان الرابط صحيحاً وحياً.
       checks := checks || format($chunk$
+  -- aani-guard:sounds-urls-owner — ملكية الملف لصاحب الصوت شرط لازم
   if exists (
     select 1
     from public.sounds as sound
-    where %s
+    where (%s)
+      and public.aani_media_owner_id(p_object_name) = sound.creator_id::text
   ) then
     return true;
   end if;
@@ -765,19 +789,36 @@ begin
       raise exception 'عمود messages.story_thumbnail_url غير مشمول في قرار الوسائط';
     end if;
 
-    -- مشاركة ستوري بطرف ثالث: لا تُقبل إلا بصلاحية رؤية الستوري نفسها،
-    -- ويُشترط ذلك فقط عند وجود أعمدة الستوري ودالة رؤية القصص.
+    -- الحالة المزوّرة (2): رسالة تحمل story_id لستوري مرئية للمستدعي، لكن
+    -- story_media_url / story_thumbnail_url يشيران إلى ملف طرف ثالث.
+    -- يجب أن يربط الفرع الرابط المطلوب بوسائط صف stories نفسه (media_url أو
+    -- thumbnail_url) مع صلاحية الرؤية على الصف نفسه — لا يكفي story_id وحده.
     if exists (
       select 1 from information_schema.columns
       where table_schema = 'public' and table_name = 'messages' and column_name = 'story_media_url'
     )
     and exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'messages' and column_name = 'story_id'
+    )
+    and to_regclass('public.stories') is not null
+    and exists (
       select 1 from pg_proc as proc
       join pg_namespace as namespace on namespace.oid = proc.pronamespace
       where namespace.nspname = 'public' and proc.proname = 'aani_can_view_story'
-    )
-    and source not like '%aani_can_view_story(message.story_id%' then
-      raise exception 'مشاركة الستوري في المحادثة بلا فحص صلاحية رؤية الستوري';
+    ) then
+      if position('aani-guard:story-share-linked' in source) = 0 then
+        raise exception 'مشاركة الستوري بلا ربط بوسائط الستوري المشار إليها — يمكن تمرير رابط ملف طرف ثالث (الحالة المزوّرة 2)';
+      end if;
+      if position('shared_story.id = message.story_id' in source) = 0 then
+        raise exception 'مشاركة الستوري لا تربط الرابط بصف الستوري نفسه (الحالة المزوّرة 2)';
+      end if;
+      if position('aani_media_path(shared_story.media_url) = v_target' in source) = 0 then
+        raise exception 'مشاركة الستوري لا تطابق media_url للستوري المشار إليها (الحالة المزوّرة 2)';
+      end if;
+      if position('aani_can_view_story(shared_story.id, v_viewer)' in source) = 0 then
+        raise exception 'مشاركة الستوري بلا فحص صلاحية الرؤية على صف الستوري نفسه (الحالة المزوّرة 2)';
+      end if;
     end if;
   end if;
 
@@ -837,13 +878,30 @@ begin
   end if;
 
   if to_regclass('public.sounds') is not null then
-    if source not like '%public.sounds%' then
+    if position('public.sounds' in source) = 0 then
       raise exception 'أصوات القصص غير مشمولة في قرار الوسائط';
     end if;
+
+    -- الحالة المزوّرة (1): مستخدم ينشئ سجل sounds باسمه (سياسة INSERT تسمح
+    -- بذلك) ويضع فيه رابط ملف مستخدم آخر، ثم يطلب توقيعه. الحماية الوحيدة هي
+    -- شرط الملكية داخل فرع وسائط الصوت، فيجب أن يكون موجوداً وموصولاً بالمسار.
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'sounds'
+        and column_name in ('preview_url', 'cover_url', 'audio_url')
+    ) then
+      if position('aani-guard:sounds-urls-owner' in source) = 0 then
+        raise exception 'فرع وسائط الصوت بلا حارس ملكية — سجل صوت يمكن أن يمنح توقيع ملف غيره (الحالة المزوّرة 1)';
+      end if;
+      if position('and public.aani_media_owner_id(p_object_name) = sound.creator_id::text' in source) = 0 then
+        raise exception 'فرع وسائط الصوت لا يطابق صاحب الملف بصاحب الصوت (الحالة المزوّرة 1)';
+      end if;
+    end if;
+
     if exists (
       select 1 from information_schema.columns
       where table_schema = 'public' and table_name = 'sounds' and column_name = 'source_video_url'
-    ) and source not like '%aani_media_owner_id(p_object_name) = sound.creator_id::text%' then
+    ) and position('and public.aani_media_owner_id(p_object_name) = sound.creator_id::text' in source) = 0 then
       raise exception 'فيديو مصدر الصوت بلا تحقق من ملكية الملف لصاحب الصوت';
     end if;
   end if;
@@ -888,6 +946,24 @@ begin
     raise exception 'استخراج صاحب الملف يقبل مقطعاً ليس معرّف مستخدم';
   end if;
 
+  -- دليل تشغيلي على الحالتين المزوّرتين (بلا كتابة أي صف):
+  -- الملكية تُقرأ من المسار نفسه، فلا يمكن نسب ملف مستخدم إلى آخر.
+  if public.aani_media_owner_id(
+       'https://ik.imagekit.io/abc123/aani/11111111-1111-1111-1111-111111111111/voice.m4a'
+     ) is distinct from '11111111-1111-1111-1111-111111111111' then
+    raise exception 'الملكية المقروءة من المسار لا تطابق مالكه';
+  end if;
+
+  -- مسارا مستخدمين مختلفين لا يتطابقان أبداً بعد التطبيع، فشرط «الرابط يطابق
+  -- وسائط السجل/الستوري» لا يتحقق برابط طرف ثالث.
+  if public.aani_media_path(
+       'https://ik.imagekit.io/abc123/aani/11111111-1111-1111-1111-111111111111/voice.m4a'
+     ) = public.aani_media_path(
+       'https://ik.imagekit.io/abc123/aani/22222222-2222-2222-2222-222222222222/voice.m4a'
+     ) then
+    raise exception 'مساران لمستخدمين مختلفين يُطبَّعان إلى مسار واحد';
+  end if;
+
   -- الزائر لا ينفّذ الدالة، والمسجّل ينفّذها
   if has_function_privilege('anon', 'public.aani_can_read_media_object(text)', 'execute') then
     raise exception 'aani_can_read_media_object ما زالت ممنوحة لـanon';
@@ -919,7 +995,10 @@ commit;
 --           p.prosrc ~* 'message.image_url'                    as messages_image,
 --           p.prosrc ~* 'message.story_media_url'              as messages_story_media,
 --           p.prosrc ~* 'message.story_thumbnail_url'          as messages_story_thumb,
---           p.prosrc ~* 'aani_can_view_story\(message.story_id' as messages_story_perm
+--           p.prosrc ~* 'shared_story.id = message.story_id'   as messages_story_linked,
+--           p.prosrc ~* 'aani_can_view_story\(shared_story.id' as messages_story_perm,
+--           p.prosrc ~* 'aani-guard:sounds-urls-owner'         as sounds_urls_owner,
+--           p.prosrc ~* 'aani-guard:story-share-linked'        as story_share_linked
 --    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 --    where n.nspname = 'public' and p.proname = 'aani_can_read_media_object';
 --    -- المتوقع: true في كل عمود (عدا ما غاب عموده/جدوله فعلاً).
@@ -936,7 +1015,17 @@ commit;
 --    ثم بحساب أرسل لنفسه مسار ملف شخص آخر:                                  -- false
 --      (يجب أن يبقى false لأن صاحب الملف ليس طرفاً في تلك الرسالة)
 --    وبصفتك طرفاً في رسالة رد ستوري: story_media_url و story_thumbnail_url  -- true
---      ولمشاركة ستوري بطرف ثالث: true فقط إن كنت ترى الستوري عبر story_id.
+--
+-- 3ب) الحالة المزوّرة (2): مشاركة ستوري برابط طرف ثالث
+--    بصفتك مستخدماً يرى ستوري A (عامة/متابع معتمد)، أنشئ رسالة إلى نفسك:
+--      update public.messages
+--         set story_id = '<visible_story_of_A>',
+--             story_media_url = '<media_path_owned_by_B>'
+--       where id = '<your_message_id>';
+--    ثم: select public.aani_can_read_media_object('<media_path_owned_by_B>');
+--    -- المتوقع: false — لأن المسار لا يطابق media_url/thumbnail_url للستوري A.
+--    وبعد إعادته إلى رابط الستوري الحقيقي: true (لأنك ترى الستوري).
+--    وستوري محذوفة (صف stories غير موجود): false — لا معاينة بلا إثبات موثوق.
 --
 -- 4) بصفتك غير متابع لحساب خاص A: كل ما يلي false
 --    select public.aani_can_read_media_object('<A_post_media>');
@@ -953,10 +1042,17 @@ commit;
 --      المنشور مقروء لك، لكن الملكية لا تطابقك → النتيجة يجب أن تبقى false.
 --    والأمر نفسه لقصة/أبرز قصة/غلاف مجموعة/فيديو مصدر صوت/مرفق تعليق.
 --
--- 5) معاينة صوت عامة (مكتبة الأصوات) لكل مسجّل: true
---    select public.aani_can_read_media_object('<sound_preview_path>');
---    وفيديو مصدر الصوت: true فقط لمن يقرأ المنشور أو يستخدمه، وصاحبه هو رافعه
---    لمنشور خاص لحساب آخر: false
+-- 5) معاينة صوت عامة (مكتبة الأصوات) لكل مسجّل: true — لملف يملكه صاحب الصوت
+--    select public.aani_can_read_media_object('<sound_preview_path_owned_by_creator>');
+--
+-- 5ب) الحالة المزوّرة (1): سجل صوت برابط ملف غيره
+--    بصفتك مستخدماً عادياً أنشئ سجلاً باسمك يشير إلى ملف يملكه A:
+--      insert into public.sounds (title, preview_url, creator_id)
+--      values ('x', '<media_path_owned_by_A>', auth.uid());
+--    ثم: select public.aani_can_read_media_object('<media_path_owned_by_A>');
+--    -- المتوقع: false — صاحب الملف (A) ليس صاحب السجل (أنت).
+--    احذف السجل التجريبي بعد الاختبار.
+--    وفيديو مصدر الصوت يخضع للشرط نفسه إضافةً إلى صلاحية قراءة منشوره.
 --
 -- 6) مصغّرة فيديو خاصة: نفس قرار الفيديو نفسه
 --    select public.aani_can_read_media_object('<private_video_path>/ik-thumbnail.jpg'); -- false
