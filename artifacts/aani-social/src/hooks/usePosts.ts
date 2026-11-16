@@ -447,8 +447,7 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
     const profMap = profileMap(profileData);
 
     // الترتيب من rank_position: نمرّ على الصفوف المرتّبة، ونأخذ كل منشور مرة
-    // واحدة. المنشورات التي لم تُعد صفوفها (محذوفة أو محجوبة بـRLS) تُسقَط
-    // ولا تُستبدل بمنشورات خارج قائمة الـRPC.
+    // واحدة. لا نُضيف أي منشور خارج قائمة الـRPC.
     const ordered: Post[] = [];
     for (const row of ranked) {
       const post = postsById.get(row.post_id);
@@ -466,6 +465,17 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
       });
     }
 
+    // المطابقة يجب أن تكون كاملة: عدد المنشورات المجهّزة = عدد صفوف ranked.
+    // أي نقص (منشور محذوف، أو محجوب أو غير مقروء بسبب RLS، أو مستبعد لأن
+    // وجهته ليست feed) يعني نتيجة شخصية جزئية، فلا تُعرض ولا تُدمج مع
+    // المسار الزمني: نُعيد null ليعود usePosts إلى الجلب الزمني بالكامل.
+    if (ordered.length !== ranked.length) {
+      console.warn('[feed] الترتيب الشخصي غير مكتمل — الانتقال إلى الترتيب الزمني', {
+        requested: ranked.length,
+        matched: ordered.length,
+      });
+      return null;
+    }
     if (ordered.length === 0) return null;
     // التجهيز داخل نفس الـtry: فشله يعود إلى المسار الزمني بدل صفحة فارغة.
     return await hydratePostInteractions(ordered, currentUserId);
