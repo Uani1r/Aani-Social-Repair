@@ -5,6 +5,7 @@ import type { RealtimeChannel } from '@supabase/supabase-js';
 import { toast } from 'sonner';
 
 import { supabase } from '@/lib/supabase';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { displayName, type Profile } from '@/lib/types';
 
 export const OPEN_CALL_PICKER_EVENT = 'aani:open-call-picker';
@@ -289,9 +290,11 @@ function createCallId(): string {
 }
 
 function CallAvatar({ peer, className = '' }: { peer: CallPeer; className?: string }) {
+  // صورة الطرف الآخر رابط ImageKit: تُوقَّع قبل العرض عند تفعيل التوقيع.
+  const avatarUrl = useMediaUrl(peer.avatarUrl ?? null);
   return (
     <div className={`aani-call-avatar ${className}`.trim()} aria-label={peer.name}>
-      {peer.avatarUrl ? <img src={peer.avatarUrl} alt="" /> : <span>{peer.name.trim().charAt(0) || 'آ'}</span>}
+      {avatarUrl ? <img src={avatarUrl} alt="" /> : <span>{peer.name.trim().charAt(0) || 'آ'}</span>}
     </div>
   );
 }

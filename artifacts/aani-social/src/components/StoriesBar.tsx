@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { USE_SOUND_EVENT, type StorySound } from '@/lib/sounds';
 import { pauseInstant, playInstant, resumeInstant, stopInstant } from '@/lib/instantAudio';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { displayName } from '@/lib/types';
 import type { Profile } from '@/lib/types';
 import { notifySeenStoryIdsChanged, readSeenStoryIds, writeSeenStoryIds } from '@/lib/seenStories';
@@ -1684,10 +1685,18 @@ export default function StoriesBar({
       && currentStory.sound_trim_end > currentStory.sound_trim_start
       ? { start: currentStory.sound_trim_start, end: currentStory.sound_trim_end }
       : null;
-    playInstant(storySoundUrl, { trim, loop: true });
-    return () => stopInstant();
+    // الصوت المختار رابط ImageKit: يُوقَّع قبل التشغيل، وفشل التوقيع يعني
+    // بقاء القصة صامتة بدل طلب الرابط العام.
+    let active = true;
+    void resolveMediaUrl(storySoundUrl).then(signedUrl => {
+      if (!active || !signedUrl) return;
+      playInstant(signedUrl, { trim, loop: true });
+    });
+    return () => {
+      active = false;
+      stopInstant();
+    };
   }, [currentStory, storySoundUrl]);
-
   // الإيقاف المؤقت للمشاهد (ضغط مطول/لوحات مفتوحة) يوقف الصوت المختار مؤقتاً ثم يستأنفه
   useEffect(() => {
     if (!storySoundUrl) return;

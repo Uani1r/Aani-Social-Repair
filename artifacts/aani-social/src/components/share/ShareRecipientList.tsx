@@ -1,6 +1,7 @@
 import { Check } from 'lucide-react';
 
 import EmptyState from '../EmptyState';
+import { SignedImage } from '../SignedMedia';
 import { displayName, type Profile } from '../../lib/types';
 
 const ShareRecipientList = ({
@@ -45,7 +46,7 @@ const ShareRecipientList = ({
           >
             <span className="relative">
               {user.avatar_url ? (
-                <img
+                <SignedImage
                   src={user.avatar_url}
                   alt=""
                   className={`h-14 w-14 rounded-full object-cover transition ${

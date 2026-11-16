@@ -16,6 +16,7 @@ import {
   type SoundLibraryState,
 } from '@/audio/SoundLibraryStore';
 import { pause as pauseAudioEngine, preview, stop as stopAudioEngine } from '@/audio/AudioEngine';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { openSoundPicker } from '@/lib/sounds';
 
 function useSoundLibraryValue<T>(selector: (state: SoundLibraryState) => T): T {
@@ -38,11 +39,22 @@ export function useSoundPicker() {
     // Optimistically leave the loading state before starting the native audio
     // element. Network buffering never holds the UI on a spinner.
     setSoundLibraryState({ playingId: soundId, loadingId: null, blockedId: null });
-    preview({ id: soundId, url: clipUrl, fallbackUrl }, 0, undefined, {
-      onPlaying: () => setSoundLibraryState({ loadingId: null, playingId: soundId, blockedId: null }),
-      onBlocked: () => setSoundLibraryState({ loadingId: null, playingId: null, blockedId: soundId }),
-      onError: () => setSoundLibraryState({ loadingId: null, playingId: null, blockedId: soundId }),
-    });
+    // توقيع الروابط أولاً: مشغّل الصوت يستخدم الرابط كما وصله، وعند تفعيل
+    // التوقيع الإلزامي لا يجوز أن يصل إليه رابط ImageKit عام. فشل التوقيع
+    // يعني «محظور» بلا محاولة طلب الملف.
+    void (async () => {
+      const signedClip = await resolveMediaUrl(clipUrl);
+      const signedFallback = fallbackUrl ? await resolveMediaUrl(fallbackUrl) : null;
+      if (!signedClip) {
+        setSoundLibraryState({ playingId: null, loadingId: null, blockedId: soundId });
+        return;
+      }
+      preview({ id: soundId, url: signedClip, fallbackUrl: signedFallback || undefined }, 0, undefined, {
+        onPlaying: () => setSoundLibraryState({ loadingId: null, playingId: soundId, blockedId: null }),
+        onBlocked: () => setSoundLibraryState({ loadingId: null, playingId: null, blockedId: soundId }),
+        onError: () => setSoundLibraryState({ loadingId: null, playingId: null, blockedId: soundId }),
+      });
+    })();
   }, []);
 
   const stopPreview = useCallback(() => {

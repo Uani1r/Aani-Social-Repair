@@ -3,6 +3,7 @@ import { Check, Search, Star, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import UserIdentity from '@/components/UserIdentity';
+import { SignedImage } from '@/components/SignedMedia';
 import { ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -233,7 +234,7 @@ export default function CloseFriendsSheet({ open, currentUserId, onClose }: Clos
                 className="mb-1 flex w-full items-center gap-4 rounded-2xl px-2 py-2 text-right transition hover:bg-white/10 active:scale-[0.99]"
               >
                 {person.avatar_url ? (
-                  <img src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
+                  <SignedImage src={person.avatar_url} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover" />
                 ) : (
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white/10 text-[12px] font-bold">
                     {(displayName(person).charAt(0) || '?').toUpperCase()}

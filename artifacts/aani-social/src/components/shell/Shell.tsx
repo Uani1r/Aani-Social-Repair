@@ -16,6 +16,7 @@ import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
 import { playInstant, warmAudioContext } from '@/lib/instantAudio';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { resumeBackgroundMedia, suspendBackgroundMedia } from '@/lib/activeVideo';
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
@@ -1638,9 +1639,13 @@ export default function Shell({
       // شغّل رابط الفيديو الأصلي بالبث المباشر؛ تخزين RAM مخصص حصراً
       // لروابط preview_url الصوتية الصغيرة التي جرى تسخينها مسبقاً.
       if (chosen.source_video_url) {
-        playInstant(chosen.source_video_url, {
-          loop: true,
-          onError: () => undefined,
+        // رابط ImageKit: يُوقَّع قبل التشغيل عند تفعيل التوقيع الإلزامي.
+        void resolveMediaUrl(chosen.source_video_url).then(signedUrl => {
+          if (!signedUrl) return;
+          playInstant(signedUrl, {
+            loop: true,
+            onError: () => undefined,
+          });
         });
       }
     } catch {

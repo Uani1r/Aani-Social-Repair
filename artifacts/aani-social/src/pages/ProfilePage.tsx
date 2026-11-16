@@ -27,6 +27,7 @@ import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
 import { useMediaUrl } from '@/lib/mediaAccess';
+import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
@@ -1598,7 +1599,7 @@ export default function ProfilePage({
                         >
                           <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
                           <span className="profile-reorder-thumb">
-                            {collection.cover_url ? <img src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <span aria-hidden="true"><Play size={18} /></span> : cover?.media_url ? <img src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
+                            {collection.cover_url ? <SignedImage src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <span aria-hidden="true"><Play size={18} /></span> : cover?.media_url ? <SignedImage src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
                           </span>
                           <span className="profile-reorder-copy"><strong>{collection.title}</strong><small>{collection.stories.length} قصص</small></span>
                         </button>
@@ -1625,7 +1626,7 @@ export default function ProfilePage({
                         >
                           <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
                           <span className="profile-reorder-thumb">
-                            {post.type === 'reel' ? getPostCoverUrl(post) ? <img src={getPostCoverUrl(post) || undefined} alt="" /> : <span aria-hidden="true"><Play size={18} /></span> : post.media_url ? <img src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
+                            {post.type === 'reel' ? getPostCoverUrl(post) ? <SignedImage src={getPostCoverUrl(post)} alt="" /> : <span aria-hidden="true"><Play size={18} /></span> : post.media_url ? <SignedImage src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
                           </span>
                           <span className="profile-reorder-copy"><strong>{post.content || 'منشور وسائط'}</strong><small>{new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(post.created_at))}</small></span>
                         </button>
@@ -2279,11 +2280,11 @@ export default function ProfilePage({
                   <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
                     <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
                       {collection.cover_url ? (
-                        <img src={collection.cover_url} className="h-full w-full object-cover" alt="" />
+                        <SignedImage src={collection.cover_url} className="h-full w-full object-cover" alt="" />
                       ) : cover?.media_url && cover.media_type === 'video' ? (
                         <span className="grid h-full w-full place-items-center text-neutral-400" aria-hidden="true"><Play size={18} /></span>
                       ) : cover?.media_url ? (
-                        <img src={cover.media_url} className="h-full w-full object-cover" alt="" />
+                        <SignedImage src={cover.media_url} className="h-full w-full object-cover" alt="" />
                       ) : (
                         <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{cover?.caption || collection.title}</span>
                       )}
@@ -2413,20 +2414,12 @@ export default function ProfilePage({
                 >
                   {isReel ? (
                     postCoverUrl ? (
-                      <img
+                      <SignedImage
                         src={thumbnailUrl(postCoverUrl)}
                         alt={post.content.slice(0, 80)}
                         loading="lazy"
                         decoding="async"
                         className="h-full w-full object-cover"
-                        onError={event => {
-                          // فشل تحويل المصغّرة → الرجوع لرابط الغلاف الأصلي
-                          const image = event.currentTarget;
-                          if (image.dataset.fallback !== '1') {
-                            image.dataset.fallback = '1';
-                            image.src = postCoverUrl;
-                          }
-                        }}
                       />
                     ) : cover ? (
                       <span className="grid h-full w-full place-items-center text-neutral-400"><Play size={28} aria-hidden="true" /></span>
@@ -2434,20 +2427,12 @@ export default function ProfilePage({
                       <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>
                     )
                   ) : cover ? (
-                    <img
+                    <SignedImage
                       src={thumbnailUrl(cover)}
                       alt={post.content.slice(0, 80)}
                       loading="lazy"
                       decoding="async"
                       className="h-full w-full object-cover"
-                      onError={event => {
-                        // فشل تحويل المصغّرة → الرجوع للرابط الأصلي كامل الدقة
-                        const image = event.currentTarget;
-                        if (image.dataset.fallback !== '1') {
-                          image.dataset.fallback = '1';
-                          image.src = cover;
-                        }
-                      }}
                     />
                   ) : post.type === 'text' ? (
                     <span className="flex h-full w-full items-center justify-center overflow-hidden p-2 text-center text-[11px] leading-5 text-neutral-200">

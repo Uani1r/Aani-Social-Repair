@@ -7,10 +7,12 @@ import {
 
 import FollowRequestsSection from '@/components/FollowRequestsSection';
 import PushNotificationsControl from '@/components/PushNotificationsControl';
+import { SignedImage } from '@/components/SignedMedia';
 import { NotificationsSkeleton } from '@/components/Skeletons';
 import { OPEN_INCOMING_CALL_EVENT } from '@/components/CallManager';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import type { NotificationItem } from '@/lib/appShared';
@@ -300,7 +302,7 @@ function NotificationAvatar({ item }: { item: NotificationEntry }) {
   return (
     <span className="relative mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[#242424] text-[#858585]">
       {item.actor?.avatar_url ? (
-        <img
+        <SignedImage
           src={item.actor.avatar_url}
           alt=""
           className="w-11 h-11 rounded-full object-cover shrink-0"
@@ -316,11 +318,14 @@ function NotificationAvatar({ item }: { item: NotificationEntry }) {
 
 function StoryNotificationThumbnail({ url }: { url: string | null }) {
   const [failed, setFailed] = useState(false);
-  if (!url || failed) return null;
+  // مصغّرة الستوري رابط ImageKit: تُوقَّع قبل العرض، وفشل التوقيع يعني عدم
+  // العرض بدل طلب الرابط العام.
+  const resolvedUrl = useMediaUrl(url);
+  if (!resolvedUrl || failed) return null;
   return (
     <span className="h-14 w-10 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]">
       <img
-        src={url}
+        src={resolvedUrl}
         alt=""
         loading="lazy"
         draggable={false}

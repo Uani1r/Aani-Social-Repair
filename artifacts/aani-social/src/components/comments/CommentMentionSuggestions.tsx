@@ -1,6 +1,7 @@
 import React from 'react';
 
 import UserIdentity from '../UserIdentity';
+import { SignedImage } from '@/components/SignedMedia';
 import type { MentionCandidate } from './types';
 import { buildInitials } from './utils';
 import { displayName } from '../../lib/types';
@@ -37,7 +38,7 @@ const CommentMentionSuggestions: React.FC<CommentMentionSuggestionsProps> = ({
           }`}
         >
           {person.avatar_url ? (
-            <img
+            <SignedImage
               src={person.avatar_url}
               alt=""
               className="h-7 w-7 shrink-0 rounded-full object-cover"

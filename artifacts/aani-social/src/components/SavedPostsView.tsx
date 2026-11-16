@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 
 import FeedPostCard from './FeedPostCard';
+import { SignedImage } from './SignedMedia';
 import { GridSkeleton } from './Skeletons';
 import EmptyState from './EmptyState';
 import { useSavedPosts } from '../lib/interactions';
@@ -57,7 +58,7 @@ function SavedPostTile({ post, onOpen }: { post: Post; onOpen: (post: Post) => v
           </span>
         </span>
       ) : mediaUrl && post.type === 'photo' ? (
-        <img
+        <SignedImage
           src={mediaUrl}
           alt={caption ? `صورة من منشور ${authorName}` : 'صورة منشورة'}
           loading="lazy"
@@ -66,8 +67,8 @@ function SavedPostTile({ post, onOpen }: { post: Post; onOpen: (post: Post) => v
       ) : mediaUrl && post.type === 'reel' ? (
         <>
           {getPostCoverUrl(post) ? (
-            <img
-              src={getPostCoverUrl(post) || undefined}
+            <SignedImage
+              src={getPostCoverUrl(post)}
               alt=""
               loading="lazy"
               decoding="async"

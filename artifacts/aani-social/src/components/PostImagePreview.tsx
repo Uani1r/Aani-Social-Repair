@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } f
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
+import { useMediaUrl } from '@/lib/mediaAccess';
+
 type Point = { x: number; y: number };
 type PinchStart = { distance: number; scale: number };
 
@@ -14,6 +16,9 @@ export default function PostImagePreview({ src, alt, className }: {
   alt: string;
   className?: string;
 }) {
+  // توقيع داخلي: بعض المستدعين يمرّرون رابطاً مخزّناً كما هو (شبكة المحفوظات،
+  // المشاركات)، وعند تفعيل التوقيع الإلزامي لا يجوز طلب الرابط العام.
+  const resolvedSrc = useMediaUrl(src);
   const [isOpen, setIsOpen] = useState(false);
   const [scale, setScale] = useState(1);
   const holdTimerRef = useRef<number | null>(null);
@@ -114,7 +119,7 @@ export default function PostImagePreview({ src, alt, className }: {
   return (
     <>
       <img
-        src={src}
+        src={resolvedSrc ?? undefined}
         alt={alt}
         draggable={false}
         onDragStart={event => event.preventDefault()}
@@ -160,7 +165,7 @@ export default function PostImagePreview({ src, alt, className }: {
             style={{ touchAction: 'none' }}
           >
             <img
-              src={src}
+              src={resolvedSrc ?? undefined}
               alt={alt}
               draggable={false}
               onDragStart={event => event.preventDefault()}

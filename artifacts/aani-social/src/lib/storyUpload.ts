@@ -10,6 +10,7 @@
 // الرابط العام الناتج يُسجَّل في supabase.ts فيُرجعه getPublicUrl.
 
 import { supabase, registerUploadedMediaUrl } from '@/lib/supabase';
+import { isImageKitPrivateUploadEnabled } from '@/lib/mediaAccess';
 import { safeExecute } from '@/lib/appErrors';
 import { recordUploadLedgerReliably } from '@/lib/uploadLedgerQueue';
 import {
@@ -240,6 +241,10 @@ async function uploadMediaUnsafe({
     form.append('fileName', uploadName);
     form.append('folder', folder);
     form.append('useUniqueFileName', 'true');
+    // Restricted access في ImageKit: الملف يُرفع خاصاً فلا يُخدم بلا توقيع.
+    // يُفعَّل فقط مع VITE_IMAGEKIT_SIGNED_URLS وVITE_IMAGEKIT_PRIVATE_UPLOADS،
+    // لأن ملفاً خاصاً بلا توقيع في الواجهة لا يُعرض أبداً.
+    if (isImageKitPrivateUploadEnabled()) form.append('isPrivateFile', 'true');
     if (!auth.publicKey) {
       reject(new Error('مفتاح ImageKit العام مفقود من إعدادات الخادم (IMAGEKIT_PUBLIC_KEY).'));
       return;

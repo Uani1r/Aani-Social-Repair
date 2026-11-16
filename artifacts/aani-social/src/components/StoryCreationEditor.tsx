@@ -2,6 +2,7 @@ import { useRef, type PointerEvent as ReactPointerEvent, type TouchEvent as Reac
 import { Star, Trash2, X } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
+import { SignedImage } from '@/components/SignedMedia';
 import Avatar from '@/components/Avatar';
 import { StoryDrawingOverlay, StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
 import StoryCropOverlay, { type StoryCropApplyResult } from '@/components/StoryCropOverlay';
@@ -12,6 +13,7 @@ import { displayName, type Profile } from '@/lib/types';
 import type { StoryAdjustments } from '@/lib/storyFilters';
 import type { StoryTextAlign, StoryTextAnimation } from '@/lib/storyFonts';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import StoryErrorDiagnosticPanel from '@/components/story/StoryErrorDiagnosticPanel';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -230,6 +232,9 @@ export default function StoryCreationEditor({
   onApplyCrop,
   onQuickPublish,
 }: StoryCreationEditorProps) {
+  // وسيط التحرير: قد يكون رابط ImageKit محمياً (إعادة نشر قصة أو اختيار من
+  // المكتبة)، أو blob محلياً — التوقيع لا يغيّر المحلي ويعيد null للفشل.
+  const signedEditorMediaUrl = useMediaUrl(editorMediaUrl);
   const stickerDeleteZoneRef = useRef<HTMLDivElement | null>(null);
   const isPointerOverDeleteZone = (point: Point) => {
     const bounds = stickerDeleteZoneRef.current?.getBoundingClientRect();
@@ -280,7 +285,7 @@ export default function StoryCreationEditor({
             {/* الصورة: تُقفل الإيماءة عليها إذا بدأ اللمس منها */}
             {editorIsVideo ? (
               <video
-                src={editorMediaUrl}
+                src={signedEditorMediaUrl || undefined}
                 autoPlay
                 loop
                 playsInline
@@ -297,7 +302,7 @@ export default function StoryCreationEditor({
               />
             ) : (
               <img
-                src={editorMediaUrl}
+                src={signedEditorMediaUrl || undefined}
                 alt=""
                 data-story-media="true"
                 className="h-full w-full object-cover"
@@ -443,7 +448,7 @@ export default function StoryCreationEditor({
             </div>
             <div className="flex items-center gap-1 rounded-full bg-black/45 px-2 py-0.5 text-white/85 backdrop-blur-sm">
               {reshareStory.author?.avatar_url ? (
-                <img src={reshareStory.author.avatar_url} alt="" className="h-4 w-4 rounded-full object-cover" />
+                <SignedImage src={reshareStory.author.avatar_url} alt="" className="h-4 w-4 rounded-full object-cover" />
               ) : (
                 <span className="flex h-4 w-4 items-center justify-center rounded-full bg-white/20 text-[7px] font-bold">
                   {displayName(reshareStory.author).replace('@', '').charAt(0)}
@@ -518,7 +523,7 @@ export default function StoryCreationEditor({
         <div className="fixed inset-x-0 bottom-0 z-[120] pointer-events-none px-4 pt-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
         <StoryEditorPanels
           storyFiltersOpen={storyFiltersOpen}
-          editorMediaUrl={editorMediaUrl}
+          editorMediaUrl={signedEditorMediaUrl || editorMediaUrl || ''}
           editorIsVideo={editorIsVideo}
           storyFilterId={storyFilterId}
           storyFilterAdjustments={storyFilterAdjustments}
@@ -537,7 +542,7 @@ export default function StoryCreationEditor({
             className="pointer-events-auto flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
           >
             {currentProfile?.avatar_url ? (
-              <img src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+              <SignedImage src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
             ) : (
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-white">
                 {displayName(currentProfile).replace('@', '').charAt(0)}
@@ -569,9 +574,9 @@ export default function StoryCreationEditor({
         onUndo={onUndoDrawing}
         onDone={onCloseDrawing}
       />
-      {storyCropOpen && editorMediaUrl && (
+      {storyCropOpen && signedEditorMediaUrl && (
         <StoryCropOverlay
-          mediaUrl={editorMediaUrl}
+          mediaUrl={signedEditorMediaUrl}
           isVideo={editorIsVideo}
           initialZoom={storyMediaZoom}
           initialOffset={storyMediaOffset}

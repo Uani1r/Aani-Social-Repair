@@ -11,6 +11,7 @@ import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
 import { OPEN_SOUND_EVENT, defaultSoundTitle, useExistingSound, type OpenSoundDetail } from '@/lib/sounds';
 import { playInstant, stopInstant } from '@/lib/instantAudio';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { displayName, normalizePostMetadata, type Post, type Profile, type Sound } from '@/lib/types';
 
@@ -167,21 +168,30 @@ export default function SoundDetailSheet() {
     if (previewLoading) return;
     // Optimistic UI عبر المشغّل العالمي الموحّد: Spinner فوراً ثم Pause عند صدور أول نغمة
     setPreviewLoading(true);
-    playInstant(url, {
-      loop: true,
-      onPlaying: () => {
-        setPreviewLoading(false);
-        setPreviewPlaying(true);
-      },
-      onEnded: () => {
+    // الرابط قد يكون ImageKit محمياً: يُوقَّع أولاً، وفشل التوقيع يوقف المحاولة.
+    void (async () => {
+      const signedUrl = await resolveMediaUrl(url);
+      if (!signedUrl) {
         setPreviewLoading(false);
         setPreviewPlaying(false);
-      },
-      onError: () => {
-        setPreviewLoading(false);
-        setPreviewPlaying(false);
-      },
-    });
+        return;
+      }
+      playInstant(signedUrl, {
+        loop: true,
+        onPlaying: () => {
+          setPreviewLoading(false);
+          setPreviewPlaying(true);
+        },
+        onEnded: () => {
+          setPreviewLoading(false);
+          setPreviewPlaying(false);
+        },
+        onError: () => {
+          setPreviewLoading(false);
+          setPreviewPlaying(false);
+        },
+      });
+    })();
   };
 
   const handleUseSound = () => {

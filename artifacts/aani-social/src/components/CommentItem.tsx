@@ -17,6 +17,7 @@ import {
 import type { CommentWithDetails } from '../lib/interactions';
 import CommentText from './CommentText';
 import UserIdentity from './UserIdentity';
+import { SignedImage } from './SignedMedia';
 import { cleanUsername, displayName } from '../lib/types';
 
 interface CommentItemProps {
@@ -197,7 +198,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
       <div className="comment-row relative flex py-2" dir="rtl">
         <div className="comment-avatar-wrap shrink-0">
           {author?.avatar_url ? (
-            <img
+            <SignedImage
               src={author.avatar_url}
               alt={authorName}
               className={`comment-avatar ${ringClasses}`}
@@ -436,7 +437,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               onClick={() => setExpandedImage(comment.image_url || null)}
               className="mt-2 block overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900"
             >
-              <img
+              <SignedImage
                 src={comment.image_url}
                 alt="مرفق التعليق"
                 className="max-h-64 w-full object-cover transition hover:scale-[1.01]"
@@ -521,7 +522,7 @@ export const CommentItem: React.FC<CommentItemProps> = ({
               <X size={16} />
             </button>
 
-            <img
+            <SignedImage
               src={expandedImage}
               alt="صورة مكبرة"
               className="max-h-[80vh] max-w-full rounded-xl object-contain"

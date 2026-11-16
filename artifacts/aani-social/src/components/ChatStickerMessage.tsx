@@ -1,4 +1,5 @@
 import { TwemojiEmoji } from '@/components/TwemojiText';
+import { SignedImage } from '@/components/SignedMedia';
 
 export const CHAT_STICKER_MESSAGE_PREFIX = '[aani-sticker:v1]';
 
@@ -31,7 +32,7 @@ export default function ChatStickerMessage({ payload }: { payload: ChatStickerPa
     <div className="messages-sticker-message" role="img" aria-label={payload.label}>
       {'emoji' in payload
         ? <TwemojiEmoji emoji={payload.emoji} size={116} className="messages-sticker-message-emoji" />
-        : <img src={payload.url} alt="" loading="lazy" draggable={false} />}
+        : <SignedImage src={payload.url} alt="" loading="lazy" draggable={false} />}
     </div>
   );
 }

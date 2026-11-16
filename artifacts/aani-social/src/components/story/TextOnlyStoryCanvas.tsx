@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import { Paintbrush, Star, Trash2, X } from 'lucide-react';
 
 import CloseFriendsSheet from '@/components/CloseFriendsSheet';
+import { SignedImage } from '@/components/SignedMedia';
 import StoryMentionPicker, { type MentionCandidate } from '@/components/StoryMentionPicker';
 import StoryMusicSheet from '@/components/StoryMusicSheet';
 import { StoryDrawingOverlay, StoryEditorPanels, StoryEditorToolbar, StoryTextEditorPanel, type StoryEditorToolKey } from '@/components/StoryEditorTools';
@@ -516,7 +517,7 @@ export default function TextOnlyStoryCanvas({
             className="pointer-events-auto flex h-11 flex-1 items-center justify-center gap-2 rounded-full bg-white px-3 text-[12px] font-bold text-[#121212] shadow-lg transition hover:bg-zinc-100 active:scale-[0.98] disabled:opacity-40"
           >
             {currentProfile?.avatar_url ? (
-              <img src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
+              <SignedImage src={currentProfile.avatar_url} alt="" className="h-6 w-6 shrink-0 rounded-full object-cover" />
             ) : (
               <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-[10px] font-bold text-white">
                 {displayName(currentProfile).replace('@', '').charAt(0)}

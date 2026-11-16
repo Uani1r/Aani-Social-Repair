@@ -20,6 +20,7 @@ import PostOptionsSheet from './PostOptionsSheet';
 import EditPostSheet from './EditPostSheet';
 import PostPrivacySheet from './PostPrivacySheet';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { uploadMedia } from '@/lib/storyUpload';
 import { appendVideoTrimFragment, getImageMediaAspectRatio, getVideoAspectRatio, parseVideoCrop, parseVideoTimeRange, type VideoTimeRange } from '@/lib/videoMedia';
 import { recordShare, usePostInteractions } from '@/lib/interactions';
@@ -165,6 +166,8 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
   const photoAudioSrc = post.audio_url
     ? (photoSoundTrimRange ? appendVideoTrimFragment(post.audio_url, photoSoundTrimRange) : post.audio_url)
     : undefined;
+  // الصوت المرفق رابط ImageKit: يُوقَّع قبل التشغيل عند تفعيل التوقيع.
+  const signedPhotoAudioSrc = useMediaUrl(photoAudioSrc);
   const fullScreenPost = useMemo(() => ({
     ...post,
     media_url: activeVideoUrl,
@@ -649,7 +652,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
           <audio
             ref={photoAudioRef}
-            src={backgroundMediaSuspended ? undefined : photoAudioSrc}
+            src={backgroundMediaSuspended ? undefined : signedPhotoAudioSrc}
             data-aani-background-media=""
             loop
             preload="none"

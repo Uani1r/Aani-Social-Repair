@@ -5,6 +5,7 @@ import { MoreVertical, Trash2, X } from 'lucide-react';
 import Avatar from '@/components/Avatar';
 import DefaultAvatar from '@/components/DefaultAvatar';
 import UserIdentity from '@/components/UserIdentity';
+import { useMediaUrl } from '@/lib/mediaAccess';
 import { cleanUsername, displayName, formatDate } from '@/lib/types';
 
 import type { StoryViewerProps } from './types';
@@ -33,14 +34,16 @@ const MINI_AVATAR_RATIO = 0.42;
  */
 function AvatarFill({ src, alt = '' }: { src: string | null; alt?: string }) {
   const [failed, setFailed] = useState(false);
+  // قد تكون صورة ImageKit محمية: تُوقَّع أولاً، ولا يُطلب الرابط العام أبداً.
+  const resolved = useMediaUrl(src);
 
-  if (!src || failed) {
+  if (!resolved || failed) {
     return <DefaultAvatar className="h-full w-full" />;
   }
 
   return (
     <img
-      src={src}
+      src={resolved}
       alt={alt}
       onError={() => setFailed(true)}
       style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
