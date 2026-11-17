@@ -177,14 +177,24 @@ function fallbackProfile(id: string, fullName: string): Profile {
   return { id, username: '', full_name: fullName, avatar_url: null, bio: '' };
 }
 
-async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]> {
+/**
+ * يجلب إعادات النشر العامة لوجهة ما، ويُميّز بين الفراغ الصحيح والفشل الحقيقي:
+ *   * مصفوفة — وقد تكون فارغة — إذا نجح الاستعلام فعلاً ولا توجد إعادات نشر
+ *     مطابقة أو مرئية. الفراغ هنا نتيجة صحيحة وليس فشلاً.
+ *   * null عند فشل حقيقي: خطأ في استعلام reposts، أو خطأ في استعلام posts بعد
+ *     كل محاولات تقليص الأعمدة، أو استثناء غير متوقع.
+ *
+ * التمييز مهم لمسار الريلز الشخصي: فشل الجلب يجب أن يُعيد المسار الزمني
+ * بالكامل، أما القائمة الفارغة فلا.
+ */
+async function fetchGlobalRepostsStrict(destination: 'feed' | 'reels'): Promise<Post[] | null> {
   try {
     const { data: repostData, error: repostError } = await supabase
       .from('reposts')
       .select('post_id, user_id, created_at')
       .order('created_at', { ascending: false })
       .limit(40);
-    if (repostError) return [];
+    if (repostError) return null;
 
     const repostRows = normalizeRepostRows(repostData).filter(row => row.user_id);
     if (repostRows.length === 0) return [];
@@ -218,7 +228,7 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
       result = await fetchRepostPosts('*');
     }
     const { data: postData, error: postsError } = result;
-    if (postsError) return [];
+    if (postsError) return null;
 
     const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
       post.visibility === 'public'
@@ -254,8 +264,16 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
       }];
     });
   } catch {
-    return [];
+    return null;
   }
+}
+
+/**
+ * الغلاف المستخدم في المسار الزمني (الرئيسية وتبويب الريلز): يحافظ على السلوك
+ * الحالي بلا أي تغيير — الفشل يُعامل كقائمة فارغة فلا تُكسر الصفحة.
+ */
+async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]> {
+  return (await fetchGlobalRepostsStrict(destination)) ?? [];
 }
 
 export async function hydratePostInteractions(
@@ -848,7 +866,15 @@ async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[]
     // ترتيب التوصيات. الـRPC يُعيد إعادات نشر المستخدم نفسه فقط (قيد RLS على
     // reposts)، وهذا المصدر يُكمل ريلز أعاد نشرها مستخدمون آخرون كما هي في
     // المسار الزمني — بنفس الدالة ونفس شروط الظهور والصلاحيات.
-    const repostedPosts = await fetchGlobalReposts('reels');
+    //
+    // تُستخدم النسخة الصارمة هنا: null يعني فشلاً حقيقياً في الجلب، فلا تُعرض
+    // قائمة شخصية ناقصة الإعادات — بل يعمل المسار الزمني بالكامل. أما []
+    // فتعني نجاح الاستعلام مع عدم وجود إعادات نشر، وهي نتيجة صحيحة.
+    const repostedPosts = await fetchGlobalRepostsStrict('reels');
+    if (repostedPosts === null) {
+      console.warn('[reels] تعذر جلب إعادات النشر العامة — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
     // منع التكرار من أكثر من مصدر: منشور ظهر في الترتيب الشخصي أو أُضيف قبله
     // من إعادة نشر أخرى يبقى مرة واحدة فقط، بالتمثيل الذي وصل أولاً (الترتيب
     // الشخصي أولاً ثم إعادات النشر بترتيبها الزمني).
