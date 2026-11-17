@@ -427,7 +427,8 @@ begin
   -- معه؟» بلا نافذة زمنية، منفصلة تماماً عن interaction_times ذات الـ72 ساعة.
   -- تُستخدم فقط لمنع نقل الاهتمام الإيجابي؛ بعد انتهاء الـCooldown يعود المنشور
   -- إلى الترتيب طبيعياً لكنه لا يحصل على نقاط نقل اهتمام إيجابية.
-  -- كل الفروع مقيدة بـ user_id = v_viewer وتحت RLS، ومع restrict على المرشحين.
+  -- كل الفروع مقيدة بـ user_id = v_viewer وتحت RLS، ومع restrict على المرشحين،
+  -- وتشمل التغذية الراجعة الصريحة من post_feedback (interested وnot_interested).
   prior_interactions as (
     select distinct activity.post_id
     from (
@@ -456,6 +457,13 @@ begin
       from public.reposts as interaction
       where interaction.user_id = v_viewer
         and interaction.post_id in (select candidate.post_id from candidates as candidate)
+      -- التغذية الراجعة الصريحة: أي سجل (interested أو not_interested) يُعدّ
+      -- تفاعلاً سابقاً مع المنشور، ويُعامل بالمثل هنا.
+      union
+      select feedback.post_id
+      from public.post_feedback as feedback
+      where feedback.user_id = v_viewer
+        and feedback.post_id in (select candidate.post_id from candidates as candidate)
     ) as activity
   ),
   -- ---------------------------------------------------------------
