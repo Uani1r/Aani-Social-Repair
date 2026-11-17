@@ -177,14 +177,24 @@ function fallbackProfile(id: string, fullName: string): Profile {
   return { id, username: '', full_name: fullName, avatar_url: null, bio: '' };
 }
 
-async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]> {
+/**
+ * يجلب إعادات النشر العامة لوجهة ما، ويُميّز بين الفراغ الصحيح والفشل الحقيقي:
+ *   * مصفوفة — وقد تكون فارغة — إذا نجح الاستعلام فعلاً ولا توجد إعادات نشر
+ *     مطابقة أو مرئية. الفراغ هنا نتيجة صحيحة وليس فشلاً.
+ *   * null عند فشل حقيقي: خطأ في استعلام reposts، أو خطأ في استعلام posts بعد
+ *     كل محاولات تقليص الأعمدة، أو استثناء غير متوقع.
+ *
+ * التمييز مهم لمسار الريلز الشخصي: فشل الجلب يجب أن يُعيد المسار الزمني
+ * بالكامل، أما القائمة الفارغة فلا.
+ */
+async function fetchGlobalRepostsStrict(destination: 'feed' | 'reels'): Promise<Post[] | null> {
   try {
     const { data: repostData, error: repostError } = await supabase
       .from('reposts')
       .select('post_id, user_id, created_at')
       .order('created_at', { ascending: false })
       .limit(40);
-    if (repostError) return [];
+    if (repostError) return null;
 
     const repostRows = normalizeRepostRows(repostData).filter(row => row.user_id);
     if (repostRows.length === 0) return [];
@@ -218,7 +228,7 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
       result = await fetchRepostPosts('*');
     }
     const { data: postData, error: postsError } = result;
-    if (postsError) return [];
+    if (postsError) return null;
 
     const originalPosts = (await normalizePostRowsWithVisibility(postData)).filter(post =>
       post.visibility === 'public'
@@ -254,8 +264,16 @@ async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]
       }];
     });
   } catch {
-    return [];
+    return null;
   }
+}
+
+/**
+ * الغلاف المستخدم في المسار الزمني (الرئيسية وتبويب الريلز): يحافظ على السلوك
+ * الحالي بلا أي تغيير — الفشل يُعامل كقائمة فارغة فلا تُكسر الصفحة.
+ */
+async function fetchGlobalReposts(destination: 'feed' | 'reels'): Promise<Post[]> {
+  return (await fetchGlobalRepostsStrict(destination)) ?? [];
 }
 
 export async function hydratePostInteractions(
@@ -340,10 +358,13 @@ function normalizePersonalizedFeedRows(value: unknown): PersonalizedFeedRow[] {
   return [...byPostId.values()].sort((first, second) => first.rank_position - second.rank_position);
 }
 
-/** يرفض الوعد بعد المهلة، ليبقى المسار الشخصي محكوماً بزمن. */
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+/**
+ * يرفض الوعد بعد المهلة، ليبقى المسار الشخصي محكوماً بزمن.
+ * `label` هو نص خطأ المهلة فقط (لا سلوك)، فبقي الافتراضي كما هو للرئيسية.
+ */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label = 'personalized feed timeout'): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('personalized feed timeout')), timeoutMs);
+    const timer = window.setTimeout(() => reject(new Error(label)), timeoutMs);
     promise.then(
       value => { window.clearTimeout(timer); resolve(value); },
       error => { window.clearTimeout(timer); reject(error); },
@@ -647,6 +668,231 @@ async function fetchPersonalizedFeedPosts(currentUserId: string): Promise<Post[]
   }
 }
 
+// =====================================================================
+// المرحلة 5-C: ربط محرك ترتيب الريلز المستقل
+// =====================================================================
+// get_personalized_reels على Supabase تُعيد ترتيباً فقط (post_id,
+// reposter_id, reposted_at, rank_position) — نفس شكل مخرجات
+// get_personalized_feed. صفوف المنشورات تبقى من جدول posts عبر الآليات
+// الحالية نفسها، فلا شكل بيانات جديد ولا إعادة بناء يدوية تفقد حقول الوسائط
+// أو الصوت أو روابط ImageKit.
+//
+// الدالة **لم تُطبَّق على الإنتاج بعد**، لذلك أي مخرج فاشل هنا يُعيد null
+// ويعمل مسار الريلز الزمني الحالي كما هو تماماً — بلا دمج أي نتيجة جزئية.
+// =====================================================================
+
+/** أقصى عدد ريلز يطلبه الـRPC، وأقصى مرشحين قبل الترتيب (حدود الدالة). */
+const PERSONALIZED_REELS_LIMIT = 40;
+const PERSONALIZED_REELS_CANDIDATES = 200;
+/** مهلة قصوى لاستدعاء الـRPC قبل الانتقال إلى المسار الزمني (ms). */
+const PERSONALIZED_REELS_TIMEOUT_MS = 6000;
+
+/** صف واحد من نتيجة get_personalized_reels بعد التحقق. */
+type PersonalizedReelRow = {
+  post_id: string;
+  reposter_id: string | null;
+  reposted_at: string | null;
+  rank_position: number;
+};
+
+/**
+ * يتحقق من صفوف الـRPC وفق عقد الدالة: post_id نص غير فارغ، rank_position رقم
+ * منتهٍ، reposter_id و reposted_at نص أو null حصراً.
+ *
+ * أي مخالفة — نتيجة ليست مصفوفة، أو صف واحد غير صالح — تُبطل النتيجة كاملة
+ * وتُعيد null. لا يُسقَط صف ولا يُحوَّل نوع غير مقبول إلى null، لأن التسامح
+ * هنا يجعل نتيجة RPC ناقصة تمرّ كأنها صحيحة. المستدعي يعيد null بدوره فيعمل
+ * المسار الزمني الحالي بالكامل.
+ */
+function normalizePersonalizedReelRows(value: unknown): PersonalizedReelRow[] | null {
+  if (!Array.isArray(value)) return null;
+
+  const byPostId = new Map<string, PersonalizedReelRow>();
+  for (const item of value as unknown[]) {
+    if (!isRecord(item)) return null;
+    const postId = item.post_id;
+    const rank = item.rank_position;
+    if (typeof postId !== 'string' || !postId) return null;
+    if (typeof rank !== 'number' || !Number.isFinite(rank)) return null;
+    const reposterId = item.reposter_id;
+    const repostedAt = item.reposted_at;
+    if (reposterId !== null && typeof reposterId !== 'string') return null;
+    if (repostedAt !== null && typeof repostedAt !== 'string') return null;
+    const row: PersonalizedReelRow = {
+      post_id: postId,
+      reposter_id: reposterId,
+      reposted_at: repostedAt,
+      rank_position: rank,
+    };
+    // عقد الدالة يضمن صفاً واحداً لكل post_id (تدمج المصادر الثلاثة ويُختار
+    // صف واحد قبل الحصص والترتيب)، فهذا الاحتياط لا يغيّر نتيجة مطابقة للعقد.
+    const existing = byPostId.get(postId);
+    if (!existing || row.rank_position < existing.rank_position) byPostId.set(postId, row);
+  }
+
+  return [...byPostId.values()].sort((first, second) => first.rank_position - second.rank_position);
+}
+
+/**
+ * هل يعني الخطأ أن الدالة غير موجودة على القاعدة (ترحيلها لم يُطبَّق بعد)؟
+ * PGRST202 من PostgREST، و42883 من PostgreSQL.
+ */
+function isMissingRpcFunctionError(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const code = typeof value.code === 'string' ? value.code : '';
+  const message = typeof value.message === 'string' ? value.message : '';
+  return code === 'PGRST202'
+    || code === '42883'
+    || /could not find the function|function .* does not exist/i.test(message);
+}
+
+/**
+ * يمنع إعادة محاولة استدعاء دالة غير موجودة في كل تحديث: كل محاولة فاشلة
+ * تُبطئ تحديث الريلز بلا فائدة. يُعاد ضبطه عند إعادة تحميل الصفحة، فبعد
+ * تطبيق الترحيل يعمل المسار الشخصي من أول تحديث.
+ */
+let personalizedReelsUnavailable = false;
+
+/**
+ * المسار الشخصي للريلز. يُعيد Post[] جاهزة بترتيب rank_position عند النجاح،
+ * أو null عند أي فشل — RPC أو مهلة أو نتيجة ليست مصفوفة أو صف واحد مخالف
+ * للعقد أو نتيجة فارغة أو جلب منشورات فاشل أو مطابقة ناقصة أو فشل تجهيز —
+ * ليستخدم المستدعي جلب الريلز الزمني الحالي بالكامل.
+ *
+ * كل صف يمرّ عبر الآليات القائمة: normalizePostRowsWithVisibility (ومعها
+ * resolvePostMediaUrls)، fetchPersonalizedPostRows، profileMap، ثم
+ * hydratePostInteractions — فلا إعادة بناء يدوية لصفوف المنشورات.
+ *
+ * إعادات النشر: الـRPC يُعيد إعادات نشر المستخدم نفسه داخل ترتيبه، ثم تُضاف
+ * إعادات نشر المستخدمين الآخرين من fetchGlobalReposts('reels') كما هي في
+ * المسار الزمني — بلا إسقاط، وبلا تكرار، وبلا خلط لترتيب التوصيات.
+ */
+async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[] | null> {
+  if (personalizedReelsUnavailable || !supabaseConfigured) return null;
+
+  try {
+    const rpcResult = await withTimeout(
+      Promise.resolve(supabase.rpc('get_personalized_reels', {
+        p_limit: PERSONALIZED_REELS_LIMIT,
+        p_candidate_limit: PERSONALIZED_REELS_CANDIDATES,
+      })),
+      PERSONALIZED_REELS_TIMEOUT_MS,
+      'personalized reels timeout',
+    );
+
+    if (rpcResult.error) {
+      if (isMissingRpcFunctionError(rpcResult.error)) personalizedReelsUnavailable = true;
+      console.warn('[reels] تعذر استدعاء get_personalized_reels — الانتقال إلى الترتيب الزمني', {
+        code: rpcResult.error.code,
+        message: rpcResult.error.message,
+      });
+      return null;
+    }
+
+    const ranked = normalizePersonalizedReelRows(rpcResult.data);
+    // نتيجة ليست مصفوفة، أو تحتوي صفاً واحداً مخالفاً للعقد: تُرفض كاملة —
+    // لا تُسقَط صفوف ولا تُعرض نتيجة شخصية جزئية.
+    if (ranked === null) {
+      console.warn('[reels] نتيجة RPC غير صالحة أو لا تطابق العقد — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+    // مصفوفة بلا صفوف: فشل أيضاً، والمسار الزمني هو الإجراء الاحتياطي.
+    if (ranked.length === 0) {
+      console.info('[reels] نتيجة ترتيب الريلز فارغة — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+
+    // نفس دالة جلب منشورات الرئيسية: أعمدة صريحة تُقلَّص عند عمود مفقود ثم
+    // (*)، وسقفها 40 صفاً = سقف طلب الريلز هنا.
+    const postData = await fetchPersonalizedPostRows(ranked.map(row => row.post_id));
+    if (postData === null) {
+      console.warn('[reels] تعذر جلب منشورات ترتيب الريلز — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+
+    // نفس تعريف الريل في المسار الزمني: أي منشور وُجّه إلى الريلز أو أي فيديو
+    // (type = 'reel')، فتبقى ريلز الصور (type = 'photo') مدعومة كما هي.
+    const rawPosts = (await normalizePostRowsWithVisibility(postData))
+      .filter(post => post.destination === 'reels' || post.type === 'reel');
+    const postsById = new Map(rawPosts.map(post => [post.id, post] as const));
+    if (postsById.size === 0) {
+      console.warn('[reels] لا صفوف منشورات قابلة للاستخدام في ترتيب الريلز — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+
+    // ملفات أصحاب المنشورات والمعيدين للنشر معاً، بنفس استعلام profiles.
+    const reposterIds = ranked
+      .map(row => row.reposter_id)
+      .filter((id): id is string => typeof id === 'string' && Boolean(id));
+    const authorIds = [...new Set(rawPosts.map(post => post.user_id))];
+    const profileIds = [...new Set([...authorIds, ...reposterIds])];
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('id, username, full_name, display_name, avatar_url, gender')
+      .in('id', profileIds);
+    const profMap = profileMap(profileData);
+
+    // الترتيب من rank_position وحده: نمرّ على الصفوف المرتّبة ونأخذ كل منشور
+    // مرة واحدة، ولا نُضيف أي منشور خارج قائمة الـRPC.
+    const ordered: Post[] = [];
+    for (const row of ranked) {
+      const post = postsById.get(row.post_id);
+      if (!post) continue;
+      ordered.push({
+        ...post,
+        author: profMap.get(post.user_id) || fallbackProfile(post.user_id, ''),
+        reposter_id: row.reposter_id,
+        reposted_at: row.reposted_at,
+        repost_attribution: row.reposter_id
+          ? (profMap.get(row.reposter_id) || fallbackProfile(row.reposter_id, ''))
+          : null,
+        likes: [],
+        comments: [],
+      });
+    }
+
+    // المطابقة يجب أن تكون كاملة: أي نقص (منشور محذوف أو محجوب أو غير مقروء
+    // بسبب RLS، أو مستبعد لأن وجهته ليست الريلز) يعني نتيجة جزئية، فلا تُعرض
+    // ولا تُدمج مع المسار الزمني: null يعيد usePosts إلى الجلب الزمني كاملاً.
+    if (ordered.length !== ranked.length) {
+      console.warn('[reels] ترتيب الريلز غير مكتمل — الانتقال إلى الترتيب الزمني', {
+        requested: ranked.length,
+        matched: ordered.length,
+      });
+      return null;
+    }
+
+    // إعادات النشر العامة: تُضاف بعد الترتيب الشخصي، فلا يُسقطها ولا يخلط
+    // ترتيب التوصيات. الـRPC يُعيد إعادات نشر المستخدم نفسه فقط (قيد RLS على
+    // reposts)، وهذا المصدر يُكمل ريلز أعاد نشرها مستخدمون آخرون كما هي في
+    // المسار الزمني — بنفس الدالة ونفس شروط الظهور والصلاحيات.
+    //
+    // تُستخدم النسخة الصارمة هنا: null يعني فشلاً حقيقياً في الجلب، فلا تُعرض
+    // قائمة شخصية ناقصة الإعادات — بل يعمل المسار الزمني بالكامل. أما []
+    // فتعني نجاح الاستعلام مع عدم وجود إعادات نشر، وهي نتيجة صحيحة.
+    const repostedPosts = await fetchGlobalRepostsStrict('reels');
+    if (repostedPosts === null) {
+      console.warn('[reels] تعذر جلب إعادات النشر العامة — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+    // منع التكرار من أكثر من مصدر: منشور ظهر في الترتيب الشخصي أو أُضيف قبله
+    // من إعادة نشر أخرى يبقى مرة واحدة فقط، بالتمثيل الذي وصل أولاً (الترتيب
+    // الشخصي أولاً ثم إعادات النشر بترتيبها الزمني).
+    const seenIds = new Set(ordered.map(post => post.id));
+    const extraReposted: Post[] = [];
+    for (const reposted of repostedPosts) {
+      if (seenIds.has(reposted.id)) continue;
+      seenIds.add(reposted.id);
+      extraReposted.push(reposted);
+    }
+
+    return await hydratePostInteractions([...ordered, ...extraReposted], currentUserId);
+  } catch (caughtError) {
+    console.warn('[reels] فشل مسار ترتيب الريلز — الانتقال إلى الترتيب الزمني', caughtError);
+    return null;
+  }
+}
+
 export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, currentUserId = '') {
   const cacheKey = `${query}:${targetUserId || ''}`;
   const hadCachedPosts = postsCache.has(cacheKey);
@@ -888,6 +1134,15 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
           setPosts([]);
         }
       } else if (query === 'reel') {
+        // 5-C: نحاول أولاً ترتيب get_personalized_reels. أي فشل أو مهلة أو
+        // نتيجة فارغة/غير صالحة أو مطابقة ناقصة يُعيد null، فينفّذ المسار
+        // الزمني الحالي كما هو تماماً — بلا دمج أي نتيجة جزئية معه.
+        const personalizedReels = await fetchPersonalizedReelPosts(currentUserId);
+        if (personalizedReels) {
+          setPosts(personalizedReels);
+          return;
+        }
+
         const { data: postData, error: postsErr } = await fetchPostRows('reel');
 
         if (postsErr) {
