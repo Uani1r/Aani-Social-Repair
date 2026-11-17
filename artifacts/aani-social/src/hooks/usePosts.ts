@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/interactions';
 import { handleAppError } from '@/lib/appErrors';
@@ -12,6 +12,7 @@ import { registerContentRefreshRequest } from '@/lib/contentRefresh';
 // الشاشة من جديد لكنها تُهيَّأ فوراً من هذه الذاكرة بلا شاشة
 // Skeleton، مع تحديث صامت في الخلفية. الشاشة لا تُصفَّر إلا عند
 // السحب للتحديث القسري (Pull to Refresh) أو عند النشر/الريبوست.
+// المفتاح يشمل المستخدم الحالي، فلا تتشارك الحسابات مدخلات الذاكرة.
 const postsCache = new Map<string, Post[]>();
 
 interface RepostRow {
@@ -734,30 +735,13 @@ function normalizePersonalizedReelRows(value: unknown): PersonalizedReelRow[] | 
 }
 
 /**
- * هل يعني الخطأ أن الدالة غير موجودة على القاعدة (ترحيلها لم يُطبَّق بعد)؟
- * PGRST202 من PostgREST، و42883 من PostgreSQL.
- */
-function isMissingRpcFunctionError(value: unknown): boolean {
-  if (!isRecord(value)) return false;
-  const code = typeof value.code === 'string' ? value.code : '';
-  const message = typeof value.message === 'string' ? value.message : '';
-  return code === 'PGRST202'
-    || code === '42883'
-    || /could not find the function|function .* does not exist/i.test(message);
-}
-
-/**
- * يمنع إعادة محاولة استدعاء دالة غير موجودة في كل تحديث: كل محاولة فاشلة
- * تُبطئ تحديث الريلز بلا فائدة. يُعاد ضبطه عند إعادة تحميل الصفحة، فبعد
- * تطبيق الترحيل يعمل المسار الشخصي من أول تحديث.
- */
-let personalizedReelsUnavailable = false;
-
-/**
  * المسار الشخصي للريلز. يُعيد Post[] جاهزة بترتيب rank_position عند النجاح،
  * أو null عند أي فشل — RPC أو مهلة أو نتيجة ليست مصفوفة أو صف واحد مخالف
  * للعقد أو نتيجة فارغة أو جلب منشورات فاشل أو مطابقة ناقصة أو فشل تجهيز —
  * ليستخدم المستدعي جلب الريلز الزمني الحالي بالكامل.
+ *
+ * كل تحديث يعيد المحاولة: لا يوجد تعطيل دائم للمحرك بعد فشل، والفشل يعني
+ * الترتيب الزمني لهذا التحديث فقط.
  *
  * كل صف يمرّ عبر الآليات القائمة: normalizePostRowsWithVisibility (ومعها
  * resolvePostMediaUrls)، fetchPersonalizedPostRows، profileMap، ثم
@@ -768,7 +752,7 @@ let personalizedReelsUnavailable = false;
  * المسار الزمني — بلا إسقاط، وبلا تكرار، وبلا خلط لترتيب التوصيات.
  */
 async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[] | null> {
-  if (personalizedReelsUnavailable || !supabaseConfigured) return null;
+  if (!supabaseConfigured) return null;
 
   try {
     const rpcResult = await withTimeout(
@@ -781,7 +765,8 @@ async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[]
     );
 
     if (rpcResult.error) {
-      if (isMissingRpcFunctionError(rpcResult.error)) personalizedReelsUnavailable = true;
+      // لا تعطيل دائم للمحرك: كل تحديث يعيد المحاولة، وفشل واحد يعني
+      // الترتيب الزمني لهذا التحديث فقط.
       console.warn('[reels] تعذر استدعاء get_personalized_reels — الانتقال إلى الترتيب الزمني', {
         code: rpcResult.error.code,
         message: rpcResult.error.message,
@@ -894,7 +879,9 @@ async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[]
 }
 
 export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: string, currentUserId = '') {
-  const cacheKey = `${query}:${targetUserId || ''}`;
+  // مفتاح الذاكرة يشمل المستخدم الحالي: لا تتشارك الحسابات ذاكرة الريلز أو
+  // المنشورات، فلا يظهر محتوى حساب لحساب آخر عند تبديل الجلسة.
+  const cacheKey = `${query}:${targetUserId || ''}:${currentUserId}`;
   const hadCachedPosts = postsCache.has(cacheKey);
   const [posts, setPostsState] = useState<Post[]>(() => postsCache.get(cacheKey) || []);
   const [loading, setLoading] = useState(!hadCachedPosts);
@@ -902,7 +889,6 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   // خطأ قراءة سجلات إعادة النشر (RLS/جدول مفقود) — يُعرض في تبويب إعادة النشر
   // بدل إظهار تبويب فارغ يوحي بعدم وجود إعادة نشر.
   const [repostsError, setRepostsError] = useState('');
-  const hadCachedPostsRef = useRef(hadCachedPosts);
 
   // كل نجاح جلب يُخزَّن في الذاكرة المؤقتة ليُعاد استخدامه عند
   // العودة إلى الشاشة بدون شاشة تحميل.
@@ -1218,9 +1204,15 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   }, [query, targetUserId, currentUserId, setPosts]);
 
   useEffect(() => {
+    // ذاكرة المفتاح الحالي تحدد البداية وقرار التحديث الصامت: عند تغيّر الحساب
+    // يتغيّر المفتاح، فلا تُعرض قائمة الحساب السابق أثناء انتظار الجلب — تُعرض
+    // ذاكرة الحساب الجديد إن وُجدت، وإلا حالة التحميل (Skeleton).
+    const cachedPosts = postsCache.get(cacheKey);
+    setPostsState(cachedPosts ?? []);
+    setLoading(!cachedPosts);
     // عند وجود محتوى محفوظ: تحديث صامت في الخلفية بلا شاشة تحميل؛
     // وإلا جلب عادي أول مرة يظهر فيه السكلتون.
-    void refresh(hadCachedPostsRef.current);
+    void refresh(cachedPosts !== undefined);
     let repostRefreshTimer: number | null = null;
     // تحديث فوري بعد نجاح النشر: جلب صامت يحدّث القائمة والذاكرة المؤقتة
     // دون وميض Skeleton، فيظهر الريل الجديد في تبويب الريلز مباشرة.
@@ -1245,7 +1237,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       window.removeEventListener('aani:repost-changed', onRepostChanged);
       window.removeEventListener('aani:content-refresh', onContentRefresh);
     };
-  }, [refresh]);
+  }, [refresh, cacheKey]);
 
   const interactionVersion = useInteractionsVersion();
   const currentPosts = useMemo(
