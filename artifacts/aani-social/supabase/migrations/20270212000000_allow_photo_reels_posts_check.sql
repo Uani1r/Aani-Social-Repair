@@ -66,53 +66,66 @@ begin
 end;
 $$;
 
--- 5) التحقق من التعريف الفعلي للقيد الجديد ومن أنه مُفعَّل على الصفوف الموجودة
+-- 5) التحقق من المعنى الفعلي للقيد، لا من نصّه
 --
--- pg_get_constraintdef يعيد صيغة `destination = ANY (ARRAY['feed', ...])` بدل
--- `in (...)`, لذلك يُطبَّع النص (حذف المسافات والأقواس وتحويلات النوع ::text
--- و::text[]) قبل مطابقته على القطع المطلوبة. أي اختلاف يتوقف عنده الترحيل
--- وتُلغى كل خطوات هذه المعاملة، فلا تبقى قاعدة نصف معدَّلة.
+-- pg_get_constraintdef/pg_get_expr يعيدان صياغة PostgreSQL نفسها: يحوّلان
+-- `in (...)` إلى `= ANY (ARRAY[...])`، ويضيفان تحويلات نوع وأقواساً، وقد
+-- يعيدان ترتيب الشروط. أي مطابقة نصية تتأثر بذلك فتفشل بلا سبب حقيقي (وهو ما
+-- حدث في المحاولة السابقة). هنا يُؤخذ تعبير القيد المخزَّن نفسه (pg_get_expr)
+-- ويُقيَّم على مصفوفة حالات فعلية (destination, type) لكل منها نتيجة متوقعة،
+-- وتُقارن النتيجة الفعلية بالمتوقعة. لا يعتمد هذا الفحص على أي صياغة نصية.
 do $$
 declare
-  constraint_def text;
+  check_expr text;
   constraint_valid boolean;
+  mismatches integer;
 begin
-  select pg_get_constraintdef(c.oid), c.convalidated
-    into constraint_def, constraint_valid
+  select pg_get_expr(c.conbin, c.conrelid), c.convalidated
+    into check_expr, constraint_valid
   from pg_constraint c
   where c.conrelid = 'public.posts'::regclass
     and c.conname = 'posts_destination_check'
     and c.contype = 'c';
 
-  if constraint_def is null then
+  if check_expr is null then
     raise exception 'posts_destination_check غير موجود بعد الإنشاء.';
   end if;
 
+  -- القيد يجب أن يكون مُفعَّلاً على الصفوف الموجودة، لا NOT VALID
   if not constraint_valid then
     raise exception 'posts_destination_check غير مُفعَّل على الصفوف الموجودة (NOT VALID).';
   end if;
 
-  constraint_def := lower(constraint_def);
-  constraint_def := replace(constraint_def, ' ', '');
-  constraint_def := replace(constraint_def, '(', '');
-  constraint_def := replace(constraint_def, ')', '');
-  -- حذف أي تحويل نوع: ::text و ::text[] و ::character varying
-  constraint_def := regexp_replace(constraint_def, '::[a-z_ ]+(\[\])?', '', 'g');
-  constraint_def := replace(constraint_def, 'public.', '');
+  -- الحالات التي تحكم سلوك الريلز:
+  --   * feed: أي type مسموح (بما فيها text و video).
+  --   * reels: reel و photo فقط.
+  --   * أي وجهة خارج feed و reels: مرفوضة.
+  begin
+    execute format($q$
+      select count(*)
+      from (
+        values
+          ('feed',  'photo', true),
+          ('feed',  'reel',  true),
+          ('feed',  'text',  true),
+          ('feed',  'video', true),
+          ('reels', 'reel',  true),
+          ('reels', 'photo', true),
+          ('reels', 'text',  false),
+          ('reels', 'video', false),
+          ('other', 'photo', false),
+          ('other', 'reel',  false)
+      ) as cases (destination, type, expected)
+      where coalesce((%s), false) <> cases.expected
+    $q$, check_expr) into mismatches;
+  exception
+    when others then
+      raise exception 'تعذّر تقييم تعبير posts_destination_check: % (التعريف: %)', sqlerrm, check_expr;
+  end;
 
-  -- destination in ('feed', 'reels')
-  if position('destination=anyarray[''feed'',''reels'']' in constraint_def) = 0 then
-    raise exception 'posts_destination_check لا يحصر destination في feed و reels. التعريف: %', constraint_def;
-  end if;
-
-  -- destination <> 'reels' or ...
-  if position('destination<>''reels''' in constraint_def) = 0 then
-    raise exception 'posts_destination_check لا يربط شرط type بالوجهة reels. التعريف: %', constraint_def;
-  end if;
-
-  -- ... or type in ('reel', 'photo')
-  if position('type=anyarray[''reel'',''photo'']' in constraint_def) = 0 then
-    raise exception 'posts_destination_check لا يسمح بـ type = photo داخل الريلز. التعريف: %', constraint_def;
+  if mismatches > 0 then
+    raise exception 'posts_destination_check لا يطابق المعنى المطلوب: % حالة مخالفة من أصل 10 (التعريف: %)',
+      mismatches, check_expr;
   end if;
 end;
 $$;
