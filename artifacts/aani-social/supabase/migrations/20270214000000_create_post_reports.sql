@@ -446,7 +446,8 @@ $$;
 --    The checks evaluate the expressions PostgreSQL stored (pg_get_expr) instead
 --    of comparing constraint or policy text, and are skipped with a NOTICE when
 --    the environment cannot simulate auth.uid() (auth.uid() not driven by
---    request.jwt.claims) or public.posts has no rows.
+--    request.jwt.claims) or when public.posts holds no post owned by a user
+--    other than the simulated reporter.
 DO $$
 DECLARE
   reason_expr text;
@@ -458,10 +459,26 @@ DECLARE
   v_author uuid;
   v_other uuid := '00000000-0000-0000-0000-000000000001'::uuid;
   v_third uuid := '00000000-0000-0000-0000-000000000002'::uuid;
-  v_missing uuid := '00000000-0000-0000-0000-0000000000ff'::uuid;
+  v_missing uuid;
   v_claims text := current_setting('request.jwt.claims', true);
   v_sub text := current_setting('request.jwt.claim.sub', true);
 BEGIN
+  -- A post id that is guaranteed absent from public.posts, generated at run
+  -- time instead of hardcoded, so the "non-existent post" test can never
+  -- coincide with a real row. The bounded loop ends as soon as an absent id is
+  -- found; the following block fails loudly if none was found within the bound.
+  v_missing := gen_random_uuid();
+
+  FOR i IN 1..10 LOOP
+    EXIT WHEN NOT EXISTS (SELECT 1 FROM public.posts AS post WHERE post.id = v_missing);
+    v_missing := gen_random_uuid();
+  END LOOP;
+
+  IF EXISTS (SELECT 1 FROM public.posts AS post WHERE post.id = v_missing) THEN
+    RAISE EXCEPTION
+      'Could not generate a post id absent from public.posts after 10 attempts';
+  END IF;
+
   -- (a) The reason CHECK must accept 1..1000 characters after btrim and reject
   --     everything else, evaluated on literal values.
   SELECT pg_get_expr(c.conbin, c.conrelid) INTO reason_expr
@@ -526,15 +543,19 @@ BEGIN
         'SELECT policy does not restrict reads to reporter_id = auth.uid(): %', results;
     END IF;
 
+    -- The post used for the INSERT tests must belong to someone other than the
+    -- simulated reporter, otherwise the "own post is rejected" case would be
+    -- indistinguishable from the "another user's post is accepted" case.
     SELECT post.id, post.user_id INTO v_post, v_author
     FROM public.posts AS post
     WHERE post.user_id IS NOT NULL
+      AND post.user_id <> v_other
     ORDER BY post.id
     LIMIT 1;
 
     IF v_post IS NULL THEN
       RAISE NOTICE
-        'post_reports INSERT policy tests skipped: public.posts has no rows';
+        'post_reports INSERT policy tests skipped: public.posts has no post owned by a user other than the simulated reporter';
     ELSE
       -- Another user's existing post is accepted.
       EXECUTE format($q$
