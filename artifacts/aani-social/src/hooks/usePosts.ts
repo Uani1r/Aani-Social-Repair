@@ -678,30 +678,39 @@ type PersonalizedReelRow = {
 };
 
 /**
- * يتحقق من صفوف الـRPC: post_id نص غير فارغ، rank_position رقم منتهٍ،
- * reposter_id و reposted_at إمّا null أو نص. يمنع تكرار post_id (يُبقي أفضل
- * ترتيب) ويُعيد الصفوف مرتّبة تصاعدياً حسب rank_position.
+ * يتحقق من صفوف الـRPC وفق عقد الدالة: post_id نص غير فارغ، rank_position رقم
+ * منتهٍ، reposter_id و reposted_at نص أو null حصراً.
+ *
+ * أي مخالفة — نتيجة ليست مصفوفة، أو صف واحد غير صالح — تُبطل النتيجة كاملة
+ * وتُعيد null. لا يُسقَط صف ولا يُحوَّل نوع غير مقبول إلى null، لأن التسامح
+ * هنا يجعل نتيجة RPC ناقصة تمرّ كأنها صحيحة. المستدعي يعيد null بدوره فيعمل
+ * المسار الزمني الحالي بالكامل.
  */
-function normalizePersonalizedReelRows(value: unknown): PersonalizedReelRow[] {
-  if (!Array.isArray(value)) return [];
+function normalizePersonalizedReelRows(value: unknown): PersonalizedReelRow[] | null {
+  if (!Array.isArray(value)) return null;
 
   const byPostId = new Map<string, PersonalizedReelRow>();
-  (value as unknown[]).forEach((item: unknown) => {
-    if (!isRecord(item)) return;
+  for (const item of value as unknown[]) {
+    if (!isRecord(item)) return null;
     const postId = item.post_id;
     const rank = item.rank_position;
-    if (typeof postId !== 'string' || !postId) return;
-    if (typeof rank !== 'number' || !Number.isFinite(rank)) return;
+    if (typeof postId !== 'string' || !postId) return null;
+    if (typeof rank !== 'number' || !Number.isFinite(rank)) return null;
+    const reposterId = item.reposter_id;
+    const repostedAt = item.reposted_at;
+    if (reposterId !== null && typeof reposterId !== 'string') return null;
+    if (repostedAt !== null && typeof repostedAt !== 'string') return null;
     const row: PersonalizedReelRow = {
       post_id: postId,
-      reposter_id: typeof item.reposter_id === 'string' && item.reposter_id ? item.reposter_id : null,
-      reposted_at: typeof item.reposted_at === 'string' && item.reposted_at ? item.reposted_at : null,
+      reposter_id: reposterId,
+      reposted_at: repostedAt,
       rank_position: rank,
     };
-    // عند تكرار post_id نُبقي أفضل ترتيب (الأصغر) — لا صفوف مكررة في النتيجة.
+    // عقد الدالة يضمن صفاً واحداً لكل post_id (تدمج المصادر الثلاثة ويُختار
+    // صف واحد قبل الحصص والترتيب)، فهذا الاحتياط لا يغيّر نتيجة مطابقة للعقد.
     const existing = byPostId.get(postId);
     if (!existing || row.rank_position < existing.rank_position) byPostId.set(postId, row);
-  });
+  }
 
   return [...byPostId.values()].sort((first, second) => first.rank_position - second.rank_position);
 }
@@ -728,9 +737,9 @@ let personalizedReelsUnavailable = false;
 
 /**
  * المسار الشخصي للريلز. يُعيد Post[] جاهزة بترتيب rank_position عند النجاح،
- * أو null عند أي فشل — RPC أو مهلة أو نتيجة فارغة/غير صالحة أو جلب منشورات
- * فاشل أو مطابقة ناقصة أو فشل تجهيز — ليستخدم المستدعي جلب الريلز الزمني
- * الحالي بالكامل.
+ * أو null عند أي فشل — RPC أو مهلة أو نتيجة ليست مصفوفة أو صف واحد مخالف
+ * للعقد أو نتيجة فارغة أو جلب منشورات فاشل أو مطابقة ناقصة أو فشل تجهيز —
+ * ليستخدم المستدعي جلب الريلز الزمني الحالي بالكامل.
  *
  * كل صف يمرّ عبر الآليات القائمة: normalizePostRowsWithVisibility (ومعها
  * resolvePostMediaUrls)، fetchPersonalizedPostRows، profileMap، ثم
@@ -762,7 +771,13 @@ async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[]
     }
 
     const ranked = normalizePersonalizedReelRows(rpcResult.data);
-    // نتيجة فارغة أو غير صالحة بالكامل: المسار الزمني هو الإجراء الاحتياطي.
+    // نتيجة ليست مصفوفة، أو تحتوي صفاً واحداً مخالفاً للعقد: تُرفض كاملة —
+    // لا تُسقَط صفوف ولا تُعرض نتيجة شخصية جزئية.
+    if (ranked === null) {
+      console.warn('[reels] نتيجة RPC غير صالحة أو لا تطابق العقد — الانتقال إلى الترتيب الزمني');
+      return null;
+    }
+    // مصفوفة بلا صفوف: فشل أيضاً، والمسار الزمني هو الإجراء الاحتياطي.
     if (ranked.length === 0) {
       console.info('[reels] نتيجة ترتيب الريلز فارغة — الانتقال إلى الترتيب الزمني');
       return null;
