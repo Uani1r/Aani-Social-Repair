@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { decoratePost, hydratePostRows, useInteractionsVersion } from '@/lib/interactions';
 import { handleAppError } from '@/lib/appErrors';
@@ -883,21 +883,38 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   // المنشورات، فلا يظهر محتوى حساب لحساب آخر عند تبديل الجلسة.
   const cacheKey = `${query}:${targetUserId || ''}:${currentUserId}`;
   const hadCachedPosts = postsCache.has(cacheKey);
-  const [posts, setPostsState] = useState<Post[]>(() => postsCache.get(cacheKey) || []);
-  const [loading, setLoading] = useState(!hadCachedPosts);
+  // القائمة محفوظة مع مفتاحها: لا يمكن عرض منشورات مفتاح سابق ولو لإطار واحد.
+  const [postState, setPostState] = useState<{ key: string; posts: Post[] }>(() => ({
+    key: cacheKey,
+    posts: postsCache.get(cacheKey) || [],
+  }));
+  const [loadingState, setLoading] = useState(!hadCachedPosts);
   const [error, setError] = useState('');
   // خطأ قراءة سجلات إعادة النشر (RLS/جدول مفقود) — يُعرض في تبويب إعادة النشر
   // بدل إظهار تبويب فارغ يوحي بعدم وجود إعادة نشر.
   const [repostsError, setRepostsError] = useState('');
+  // جيل الطلب: كل استدعاء جديد يُبطل صلاحية ما قبله للكتابة على حالة الشاشة.
+  const requestIdRef = useRef(0);
 
-  // كل نجاح جلب يُخزَّن في الذاكرة المؤقتة ليُعاد استخدامه عند
-  // العودة إلى الشاشة بدون شاشة تحميل.
-  const setPosts = useCallback((value: Post[]) => {
-    postsCache.set(cacheKey, value);
-    setPostsState(value);
-  }, [cacheKey]);
+  // المعروض مرتبط بالمفتاح الحالي: إن كان مفتاح الحالة لحساب أو استعلام سابق
+  // نقرأ مفتاح اللحظة الحالية من الذاكرة (أو لا شيء)، فلا تتسرّب بيانات سابقة
+  // إلى أي render قبل تنفيذ التأثير.
+  const posts = postState.key === cacheKey ? postState.posts : (postsCache.get(cacheKey) || []);
+  const loading = postState.key === cacheKey ? loadingState : !hadCachedPosts;
 
   const refresh = useCallback(async (silent = false) => {
+    // جيل هذا الطلب: أي طلب أحدث منه يُلغي صلاحيته للكتابة على حالة الشاشة.
+    const requestId = ++requestIdRef.current;
+    const isLatestRequest = () => requestId === requestIdRef.current;
+
+    // الذاكرة تُكتب دائماً لمفتاح هذا الطلب، فنتائج حساب تُخزَّن في مدخله هو
+    // حتى لو صار الطلب قديماً؛ أما حالة الشاشة فلا يمسّها إلا أحدث طلب.
+    const setPosts = (value: Post[]) => {
+      postsCache.set(cacheKey, value);
+      if (!isLatestRequest()) return;
+      setPostState({ key: cacheKey, posts: value });
+    };
+
     if (!supabaseConfigured) {
       setPosts([]);
       setError('تعذر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.');
@@ -1181,9 +1198,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         setPosts(await hydratePostInteractions(reelPosts, currentUserId));
       }
     } catch (caughtError) {
+      // طلب قديم (مفتاح أو حساب سابق): لا يمسّ حالة الشاشة ولا رسائل الخطأ.
+      if (!isLatestRequest()) return;
       console.error('[posts] فشل جلب المنشورات', { query, error: caughtError });
       if (!silent) {
-        setPostsState([]);
+        setPostState({ key: cacheKey, posts: [] });
         const errorCode = isRecord(caughtError) && typeof caughtError.code === 'string' ? caughtError.code : '';
         const errorMessage = isRecord(caughtError) && typeof caughtError.message === 'string' ? caughtError.message : '';
         const errorDetail = errorCode || errorMessage
@@ -1199,16 +1218,16 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         'تعذر تحميل المنشورات. راجع التفاصيل التشخيصية ثم أعد المحاولة.',
       );
     } finally {
-      if (!silent) setLoading(false);
+      if (!silent && isLatestRequest()) setLoading(false);
     }
-  }, [query, targetUserId, currentUserId, setPosts]);
+  }, [query, targetUserId, currentUserId, cacheKey]);
 
   useEffect(() => {
     // ذاكرة المفتاح الحالي تحدد البداية وقرار التحديث الصامت: عند تغيّر الحساب
     // يتغيّر المفتاح، فلا تُعرض قائمة الحساب السابق أثناء انتظار الجلب — تُعرض
     // ذاكرة الحساب الجديد إن وُجدت، وإلا حالة التحميل (Skeleton).
     const cachedPosts = postsCache.get(cacheKey);
-    setPostsState(cachedPosts ?? []);
+    setPostState({ key: cacheKey, posts: cachedPosts ?? [] });
     setLoading(!cachedPosts);
     // عند وجود محتوى محفوظ: تحديث صامت في الخلفية بلا شاشة تحميل؛
     // وإلا جلب عادي أول مرة يظهر فيه السكلتون.
