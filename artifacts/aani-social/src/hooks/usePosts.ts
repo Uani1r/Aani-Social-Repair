@@ -745,8 +745,9 @@ let personalizedReelsUnavailable = false;
  * resolvePostMediaUrls)، fetchPersonalizedPostRows، profileMap، ثم
  * hydratePostInteractions — فلا إعادة بناء يدوية لصفوف المنشورات.
  *
- * لا تُدمج إعادة النشر العامة (fetchGlobalReposts) هنا: الـRPC يُعيد إعادات
- * نشر المستخدم نفسه داخل صفوفه المرتّبة، ودمج مصدر ثانٍ يخلط ترتيبين.
+ * إعادات النشر: الـRPC يُعيد إعادات نشر المستخدم نفسه داخل ترتيبه، ثم تُضاف
+ * إعادات نشر المستخدمين الآخرين من fetchGlobalReposts('reels') كما هي في
+ * المسار الزمني — بلا إسقاط، وبلا تكرار، وبلا خلط لترتيب التوصيات.
  */
 async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[] | null> {
   if (personalizedReelsUnavailable || !supabaseConfigured) return null;
@@ -843,7 +844,23 @@ async function fetchPersonalizedReelPosts(currentUserId: string): Promise<Post[]
       return null;
     }
 
-    return await hydratePostInteractions(ordered, currentUserId);
+    // إعادات النشر العامة: تُضاف بعد الترتيب الشخصي، فلا يُسقطها ولا يخلط
+    // ترتيب التوصيات. الـRPC يُعيد إعادات نشر المستخدم نفسه فقط (قيد RLS على
+    // reposts)، وهذا المصدر يُكمل ريلز أعاد نشرها مستخدمون آخرون كما هي في
+    // المسار الزمني — بنفس الدالة ونفس شروط الظهور والصلاحيات.
+    const repostedPosts = await fetchGlobalReposts('reels');
+    // منع التكرار من أكثر من مصدر: منشور ظهر في الترتيب الشخصي أو أُضيف قبله
+    // من إعادة نشر أخرى يبقى مرة واحدة فقط، بالتمثيل الذي وصل أولاً (الترتيب
+    // الشخصي أولاً ثم إعادات النشر بترتيبها الزمني).
+    const seenIds = new Set(ordered.map(post => post.id));
+    const extraReposted: Post[] = [];
+    for (const reposted of repostedPosts) {
+      if (seenIds.has(reposted.id)) continue;
+      seenIds.add(reposted.id);
+      extraReposted.push(reposted);
+    }
+
+    return await hydratePostInteractions([...ordered, ...extraReposted], currentUserId);
   } catch (caughtError) {
     console.warn('[reels] فشل مسار ترتيب الريلز — الانتقال إلى الترتيب الزمني', caughtError);
     return null;
