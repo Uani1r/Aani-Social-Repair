@@ -14,6 +14,8 @@ import { registerContentRefreshRequest } from '@/lib/contentRefresh';
 // السحب للتحديث القسري (Pull to Refresh) أو عند النشر/الريبوست.
 // المفتاح يشمل المستخدم الحالي، فلا تتشارك الحسابات مدخلات الذاكرة.
 const postsCache = new Map<string, Post[]>();
+// جيل مستقل لكل مفتاح: طلب أقدم لنفس المفتاح لا يستبدل نتيجة طلب أحدث منه.
+const postsCacheGeneration = new Map<string, number>();
 
 interface RepostRow {
   post_id: string;
@@ -914,10 +916,17 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       apply();
     };
 
-    // الذاكرة تُكتب دائماً لمفتاح هذا الطلب، فنتائج حساب تُخزَّن في مدخله هو
-    // حتى لو صار الطلب قديماً؛ أما حالة الشاشة فلا يمسّها إلا أحدث طلب.
+    // جيل مستقل لهذا المفتاح: أحدث طلب لنفس المفتاح هو وحده من يكتب ذاكرته،
+    // فطلب أقدم لا يستبدل نتيجة أحدث منه في postsCache.
+    const generation = (postsCacheGeneration.get(cacheKey) ?? 0) + 1;
+    postsCacheGeneration.set(cacheKey, generation);
+    const isLatestForKey = () => (postsCacheGeneration.get(cacheKey) ?? 0) === generation;
+
+    // الذاكرة تُكتب لمفتاح هذا الطلب، وبشرط أن يكون أحدث طلب لذلك المفتاح:
+    // طلب حساب سابق يبقى قادراً على حفظ نتيجته في مفتاحه ما لم يبدأ طلب أحدث
+    // لنفس المفتاح. أما حالة الشاشة فلا يمسّها إلا أحدث طلب عامّاً.
     const setPosts = (value: Post[]) => {
-      postsCache.set(cacheKey, value);
+      if (isLatestForKey()) postsCache.set(cacheKey, value);
       commitState(() => setPostState({ key: cacheKey, posts: value }));
     };
 
