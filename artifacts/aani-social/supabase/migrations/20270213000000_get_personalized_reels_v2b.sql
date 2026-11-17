@@ -10,6 +10,8 @@
 --      المنشور نفسه: مشاهدة، إعجاب، حفظ، مشاركة، إعادة نشر.
 --   2) نقل الاهتمام (Taste Transfer) من المنشورات التي تفاعل معها المستخدم
 --      إلى **منشورات أخرى** لصاحب الحساب نفسه أو تستخدم الصوت نفسه.
+--      ولا ينتقل الاهتمام الإيجابي إلى منشور سبق للمستخدم مشاهدته أو التفاعل
+--      معه (إشارة has_prior_interaction بلا نافذة زمنية، منفصلة عن الـCooldown).
 --   3) تنويع: ترتيب متناوب حسب ترتيب المنشور داخل مجموعة صاحبه (الأول من كل
 --      صاحب، ثم الثاني، ثم الثالث...) بدل تتابع نفس الصاحب في القمة.
 --
@@ -421,6 +423,41 @@ begin
     ) as activity
     group by activity.post_id
   ),
+  -- V2-B (1-ب): إشارة مستقلة «هل سبق للمستخدم مشاهدة هذا المنشور أو التفاعل
+  -- معه؟» بلا نافذة زمنية، منفصلة تماماً عن interaction_times ذات الـ72 ساعة.
+  -- تُستخدم فقط لمنع نقل الاهتمام الإيجابي؛ بعد انتهاء الـCooldown يعود المنشور
+  -- إلى الترتيب طبيعياً لكنه لا يحصل على نقاط نقل اهتمام إيجابية.
+  -- كل الفروع مقيدة بـ user_id = v_viewer وتحت RLS، ومع restrict على المرشحين.
+  prior_interactions as (
+    select distinct activity.post_id
+    from (
+      select view_event.post_id
+      from public.post_view_events as view_event
+      where view_event.user_id = v_viewer
+        and view_event.surface = 'reels'
+        and view_event.post_id in (select candidate.post_id from candidates as candidate)
+      union
+      select interaction.post_id
+      from public.likes as interaction
+      where interaction.user_id = v_viewer
+        and interaction.post_id in (select candidate.post_id from candidates as candidate)
+      union
+      select interaction.post_id
+      from public.bookmarks as interaction
+      where interaction.user_id = v_viewer
+        and interaction.post_id in (select candidate.post_id from candidates as candidate)
+      union
+      select interaction.post_id
+      from public.post_shares as interaction
+      where interaction.user_id = v_viewer
+        and interaction.post_id in (select candidate.post_id from candidates as candidate)
+      union
+      select interaction.post_id
+      from public.reposts as interaction
+      where interaction.user_id = v_viewer
+        and interaction.post_id in (select candidate.post_id from candidates as candidate)
+    ) as activity
+  ),
   -- ---------------------------------------------------------------
   -- 4) V2-B: إشارات الذوق — كل سجل شخصي للمستخدم مع وزنه، مربوطاً بجدول
   --    posts لاستخراج صاحب الحساب (user_id) والصوت (sound_id).
@@ -555,6 +592,7 @@ begin
       coalesce(candidate.reposts_count, 0) as reposts_count,
       coalesce(candidate.shares_count, 0) as shares_count,
       interaction_times.last_interaction_at,
+      (prior_interactions.post_id is not null) as has_prior_interaction,
       coalesce(author_affinity.affinity, 0) as author_affinity,
       coalesce(sound_affinity.affinity, 0) as sound_affinity,
       1.0::numeric / (
@@ -576,6 +614,7 @@ begin
     left join signal_image_views as image_views on image_views.post_id = candidate.post_id
     left join signal_feedback as feedback on feedback.post_id = candidate.post_id
     left join interaction_times on interaction_times.post_id = candidate.post_id
+    left join prior_interactions on prior_interactions.post_id = candidate.post_id
     left join author_affinity on author_affinity.post_id = candidate.post_id
     left join sound_affinity on sound_affinity.post_id = candidate.post_id
   ),
@@ -646,16 +685,17 @@ begin
               ) / 66.0::numeric
             else 0::numeric
           end
-        -- V2-B (2): نقل الاهتمام. الإيجابي يُمنح فقط للمنشورات التي لم يتفاعل
-        -- معها المستخدم بعد (وإلا بقيت تحت كبح التكرار وحده)؛ السلبي يُطبَّق
-        -- دائماً بحد أدنى محدود.
+        -- V2-B (2): نقل الاهتمام. الإيجابي يُمنح فقط لمنشور لم يسبق للمستخدم
+        -- مشاهدته أو التفاعل معه (has_prior_interaction = false)، فلا يحصل
+        -- منشور سبقت مشاهدته على نقاط نقل اهتمام ولو انتهى الـCooldown؛
+        -- السلبي يُطبَّق دائماً بحد أدنى محدود.
         + case
-            when scored.last_interaction_at is null
+            when not scored.has_prior_interaction
               then least(0.30::numeric, greatest(0::numeric, scored.author_affinity * 0.35::numeric))
             else 0::numeric
           end
         + case
-            when scored.last_interaction_at is null
+            when not scored.has_prior_interaction
               then least(0.20::numeric, greatest(0::numeric, scored.sound_affinity * 0.30::numeric))
             else 0::numeric
           end
