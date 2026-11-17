@@ -440,3 +440,153 @@ BEGIN
   END IF;
 END
 $$;
+
+
+-- 9. Semantic verification of the reason CHECK and both policy predicates.
+--    The checks evaluate the expressions PostgreSQL stored (pg_get_expr) instead
+--    of comparing constraint or policy text, and are skipped with a NOTICE when
+--    the environment cannot simulate auth.uid() (auth.uid() not driven by
+--    request.jwt.claims) or public.posts has no rows.
+DO $$
+DECLARE
+  reason_expr text;
+  select_expr text;
+  insert_expr text;
+  results boolean[];
+  verdict boolean;
+  v_post uuid;
+  v_author uuid;
+  v_other uuid := '00000000-0000-0000-0000-000000000001'::uuid;
+  v_third uuid := '00000000-0000-0000-0000-000000000002'::uuid;
+  v_missing uuid := '00000000-0000-0000-0000-0000000000ff'::uuid;
+  v_claims text := current_setting('request.jwt.claims', true);
+  v_sub text := current_setting('request.jwt.claim.sub', true);
+BEGIN
+  -- (a) The reason CHECK must accept 1..1000 characters after btrim and reject
+  --     everything else, evaluated on literal values.
+  SELECT pg_get_expr(c.conbin, c.conrelid) INTO reason_expr
+  FROM pg_constraint c
+  WHERE c.conrelid = 'public.post_reports'::regclass
+    AND c.conname = 'post_reports_reason_check'
+    AND c.contype = 'c';
+
+  IF reason_expr IS NULL THEN
+    RAISE EXCEPTION 'reason CHECK expression is not available';
+  END IF;
+
+  EXECUTE format($q$
+    SELECT array_agg((%s) ORDER BY t.idx)
+    FROM (VALUES
+      (1, 'abc'::text),
+      (2, ''::text),
+      (3, repeat(' ', 5)),
+      (4, repeat('a', 1000)),
+      (5, repeat('a', 1001)),
+      (6, ' a '::text)
+    ) AS t(idx, reason)
+  $q$, reason_expr) INTO results;
+
+  IF results IS DISTINCT FROM ARRAY[true, false, false, true, false, true] THEN
+    RAISE EXCEPTION
+      'reason CHECK does not enforce btrim length between 1 and 1000: %', results;
+  END IF;
+
+  -- (b) Policy predicates, evaluated as authenticated with a simulated uid.
+  SELECT pg_get_expr(p.polqual, p.polrelid) INTO select_expr
+  FROM pg_policy p
+  WHERE p.polrelid = 'public.post_reports'::regclass
+    AND p.polname = 'post_reports_select_own';
+
+  SELECT pg_get_expr(p.polwithcheck, p.polrelid) INTO insert_expr
+  FROM pg_policy p
+  WHERE p.polrelid = 'public.post_reports'::regclass
+    AND p.polname = 'post_reports_insert_own';
+
+  IF select_expr IS NULL OR insert_expr IS NULL THEN
+    RAISE EXCEPTION 'policy expressions are not available';
+  END IF;
+
+  PERFORM set_config(
+    'request.jwt.claims', json_build_object('sub', v_other)::text, true
+  );
+  PERFORM set_config('request.jwt.claim.sub', v_other::text, true);
+
+  IF auth.uid() IS DISTINCT FROM v_other THEN
+    RAISE NOTICE
+      'post_reports policy tests skipped: auth.uid() does not follow request.jwt.claims here';
+  ELSE
+    -- SELECT reads only the reporter's own rows.
+    EXECUTE format($q$
+      SELECT array_agg((%s) ORDER BY t.idx)
+      FROM (VALUES (1, %L::uuid), (2, %L::uuid)) AS t(idx, reporter_id)
+    $q$, select_expr, v_other, v_missing) INTO results;
+
+    IF results IS DISTINCT FROM ARRAY[true, false] THEN
+      RAISE EXCEPTION
+        'SELECT policy does not restrict reads to reporter_id = auth.uid(): %', results;
+    END IF;
+
+    SELECT post.id, post.user_id INTO v_post, v_author
+    FROM public.posts AS post
+    WHERE post.user_id IS NOT NULL
+    ORDER BY post.id
+    LIMIT 1;
+
+    IF v_post IS NULL THEN
+      RAISE NOTICE
+        'post_reports INSERT policy tests skipped: public.posts has no rows';
+    ELSE
+      -- Another user's existing post is accepted.
+      EXECUTE format($q$
+        SELECT (%s)
+        FROM (VALUES (%L::uuid, %L::uuid)) AS post_reports(post_id, reporter_id)
+      $q$, insert_expr, v_post, v_other) INTO verdict;
+
+      IF verdict IS DISTINCT FROM true THEN
+        RAISE EXCEPTION
+          'INSERT policy rejects reporting another user''s existing post';
+      END IF;
+
+      -- A post that does not exist is rejected.
+      EXECUTE format($q$
+        SELECT (%s)
+        FROM (VALUES (%L::uuid, %L::uuid)) AS post_reports(post_id, reporter_id)
+      $q$, insert_expr, v_missing, v_other) INTO verdict;
+
+      IF verdict IS DISTINCT FROM false THEN
+        RAISE EXCEPTION 'INSERT policy accepts a non-existent post';
+      END IF;
+
+      -- A forged reporter_id is rejected.
+      EXECUTE format($q$
+        SELECT (%s)
+        FROM (VALUES (%L::uuid, %L::uuid)) AS post_reports(post_id, reporter_id)
+      $q$, insert_expr, v_post, v_third) INTO verdict;
+
+      IF verdict IS DISTINCT FROM false THEN
+        RAISE EXCEPTION
+          'INSERT policy accepts a reporter_id different from auth.uid()';
+      END IF;
+
+      -- Reporting the viewer's own post is rejected.
+      PERFORM set_config(
+        'request.jwt.claims', json_build_object('sub', v_author)::text, true
+      );
+      PERFORM set_config('request.jwt.claim.sub', v_author::text, true);
+
+      EXECUTE format($q$
+        SELECT (%s)
+        FROM (VALUES (%L::uuid, %L::uuid)) AS post_reports(post_id, reporter_id)
+      $q$, insert_expr, v_post, v_author) INTO verdict;
+
+      IF verdict IS DISTINCT FROM false THEN
+        RAISE EXCEPTION
+          'INSERT policy accepts reporting the viewer''s own post';
+      END IF;
+    END IF;
+  END IF;
+
+  PERFORM set_config('request.jwt.claims', coalesce(v_claims, ''), true);
+  PERFORM set_config('request.jwt.claim.sub', coalesce(v_sub, ''), true);
+END
+$$;
