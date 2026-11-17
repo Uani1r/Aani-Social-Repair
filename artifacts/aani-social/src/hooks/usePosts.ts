@@ -907,22 +907,30 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     const requestId = ++requestIdRef.current;
     const isLatestRequest = () => requestId === requestIdRef.current;
 
+    // كل تحديث لحالة الشاشة (القائمة، الخطأ، التحميل، خطأ إعادة النشر) يمرّ من
+    // هنا، فلا يكتبه إلا أحدث طلب.
+    const commitState = (apply: () => void) => {
+      if (!isLatestRequest()) return;
+      apply();
+    };
+
     // الذاكرة تُكتب دائماً لمفتاح هذا الطلب، فنتائج حساب تُخزَّن في مدخله هو
     // حتى لو صار الطلب قديماً؛ أما حالة الشاشة فلا يمسّها إلا أحدث طلب.
     const setPosts = (value: Post[]) => {
       postsCache.set(cacheKey, value);
-      if (!isLatestRequest()) return;
-      setPostState({ key: cacheKey, posts: value });
+      commitState(() => setPostState({ key: cacheKey, posts: value }));
     };
 
     if (!supabaseConfigured) {
       setPosts([]);
-      setError('تعذر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.');
-      setLoading(false);
+      commitState(() => {
+        setError('تعذر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.');
+        setLoading(false);
+      });
       return;
     }
-    if (!silent) setLoading(true);
-    setError('');
+    if (!silent) commitState(() => setLoading(true));
+    commitState(() => setError(''));
     if (query === 'feed' && !silent) setPosts([]);
     try {
       const fetchPostRows = async (
@@ -1048,13 +1056,15 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
             hint: repostsError.hint,
             targetUserId,
           });
-          setRepostsError(
-            repostsError.code === '42501'
-              ? 'تعذر تحميل إعادات النشر: صلاحيات القراءة (RLS) تمنع قراءة سجلات reposts لهذا الحساب.'
-              : 'تعذر تحميل إعادات النشر من قاعدة البيانات. حاول التحديث، وإن استمر الخطأ راجع سجلات التشخيص.',
-          );
+          commitState(() => {
+            setRepostsError(
+              repostsError.code === '42501'
+                ? 'تعذر تحميل إعادات النشر: صلاحيات القراءة (RLS) تمنع قراءة سجلات reposts لهذا الحساب.'
+                : 'تعذر تحميل إعادات النشر من قاعدة البيانات. حاول التحديث، وإن استمر الخطأ راجع سجلات التشخيص.',
+            );
+          });
         } else {
-          setRepostsError('');
+          commitState(() => setRepostsError(''));
         }
 
         const repostRows = repostsError ? [] : normalizeRepostRows(repostData);
@@ -1202,15 +1212,17 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       if (!isLatestRequest()) return;
       console.error('[posts] فشل جلب المنشورات', { query, error: caughtError });
       if (!silent) {
-        setPostState({ key: cacheKey, posts: [] });
-        const errorCode = isRecord(caughtError) && typeof caughtError.code === 'string' ? caughtError.code : '';
-        const errorMessage = isRecord(caughtError) && typeof caughtError.message === 'string' ? caughtError.message : '';
-        const errorDetail = errorCode || errorMessage
-          ? ` (${[errorCode, errorMessage].filter(Boolean).join(': ')})`
-          : '';
-        setError(isPostsPermissionError(caughtError)
-          ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
-          : `تعذر تحميل ${query === 'reel' ? 'الريلز' : 'المنشورات'}. أعد المحاولة بعد لحظات.${errorDetail}`);
+        commitState(() => {
+          setPostState({ key: cacheKey, posts: [] });
+          const errorCode = isRecord(caughtError) && typeof caughtError.code === 'string' ? caughtError.code : '';
+          const errorMessage = isRecord(caughtError) && typeof caughtError.message === 'string' ? caughtError.message : '';
+          const errorDetail = errorCode || errorMessage
+            ? ` (${[errorCode, errorMessage].filter(Boolean).join(': ')})`
+            : '';
+          setError(isPostsPermissionError(caughtError)
+            ? 'تعذر قراءة المنشورات بسبب صلاحيات جدول posts. راجع GRANT وسياسات RLS في Supabase لدور authenticated.'
+            : `تعذر تحميل ${query === 'reel' ? 'الريلز' : 'المنشورات'}. أعد المحاولة بعد لحظات.${errorDetail}`);
+        });
       }
       handleAppError(
         'فشل تحميل المنشورات',
@@ -1251,6 +1263,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     window.addEventListener('aani:repost-changed', onRepostChanged);
     window.addEventListener('aani:content-refresh', onContentRefresh);
     return () => {
+      // إبطال صلاحية أي طلب سابق عند تغيّر المفتاح أو مغادرة المكوّن: نتائجه
+      // تبقى في ذاكرة مفتاحه، لكنها لا تكتب على حالة الشاشة.
+      requestIdRef.current += 1;
       if (repostRefreshTimer !== null) window.clearTimeout(repostRefreshTimer);
       window.removeEventListener('aani:post-created', onPostCreated);
       window.removeEventListener('aani:repost-changed', onRepostChanged);
