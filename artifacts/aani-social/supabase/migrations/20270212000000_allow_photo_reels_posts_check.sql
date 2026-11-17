@@ -98,7 +98,8 @@ begin
 
   -- الحالات التي تحكم سلوك الريلز:
   --   * feed: أي type مسموح (بما فيها text و video).
-  --   * reels: reel و photo فقط.
+  --   * reels: reel و photo فقط — وأي نوع آخر مرفوض، حتى لو كان نوعاً
+  --     معروفاً في مكان آخر (audio) أو نوعاً غير معروف تماماً.
   --   * أي وجهة خارج feed و reels: مرفوضة.
   begin
     execute format($q$
@@ -113,6 +114,8 @@ begin
           ('reels', 'photo', true),
           ('reels', 'text',  false),
           ('reels', 'video', false),
+          ('reels', 'audio', false),
+          ('reels', 'unknown_type', false),
           ('other', 'photo', false),
           ('other', 'reel',  false)
       ) as cases (destination, type, expected)
@@ -124,7 +127,7 @@ begin
   end;
 
   if mismatches > 0 then
-    raise exception 'posts_destination_check لا يطابق المعنى المطلوب: % حالة مخالفة من أصل 10 (التعريف: %)',
+    raise exception 'posts_destination_check لا يطابق المعنى المطلوب: % حالة مخالفة من أصل 12 (التعريف: %)',
       mismatches, check_expr;
   end if;
 end;
