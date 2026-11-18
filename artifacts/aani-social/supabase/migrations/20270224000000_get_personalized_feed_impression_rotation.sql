@@ -286,7 +286,7 @@ as $$
     from aani_internal.aani_get_personalized_feed_relevance(p_limit, p_candidate_limit) as ranked
   ),
   feed_impression_history as (
-    -- سجل الظهور في Feed فقط. انطباعات Reels (surface = 'reels') لا تُقرأ هنا
+    -- سجل الظهور في سطح الرئيسية فقط. انطباعات السطح الآخر لا تُقرأ هنا
     -- إطلاقًا، فلا تتسرب بين السطحين.
     select
       impression.post_id,

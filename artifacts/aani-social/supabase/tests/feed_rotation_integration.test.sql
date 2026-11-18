@@ -245,7 +245,8 @@ begin
     raise exception 'assert: النتيجة تحتوي % معرفًا مكررًا.', v_duplicates;
   end if;
 
-  -- حارس Surface: طبقة Feed لا تذكر 'reels'، وتقرأ 'feed' فقط
+  -- حارس Surface: الفحص يقرأ تعريف الدالة كاملًا بما فيه التعليقات، ولذلك
+  -- يجب ألا يرد اسم السطح الآخر في نص الطبقة أصلًا؛ والطبقة تقرأ 'feed' فقط.
   v_wrapper_definition := pg_get_functiondef(
     'public.get_personalized_feed(integer,integer)'::regprocedure
   );
