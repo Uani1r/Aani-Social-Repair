@@ -235,7 +235,7 @@ declare
   v_engine_40 integer;
   v_engine_200 integer;
   v_final integer;
-  v_unseen uuid := '00000000-0000-4000-8000-000000000001';
+  v_unseen uuid := '00000000-0000-4000-8000-000000000101';
   v_private uuid := '00000000-0000-4000-8000-0000000000cc';
   v_unseen_rank integer;
   v_duplicates integer;
