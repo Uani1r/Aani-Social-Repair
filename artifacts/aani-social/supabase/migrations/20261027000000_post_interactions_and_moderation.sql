@@ -20,19 +20,11 @@ create table if not exists public.post_feedback (
   primary key (post_id, user_id)
 );
 
-create table if not exists public.post_reports (
-  id uuid primary key default gen_random_uuid(),
-  post_id uuid not null references public.posts(id) on delete cascade,
-  reporter_id uuid not null references public.profiles(id) on delete cascade,
-  reason text not null check (char_length(btrim(reason)) between 1 and 1000),
-  created_at timestamptz not null default now(),
-  constraint post_reports_post_reporter_unique unique (post_id, reporter_id)
-);
+-- public.post_reports (table, RLS and policies) is owned by
+-- 20270214000000_create_post_reports.sql; nothing here creates or alters it.
 
 alter table public.post_feedback enable row level security;
-alter table public.post_reports enable row level security;
 grant select, insert, update, delete on public.post_feedback to authenticated;
-grant insert, select on public.post_reports to authenticated;
 
 drop policy if exists post_feedback_select_own on public.post_feedback;
 create policy post_feedback_select_own on public.post_feedback
@@ -48,20 +40,6 @@ create policy post_feedback_update_own on public.post_feedback
 drop policy if exists post_feedback_delete_own on public.post_feedback;
 create policy post_feedback_delete_own on public.post_feedback
   for delete to authenticated using (user_id = (select auth.uid()));
-
-drop policy if exists post_reports_insert_own on public.post_reports;
-create policy post_reports_insert_own on public.post_reports
-  for insert to authenticated
-  with check (
-    reporter_id = (select auth.uid())
-    and exists (
-      select 1 from public.posts p
-      where p.id = post_id and p.user_id <> (select auth.uid())
-    )
-  );
-drop policy if exists post_reports_select_own on public.post_reports;
-create policy post_reports_select_own on public.post_reports
-  for select to authenticated using (reporter_id = (select auth.uid()));
 
 create or replace function public.get_post_interactions(p_post_ids uuid[])
 returns table (
