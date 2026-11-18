@@ -234,7 +234,7 @@ begin
   -- المنشور الواحد مرتين ولا تضيع حصة النافذة الضيقة لصالح محتوى أقدم.
   -- كل الخطوات تحتفظ بشروط الخصوصية والحظر والحذف وأهلية الريلز نفسها.
   discovery_steps as (
-    select
+    (select
       1 as window_step,
       post.id as post_id,
       post.created_at as post_created_at,
@@ -263,8 +263,10 @@ begin
         from followed_authors as followed
         where followed.author_id = post.user_id
       )
+      order by post.created_at desc, post.id asc
+      limit v_bound_discovery)
     union all
-    select
+    (select
       2 as window_step,
       post.id,
       post.created_at,
@@ -294,8 +296,10 @@ begin
         from followed_authors as followed
         where followed.author_id = post.user_id
       )
+      order by post.created_at desc, post.id asc
+      limit v_bound_discovery)
     union all
-    select
+    (select
       3 as window_step,
       post.id,
       post.created_at,
@@ -325,6 +329,8 @@ begin
         from followed_authors as followed
         where followed.author_id = post.user_id
       )
+      order by post.created_at desc, post.id asc
+      limit v_bound_discovery)
   ),
   -- حصة الاكتشاف تُملأ من النافذة الأضيق أولًا ثم تُكمَّل من الأوسع عند الحاجة،
   -- بسقف صفوف واحد لكل مصدر: لا استعلام غير محدود.
@@ -357,7 +363,7 @@ begin
   -- تُستبعد المنشورات التي يغطيها مصدر المتابعات (30 يومًا) أو الاكتشاف
   -- (حتى 180 يومًا) حتى لا تتكرر، فيبقى مصدر إعادة النشر لما هو أقدم فقط.
   repost_steps as (
-    select
+    (select
       1 as window_step,
       repost.post_id,
       post.created_at as post_created_at,
@@ -402,8 +408,10 @@ begin
           where followed.author_id = post.user_id
         )
       )
+      order by repost.created_at desc, repost.post_id asc
+      limit v_bound_reposts)
     union all
-    select
+    (select
       2 as window_step,
       repost.post_id,
       post.created_at,
@@ -447,8 +455,10 @@ begin
           where followed.author_id = post.user_id
         )
       )
+      order by repost.created_at desc, repost.post_id asc
+      limit v_bound_reposts)
     union all
-    select
+    (select
       3 as window_step,
       repost.post_id,
       post.created_at,
@@ -492,6 +502,8 @@ begin
           where followed.author_id = post.user_id
         )
       )
+      order by repost.created_at desc, repost.post_id asc
+      limit v_bound_reposts)
   ),
   -- إعادة النشر الأحدث فقط لكل منشور (من أوضح خطوة)، ثم حصة الإعادات كاملة
   -- بسقف صفوف واحد: لا استعلام غير محدود.
@@ -1220,6 +1232,13 @@ begin
      or position('60 days' in v_relevance_definition) = 0
      or position('window_step' in v_relevance_definition) = 0 then
     raise exception 'المحرك الداخلي لا يوسّع نوافذ المصادر تدريجيًا (14/60/180 يومًا أو إعادات النشر 30/90/365).'
+      using errcode = '42501';
+  end if;
+
+  -- حدّ صريح لكل نافذة قبل تجميع النتائج: لا قراءة غير محدودة لأي نافذة.
+  if position('limit v_bound_discovery' in v_relevance_definition) = 0
+     or position('limit v_bound_reposts' in v_relevance_definition) = 0 then
+    raise exception 'نوافذ المصادر تفتقد حدود LIMIT صريحة لكل نافذة.'
       using errcode = '42501';
   end if;
 

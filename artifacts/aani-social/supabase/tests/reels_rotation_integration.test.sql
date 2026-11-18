@@ -211,7 +211,29 @@ declare
   v_private uuid := '00000000-0000-4000-8000-0000000000cc';
   v_unseen_rank integer;
   v_duplicates integer;
+  v_definition text;
+  v_discovery_limit_count integer;
+  v_repost_limit_count integer;
 begin
+  -- حدود صريحة لكل نافذة: LIMIT قبل تجميع النتائج وترتيبها، في كل من نوافذ
+  -- الاكتشاف الثلاث (14/60/180) ونوافذ إعادة النشر الثلاث (30/90/365).
+  v_definition := pg_get_functiondef(
+    'public.aani_get_personalized_reels_relevance(integer,integer)'::regprocedure
+  );
+  v_discovery_limit_count := (
+    length(v_definition) - length(replace(v_definition, 'limit v_bound_discovery', ''))
+  ) / length('limit v_bound_discovery');
+  v_repost_limit_count := (
+    length(v_definition) - length(replace(v_definition, 'limit v_bound_reposts', ''))
+  ) / length('limit v_bound_reposts');
+
+  if v_discovery_limit_count <> 3 then
+    raise exception 'assert: نوافذ الاكتشاف يجب أن تحمل 3 حدود LIMIT صريحة، وجدنا %.', v_discovery_limit_count;
+  end if;
+  if v_repost_limit_count <> 3 then
+    raise exception 'assert: نوافذ إعادة النشر يجب أن تحمل 3 حدود LIMIT صريحة، وجدنا %.', v_repost_limit_count;
+  end if;
+
   select count(*) into v_engine_40 from t_engine_40;
   select count(*) into v_engine_200 from t_engine_200;
   select count(*) into v_final from t_final;
