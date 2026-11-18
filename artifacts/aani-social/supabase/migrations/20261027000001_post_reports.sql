@@ -26,7 +26,7 @@ create table if not exists public.reports (
 -- Repair / upgrade an existing table (no-op on a fresh database)
 -- ---------------------------------------------------------------------
 alter table public.reports add column if not exists reporter_id uuid;
-alter table public.reports add column if not exists reported_user_id;
+alter table public.reports add column if not exists reported_user_id uuid;
 alter table public.reports add column if not exists status text not null default 'pending';
 -- Kept only so legacy clients and legacy rows stay valid; newer code
 -- writes reporter_id. Both are kept in sync by a trigger below.
