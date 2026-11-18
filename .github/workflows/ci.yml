@@ -54,6 +54,13 @@ jobs:
       - name: Build @workspace/aani-social
         run: pnpm --filter @workspace/aani-social run build
 
+      # Runs only the reels unit tests added by this work. The wider test:unit
+      # script also runs mediaCompressor.test.ts, which already fails on main
+      # (12 failing subtests at mediaCompressor.test.ts:381) independently of
+      # this change, so it is not a gate here.
+      - name: Unit tests @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts
+
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
 

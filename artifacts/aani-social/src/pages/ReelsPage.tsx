@@ -8,6 +8,7 @@ import { usePosts } from '@/hooks/usePosts';
 import { getPendingPosts, removePendingPost, retryPendingPost, subscribePendingPosts, type PendingPost } from '@/lib/pendingPosts';
 import { getPostCoverUrl, getPostDestination } from '@/lib/types';
 import { preloadImage, releaseVideoPreloadCandidate, setVideoPreloadCandidate } from '@/lib/mediaPreload';
+import { startReelsViewingSession } from '@/lib/reelsViewingSession';
 
 const savedReelsScrollPositions = new Map<string, number>();
 
@@ -22,11 +23,21 @@ function saveReelsScrollPosition(userId: string, scrollTop: number) {
 
 export default function ReelsPage({ userId, onOpenComments }: { userId: string; onOpenComments: (postId: string) => void }) {
   const [location] = useLocation();
-  const { posts, loading, refresh, error } = usePosts('reel', undefined, userId);
+  // كل تركيب لهذه الشاشة = جلسة عرض جديدة، فيُسمح بترتيب جديد من الخادم بدل
+  // الالتزام بمدة التخزين المؤقت. يُبدأ قبل usePosts حتى يقرأه الخطاف.
+  const viewingSessionStartedRef = useRef(false);
+  if (!viewingSessionStartedRef.current) {
+    viewingSessionStartedRef.current = true;
+    startReelsViewingSession();
+  }
+  const { posts, loading, refresh, error, reelsBatchReplaced } = usePosts('reel', undefined, userId);
   const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
   const activeIndexRef = useRef(0);
+  // إعادة التمرير إلى أول ريل تحدث مرة واحدة فقط عند استبدال الدفعة، لا مع كل
+  // تغيّر في حالة التحميل.
+  const handledReelsResetRef = useRef(false);
 
   useEffect(() => subscribePendingPosts(() => setPendingPosts(getPendingPosts())), []);
 
@@ -39,6 +50,21 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
     if (loading || new URLSearchParams(location.split('?')[1] || '').has('openReel')) return undefined;
     const container = scrollRef.current;
     if (!container) return undefined;
+    // بدأت الشاشة بترتيب جديد من الخادم: تُفتح جلسة عرض جديدة من أول ريل،
+    // فلا يُستعاد موضع قديم يشير إلى ترتيب مختلف (ويُمسح الموضع المحفوظ).
+    if (reelsBatchReplaced && !handledReelsResetRef.current) {
+      handledReelsResetRef.current = true;
+      savedReelsScrollPositions.delete(userId);
+      try {
+        window.sessionStorage.removeItem(`aani:reels-scroll:${userId}`);
+      } catch {
+        // التخزين غير متاح: تكفي إزالة الموضع من الذاكرة.
+      }
+      container.scrollTop = 0;
+      activeIndexRef.current = 0;
+      setActiveIndex(0);
+      return undefined;
+    }
     let savedScrollTop = savedReelsScrollPositions.get(userId) || 0;
     try {
       savedScrollTop = Number(window.sessionStorage.getItem(`aani:reels-scroll:${userId}`)) || savedScrollTop;
@@ -53,7 +79,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
       setActiveIndex(index);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [loading, userId]);
+  }, [loading, userId, reelsBatchReplaced]);
 
   useEffect(() => () => {
     const container = scrollRef.current;
