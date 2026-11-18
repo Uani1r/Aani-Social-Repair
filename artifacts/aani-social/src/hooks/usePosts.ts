@@ -899,7 +899,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   const cacheKey = `${query}:${targetUserId || ''}:${currentUserId}`;
   // دفعة ريلز معلّقة من جلسة سابقة لنفس المفتاح: تُطبَّق عند بداية جلسة عرض
   // جديدة بدل استبدال ما يراه المستخدم في منتصف المشاهدة.
-  const pendingReelsBatch = query === 'reel' ? getPendingReelsBatch(cacheKey) : undefined;
+  const pendingReelsBatch = query === 'reel' ? getPendingReelsBatch<Post>(cacheKey) : undefined;
   const hadCachedPosts = postsCache.has(cacheKey) || pendingReelsBatch !== undefined;
   // القائمة محفوظة مع مفتاحها: لا يمكن عرض منشورات مفتاح سابق ولو لإطار واحد.
   const [postState, setPostState] = useState<{ key: string; posts: Post[] }>(() => ({
@@ -1306,7 +1306,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     // ذاكرة المفتاح الحالي تحدد البداية وقرار التحديث الصامت: عند تغيّر الحساب
     // يتغيّر المفتاح، فلا تُعرض قائمة الحساب السابق أثناء انتظار الجلب — تُعرض
     // ذاكرة الحساب الجديد إن وُجدت، وإلا حالة التحميل (Skeleton).
-    const pendingBatch = query === 'reel' ? getPendingReelsBatch(cacheKey) : undefined;
+    const pendingBatch = query === 'reel' ? getPendingReelsBatch<Post>(cacheKey) : undefined;
     const cachedPosts = pendingBatch ?? postsCache.get(cacheKey);
     setPostState({ key: cacheKey, posts: cachedPosts ?? [] });
     setLoading(!cachedPosts);

@@ -9,7 +9,7 @@
 // المشاهدة. المفاتيح مستقلة لكل مستخدم ولكل سطح، فلا تتسرب دفعة حساب إلى آخر
 // ولا دفعة الـFeed إلى الريلز.
 
-/** أقل وصف يحتاجه الطابور من المنشور: معرّف فريد يكفي لمنع الخلط بين الدفعات. */
+/** أقل وصف يحتاجه الطابور من المنشور: معرّف فريد يكفي للتمييز بين الدفعات. */
 export type ReelBatchPost = { id: string };
 
 const pendingBatches = new Map<string, ReelBatchPost[]>();
@@ -25,7 +25,7 @@ export function shouldDeferReelsBatch(hasVisibleBatch: boolean): boolean {
 }
 
 /** يخزّن دفعة جديدة لمفتاحها، ويستبدل أي دفعة معلّقة أقدم لنفس المفتاح. */
-export function setPendingReelsBatch(key: string, posts: ReelBatchPost[]): void {
+export function setPendingReelsBatch<T extends ReelBatchPost>(key: string, posts: T[]): void {
   if (!key || posts.length === 0) return;
   pendingBatches.set(key, posts);
 }
@@ -35,9 +35,14 @@ export function hasPendingReelsBatch(key: string): boolean {
   return pendingBatches.has(key);
 }
 
-/** الدفعة المعلّقة لهذا المفتاح (أو undefined) دون حذفها. */
-export function getPendingReelsBatch(key: string): ReelBatchPost[] | undefined {
-  return pendingBatches.get(key);
+/**
+ * الدفعة المعلّقة لهذا المفتاح (أو undefined) دون حذفها.
+ *
+ * النوع يُحدَّد عند الاستدعاء (getPendingReelsBatch<Post>(key)) لأن الطابور لا
+ * يعرف إلا أن العنصر يحمل `id`؛ المستدعي يعرف نوعه الحقيقي.
+ */
+export function getPendingReelsBatch<T extends ReelBatchPost>(key: string): T[] | undefined {
+  return pendingBatches.get(key) as T[] | undefined;
 }
 
 /** تُحذف الدفعة المعلّقة بعد أن تصبح هي الدفعة المعروضة. */
