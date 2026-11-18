@@ -206,6 +206,7 @@ begin
   -- ---------------------------------------------------------------
   follow_slice as (
     select
+      1 as window_step,
       post.id as post_id,
       post.created_at as post_created_at,
       post.created_at as candidate_at,
@@ -228,8 +229,13 @@ begin
     order by post.created_at desc, post.id asc
     limit v_bound_follow
   ),
-  discovery_slice as (
+  -- التوسع التدريجي للاكتشاف: نافذة 14 يومًا أولًا، ثم 60، ثم 180، بحدود صفوف
+  -- صريحة لكل مصدر. النوافذ مفصولة (كل خطوة تستبعد ما غطّته السابقة) فلا يُقرأ
+  -- المنشور الواحد مرتين ولا تضيع حصة النافذة الضيقة لصالح محتوى أقدم.
+  -- كل الخطوات تحتفظ بشروط الخصوصية والحظر والحذف وأهلية الريلز نفسها.
+  discovery_steps as (
     select
+      1 as window_step,
       post.id as post_id,
       post.created_at as post_created_at,
       post.created_at as candidate_at,
@@ -257,11 +263,251 @@ begin
         from followed_authors as followed
         where followed.author_id = post.user_id
       )
-    order by post.created_at desc, post.id asc
-    limit v_bound_discovery
+    union all
+    select
+      2 as window_step,
+      post.id,
+      post.created_at,
+      post.created_at,
+      post.user_id,
+      post.sound_id,
+      coalesce(post.likes_count, 0),
+      coalesce(post.comments_count, 0),
+      coalesce(post.reposts_count, 0),
+      coalesce(post.shares_count, 0),
+      case
+        when post.type = 'photo'
+          or coalesce(post.media_url, post.media_urls[1], '') ~* '[.](jpe?g|png|webp|gif|avif)([?#]|$)'
+          then 'image'
+        else 'video'
+      end
+    from public.posts as post
+    join public.profiles as owner on owner.id = post.user_id
+    where coalesce(post.visibility, 'public') <> 'private'
+      and owner.is_private = false
+      and owner.is_deactivated = false
+      and post.created_at >= now() - interval '60 days'
+      and post.created_at < now() - interval '14 days'
+      and (post.type = 'reel' or post.destination = 'reels')
+      and not exists (
+        select 1
+        from followed_authors as followed
+        where followed.author_id = post.user_id
+      )
+    union all
+    select
+      3 as window_step,
+      post.id,
+      post.created_at,
+      post.created_at,
+      post.user_id,
+      post.sound_id,
+      coalesce(post.likes_count, 0),
+      coalesce(post.comments_count, 0),
+      coalesce(post.reposts_count, 0),
+      coalesce(post.shares_count, 0),
+      case
+        when post.type = 'photo'
+          or coalesce(post.media_url, post.media_urls[1], '') ~* '[.](jpe?g|png|webp|gif|avif)([?#]|$)'
+          then 'image'
+        else 'video'
+      end
+    from public.posts as post
+    join public.profiles as owner on owner.id = post.user_id
+    where coalesce(post.visibility, 'public') <> 'private'
+      and owner.is_private = false
+      and owner.is_deactivated = false
+      and post.created_at >= now() - interval '180 days'
+      and post.created_at < now() - interval '60 days'
+      and (post.type = 'reel' or post.destination = 'reels')
+      and not exists (
+        select 1
+        from followed_authors as followed
+        where followed.author_id = post.user_id
+      )
+  ),
+  -- حصة الاكتشاف تُملأ من النافذة الأضيق أولًا ثم تُكمَّل من الأوسع عند الحاجة،
+  -- بسقف صفوف واحد لكل مصدر: لا استعلام غير محدود.
+  discovery_slice as (
+    select
+      ranked.window_step,
+      ranked.post_id,
+      ranked.post_created_at,
+      ranked.candidate_at,
+      ranked.author_id,
+      ranked.sound_id,
+      ranked.likes_count,
+      ranked.comments_count,
+      ranked.reposts_count,
+      ranked.shares_count,
+      ranked.media_kind
+    from (
+      select
+        candidate.*,
+        row_number() over (
+          order by candidate.window_step asc, candidate.post_created_at desc,
+                   candidate.post_id asc
+        ) as slice_position
+      from discovery_steps as candidate
+    ) as ranked
+    where ranked.slice_position <= v_bound_discovery
+  ),
+  -- إعادة نشر المستخدم الحالي: نفس التوسع التدريجي (30 ثم 90 ثم 365 يومًا)
+  -- بنوافذ مفصولة وحدود صفوف صريحة، وبنفس شروط الخصوصية وأهلية الريلز.
+  -- تُستبعد المنشورات التي يغطيها مصدر المتابعات (30 يومًا) أو الاكتشاف
+  -- (حتى 180 يومًا) حتى لا تتكرر، فيبقى مصدر إعادة النشر لما هو أقدم فقط.
+  repost_steps as (
+    select
+      1 as window_step,
+      repost.post_id,
+      post.created_at as post_created_at,
+      repost.created_at as reposted_at,
+      post.user_id as author_id,
+      post.sound_id as sound_id,
+      coalesce(post.likes_count, 0) as likes_count,
+      coalesce(post.comments_count, 0) as comments_count,
+      coalesce(post.reposts_count, 0) as reposts_count,
+      coalesce(post.shares_count, 0) as shares_count,
+      case
+        when post.type = 'photo'
+          or coalesce(post.media_url, post.media_urls[1], '') ~* '[.](jpe?g|png|webp|gif|avif)([?#]|$)'
+          then 'image'
+        else 'video'
+      end as media_kind
+    from public.reposts as repost
+    join public.posts as post on post.id = repost.post_id
+    where repost.created_at >= now() - interval '30 days'
+      -- إعادة نشر المستخدم الحالي فقط: aani_reposts_select_own هي سياسة
+      -- SELECT المتساهلة الوحيدة على reposts، فلا تُقرأ إعادات الآخرين.
+      and repost.user_id = v_viewer
+      and (post.type = 'reel' or post.destination = 'reels')
+      and not (
+        post.created_at >= now() - interval '30 days'
+        and exists (
+          select 1 from followed_authors as followed
+          where followed.author_id = post.user_id
+        )
+      )
+      and not (
+        post.created_at >= now() - interval '180 days'
+        and coalesce(post.visibility, 'public') <> 'private'
+        and exists (
+          select 1 from public.profiles as owner
+          where owner.id = post.user_id
+            and owner.is_private = false
+            and owner.is_deactivated = false
+        )
+        and not exists (
+          select 1 from followed_authors as followed
+          where followed.author_id = post.user_id
+        )
+      )
+    union all
+    select
+      2 as window_step,
+      repost.post_id,
+      post.created_at,
+      repost.created_at,
+      post.user_id,
+      post.sound_id,
+      coalesce(post.likes_count, 0),
+      coalesce(post.comments_count, 0),
+      coalesce(post.reposts_count, 0),
+      coalesce(post.shares_count, 0),
+      case
+        when post.type = 'photo'
+          or coalesce(post.media_url, post.media_urls[1], '') ~* '[.](jpe?g|png|webp|gif|avif)([?#]|$)'
+          then 'image'
+        else 'video'
+      end
+    from public.reposts as repost
+    join public.posts as post on post.id = repost.post_id
+    where repost.created_at >= now() - interval '90 days'
+      and repost.created_at < now() - interval '30 days'
+      and repost.user_id = v_viewer
+      and (post.type = 'reel' or post.destination = 'reels')
+      and not (
+        post.created_at >= now() - interval '30 days'
+        and exists (
+          select 1 from followed_authors as followed
+          where followed.author_id = post.user_id
+        )
+      )
+      and not (
+        post.created_at >= now() - interval '180 days'
+        and coalesce(post.visibility, 'public') <> 'private'
+        and exists (
+          select 1 from public.profiles as owner
+          where owner.id = post.user_id
+            and owner.is_private = false
+            and owner.is_deactivated = false
+        )
+        and not exists (
+          select 1 from followed_authors as followed
+          where followed.author_id = post.user_id
+        )
+      )
+    union all
+    select
+      3 as window_step,
+      repost.post_id,
+      post.created_at,
+      repost.created_at,
+      post.user_id,
+      post.sound_id,
+      coalesce(post.likes_count, 0),
+      coalesce(post.comments_count, 0),
+      coalesce(post.reposts_count, 0),
+      coalesce(post.shares_count, 0),
+      case
+        when post.type = 'photo'
+          or coalesce(post.media_url, post.media_urls[1], '') ~* '[.](jpe?g|png|webp|gif|avif)([?#]|$)'
+          then 'image'
+        else 'video'
+      end
+    from public.reposts as repost
+    join public.posts as post on post.id = repost.post_id
+    where repost.created_at >= now() - interval '365 days'
+      and repost.created_at < now() - interval '90 days'
+      and repost.user_id = v_viewer
+      and (post.type = 'reel' or post.destination = 'reels')
+      and not (
+        post.created_at >= now() - interval '30 days'
+        and exists (
+          select 1 from followed_authors as followed
+          where followed.author_id = post.user_id
+        )
+      )
+      and not (
+        post.created_at >= now() - interval '180 days'
+        and coalesce(post.visibility, 'public') <> 'private'
+        and exists (
+          select 1 from public.profiles as owner
+          where owner.id = post.user_id
+            and owner.is_private = false
+            and owner.is_deactivated = false
+        )
+        and not exists (
+          select 1 from followed_authors as followed
+          where followed.author_id = post.user_id
+        )
+      )
+  ),
+  -- إعادة النشر الأحدث فقط لكل منشور (من أوضح خطوة)، ثم حصة الإعادات كاملة
+  -- بسقف صفوف واحد: لا استعلام غير محدود.
+  repost_ranked as (
+    select
+      candidate.*,
+      row_number() over (
+        partition by candidate.post_id
+        order by candidate.window_step asc, candidate.reposted_at desc,
+                 candidate.post_id asc
+      ) as repost_position
+    from repost_steps as candidate
   ),
   repost_slice as (
     select
+      latest.window_step,
       latest.post_id,
       latest.post_created_at,
       latest.reposted_at as candidate_at,
@@ -274,57 +520,15 @@ begin
       latest.media_kind
     from (
       select
-        repost.post_id,
-        post.created_at as post_created_at,
-        repost.created_at as reposted_at,
-        post.user_id as author_id,
-        post.sound_id as sound_id,
-        coalesce(post.likes_count, 0) as likes_count,
-        coalesce(post.comments_count, 0) as comments_count,
-        coalesce(post.reposts_count, 0) as reposts_count,
-        coalesce(post.shares_count, 0) as shares_count,
-        case
-          when post.type = 'photo'
-            or coalesce(post.media_url, post.media_urls[1], '') ~* '[.](jpe?g|png|webp|gif|avif)([?#]|$)'
-            then 'image'
-          else 'video'
-        end as media_kind,
+        ranked.*,
         row_number() over (
-          partition by repost.post_id
-          order by repost.created_at desc, repost.user_id asc, repost.post_id asc
-        ) as repost_position
-      from public.reposts as repost
-      join public.posts as post on post.id = repost.post_id
-      where repost.created_at >= now() - interval '30 days'
-        -- إعادة نشر المستخدم الحالي فقط: aani_reposts_select_own هي سياسة
-        -- SELECT المتساهلة الوحيدة على reposts، فلا تُقرأ إعادات الآخرين.
-        and repost.user_id = v_viewer
-        and (post.type = 'reel' or post.destination = 'reels')
-        and not (
-          post.created_at >= now() - interval '30 days'
-          and exists (
-            select 1 from followed_authors as followed
-            where followed.author_id = post.user_id
-          )
-        )
-        and not (
-          post.created_at >= now() - interval '14 days'
-          and coalesce(post.visibility, 'public') <> 'private'
-          and exists (
-            select 1 from public.profiles as owner
-            where owner.id = post.user_id
-              and owner.is_private = false
-              and owner.is_deactivated = false
-          )
-          and not exists (
-            select 1 from followed_authors as followed
-            where followed.author_id = post.user_id
-          )
-        )
+          order by ranked.window_step asc, ranked.reposted_at desc,
+                   ranked.post_id asc
+        ) as slice_position
+      from repost_ranked as ranked
+      where ranked.repost_position = 1
     ) as latest
-    where latest.repost_position = 1
-    order by latest.reposted_at desc, latest.post_id asc
-    limit v_bound_reposts
+    where latest.slice_position <= v_bound_reposts
   ),
   raw_candidates as (
     select 1 as source_rank, follow_slice.* from follow_slice
@@ -340,8 +544,8 @@ begin
       candidate.*,
       row_number() over (
         partition by candidate.post_id
-        order by candidate.source_rank asc, candidate.candidate_at desc,
-                 candidate.post_id asc
+        order by candidate.source_rank asc, candidate.window_step asc,
+                 candidate.candidate_at desc, candidate.post_id asc
       ) as assignment_position
     from raw_candidates as candidate
   ),
@@ -1007,6 +1211,15 @@ begin
 
   if position('coalesce(p_candidate_limit, 100)' in v_relevance_definition) = 0 then
     raise exception 'سقف المرشحين في المحرك الداخلي لا يستند إلى p_candidate_limit.'
+      using errcode = '42501';
+  end if;
+
+  -- التوسع التدريجي الحقيقي في المصادر: نوافذ أوسع عند الحاجة، لا مجرد ترتيب
+  -- أول 200 مرشح من النوافذ القديمة.
+  if position('180 days' in v_relevance_definition) = 0
+     or position('60 days' in v_relevance_definition) = 0
+     or position('window_step' in v_relevance_definition) = 0 then
+    raise exception 'المحرك الداخلي لا يوسّع نوافذ المصادر تدريجيًا (14/60/180 يومًا أو إعادات النشر 30/90/365).'
       using errcode = '42501';
   end if;
 
