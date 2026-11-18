@@ -18,7 +18,7 @@ import type { Profile } from '@/lib/types';
 export const PUBLIC_PROFILE_COLUMNS = [
   'id', 'username', 'full_name', 'display_name', 'avatar_url',
   'cover_url', 'cover_position_x', 'cover_position_y',
-  'bio', 'job', 'website', 'gender',
+  'bio', 'website', 'gender',
   'is_private', 'is_nearby_visible', 'is_deactivated',
   'show_city', 'show_job', 'show_birth_date',
   'created_at', 'updated_at',
@@ -27,16 +27,17 @@ export const PUBLIC_PROFILE_COLUMNS = [
 /**
  * شكل صف profiles عند طلب PUBLIC_PROFILE_COLUMNS.
  * قائمة الأعمدة ديناميكية، فلا يستنتج postgrest-js شكل الصف — يُمرَّر هذا
- * النوع إلى .returns عند الاستعلام.
+ * النوع إلى .returns عند الاستعلام. job مستثنى عمداً: قراءته المباشرة مسحوبة
+ * ولا تصل إلا عبر aani_public_profile.
  */
-export type PublicProfileRow = Partial<Profile> & Pick<Profile, 'id' | 'username'>;
+export type PublicProfileRow = Omit<Partial<Profile>, 'job'> & Pick<Profile, 'id' | 'username'>;
 
 /**
  * الحقول المشروطة بأعلام الظهور (city/location محكومان بـ show_city،
- * وbirth_date بـ show_birth_date). لا تُقرأ مباشرة من الجدول: يُعيدها
- * aani_public_profile فارغة عندما يختار صاحب الحساب إخفاءها.
+ * وbirth_date بـ show_birth_date، وjob بـ show_job). لا تُقرأ مباشرة من الجدول:
+ * يُعيدها aani_public_profile فارغة عندما يختار صاحب الحساب إخفاءها.
  */
-export type ConditionalProfileFields = Pick<Profile, 'city' | 'location' | 'birth_date'>;
+export type ConditionalProfileFields = Pick<Profile, 'city' | 'location' | 'birth_date' | 'job'>;
 
 /**
  * يقرأ حقول الملف المشروطة بأعلام الظهور عبر الدالة المصرّح بها.
@@ -57,7 +58,7 @@ export async function fetchConditionalProfileFields(
     }
 
     const row = (Array.isArray(data) ? data[0] : data) as
-      | { city?: unknown; location?: unknown; birth_date?: unknown }
+      | { city?: unknown; location?: unknown; birth_date?: unknown; job?: unknown }
       | null;
     if (!row) return null;
 
@@ -65,6 +66,7 @@ export async function fetchConditionalProfileFields(
       city: typeof row.city === 'string' ? row.city : null,
       location: typeof row.location === 'string' ? row.location : null,
       birth_date: typeof row.birth_date === 'string' ? row.birth_date : null,
+      job: typeof row.job === 'string' ? row.job : null,
     };
   } catch (error) {
     console.warn('[profile] فشل طلب حقول الملف المشروطة:', error);
