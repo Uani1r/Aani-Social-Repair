@@ -1,0 +1,55 @@
+name: CI
+
+# Runs typecheck and build for the two runnable artifacts on every pull request
+# into main, and on every push to main itself.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# One run per ref: a new push to the same branch cancels the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck-and-build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm must be installed before setup-node, so that the pnpm store cache
+      # it configures can be resolved.
+      - name: Set up pnpm 10.33.3
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run typecheck
+
+      - name: Build @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run build
+
+      - name: Typecheck @workspace/api-server
+        run: pnpm --filter @workspace/api-server run typecheck
+
+      - name: Build @workspace/api-server
+        run: pnpm --filter @workspace/api-server run build
