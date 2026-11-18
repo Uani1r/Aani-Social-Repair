@@ -168,7 +168,8 @@ select
 from generate_series(1, 10) as g;
 
 -- مصدر الاكتشاف: 44 ريلز حديثة من author B، وواحد قديم (قبل 100 يوم) هو
--- الريل غير المشاهد. author_position له = 45، فيقع بعد المرتبة 40 حتمًا.
+-- الريل غير المشاهد. author_position له 46 (45 من الاكتشاف + منشور معاد نشره)
+-- فيقع بعد المرتبة 40 حتمًا مهما تغيّرت النقاط.
 insert into public.posts (id, user_id, created_at, type, destination, visibility, media_url)
 select
   ('00000000-0000-4000-8000-' || lpad((100 + g)::text, 12, '0'))::uuid,
