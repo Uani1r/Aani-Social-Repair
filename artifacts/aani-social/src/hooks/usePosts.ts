@@ -6,6 +6,12 @@ import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post, type PostRow, type Profile } from '@/lib/types';
 import { resolvePostMediaUrls } from '@/lib/postMedia';
 import { registerContentRefreshRequest } from '@/lib/contentRefresh';
+import {
+  clearPendingReelsBatch,
+  getPendingReelsBatch,
+  setPendingReelsBatch,
+  shouldDeferReelsBatch,
+} from '@/lib/reelsBatches';
 
 // ذاكرة مؤقتة على مستوى الوحدة (بديل Keep-Alive/staleTime):
 // عند التنقل بين التبويبات (الرئيسية/الريلز/الملف الشخصي) تُركَّب
@@ -16,6 +22,10 @@ import { registerContentRefreshRequest } from '@/lib/contentRefresh';
 const postsCache = new Map<string, Post[]>();
 // جيل مستقل لكل مفتاح: طلب أقدم لنفس المفتاح لا يستبدل نتيجة طلب أحدث منه.
 const postsCacheGeneration = new Map<string, number>();
+// وقت آخر دفعة ريلز ناجحة لكل مفتاح: يمنع طلبًا جديدًا عند كل إعادة تركيب
+// للشاشة. لا يُستخدم إلا لمفتاح الريلز، ولا يمسّ منطق Feed.
+const postsCacheTimestamp = new Map<string, number>();
+const REELS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface RepostRow {
   post_id: string;
@@ -885,17 +895,23 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   // مفتاح الذاكرة يشمل المستخدم الحالي: لا تتشارك الحسابات ذاكرة الريلز أو
   // المنشورات، فلا يظهر محتوى حساب لحساب آخر عند تبديل الجلسة.
   const cacheKey = `${query}:${targetUserId || ''}:${currentUserId}`;
-  const hadCachedPosts = postsCache.has(cacheKey);
+  // دفعة ريلز معلّقة من جلسة سابقة لنفس المفتاح: تُطبَّق عند بداية جلسة عرض
+  // جديدة بدل استبدال ما يراه المستخدم في منتصف المشاهدة.
+  const pendingReelsBatch = query === 'reel' ? getPendingReelsBatch(cacheKey) : undefined;
+  const hadCachedPosts = postsCache.has(cacheKey) || pendingReelsBatch !== undefined;
   // القائمة محفوظة مع مفتاحها: لا يمكن عرض منشورات مفتاح سابق ولو لإطار واحد.
   const [postState, setPostState] = useState<{ key: string; posts: Post[] }>(() => ({
     key: cacheKey,
-    posts: postsCache.get(cacheKey) || [],
+    posts: (getPendingReelsBatch(cacheKey) ?? postsCache.get(cacheKey)) || [],
   }));
   const [loadingState, setLoading] = useState(!hadCachedPosts);
   const [error, setError] = useState('');
   // خطأ قراءة سجلات إعادة النشر (RLS/جدول مفقود) — يُعرض في تبويب إعادة النشر
   // بدل إظهار تبويب فارغ يوحي بعدم وجود إعادة نشر.
   const [repostsError, setRepostsError] = useState('');
+  // هل بدأت هذه الشاشة بدفعة ريلز معلّقة من الخادم؟ يُستخدم لإعادة التمرير إلى
+  // أول ريل بدل استعادة موضع قديم لا يطابق ترتيبًا جديدًا.
+  const [reelsBatchReplaced, setReelsBatchReplaced] = useState(false);
   // جيل الطلب: كل استدعاء جديد يُبطل صلاحية ما قبله للكتابة على حالة الشاشة.
   const requestIdRef = useRef(0);
 
@@ -904,6 +920,11 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   // إلى أي render قبل تنفيذ التأثير.
   const posts = postState.key === cacheKey ? postState.posts : (postsCache.get(cacheKey) || []);
   const loading = postState.key === cacheKey ? loadingState : !hadCachedPosts;
+  // أحدث قائمة معروضة: تُقرأ داخل refresh لمعرفة هل هناك دفعة يشاهدها المستخدم
+  // الآن. مرجع لا اعتمادية: إدخال postState في اعتماديات useCallback كان
+  // سيُعيد إنشاء refresh مع كل تحديث ويدخل في حلقة تحديث بلا نهاية.
+  const visiblePostsRef = useRef<Post[]>(posts);
+  visiblePostsRef.current = posts;
 
   const refresh = useCallback(async (silent = false) => {
     // جيل هذا الطلب: أي طلب أحدث منه يُلغي صلاحيته للكتابة على حالة الشاشة.
@@ -929,6 +950,21 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     const setPosts = (value: Post[]) => {
       if (isLatestForKey()) postsCache.set(cacheKey, value);
       commitState(() => setPostState({ key: cacheKey, posts: value }));
+    };
+
+    // هل توجد دفعة ريلز معروضة الآن؟ التبديل تحتها ممنوع: الترتيب الجديد
+    // يُحفظ كدفعة معلّقة ويُطبَّق عند بداية جلسة عرض جديدة (تركيب الشاشة).
+    const shouldDeferBatch = query === 'reel'
+      && shouldDeferReelsBatch(visiblePostsRef.current.length > 0);
+
+    /** كتابة نتيجة جلب الريلز: مباشرة إن لا دفعة ظاهرة، وإلا إلى الطابور المعلّق. */
+    const applyReelsResult = (value: Post[]) => {
+      postsCacheTimestamp.set(cacheKey, Date.now());
+      if (shouldDeferBatch && value.length > 0) {
+        setPendingReelsBatch(cacheKey, value);
+        return;
+      }
+      setPosts(value);
     };
 
     if (!supabaseConfigured) {
@@ -1162,7 +1198,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         // الزمني الحالي كما هو تماماً — بلا دمج أي نتيجة جزئية معه.
         const personalizedReels = await fetchPersonalizedReelPosts(currentUserId);
         if (personalizedReels) {
-          setPosts(personalizedReels);
+          applyReelsResult(personalizedReels);
           return;
         }
 
@@ -1215,7 +1251,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
         const reelPosts = [...repostedPosts, ...formatted].sort((first, second) =>
           Date.parse(second.reposted_at || second.created_at) - Date.parse(first.reposted_at || first.created_at),
         );
-        setPosts(await hydratePostInteractions(reelPosts, currentUserId));
+        applyReelsResult(await hydratePostInteractions(reelPosts, currentUserId));
       }
     } catch (caughtError) {
       // طلب قديم (مفتاح أو حساب سابق): لا يمسّ حالة الشاشة ولا رسائل الخطأ.
@@ -1223,7 +1259,9 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       console.error('[posts] فشل جلب المنشورات', { query, error: caughtError });
       if (!silent) {
         commitState(() => {
-          setPostState({ key: cacheKey, posts: [] });
+          // الريلز لا تُفرَّغ عند فشل تحديث: القائمة المعروضة تبقى كما هي بدل
+          // شاشة فارغة أو إعادة بناء بترتيب لم يعد مطابقًا.
+          if (query !== 'reel') setPostState({ key: cacheKey, posts: [] });
           const errorCode = isRecord(caughtError) && typeof caughtError.code === 'string' ? caughtError.code : '';
           const errorMessage = isRecord(caughtError) && typeof caughtError.message === 'string' ? caughtError.message : '';
           const errorDetail = errorCode || errorMessage
@@ -1248,12 +1286,26 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     // ذاكرة المفتاح الحالي تحدد البداية وقرار التحديث الصامت: عند تغيّر الحساب
     // يتغيّر المفتاح، فلا تُعرض قائمة الحساب السابق أثناء انتظار الجلب — تُعرض
     // ذاكرة الحساب الجديد إن وُجدت، وإلا حالة التحميل (Skeleton).
-    const cachedPosts = postsCache.get(cacheKey);
+    const pendingBatch = query === 'reel' ? getPendingReelsBatch(cacheKey) : undefined;
+    const cachedPosts = pendingBatch ?? postsCache.get(cacheKey);
     setPostState({ key: cacheKey, posts: cachedPosts ?? [] });
     setLoading(!cachedPosts);
-    // عند وجود محتوى محفوظ: تحديث صامت في الخلفية بلا شاشة تحميل؛
-    // وإلا جلب عادي أول مرة يظهر فيه السكلتون.
-    void refresh(cachedPosts !== undefined);
+    if (pendingBatch) {
+      // جلسة عرض جديدة تبدأ بترتيب الخادم الأحدث: تُثبَّت الدفعة في الذاكرة
+      // وتُزال من الطابور، وتُعلَّم الشاشة لتستأنف من أول ريل (لا موضع قديم
+      // يشير إلى ترتيب مختلف).
+      postsCache.set(cacheKey, pendingBatch);
+      postsCacheTimestamp.set(cacheKey, Date.now());
+      clearPendingReelsBatch(cacheKey);
+      setReelsBatchReplaced(true);
+    }
+    // عند وجود محتوى محفوظ حديث: لا طلب جديد عند كل إعادة تركيب للشاشة؛
+    // الجلب الصامت في الخلفية يبقى فقط بعد انتهاء صلاحية الذاكرة القصيرة.
+    const cachedAt = postsCacheTimestamp.get(cacheKey) ?? 0;
+    const cacheIsFresh = query === 'reel'
+      && cachedPosts !== undefined
+      && Date.now() - cachedAt < REELS_CACHE_TTL_MS;
+    if (!cacheIsFresh) void refresh(cachedPosts !== undefined);
     let repostRefreshTimer: number | null = null;
     // تحديث فوري بعد نجاح النشر: جلب صامت يحدّث القائمة والذاكرة المؤقتة
     // دون وميض Skeleton، فيظهر الريل الجديد في تبويب الريلز مباشرة.
@@ -1289,5 +1341,5 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
     [posts, currentUserId, interactionVersion],
   );
 
-  return { posts: currentPosts, loading, error, repostsError, refresh };
+  return { posts: currentPosts, loading, error, repostsError, refresh, reelsBatchReplaced };
 }

@@ -22,7 +22,7 @@ function saveReelsScrollPosition(userId: string, scrollTop: number) {
 
 export default function ReelsPage({ userId, onOpenComments }: { userId: string; onOpenComments: (postId: string) => void }) {
   const [location] = useLocation();
-  const { posts, loading, refresh, error } = usePosts('reel', undefined, userId);
+  const { posts, loading, refresh, error, reelsBatchReplaced } = usePosts('reel', undefined, userId);
   const [pendingPosts, setPendingPosts] = useState<PendingPost[]>(getPendingPosts);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -39,6 +39,17 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
     if (loading || new URLSearchParams(location.split('?')[1] || '').has('openReel')) return undefined;
     const container = scrollRef.current;
     if (!container) return undefined;
+    // بدأت الشاشة بترتيب جديد من الخادم: تُفتح جلسة عرض جديدة من أول ريل،
+    // فلا يُستعاد موضع قديم يشير إلى ترتيب مختلف (ويُمسح الموضع المحفوظ).
+    if (reelsBatchReplaced) {
+      savedReelsScrollPositions.delete(userId);
+      try {
+        window.sessionStorage.removeItem(`aani:reels-scroll:${userId}`);
+      } catch {
+        // التخزين غير متاح: تكفي إزالة الموضع من الذاكرة.
+      }
+      return undefined;
+    }
     let savedScrollTop = savedReelsScrollPositions.get(userId) || 0;
     try {
       savedScrollTop = Number(window.sessionStorage.getItem(`aani:reels-scroll:${userId}`)) || savedScrollTop;
@@ -53,7 +64,7 @@ export default function ReelsPage({ userId, onOpenComments }: { userId: string; 
       setActiveIndex(index);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [loading, userId]);
+  }, [loading, userId, reelsBatchReplaced]);
 
   useEffect(() => () => {
     const container = scrollRef.current;
