@@ -54,6 +54,9 @@ jobs:
       - name: Build @workspace/aani-social
         run: pnpm --filter @workspace/aani-social run build
 
+      - name: Unit tests @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run test:unit
+
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
 
