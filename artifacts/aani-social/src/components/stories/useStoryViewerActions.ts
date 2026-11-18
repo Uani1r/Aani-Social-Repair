@@ -417,8 +417,9 @@ export function useStoryViewerActions({
 
       // 2) كل من أعجب بقصة يُحتسب مشاهداً: طلب مستقل لا يُلغي الإعجاب
       //    ولا يؤخّر تأكيده إن فشل تسجيل المشاهدة.
-      void supabase
-        .rpc('aani_record_story_view', { p_story_id: storyId })
+      void Promise.resolve(
+        supabase.rpc('aani_record_story_view', { p_story_id: storyId }),
+      )
         .then(({ error: viewError }) => {
           if (viewError) console.warn('[story views] تعذر تسجيل مشاهدة المعجب:', viewError);
         })

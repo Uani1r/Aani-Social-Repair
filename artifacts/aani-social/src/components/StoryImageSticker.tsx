@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type TouchEvent as ReactTouchEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type Touch as ReactTouch, type TouchEvent as ReactTouchEvent, type TouchList as ReactTouchList } from 'react';
 
 import type { StoryImageOverlay, StoryImageStickerUpdate, StoryStickerShape } from '@/components/stories/types';
 
@@ -52,7 +52,7 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function touchCenter(touches: TouchList) {
+function touchCenter(touches: ReactTouchList) {
   const first = touches[0];
   const second = touches[1];
   return {
@@ -115,7 +115,7 @@ export default function StoryImageSticker({
     if (gesture) gesture.timer = undefined;
   };
 
-  const beginSingleTouch = (touch: Touch, mode: GestureMode = 'pending') => {
+  const beginSingleTouch = (touch: ReactTouch, mode: GestureMode = 'pending') => {
     const gesture: StickerGesture = {
       mode,
       touchCount: 1,
@@ -144,7 +144,7 @@ export default function StoryImageSticker({
     gestureRef.current = gesture;
   };
 
-  const beginTransform = (touches: TouchList) => {
+  const beginTransform = (touches: ReactTouchList) => {
     const center = touchCenter(touches);
     gestureRef.current = {
       mode: 'transform',

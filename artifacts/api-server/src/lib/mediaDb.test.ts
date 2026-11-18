@@ -32,7 +32,7 @@ function stubSupabaseFetch(handler: (table: string, params: URLSearchParams) => 
   const tables: string[] = [];
   const orParams = new Map<string, string>();
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: URL | RequestInfo) => {
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0]) => {
     const url = new URL(String(input));
     const table = url.pathname.split("/")[3] ?? "";
     tables.push(table);

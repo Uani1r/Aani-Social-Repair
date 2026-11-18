@@ -163,14 +163,18 @@ const styles = {
 const SERVER_OK_COLOR = '#14532d';
 const SERVER_STALE_COLOR = '#7f1d1d';
 
-function describeServerCheck(check: ServerCheckResult | null): { text: string; color: string } | null {
+function describeServerCheck(check: mediaDiagnostics.ServerCheckResult | null): { text: string; color: string } | null {
   if (!check) return null;
   if (check.error) return { text: `فحص الخادم فشل: ${check.error}`, color: SERVER_STALE_COLOR };
   const upload = check.uploadCheck;
   const auth = check.authCheck;
+  // استدعاء واقٍ: نسخة قديمة من الوحدة قد لا تحمل الدالة
+  const knownBuild = typeof mediaDiagnostics.getLastKnownServerBuildVersion === 'function'
+    ? mediaDiagnostics.getLastKnownServerBuildVersion()
+    : null;
   if (upload?.ok && upload.serverBuildVersion) {
     return {
-      text: `الخادم حيّ ويحتوي المسارات الجديدة (HTTP ${upload.status}) — إصدار الخادم: ${upload.serverBuildVersion}${getLastKnownServerBuildVersion() === upload.serverBuildVersion ? '' : ' (لاحظ: هذا الإصدار من الاستجابة الحية)'}`,
+      text: `الخادم حيّ ويحتوي المسارات الجديدة (HTTP ${upload.status}) — إصدار الخادم: ${upload.serverBuildVersion}${knownBuild === upload.serverBuildVersion ? '' : ' (لاحظ: هذا الإصدار من الاستجابة الحية)'}`,
       color: SERVER_OK_COLOR,
     };
   }
@@ -191,8 +195,8 @@ function describeServerCheck(check: ServerCheckResult | null): { text: string; c
 
 export default function StoryErrorDiagnosticPanel() {
   const [open, setOpen] = useState(false);
-  const [latestFailure, setLatestFailure] = useState<MediaDiagnosticEvent | null>(null);
-  const [serverCheck, setServerCheck] = useState<ServerCheckResult | null>(null);
+  const [latestFailure, setLatestFailure] = useState<mediaDiagnostics.MediaDiagnosticEvent | null>(null);
+  const [serverCheck, setServerCheck] = useState<mediaDiagnostics.ServerCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [serverVersionLive, setServerVersionLive] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);

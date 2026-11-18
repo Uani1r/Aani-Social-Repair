@@ -247,9 +247,11 @@ export default function ChatPhotoEditor({
           initialOffset={offset}
           initialRotation={0}
           onCancel={() => setCropOpen(false)}
-          onApply={transform => {
-            setZoom(transform.zoom);
-            setOffset(transform.offset);
+          onApply={result => {
+            if (result.kind === 'transform') {
+              setZoom(result.transform.zoom);
+              setOffset(result.transform.offset);
+            }
             setCropOpen(false);
           }}
         />

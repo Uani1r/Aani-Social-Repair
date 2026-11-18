@@ -321,8 +321,13 @@ export async function mediaInActiveUse(
     }
   }
 
-  const excludePost = options.excludePostId ? { id: `neq.${options.excludePostId}` } : {};
-  const excludeStory = options.excludeStoryId ? { id: `neq.${options.excludeStoryId}` } : {};
+  // النوع صريح: بدونه يصبح { id?: undefined } اتحاداً لا يطابق Record<string, string>
+  const excludePost: Record<string, string> | undefined = options.excludePostId
+    ? { id: `neq.${options.excludePostId}` }
+    : undefined;
+  const excludeStory: Record<string, string> | undefined = options.excludeStoryId
+    ? { id: `neq.${options.excludeStoryId}` }
+    : undefined;
 
   // كل فحص دالة كسولة تُنفَّذ عند بلوغها فقط: إنشاء كل الوعود مسبقاً كان
   // يترك وعوداً مرفوضة بلا مُنتَظِر (رفض غير معالج) يُسقط عملية Node.js كلها

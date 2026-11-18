@@ -125,7 +125,10 @@ export function useInteractionRealtime(
     const rebuildChannel = () => {
       if (disposed) return;
       const { channel } = current;
-      if (channel.state === "SUBSCRIBED" || channel.state === "JOINING") return;
+      // ChannelState يحمل قيم realtime-js الفعلية (joined/joining) لا أسماء
+      // حالات الإشتراك (SUBSCRIBED). التوسيع إلى string يجعل المقارنة صريحة.
+      const channelState: string = channel.state;
+      if (channelState === 'joined' || channelState === 'joining') return;
       const now = Date.now();
       if (now - lastRebuildAt < REBUILD_COOLDOWN_MS) return;
       lastRebuildAt = now;

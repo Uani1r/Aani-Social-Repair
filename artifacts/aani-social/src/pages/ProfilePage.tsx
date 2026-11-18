@@ -25,7 +25,7 @@ import { useSeenStoryIds } from '@/lib/seenStories';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
-import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
+import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS, type PublicProfileRow } from '@/lib/profileFields';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
@@ -517,11 +517,13 @@ export default function ProfilePage({
       return () => { active = false; };
     }
 
-    void supabase
-      .from('stories')
-      .select('id, expires_at')
-      .eq('user_id', activeUserId)
-      .gt('expires_at', new Date().toISOString())
+    void Promise.resolve(
+      supabase
+        .from('stories')
+        .select('id, expires_at')
+        .eq('user_id', activeUserId)
+        .gt('expires_at', new Date().toISOString()),
+    )
       .then(({ data, error }) => {
         if (!active) return;
         if (error) {
@@ -748,7 +750,7 @@ export default function ProfilePage({
       };
 
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
-        supabase.from('profiles').select(PUBLIC_PROFILE_COLUMNS).eq('id', activeUserId).maybeSingle(),
+        supabase.from('profiles').select(PUBLIC_PROFILE_COLUMNS).eq('id', activeUserId).returns<PublicProfileRow>().maybeSingle(),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('following_id', activeUserId),
         supabase.from('follows').select('*', { count: 'exact', head: true }).eq('follower_id', activeUserId),
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', currentUserId).eq('following_id', activeUserId).maybeSingle(),

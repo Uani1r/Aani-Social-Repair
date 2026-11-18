@@ -1309,7 +1309,8 @@ export default function MessagesPage({
             ? { ...message, content: openedChatMediaContent(message.content) }
             : message;
         });
-      const reactionResult = visibleMessages.length
+      type MessageReactionRow = { message_id: string; user_id: string; emoji: string };
+      const reactionResult: { data: MessageReactionRow[] | null; error: unknown } = visibleMessages.length
         ? await retrySupabaseQuery(async () => await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id)))
         : { data: [], error: null };
       const nextReactions: Record<string, MessageReaction[]> = {};

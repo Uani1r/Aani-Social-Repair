@@ -344,6 +344,7 @@ export function inspectMp4Bytes(bytes: Uint8Array): Mp4Inspection {
 
   /** stsd FullBox: ترويسة (8) + version/flags (4) + entry_count (4) ثم المدخلات. */
   function parseStsd(boxStart: number, boxEnd: number, trak: TrakInspection | null): void {
+    if (!trak) return;
     let entryOffset = boxStart + 16;
     while (entryOffset + 8 <= boxEnd) {
       const entrySize = readU32(bytes, entryOffset);
@@ -1087,7 +1088,7 @@ export async function extractAudio(
     trim?: { start: number; end: number };
     onProgress?: (percent: number) => void;
     signal?: AbortSignal;
-  } = {},
+  },
 ): Promise<File> {
   const { kind, trim, onProgress, signal } = options;
   ensureNotAborted(signal);

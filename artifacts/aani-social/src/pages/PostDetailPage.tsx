@@ -8,6 +8,29 @@ import { decoratePost, useInteractionsVersion } from '@/lib/interactions';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { normalizePostMetadata, type Post } from '@/lib/types';
 
+/**
+ * أعمدة posts التي يقرأها هذا الصفحة. القائمة الطويلة تتجاوز حدود محلّل
+ * أنواع postgrest-js، فيُحدَّد الناتج صراحةً عبر .returns أدناه.
+ */
+type PostDetailRow = {
+  id: string;
+  user_id: string;
+  content: string | null;
+  post_metadata?: unknown;
+  media_url?: string | null;
+  media_urls?: string[] | null;
+  type?: string | null;
+  destination?: string | null;
+  created_at?: string;
+  audio_url?: string | null;
+  audio_title?: string | null;
+  sound_id?: string | null;
+  sound_trim_start?: number | null;
+  sound_trim_end?: number | null;
+  trim_start?: number | null;
+  trim_end?: number | null;
+};
+
 export default function PostDetailPage({ postId, currentUserId, onOpenComments }: { postId: string; currentUserId: string; onOpenComments: (postId: string, commentId?: string) => void }) {
   const [location] = useLocation();
   const [post, setPost] = useState<Post | null>(null);
@@ -26,12 +49,16 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     }
     setLoading(true);
     try {
+      // قائمة الأعمدة الطويلة تتجاوز محلّل الأنواع في postgrest-js فيصبح Result
+      // never، ولأن maybeSingle يتوقع مصفوفة يصبح الناتج never أيضاً. لذلك
+      // يُفرض نوع الصف عبر overrideTypes بعد maybeSingle لا عبر returns قبله.
       const loadPost = (includeDestination: boolean) => supabase.from('posts')
         .select(includeDestination
           ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at, audio_url, audio_title, sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end'
           : '*')
         .eq('id', postId)
-        .maybeSingle();
+        .maybeSingle()
+        .overrideTypes<PostDetailRow, { merge: false }>();
       let postResult = await loadPost(true);
       if (postResult.error?.code === '42703' || postResult.error?.code === 'PGRST204') {
         postResult = await loadPost(false);

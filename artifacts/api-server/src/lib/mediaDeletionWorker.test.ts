@@ -61,7 +61,7 @@ type Call = { method: string; url: string };
 function stubFetch(handler: (method: string, url: string, body: unknown) => unknown): { calls: Call[]; restore: () => void } {
   const calls: Call[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async (input: URL | RequestInfo, init?: RequestInit) => {
+  globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = String(input instanceof URL ? input : input);
     const method = (init?.method ?? "GET").toUpperCase();
     calls.push({ method, url });

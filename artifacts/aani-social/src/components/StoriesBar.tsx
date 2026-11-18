@@ -24,6 +24,7 @@ import {
 } from '@/lib/appShared';
 
 import StoryComposerSheet from './StoryComposerSheet';
+import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import StoryCreationEditor from '@/components/StoryCreationEditor';
 import TextOnlyStoryCanvas from '@/components/story/TextOnlyStoryCanvas';
 import StoryViewer from '@/components/StoryViewer';
@@ -1518,15 +1519,22 @@ export default function StoriesBar({
             localStorage.removeItem(key);
             continue;
           }
-          if (!session || !Number.isFinite(session.expiresAt) || !Number.isFinite(session.createdAt)) {
+          if (!session) {
             localStorage.removeItem(key);
             continue;
           }
-          if ((session.expiresAt as number) <= Date.now() && !session.expired) {
+          // Partial قد تحمل undefined؛ نُثبّت القيم الرقمية قبل التحقق منها
+          const expiresAt = typeof session.expiresAt === 'number' ? session.expiresAt : NaN;
+          const createdAt = typeof session.createdAt === 'number' ? session.createdAt : NaN;
+          if (!Number.isFinite(expiresAt) || !Number.isFinite(createdAt)) {
+            localStorage.removeItem(key);
+            continue;
+          }
+          if (expiresAt <= Date.now() && !session.expired) {
             localStorage.setItem(key, JSON.stringify({
               profileIds: [],
-              createdAt: session.createdAt,
-              expiresAt: session.expiresAt,
+              createdAt,
+              expiresAt,
               expired: true,
             } satisfies StoryViewerPreviewSession));
           }
@@ -1549,12 +1557,14 @@ export default function StoriesBar({
     }
 
     let active = true;
-    void supabase
-      .from('story_likes')
-      .select('id')
-      .eq('story_id', currentStory.id)
-      .eq('user_id', userId)
-      .maybeSingle()
+    void Promise.resolve(
+      supabase
+        .from('story_likes')
+        .select('id')
+        .eq('story_id', currentStory.id)
+        .eq('user_id', userId)
+        .maybeSingle(),
+    )
       .then(({ data, error }) => {
         if (!active) return;
         if (error) {
@@ -1585,8 +1595,9 @@ export default function StoriesBar({
     if (!currentStory || isStoryOwner || !userId || !supabaseConfigured) return;
 
     let active = true;
-    void supabase
-      .rpc('aani_record_story_view', { p_story_id: currentStory.id })
+    void Promise.resolve(
+      supabase.rpc('aani_record_story_view', { p_story_id: currentStory.id }),
+    )
       .then(({ error }) => {
         if (active && error) {
           console.warn('[story views] تعذر تسجيل المشاهدة في الخلفية:', error);

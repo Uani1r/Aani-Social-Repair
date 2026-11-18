@@ -22,7 +22,7 @@ import type { MusicTrack } from '@/lib/music';
 
 type Point = { x: number; y: number };
 type StoryEditorExtraTool = { key: string; label: string; action: () => void };
-type StoryBackgroundPreset = { background: string };
+type StoryBackgroundPreset = { label: string; background: string };
 type StoryFilterOverlay = { color: string; opacity: number; blend: string };
 
 type StoryCreationEditorProps = {

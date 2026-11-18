@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS } from '@/lib/profileFields';
+import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS, type PublicProfileRow } from '@/lib/profileFields';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
 import { flushUploadLedgerQueue } from '@/lib/uploadLedgerQueue';
 import type { Profile } from '@/lib/types';
@@ -124,7 +124,11 @@ export default function useAppSession() {
         // الأعمدة العامة فقط: أعمدة التفضيلات الشخصية و city/location/birth_date
         // لم تعد ممنوحة للقراءة عبر REST (ترحيل 20270206000000)، وتُقرأ لصاحب
         // الحساب عبر الدالتين المصرّح بهما أدناه.
-        const { data, error } = await supabase.from('profiles').select(PUBLIC_PROFILE_COLUMNS).eq('id', user.id).maybeSingle();
+        const { data, error } = await supabase.from('profiles')
+          .select(PUBLIC_PROFILE_COLUMNS)
+          .eq('id', user.id)
+          .returns<PublicProfileRow>()
+          .maybeSingle();
         if (error) throw error;
         if (!active) return;
 
