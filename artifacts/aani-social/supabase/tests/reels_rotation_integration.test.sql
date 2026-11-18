@@ -144,41 +144,68 @@ create policy posts_test_select
 \ir ../migrations/20270213000000_get_personalized_reels_v2b.sql
 \ir ../migrations/20270223000000_get_personalized_reels_impression_rotation.sql
 
--- 7) بيانات الاختبار
+-- 7) بيانات الاختبار — موزّعة على المصادر الثلاثة بما يوافق حصص المحرك
+--    (40% متابعات، 40% اكتشاف، 20% إعادات نشر)، حتى لا يكون العدد النهائي
+--    رهينة لمصدر واحد.
 insert into public.profiles (id, is_private, is_deactivated) values
   ('00000000-0000-4000-8000-0000000000aa', false, false),  -- author A (متابَع)
-  ('00000000-0000-4000-8000-0000000000bb', true, false);   -- author B (خاص)
+  ('00000000-0000-4000-8000-0000000000bb', false, false),  -- author B (اكتشاف)
+  ('00000000-0000-4000-8000-0000000000dd', true, false);   -- author D (حساب خاص)
 
 insert into public.follows (follower_id, following_id) values
   ('00000000-0000-4000-8000-0000000000ff', '00000000-0000-4000-8000-0000000000aa');
 
--- 41 ريلًا من author A، الأقدم (created_at - 2 hours) سيكون صاحب أدنى ترتيب
+-- مصدر المتابعات: 10 ريلز حديثة من author A (داخل نافذة 30 يومًا)
 insert into public.posts (id, user_id, created_at, type, destination, visibility, media_url)
 select
   ('00000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid,
   '00000000-0000-4000-8000-0000000000aa',
-  now() - (interval '2 hours') + (g * interval '1 minute'),
+  now() - (g * interval '1 hour'),
   'reel',
   'reels',
   'public',
-  'https://example.test/reel-' || g || '.mp4'
-from generate_series(1, 41) as g;
+  'https://example.test/reel-a-' || g || '.mp4'
+from generate_series(1, 10) as g;
 
--- 40 منها ظهرت قبل 10 دقائق (لم يظهر الأقدم: post 1)
-insert into public.post_impressions (event_id, user_id, post_id, surface, content_type, session_id, impression_at)
+-- مصدر الاكتشاف: 44 ريلز حديثة من author B، وواحد قديم (قبل 100 يوم) هو
+-- الريل غير المشاهد. author_position له = 45، فيقع بعد المرتبة 40 حتمًا.
+insert into public.posts (id, user_id, created_at, type, destination, visibility, media_url)
 select
-  gen_random_uuid(),
-  '00000000-0000-4000-8000-0000000000ff',
-  ('00000000-0000-4000-8000-' || lpad(g::text, 12, '0'))::uuid,
+  ('00000000-0000-4000-8000-' || lpad((100 + g)::text, 12, '0'))::uuid,
+  '00000000-0000-4000-8000-0000000000bb',
+  case when g = 1 then now() - interval '100 days' else now() - (g * interval '1 hour') end,
+  'reel',
   'reels',
-  'video',
-  gen_random_uuid(),
-  now() - interval '10 minutes'
-from generate_series(2, 41) as g;
+  'public',
+  'https://example.test/reel-b-' || g || '.mp4'
+from generate_series(1, 45) as g;
+
+-- مصدر إعادة النشر: منشوران قبل 200 يوم (لا يغطيهما الاكتشاف 180 يومًا)
+-- أعادهما المستخدم الحالي حديثًا.
+insert into public.posts (id, user_id, created_at, type, destination, visibility, media_url)
+values
+  ('00000000-0000-4000-8000-000000000901', '00000000-0000-4000-8000-0000000000bb',
+   now() - interval '200 days', 'reel', 'reels', 'public', 'https://example.test/repost-1.mp4'),
+  ('00000000-0000-4000-8000-000000000902', '00000000-0000-4000-8000-0000000000aa',
+   now() - interval '210 days', 'reel', 'reels', 'public', 'https://example.test/repost-2.mp4');
+
+insert into public.reposts (post_id, user_id, created_at) values
+  ('00000000-0000-4000-8000-000000000901', '00000000-0000-4000-8000-0000000000ff', now() - interval '1 hour'),
+  ('00000000-0000-4000-8000-000000000902', '00000000-0000-4000-8000-0000000000ff', now() - interval '2 hours');
+
+-- كل المرشحين ظهروا قبل 10 دقائق، باستثناء الريل غير المشاهد (101) والخاص (cc)
+insert into public.post_impressions (event_id, user_id, post_id, surface, content_type, session_id, impression_at)
+select gen_random_uuid(), '00000000-0000-4000-8000-0000000000ff', seen.post_id,
+       'reels', 'video', gen_random_uuid(), now() - interval '10 minutes'
+from (
+  select post_id from public.posts
+  where user_id in ('00000000-0000-4000-8000-0000000000aa', '00000000-0000-4000-8000-0000000000bb')
+    and id <> '00000000-0000-4000-8000-000000000101'::uuid
+) as seen;
 
 -- منشور خاص من حساب خاص: يجب ألا يصل إلى أي نتيجة
 insert into public.posts (id, user_id, created_at, type, destination, visibility, media_url)
-values ('00000000-0000-4000-8000-0000000000cc', '00000000-0000-4000-8000-0000000000bb',
+values ('00000000-0000-4000-8000-0000000000cc', '00000000-0000-4000-8000-0000000000dd',
         now() - interval '5 minutes', 'reel', 'reels', 'private', 'https://example.test/private.mp4');
 
 insert into public.post_impressions (event_id, user_id, post_id, surface, content_type, session_id, impression_at)
@@ -238,12 +265,20 @@ begin
   select count(*) into v_engine_200 from t_engine_200;
   select count(*) into v_final from t_final;
 
-  -- المحرك الداخلي يصل إلى كامل المرشحين عند الطلب، ويقصّ على 40 عند طلبه
-  if v_engine_40 <> 40 then
-    raise exception 'assert: المحرك بسقف 40 يجب أن يُعيد 40، وجدنا %', v_engine_40;
+  -- المحرك بسقف 40 لا يتجاوز 40، وبسقف 200 يصل إلى كامل المرشحين.
+  -- الحصص (40/40/20) لا تُلزم بعدد 40 من مصدر واحد، فالتأكيد على السقف نفسه
+  -- وعلى ظهور/غياب الريل غير المشاهد، لا على عدد ثابت من مصدر واحد.
+  if v_engine_40 > 40 then
+    raise exception 'assert: المحرك بسقف 40 يجب ألا يتجاوز 40، وجدنا %', v_engine_40;
+  end if;
+  if v_engine_40 = 0 then
+    raise exception 'assert: المحرك بسقف 40 يجب أن يُعيد مرشحين، وجدنا 0.';
   end if;
   if v_engine_200 < 41 then
     raise exception 'assert: المحرك يجب أن يُعيد 41 مرشحًا أو أكثر عند p_candidate_limit=200، وجدنا %', v_engine_200;
+  end if;
+  if v_engine_200 <= v_engine_40 then
+    raise exception 'assert: سقف 200 يجب أن يرى مرشحين أكثر من سقف 40 (% مقابل %).', v_engine_200, v_engine_40;
   end if;
 
   -- الريل غير المشاهد (أدنى ترتيب في المحرك) غائب عن سقف 40 وحاضر في 200
