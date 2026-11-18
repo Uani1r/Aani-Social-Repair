@@ -64,12 +64,15 @@ type StoryLookupRow = {
 };
 
 async function queryStoryMedia(storyId: string, columns: string): Promise<StoryLookupResult> {
+  // القائمة الديناميكية لا يستنتجها postgrest-js فيصبح Result = never، وبعد
+  // maybeSingle ينهار النوع إلى never. الحل الموثّق: overrideTypes بعد
+  // maybeSingle (returns قبله لا ينفع لأن maybeSingle يتوقع مصفوفة).
   const { data, error } = await supabase
     .from('stories')
     .select(columns)
     .eq('id', storyId)
-    .returns<StoryLookupRow>()
-    .maybeSingle();
+    .maybeSingle()
+    .overrideTypes<StoryLookupRow, { merge: false }>();
   if (error) throw error;
   if (!data) return { status: 'missing' };
 

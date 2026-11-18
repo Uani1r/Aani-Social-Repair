@@ -49,13 +49,16 @@ export default function PostDetailPage({ postId, currentUserId, onOpenComments }
     }
     setLoading(true);
     try {
+      // قائمة الأعمدة الطويلة تتجاوز محلّل الأنواع في postgrest-js فيصبح Result
+      // never، ولأن maybeSingle يتوقع مصفوفة يصبح الناتج never أيضاً. لذلك
+      // يُفرض نوع الصف عبر overrideTypes بعد maybeSingle لا عبر returns قبله.
       const loadPost = (includeDestination: boolean) => supabase.from('posts')
         .select(includeDestination
           ? 'id, user_id, content, post_metadata, media_url, media_urls, type, destination, created_at, audio_url, audio_title, sound_id, sound_trim_start, sound_trim_end, trim_start, trim_end'
           : '*')
         .eq('id', postId)
-        .returns<PostDetailRow>()
-        .maybeSingle();
+        .maybeSingle()
+        .overrideTypes<PostDetailRow, { merge: false }>();
       let postResult = await loadPost(true);
       if (postResult.error?.code === '42703' || postResult.error?.code === 'PGRST204') {
         postResult = await loadPost(false);
