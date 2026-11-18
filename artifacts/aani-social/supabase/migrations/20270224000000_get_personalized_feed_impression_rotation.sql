@@ -37,6 +37,7 @@ do $$
 declare
   v_function oid := to_regprocedure('public.get_personalized_feed(integer,integer)');
   v_relevance oid := to_regprocedure('public.aani_get_personalized_feed_relevance(integer,integer)');
+  v_internal_relevance oid := to_regprocedure('aani_internal.aani_get_personalized_feed_relevance(integer,integer)');
   v_required_columns text[] := array['user_id', 'post_id', 'surface', 'impression_at'];
   v_column text;
   v_is_security_invoker boolean;
@@ -49,8 +50,8 @@ begin
       using errcode = '42883';
   end if;
 
-  if v_relevance is not null then
-    raise exception 'aani_get_personalized_feed_relevance موجودة سابقًا؛ يبدو أن هذا الترحيل طُبّق من قبل. أوقف الترحيل.'
+  if v_relevance is not null or v_internal_relevance is not null then
+    raise exception 'دالة المحرك الداخلي aani_get_personalized_feed_relevance موجودة سابقًا؛ يبدو أن هذا الترحيل طُبّق من قبل. أوقف الترحيل.'
       using errcode = '42723';
   end if;
 
@@ -129,43 +130,130 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
--- 1) إعادة تسمية المحرك المنشور (تُحفظ الصلاحيات و search_path و INVOKER).
+-- 1) إنشاء مخطط داخلي غير مكشوف عبر PostgREST، ونقل محرك Feed إليه
+--    (لا يُستدعى مباشرةً كـ RPC من public). يبقى SECURITY INVOKER و
+--    search_path = '' كما هو، وتُمنح USAGE للدور الذي تستدعيه الطبقة فقط.
+--    PostgREST يعرض عادةً public (وgraphql_public) فقط؛ هذا المخطط ليس منها.
 -- ---------------------------------------------------------------------
+create schema if not exists aani_internal;
+
+revoke all on schema aani_internal from public, anon;
+grant usage on schema aani_internal to authenticated;
+
 alter function public.get_personalized_feed(integer, integer)
+  set schema aani_internal;
+
+alter function aani_internal.get_personalized_feed(integer, integer)
   rename to aani_get_personalized_feed_relevance;
 
 -- ---------------------------------------------------------------------
--- 2) توسيع سقف المحرك الداخلي: القصّ على v_candidates (سقف المرشحين من
---    p_candidate_limit، بحد 160 كما في المحرك الأصلي) بدل v_limit (40).
---    تغيير واحد في الجسم، مع تحقق قبل التنفيذ وبعده.
+-- 2) تعديل جسم المحرك الداخلي بأربعة تغييرات محصورة، مع تحقق قبل التنفيذ
+--    وبعده (إن غاب أي نص متوقع يتوقف الترحيل دون أي تغيير):
+--    أ) توسيع نوافذ المصادر تدريجيًا بحسب سقف المرشحين، مع الحفاظ على الفصل
+--       بين أهلية المتابعات والاكتشاف وإعادة النشر (نفس النافذة في الاستكشاف
+--       وفي استبعاد إعادة النشر، فلا يتكرر المنشور بين المصدرين).
+--       المتابعات: 30 → 90 → 365 يومًا. الاكتشاف: 14 → 60 → 180 يومًا.
+--       إعادة النشر: 30 → 90 → 365 يومًا.
+--    ب) قصر إشارة post_impressions على surface = 'feed' فقط، فلا تؤثر
+--       انطباعات Reels في نقاط Feed.
+--    ج) القصّ النهائي على v_candidates (سقف المرشحين من p_candidate_limit،
+--       بحد 160) بدل v_limit (40).
+--    الحصص 50/35/15 والأوزان والتنويع وإشارات التفاعل لا تتغير.
 -- ---------------------------------------------------------------------
 do $$
 declare
-  v_relevance oid := to_regprocedure('public.aani_get_personalized_feed_relevance(integer,integer)');
+  v_relevance oid := to_regprocedure('aani_internal.aani_get_personalized_feed_relevance(integer,integer)');
   v_definition text;
+  v_old_discovery_where constant text :=
+    '    where coalesce(post.visibility, ''public'') <> ''private''
+      and owner.is_private = false
+      and owner.is_deactivated = false
+      and post.created_at >= now() - interval ''14 days''';
+  v_new_discovery_where constant text :=
+    '    where coalesce(post.visibility, ''public'') <> ''private''
+      and owner.is_private = false
+      and owner.is_deactivated = false
+      and post.created_at >= now() - (
+        case
+          when coalesce(p_candidate_limit, 80) <= 40 then interval ''14 days''
+          when coalesce(p_candidate_limit, 80) <= 80 then interval ''60 days''
+          else interval ''180 days''
+        end
+      )';
+  v_old_follow_where constant text :=
+    '    where post.created_at >= now() - interval ''30 days''
+      -- الوجهة: التغذية الرئيسية فقط.';
+  v_new_follow_where constant text :=
+    '    where post.created_at >= now() - (
+        case
+          when coalesce(p_candidate_limit, 80) <= 40 then interval ''30 days''
+          when coalesce(p_candidate_limit, 80) <= 80 then interval ''90 days''
+          else interval ''365 days''
+        end
+      )
+      -- الوجهة: التغذية الرئيسية فقط.';
+  v_old_repost_where constant text :=
+    '      where repost.created_at >= now() - interval ''30 days''';
+  v_new_repost_where constant text :=
+    '      where repost.created_at >= now() - (
+        case
+          when coalesce(p_candidate_limit, 80) <= 40 then interval ''30 days''
+          when coalesce(p_candidate_limit, 80) <= 80 then interval ''90 days''
+          else interval ''365 days''
+        end
+      )';
+  v_old_repost_discovery_exclusion constant text :=
+    '          post.created_at >= now() - interval ''14 days''
+          and coalesce(post.visibility, ''public'') <> ''private''';
+  v_new_repost_discovery_exclusion constant text :=
+    '          post.created_at >= now() - (
+            case
+              when coalesce(p_candidate_limit, 80) <= 40 then interval ''14 days''
+              when coalesce(p_candidate_limit, 80) <= 80 then interval ''60 days''
+              else interval ''180 days''
+            end
+          )
+          and coalesce(post.visibility, ''public'') <> ''private''';
+  v_old_impressions_surface constant text :=
+    '      and impression.impression_at >= now() - interval ''7 days''';
+  v_new_impression_filter constant text :=
+    '      and impression.surface = ''feed''
+      and impression.impression_at >= now() - interval ''7 days''';
   v_old_filter constant text := 'where final_ranking.rank_position <= v_limit';
   v_new_filter constant text := 'where final_ranking.rank_position <= v_candidates';
 begin
   if v_relevance is null then
-    raise exception 'aani_get_personalized_feed_relevance غير موجودة بعد إعادة التسمية. أوقف الترحيل.'
+    raise exception 'aani_internal.aani_get_personalized_feed_relevance غير موجودة بعد النقل. أوقف الترحيل.'
       using errcode = '42883';
   end if;
 
   v_definition := pg_get_functiondef(v_relevance);
 
-  if position(v_old_filter in v_definition) = 0 then
-    raise exception 'لم يُعثر على نص القصّ المتوقع في المحرك الداخلي. أوقف الترحيل دون تغيير.'
+  if position(v_old_follow_where in v_definition) = 0
+     or position(v_old_discovery_where in v_definition) = 0
+     or position(v_old_repost_where in v_definition) = 0
+     or position(v_old_repost_discovery_exclusion in v_definition) = 0
+     or position(v_old_impressions_surface in v_definition) = 0
+     or position(v_old_filter in v_definition) = 0 then
+    raise exception 'نصوص المحرك الداخلي لا تطابق الافتراضات (نوافذ المصادر أو إشارة الظهور أو القصّ). أوقف الترحيل دون تغيير.'
       using errcode = '42804';
   end if;
 
+  v_definition := replace(v_definition, v_old_follow_where, v_new_follow_where);
+  v_definition := replace(v_definition, v_old_discovery_where, v_new_discovery_where);
+  v_definition := replace(v_definition, v_old_repost_where, v_new_repost_where);
+  v_definition := replace(v_definition, v_old_repost_discovery_exclusion, v_new_repost_discovery_exclusion);
+  v_definition := replace(v_definition, v_old_impressions_surface, v_new_impression_filter);
   v_definition := replace(v_definition, v_old_filter, v_new_filter);
 
-  if position(v_new_filter in v_definition) = 0 then
-    raise exception 'فشل استبدال القصّ في المحرك الداخلي. أوقف الترحيل دون تغيير.'
+  if position(v_new_filter in v_definition) = 0
+     or position(v_new_impression_filter in v_definition) = 0
+     or position(v_new_discovery_where in v_definition) = 0 then
+    raise exception 'فشل أحد استبدالات المحرك الداخلي. أوقف الترحيل دون تغيير.'
       using errcode = '42804';
   end if;
 
-  -- تنفيذ التعريف المعدّل: CREATE OR REPLACE يحفظ الملكية والصلاحيات.
+  -- CREATE OR REPLACE يحفظ الملكية والصلاحيات لهذا التوقيع نفسه.
   execute v_definition;
 end $$;
 
@@ -195,7 +283,7 @@ as $$
       ranked.reposter_id,
       ranked.reposted_at,
       ranked.rank_position as relevance_rank
-    from public.aani_get_personalized_feed_relevance(p_limit, p_candidate_limit) as ranked
+    from aani_internal.aani_get_personalized_feed_relevance(p_limit, p_candidate_limit) as ranked
   ),
   feed_impression_history as (
     -- سجل الظهور في Feed فقط. انطباعات Reels (surface = 'reels') لا تُقرأ هنا
@@ -262,9 +350,9 @@ revoke all on function public.get_personalized_feed(integer, integer)
 grant execute on function public.get_personalized_feed(integer, integer)
   to authenticated;
 
-revoke all on function public.aani_get_personalized_feed_relevance(integer, integer)
-  from public, anon, service_role;
-grant execute on function public.aani_get_personalized_feed_relevance(integer, integer)
+revoke all on function aani_internal.aani_get_personalized_feed_relevance(integer, integer)
+  from public, anon, authenticated, service_role;
+grant execute on function aani_internal.aani_get_personalized_feed_relevance(integer, integer)
   to authenticated;
 
 -- ---------------------------------------------------------------------
@@ -273,7 +361,8 @@ grant execute on function public.aani_get_personalized_feed_relevance(integer, i
 do $$
 declare
   v_wrapper oid := to_regprocedure('public.get_personalized_feed(integer,integer)');
-  v_relevance oid := to_regprocedure('public.aani_get_personalized_feed_relevance(integer,integer)');
+  v_relevance oid := to_regprocedure('aani_internal.aani_get_personalized_feed_relevance(integer,integer)');
+  v_public_relevance oid := to_regprocedure('public.aani_get_personalized_feed_relevance(integer,integer)');
   v_wrapper_definer boolean;
   v_wrapper_settings text[];
   v_relevance_definer boolean;
@@ -286,6 +375,12 @@ begin
   if v_wrapper is null or v_relevance is null then
     raise exception 'إحدى دالتي Feed غائبة بعد الترحيل. أوقف الترحيل.'
       using errcode = '42883';
+  end if;
+
+  -- الدالة الداخلية يجب ألا تكون مكشوفة في public (PostgREST لا يعرض aani_internal).
+  if v_public_relevance is not null then
+    raise exception 'دالة المحرك الداخلي ما زالت في public — يجب ألا تُستدعى كـ RPC. أوقف الترحيل.'
+      using errcode = '42501';
   end if;
 
   select proc.prosecdef, proc.proconfig
@@ -330,6 +425,18 @@ begin
     raise exception 'المحرك الداخلي لـ Feed ما زال يقصّ على v_limit. أوقف الترحيل.'
       using errcode = '42501';
   end if;
+  -- إشارة الظهور داخل المحرك مقيدة بسطح Feed فقط.
+  if position('impression.surface = ''feed''' in v_relevance_definition) = 0 then
+    raise exception 'إشارة post_impressions في المحرك الداخلي غير مقيدة بـ surface = ''feed''. أوقف الترحيل.'
+      using errcode = '42501';
+  end if;
+  -- توسيع النوافذ تدريجيًا موجود.
+  if position('180 days' in v_relevance_definition) = 0
+     or position('365 days' in v_relevance_definition) = 0
+     or position('60 days' in v_relevance_definition) = 0 then
+    raise exception 'نوافذ المصادر في المحرك الداخلي غير موسّعة (14/60/180 أو 30/90/365). أوقف الترحيل.'
+      using errcode = '42501';
+  end if;
   if position('coalesce(post.destination, ''feed'') = ''feed''' in v_relevance_definition) = 0 then
     raise exception 'شرط فصل الوجهات غاب من المحرك الداخلي. أوقف الترحيل.'
       using errcode = '42501';
@@ -348,8 +455,8 @@ begin
       using errcode = '42501';
   end if;
 
-  if position('aani_get_personalized_feed_relevance' in v_wrapper_definition) = 0 then
-    raise exception 'طبقة التدوير لا تستدعي محرك Feed الأصلي.'
+  if position('aani_internal.aani_get_personalized_feed_relevance' in v_wrapper_definition) = 0 then
+    raise exception 'طبقة التدوير لا تستدعي المحرك الداخلي من aani_internal.'
       using errcode = '42501';
   end if;
 
@@ -397,8 +504,8 @@ commit;
 -- =====================================================================
 -- تحقق يدوي اختياري بعد التطبيق (قراءة فقط، لا يُنفَّذ هنا):
 --
--- 1) المحرك الداخلي يرى كامل المرشحين (حتى 160) لا 40:
--- select count(*) from public.aani_get_personalized_feed_relevance(40, 160);
+-- 1) المحرك الداخلي في aani_internal (غير مكشوف) يرى كامل المرشحين (حتى 160):
+-- select count(*) from aani_internal.aani_get_personalized_feed_relevance(40, 160);
 --
 -- 2) الطبقة تُعيد 40 على الأكثر:
 -- select count(*) from public.get_personalized_feed(40, 160);

@@ -176,10 +176,10 @@ set role authenticated;
 select set_config('request.jwt.claim.sub', '00000000-0000-4000-8000-0000000000ff', true);
 
 create temp table t_engine_40 as
-  select * from public.aani_get_personalized_feed_relevance(40, 40);
+  select * from aani_internal.aani_get_personalized_feed_relevance(40, 40);
 
 create temp table t_engine_160 as
-  select * from public.aani_get_personalized_feed_relevance(40, 160);
+  select * from aani_internal.aani_get_personalized_feed_relevance(40, 160);
 
 create temp table t_final as
   select * from public.get_personalized_feed(40, 160);
@@ -197,6 +197,7 @@ declare
   v_unseen_rank integer;
   v_duplicates integer;
   v_wrapper_definition text;
+  v_inner_definition text;
 begin
   select count(*) into v_engine_40 from t_engine_40;
   select count(*) into v_engine_160 from t_engine_160;
@@ -253,6 +254,32 @@ begin
   end if;
   if position('''feed''' in v_wrapper_definition) = 0 then
     raise exception 'assert: طبقة Feed لا تقرأ surface = ''feed''.';
+  end if;
+
+  -- الدالة الداخلية خارج public (غير مكشوفة عبر PostgREST) وفي aani_internal
+  if to_regprocedure('public.aani_get_personalized_feed_relevance(integer,integer)') is not null then
+    raise exception 'assert: الدالة الداخلية ما زالت مكشوفة في public.';
+  end if;
+  if not exists (
+    select 1
+    from pg_proc as proc
+    join pg_namespace as namespace on namespace.oid = proc.pronamespace
+    where namespace.nspname = 'aani_internal'
+      and proc.proname = 'aani_get_personalized_feed_relevance'
+  ) then
+    raise exception 'assert: الدالة الداخلية غير موجودة في aani_internal.';
+  end if;
+
+  -- إشارة الظهور داخل المحرك مقيدة بـ surface = 'feed'
+  v_inner_definition := pg_get_functiondef(
+    'aani_internal.aani_get_personalized_feed_relevance(integer,integer)'::regprocedure
+  );
+  if position('impression.surface = ''feed''' in v_inner_definition) = 0 then
+    raise exception 'assert: إشارة post_impressions في المحرك غير مقيدة بـ surface = ''feed''.';
+  end if;
+  if position('180 days' in v_inner_definition) = 0
+     or position('365 days' in v_inner_definition) = 0 then
+    raise exception 'assert: نوافذ المصادر في المحرك غير موسّعة تدريجيًا.';
   end if;
 end $$;
 
