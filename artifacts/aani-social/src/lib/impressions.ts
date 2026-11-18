@@ -1,9 +1,10 @@
-// تتبع صامت لظهور المنشورات في الـFeed الرئيسي (المرحلة الثانية من خوارزمية آني).
+// تتبع صامت لظهور المنشورات: الـFeed الرئيسي (المرحلة الثانية من خوارزمية آني)
+// والريلز (surface='reels') بمسار مستقل تماماً عن تشغيل الفيديو.
 //
 // القاعدة: بطاقة المنشور تُحتسب Impression واحداً عندما يظهر 50% منها على الأقل
 // داخل نافذة العرض مدةً متصلة قدرها 500ms، مرة واحدة لكل منشور في جلسة التصفح
-// الحالية. إن انخفضت النسبة قبل اكتمال المدة تُلغى المحاولة ويُعاد القياس عند
-// ظهور البطاقة مجدداً.
+// الحالية. في الريلز الشرط هو ظهور 60% من الشريحة مدة 500ms متصلة. إن انخفضت
+// النسبة قبل اكتمال المدة تُلغى المحاولة ويُعاد القياس عند ظهور البطاقة مجدداً.
 //
 // ما لا يفعله هذا الملف:
 //   * لا يغيّر ترتيب المنشورات ولا استعلامات usePosts، ولا يعرض أي عنصر مرئي.
@@ -26,6 +27,8 @@
 //     إعادة التحميل حين يكون التخزين غير متاح.
 // لا يُعتبر المنشور مسجَّلاً بمجرد إضافته إلى الطابور.
 
+import { useEffect } from 'react';
+
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 
 export type ImpressionContentType = 'text' | 'image' | 'video';
@@ -35,7 +38,7 @@ type ImpressionEvent = {
   event_id: string;
   user_id: string;
   post_id: string;
-  surface: 'feed';
+  surface: 'feed' | 'reels';
   content_type: ImpressionContentType;
   session_id: string;
 };
@@ -92,7 +95,7 @@ function isImpressionEvent(value: unknown): value is ImpressionEvent {
   return typeof row.event_id === 'string' && UUID_PATTERN.test(row.event_id)
     && typeof row.user_id === 'string' && row.user_id.length > 0
     && typeof row.post_id === 'string' && row.post_id.length > 0
-    && row.surface === 'feed'
+    && (row.surface === 'feed' || row.surface === 'reels')
     && (row.content_type === 'text' || row.content_type === 'image' || row.content_type === 'video')
     && typeof row.session_id === 'string' && UUID_PATTERN.test(row.session_id);
 }
@@ -128,8 +131,31 @@ function readSessionId(): string {
   return created;
 }
 
-function dedupeKeyOf(event: { session_id: string; user_id: string; post_id: string }): string {
-  return `${event.session_id}:${event.user_id}:${event.post_id}`;
+/**
+ * مفتاح منع التكرار: جلسة + سطح + مستخدم + منشور.
+ *
+ * السطح جزء من المفتاح لأن الظهور في الريلز مستقل عن الظهور في الـFeed: قد
+ * يظهر المنشور نفسه في المكانين داخل الجلسة نفسها، ولكلٍّ منهما Impression واحد.
+ */
+function dedupeKeyOf(event: {
+  session_id: string;
+  user_id: string;
+  post_id: string;
+  surface: 'feed' | 'reels';
+}): string {
+  return `${event.session_id}:${event.surface}:${event.user_id}:${event.post_id}`;
+}
+
+/**
+ * مفتاحات المرحلة الأولى كانت بصيغة session:user:post بلا سطح. تُحوَّل عند
+ * الاستعادة إلى الصيغة الحالية session:feed:user:post بدل مسحها، فلا يُعاد
+ * تسجيل منشور Feed سُجّل قبل هذا التحديث في جلسة التصفح نفسها.
+ */
+function upgradeRecordedKey(key: string): string {
+  const parts = key.split(':');
+  if (parts.length !== 3) return key;
+  const [sessionId, userId, postId] = parts;
+  return `${sessionId}:feed:${userId}:${postId}`;
 }
 
 // ---------------------------------------------------------------------
@@ -149,7 +175,9 @@ function loadRecordedImpressions(): void {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return;
     for (const value of parsed) {
-      if (typeof value === 'string' && value) recordedImpressions.add(value);
+      // المفتاح القديم (session:user:post) يُحوَّل إلى session:feed:user:post
+      // بدل مسحه، فلا يُعاد تسجيل منشورات Feed المسجّلة قبل التحديث.
+      if (typeof value === 'string' && value) recordedImpressions.add(upgradeRecordedKey(value));
     }
   } catch {
     // قائمة تالفة: نتجاهلها ونبدأ من جديد
@@ -377,14 +405,17 @@ function enqueueImpression(input: {
   userId: string;
   postId: string;
   contentType: ImpressionContentType;
+  /** السطح: Feed افتراضياً، وreels من مسار الريلز. */
+  surface?: 'feed' | 'reels';
 }): EnqueueOutcome {
   try {
     if (!input.userId || !input.postId) return 'unavailable';
     if (!supabaseConfigured) return 'unavailable';
 
+    const surface = input.surface ?? 'feed';
     loadPending();
     const sessionId = readSessionId();
-    const key = `${sessionId}:${input.userId}:${input.postId}`;
+    const key = `${sessionId}:${surface}:${input.userId}:${input.postId}`;
     // مسجَّل سابقاً: لا تكرار.
     if (recordedImpressions.has(key)) return 'duplicate';
     // معلّق بالفعل: لا حدث ثانٍ لنفس المنشور، ولا يُفقد الأول.
@@ -400,7 +431,7 @@ function enqueueImpression(input: {
       event_id: randomUuid(),
       user_id: input.userId,
       post_id: input.postId,
-      surface: 'feed',
+      surface,
       content_type: input.contentType,
       session_id: sessionId,
     });
@@ -546,4 +577,90 @@ export function observeFeedImpression(
       // لا شيء
     }
   };
+}
+
+/**
+ * Impression مستقل لشريحة ريل واحدة (صورة أو فيديو) على سطح 'reels'.
+ *
+ * يسجّل الظهور فقط بعد أن تُبلّغ الشريحة عن ظهورها (`active`، وهي عتبة 60%
+ * في ReelSlide) واستمرارها كذلك 500ms متصلة والصفحة ظاهرة. لا يقرأ حالة
+ * التشغيل ولا الصوت ولا يلمسهما: ريل الفيديو ينتج Impression حتى لو لم يُشغَّل.
+ *
+ * إخفاء الصفحة: يُلغى العدّ وتُمسح المؤقّتات، وعند العودة يبدأ عدّ جديد 500ms.
+ * عند امتلاء الطابور تُعاد المحاولة ما دامت الشريحة ظاهرة، ولا يُحذف أي حدث
+ * معلّق. منع التكرار لكل (جلسة، سطح، مستخدم، منشور) داخل جلسة التصفح.
+ *
+ * لا يُستدعى للمنشورات المؤقتة (Pending) ولا يُسجّل شيئاً حين تكون `enabled`
+ * أو `active` أو معرّفات المستخدم والمنشور غير متاحة.
+ */
+export function useReelSurfaceImpression(input: {
+  postId: string;
+  userId: string;
+  contentType: ImpressionContentType;
+  active: boolean;
+  enabled: boolean;
+}): void {
+  const { postId, userId, contentType, active, enabled } = input;
+
+  useEffect(() => {
+    if (!active || !enabled || !postId || !userId) return;
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    let visibleTimer: number | null = null;
+    let retryTimer: number | null = null;
+    let accepted = false;
+
+    const clearTimers = () => {
+      if (visibleTimer !== null) {
+        window.clearTimeout(visibleTimer);
+        visibleTimer = null;
+      }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const attempt = () => {
+      visibleTimer = null;
+      if (accepted || isHidden()) return;
+      const outcome = enqueueImpression({
+        userId,
+        postId,
+        contentType,
+        surface: 'reels',
+      });
+      if (outcome === 'accepted' || outcome === 'duplicate') {
+        accepted = true;
+        return;
+      }
+      if (outcome === 'full' && retryTimer === null) {
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          schedule();
+        }, FULL_RETRY_MS);
+      }
+    };
+
+    const schedule = () => {
+      if (accepted || visibleTimer !== null || isHidden()) return;
+      visibleTimer = window.setTimeout(attempt, MIN_VISIBLE_MS);
+    };
+
+    const onVisibilityChange = () => {
+      if (isHidden()) {
+        clearTimers();
+      } else {
+        schedule();
+      }
+    };
+
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    schedule();
+
+    return () => {
+      clearTimers();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [active, enabled, postId, userId, contentType]);
 }

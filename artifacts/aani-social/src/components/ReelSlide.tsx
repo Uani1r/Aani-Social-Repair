@@ -33,6 +33,7 @@ import { getImageKitVideoThumbnailUrl } from '@/lib/postMedia';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { useReelViewTracking } from '@/lib/reelViews';
 import { useReelImageImpression } from '@/lib/reelImpressions';
+import { useReelSurfaceImpression } from '@/lib/impressions';
 
 const hasOpenFeedDialog = () => typeof document !== 'undefined' && Array.from(document.querySelectorAll(
   '[role="dialog"]:not([aria-hidden="true"]):not([aria-modal="false"]):not([data-state="closed"])',
@@ -136,6 +137,18 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
     userId: currentUserId,
     active: isVisible,
     enabled: isImageMedia && !pendingState,
+  });
+  // Impression ظهور مستقل لكل ريل (صورة أو فيديو) على سطح 'reels': يُسجّل في
+  // post_impressions بعد ظهور 60% (isVisible) لمدة 500ms متصلة، بمعزل عن تشغيل
+  // الوسائط وعن useReelViewTracking/useReelImageImpression (post_view_events)
+  // أعلاه. لا يعتمد على تشغيل الفيديو أو الصوت، ولا يسجّل شيئاً للمنشورات
+  // المؤقتة (Pending).
+  useReelSurfaceImpression({
+    postId: post.id,
+    userId: currentUserId,
+    contentType: isImageMedia ? 'image' : 'video',
+    active: isVisible,
+    enabled: !pendingState,
   });
   // نظام الأصوات (TikTok): عنوان الصوت + صوت خلفي مستعار من فيديو آخر
   const soundLabel = post.audio_title || (post.sound_id ? defaultSoundTitle(displayName(post.author)) : '');
