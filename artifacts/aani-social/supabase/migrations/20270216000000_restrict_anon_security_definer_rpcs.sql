@@ -38,6 +38,7 @@ declare
   v_role text;
   v_create_secdef boolean;
   v_create_calls boolean;
+  v_owner_mismatch text[];
   v_invoker_caller text;
 begin
   -- 1.1 كل الدوال موجودة بالتوقيع المطابق
@@ -89,7 +90,34 @@ begin
       using errcode = '42883';
   end if;
 
-  -- 1.4 لا دالة SECURITY INVOKER في public تستدعي aani_story_exists
+  -- 1.4 مالك كل نسخة من aani_create_story تستدعي aani_story_exists يجب أن يطابق
+  --     مالك aani_story_exists. التنفيذ داخل SECURITY DEFINER يجري بصلاحيات
+  --     مالك الدالة المستدعية؛ فإذا اختلف المالكان فقد لا يملك المنفّذ صلاحية
+  --     EXECUTE على الدالة الداخلية بعد سحبها من كل الأدوار ⇒ يتعطّل مسار النشر.
+  --     الملكية لا تُصحَّح تلقائياً: الترحيل يتوقف ويُترك القرار للمشغّل.
+  select array_agg(
+           format('%s (%s) مالكه %s',
+                  creator.proname,
+                  pg_get_function_identity_arguments(creator.oid),
+                  pg_get_userbyid(creator.proowner))
+         )
+  into v_owner_mismatch
+  from pg_proc as creator
+  join pg_namespace as ns on ns.oid = creator.pronamespace
+  where ns.nspname = 'public'
+    and creator.proname = 'aani_create_story'
+    and creator.prosrc ilike '%aani_story_exists%'
+    and creator.proowner <>
+      (select owner_proc.proowner
+       from pg_proc as owner_proc
+       where owner_proc.oid = 'public.aani_story_exists(uuid)'::regprocedure);
+
+  if v_owner_mismatch is not null then
+    raise exception 'aani: مالك إحدى نسخ aani_create_story يختلف عن مالك aani_story_exists: %. أوقف الترحيل — الملكية لم تُصحَّح تلقائياً؛ وحّد مالك الدوال يدوياً ثم أعد المحاولة.', array_to_string(v_owner_mismatch, ' | ')
+      using errcode = '42501';
+  end if;
+
+  -- 1.5 لا دالة SECURITY INVOKER في public تستدعي aani_story_exists
   select proc.oid::regprocedure::text
   into v_invoker_caller
   from pg_proc as proc
