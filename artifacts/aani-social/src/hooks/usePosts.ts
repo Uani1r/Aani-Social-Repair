@@ -12,6 +12,7 @@ import {
   setPendingReelsBatch,
   shouldDeferReelsBatch,
 } from '@/lib/reelsBatches';
+import { currentReelsViewingSession, isReelsCacheFresh } from '@/lib/reelsViewingSession';
 
 // ذاكرة مؤقتة على مستوى الوحدة (بديل Keep-Alive/staleTime):
 // عند التنقل بين التبويبات (الرئيسية/الريلز/الملف الشخصي) تُركَّب
@@ -22,9 +23,10 @@ import {
 const postsCache = new Map<string, Post[]>();
 // جيل مستقل لكل مفتاح: طلب أقدم لنفس المفتاح لا يستبدل نتيجة طلب أحدث منه.
 const postsCacheGeneration = new Map<string, number>();
-// وقت آخر دفعة ريلز ناجحة لكل مفتاح: يمنع طلبًا جديدًا عند كل إعادة تركيب
-// للشاشة. لا يُستخدم إلا لمفتاح الريلز، ولا يمسّ منطق Feed.
-const postsCacheTimestamp = new Map<string, number>();
+// بصمة آخر جلب ريلز ناجح لكل مفتاح: جلسة العرض + الوقت. تمنع طلبًا جديدًا عند
+// إعادة تركيب المكوّن داخل جلسة العرض نفسها، ولا تمنع جلسة عرض جديدة من الحصول
+// على ترتيب جديد من الخادم. لا تُستخدم إلا لمفتاح الريلز.
+const postsCacheFetchMark = new Map<string, { session: number; at: number }>();
 const REELS_CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface RepostRow {
@@ -926,7 +928,7 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
   const visiblePostsRef = useRef<Post[]>(posts);
   visiblePostsRef.current = posts;
 
-  const refresh = useCallback(async (silent = false) => {
+  const refresh = useCallback(async (silent = false, applyMode: 'initial' | 'background' = 'background') => {
     // جيل هذا الطلب: أي طلب أحدث منه يُلغي صلاحيته للكتابة على حالة الشاشة.
     const requestId = ++requestIdRef.current;
     const isLatestRequest = () => requestId === requestIdRef.current;
@@ -952,17 +954,35 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       commitState(() => setPostState({ key: cacheKey, posts: value }));
     };
 
+    // جلسة العرض الحالية: جلسة جديدة لا تُقيَّد بمدة التخزين المؤقت.
+    const reelsSession = query === 'reel' ? currentReelsViewingSession() : 0;
+
+    /** تسجيل أن هذا المفتاح جُلب في هذه الجلسة الآن؛ يخصّ الريلز فقط. */
+    const markReelsFetch = () => {
+      if (query === 'reel') postsCacheFetchMark.set(cacheKey, { session: reelsSession, at: Date.now() });
+    };
+
     // هل توجد دفعة ريلز معروضة الآن؟ التبديل تحتها ممنوع: الترتيب الجديد
-    // يُحفظ كدفعة معلّقة ويُطبَّق عند بداية جلسة عرض جديدة (تركيب الشاشة).
+    // يُحفظ كدفعة معلّقة ويُطبَّق عند بداية جلسة عرض جديدة. الجلب الأول في بداية
+    // الجلسة (applyMode = 'initial') هو بداية العرض، فيُطبَّق مباشرة.
     const shouldDeferBatch = query === 'reel'
+      && applyMode === 'background'
       && shouldDeferReelsBatch(visiblePostsRef.current.length > 0);
 
     /** كتابة نتيجة جلب الريلز: مباشرة إن لا دفعة ظاهرة، وإلا إلى الطابور المعلّق. */
     const applyReelsResult = (value: Post[]) => {
-      postsCacheTimestamp.set(cacheKey, Date.now());
+      markReelsFetch();
       if (shouldDeferBatch && value.length > 0) {
         setPendingReelsBatch(cacheKey, value);
         return;
+      }
+      // ترتيب جديد في بداية جلسة عرض: تُعلَّم الشاشة لتستأنف من أول ريل بدل
+      // استعادة موضع قديم يشير إلى ترتيب مختلف.
+      const previous = visiblePostsRef.current;
+      if (value.length > 0 && previous.length > 0
+        && (value.length !== previous.length
+          || value.some((post, index) => post.id !== previous[index]?.id))) {
+        setReelsBatchReplaced(true);
       }
       setPosts(value);
     };
@@ -1295,17 +1315,20 @@ export function usePosts(query: 'feed' | 'reel' | 'profile', targetUserId?: stri
       // وتُزال من الطابور، وتُعلَّم الشاشة لتستأنف من أول ريل (لا موضع قديم
       // يشير إلى ترتيب مختلف).
       postsCache.set(cacheKey, pendingBatch);
-      postsCacheTimestamp.set(cacheKey, Date.now());
+      postsCacheFetchMark.set(cacheKey, { session: currentReelsViewingSession(), at: Date.now() });
       clearPendingReelsBatch(cacheKey);
       setReelsBatchReplaced(true);
     }
-    // عند وجود محتوى محفوظ حديث: لا طلب جديد عند كل إعادة تركيب للشاشة؛
-    // الجلب الصامت في الخلفية يبقى فقط بعد انتهاء صلاحية الذاكرة القصيرة.
-    const cachedAt = postsCacheTimestamp.get(cacheKey) ?? 0;
-    const cacheIsFresh = query === 'reel'
-      && cachedPosts !== undefined
-      && Date.now() - cachedAt < REELS_CACHE_TTL_MS;
-    if (!cacheIsFresh) void refresh(cachedPosts !== undefined);
+    // جلسة عرض جديدة = فرصة الحصول على ترتيب جديد من الخادم. إعادة تركيب
+    // المكوّن داخل الجلسة نفسها لا تُكرّر الطلب قبل انتهاء المدة.
+    const cacheIsFresh = query === 'reel' && isReelsCacheFresh({
+      hasCachedBatch: cachedPosts !== undefined,
+      cacheMark: postsCacheFetchMark.get(cacheKey),
+      viewingSession: currentReelsViewingSession(),
+      now: Date.now(),
+      ttlMs: REELS_CACHE_TTL_MS,
+    });
+    if (!cacheIsFresh) void refresh(cachedPosts !== undefined, 'initial');
     let repostRefreshTimer: number | null = null;
     // تحديث فوري بعد نجاح النشر: جلب صامت يحدّث القائمة والذاكرة المؤقتة
     // دون وميض Skeleton، فيظهر الريل الجديد في تبويب الريلز مباشرة.
