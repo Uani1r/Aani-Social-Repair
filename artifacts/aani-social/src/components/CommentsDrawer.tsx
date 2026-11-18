@@ -57,6 +57,13 @@ type SupabaseErrorDetails = {
   hint?: string;
 };
 
+/** أعمدة إعدادات التعليق في public.posts التي يقرأها الدرج عند الفتح */
+type CommentPostSettingsRow = {
+  user_id: string;
+  comments_disabled?: boolean;
+  hide_comments?: boolean;
+};
+
 const getErrorDetails = (error: unknown): SupabaseErrorDetails => {
   if (error instanceof Error) {
     const details = error as Error & SupabaseErrorDetails;
@@ -121,7 +128,7 @@ const filterHiddenComments = (
   items.flatMap((item) => {
     const visibleReplies = filterHiddenComments(item.replies ?? [], blockedUserIds);
     if (item.is_hidden_by_me || blockedUserIds.has(item.user_id)) {
-      return visibleReplies.map((reply) => ({ ...reply, parent_id: null }));
+      return visibleReplies.map((reply): CommentWithDetails => ({ ...reply, parent_id: null }));
     }
     return [{ ...item, replies: visibleReplies }];
   });
@@ -298,11 +305,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
     setRestrictedUserIds(new Set());
     setCommentAccess({ canRead: true, canComment: true, checking: true, failed: false });
     void (async () => {
-      let postRow: {
-        user_id: string;
-        comments_disabled?: boolean;
-        hide_comments?: boolean;
-      } | null = null;
+      let postRow: CommentPostSettingsRow | null = null;
       let legacySchema = false;
 
       const settingsResult = await supabase
@@ -311,7 +314,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
         .eq('id', postId)
         .maybeSingle();
       if (!settingsResult.error && settingsResult.data) {
-        postRow = settingsResult.data as typeof postRow;
+        postRow = settingsResult.data as CommentPostSettingsRow;
       } else if (settingsResult.error?.code === '42703' || settingsResult.error?.code === 'PGRST204') {
         const legacyResult = await supabase
           .from('posts')
@@ -319,7 +322,7 @@ export const CommentsDrawer: React.FC<CommentsDrawerProps> = ({
           .eq('id', postId)
           .maybeSingle();
         if (!legacyResult.error && legacyResult.data) {
-          postRow = legacyResult.data as typeof postRow;
+          postRow = legacyResult.data as CommentPostSettingsRow;
           legacySchema = true;
         }
       }

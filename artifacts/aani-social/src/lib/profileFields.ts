@@ -25,6 +25,13 @@ export const PUBLIC_PROFILE_COLUMNS = [
 ].join(',');
 
 /**
+ * شكل صف profiles عند طلب PUBLIC_PROFILE_COLUMNS.
+ * قائمة الأعمدة ديناميكية، فلا يستنتج postgrest-js شكل الصف — يُمرَّر هذا
+ * النوع إلى .returns عند الاستعلام.
+ */
+export type PublicProfileRow = Partial<Profile> & Pick<Profile, 'id' | 'username'>;
+
+/**
  * الحقول المشروطة بأعلام الظهور (city/location محكومان بـ show_city،
  * وbirth_date بـ show_birth_date). لا تُقرأ مباشرة من الجدول: يُعيدها
  * aani_public_profile فارغة عندما يختار صاحب الحساب إخفاءها.

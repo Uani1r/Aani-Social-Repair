@@ -55,11 +55,20 @@ function isMissingColumnErrorMessage(error: unknown): boolean {
   return /expires_at|thumbnail_url|column .*does not exist|could not find the '[^']+' column/i.test(message);
 }
 
+/** أعمدة stories التي تحتاجها البطاقة (كلها اختيارية عدا الوسائط) */
+type StoryLookupRow = {
+  media_url: string | null;
+  media_type: string | null;
+  thumbnail_url?: string | null;
+  expires_at?: string | null;
+};
+
 async function queryStoryMedia(storyId: string, columns: string): Promise<StoryLookupResult> {
   const { data, error } = await supabase
     .from('stories')
     .select(columns)
     .eq('id', storyId)
+    .returns<StoryLookupRow>()
     .maybeSingle();
   if (error) throw error;
   if (!data) return { status: 'missing' };

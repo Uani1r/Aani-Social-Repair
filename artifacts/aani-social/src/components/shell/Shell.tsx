@@ -24,6 +24,7 @@ import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { reportPublishFailure, type PublishPhase } from '@/lib/publishDiagnostics';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import type { PostgrestError } from '@supabase/supabase-js';
 import { addPendingPost, removePendingPost, updatePendingPost } from '@/lib/pendingPosts';
 import { uploadMedia } from '@/lib/storyUpload';
 import { extractAudio, NoAudioTrackError } from '@/utils/mediaCompressor';
@@ -283,7 +284,7 @@ export default function Shell({
         previewUrl?: string | null;
         soundTrim?: { start: number; end: number } | null;
         creatorName?: string | null;
-        source?: 'picker' | 'post';
+        source?: 'picker' | 'post' | 'story';
       }>).detail;
       if (!detail?.soundId) return;
       // أصوات القصة يديرها StoriesBar بنفسه (باتجاه القصة) — لا مسار نشر منشورات
@@ -2336,15 +2337,17 @@ export default function Shell({
         );
         // إعادة محاولة صامتة عند أخطاء عابرة (استيقاظ/شبكة/5xx) بنفس المعرّف
         // ونفس الحمولة — upsert على id يجعل التكرار مستحيلاً.
-        const upsertPostWithRetry = async (payload: Record<string, unknown>) => {
-          let result = await upsertPost(payload);
+        const upsertPostWithRetry = async (
+          payload: Record<string, unknown>,
+        ): Promise<{ error: PostgrestError | null }> => {
+          let result: { error: PostgrestError | null } = await upsertPost(payload);
           for (let retry = 0; retry < 2 && result.error && isTransientPostError(result.error); retry += 1) {
             ensureAttemptAlive();
             // احتمال أن الكتابة وصلت وفُقد الرد: فحص السجل قبل إعادة الإرسال،
             // فلا نُعيد طلباً ربما نجح ولا نكرر أي أثر جانبي. (لا رفع جديد للوسائط
             // هنا — الرفع تمّ مرة واحدة قبل هذه المرحلة).
             if (await postRowExists()) {
-              return { ...result, error: null } as typeof result;
+              return { error: null };
             }
             ensureAttemptAlive();
             // خطأ اتصال مرتبط بالخادم ⇒ أبطِل حالة الاستيقاظ ليُعاد فحص الصحة

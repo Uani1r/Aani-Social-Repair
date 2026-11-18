@@ -670,7 +670,7 @@ export default function FeedPostCard({ post, currentUserId, onRefresh, onOpenCom
           )}
           <audio
             ref={photoAudioRef}
-            src={backgroundMediaSuspended ? undefined : signedPhotoAudioSrc}
+            src={backgroundMediaSuspended ? undefined : signedPhotoAudioSrc ?? undefined}
             data-aani-background-media=""
             loop
             preload="none"

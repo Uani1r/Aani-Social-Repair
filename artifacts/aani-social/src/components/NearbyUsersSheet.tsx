@@ -307,7 +307,10 @@ export default function NearbyUsersSheet({
 
     const rebuildChannel = () => {
       if (disposed) return;
-      if (channel && (channel.state === 'SUBSCRIBED' || channel.state === 'JOINING')) return;
+      // ChannelState يحمل قيم realtime-js الفعلية (joined/joining) لا أسماء
+      // حالات الإشتراك (SUBSCRIBED). التوسيع إلى string يجعل المقارنة صريحة.
+      const channelState: string = channel ? channel.state : '';
+      if (channelState === 'joined' || channelState === 'joining') return;
       const now = Date.now();
       if (now - lastRebuildAt < CHANNEL_REBUILD_COOLDOWN_MS) return;
       lastRebuildAt = now;

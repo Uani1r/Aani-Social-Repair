@@ -841,7 +841,10 @@ export default function CallManager({
       toast.info('افتح محادثة مع الشخص الذي تريد الاتصال به أولاً.');
       return;
     }
-    if (callRef.current) {
+    // قراءة واحدة داخل متغير محلي: الحارس على callRef.current مباشرةً يضيّق
+    // نوعه إلى null لبقية الدالة رغم أن setActiveCall يعيد تعيينه لاحقاً.
+    const existingCall = callRef.current;
+    if (existingCall) {
       toast.info('لديك مكالمة جارية بالفعل.');
       return;
     }

@@ -50,6 +50,20 @@ type NotificationReferenceRow = {
   comment_id?: string | null;
 };
 
+/**
+ * أعمدة notifications المقروءة هنا. القائمة الديناميكية (loadRows) تمنع
+ * postgrest-js من استنتاج شكل الصف، فيُحدَّد الناتج صراحةً عبر .returns.
+ */
+type NotificationRow = {
+  id: string;
+  content: string;
+  type: string;
+  is_read: boolean;
+  created_at: string;
+  content_kind?: string | null;
+  metadata?: Record<string, unknown> | null;
+};
+
 type NotificationTarget =
   | { kind: 'post'; postId: string; contentKind?: string | null }
   | { kind: 'comment'; postId: string; commentId: string | null }
@@ -348,6 +362,8 @@ export default function NotificationsModal({
   onOpenFollowRequestsHandled,
   onOpenFollowRequests,
 }: NotificationsModalProps) {
+  // التمرير الافتراضي لا يعالج null، فنُطبّع القيمة هنا قبل كل استخدام
+  const settings = notificationSettings ?? DEFAULT_NOTIFICATION_SETTINGS;
   // زر الرجوع (الهاتف/المتصفح) يغلق الإشعارات ويعيدك لنفس المكان
   useOverlayBack(isOpen, onClose);
   const [, setLocation] = useLocation();
@@ -402,7 +418,8 @@ export default function NotificationsModal({
           .neq('type', 'follow_request')
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
-          .range(offset, offset + PAGE_SIZE - 1);
+          .range(offset, offset + PAGE_SIZE - 1)
+          .returns<NotificationRow[]>();
 
         let { data, error: queryError } = await loadRows('id,content,type,is_read,created_at,content_kind,metadata');
         // احتياط لقاعدة لم يُطبَّق عليها ترحيل metadata بعد.
@@ -628,11 +645,11 @@ export default function NotificationsModal({
   const visibleItems = useMemo(() => {
     const aggregated = aggregateNotifications(items)
       .filter(item => !isSuppressedLegacyNotification(item))
-      .filter(item => notificationSettings[getPreferenceCategory(item)] !== false);
+      .filter(item => settings[getPreferenceCategory(item)] !== false);
     return activeFilter === 'all'
       ? aggregated
       : aggregated.filter(item => getFilterForNotification(item) === activeFilter);
-  }, [activeFilter, items, notificationSettings]);
+  }, [activeFilter, items, settings]);
 
   const markNotificationRead = async (item: NotificationEntry) => {
     if (item.is_read) return;
@@ -829,7 +846,7 @@ export default function NotificationsModal({
           </button>
         </header>
 
-        {notificationSettings.followers !== false && (
+        {settings.followers !== false && (
           <FollowRequestsSection
             currentUserId={currentUserId}
             dir={language === 'ar' ? 'rtl' : 'ltr'}

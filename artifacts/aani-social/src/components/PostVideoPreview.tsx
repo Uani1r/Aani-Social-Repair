@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, typ
 import { useFeedVideoGestures } from '@/hooks/useFeedVideoGestures';
 import {
   isBackgroundMediaSuspended,
+  playBackgroundMedia,
   playExclusive,
   releaseActiveVideo,
   subscribeBackgroundMediaSuspension,
