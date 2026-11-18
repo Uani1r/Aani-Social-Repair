@@ -42,6 +42,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # api-server references the composite libs (lib/db, lib/api-zod) through
+      # project references, so their declarations must exist before its own
+      # typecheck — otherwise tsc reports "output file has not been built".
+      - name: Build workspace libraries
+        run: pnpm run typecheck:libs
+
       - name: Typecheck @workspace/aani-social
         run: pnpm --filter @workspace/aani-social run typecheck
 

@@ -315,15 +315,17 @@ router.post("/webhook/push", (req, res) => {
   logPushWebhookRequest(req);
 
   if (!authenticatePushWebhook(req)) {
-    return res.status(401).json({ success: false, error: "Unauthorized" });
+    res.status(401).json({ success: false, error: "Unauthorized" });
+    return;
   }
 
   if (!readSupabaseAdminConfig() || !readServiceAccount()) {
     logger.error("Push notification service is missing Supabase or Firebase secrets.");
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       error: "Push notification service is not configured.",
     });
+    return;
   }
 
   // استجابة فورية — لا ينتظر Supabase اكتمال الإرسال
