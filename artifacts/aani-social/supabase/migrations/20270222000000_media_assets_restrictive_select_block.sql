@@ -15,19 +15,27 @@
 -- "permission denied for function" بدل أن تُفلتر الصفوف.
 --
 -- الإصلاح: استبدال السياسة المشتركة بسياستين RESTRICTIVE منفصلتين، كل دور
--- يحصل على سياسة تستدعي فقط ما يملك صلاحية تنفيذه:
+-- يحصل على سياسة تستدعي فقط ما يملك صلاحية تنفيذه، مع سياسة PERMISSIVE صريحة
+-- للزوار بدل الاعتماد وحده على media_assets_public_read USING (true):
 --
---   * media_assets_restrictive_anon_select  (to anon)
---       بوابة aani_can_read_post فقط، ولا تستدعي aani_is_user_blocked إطلاقاً.
---       شرط المالك غير قابل للتحقق أبداً مع anon (auth.uid() = NULL)، فإسقاطه
---       لا يوسّع الوصول.
+--   * media_assets_anon_public_select  (PERMISSIVE, to anon)
+--       الزائر غير المسجّل لا يرى إلا وسائط مرتبطة بمنشور يمكن قراءته فعلياً
+--       عبر aani_can_read_post(post.id, NULL) — أي منشور غير خاص لصاحب حساب غير
+--       خاص. لا تستدعي aani_is_user_blocked (anon لا تملك EXECUTE عليها)،
+--       ولا تُمنح أي صلاحية جديدة: anon لديها SELECT على media_assets وposts
+--       وEXECUTE على aani_can_read_post أصلاً، والترحيل يتحقق من ذلك فقط.
 --
---   * media_assets_restrictive_authenticated_select  (to authenticated)
+--   * media_assets_restrictive_anon_select  (RESTRICTIVE, to anon)
+--       نفس بوابة aani_can_read_post كقيد AND فوق السياسة permissive، ولا
+--       تستدعي aani_is_user_blocked إطلاقاً. شرط المالك غير قابل للتحقق أبداً
+--       مع anon (auth.uid() = NULL)، فإسقاطه لا يوسّع الوصول.
+--
+--   * media_assets_restrictive_authenticated_select  (RESTRICTIVE, to authenticated)
 --       شرط المالك، أو منشور مرتبط يمرّ من aani_can_read_post، مع فحص الحظر
 --       عبر aani_is_user_blocked (لأن aani_can_read_post دالة SECURITY DEFINER
 --       تتجاوز RLS، ومنها فحص الحظر الموجود على public.posts).
 --
--- لا تُحذف أي سياسة permissive، ولا تُمنح anon أي صلاحية جديدة، ولا تُعدَّل
+-- لا تُحذف أي سياسة permissive قائمة، ولا تُمنح anon أي صلاحية جديدة، ولا تُعدَّل
 -- صلاحيات الدوال ولا الترحيل 20270218000000. آمن لإعادة التطبيق.
 -- ============================================================================
 
@@ -92,6 +100,22 @@ begin
         using errcode = '42704';
     end if;
   end loop;
+
+  -- الصلاحيات التي تعتمد عليها السياسات: تُتحقق فقط، ولا يُمنح أي شيء هنا.
+  if not has_table_privilege('anon', 'public.media_assets', 'SELECT') then
+    raise exception 'aani: anon لا تملك SELECT على public.media_assets. أوقف الترحيل.'
+      using errcode = '42501';
+  end if;
+
+  if not has_table_privilege('anon', 'public.posts', 'SELECT') then
+    raise exception 'aani: anon لا تملك SELECT على public.posts — سياسة الزوار تستعلم posts. أوقف الترحيل.'
+      using errcode = '42501';
+  end if;
+
+  if not has_function_privilege('anon', 'public.aani_can_read_post(uuid, uuid)'::regprocedure, 'EXECUTE') then
+    raise exception 'aani: anon لا تملك EXECUTE على public.aani_can_read_post(uuid, uuid). أوقف الترحيل.'
+      using errcode = '42501';
+  end if;
 end $$;
 
 -- ----------------------------------------------------------------------------
@@ -124,11 +148,32 @@ begin
 end $$;
 
 -- ----------------------------------------------------------------------------
--- 1) حذف السياسة المشتركة (التي أنشأها 20270221000000) وإنشاء سياسة لكل دور
+-- 1) حذف السياسة المشتركة (التي أنشأها 20270221000000)، وإنشاء سياسة permissive
+--    صريحة للزوار، وإعادة إنشاء القيود RESTRICTIVE لدور لكلٍّ من anon وauthenticated
 -- ============================================================================
 drop policy if exists media_assets_restrictive_select on public.media_assets;
 
--- 1.1) الزوار (anon): بوابة aani_can_read_post فقط، بلا aani_is_user_blocked.
+-- 1.1) الزوار (anon): سياسة permissive صريحة تسمح فقط بوسائط المنشورات العامة
+--      التي يقرّها aani_can_read_post بلا هوية (NULL)، بلا aani_is_user_blocked.
+drop policy if exists media_assets_anon_public_select on public.media_assets;
+
+create policy media_assets_anon_public_select
+  on public.media_assets
+  as permissive
+  for select
+  to anon
+  using (
+    exists (
+      select 1
+      from public.posts as post
+      where post.media_asset_id = media_assets.id
+        and post.user_id = media_assets.user_id
+        and public.aani_can_read_post(post.id, null::uuid)
+    )
+  );
+
+-- 1.2) الزوار (anon): نفس البوابة كقيد RESTRICTIVE (AND) فوق السياسة permissive،
+--      بلا aani_is_user_blocked (anon لا تملك EXECUTE عليها).
 drop policy if exists media_assets_restrictive_anon_select on public.media_assets;
 
 create policy media_assets_restrictive_anon_select
@@ -146,7 +191,7 @@ create policy media_assets_restrictive_anon_select
     )
   );
 
--- 1.2) المسجّلون (authenticated): شرط المالك + بوابة المنشور + فحص الحظر.
+-- 1.3) المسجّلون (authenticated): شرط المالك + بوابة المنشور + فحص الحظر.
 drop policy if exists media_assets_restrictive_authenticated_select on public.media_assets;
 
 create policy media_assets_restrictive_authenticated_select
@@ -174,6 +219,8 @@ do $$
 declare
   v_anon_qual text;
   v_anon_roles name[];
+  v_anon_public_qual text;
+  v_anon_public_roles name[];
   v_auth_qual text;
   v_auth_roles name[];
   v_missing_permissive text;
@@ -219,6 +266,39 @@ begin
   -- (ب٢) سياسة anon لا تستدعي دالة الحظر إطلاقاً (لأن anon لا يملك EXECUTE عليها)
   if position('aani_is_user_blocked' in v_anon_qual) > 0 then
     raise exception 'aani: سياسة anon تستدعي aani_is_user_blocked — ستفشل قراءات الزوار بخطأ صلاحيات: %', v_anon_qual
+      using errcode = '42501';
+  end if;
+
+  -- (ب٣) سياسة anon permissive موجودة، لدور anon وحده، وتسمح فقط بوسائط
+  --      منشور يقرّه aani_can_read_post بلا هوية، بلا استدعاء دالة الحظر
+  select coalesce(qual, ''), roles
+    into v_anon_public_qual, v_anon_public_roles
+  from pg_policies
+  where schemaname = 'public'
+    and tablename = 'media_assets'
+    and policyname = 'media_assets_anon_public_select'
+    and permissive = 'PERMISSIVE'
+    and cmd = 'SELECT';
+
+  if v_anon_public_qual is null or v_anon_public_qual = '' then
+    raise exception 'aani: السياسة media_assets_anon_public_select غير مثبتة كـ PERMISSIVE على SELECT.'
+      using errcode = '42501';
+  end if;
+
+  if v_anon_public_roles is distinct from array['anon']::name[] then
+    raise exception 'aani: سياسة anon permissive موجّهة إلى % بدل anon وحدها.', v_anon_public_roles
+      using errcode = '42501';
+  end if;
+
+  if position('aani_can_read_post' in v_anon_public_qual) = 0
+     or position('media_asset_id' in v_anon_public_qual) = 0
+     or position('user_id' in v_anon_public_qual) = 0 then
+    raise exception 'aani: سياسة anon permissive لا تربط الوسائط بمنشور يمرّ من aani_can_read_post: %', v_anon_public_qual
+      using errcode = '42501';
+  end if;
+
+  if position('aani_is_user_blocked' in v_anon_public_qual) > 0 then
+    raise exception 'aani: سياسة anon permissive تستدعي aani_is_user_blocked (anon لا تملك EXECUTE عليها): %', v_anon_public_qual
       using errcode = '42501';
   end if;
 
@@ -298,6 +378,20 @@ begin
     raise notice 'aani: anon يملك EXECUTE على aani_is_user_blocked، لكن سياسة anon لا تستدعيه فلا حاجة له.';
   else
     raise notice 'aani: anon لا يملك EXECUTE على aani_is_user_blocked (كما هو متوقع بعد 20270218000000)، وسياسة anon لا تستدعيه.';
+  end if;
+
+  -- (و) تنبيه فقط: أي سياسة permissive أخرى تشمل anon تبقى كما هي، والقيد الفعلي
+  --     للزوار هو السياسة RESTRICTIVE media_assets_restrictive_anon_select.
+  if exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'media_assets'
+      and cmd = 'SELECT'
+      and permissive = 'PERMISSIVE'
+      and 'anon' = any (roles)
+      and policyname <> 'media_assets_anon_public_select'
+  ) then
+    raise notice 'aani: توجد سياسات SELECT permissive أخرى تشمل anon على media_assets (مثل media_assets_public_read USING (true))؛ القيد الفعلي للزوار هو media_assets_restrictive_anon_select.';
   end if;
 end $$;
 
