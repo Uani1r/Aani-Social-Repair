@@ -14,7 +14,6 @@ export function startReelsViewingSession(): number {
   currentSession += 1;
   return currentSession;
 }
-
 /** رقم جلسة العرض الحالية (0 قبل أول زيارة). */
 export function currentReelsViewingSession(): number {
   return currentSession;
