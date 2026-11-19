@@ -115,8 +115,8 @@ export default function StoryMediaStage({
               onVideoTimeUpdate(currentStory.id, video.currentTime, video.duration);
             }}
             // المؤقت يبدأ عند جاهزية أول إطار وظهوره، لا عند مجرد فتح القصة.
-            onLoadedData={() => onMediaReady(currentStory.id)}
-            onPlaying={() => onMediaReady(currentStory.id)}
+            onLoadedData={() => onMediaReady?.(currentStory.id)}
+            onPlaying={() => onMediaReady?.(currentStory.id)}
             onEnded={() => onVideoEnded(currentStory.id)}
           />
         ) : (
@@ -126,7 +126,7 @@ export default function StoryMediaStage({
             className="h-full w-full object-contain"
             style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }}
             // المؤقت يبدأ بعد تحميل الصورة وظهورها فعلياً.
-            onLoad={() => onMediaReady(currentStory.id)}
+            onLoad={() => onMediaReady?.(currentStory.id)}
           />
         )
       ) : (

@@ -52,7 +52,7 @@ export type StoryViewerProps = {
   onVideoTimeUpdate: (storyId: string, currentTimeSeconds: number, durationSeconds: number) => void;
   onVideoEnded: (storyId: string) => void;
   /** يُستدعى بعد ظهور وسيط القصة فعلياً (صورة محمّلة أو فيديو جاهز) لبدء المؤقت. */
-  onMediaReady: (storyId: string) => void;
+  onMediaReady?: (storyId: string) => void;
   onOpenStoryViews: (wasPaused?: boolean) => void;
   onCloseStoryViews: () => void;
   onSendReply: () => void;
