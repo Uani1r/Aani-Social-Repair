@@ -265,9 +265,10 @@ export function normalizeStoryRow(value: unknown): StoryRow | null {
     return null;
   }
 
+  // القصص المحفوظة بمدة تبقى كما هي؛ الغائبة تأخذ الافتراضي الجديد 60 ثانية.
   const duration = typeof value.duration_seconds === 'number' && Number.isFinite(value.duration_seconds)
     ? value.duration_seconds
-    : 5;
+    : 60;
   const timedTexts = Array.isArray(value.timed_texts)
     ? (value.timed_texts as unknown[]).filter(isStoryTimedText)
     : [];

@@ -228,6 +228,8 @@ export default function StoriesBar({
   const progressRef = useRef(progress);
   progressRef.current = progress;
   const [videoDurationForStory, setVideoDurationForStory] = useState<{ storyId: string; durationSeconds: number } | null>(null);
+  // القصة الجاهزة للعرض: لا يبدأ مؤقتها وشريط تقدمها قبل ظهور وسيطها فعلياً.
+  const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [replyText, setReplyText] = useState('');
   const [replyFocused, setReplyFocused] = useState(false);
@@ -1473,11 +1475,12 @@ export default function StoriesBar({
   currentStoryRef.current = currentStory;
   const isStoryOwner = Boolean(currentStory && currentStory.user_id === userId);
   const storedStoryDuration = Number(currentStory?.duration_seconds);
+  // المدة الافتراضية للقصة الجديدة 60 ثانية؛ القصص المحفوظة بمدة تبقى كما هي.
   const storyDisplayDuration = Number.isFinite(storedStoryDuration) && storedStoryDuration > 0
     ? Math.min(120, Math.max(5, storedStoryDuration))
-    : 5;
+    : 60;
   const currentVideoDuration = currentStory && videoDurationForStory?.storyId === currentStory.id
-    ? videoDurationForStory?.durationSeconds ?? 5
+    ? videoDurationForStory?.durationSeconds ?? 60
     : null;
   const currentStoryFilter = decodeStoryFilterKey(currentStory?.filter_key ?? undefined);
   // صاحب القصة الأصلية لقصص إعادة المشاركة: يُجلب مرة واحدة لكل معرّف أصل
@@ -1681,17 +1684,10 @@ export default function StoriesBar({
     };
   }, [currentStory?.id, isStoryOwner, userId]);
 
-  // المشاهدة تُسجَّل بمجرد ظهور القصة للمستخدم بعد التحقق من صلاحيتها، لا عند
-  // اكتمال عرضها. الانتقال إلى القصة التالية يعيد الفحص ويسجّل مشاهدتها فوراً،
-  // ولا تُسجَّل مشاهدة قبل ظهور القصة ولا لصاحب القصة لنفسه.
+  // تسجيل المشاهدة يحدث فور نجاح فحص الصلاحية فقط: لا يُسجَّل شيء إذا فشل الفحص
+  // أو أعاد أن القصة غير متاحة، ولا ينتظر لايكاً أو رداً أو اكتمال العرض.
   useEffect(() => {
-    if (!currentStory || archiveViewerOpen || isStoryOwner || !userId) return;
-
-    // بلا واجهة خلفية: يبقى التسجيل المحلي فقط.
-    if (!supabaseConfigured) {
-      recordStoryOpenView(currentStory.id);
-      return;
-    }
+    if (!currentStory || archiveViewerOpen || isStoryOwner || !userId || !supabaseConfigured) return;
 
     let active = true;
     const storyId = currentStory.id;
@@ -1706,7 +1702,6 @@ export default function StoriesBar({
         if (error) {
           // تحقق من أن المستخدم ما زال على نفس القصة قبل الإغلاق.
           if (currentStoryRef.current?.id !== storyId) return;
-          // تعذّر التحقق من الصلاحية: أغلق العارض بأمان بلا تسجيل مشاهدة.
           setArchiveViewerOpen(false);
           setActiveUserGroup(null);
           return;
@@ -1715,7 +1710,8 @@ export default function StoriesBar({
           if (currentStoryRef.current?.id === storyId) handleNextStory();
           return;
         }
-        recordStoryOpenView(storyId);
+        // القصة مسموحة: تُسجَّل المشاهدة الآن، مرة واحدة لكل قصة في الجلسة.
+        if (currentStoryRef.current?.id === storyId) recordStoryOpenView(storyId);
       })
       .catch(() => {
         if (!active || currentStoryRef.current?.id !== storyId) return;
@@ -1750,10 +1746,23 @@ export default function StoriesBar({
     };
   }, [replyFocused, isStoryOwner]);
 
+  // أي قصة جديدة تبدأ غير جاهزة حتى يظهر وسيطها، فلا يعمل مؤقتها على شاشة سوداء.
+  useEffect(() => {
+    setMediaReadyStoryId(null);
+  }, [currentStory?.id]);
+
+  const handleStoryMediaReady = useCallback((storyId: string) => {
+    if (currentStoryRef.current?.id !== storyId) return;
+    setMediaReadyStoryId(storyId);
+  }, []);
+
   useEffect(() => {
     if (!currentStory || isPaused || storyViewsOpen) return;
 
     const storyId = currentStory.id;
+    // المؤقت لا يبدأ قبل ظهور وسيط القصة فعلياً (صورة محمّلة أو فيديو جاهز).
+    // القصص النصية بلا وسيط تبدأ فوراً كما كانت.
+    if (currentStory.media_url && mediaReadyStoryId !== storyId) return;
     if (currentStory.media_type === 'video' && currentStory.media_url) {
       if (!Number.isFinite(currentVideoDuration) || currentVideoDuration === null || currentVideoDuration <= 0) return;
       const video = storyVideoRef.current;
@@ -1793,7 +1802,7 @@ export default function StoriesBar({
       window.clearInterval(progressInterval);
       window.clearTimeout(storyTimeout);
     };
-  }, [activeStoryIndex, activeUserGroup, archiveViewerOpen, currentStory?.id, currentStory?.media_type, currentStory?.media_url, currentVideoDuration, isPaused, storyDisplayDuration, storyViewsOpen]);
+  }, [activeStoryIndex, activeUserGroup, archiveViewerOpen, currentStory?.id, currentStory?.media_type, currentStory?.media_url, currentVideoDuration, isPaused, mediaReadyStoryId, storyDisplayDuration, storyViewsOpen]);
 
   // تشغيل صوت القصة المختار تزامناً مع عرضها وإيقافه عند الانتقال للقصة التالية أو الإغلاق
   // + كتم صوت الفيديو الأصلي عند وجود صوت مختار وإعادته طبيعياً عند غيابه
@@ -1905,7 +1914,7 @@ export default function StoriesBar({
       ? storedDuration
       : Number.isFinite(durationSeconds) && durationSeconds > 0
         ? durationSeconds
-        : 5;
+        : 60;
     const elapsed = Math.min(duration, Math.max(0, currentTimeSeconds));
     const nextProgress = Math.min(100, (elapsed / duration) * 100);
     progressRef.current = nextProgress;
@@ -2143,7 +2152,7 @@ export default function StoriesBar({
     setReshareStory(null);
     setReshareScaledDown(false);
     storyDurationManuallyChosenRef.current = false;
-    setUploadDuration(5);
+    setUploadDuration(60);
     setStoryDurationOpen(false);
     setShowStoryPicker(false);
     setShowUploadModal(true);
@@ -2420,6 +2429,7 @@ export default function StoriesBar({
           onVideoMetadata={handleStoryVideoMetadata}
           onVideoTimeUpdate={handleStoryVideoTimeUpdate}
           onVideoEnded={handleStoryVideoEnded}
+          onMediaReady={handleStoryMediaReady}
           onOpenStoryViews={wasPaused => void handleOpenStoryViews(wasPaused)}
           onCloseStoryViews={handleCloseStoryViews}
           onSendReply={() => void handleSendReply()}

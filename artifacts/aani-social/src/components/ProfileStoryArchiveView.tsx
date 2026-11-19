@@ -28,6 +28,8 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
   const [progress, setProgress] = useState(0);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(5);
+  // لا يبدأ مؤقت القصة قبل ظهور وسيطها فعلياً (صورة محمّلة أو فيديو جاهز).
+  const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [deletingStory, setDeletingStory] = useState(false);
@@ -95,14 +97,21 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
 
   useEffect(() => {
     if (!selectedStory) return;
-    const duration = Math.min(120, Math.max(5, Number(selectedStory.duration_seconds) || 5));
+    const duration = Math.min(120, Math.max(5, Number(selectedStory.duration_seconds) || 60));
     elapsedMsRef.current = 0;
     setProgress(0);
     setCurrentTimeSec(0);
     setDurationSeconds(duration);
     setIsPaused(false);
     setShowMenu(false);
+    // القصة الجديدة تبدأ غير جاهزة حتى يظهر وسيطها.
+    setMediaReadyStoryId(null);
   }, [selectedStory?.id]);
+
+  const handleMediaReady = (storyId: string) => {
+    if (selectedStory?.id !== storyId) return;
+    setMediaReadyStoryId(storyId);
+  };
 
   const goToNextStory = useCallback(() => {
     if (!selectedStory) return;
@@ -121,6 +130,8 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
 
   useEffect(() => {
     if (!selectedStory || selectedStory.media_type === 'video' || isPaused) return;
+    // لا يبدأ المؤقت قبل ظهور وسيط القصة فعلياً؛ النصية بلا وسيط تبدأ فوراً.
+    if (selectedStory.media_url && mediaReadyStoryId !== selectedStory.id) return;
     let lastTick = Date.now();
     const timer = window.setInterval(() => {
       const now = Date.now();
@@ -132,7 +143,7 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
       if (elapsed >= durationSeconds) goToNextStory();
     }, 50);
     return () => window.clearInterval(timer);
-  }, [selectedStory?.id, selectedStory?.media_type, durationSeconds, isPaused, goToNextStory]);
+  }, [selectedStory?.id, selectedStory?.media_type, selectedStory?.media_url, durationSeconds, isPaused, mediaReadyStoryId, goToNextStory]);
 
   const handleVideoTimeUpdate = (storyId: string, currentTime: number, videoDuration: number) => {
     if (selectedStory?.id !== storyId || !Number.isFinite(currentTime)) return;
@@ -310,6 +321,7 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
               }}
               onVideoTimeUpdate={handleVideoTimeUpdate}
               onVideoEnded={goToNextStory}
+              onMediaReady={handleMediaReady}
             />
             <div dir="ltr" className="absolute inset-x-0 z-30 flex justify-center gap-2 px-3" style={{ bottom: 'calc(1rem + env(safe-area-inset-bottom))' }}>
               <button type="button" dir="rtl" onClick={() => void openHighlightsPicker()} className="flex h-9 items-center gap-1.5 rounded-full border border-white/30 bg-black/60 px-3 text-[11px] font-semibold text-white shadow-lg backdrop-blur-md">

@@ -1,5 +1,5 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from 'react';
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { toast } from 'sonner';
 
 import type {
@@ -98,6 +98,19 @@ export function useStoryViewerActions({
 }: UseStoryViewerActionsOptions) {
   // قفل متزامن: يمنع استدعاء الإرسال مرتين قبل أن يحدّث React حالة isSendingReply.
   const replySendLockRef = useRef(false);
+  // تحديث دوري لقائمة المشاهدين أثناء فتحها، فلا يعتمد ظهور المشاهدة على حدث
+  // Realtime على story_views ولا على تفاعل آخر (لايك/رد).
+  const storyViewsPollRef = useRef<number | null>(null);
+  const storyViewsPollCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => {
+    storyViewsPollCleanupRef.current?.();
+  }, []);
+
+  // إغلاق لوحة المشاهدين بأي طريق (خارجي أيضاً) يوقف التحديث الدوري.
+  useEffect(() => {
+    if (!storyViewsOpen) storyViewsPollCleanupRef.current?.();
+  }, [storyViewsOpen]);
 
   const handleOpenStoryViews = async (wasPausedBeforeOpen = isPaused) => {
     if (!currentStory || !isStoryOwner || !supabaseConfigured || storyViewsOpen) return;
@@ -147,6 +160,24 @@ export function useStoryViewerActions({
         }, refreshStoryViewerEntries)
         .subscribe();
       storyViewsChannelRef.current = channel;
+
+      // تحديث دوري احتياطي: تظهر المشاهدة الجديدة في القائمة حتى لو لم يصل حدث
+      // Realtime على story_views، بلا انتظار لايك أو رد أو أي تفاعل آخر.
+      storyViewsPollCleanupRef.current?.();
+      const refreshOnVisible = () => {
+        if (document.visibilityState === 'visible') refreshStoryViewerEntries();
+      };
+      document.addEventListener('visibilitychange', refreshOnVisible);
+      const pollId = window.setInterval(refreshStoryViewerEntries, 4000);
+      storyViewsPollRef.current = pollId;
+      storyViewsPollCleanupRef.current = () => {
+        if (storyViewsPollRef.current !== null) {
+          window.clearInterval(storyViewsPollRef.current);
+          storyViewsPollRef.current = null;
+        }
+        document.removeEventListener('visibilitychange', refreshOnVisible);
+        storyViewsPollCleanupRef.current = null;
+      };
     } catch (error) {
       if (requestId !== storyViewsRequestRef.current || currentStory?.id !== storyId) return;
       console.error('[story views] تعذر تحميل قائمة المشاهدين:', error);
@@ -176,6 +207,7 @@ export function useStoryViewerActions({
   };
 
   const handleCloseStoryViews = () => {
+    storyViewsPollCleanupRef.current?.();
     storyViewsRequestRef.current += 1;
     if (storyViewsChannelRef.current) {
       void supabase.removeChannel(storyViewsChannelRef.current);
