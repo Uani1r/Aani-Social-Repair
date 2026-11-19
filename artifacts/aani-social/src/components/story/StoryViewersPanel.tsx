@@ -155,57 +155,71 @@ export default function StoryViewersPanel({
           {!storyViewsLoading && !storyViewsError && storyViewers.length > 0 && (
             <ul className="space-y-2">
               {storyViewers.map((item: StoryViewerEntry) => (
-                <li key={`${currentStory.id}:${item.user_id}`} className="flex items-center gap-4 rounded-xl px-2 py-2 hover:bg-white/[0.03]">
-                  <Avatar profile={item.viewer} />
-                  <div className="min-w-0 flex-1">
-                    <UserIdentity
-                      name={storyViewerDisplayName(item.viewer)}
-                      username={cleanUsername(item.viewer?.username) || 'اسم المستخدم غير متاح'}
-                      nameClassName="text-xs font-semibold text-white"
-                      usernameClassName="text-[10px] text-zinc-400"
-                    />
-                    <time className="mt-1 block text-[10px] text-zinc-500">
+                <li
+                  key={`${currentStory.id}:${item.user_id}`}
+                  dir="rtl"
+                  className="flex items-center gap-2 rounded-xl px-2 py-2 hover:bg-white/[0.03]"
+                >
+                  {/* الهوية: الصورة والاسم واليوزر مجموعة واحدة متماسكة */}
+                  <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                    <Avatar profile={item.viewer} />
+                    <div className="min-w-0 flex-1">
+                      <UserIdentity
+                        name={storyViewerDisplayName(item.viewer)}
+                        username={cleanUsername(item.viewer?.username) || 'اسم المستخدم غير متاح'}
+                        nameClassName="truncate text-xs font-semibold text-white"
+                        usernameClassName="truncate text-[10px] text-zinc-400"
+                      />
+                    </div>
+                  </div>
+
+                  {/* الوقت ومؤشر الإعجاب وزر الخيارات في الجهة المقابلة بجواره */}
+                  <div className="flex shrink-0 items-center gap-1">
+                    <time
+                      className="max-w-[9.5rem] truncate text-[11px] leading-5 text-zinc-400"
+                      dir="rtl"
+                    >
                       {item.is_viewer === false
                         ? `أعجب بالقصة ${formatDate(item.liked_at || item.viewed_at)}`
                         : formatDate(item.viewed_at)}
                     </time>
+                    {item.is_liked && (
+                      <Heart size={16} fill="currentColor" className="shrink-0 text-pink-500" aria-label="أعجب بالستوري" />
+                    )}
+                    <DropdownMenu onOpenChange={onViewerRowMenuOpenChange}>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={`خيارات ${cleanUsername(item.viewer?.username) || 'المشاهد'}`}
+                          disabled={Boolean(viewerActionBusyId)}
+                          className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
+                        >
+                          <MoreVertical size={18} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="z-[150] min-w-48 border-zinc-800 bg-zinc-900 text-white">
+                        <DropdownMenuItem onSelect={() => onOpenViewerReport(item)}>
+                          <Flag size={15} /> الإبلاغ عن الحساب
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="text-amber-300 focus:text-amber-200" onSelect={() => onBlockStoryViewer(item)}>
+                          <Ban size={15} /> حظر الحساب
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onHideStoryFromViewer(item)}>
+                          <EyeOff size={15} /> إخفاء الستوري عنه
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => onToggleStoryViewerFollow(item)}>
+                          <UserRound size={15} />
+                          {item.is_following
+                            ? 'إلغاء المتابعة'
+                            : item.follow_request_pending
+                              ? 'إلغاء طلب المتابعة'
+                              : item.viewer?.is_private
+                                ? 'طلب متابعة'
+                                : 'متابعة'}
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                  {item.is_liked && (
-                    <Heart size={16} fill="currentColor" className="shrink-0 text-pink-500" aria-label="أعجب بالستوري" />
-                  )}
-                  <DropdownMenu onOpenChange={onViewerRowMenuOpenChange}>
-                    <DropdownMenuTrigger asChild>
-                      <button
-                        type="button"
-                        aria-label={`خيارات ${cleanUsername(item.viewer?.username) || 'المشاهد'}`}
-                        disabled={Boolean(viewerActionBusyId)}
-                        className="flex h-9 w-8 shrink-0 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white/10 hover:text-white disabled:opacity-50"
-                      >
-                        <MoreVertical size={18} />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="z-[150] min-w-48 border-zinc-800 bg-zinc-900 text-white">
-                      <DropdownMenuItem onSelect={() => onOpenViewerReport(item)}>
-                        <Flag size={15} /> الإبلاغ عن الحساب
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="text-amber-300 focus:text-amber-200" onSelect={() => onBlockStoryViewer(item)}>
-                        <Ban size={15} /> حظر الحساب
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => onHideStoryFromViewer(item)}>
-                        <EyeOff size={15} /> إخفاء الستوري عنه
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => onToggleStoryViewerFollow(item)}>
-                        <UserRound size={15} />
-                        {item.is_following
-                          ? 'إلغاء المتابعة'
-                          : item.follow_request_pending
-                            ? 'إلغاء طلب المتابعة'
-                            : item.viewer?.is_private
-                              ? 'طلب متابعة'
-                              : 'متابعة'}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
                 </li>
               ))}
             </ul>
