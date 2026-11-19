@@ -1597,10 +1597,21 @@ export default function StoriesBar({
       }),
     )
       .then(({ data, error }) => {
-        if (!active || error) return;
+        if (!active) return;
+        if (error) {
+          // تعذّر التحقق من الصلاحية: أغلق العارض بأمان ولا تُبقِ القصة معروضة.
+          // هذا الإغلاق لا يسجّل مشاهدة.
+          setArchiveViewerOpen(false);
+          setActiveUserGroup(null);
+          return;
+        }
         if (data === false) handleNextStory();
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!active) return;
+        setArchiveViewerOpen(false);
+        setActiveUserGroup(null);
+      });
 
     return () => {
       active = false;

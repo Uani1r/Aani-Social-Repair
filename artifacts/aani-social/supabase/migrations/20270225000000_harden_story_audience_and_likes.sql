@@ -51,6 +51,14 @@ begin
   if to_regclass('public.profiles') is null then
     raise exception 'public.profiles غير موجود. أوقف الترحيل.' using errcode = '42P01';
   end if;
+  if to_regprocedure('public.aani_is_mutual_follow(uuid,uuid)') is null then
+    raise exception 'public.aani_is_mutual_follow(uuid, uuid) غير موجودة (شرط Close Friends). أوقف الترحيل.'
+      using errcode = '42883';
+  end if;
+  if to_regprocedure('public.aani_is_user_blocked(uuid,uuid)') is null then
+    raise exception 'public.aani_is_user_blocked(uuid, uuid) غير موجودة. أوقف الترحيل.'
+      using errcode = '42883';
+  end if;
 
   foreach v_column in array array['blocker_id', 'blocked_id']
   loop
@@ -116,6 +124,8 @@ begin
     user_id,
     is_close_friends,
     original_story_id,
+    media_url,
+    media_type,
     created_at,
     expires_at,
     share_type,
@@ -127,6 +137,8 @@ begin
       story.user_id,
       story.is_close_friends,
       story.original_story_id,
+      story.media_url,
+      story.media_type,
       story.created_at,
       story.expires_at,
       story.share_type,
@@ -146,10 +158,17 @@ begin
       original.user_id,
       original.is_close_friends,
       original.original_story_id,
+      original.media_url,
+      original.media_type,
       original.created_at,
       original.expires_at,
       original.share_type,
-      child.share_type = 'reshare',
+      -- سلامة إعادة المشاركة: النوع reshare AND نفس الوسائط تمامًا (لا نوع ولا رابط مختلف)
+      (
+        child.share_type = 'reshare'
+        and child.media_url is not distinct from original.media_url
+        and child.media_type = original.media_type
+      ),
       coalesce(
         nullif(to_jsonb(original) ->> 'audience', ''),
         case when original.is_close_friends then 'close_friends' else 'all' end
@@ -196,12 +215,8 @@ begin
                   where listed.user_id = story.user_id
                     and listed.friend_id = p_viewer_id
                 )
-                or not exists (
-                  select 1
-                  from public.follows as accepted
-                  where accepted.follower_id = p_viewer_id
-                    and accepted.following_id = story.user_id
-                )
+                -- المتابعة المتبادلة كما في النسخة المنشورة (ليست متابعة أحادية)
+                or not public.aani_is_mutual_follow(story.user_id, p_viewer_id)
               )
             )
             -- وفي غير قصة Close Friends: القيمة الفعلية all تعني قصة عامة.
@@ -217,12 +232,7 @@ begin
                     where listed.user_id = story.user_id
                       and listed.friend_id = p_viewer_id
                   )
-                  or not exists (
-                    select 1
-                    from public.follows as accepted
-                    where accepted.follower_id = p_viewer_id
-                      and accepted.following_id = story.user_id
-                  )
+                  or not public.aani_is_mutual_follow(story.user_id, p_viewer_id)
                 )
                 when 'followers' then not exists (
                   select 1
@@ -325,6 +335,15 @@ begin
   end if;
   if position('is_close_friends' in v_definition) = 0 then
     raise exception 'aani_can_view_story فقدت توافق is_close_friends.'
+      using errcode = '42501';
+  end if;
+  if position('aani_is_mutual_follow' in v_definition) = 0 then
+    raise exception 'aani_can_view_story لا تفرض المتابعة المتبادلة لقصص Close Friends.'
+      using errcode = '42501';
+  end if;
+  if position('media_type' in v_definition) = 0
+     or position('is not distinct from' in lower(v_definition)) = 0 then
+    raise exception 'تحقق سلامة إعادة المشاركة (media_url/media_type) غائب. أوقف الترحيل.'
       using errcode = '42501';
   end if;
 
