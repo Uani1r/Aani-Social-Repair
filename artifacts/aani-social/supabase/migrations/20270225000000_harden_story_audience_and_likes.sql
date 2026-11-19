@@ -6,13 +6,15 @@
 -- 1) aani_can_view_story: يُعاد تعريفه بنفس منطق النسخة المنشورة (هوية
 --    المستدعي، انتهاء القصة، سلسلة إعادة المشاركة، خصوصية الحساب، الحظر عبر
 --    user_blocks.blocker_id/blocked_id) مع فحص audience فعلي:
---      * public        → مسموح (مع بقاء قيود الحساب الخاص والحظر)
---      * close_friends → عضو close_friends فقط
+--      * all / public  → مسموح (مع بقاء قيود الحساب الخاص والحظر)
+--      * close_friends → عضو close_friends مع متابعة متبادلة فقط
 --      * followers     → متابعة معتمدة فقط
 --      * أي قيمة أخرى → يُرفض
 --    التوافق مع القصص القديمة: يُقرأ audience عبر to_jsonb(story) فلا يفشل
 --    الترحيل إن غاب العمود، وأي قيمة غائبة/فارغة تُشتق من is_close_friends:
---    true → close_friends، false → public.
+--    true → close_friends، false → all.
+--    aani_is_mutual_follow(p_user_id, p_friend_id): المعامل الأول هو المستدعي
+--    (p_viewer_id) والثاني هو صاحب القصة (story.user_id) — وليس العكس.
 --
 -- 2) story_likes:
 --      * حذف السياسة المتساهلة القديمة "Users like stories as themselves"
@@ -224,7 +226,7 @@ begin
                 and accepted.following_id = story.user_id
             ))
             -- جمهور القصة: is_close_friends=true قيد أمني دائم لا يُتجاوَز
-            -- بقيمة audience، ويشترط العضوية والمتابعة المعتمدة.
+            -- بقيمة audience، ويشترط العضوية والمتابعة المتبادلة.
             or (
               story.is_close_friends
               and not exists (
@@ -232,7 +234,9 @@ begin
                 from public.close_friends as listed
                 where listed.user_id = story.user_id
                   and listed.friend_id = p_viewer_id
-                  and public.aani_is_mutual_follow(story.user_id, p_viewer_id)
+                  -- ترتيب المعاملات: p_user_id هو المستدعي (p_viewer_id)،
+                  -- وp_friend_id هو صاحب القصة (story.user_id).
+                  and public.aani_is_mutual_follow(p_viewer_id, story.user_id)
               )
             )
             -- وفي غير قصة Close Friends: القيمة الفعلية all تعني قصة عامة.
@@ -246,7 +250,8 @@ begin
                   from public.close_friends as listed
                   where listed.user_id = story.user_id
                     and listed.friend_id = p_viewer_id
-                    and public.aani_is_mutual_follow(story.user_id, p_viewer_id)
+                    -- نفس الترتيب: p_user_id = p_viewer_id، p_friend_id = story.user_id.
+                    and public.aani_is_mutual_follow(p_viewer_id, story.user_id)
                 )
                 when 'followers' then not exists (
                   select 1
@@ -353,6 +358,12 @@ begin
   end if;
   if position('aani_is_mutual_follow' in v_definition) = 0 then
     raise exception 'aani_can_view_story لا تفرض المتابعة المتبادلة لقصص Close Friends.'
+      using errcode = '42501';
+  end if;
+  -- aani_is_mutual_follow تشترط أن يكون p_user_id هو المستدعي: الأول p_viewer_id
+  -- والثاني story.user_id. الفحص يمنع عودة ترتيب المعاملات المقلوب.
+  if position('aani_is_mutual_follow(p_viewer_id, story.user_id)' in v_definition) = 0 then
+    raise exception 'aani_can_view_story تستدعي aani_is_mutual_follow بترتيب معاملات خاطئ: يجب أن يكون المستدعي p_viewer_id أولاً.'
       using errcode = '42501';
   end if;
   if position('media_type' in v_definition) = 0
