@@ -95,7 +95,7 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
 
   useEffect(() => {
     if (!selectedStory) return;
-    const duration = Math.min(120, Math.max(5, Number(selectedStory.duration_seconds) || 5));
+    const duration = Math.min(120, Math.max(5, Number(selectedStory.duration_seconds) || 60));
     elapsedMsRef.current = 0;
     setProgress(0);
     setCurrentTimeSec(0);

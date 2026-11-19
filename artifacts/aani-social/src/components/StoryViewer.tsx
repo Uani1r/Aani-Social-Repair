@@ -63,6 +63,7 @@ export default function StoryViewer({
   onVideoMetadata,
   onVideoTimeUpdate,
   onVideoEnded,
+  onMediaReady,
   onOpenStoryViews,
   onCloseStoryViews,
   onSendReply,
@@ -378,6 +379,7 @@ export default function StoryViewer({
           onVideoMetadata={onVideoMetadata}
           onVideoTimeUpdate={onVideoTimeUpdate}
           onVideoEnded={onVideoEnded}
+          onMediaReady={onMediaReady}
         />
 
         <StoryReplyControls

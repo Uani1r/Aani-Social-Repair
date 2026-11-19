@@ -24,6 +24,7 @@ type StoryMediaStageProps = Pick<
   | 'onVideoMetadata'
   | 'onVideoTimeUpdate'
   | 'onVideoEnded'
+  | 'onMediaReady'
 >;
 
 export default function StoryMediaStage({
@@ -43,6 +44,7 @@ export default function StoryMediaStage({
   onVideoMetadata,
   onVideoTimeUpdate,
   onVideoEnded,
+  onMediaReady,
 }: StoryMediaStageProps) {
   const canvasStyle = currentStory.timed_texts.find(
     (item): item is StoryCanvasStyleOverlay => item.type === 'canvas-style'
@@ -112,10 +114,20 @@ export default function StoryMediaStage({
               const video = event.currentTarget;
               onVideoTimeUpdate(currentStory.id, video.currentTime, video.duration);
             }}
+            // المؤقت يبدأ عند جاهزية أول إطار وظهوره، لا عند مجرد فتح القصة.
+            onLoadedData={() => onMediaReady(currentStory.id)}
+            onPlaying={() => onMediaReady(currentStory.id)}
             onEnded={() => onVideoEnded(currentStory.id)}
           />
         ) : (
-          <img src={storyMediaUrl} alt="" className="h-full w-full object-contain" style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }} />
+          <img
+            src={storyMediaUrl}
+            alt=""
+            className="h-full w-full object-contain"
+            style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }}
+            // المؤقت يبدأ بعد تحميل الصورة وظهورها فعلياً.
+            onLoad={() => onMediaReady(currentStory.id)}
+          />
         )
       ) : (
         <div
