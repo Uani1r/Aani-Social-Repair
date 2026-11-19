@@ -337,6 +337,9 @@ create policy aani_story_likes_delete_own on public.story_likes
 do $$
 declare
   v_definition text;
+  v_normalized_definition text;
+  v_mutual_follow_call text := 'aani_is_mutual_follow(p_viewer_id, story.user_id)';
+  v_mutual_follow_calls integer;
   v_policy_count integer;
 begin
   -- الدالة ما زالت SECURITY DEFINER وبـ search_path فارغ وذات audience
@@ -356,14 +359,16 @@ begin
     raise exception 'aani_can_view_story فقدت توافق is_close_friends.'
       using errcode = '42501';
   end if;
-  if position('aani_is_mutual_follow' in v_definition) = 0 then
-    raise exception 'aani_can_view_story لا تفرض المتابعة المتبادلة لقصص Close Friends.'
-      using errcode = '42501';
-  end if;
-  -- aani_is_mutual_follow تشترط أن يكون p_user_id هو المستدعي: الأول p_viewer_id
-  -- والثاني story.user_id. الفحص يمنع عودة ترتيب المعاملات المقلوب.
-  if position('aani_is_mutual_follow(p_viewer_id, story.user_id)' in v_definition) = 0 then
-    raise exception 'aani_can_view_story تستدعي aani_is_mutual_follow بترتيب معاملات خاطئ: يجب أن يكون المستدعي p_viewer_id أولاً.'
+  -- يجب أن يظهر الاستدعاء الصحيح (المستدعي p_viewer_id أولاً، وصاحب القصة
+  -- story.user_id ثانياً) مرتين بالضبط: في فرع is_close_friends وفي فرع
+  -- audience = 'close_friends'. أي عدد غيرهما يوقف الترحيل.
+  v_normalized_definition := regexp_replace(v_definition, '\s+', ' ', 'g');
+  v_mutual_follow_calls := (
+    length(v_normalized_definition)
+    - length(replace(v_normalized_definition, v_mutual_follow_call, ''))
+  ) / length(v_mutual_follow_call);
+  if v_mutual_follow_calls <> 2 then
+    raise exception 'aani_can_view_story يجب أن تستدعي aani_is_mutual_follow(p_viewer_id, story.user_id) مرتين بالضبط (فرع is_close_friends وفرع audience)، والعدد الفعلي: % — أوقف الترحيل.', coalesce(v_mutual_follow_calls, -1)
       using errcode = '42501';
   end if;
   if position('media_type' in v_definition) = 0
