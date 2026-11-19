@@ -1684,15 +1684,8 @@ export default function StoriesBar({
     };
   }, [currentStory?.id, isStoryOwner, userId]);
 
-  // تسجيل المشاهدة يبدأ لحظة ظهور القصة (بمجرد فتحها)، ولا ينتظر لايكاً أو رداً
-  // أو اكتمال العرض. منع التكرار واستثناء صاحب القصة داخل recordStoryOpenView.
-  useEffect(() => {
-    if (!currentStory || archiveViewerOpen || isStoryOwner || !userId) return;
-    recordStoryOpenView(currentStory.id);
-  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, recordStoryOpenView, userId]);
-
-  // فحص الصلاحية عند فتح القصة (لا الاعتماد على بيانات مخزّنة سابقاً)؛ وإذا فقد
-  // المستخدم الصلاحية يتوقف العرض فوراً وينتقل/يُغلق بأمان بلا أي تسجيل إضافي.
+  // تسجيل المشاهدة يحدث فور نجاح فحص الصلاحية فقط: لا يُسجَّل شيء إذا فشل الفحص
+  // أو أعاد أن القصة غير متاحة، ولا ينتظر لايكاً أو رداً أو اكتمال العرض.
   useEffect(() => {
     if (!currentStory || archiveViewerOpen || isStoryOwner || !userId || !supabaseConfigured) return;
 
@@ -1715,7 +1708,10 @@ export default function StoriesBar({
         }
         if (data === false) {
           if (currentStoryRef.current?.id === storyId) handleNextStory();
+          return;
         }
+        // القصة مسموحة: تُسجَّل المشاهدة الآن، مرة واحدة لكل قصة في الجلسة.
+        if (currentStoryRef.current?.id === storyId) recordStoryOpenView(storyId);
       })
       .catch(() => {
         if (!active || currentStoryRef.current?.id !== storyId) return;
@@ -1726,7 +1722,7 @@ export default function StoriesBar({
     return () => {
       active = false;
     };
-  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, userId]);
+  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, recordStoryOpenView, userId]);
 
   useEffect(() => {
     if (!replyFocused || isStoryOwner) {
