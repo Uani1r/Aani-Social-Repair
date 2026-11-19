@@ -32,6 +32,9 @@ declare
   v_story_columns text[] := array['id', 'user_id', 'is_close_friends', 'created_at', 'expires_at', 'original_story_id', 'share_type', 'media_url', 'media_type'];
   v_like_columns text[] := array['story_id', 'user_id'];
   v_column text;
+  v_story_function regprocedure := to_regprocedure('public.aani_can_view_story(uuid, uuid)');
+  v_mutual_follow_function regprocedure := to_regprocedure('public.aani_is_mutual_follow(uuid, uuid)');
+  v_story_function_owner oid;
 begin
   if to_regclass('public.stories') is null then
     raise exception 'public.stories غير موجود. أوقف الترحيل.' using errcode = '42P01';
@@ -51,9 +54,26 @@ begin
   if to_regclass('public.profiles') is null then
     raise exception 'public.profiles غير موجود. أوقف الترحيل.' using errcode = '42P01';
   end if;
-  if to_regprocedure('public.aani_is_mutual_follow(uuid,uuid)') is null then
-    raise exception 'public.aani_is_mutual_follow(uuid, uuid) غير موجودة (شرط Close Friends). أوقف الترحيل.'
+  if v_story_function is null then
+    raise exception 'public.aani_can_view_story(uuid, uuid) غير موجودة. أوقف الترحيل.'
       using errcode = '42883';
+  end if;
+  if v_mutual_follow_function is null then
+    raise exception 'public.aani_is_mutual_follow(uuid, uuid) غير موجودة. أوقف الترحيل.'
+      using errcode = '42883';
+  end if;
+  select proc.proowner
+    into v_story_function_owner
+  from pg_proc as proc
+  where proc.oid = v_story_function;
+  if v_story_function_owner is null
+     or not has_function_privilege(
+       v_story_function_owner,
+       v_mutual_follow_function,
+       'EXECUTE'
+     ) then
+    raise exception 'مالك aani_can_view_story لا يملك EXECUTE على aani_is_mutual_follow. أوقف الترحيل.'
+      using errcode = '42501';
   end if;
   if to_regprocedure('public.aani_is_user_blocked(uuid,uuid)') is null then
     raise exception 'public.aani_is_user_blocked(uuid, uuid) غير موجودة. أوقف الترحيل.'
@@ -111,7 +131,6 @@ as $$
 declare
   v_actor uuid := (select auth.uid());
   v_result boolean;
-  v_audience text;
 begin
   -- لا يُسمح بفحص الصلاحية إلا لهوية المستدعي نفسه
   if p_viewer_id is not null and p_viewer_id is distinct from v_actor then
@@ -208,15 +227,12 @@ begin
             -- بقيمة audience، ويشترط العضوية والمتابعة المعتمدة.
             or (
               story.is_close_friends
-              and (
-                not exists (
-                  select 1
-                  from public.close_friends as listed
-                  where listed.user_id = story.user_id
-                    and listed.friend_id = p_viewer_id
-                )
-                -- المتابعة المتبادلة كما في النسخة المنشورة (ليست متابعة أحادية)
-                or not public.aani_is_mutual_follow(story.user_id, p_viewer_id)
+              and not exists (
+                select 1
+                from public.close_friends as listed
+                where listed.user_id = story.user_id
+                  and listed.friend_id = p_viewer_id
+                  and public.aani_is_mutual_follow(story.user_id, p_viewer_id)
               )
             )
             -- وفي غير قصة Close Friends: القيمة الفعلية all تعني قصة عامة.
@@ -225,14 +241,12 @@ begin
               and case lower(coalesce(story.audience, 'all'))
                 when 'all' then false
                 when 'public' then false
-                when 'close_friends' then (
-                  not exists (
-                    select 1
-                    from public.close_friends as listed
-                    where listed.user_id = story.user_id
-                      and listed.friend_id = p_viewer_id
-                  )
-                  or not public.aani_is_mutual_follow(story.user_id, p_viewer_id)
+                when 'close_friends' then not exists (
+                  select 1
+                  from public.close_friends as listed
+                  where listed.user_id = story.user_id
+                    and listed.friend_id = p_viewer_id
+                    and public.aani_is_mutual_follow(story.user_id, p_viewer_id)
                 )
                 when 'followers' then not exists (
                   select 1
