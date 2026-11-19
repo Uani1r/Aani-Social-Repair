@@ -243,18 +243,20 @@ create policy aani_story_likes_delete_own on public.story_likes
 
 -- =====================================================================
 -- 6) دالة تسجيل المشاهدة (idempotent)
+--    المتغير v_viewer_id لا viewer_id: تجنّب خطأ 42702
+--    (column reference "viewer_id" is ambiguous) مع عمود story_views.viewer_id
 -- =====================================================================
 
 create or replace function public.aani_record_story_view(p_story_id uuid)
 returns void
 language plpgsql
 security definer
-set search_path = ''
-as $$
+set search_path to ''
+as $function$
 declare
-  viewer_id uuid := auth.uid();
+  v_viewer_id uuid := auth.uid();
 begin
-  if viewer_id is null then
+  if v_viewer_id is null then
     raise exception 'Authentication is required' using errcode = '42501';
   end if;
   if p_story_id is null then
@@ -264,17 +266,18 @@ begin
     select 1
     from public.stories as story
     where story.id = p_story_id
-      and story.user_id <> viewer_id
-      and public.aani_can_view_story(story.id, viewer_id)
+      and story.user_id <> v_viewer_id
+      and public.aani_can_view_story(story.id, v_viewer_id)
   ) then
     raise exception 'Story is not available to this viewer' using errcode = '42501';
   end if;
 
   insert into public.story_views (story_id, viewer_id)
-  values (p_story_id, viewer_id)
-  on conflict (story_id, viewer_id) do nothing;
+  values (p_story_id, v_viewer_id)
+  on conflict (story_id, viewer_id) do update
+    set created_at = now();
 end;
-$$;
+$function$;
 revoke all on function public.aani_record_story_view(uuid) from public, anon, authenticated;
 grant execute on function public.aani_record_story_view(uuid) to authenticated;
 
