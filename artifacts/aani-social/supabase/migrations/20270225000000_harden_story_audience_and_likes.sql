@@ -362,7 +362,8 @@ begin
   -- يجب أن يظهر الاستدعاء الصحيح (المستدعي p_viewer_id أولاً، وصاحب القصة
   -- story.user_id ثانياً) مرتين بالضبط: في فرع is_close_friends وفي فرع
   -- audience = 'close_friends'. أي عدد غيرهما يوقف الترحيل.
-  v_normalized_definition := regexp_replace(v_definition, '\s+', ' ', 'g');
+  -- تطبيع المسافات بتعبير POSIX صريح (لا يعتمد على معنى \s داخل نص عادي).
+  v_normalized_definition := regexp_replace(v_definition, '[[:space:]]+', ' ', 'g');
   v_mutual_follow_calls := (
     length(v_normalized_definition)
     - length(replace(v_normalized_definition, v_mutual_follow_call, ''))
