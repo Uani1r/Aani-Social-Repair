@@ -29,7 +29,7 @@ begin;
 -- ---------------------------------------------------------------------
 do $$
 declare
-  v_story_columns text[] := array['id', 'user_id', 'is_close_friends', 'created_at', 'expires_at', 'original_story_id', 'share_type'];
+  v_story_columns text[] := array['id', 'user_id', 'is_close_friends', 'created_at', 'expires_at', 'original_story_id', 'share_type', 'media_url', 'media_type'];
   v_like_columns text[] := array['story_id', 'user_id'];
   v_column text;
 begin
