@@ -115,6 +115,7 @@ begin
     id,
     user_id,
     is_close_friends,
+    original_story_id,
     created_at,
     expires_at,
     share_type,
@@ -125,6 +126,7 @@ begin
       story.id,
       story.user_id,
       story.is_close_friends,
+      story.original_story_id,
       story.created_at,
       story.expires_at,
       story.share_type,
@@ -132,7 +134,7 @@ begin
       -- audience من العمود إن وُجد، وإلا تُشتق من is_close_friends (توافق قديم)
       coalesce(
         nullif(to_jsonb(story) ->> 'audience', ''),
-        case when story.is_close_friends then 'close_friends' else 'public' end
+        case when story.is_close_friends then 'close_friends' else 'all' end
       )
     from public.stories as story
     where story.id = p_story_id
@@ -143,13 +145,14 @@ begin
       original.id,
       original.user_id,
       original.is_close_friends,
+      original.original_story_id,
       original.created_at,
       original.expires_at,
       original.share_type,
       child.share_type = 'reshare',
       coalesce(
         nullif(to_jsonb(original) ->> 'audience', ''),
-        case when original.is_close_friends then 'close_friends' else 'public' end
+        case when original.is_close_friends then 'close_friends' else 'all' end
       )
     from public.stories as original
     join story_chain as child on child.original_story_id = original.id
@@ -182,15 +185,44 @@ begin
               where accepted.follower_id = p_viewer_id
                 and accepted.following_id = story.user_id
             ))
-            -- جمهور القصة
+            -- جمهور القصة: is_close_friends=true قيد أمني دائم لا يُتجاوَز
+            -- بقيمة audience، ويشترط العضوية والمتابعة المعتمدة.
             or (
-              case lower(coalesce(story.audience, 'public'))
-                when 'public' then false
-                when 'close_friends' then not exists (
+              story.is_close_friends
+              and (
+                not exists (
                   select 1
                   from public.close_friends as listed
                   where listed.user_id = story.user_id
                     and listed.friend_id = p_viewer_id
+                )
+                or not exists (
+                  select 1
+                  from public.follows as accepted
+                  where accepted.follower_id = p_viewer_id
+                    and accepted.following_id = story.user_id
+                )
+              )
+            )
+            -- وفي غير قصة Close Friends: القيمة الفعلية all تعني قصة عامة.
+            or (
+              not story.is_close_friends
+              and case lower(coalesce(story.audience, 'all'))
+                when 'all' then false
+                when 'public' then false
+                when 'close_friends' then (
+                  not exists (
+                    select 1
+                    from public.close_friends as listed
+                    where listed.user_id = story.user_id
+                      and listed.friend_id = p_viewer_id
+                  )
+                  or not exists (
+                    select 1
+                    from public.follows as accepted
+                    where accepted.follower_id = p_viewer_id
+                      and accepted.following_id = story.user_id
+                  )
                 )
                 when 'followers' then not exists (
                   select 1

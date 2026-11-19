@@ -1838,8 +1838,8 @@ export default function StoriesBar({
     if (currentIdx === -1) return;
     const nextUser = userIds[currentIdx + 1];
     if (!nextUser) {
-      // لا يوجد شخص تالٍ: إغلاق العارض بنفس مسار الإغلاق المعتمد
-      if (currentStory?.id) markStorySeen(String(currentStory.id));
+      // لا يوجد شخص تالٍ: إغلاق العارض دون تسجيل مشاهدة (الإغلاق/التخطي
+      // لا يُسجّل مشاهدة؛ تُسجَّل عند اكتمال العرض فقط).
       setArchiveViewerOpen(false);
       setActiveUserGroup(null);
       return;
