@@ -120,6 +120,27 @@ async function fetchOriginalStoryAuthor(originalStoryId: string): Promise<StoryA
   return typeof ownerId === 'string' ? fetchProfileAuthor(ownerId) : null;
 }
 
+/** ترتيب قصص الحساب داخل العارض: الأقدم أولاً ثم الأحدث. */
+function sortStoriesOldestFirst(stories: StoryRow[]): StoryRow[] {
+  return [...stories].sort((first, second) => {
+    const firstTime = Date.parse(first.created_at);
+    const secondTime = Date.parse(second.created_at);
+    if (Number.isFinite(firstTime) && Number.isFinite(secondTime) && firstTime !== secondTime) {
+      return firstTime - secondTime;
+    }
+    return first.id.localeCompare(second.id);
+  });
+}
+
+/** فهرس أول قصة غير مشاهدة: يبدأ العرض منها، وإن كانت كلها مشاهدة يبدأ من الأقدم. */
+function firstUnseenStoryIndex(stories: StoryRow[], seenIds: Set<string>): number {
+  const index = stories.findIndex(story => !seenIds.has(story.id));
+  return index >= 0 ? index : 0;
+}
+
+/** فاصل قصير قبل انتقال حساب أكمل المستخدم قصصه إلى نهاية مجموعته في الشريط. */
+const ACCOUNT_ROTATION_DELAY_MS = 8000;
+
 export default function StoriesBar({
   userId,
   currentProfile,
@@ -160,6 +181,46 @@ export default function StoriesBar({
     writeSeenStoryIds(userId, seenStoryIds);
     notifySeenStoryIdsChanged();
   }, [seenStoryIds, userId]);
+
+  // حسابات أكمل المستخدم قصصها في هذه الجلسة، وتنتقل إلى نهاية مجموعتها في
+  // الشريط بعد فاصل قصير (ACCOUNT_ROTATION_DELAY_MS).
+  const [demotedStoryUserIds, setDemotedStoryUserIds] = useState<string[]>([]);
+  const demotionTimersRef = useRef<Map<string, number>>(new Map());
+
+  // ترتيب جلسة العرض: يُلتقط عند فتح القصص فلا تتحرك الحسابات أثناء التنقل.
+  const viewerOrderRef = useRef<string[] | null>(null);
+
+  // منع تسجيل المشاهدة أكثر من مرة لنفس القصة في الجلسة.
+  const recordedStoryViewIdsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const timers = demotionTimersRef.current;
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
+  // المشاهدة تُسجَّل لحظة ظهور القصة (بعد التحقق من صلاحيتها) محلياً وفي
+  // story_views، مع منع التكرار، ولا تُسجَّل لصاحب القصة لنفسه.
+  const recordStoryOpenView = useCallback((storyId: string) => {
+    if (!storyId || recordedStoryViewIdsRef.current.has(storyId)) return;
+    recordedStoryViewIdsRef.current.add(storyId);
+    markStorySeen(storyId);
+    if (!userId || !supabaseConfigured) return;
+
+    void Promise.resolve(supabase.rpc('aani_record_story_view', { p_story_id: storyId }))
+      .then(({ error }) => {
+        if (error) {
+          // فشل الطلب: لا نُبقي القصة «مسجَّلة» كي تُعاد المحاولة عند فتحها لاحقاً.
+          recordedStoryViewIdsRef.current.delete(storyId);
+          console.warn('[story views] تعذر تسجيل المشاهدة:', error);
+        }
+      })
+      .catch(() => {
+        recordedStoryViewIdsRef.current.delete(storyId);
+      });
+  }, [markStorySeen, userId]);
 
   const [showUI, setShowUI] = useState(true);
   const [isPaused, setIsPaused] = useState(false);
@@ -1338,37 +1399,75 @@ export default function StoriesBar({
     });
   };
 
+  // ترتيب الشريط:
+  //   1) صاحب الحساب أولاً ثم الأصدقاء المقربون (والحلقة الخضراء تُعرض في الشريط)،
+  //   2) الحسابات ذات القصص غير المشاهدة قبل التي شوهدت قصصها (فالقصص الجديدة
+  //      تدخل المقدمة)،
+  //   3) الحساب الذي أكمل المستخدم قصصه ينتقل إلى نهاية مجموعته بعد فاصل قصير،
+  //   4) الأحدث أولاً داخل نفس المجموعة.
   const orderedStoryUserIds = useMemo(() => {
     const seenIds = new Set(seenStoryIds);
+    const demotedIds = new Set(demotedStoryUserIds);
     const newestStoryTime = (stories: StoryRow[]) => Math.max(
       0,
       ...stories.map(story => Date.parse(story.created_at)).filter(Number.isFinite),
     );
+    const hasCloseFriendsStory = (stories: StoryRow[]) => stories.some(story => story.is_close_friends);
+    const hasUnseenStory = (stories: StoryRow[]) => stories.some(story => !seenIds.has(story.id));
 
     return Object.keys(groupedStories).sort((firstId, secondId) => {
       if (firstId === userId) return secondId === userId ? 0 : -1;
       if (secondId === userId) return 1;
 
-      const firstUnseen = groupedStories[firstId].some(story => !seenIds.has(story.id));
-      const secondUnseen = groupedStories[secondId].some(story => !seenIds.has(story.id));
+      const firstClose = hasCloseFriendsStory(groupedStories[firstId]);
+      const secondClose = hasCloseFriendsStory(groupedStories[secondId]);
+      if (firstClose !== secondClose) return firstClose ? -1 : 1;
+
+      const firstUnseen = hasUnseenStory(groupedStories[firstId]);
+      const secondUnseen = hasUnseenStory(groupedStories[secondId]);
       if (firstUnseen !== secondUnseen) return firstUnseen ? -1 : 1;
+
+      const firstDemoted = demotedIds.has(firstId);
+      const secondDemoted = demotedIds.has(secondId);
+      if (firstDemoted !== secondDemoted) return firstDemoted ? 1 : -1;
 
       const newestDifference = newestStoryTime(groupedStories[secondId]) - newestStoryTime(groupedStories[firstId]);
       return newestDifference || firstId.localeCompare(secondId, 'ar');
     });
-  }, [groupedStories, seenStoryIds, userId]);
+  }, [demotedStoryUserIds, groupedStories, seenStoryIds, userId]);
+
+  // قصص حساب واحد كما تُعرض في العارض: النشطة فقط، الأقدم إلى الأحدث.
+  const storiesForOwner = useCallback((ownerId: string): StoryRow[] => {
+    const now = Date.now();
+    const notExpired = (story: StoryRow) => !story.expires_at || Date.parse(story.expires_at) > now;
+    const source = ownerId === profileStoryOwnerId ? profilePreviewStories : (groupedStories[ownerId] ?? []);
+    return sortStoriesOldestFirst(source.filter(notExpired));
+  }, [groupedStories, profilePreviewStories, profileStoryOwnerId]);
+
+  // ترتيب التنقل أثناء جلسة العرض: لقطة لحظة الفتح، وإلا ترتيب الشريط الحالي.
+  const navigationUserIds = () => {
+    const snapshot = viewerOrderRef.current;
+    return snapshot && snapshot.length > 0 ? snapshot : orderedStoryUserIds;
+  };
+
+  // فهرس أول قصة غير مشاهدة لحساب: بداية العرض عند فتحه أو الانتقال إليه.
+  const startIndexForOwner = (ownerId: string) => (
+    firstUnseenStoryIndex(storiesForOwner(ownerId), new Set(seenStoryIds))
+  );
 
   const activeStories = useMemo(() => {
     // الأرشيف يعرض القصص المنتهية وفق نظامه الحالي — لا يُلمس هنا
     if (archiveViewerOpen) return archiveStories;
-    // فلتر انتهاء صارم على مستوى العرض أيضاً: أي قصة تجاوزت expires_at لا تُعرض
-    // من مسار القصص النشطة حتى لو وصلت من حالة سابقة (snapshot) لم تُحدَّث بعد،
+    // فلتر انتهاء صارم على مستوى العرض أيضاً، وترتيب الأقدم إلى الأحدث،
     // ويشمل ذلك قصص صاحب الحساب نفسه.
-    const now = Date.now();
-    const notExpired = (story: StoryRow) => !story.expires_at || Date.parse(story.expires_at) > now;
-    if (activeUserGroup && activeUserGroup === profileStoryOwnerId) return profilePreviewStories.filter(notExpired);
-    return activeUserGroup && groupedStories[activeUserGroup] ? groupedStories[activeUserGroup].filter(notExpired) : [];
-  }, [activeUserGroup, archiveStories, archiveViewerOpen, groupedStories, profileStoryOwnerId, profilePreviewStories]);
+    if (!activeUserGroup) return [];
+    return storiesForOwner(activeUserGroup);
+  }, [activeUserGroup, archiveStories, archiveViewerOpen, storiesForOwner]);
+
+  // عند إغلاق العارض تُهمَل لقطة الترتيب ليُعاد التقاطها عند الفتح التالي.
+  useEffect(() => {
+    if (!activeUserGroup) viewerOrderRef.current = null;
+  }, [activeUserGroup]);
 
   const currentStory = activeStories[activeStoryIndex] || null;
   currentStoryRef.current = currentStory;
@@ -1582,33 +1681,44 @@ export default function StoriesBar({
     };
   }, [currentStory?.id, isStoryOwner, userId]);
 
-  // لا تُسجَّل مشاهدة عند فتح القصة أو تخطيها أو إغلاقها. هنا إعادة التحقق من
-  // صلاحية القصة عند فتحها (لا الاعتماد على بيانات مخزّنة سابقًا)؛ وإذا فقد
-  // المستخدم الصلاحية يتوقف العرض فورًا وينتقل بأمان. أما تسجيل المشاهدة
-  // محليًا وفي story_views فيتم في autoAdvanceStoryRef عند اكتمال العرض فقط.
+  // المشاهدة تُسجَّل بمجرد ظهور القصة للمستخدم بعد التحقق من صلاحيتها، لا عند
+  // اكتمال عرضها. الانتقال إلى القصة التالية يعيد الفحص ويسجّل مشاهدتها فوراً،
+  // ولا تُسجَّل مشاهدة قبل ظهور القصة ولا لصاحب القصة لنفسه.
   useEffect(() => {
-    if (!currentStory || archiveViewerOpen || isStoryOwner || !userId || !supabaseConfigured) return;
+    if (!currentStory || archiveViewerOpen || isStoryOwner || !userId) return;
+
+    // بلا واجهة خلفية: يبقى التسجيل المحلي فقط.
+    if (!supabaseConfigured) {
+      recordStoryOpenView(currentStory.id);
+      return;
+    }
 
     let active = true;
+    const storyId = currentStory.id;
     void Promise.resolve(
       supabase.rpc('aani_can_view_story', {
-        p_story_id: currentStory.id,
+        p_story_id: storyId,
         p_viewer_id: userId,
       }),
     )
       .then(({ data, error }) => {
         if (!active) return;
         if (error) {
-          // تعذّر التحقق من الصلاحية: أغلق العارض بأمان ولا تُبقِ القصة معروضة.
-          // هذا الإغلاق لا يسجّل مشاهدة.
+          // تحقق من أن المستخدم ما زال على نفس القصة قبل الإغلاق.
+          if (currentStoryRef.current?.id !== storyId) return;
+          // تعذّر التحقق من الصلاحية: أغلق العارض بأمان بلا تسجيل مشاهدة.
           setArchiveViewerOpen(false);
           setActiveUserGroup(null);
           return;
         }
-        if (data === false) handleNextStory();
+        if (data === false) {
+          if (currentStoryRef.current?.id === storyId) handleNextStory();
+          return;
+        }
+        recordStoryOpenView(storyId);
       })
       .catch(() => {
-        if (!active) return;
+        if (!active || currentStoryRef.current?.id !== storyId) return;
         setArchiveViewerOpen(false);
         setActiveUserGroup(null);
       });
@@ -1616,7 +1726,7 @@ export default function StoriesBar({
     return () => {
       active = false;
     };
-  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, userId]);
+  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, recordStoryOpenView, userId]);
 
   useEffect(() => {
     if (!replyFocused || isStoryOwner) {
@@ -1719,6 +1829,23 @@ export default function StoriesBar({
     else void resumeInstant();
   }, [isPaused, storySoundUrl]);
 
+  /**
+   * بعد إكمال قصص حساب، ينتقل إلى نهاية مجموعته في الشريط بعد فاصل قصير
+   * (ACCOUNT_ROTATION_DELAY_MS) فلا يعود إلى المقدمة فوراً في التدوير.
+   */
+  const demoteAccountAfterCompletion = useCallback((ownerId: string | null) => {
+    if (!ownerId || ownerId === userId) return;
+    if (demotionTimersRef.current.has(ownerId)) return;
+
+    const timer = window.setTimeout(() => {
+      demotionTimersRef.current.delete(ownerId);
+      setDemotedStoryUserIds(previous => (
+        previous.includes(ownerId) ? previous : [...previous, ownerId]
+      ));
+    }, ACCOUNT_ROTATION_DELAY_MS);
+    demotionTimersRef.current.set(ownerId, timer);
+  }, [userId]);
+
   const handleNextStory = () => {
     if (archiveViewerOpen) {
       if (activeStoryIndex < activeStories.length - 1) {
@@ -1737,11 +1864,15 @@ export default function StoriesBar({
       setProgress(0);
       setCurrentTimeSec(0);
     } else {
-      const userIds = orderedStoryUserIds;
+      // اكتملت قصص هذا الحساب: ينتقل إلى نهاية مجموعته بعد فاصل قصير.
+      if (activeStories.length > 0) demoteAccountAfterCompletion(activeUserGroup);
+      const userIds = navigationUserIds();
       const currentIdx = userIds.indexOf(activeUserGroup || '');
       if (currentIdx !== -1 && currentIdx < userIds.length - 1) {
-        setActiveUserGroup(userIds[currentIdx + 1]);
-        setActiveStoryIndex(0);
+        const nextUser = userIds[currentIdx + 1];
+        setActiveUserGroup(nextUser);
+        // يبدأ الحساب التالي من أقدم قصة غير مشاهدة لديه.
+        setActiveStoryIndex(startIndexForOwner(nextUser));
         setProgress(0);
         setCurrentTimeSec(0);
       } else {
@@ -1750,22 +1881,10 @@ export default function StoriesBar({
     }
   };
 
-  /** مشاهدة مكتملة: تُسجَّل محليًا وفي story_views بعد اكتمال العرض فقط. */
-  const recordStoryViewCompletion = (storyId: string) => {
-    markStorySeen(storyId);
-    if (isStoryOwner || !userId || !supabaseConfigured) return;
-    void Promise.resolve(supabase.rpc('aani_record_story_view', { p_story_id: storyId }))
-      .then(({ error }) => {
-        if (error) console.warn('[story views] تعذر تسجيل المشاهدة:', error);
-      })
-      .catch(() => undefined);
-  };
-
   autoAdvanceStoryRef.current = (storyId: string) => {
     if (currentStoryRef.current?.id !== storyId || autoAdvancedStoryIdRef.current === storyId) return;
     autoAdvancedStoryIdRef.current = storyId;
-    // اكتمل عرض القصة فعليًا (نهاية مدة الصورة أو نهاية الفيديو).
-    recordStoryViewCompletion(storyId);
+    // اكتمل عرض القصة (نهاية مدة الصورة أو الفيديو) — المشاهدة سُجّلت عند ظهورها.
     handleNextStory();
   };
 
@@ -1813,12 +1932,13 @@ export default function StoriesBar({
       setProgress(0);
       setCurrentTimeSec(0);
     } else {
-      const userIds = orderedStoryUserIds;
+      const userIds = navigationUserIds();
       const currentIdx = userIds.indexOf(activeUserGroup || '');
       if (currentIdx > 0) {
         const prevUser = userIds[currentIdx - 1];
         setActiveUserGroup(prevUser);
-        setActiveStoryIndex(groupedStories[prevUser].length - 1);
+        // آخر قصة في ترتيب الشخص السابق (الأقدم إلى الأحدث).
+        setActiveStoryIndex(Math.max(0, storiesForOwner(prevUser).length - 1));
         setProgress(0);
         setCurrentTimeSec(0);
       }
@@ -1826,37 +1946,37 @@ export default function StoriesBar({
   };
 
   // ===== التنقل بالسحب الأفقي بين مجموعات المستخدمين =====
-  // يستخدم نفس حالة التنقل الحالية (activeUserGroup + activeStoryIndex + الترتيب
-  // orderedStoryUserIds) بلا أي نظام موازٍ لإدارة القصص.
+  // يستخدم لقطة ترتيب جلسة العرض (navigationUserIds) فلا تتحرك الحسابات
+  // ولا تتكرر أو تُفقد أثناء التدوير، ويبدأ كل حساب من أقدم قصة غير مشاهدة.
   const goToPreviousUserStart = () => {
     if (archiveViewerOpen) return;
-    const userIds = orderedStoryUserIds;
+    const userIds = navigationUserIds();
     const currentIdx = userIds.indexOf(activeUserGroup || '');
     // لا يوجد شخص سابق: لا تنفيذ انتقال
     if (currentIdx <= 0) return;
     const previousUser = userIds[currentIdx - 1];
-    if (!groupedStories[previousUser]?.length) return;
+    if (storiesForOwner(previousUser).length === 0) return;
     setActiveUserGroup(previousUser);
-    setActiveStoryIndex(0); // بداية قصص الشخص السابق — تخطي بقية قصص الحالي
+    setActiveStoryIndex(startIndexForOwner(previousUser));
     setProgress(0);
     setCurrentTimeSec(0);
   };
 
   const goToNextUserStart = () => {
     if (archiveViewerOpen) return;
-    const userIds = orderedStoryUserIds;
+    const userIds = navigationUserIds();
     const currentIdx = userIds.indexOf(activeUserGroup || '');
     if (currentIdx === -1) return;
     const nextUser = userIds[currentIdx + 1];
     if (!nextUser) {
-      // لا يوجد شخص تالٍ: إغلاق العارض دون تسجيل مشاهدة (الإغلاق/التخطي
-      // لا يُسجّل مشاهدة؛ تُسجَّل عند اكتمال العرض فقط).
+      // لا يوجد شخص تالٍ: إغلاق العارض (الإغلاق/التخطي لا يسجّل مشاهدة).
       setArchiveViewerOpen(false);
       setActiveUserGroup(null);
       return;
     }
     setActiveUserGroup(nextUser);
-    setActiveStoryIndex(0); // بداية قصص الشخص التالي — تخطي بقية قصص الحالي
+    // بداية قصص الشخص التالي: أقدم قصة غير مشاهدة.
+    setActiveStoryIndex(startIndexForOwner(nextUser));
     setProgress(0);
     setCurrentTimeSec(0);
   };
@@ -2061,8 +2181,10 @@ export default function StoriesBar({
         uploadProgress={uploadProgress}
         onOpenMyStories={() => {
           setArchiveViewerOpen(false);
+          // تُلتقط لقطة الترتيب الآن كي لا تتغير بين الحسابات أثناء التدوير.
+          viewerOrderRef.current = orderedStoryUserIds;
           setActiveUserGroup(userId);
-          setActiveStoryIndex(0);
+          setActiveStoryIndex(startIndexForOwner(userId));
           setProgress(0);
         }}
         onOpenPicker={() => {
@@ -2071,8 +2193,9 @@ export default function StoriesBar({
         }}
         onOpenStoryGroup={authorId => {
           setArchiveViewerOpen(false);
+          viewerOrderRef.current = orderedStoryUserIds;
           setActiveUserGroup(authorId);
-          setActiveStoryIndex(0);
+          setActiveStoryIndex(startIndexForOwner(authorId));
           setProgress(0);
           setCurrentTimeSec(0);
         }}
@@ -2284,7 +2407,7 @@ export default function StoriesBar({
           onReportStory={() => { void handleReportStory(); }}
           onDeleteStory={() => void handleDeleteStory()}
           onCloseViewer={() => {
-            // الإغلاق المبكر لا يُسجّل مشاهدة؛ تُسجَّل عند اكتمال العرض فقط.
+            // المشاهدة سُجّلت عند ظهور القصة؛ الإغلاق لا يضيف تسجيلاً جديداً.
             setArchiveViewerOpen(false);
             setActiveUserGroup(null);
           }}
