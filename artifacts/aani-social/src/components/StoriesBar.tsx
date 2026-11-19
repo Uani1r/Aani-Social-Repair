@@ -1582,37 +1582,41 @@ export default function StoriesBar({
     };
   }, [currentStory?.id, isStoryOwner, userId]);
 
-  // تُسجَّل المشاهدة محلياً عند فتح القصة — بما في ذلك قصص صاحب الحساب —
-  // كي تنطفئ حلقة «غير مشاهد» بعد العرض. أما story_views فلا يُكتب فيها
-  // مشاهدة صاحب القصة (الـRPC أدناه مشروط بـisStoryOwner)، ولا تُمسّ حلقة
-  // الأرشيف لأن الأرشيف خارج نطاق هذا التأثير.
+  // لا تُسجَّل مشاهدة عند فتح القصة أو تخطيها أو إغلاقها. هنا إعادة التحقق من
+  // صلاحية القصة عند فتحها (لا الاعتماد على بيانات مخزّنة سابقًا)؛ وإذا فقد
+  // المستخدم الصلاحية يتوقف العرض فورًا وينتقل بأمان. أما تسجيل المشاهدة
+  // محليًا وفي story_views فيتم في autoAdvanceStoryRef عند اكتمال العرض فقط.
   useEffect(() => {
-    if (!currentStory || archiveViewerOpen) return;
-    markStorySeen(String(currentStory.id));
-  }, [archiveViewerOpen, currentStory?.id, markStorySeen]);
-
-  useEffect(() => {
-    if (!currentStory || isStoryOwner || !userId || !supabaseConfigured) return;
+    if (!currentStory || archiveViewerOpen || isStoryOwner || !userId || !supabaseConfigured) return;
 
     let active = true;
     void Promise.resolve(
-      supabase.rpc('aani_record_story_view', { p_story_id: currentStory.id }),
+      supabase.rpc('aani_can_view_story', {
+        p_story_id: currentStory.id,
+        p_viewer_id: userId,
+      }),
     )
-      .then(({ error }) => {
-        if (active && error) {
-          console.warn('[story views] تعذر تسجيل المشاهدة في الخلفية:', error);
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          // تعذّر التحقق من الصلاحية: أغلق العارض بأمان ولا تُبقِ القصة معروضة.
+          // هذا الإغلاق لا يسجّل مشاهدة.
+          setArchiveViewerOpen(false);
+          setActiveUserGroup(null);
+          return;
         }
+        if (data === false) handleNextStory();
       })
-      .catch(error => {
-        if (active) {
-          console.warn('[story views] تعذر تسجيل المشاهدة في الخلفية:', error);
-        }
+      .catch(() => {
+        if (!active) return;
+        setArchiveViewerOpen(false);
+        setActiveUserGroup(null);
       });
 
     return () => {
       active = false;
     };
-  }, [currentStory?.id, isStoryOwner, userId]);
+  }, [archiveViewerOpen, currentStory?.id, isStoryOwner, userId]);
 
   useEffect(() => {
     if (!replyFocused || isStoryOwner) {
@@ -1716,8 +1720,6 @@ export default function StoriesBar({
   }, [isPaused, storySoundUrl]);
 
   const handleNextStory = () => {
-    if (currentStory?.id) markStorySeen(String(currentStory.id));
-
     if (archiveViewerOpen) {
       if (activeStoryIndex < activeStories.length - 1) {
         setActiveStoryIndex(index => index + 1);
@@ -1748,9 +1750,22 @@ export default function StoriesBar({
     }
   };
 
+  /** مشاهدة مكتملة: تُسجَّل محليًا وفي story_views بعد اكتمال العرض فقط. */
+  const recordStoryViewCompletion = (storyId: string) => {
+    markStorySeen(storyId);
+    if (isStoryOwner || !userId || !supabaseConfigured) return;
+    void Promise.resolve(supabase.rpc('aani_record_story_view', { p_story_id: storyId }))
+      .then(({ error }) => {
+        if (error) console.warn('[story views] تعذر تسجيل المشاهدة:', error);
+      })
+      .catch(() => undefined);
+  };
+
   autoAdvanceStoryRef.current = (storyId: string) => {
     if (currentStoryRef.current?.id !== storyId || autoAdvancedStoryIdRef.current === storyId) return;
     autoAdvancedStoryIdRef.current = storyId;
+    // اكتمل عرض القصة فعليًا (نهاية مدة الصورة أو نهاية الفيديو).
+    recordStoryViewCompletion(storyId);
     handleNextStory();
   };
 
@@ -1834,8 +1849,8 @@ export default function StoriesBar({
     if (currentIdx === -1) return;
     const nextUser = userIds[currentIdx + 1];
     if (!nextUser) {
-      // لا يوجد شخص تالٍ: إغلاق العارض بنفس مسار الإغلاق المعتمد
-      if (currentStory?.id) markStorySeen(String(currentStory.id));
+      // لا يوجد شخص تالٍ: إغلاق العارض دون تسجيل مشاهدة (الإغلاق/التخطي
+      // لا يُسجّل مشاهدة؛ تُسجَّل عند اكتمال العرض فقط).
       setArchiveViewerOpen(false);
       setActiveUserGroup(null);
       return;
@@ -2269,8 +2284,7 @@ export default function StoriesBar({
           onReportStory={() => { void handleReportStory(); }}
           onDeleteStory={() => void handleDeleteStory()}
           onCloseViewer={() => {
-            // تسجيل الخروج من العارض أيضاً يثبّت المشاهدة (فتح → إغلاق/تمرير).
-            if (!archiveViewerOpen && currentStory?.id) markStorySeen(String(currentStory.id));
+            // الإغلاق المبكر لا يُسجّل مشاهدة؛ تُسجَّل عند اكتمال العرض فقط.
             setArchiveViewerOpen(false);
             setActiveUserGroup(null);
           }}
