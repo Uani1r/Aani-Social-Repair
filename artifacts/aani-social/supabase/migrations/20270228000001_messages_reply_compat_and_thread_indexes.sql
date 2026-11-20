@@ -20,8 +20,8 @@
 --
 -- 5) التحقق من ترتيب تشغيل الـtriggers على مساري الإدراج والتحديث.
 --
--- لا يغيّر: أي عمود آخر، أو سياسة RLS، أو صلاحية، أو دالة قائمة. التغيير
--- الوحيد على trigger قائم هو إعادة إنشاء تحقق UPDATE بقائمة أعمدة أوسع.
+-- لا يغيّر أي عمود آخر، أو سياسة RLS، أو صلاحية. يعيد هذا الترحيل إنشاء دالة
+-- التحقق ومشغليها لضمان استعادتها إذا غابت عن البيئة.
 -- ============================================================================
 
 begin;
@@ -268,33 +268,58 @@ begin
   end if;
 end $$;
 
--- 4) التحقق من هدف الرد يجب أن يعمل على مسار التحديث عند تغيير reply_to_id
---    وحده أيضاً. في الترحيل 20261205000000 كان trigger التحديث مقصوراً على
---    reply_to_message_id وsender_id وrecipient_id، فتحديث reply_to_id وحده
---    يُزامَن عبر aani_sync… لكنه لا يُتحقق منه، فيمكن ربط رد برسالة من
---    محادثة أخرى. نعيد إنشاء الـtrigger بقائمة الأعمدة الكاملة.
---    الترتيب يبقى صحيحاً: aani_sync… يسبق aani_validate… أبجدياً.
-do $$
+-- 4) استعادة التحقق من هدف الرد ومشغليه حتى لو حُذفت الدالة أو المشغلات.
+--    التحقق يقصر الهدف على الرسائل في المحادثة الثنائية نفسها.
+--    أسماء BEFORE ROW triggers تضمن أن aani_sync_message_reply_ids يسبق
+--    aani_validate_message_reply_target على مساري INSERT وUPDATE.
+create or replace function public.aani_validate_message_reply_target()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
 begin
-  if exists (
+  if new.reply_to_message_id is not null and not exists (
+    select 1
+    from public.messages as parent
+    where parent.id = new.reply_to_message_id
+      and (
+        (parent.sender_id = new.sender_id and parent.recipient_id = new.recipient_id)
+        or (parent.sender_id = new.recipient_id and parent.recipient_id = new.sender_id)
+      )
+  ) then
+    raise exception 'Reply target must belong to the same conversation' using errcode = '23503';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists aani_validate_message_reply_target_insert on public.messages;
+drop trigger if exists aani_validate_message_reply_target_update on public.messages;
+
+create trigger aani_validate_message_reply_target_insert
+  before insert on public.messages
+  for each row execute function public.aani_validate_message_reply_target();
+
+do $$
+declare
+  v_has_reply_id boolean;
+begin
+  select exists (
     select 1 from pg_attribute
     where attrelid = 'public.messages'::regclass
       and attname = 'reply_to_id'
       and attnum > 0 and not attisdropped
-  ) and exists (
-    select 1 from pg_trigger
-    where tgrelid = 'public.messages'::regclass
-      and tgname = 'aani_validate_message_reply_target_update'
-      and not tgisinternal
-  ) and exists (
-    select 1 from pg_proc
-    where proname = 'aani_validate_message_reply_target'
-      and pronamespace = 'public'::regnamespace
-  ) then
-    drop trigger aani_validate_message_reply_target_update on public.messages;
-    create trigger aani_validate_message_reply_target_update
-      before update of reply_to_id, reply_to_message_id, sender_id, recipient_id on public.messages
-      for each row execute function public.aani_validate_message_reply_target();
+  ) into v_has_reply_id;
+
+  if v_has_reply_id then
+    execute 'create trigger aani_validate_message_reply_target_update
+      before update of reply_to_message_id, reply_to_id, sender_id, recipient_id on public.messages
+      for each row execute function public.aani_validate_message_reply_target()';
+  else
+    execute 'create trigger aani_validate_message_reply_target_update
+      before update of reply_to_message_id, sender_id, recipient_id on public.messages
+      for each row execute function public.aani_validate_message_reply_target()';
   end if;
 end $$;
 

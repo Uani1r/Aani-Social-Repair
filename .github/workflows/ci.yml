@@ -115,11 +115,15 @@ jobs:
       - name: Build the minimal messages schema
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_legacy_schema.sql
 
-      - name: Apply the reply compatibility migration
+      # Simulate a partial restore in the throwaway PostgreSQL: both trigger
+      # functions and all three related triggers are absent before migration.
+      - name: Remove reply validation and synchronization triggers and functions
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_trigger_bootstrap.sql
+
+      - name: Apply the migration from the triggerless state
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
 
-      # The migration must be safe to re-run: no duplicate reply index, the
-      # sync trigger is recreated, and the validation trigger keeps reply_to_id.
+      # Re-applying proves the restored functions/triggers and indexes are idempotent.
       - name: Re-apply the migration (idempotency)
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
 
