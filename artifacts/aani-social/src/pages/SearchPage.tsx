@@ -112,6 +112,9 @@ const SEARCHABLE_PROFILE_FIELDS = ['username', 'full_name', 'display_name'] as c
 // الأعمدة التي تعرضها الواجهة فقط — بلا bio أو حقول غير مستخدمة.
 const SEARCH_PROFILE_COLUMNS = 'id, username, full_name, display_name, avatar_url, gender';
 const SEARCH_CANDIDATE_LIMIT = 100;
+// سقف مستقل لاستعلام البدايات، كي لا تختفي أقوى النتائج عند امتلاء استعلام
+// المطابقات الجزئية.
+const SEARCH_PREFIX_LIMIT = 50;
 const SEARCH_RESULT_LIMIT = 30;
 
 /**
@@ -216,24 +219,45 @@ export default function SearchPage({ userId }: { userId: string }) {
     setSearchError(null);
     try {
       // عدد البدائل ≤ 16 × 3 حقول ⇒ طلب PostgREST محدود الحجم مهما طال النص.
-      const filters = getSearchVariants(normalizedQuery).flatMap(variant =>
+      const variants = getSearchVariants(normalizedQuery);
+      const buildFilters = (wrap: boolean) => variants.flatMap(variant =>
         SEARCHABLE_PROFILE_FIELDS.map(
-          field => `${field}.ilike.${quotePostgrestValue(`%${variant}%`)}`,
+          field => `${field}.ilike.${quotePostgrestValue(wrap ? `%${variant}%` : `${variant}%`)}`,
         ),
       );
-      const { data, error } = await supabase
-        .from('profiles')
-        .select(SEARCH_PROFILE_COLUMNS)
-        // الحسابات المعطّلة لا تظهر في نتائج البحث.
-        .eq('is_deactivated', false)
-        .or(filters.join(','))
-        .limit(SEARCH_CANDIDATE_LIMIT);
+
+      // استعلامان متوازيان:
+      //   (1) بدايات الحقول — يضمن ظهور التطابق التام/البادئة مهما زاد عدد
+      //       المطابقات الجزئية، فلا يهضمها سقف الجلب.
+      //   (2) مطابقات جزئية — أوسع شبكة، ثم يُرتّب الجميع بالصلة على العميل.
+      const [prefixResult, containsResult] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select(SEARCH_PROFILE_COLUMNS)
+          .eq('is_deactivated', false)
+          .or(buildFilters(false).join(','))
+          .limit(SEARCH_PREFIX_LIMIT),
+        supabase
+          .from('profiles')
+          .select(SEARCH_PROFILE_COLUMNS)
+          .eq('is_deactivated', false)
+          .or(buildFilters(true).join(','))
+          .limit(SEARCH_CANDIDATE_LIMIT),
+      ]);
 
       if (requestId !== searchRequestRef.current) return;
-      if (error) throw error;
+      if (prefixResult.error) throw prefixResult.error;
+      if (containsResult.error) throw containsResult.error;
+
+      // دمج بلا تكرار قبل الترتيب، فلا يفقد أي صف قوي بسبب ترتيب الجلب.
+      const profileById = new Map<string, Profile>();
+      [...(prefixResult.data || []), ...(containsResult.data || [])].forEach((row) => {
+        const profile = row as Profile;
+        if (!profileById.has(profile.id)) profileById.set(profile.id, profile);
+      });
 
       // الترتيب على العميل حسب درجة الصلة، ثم الأقدم في الترتيب الأبجدي عند التساوي.
-      const rankedProfiles = ((data || []) as Profile[])
+      const rankedProfiles = [...profileById.values()]
         .map(profile => ({ profile, score: scoreProfileMatch(profile, normalizedQuery) }))
         .filter(entry => entry.score > 0)
         .sort((first, second) => {
