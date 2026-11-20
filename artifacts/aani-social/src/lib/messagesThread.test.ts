@@ -220,7 +220,8 @@ test('a stale older page is dropped and does not reopen paging progress', () => 
 });
 
 test('an empty older page advances nothing but closes paging', () => {
-  const descending = [...makeThreadRows(PAGE)].reverse();
+  // أحدث صفحة أقصر من حجم الصفحة: لا شيء أقدم أصلاً.
+  const descending = [...makeThreadRows(PAGE - 1)].reverse();
   const progress = progressAfterLatestPage(initialOlderPageProgress(), descending, PAGE);
   assert.equal(progress.hasOlder, false);
 

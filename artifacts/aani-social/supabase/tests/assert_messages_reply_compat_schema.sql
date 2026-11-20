@@ -27,8 +27,9 @@ begin
   select count(*) into v_equivalent_count
   from pg_index as index_row
   join pg_class as table_row on table_row.oid = index_row.indrelid
+  join pg_class as index_relation on index_relation.oid = index_row.indexrelid
   join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
-  join pg_am as access_method on access_method.oid = index_row.relam
+  join pg_am as access_method on access_method.oid = index_relation.relam
   where schema_row.nspname = 'public'
     and table_row.relname = 'messages'
     and access_method.amname = 'btree'
