@@ -181,7 +181,7 @@ begin
 
   -- أي فهرس btree أول عمود فيه هو reply_to_message_id يخدم نفس الاستعلام،
   -- سواء كان جزئياً على هذا العمود أو عاماً عليه.
-  select index_row.relname into v_equivalent_index
+  select index_relation.relname into v_equivalent_index
   from pg_index as index_row
   join pg_class as table_row on table_row.oid = index_row.indrelid
   join pg_class as index_relation on index_relation.oid = index_row.indexrelid
