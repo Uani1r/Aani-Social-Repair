@@ -9,11 +9,14 @@
 --      pg_extension/pg_namespace دون نقله أو حذفه أو تغيير صلاحياته، وإن لم يكن
 --      مثبتاً فيُنشأ في مخطط extensions شرط وجوده؛ وإلا يتوقف الترحيل برسالة
 --      واضحة بدل إنشاء مخطط جديد.
---   2) يتحقق من أن gin_trgm_ops يخص pg_trgm وأنه operator class لـ GIN.
+--   2) يثبت أن gin_trgm_ops عضو في امتداد pg_trgm عبر pg_depend (deptype = 'e')
+--      وأنه operator class لـ GIN، ويأخذ مخططه من pg_opclass.opcnamespace.
 --   3) ينشئ ثلاثة فهارس GIN ثلاثية الأحرف + فهرس B-tree لبادئة اسم المستخدم،
---      كلها WHERE is_deactivated = false، وبأسماء ثابتة مع if not exists.
---   4) يتحقق بعد الإنشاء من الاسم والجدول والصلاحية والجاهزية ووجود الشرط
---      والعمود ونوع الفهرس، ويرفع استثناءً إن اختل أي شرط.
+--      كلها WHERE is_deactivated = false، بأسماء ثابتة مع if not exists.
+--   4) يتحقق بعد الإنشاء من الكتالوجات مباشرة: الجدول والصلاحية والجاهزية ونوع
+--      الوصول، والأعمدة بالضبط من pg_index.indkey مع pg_attribute، والـoperator
+--      class لكل مفتاح من pg_index.indclass مع pg_opclass، وشرط الفهرس من
+--      pg_get_expr(indpred) بمساواة تامة بـ is_deactivated = false.
 --
 -- ما لا يفعله:
 --   * لا يغيّر أي عمود أو قيد أو بيان.
@@ -27,6 +30,7 @@ begin;
 do $$
 declare
   v_trgm_schema text;
+  v_trgm_opclass_schema text;
   v_index_name text;
   v_column text;
   v_conflicts integer;
@@ -53,18 +57,26 @@ begin
       using errcode = '42704';
   end if;
 
-  -- 3) التحقق أن gin_trgm_ops تابع لـ pg_trgm وأنه operator class لـ GIN.
-  if not exists (
-    select 1
-    from pg_opclass as opclass
-    join pg_namespace as namespace on namespace.oid = opclass.opcnamespace
-    join pg_extension as extension on extension.extnamespace = namespace.oid
-    join pg_am as access_method on access_method.oid = opclass.opcmethod
-    where extension.extname = 'pg_trgm'
-      and opclass.opcname = 'gin_trgm_ops'
-      and access_method.amname = 'gin'
-  ) then
-    raise exception 'gin_trgm_ops غير متاح ضمن امتداد pg_trgm كـ GIN operator class. أوقف الترحيل.'
+  -- 3) إثبات عضوية gin_trgm_ops في امتداد pg_trgm عبر pg_depend، وأنه GIN
+  --    operator class، مع أخذ مخططه من pg_opclass.opcnamespace.
+  select namespace.nspname
+    into v_trgm_opclass_schema
+  from pg_opclass as opclass
+  join pg_namespace as namespace on namespace.oid = opclass.opcnamespace
+  join pg_am as access_method on access_method.oid = opclass.opcmethod
+  join pg_depend as dependency
+    on dependency.classid = 'pg_opclass'::regclass
+   and dependency.objid = opclass.oid
+   and dependency.refclassid = 'pg_extension'::regclass
+   and dependency.deptype = 'e'
+  join pg_extension as extension on extension.oid = dependency.refobjid
+  where extension.extname = 'pg_trgm'
+    and opclass.opcname = 'gin_trgm_ops'
+    and access_method.amname = 'gin'
+  limit 1;
+
+  if v_trgm_opclass_schema is null then
+    raise exception 'تعذر إثبات أن gin_trgm_ops عضو في امتداد pg_trgm (pg_depend) وكـ GIN operator class. أوقف الترحيل.'
       using errcode = '42704';
   end if;
 
@@ -91,7 +103,7 @@ begin
     end if;
   end loop;
 
-  -- 5) إنشاء الفهارس الثلاثة، مع تأهيل operator class بالمخطط المكتشف.
+  -- 5) إنشاء الفهارس الثلاثة، مع تأهيل operator class بمخططه المكتشف.
   for v_index_name, v_column in
     select targets.index_name, targets.column_name
     from (
@@ -105,7 +117,7 @@ begin
       'create index if not exists %I on public.profiles using gin (%I %I.gin_trgm_ops) where is_deactivated = false',
       v_index_name,
       v_column,
-      v_trgm_schema
+      v_trgm_opclass_schema
     );
   end loop;
 
@@ -114,48 +126,99 @@ begin
     'create index if not exists profiles_username_prefix_search_idx on public.profiles using btree (username text_pattern_ops, id) where is_deactivated = false';
 end $$;
 
--- 7) التحقق البعدي: الاسم والجدول والصلاحية والجاهزية والعمود ونوع الفهرس والشرط.
+-- 7) التحقق البعدي من الكتالوجات مباشرة.
 do $$
 declare
-  v_targets text[] := array[
+  v_expected constant text[] := array[
     'profiles_username_trgm_search_idx',
     'profiles_full_name_trgm_search_idx',
     'profiles_display_name_trgm_search_idx'
   ];
   v_index_name text;
-  v_definition text;
-  v_access_method text;
+  v_expected_column text;
   v_is_valid boolean;
   v_is_ready boolean;
-  v_has_predicate boolean;
-  v_key_count integer;
   v_table_oid oid;
-  v_column_name text;
+  v_key_count integer;
+  v_access_method text;
+  v_predicate text;
+  v_normalized_predicate text;
+  v_columns text[];
+  v_opclass_names text[];
+  v_opclass_schemas text[];
+  v_trgm_opclass_schema text;
 begin
-  foreach v_index_name in array v_targets
+  -- 7.1 مخطط operator class كما هو مثبَت في pg_depend لامتداد pg_trgm.
+  select namespace.nspname
+    into v_trgm_opclass_schema
+  from pg_opclass as opclass
+  join pg_namespace as namespace on namespace.oid = opclass.opcnamespace
+  join pg_am as access_method on access_method.oid = opclass.opcmethod
+  join pg_depend as dependency
+    on dependency.classid = 'pg_opclass'::regclass
+   and dependency.objid = opclass.oid
+   and dependency.refclassid = 'pg_extension'::regclass
+   and dependency.deptype = 'e'
+  join pg_extension as extension on extension.oid = dependency.refobjid
+  where extension.extname = 'pg_trgm'
+    and opclass.opcname = 'gin_trgm_ops'
+    and access_method.amname = 'gin'
+  limit 1;
+
+  if v_trgm_opclass_schema is null then
+    raise exception 'تعذر إثبات مخطط gin_trgm_ops من pg_depend/pg_opclass. أوقف الترحيل.'
+      using errcode = '42704';
+  end if;
+
+  foreach v_index_name in array v_expected || array['profiles_username_prefix_search_idx']
   loop
-    v_column_name := case v_index_name
+    v_expected_column := case v_index_name
       when 'profiles_username_trgm_search_idx' then 'username'
       when 'profiles_full_name_trgm_search_idx' then 'full_name'
-      else 'display_name'
+      when 'profiles_display_name_trgm_search_idx' then 'display_name'
+      else 'username'
     end;
 
     select
-      pg_get_indexdef(class.oid),
-      access_method.amname,
       index.indisvalid,
       index.indisready,
-      index.indpred is not null,
+      index.indrelid,
       index.indnkeyatts,
-      index.indrelid
+      access_method.amname,
+      case when index.indpred is null then null
+           else pg_get_expr(index.indpred, index.indrelid)
+      end,
+      (
+        select array_agg(attribute.attname order by key.ord)
+        from generate_subscripts(index.indkey::smallint[], 1) as key(ord)
+        join pg_attribute as attribute
+          on attribute.attrelid = index.indrelid
+         and attribute.attnum = (index.indkey::smallint[])[key.ord]
+        where key.ord <= index.indnkeyatts
+      ),
+      (
+        select array_agg(opclass.opcname order by key.ord)
+        from generate_subscripts(index.indclass::oid[], 1) as key(ord)
+        join pg_opclass as opclass on opclass.oid = (index.indclass::oid[])[key.ord]
+        where key.ord <= index.indnkeyatts
+      ),
+      (
+        select array_agg(namespace.nspname order by key.ord)
+        from generate_subscripts(index.indclass::oid[], 1) as key(ord)
+        join pg_opclass as opclass on opclass.oid = (index.indclass::oid[])[key.ord]
+        join pg_namespace as namespace on namespace.oid = opclass.opcnamespace
+        where key.ord <= index.indnkeyatts
+      )
     into
-      v_definition,
-      v_access_method,
       v_is_valid,
       v_is_ready,
-      v_has_predicate,
+      v_table_oid,
       v_key_count,
-      v_table_oid
+      v_access_method,
+      v_predicate,
+      v_columns,
+      v_opclass_names,
+      v_opclass_schemas
     from pg_class as class
     join pg_namespace as namespace on namespace.oid = class.relnamespace
     join pg_index as index on index.indexrelid = class.oid
@@ -164,7 +227,7 @@ begin
       and class.relname = v_index_name
       and class.relkind = 'i';
 
-    if v_definition is null then
+    if v_table_oid is null then
       raise exception 'الفهرس % غير موجود في public بعد الإنشاء.', v_index_name
         using errcode = '42704';
     end if;
@@ -176,71 +239,56 @@ begin
       raise exception 'الفهرس % غير صالح أو غير جاهز (indisvalid=% indisready=%).', v_index_name, v_is_valid, v_is_ready
         using errcode = '55000';
     end if;
-    if v_access_method <> 'gin' or v_key_count <> 1 then
-      raise exception 'الفهرس % ليس GIN بعمود واحد.', v_index_name
+    if v_predicate is null then
+      raise exception 'الفهرس % بلا شرط WHERE، والمطلوب is_deactivated = false.', v_index_name
         using errcode = '42809';
     end if;
-    if not v_has_predicate
-       or position('is_deactivated' in lower(v_definition)) = 0 then
-      raise exception 'الفهرس % لا يستبعد الحسابات المعطلة (WHERE is_deactivated = false).', v_index_name
+
+    v_normalized_predicate := regexp_replace(
+      regexp_replace(lower(v_predicate), '[[:space:]]+', '', 'g'),
+      '[()]', '', 'g'
+    );
+
+    if v_normalized_predicate not in ('is_deactivated=false', 'false=is_deactivated') then
+      raise exception 'شرط الفهرس % ليس is_deactivated = false (الشرط الفعلي: %).', v_index_name, v_predicate
         using errcode = '42809';
     end if;
-    if position('gin_trgm_ops' in lower(v_definition)) = 0
-       or position(v_column_name in lower(v_definition)) = 0 then
-      raise exception 'الفهرس % لا يطابق العمود/الـoperator class المتوقع (% gin_trgm_ops).', v_index_name, v_column_name
-        using errcode = '42809';
+
+    if v_index_name = 'profiles_username_prefix_search_idx' then
+      -- 7.2 فهرس البادئة: B-tree على (username, id) بالترتيب.
+      if v_access_method <> 'btree' or v_key_count <> 2 then
+        raise exception 'فهرس البادئة % ليس B-tree بمعاملين.', v_index_name
+          using errcode = '42809';
+      end if;
+      if v_columns is distinct from array['username', 'id'] then
+        raise exception 'أعمدة فهرس البادئة % يجب أن تكون (username, id) بالترتيب، والفعلي: %.', v_index_name, coalesce(array_to_string(v_columns, ','), 'null')
+          using errcode = '42809';
+      end if;
+      if v_opclass_names is null or v_opclass_names[1] is distinct from 'text_pattern_ops' then
+        raise exception 'فهرس البادئة % لا يستخدم text_pattern_ops على العمود الأول (الفعلي: %).', v_index_name, coalesce(array_to_string(v_opclass_names, ','), 'null')
+          using errcode = '42809';
+      end if;
+    else
+      -- 7.3 فهارس GIN: عمود واحد بالضبط هو العمود المحدد، وoperator class
+      --     هو gin_trgm_ops في مخططه المكتشف.
+      if v_access_method <> 'gin' or v_key_count <> 1 then
+        raise exception 'الفهرس % ليس GIN بعمود واحد.', v_index_name
+          using errcode = '42809';
+      end if;
+      if v_columns is distinct from array[v_expected_column] then
+        raise exception 'عمود الفهرس % يجب أن يكون % فقط، والفعلي: %.', v_index_name, v_expected_column, coalesce(array_to_string(v_columns, ','), 'null')
+          using errcode = '42809';
+      end if;
+      if v_opclass_names is null or v_opclass_names[1] is distinct from 'gin_trgm_ops' then
+        raise exception 'الفهرس % لا يستخدم gin_trgm_ops (الفعلي: %).', v_index_name, coalesce(array_to_string(v_opclass_names, ','), 'null')
+          using errcode = '42809';
+      end if;
+      if v_opclass_schemas is null or v_opclass_schemas[1] is distinct from v_trgm_opclass_schema then
+        raise exception 'الفهرس % يستخدم gin_trgm_ops من مخطط غير مخطط امتداد pg_trgm (%).', v_index_name, v_trgm_opclass_schema
+          using errcode = '42809';
+      end if;
     end if;
   end loop;
-
-  select
-    pg_get_indexdef(class.oid),
-    access_method.amname,
-    index.indisvalid,
-    index.indisready,
-    index.indpred is not null,
-    index.indnkeyatts,
-    index.indrelid
-  into
-    v_definition,
-    v_access_method,
-    v_is_valid,
-    v_is_ready,
-    v_has_predicate,
-    v_key_count,
-    v_table_oid
-  from pg_class as class
-  join pg_namespace as namespace on namespace.oid = class.relnamespace
-  join pg_index as index on index.indexrelid = class.oid
-  join pg_am as access_method on access_method.oid = class.relam
-  where namespace.nspname = 'public'
-    and class.relname = 'profiles_username_prefix_search_idx'
-    and class.relkind = 'i';
-
-  if v_definition is null then
-    raise exception 'فهرس البادئة profiles_username_prefix_search_idx غير موجود في public بعد الإنشاء.'
-      using errcode = '42704';
-  end if;
-  if v_table_oid <> 'public.profiles'::regclass then
-    raise exception 'فهرس البادئة ليس على public.profiles.'
-      using errcode = '42809';
-  end if;
-  if not v_is_valid or not v_is_ready then
-    raise exception 'فهرس البادئة غير صالح أو غير جاهز (indisvalid=% indisready=%).', v_is_valid, v_is_ready
-      using errcode = '55000';
-  end if;
-  if v_access_method <> 'btree' or v_key_count <> 2 then
-    raise exception 'فهرس البادئة ليس B-tree بعمودين.'
-      using errcode = '42809';
-  end if;
-  if not v_has_predicate
-     or position('is_deactivated' in lower(v_definition)) = 0 then
-    raise exception 'فهرس البادئة لا يستبعد الحسابات المعطلة (WHERE is_deactivated = false).'
-      using errcode = '42809';
-  end if;
-  if position('username text_pattern_ops' in lower(v_definition)) = 0 then
-    raise exception 'فهرس البادئة لا يستخدم username text_pattern_ops كما هو متوقع.'
-      using errcode = '42809';
-  end if;
 end $$;
 
 commit;
