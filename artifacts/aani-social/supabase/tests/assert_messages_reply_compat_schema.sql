@@ -2,9 +2,12 @@
 -- تحقق ثابت من نتيجة ترحيل توافق الردود (يُشغَّل بعد تطبيقه في CI).
 --
 -- يفشل إن:
---   * أُنشئ فهرس ثانٍ مكافئ على reply_to_message_id (تكرار aani_messages_reply_to_idx)،
+--   * وُجد أكثر من فهرس واحد مكافئ لعمود الردود، أو لم يوجد أي فهرس مكافئ،
 --   * لم يُوسَّع trigger التحقق على مسار UPDATE ليشمل reply_to_id،
 --   * غاب trigger المزامنة أو فهرسا المحادثة الثنائية.
+--
+-- التكافؤ هنا يُقارَن بتعريف الفهرس كاملاً (عمود مفتاحي واحد، btree، بلا
+-- تعبيرات، وشرط جزئي مطابق)، لا بمجرد العمود وطريقة الفهرسة.
 -- ============================================================================
 
 do $$
@@ -32,9 +35,16 @@ begin
   join pg_am as access_method on access_method.oid = index_relation.relam
   where schema_row.nspname = 'public'
     and table_row.relname = 'messages'
+    and index_row.indisvalid
     and access_method.amname = 'btree'
-    and index_row.indnatts > 0
-    and index_row.indkey[0] = v_reply_attribute;
+    and index_row.indnkeyatts = 1
+    and index_row.indkey[0] = v_reply_attribute
+    and index_row.indexprs is null
+    and (
+      index_row.indpred is null
+      or regexp_replace(lower(btrim(pg_get_expr(index_row.indpred, index_row.indrelid))), '\s+', ' ', 'g')
+        in ('(reply_to_message_id is not null)', 'reply_to_message_id is not null')
+    );
 
   if v_equivalent_count <> 1 then
     raise exception 'عدد فهارس الردود المكافئة %، والمتوقع 1 (لا فهرس مكرر).', v_equivalent_count;

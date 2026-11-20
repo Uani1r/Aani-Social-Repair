@@ -128,3 +128,26 @@ jobs:
 
       - name: Run the reply compatibility tests
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reply_compat.test.sql
+
+      # Index equivalence scenario. The setup drops the reply indexes in this
+      # throwaway database only (never in a Supabase database) and creates two
+      # non-equivalent ones: a partial index with a narrower predicate (does not
+      # cover every required row) and a two-key-column index. The migration must
+      # still create the correct index, and a second run must not duplicate it.
+      - name: Prepare the non-equivalent reply index scenario
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_index_scenarios.sql
+
+      - name: Apply the migration with only non-equivalent reply indexes present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the correct reply index was created exactly once
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql
+
+      # Re-applying with the correct index present must not create a duplicate:
+      # the same assertions require exactly one equivalent index and exactly
+      # three indexes whose first key column is reply_to_message_id.
+      - name: Re-apply the migration with the correct index present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the correct reply index was not duplicated
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql

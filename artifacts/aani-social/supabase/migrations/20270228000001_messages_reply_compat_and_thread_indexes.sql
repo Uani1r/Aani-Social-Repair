@@ -159,10 +159,20 @@ begin
 end $$;
 
 -- 2) فهرس عمود الردود الجديد.
--- الفهرس aani_messages_reply_to_idx (أُنشئ في الترحيل 20261205000000) مبني
--- على العمود نفسه بنفس الشروط: btree على reply_to_message_id حيث ليس null.
--- فإضافة فهرس ثانٍ مكافئ إهدار للكتابة والمساحة. نتحقق من التكافؤ بالأعمدة
--- والشرط وطريقة الفهرسة لا بالاسم، وننشئ الجديد فقط عند غياب أي مكافئ.
+-- الفهرس aani_messages_reply_to_idx (أُنشئ في الترحيل 20261205000000) مبني على
+-- العمود نفسه بنفس الشرط. لكن التكافؤ لا يُستدل عليه بالعمود وطريقة الفهرسة
+-- فقط: لا بد أن يتطابق تعريف الفهرس كاملاً — عدد الأعمدة المفتاحية وترتيبها،
+-- طريقة الفهرسة (btree)، عدم وجود تعبيرات، والشرط الجزئي (indpred) — لأن أي
+-- اختلاف في هذه الخصائص يغيّر الصفوف التي يغطيها الفهرس.
+--
+-- القاعدة المطبقة:
+--   * فهرس كامل (بلا شرط) على العمود نفسه يغطي كل الصفوف، فهو مكافئ.
+--   * فهرس جزئي يُعد مكافئاً فقط إذا كان شرطه هو نفسه شرط الفهرس المطلوب
+--     (reply_to_message_id IS NOT NULL)؛ شرط أضيق أو مختلف لا يغطي كل الصفوف
+--     المطلوبة فلا يُعد مكافئاً.
+--   * فهرس بأكثر من عمود مفتاحي ليس نفس الفهرس.
+--   * أعمدة INCLUDE لا تُغيّر تغطية الصفوف، فلا تُبطل التكافؤ.
+-- عند غياب أي مكافئ ننشئ الفهرس المطلوب، ولا نحذف أي فهرس قائم.
 do $$
 declare
   v_reply_attribute smallint;
@@ -179,19 +189,34 @@ begin
     return;
   end if;
 
-  -- أي فهرس btree أول عمود فيه هو reply_to_message_id يخدم نفس الاستعلام،
-  -- سواء كان جزئياً على هذا العمود أو عاماً عليه.
-  select index_relation.relname into v_equivalent_index
-  from pg_index as index_row
-  join pg_class as table_row on table_row.oid = index_row.indrelid
-  join pg_class as index_relation on index_relation.oid = index_row.indexrelid
-  join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
-  join pg_am as access_method on access_method.oid = index_relation.relam
-  where schema_row.nspname = 'public'
-    and table_row.relname = 'messages'
-    and access_method.amname = 'btree'
-    and index_row.indnatts > 0
-    and index_row.indkey[0] = v_reply_attribute
+  select candidate.index_name into v_equivalent_index
+  from (
+    select
+      index_relation.relname as index_name,
+      case
+        when index_row.indpred is null then null
+        else regexp_replace(lower(btrim(pg_get_expr(index_row.indpred, index_row.indrelid))), '\s+', ' ', 'g')
+      end as normalized_predicate
+    from pg_index as index_row
+    join pg_class as table_row on table_row.oid = index_row.indrelid
+    join pg_class as index_relation on index_relation.oid = index_row.indexrelid
+    join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
+    join pg_am as access_method on access_method.oid = index_relation.relam
+    where schema_row.nspname = 'public'
+      and table_row.relname = 'messages'
+      and index_row.indisvalid
+      and access_method.amname = 'btree'
+      -- عمود مفتاحي واحد فقط، وهو reply_to_message_id
+      and index_row.indnkeyatts = 1
+      and index_row.indkey[0] = v_reply_attribute
+      -- فهرس أعمدة صريحة، لا تعبيرات
+      and index_row.indexprs is null
+  ) as candidate
+  where candidate.normalized_predicate is null
+     or candidate.normalized_predicate in (
+       '(reply_to_message_id is not null)',
+       'reply_to_message_id is not null'
+     )
   limit 1;
 
   if v_equivalent_index is null then
