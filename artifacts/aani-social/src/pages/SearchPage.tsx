@@ -112,9 +112,11 @@ const SEARCHABLE_PROFILE_FIELDS = ['username', 'full_name', 'display_name'] as c
 // الأعمدة التي تعرضها الواجهة فقط — بلا bio أو حقول غير مستخدمة.
 const SEARCH_PROFILE_COLUMNS = 'id, username, full_name, display_name, avatar_url, gender';
 const SEARCH_CANDIDATE_LIMIT = 100;
-// سقف مستقل لاستعلام البدايات، كي لا تختفي أقوى النتائج عند امتلاء استعلام
-// المطابقات الجزئية.
-const SEARCH_PREFIX_LIMIT = 50;
+// التطابق التام له استعلام مستقل بحدّه الصغير، فلا يتأثر بأي سقف آخر.
+const SEARCH_EXACT_LIMIT = 20;
+// سقف كل صفحة من نتائج البادئات، مع صفحات إضافية عند امتلائها.
+const SEARCH_PREFIX_PAGE_SIZE = 50;
+const SEARCH_PREFIX_MAX_PAGES = 2;
 const SEARCH_RESULT_LIMIT = 30;
 
 /**
@@ -220,39 +222,76 @@ export default function SearchPage({ userId }: { userId: string }) {
     try {
       // عدد البدائل ≤ 16 × 3 حقول ⇒ طلب PostgREST محدود الحجم مهما طال النص.
       const variants = getSearchVariants(normalizedQuery);
-      const buildFilters = (wrap: boolean) => variants.flatMap(variant =>
-        SEARCHABLE_PROFILE_FIELDS.map(
-          field => `${field}.ilike.${quotePostgrestValue(wrap ? `%${variant}%` : `${variant}%`)}`,
-        ),
+      const buildFilters = (match: 'exact' | 'prefix' | 'contains') => variants.flatMap(variant =>
+        SEARCHABLE_PROFILE_FIELDS.map((field) => {
+          const pattern = match === 'exact'
+            ? variant
+            : match === 'prefix'
+              ? `${variant}%`
+              : `%${variant}%`;
+          return `${field}.ilike.${quotePostgrestValue(pattern)}`;
+        }),
       );
 
-      // استعلامان متوازيان:
-      //   (1) بدايات الحقول — يضمن ظهور التطابق التام/البادئة مهما زاد عدد
-      //       المطابقات الجزئية، فلا يهضمها سقف الجلب.
-      //   (2) مطابقات جزئية — أوسع شبكة، ثم يُرتّب الجميع بالصلة على العميل.
-      const [prefixResult, containsResult] = await Promise.all([
+      // ترتيب ثابت من قاعدة البيانات (username ثم id) حتى تكون صفحات البادئات
+      // متسلسلة بلا تكرار أو فقدان بين الطلبات.
+      const fetchPrefixPage = async (from: number, to: number) => {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select(SEARCH_PROFILE_COLUMNS)
+          .eq('is_deactivated', false)
+          .or(buildFilters('prefix').join(','))
+          .order('username', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+        if (error) throw error;
+        return (data || []) as Profile[];
+      };
+
+      const fetchPrefixRows = async (): Promise<Profile[]> => {
+        const rows: Profile[] = [];
+        for (let page = 0; page < SEARCH_PREFIX_MAX_PAGES; page += 1) {
+          const from = page * SEARCH_PREFIX_PAGE_SIZE;
+          const pageRows = await fetchPrefixPage(from, from + SEARCH_PREFIX_PAGE_SIZE - 1);
+          rows.push(...pageRows);
+          if (pageRows.length < SEARCH_PREFIX_PAGE_SIZE) break;
+        }
+        return rows;
+      };
+
+      // ثلاثة استعلامات متوازية تضمن عدم ضياع أي فئة بسبب سقف الأخرى:
+      //   (1) تطابق تام في أحد الحقول الثلاثة — بحدّه المستقل الصغير.
+      //   (2) بدايات الحقول — بترتيب من القاعدة وصفحات متتالية.
+      //   (3) مطابقات جزئية — أوسع شبكة، ويُرتّب الجميع بالصلة على العميل.
+      const [exactResult, prefixRows, containsResult] = await Promise.all([
         supabase
           .from('profiles')
           .select(SEARCH_PROFILE_COLUMNS)
           .eq('is_deactivated', false)
-          .or(buildFilters(false).join(','))
-          .limit(SEARCH_PREFIX_LIMIT),
+          .or(buildFilters('exact').join(','))
+          .order('username', { ascending: true })
+          .order('id', { ascending: true })
+          .limit(SEARCH_EXACT_LIMIT),
+        fetchPrefixRows(),
         supabase
           .from('profiles')
           .select(SEARCH_PROFILE_COLUMNS)
           .eq('is_deactivated', false)
-          .or(buildFilters(true).join(','))
+          .or(buildFilters('contains').join(','))
           .limit(SEARCH_CANDIDATE_LIMIT),
       ]);
 
       if (requestId !== searchRequestRef.current) return;
-      if (prefixResult.error) throw prefixResult.error;
+      if (exactResult.error) throw exactResult.error;
       if (containsResult.error) throw containsResult.error;
 
       // دمج بلا تكرار قبل الترتيب، فلا يفقد أي صف قوي بسبب ترتيب الجلب.
       const profileById = new Map<string, Profile>();
-      [...(prefixResult.data || []), ...(containsResult.data || [])].forEach((row) => {
-        const profile = row as Profile;
+      [
+        ...((exactResult.data || []) as Profile[]),
+        ...prefixRows,
+        ...((containsResult.data || []) as Profile[]),
+      ].forEach((profile) => {
         if (!profileById.has(profile.id)) profileById.set(profile.id, profile);
       });
 
