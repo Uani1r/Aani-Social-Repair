@@ -11,7 +11,11 @@ import {
 
 type Row = { id: string; created_at: string; hidden?: boolean };
 
-const row = (id: string, createdAt: string): Row => ({ id, created_at: createdAt });
+const row = (id: string, createdAt: string, extra: { hidden?: boolean } = {}): Row => ({
+  id,
+  created_at: createdAt,
+  ...extra,
+});
 
 test('merge keeps a stable created_at then id order and never duplicates', () => {
   const page = [row('b', '2026-01-01T10:00:01Z'), row('a', '2026-01-01T10:00:00Z')];
