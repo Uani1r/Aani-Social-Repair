@@ -263,27 +263,16 @@ export default function SearchPage({ userId }: { userId: string }) {
 
       if (requestId !== searchRequestRef.current) return;
 
-      // دمج بلا تكرار قبل الترتيب، فلا يفقد أي صف قوي بسبب ترتيب الجلب.
+      // لا إعادة ترتيب على العميل: تُحفظ درجة كل طبقة كما رتّبها الاستعلام
+      // (username ثم id من قاعدة البيانات)، وترتيب tiers هو ترتيب الدرجات 6→1.
+      // Map يضمن إزالة التكرار مع الحفاظ على هذا الترتيب.
       const profileById = new Map<string, Profile>();
       tiers.flat().forEach((profile) => {
-        if (!profileById.has(profile.id)) profileById.set(profile.id, profile);
+        if (profileById.has(profile.id)) return;
+        if (scoreProfileMatch(profile, normalizedQuery) > 0) profileById.set(profile.id, profile);
       });
 
-      // الترتيب على العميل حسب درجة الصلة، ثم الأقدم في الترتيب الأبجدي عند التساوي.
-      const rankedProfiles = [...profileById.values()]
-        .map(profile => ({ profile, score: scoreProfileMatch(profile, normalizedQuery) }))
-        .filter(entry => entry.score > 0)
-        .sort((first, second) => {
-          if (second.score !== first.score) return second.score - first.score;
-          const usernameOrder = (first.profile.username || '')
-            .localeCompare(second.profile.username || '', 'en');
-          return usernameOrder || first.profile.id.localeCompare(second.profile.id);
-        })
-        // نفس سقف الدرجة = سقف العرض، فلا تحجب درجةٌ نتيجةً أعلى منها.
-        .slice(0, SEARCH_TIER_LIMIT)
-        .map(entry => entry.profile);
-
-      setProfiles(rankedProfiles);
+      setProfiles([...profileById.values()].slice(0, SEARCH_TIER_LIMIT));
     } catch {
       if (requestId !== searchRequestRef.current) return;
       setProfiles([]);
