@@ -39,27 +39,66 @@ const readSearchHistory = (key: string): Profile[] => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// تطبيع نص البحث
+//   * NFC ثم توحيد الحروف العربية المتكافئة (أ إ آ ← ا، ة ← ه، ى ← ي، ؤ ← و).
+//   * حذف التشكيل والتطويل (U+064B..U+0652، U+0670، U+0640) قبل المقارنة.
+//   * تاريخ/أرقام عربية-هندية تُحوَّل إلى أرقام لاتينية ليعمل البحث الرقمي.
+//   * الإنجليزية تبقى كما هي عبر toLowerCase.
+// ---------------------------------------------------------------------------
+const ARABIC_DIACRITICS_REGEX = /[\u064B-\u0652\u0670\u0640]/g;
+const ARABIC_INDIC_DIGITS: Record<string, string> = {
+  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+  '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+  '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+};
+
 const normalizeSearchText = (value: string): string => value
+  .normalize('NFKC')
+  .replace(ARABIC_DIACRITICS_REGEX, '')
   .trim()
   .replace(/\s+/g, ' ')
   .toLowerCase()
   .replace(/[أإآ]/g, 'ا')
   .replace(/ة/g, 'ه')
-  .replace(/ى/g, 'ي');
+  .replace(/ى/g, 'ي')
+  .replace(/ؤ/g, 'و')
+  .replace(/[٠-٩۰-۹]/g, digit => ARABIC_INDIC_DIGITS[digit] || digit);
 
+/** الاستعلام بعد إزالة بادئة @ وتطبيع النص — يدعم البحث بـ @username. */
 const normalizeSearchQuery = (value: string): string => normalizeSearchText(value).replace(/^@+/, '').trim();
+
+// عدد بدائل الحروف محدود: كل حرف له بديلان أو ثلاثة، والسقف 16 شكلاً
+// حتى لا يتضخم طلب PostgREST عند الكتابة السريعة.
+const MAX_SEARCH_VARIANTS = 16;
 
 const getSearchVariants = (normalizedQuery: string): string[] => {
   const alternatives: Record<string, string[]> = {
     ا: ['ا', 'أ', 'إ', 'آ'],
     ه: ['ه', 'ة'],
     ي: ['ي', 'ى'],
+    و: ['و', 'ؤ'],
   };
-  let variants = [''];
 
+  if (!normalizedQuery) return [];
+
+  let variants: string[] = [''];
   for (const character of normalizedQuery) {
-    const characters = alternatives[character] || [character];
-    variants = variants.flatMap(prefix => characters.map(alternative => `${prefix}${alternative}`)).slice(0, 128);
+    const characters = alternatives[character];
+    if (!characters) {
+      variants = variants.map(prefix => `${prefix}${character}`);
+    } else {
+      if (variants.length * characters.length > MAX_SEARCH_VARIANTS) break;
+      variants = variants.flatMap(prefix => characters.map(alternative => `${prefix}${alternative}`));
+    }
+    if (variants.length >= MAX_SEARCH_VARIANTS) break;
+  }
+
+  // لو توقفنا قبل نهاية الاستعلام بسبب السقف، نكتفي بالشكل المطبَّع وحده:
+  // استعلام واحد كامل أدق من بادئة ناقصة تُرجع نتائج عشوائية.
+  if (variants.length === 0 || variants.some(variant => variant.length !== normalizedQuery.length)) {
+    return [normalizedQuery];
   }
 
   return [...new Set(variants)];
@@ -68,11 +107,38 @@ const getSearchVariants = (normalizedQuery: string): string[] => {
 const quotePostgrestValue = (value: string): string =>
   `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-const matchesProfile = (profile: Profile, normalizedQuery: string): boolean => [
-  profile.display_name,
-  profile.full_name,
-  profile.username,
-].some(value => typeof value === 'string' && normalizeSearchText(value).includes(normalizedQuery));
+// حقول الحساب القابلة للبحث، بالترتيب المطلوب في خوارزمية الترتيب.
+const SEARCHABLE_PROFILE_FIELDS = ['username', 'full_name', 'display_name'] as const;
+// الأعمدة التي تعرضها الواجهة فقط — بلا bio أو حقول غير مستخدمة.
+const SEARCH_PROFILE_COLUMNS = 'id, username, full_name, display_name, avatar_url, gender';
+const SEARCH_CANDIDATE_LIMIT = 100;
+const SEARCH_RESULT_LIMIT = 30;
+
+/**
+ * درجة الصلة للحساب حسب الأولوية المطلوبة:
+ *   6 تطابق اسم المستخدم بالكامل
+ *   5 بداية اسم المستخدم
+ *   4 تطابق الاسم المعروض بالكامل
+ *   3 بداية الاسم المعروض
+ *   2 تطابق جزئي في اسم المستخدم
+ *   1 تطابق جزئي في الاسم المعروض
+ *   0 لا تطابق (يُستبعد، فلا تظهر نتائج غير مرتبطة)
+ */
+const scoreProfileMatch = (profile: Profile, normalizedQuery: string): number => {
+  if (!normalizedQuery) return 0;
+
+  const username = normalizeSearchText(profile.username || '');
+  const displayName = normalizeSearchText(profile.display_name || '');
+  const fullName = normalizeSearchText(profile.full_name || '');
+
+  if (username === normalizedQuery) return 6;
+  if (username.startsWith(normalizedQuery)) return 5;
+  if (displayName === normalizedQuery || fullName === normalizedQuery) return 4;
+  if (displayName.startsWith(normalizedQuery) || fullName.startsWith(normalizedQuery)) return 3;
+  if (username.includes(normalizedQuery)) return 2;
+  if (displayName.includes(normalizedQuery) || fullName.includes(normalizedQuery)) return 1;
+  return 0;
+};
 
 export default function SearchPage({ userId }: { userId: string }) {
   const cachedSearch = searchStateCache.get(userId);
@@ -149,21 +215,37 @@ export default function SearchPage({ userId }: { userId: string }) {
     setLoading(true);
     setSearchError(null);
     try {
-      const fields = ['username', 'full_name', 'display_name'];
+      // عدد البدائل ≤ 16 × 3 حقول ⇒ طلب PostgREST محدود الحجم مهما طال النص.
       const filters = getSearchVariants(normalizedQuery).flatMap(variant =>
-        fields.map(field => `${field}.ilike.${quotePostgrestValue(`%${variant}%`)}`),
+        SEARCHABLE_PROFILE_FIELDS.map(
+          field => `${field}.ilike.${quotePostgrestValue(`%${variant}%`)}`,
+        ),
       );
       const { data, error } = await supabase
         .from('profiles')
-        .select('id, username, full_name, display_name, avatar_url, gender, bio')
+        .select(SEARCH_PROFILE_COLUMNS)
+        // الحسابات المعطّلة لا تظهر في نتائج البحث.
+        .eq('is_deactivated', false)
         .or(filters.join(','))
-        .limit(100);
+        .limit(SEARCH_CANDIDATE_LIMIT);
 
       if (requestId !== searchRequestRef.current) return;
       if (error) throw error;
-      setProfiles(((data || []) as Profile[])
-        .filter(profile => matchesProfile(profile, normalizedQuery))
-        .slice(0, 30));
+
+      // الترتيب على العميل حسب درجة الصلة، ثم الأقدم في الترتيب الأبجدي عند التساوي.
+      const rankedProfiles = ((data || []) as Profile[])
+        .map(profile => ({ profile, score: scoreProfileMatch(profile, normalizedQuery) }))
+        .filter(entry => entry.score > 0)
+        .sort((first, second) => {
+          if (second.score !== first.score) return second.score - first.score;
+          const usernameOrder = (first.profile.username || '')
+            .localeCompare(second.profile.username || '', 'en');
+          return usernameOrder || first.profile.id.localeCompare(second.profile.id);
+        })
+        .slice(0, SEARCH_RESULT_LIMIT)
+        .map(entry => entry.profile);
+
+      setProfiles(rankedProfiles);
     } catch {
       if (requestId !== searchRequestRef.current) return;
       setProfiles([]);
@@ -270,7 +352,18 @@ export default function SearchPage({ userId }: { userId: string }) {
       )}
 
       {loading && <ListSkeleton count={6} />}
-      {searchError && !loading && <div className="status-box">{searchError}</div>}
+      {searchError && !loading && (
+        <div className="status-box">
+          <span>{searchError}</span>
+          <button
+            type="button"
+            onClick={() => void handleSearch(term)}
+            className="mt-2 block text-xs font-semibold text-pink-400 transition-colors hover:text-pink-300"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      )}
 
       {!loading && !searchError && profiles.length > 0 && (
         <div className="card space-y-2 content-fade-in">
@@ -300,7 +393,10 @@ export default function SearchPage({ userId }: { userId: string }) {
       )}
 
       {!loading && !searchError && normalizeSearchQuery(term) && profiles.length === 0 && (
-        <EmptyState className="card rounded-2xl" />
+        <div className="card rounded-2xl py-3">
+          <EmptyState className="py-4" />
+          <p className="text-center text-xs text-zinc-500">جرّب اسماً آخر أو اسم مستخدم بدون @</p>
+        </div>
       )}
     </section>
   );
