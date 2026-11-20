@@ -323,6 +323,20 @@ begin
   end if;
 end $$;
 
+-- لا تُستدعى دالة التحقق مباشرةً؛ ينفّذها PostgreSQL عبر مشغلات الصف.
+revoke execute on function public.aani_validate_message_reply_target() from public;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'revoke execute on function public.aani_validate_message_reply_target() from anon';
+  end if;
+
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'revoke execute on function public.aani_validate_message_reply_target() from authenticated';
+  end if;
+end $$;
+
 -- 5) فهارس المحادثة الثنائية بترتيب ثابت.
 create index if not exists aani_messages_thread_created_idx
   on public.messages (sender_id, recipient_id, created_at desc, id desc);

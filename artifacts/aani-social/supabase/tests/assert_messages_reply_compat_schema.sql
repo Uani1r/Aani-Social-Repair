@@ -67,6 +67,45 @@ begin
     raise exception 'دالة التحقق public.aani_validate_message_reply_target() غير موجودة.';
   end if;
 
+  if exists (
+    select 1
+    from pg_proc as procedure_row
+    cross join lateral aclexplode(coalesce(
+      procedure_row.proacl,
+      acldefault('f', procedure_row.proowner)
+    )) as function_acl
+    where procedure_row.oid = v_validator_oid
+      and function_acl.grantee = 0
+      and function_acl.privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'ما زال PUBLIC يملك EXECUTE على دالة التحقق.';
+  end if;
+
+  if exists (
+    select 1
+    from pg_proc as procedure_row
+    cross join lateral aclexplode(coalesce(
+      procedure_row.proacl,
+      acldefault('f', procedure_row.proowner)
+    )) as function_acl
+    where procedure_row.oid = v_validator_oid
+      and function_acl.grantee in (
+        select role_row.oid from pg_roles as role_row
+        where role_row.rolname in ('anon', 'authenticated')
+      )
+      and function_acl.privilege_type = 'EXECUTE'
+  ) then
+    raise exception 'ما زال anon أو authenticated يملك EXECUTE مباشراً على دالة التحقق.';
+  end if;
+
+  if has_function_privilege('anon', v_validator_oid, 'EXECUTE') then
+    raise exception 'ما زال anon يملك EXECUTE فعلياً على دالة التحقق.';
+  end if;
+
+  if has_function_privilege('authenticated', v_validator_oid, 'EXECUTE') then
+    raise exception 'ما زال authenticated يملك EXECUTE فعلياً على دالة التحقق.';
+  end if;
+
   if not v_validator_security_definer then
     raise exception 'دالة التحقق لا تعمل بصفة SECURITY DEFINER.';
   end if;
