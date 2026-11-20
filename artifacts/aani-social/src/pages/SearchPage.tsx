@@ -107,17 +107,14 @@ const getSearchVariants = (normalizedQuery: string): string[] => {
 const quotePostgrestValue = (value: string): string =>
   `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
-// حقول الحساب القابلة للبحث، بالترتيب المطلوب في خوارزمية الترتيب.
-const SEARCHABLE_PROFILE_FIELDS = ['username', 'full_name', 'display_name'] as const;
+// حقول اسم المستخدم وحقول الاسم، مفصولة لأن درجات الصلة تختلف بينهما.
+const USERNAME_SEARCH_FIELDS = ['username'] as const;
+const NAME_SEARCH_FIELDS = ['full_name', 'display_name'] as const;
 // الأعمدة التي تعرضها الواجهة فقط — بلا bio أو حقول غير مستخدمة.
 const SEARCH_PROFILE_COLUMNS = 'id, username, full_name, display_name, avatar_url, gender';
-const SEARCH_CANDIDATE_LIMIT = 100;
-// التطابق التام له استعلام مستقل بحدّه الصغير، فلا يتأثر بأي سقف آخر.
-const SEARCH_EXACT_LIMIT = 20;
-// سقف كل صفحة من نتائج البادئات، مع صفحات إضافية عند امتلائها.
-const SEARCH_PREFIX_PAGE_SIZE = 50;
-const SEARCH_PREFIX_MAX_PAGES = 2;
-const SEARCH_RESULT_LIMIT = 30;
+// لكل درجة صلة استعلامها المستقل بنفس سقف النتائج المعروضة: أي درجة وحدها
+// تستطيع ملء الشاشة، فلا تُسقط درجة أعلى نتيجة بسبب ميزانية درجة أدنى.
+const SEARCH_TIER_LIMIT = 30;
 
 /**
  * درجة الصلة للحساب حسب الأولوية المطلوبة:
@@ -220,78 +217,55 @@ export default function SearchPage({ userId }: { userId: string }) {
     setLoading(true);
     setSearchError(null);
     try {
-      // عدد البدائل ≤ 16 × 3 حقول ⇒ طلب PostgREST محدود الحجم مهما طال النص.
+      // عدد البدائل ≤ 16 لكل حقل ⇒ كل طلب PostgREST محدود الحجم مهما طال النص.
       const variants = getSearchVariants(normalizedQuery);
-      const buildFilters = (match: 'exact' | 'prefix' | 'contains') => variants.flatMap(variant =>
-        SEARCHABLE_PROFILE_FIELDS.map((field) => {
-          const pattern = match === 'exact'
-            ? variant
-            : match === 'prefix'
-              ? `${variant}%`
-              : `%${variant}%`;
-          return `${field}.ilike.${quotePostgrestValue(pattern)}`;
-        }),
-      );
+      const buildFilters = (
+        fields: readonly string[],
+        match: 'exact' | 'prefix' | 'contains',
+      ) => variants.flatMap(variant => fields.map((field) => {
+        const pattern = match === 'exact'
+          ? variant
+          : match === 'prefix'
+            ? `${variant}%`
+            : `%${variant}%`;
+        return `${field}.ilike.${quotePostgrestValue(pattern)}`;
+      }));
 
-      // ترتيب ثابت من قاعدة البيانات (username ثم id) حتى تكون صفحات البادئات
-      // متسلسلة بلا تكرار أو فقدان بين الطلبات.
-      const fetchPrefixPage = async (from: number, to: number) => {
+      // استعلام مستقل لكل درجة صلة، كلها مرتّبة من القاعدة (username ثم id)
+      // ليكون كل صف جالب هو الأفضل داخل درجته تحت نفس فاصل التعادل.
+      const runTier = async (
+        fields: readonly string[],
+        match: 'exact' | 'prefix' | 'contains',
+      ): Promise<Profile[]> => {
         const { data, error } = await supabase
           .from('profiles')
           .select(SEARCH_PROFILE_COLUMNS)
           .eq('is_deactivated', false)
-          .or(buildFilters('prefix').join(','))
+          .or(buildFilters(fields, match).join(','))
           .order('username', { ascending: true })
           .order('id', { ascending: true })
-          .range(from, to);
+          .limit(SEARCH_TIER_LIMIT);
         if (error) throw error;
         return (data || []) as Profile[];
       };
 
-      const fetchPrefixRows = async (): Promise<Profile[]> => {
-        const rows: Profile[] = [];
-        for (let page = 0; page < SEARCH_PREFIX_MAX_PAGES; page += 1) {
-          const from = page * SEARCH_PREFIX_PAGE_SIZE;
-          const pageRows = await fetchPrefixPage(from, from + SEARCH_PREFIX_PAGE_SIZE - 1);
-          rows.push(...pageRows);
-          if (pageRows.length < SEARCH_PREFIX_PAGE_SIZE) break;
-        }
-        return rows;
-      };
-
-      // ثلاثة استعلامات متوازية تضمن عدم ضياع أي فئة بسبب سقف الأخرى:
-      //   (1) تطابق تام في أحد الحقول الثلاثة — بحدّه المستقل الصغير.
-      //   (2) بدايات الحقول — بترتيب من القاعدة وصفحات متتالية.
-      //   (3) مطابقات جزئية — أوسع شبكة، ويُرتّب الجميع بالصلة على العميل.
-      const [exactResult, prefixRows, containsResult] = await Promise.all([
-        supabase
-          .from('profiles')
-          .select(SEARCH_PROFILE_COLUMNS)
-          .eq('is_deactivated', false)
-          .or(buildFilters('exact').join(','))
-          .order('username', { ascending: true })
-          .order('id', { ascending: true })
-          .limit(SEARCH_EXACT_LIMIT),
-        fetchPrefixRows(),
-        supabase
-          .from('profiles')
-          .select(SEARCH_PROFILE_COLUMNS)
-          .eq('is_deactivated', false)
-          .or(buildFilters('contains').join(','))
-          .limit(SEARCH_CANDIDATE_LIMIT),
+      // ست درجات مطابقة، لا تشترك في أي سقف:
+      //   6 username exact · 5 username prefix · 4 name exact
+      //   3 name prefix · 2 username contains · 1 name contains
+      const tiers = await Promise.all([
+        runTier(USERNAME_SEARCH_FIELDS, 'exact'),
+        runTier(USERNAME_SEARCH_FIELDS, 'prefix'),
+        runTier(NAME_SEARCH_FIELDS, 'exact'),
+        runTier(NAME_SEARCH_FIELDS, 'prefix'),
+        runTier(USERNAME_SEARCH_FIELDS, 'contains'),
+        runTier(NAME_SEARCH_FIELDS, 'contains'),
       ]);
 
       if (requestId !== searchRequestRef.current) return;
-      if (exactResult.error) throw exactResult.error;
-      if (containsResult.error) throw containsResult.error;
 
       // دمج بلا تكرار قبل الترتيب، فلا يفقد أي صف قوي بسبب ترتيب الجلب.
       const profileById = new Map<string, Profile>();
-      [
-        ...((exactResult.data || []) as Profile[]),
-        ...prefixRows,
-        ...((containsResult.data || []) as Profile[]),
-      ].forEach((profile) => {
+      tiers.flat().forEach((profile) => {
         if (!profileById.has(profile.id)) profileById.set(profile.id, profile);
       });
 
@@ -305,7 +279,8 @@ export default function SearchPage({ userId }: { userId: string }) {
             .localeCompare(second.profile.username || '', 'en');
           return usernameOrder || first.profile.id.localeCompare(second.profile.id);
         })
-        .slice(0, SEARCH_RESULT_LIMIT)
+        // نفس سقف الدرجة = سقف العرض، فلا تحجب درجةٌ نتيجةً أعلى منها.
+        .slice(0, SEARCH_TIER_LIMIT)
         .map(entry => entry.profile);
 
       setProfiles(rankedProfiles);
