@@ -31,6 +31,11 @@ import {
   type RealtimeChannelId,
 } from '@/lib/realtimeChannelHealth';
 import {
+  createInboxRequestTracker,
+  fetchMessagesInboxSummaries,
+  requestUnreadCounts as buildRequestUnreadCounts,
+} from '@/lib/messagesInbox';
+import {
   createOlderRequestTracker,
   initialOlderPageProgress,
   mergeThreadRows,
@@ -937,7 +942,7 @@ export default function MessagesPage({
   const realtimeChannelsRef = useRef(createRealtimeChannelSupervisor());
   const realtimeResubscribeTimerRef = useRef<number | null>(null);
   const realtimeResubscribeAtRef = useRef<number | null>(null);
-  const contactsRequestRef = useRef(0);
+  const contactsRequestTrackerRef = useRef(createInboxRequestTracker());
   // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
   // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
   const storyIdsByContactRef = useRef<Record<string, string[]>>({});
@@ -1143,6 +1148,16 @@ export default function MessagesPage({
     }
   }, []);
 
+  const markInboxMessagesDelivered = useCallback(async () => {
+    if (!supabaseConfigured) return;
+    try {
+      const { error } = await supabase.rpc('aani_mark_inbox_messages_delivered');
+      if (error) console.warn('[messages] تعذر تحديث حالة توصيل رسائل القائمة:', error);
+    } catch (error) {
+      console.warn('[messages] تعذر تحديث حالة توصيل رسائل القائمة:', error);
+    }
+  }, []);
+
   useLayoutEffect(() => {
     const input = messageInputRef.current;
     if (!input) return;
@@ -1173,7 +1188,7 @@ export default function MessagesPage({
   }, [selectedId]);
 
   const loadConversationList = useCallback(async () => {
-    const requestId = ++contactsRequestRef.current;
+    const requestId = contactsRequestTrackerRef.current.begin();
     if (!supabaseConfigured) {
       setCurrentProfile(null);
       setConversations([]);
@@ -1186,41 +1201,44 @@ export default function MessagesPage({
     setMutualFollowersLoading(true);
     try {
       await purgeExpiredMessages();
-      const [profileResult, messagesResult, followsResult, hiddenMessageIds, requestStatesResult] = await Promise.all([
+      const readAtByContactSnapshot = readAtByContactRef.current;
+      const requestTabReadAtSnapshot = requestTabReadAtRef.current;
+      const [profileResult, summaryResult, followsResult, requestStatesResult] = await Promise.all([
         retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).eq('id', currentUserId).maybeSingle()),
-        queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
+        fetchMessagesInboxSummaries(
+          args => retrySupabaseQuery(async () => await supabase.rpc('aani_get_messages_inbox_summaries', args)),
+          readAtByContactSnapshot,
+          requestTabReadAtSnapshot,
+          value => normalizeMessageRows([value])[0] || null,
+        ),
         retrySupabaseQuery(async () => await supabase
           .from('follows')
           .select('follower_id, following_id')
           .or(`follower_id.eq.${currentUserId},following_id.eq.${currentUserId}`)),
-        loadHiddenMessageIds(currentUserId),
         retrySupabaseQuery(async () => await supabase
           .from('message_conversation_requests')
           .select('participant_one_id, participant_two_id, recipient_id, status')
           .or(`participant_one_id.eq.${currentUserId},participant_two_id.eq.${currentUserId}`)),
       ]);
 
-      if (requestId !== contactsRequestRef.current) return;
+      if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
       if (profileResult.error) throw profileResult.error;
-      if (messagesResult.error) throw messagesResult.error;
+      if (summaryResult.error) throw summaryResult.error;
       if (followsResult.error) throw followsResult.error;
       setCurrentProfile((profileResult.data || null) as Profile | null);
+      void markInboxMessagesDelivered();
 
-      const latestByContact = new Map<string, MessageRow>();
-      const conversationMessages = normalizeMessageRows(messagesResult.data)
-        .filter(message => !hiddenMessageIds.has(message.id));
-      void markMessagesDelivered(conversationMessages
-        .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
-        .map(message => message.id));
-      conversationMessages.forEach(message => {
-        const contactId = message.sender_id === currentUserId ? message.recipient_id : message.sender_id;
+      const summariesByContact = new Map(summaryResult.data);
+      summariesByContact.forEach((summary, contactId) => {
+        const message = summary.lastMessage;
+        if (!message) return;
         const mediaMessage = parseChatMediaMessage(message.content);
         const safeMessage = mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
           ? { ...message, content: openedChatMediaContent(message.content) }
           : message;
-        if (!latestByContact.has(contactId)) latestByContact.set(contactId, safeMessage);
+        summariesByContact.set(contactId, { ...summary, lastMessage: safeMessage });
       });
-      const contactIds = [...latestByContact.keys()];
+      const contactIds = [...summariesByContact.keys()];
       if (selectedId && !contactIds.includes(selectedId)) contactIds.push(selectedId);
 
       const followingIds = new Set<string>();
@@ -1234,13 +1252,13 @@ export default function MessagesPage({
       const profilesResult = profileIds.length
         ? await retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds))
         : { data: [], error: null };
-      if (requestId !== contactsRequestRef.current) return;
+      if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
       if (profilesResult.error) throw profilesResult.error;
 
       const storiesResult = contactIds.length
         ? await retrySupabaseQuery(async () => await supabase.from('stories').select('id, user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString()))
         : { data: [], error: null };
-      if (requestId !== contactsRequestRef.current) return;
+      if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
       if (requestStatesResult.error) {
         console.warn('[messages] تعذر تحميل حالات طلبات المراسلة:', requestStatesResult.error);
       }
@@ -1277,7 +1295,7 @@ export default function MessagesPage({
       const nextConversations = contactIds.flatMap(contactId => {
         const profile = profileById.get(contactId);
         if (!profile) return [];
-        const lastMessage = latestByContact.get(contactId) || null;
+        const lastMessage = summariesByContact.get(contactId)?.lastMessage || null;
         const requestState = requestStateByContact.get(contactId);
         const storedIncomingRequest = Boolean(requestState?.recipientId === currentUserId && requestState.status !== 'accepted');
         const inferredIncomingRequest = Boolean(!requestState && lastMessage?.recipient_id === currentUserId && !mutualIdSet.has(contactId));
@@ -1294,25 +1312,19 @@ export default function MessagesPage({
         }];
       });
       const requestContactIds = new Set(nextConversations.filter(conversation => conversation.isRequest).map(conversation => conversation.profile.id));
-      const requestUnreadCounts: Record<string, number> = {};
-      const requestTabReadAt = Date.parse(requestTabReadAtRef.current || '') || 0;
-      conversationMessages.forEach(message => {
-        if (message.recipient_id !== currentUserId || message.read_at || !requestContactIds.has(message.sender_id)) return;
-        const messageTime = Date.parse(message.created_at) || 0;
-        const conversationReadAt = Date.parse(readAtByContactRef.current[message.sender_id] || '') || 0;
-        if (messageTime <= Math.max(requestTabReadAt, conversationReadAt)) return;
-        requestUnreadCounts[message.sender_id] = (requestUnreadCounts[message.sender_id] || 0) + 1;
-      });
-      setRequestUnreadByContact(requestUnreadCounts);
+      if (readAtByContactRef.current === readAtByContactSnapshot
+        && requestTabReadAtRef.current === requestTabReadAtSnapshot) {
+        setRequestUnreadByContact(buildRequestUnreadCounts(summariesByContact, requestContactIds));
+      }
       setConversations(nextConversations);
       setConversationCacheReady(true);
     } catch (error) {
-      if (requestId !== contactsRequestRef.current) return;
+      if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
       console.error('[messages] تعذر تحميل قائمة المحادثات:', error);
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
       setMutualFollowersLoading(false);
     }
-  }, [currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
+  }, [currentUserId, markInboxMessagesDelivered, purgeExpiredMessages, selectedId]);
 
   // حلقة القصص حول صور المحادثات: تنطفئ فور مشاهدة القصص في شريط القصص،
   // دون إعادة تحميل قائمة المحادثات من الشبكة.
@@ -1641,7 +1653,7 @@ export default function MessagesPage({
     return () => {
       removedByUs = true;
       realtimeChannelsRef.current.markIntentionalClose('inbox', token);
-      contactsRequestRef.current += 1;
+      contactsRequestTrackerRef.current.invalidate();
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };

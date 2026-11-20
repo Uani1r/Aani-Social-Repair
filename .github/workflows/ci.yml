@@ -54,14 +54,12 @@ jobs:
       - name: Build @workspace/aani-social
         run: pnpm --filter @workspace/aani-social run build
 
-      # Runs only the reels unit tests added by this work. The wider test:unit
-      # script also runs mediaCompressor.test.ts, which already fails on main
-      # (12 failing subtests at mediaCompressor.test.ts:381) independently of
-      # this change, so it is not a gate here. messagesThread covers the DM
-      # pagination/merge/guard helpers, realtimeChannelHealth the channel
-      # status handling added with the messages fix.
+      # Run focused unit tests; the wider test:unit script includes unrelated
+      # mediaCompressor failures already present on main. messagesInbox covers
+      # summary mapping and stale inbox requests; messagesThread covers pagination
+      # and merge guards; realtimeChannelHealth covers channel status recovery.
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/realtimeChannelHealth.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/realtimeChannelHealth.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
@@ -172,3 +170,49 @@ jobs:
 
       - name: Assert the full reply index already covered the required rows
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_full_covered.sql
+
+  messages-inbox-sql:
+    name: Messages inbox summary SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_inbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_inbox_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary inbox schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_inbox_schema.sql
+
+      - name: Apply the inbox summary migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270301000000_messages_inbox_summary.sql
+
+      - name: Test summary semantics, hiding, delivery and permissions
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_inbox_summary.test.sql
