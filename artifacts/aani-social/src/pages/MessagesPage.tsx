@@ -31,8 +31,10 @@ import {
   type RealtimeChannelId,
 } from '@/lib/realtimeChannelHealth';
 import {
+  buildLegacyMessagesInboxSummaries,
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
+  legacyInboxDeliveryMessageIds,
   requestUnreadCounts as buildRequestUnreadCounts,
 } from '@/lib/messagesInbox';
 import {
@@ -466,13 +468,14 @@ async function retrySupabaseQuery<T>(query: () => Promise<T>, maxAttempts = 3): 
   throw new Error('تعذر الاتصال بالخادم.');
 }
 
-async function loadHiddenMessageIds(userId: string): Promise<Set<string>> {
+async function loadHiddenMessageIds(userId: string, required = false): Promise<Set<string>> {
   const { data, error } = await retrySupabaseQuery(async () => await supabase
     .from('message_hides')
     .select('message_id')
     .eq('user_id', userId));
   if (error) {
     console.warn('[messages] تعذر جلب الرسائل المخفية:', error);
+    if (required) throw error;
     return new Set();
   }
   return new Set((data || []).flatMap(row => typeof row.message_id === 'string' ? [row.message_id] : []));
@@ -1210,6 +1213,28 @@ export default function MessagesPage({
           readAtByContactSnapshot,
           requestTabReadAtSnapshot,
           value => normalizeMessageRows([value])[0] || null,
+          () => retrySupabaseQuery(async () => await supabase.rpc('aani_get_messages_inbox_summaries')),
+          async () => {
+            const [messagesResult, hiddenMessageIds] = await Promise.all([
+              queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
+              loadHiddenMessageIds(currentUserId, true),
+            ]);
+            if (messagesResult.error) {
+              return { data: new Map(), error: messagesResult.error };
+            }
+            const messages = normalizeMessageRows(messagesResult.data);
+            return {
+              data: buildLegacyMessagesInboxSummaries(
+                messages,
+                hiddenMessageIds,
+                currentUserId,
+                readAtByContactSnapshot,
+                requestTabReadAtSnapshot,
+              ),
+              error: null,
+              deliveryMessageIds: legacyInboxDeliveryMessageIds(messages, hiddenMessageIds, currentUserId),
+            };
+          },
         ),
         retrySupabaseQuery(async () => await supabase
           .from('follows')
@@ -1226,7 +1251,11 @@ export default function MessagesPage({
       if (summaryResult.error) throw summaryResult.error;
       if (followsResult.error) throw followsResult.error;
       setCurrentProfile((profileResult.data || null) as Profile | null);
-      void markInboxMessagesDelivered();
+      if (summaryResult.usedFallback) {
+        void markMessagesDelivered(summaryResult.deliveryMessageIds);
+      } else {
+        void markInboxMessagesDelivered();
+      }
 
       const summariesByContact = new Map(summaryResult.data);
       summariesByContact.forEach((summary, contactId) => {
@@ -1324,7 +1353,7 @@ export default function MessagesPage({
       setContactsError('تعذر تحميل المحادثات الآن. حاول مرة أخرى.');
       setMutualFollowersLoading(false);
     }
-  }, [currentUserId, markInboxMessagesDelivered, purgeExpiredMessages, selectedId]);
+  }, [currentUserId, markInboxMessagesDelivered, markMessagesDelivered, purgeExpiredMessages, selectedId]);
 
   // حلقة القصص حول صور المحادثات: تنطفئ فور مشاهدة القصص في شريط القصص،
   // دون إعادة تحميل قائمة المحادثات من الشبكة.

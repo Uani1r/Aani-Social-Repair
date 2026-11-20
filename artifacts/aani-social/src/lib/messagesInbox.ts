@@ -14,6 +14,23 @@ export interface InboxRequestTracker {
   isCurrent(requestId: number): boolean;
 }
 
+export interface LegacyInboxMessage {
+  id: string;
+  sender_id: string;
+  recipient_id: string;
+  created_at: string;
+  read_at?: string | null;
+  delivered_at?: string | null;
+}
+
+export interface InboxSummaryResult<TMessage> {
+  data: Map<string, MessagesInboxSummary<TMessage>>;
+  error: unknown | null;
+  usedFallback: boolean;
+  deliveryMessageIds: string[];
+}
+
+const INBOX_SUMMARY_RPC = 'aani_get_messages_inbox_summaries';
 const UNIX_EPOCH = '1970-01-01T00:00:00.000Z';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -71,15 +88,146 @@ export function requestUnreadCounts<TMessage>(
   return counts;
 }
 
+function errorField(error: unknown, key: 'code' | 'message' | 'details' | 'hint'): unknown {
+  return isRecord(error) ? error[key] : null;
+}
+
+function isPotentialMissingInboxSummaryRpc(error: unknown): boolean {
+  const code = errorField(error, 'code');
+  const message = errorField(error, 'message');
+  return code === 'PGRST202'
+    && typeof message === 'string'
+    && message.includes(INBOX_SUMMARY_RPC)
+    && /schema cache/i.test(message);
+}
+
+/**
+ * PGRST202 also covers stale function signatures. Confirm with a no-argument
+ * call before falling back; the inbox RPC's arguments have defaults. A
+ * signature mismatch with useful PostgREST details, PGRST203, permission
+ * failures, and transport failures must never trigger the legacy path.
+ */
+export function isConfirmedMissingMessagesInboxRpc(error: unknown): boolean {
+  const message = errorField(error, 'message');
+  const details = errorField(error, 'details');
+  if (errorField(error, 'code') !== 'PGRST202' || typeof message !== 'string') return false;
+  const functionName = `(?:public\\.)?${INBOX_SUMMARY_RPC}\\(\\)`;
+  const missingFunctionMessage = new RegExp(`Could not find the function\\s+${functionName}\\s+in the schema cache`, 'i').test(message)
+    || new RegExp(`Could not find\\s+${functionName}\\s+function\\s+in the schema cache`, 'i').test(message);
+  return missingFunctionMessage && (details == null || details === '');
+}
+
+export function buildLegacyMessagesInboxSummaries<TMessage extends LegacyInboxMessage>(
+  orderedMessages: readonly TMessage[],
+  hiddenMessageIds: ReadonlySet<string>,
+  actorId: string,
+  readAtByContact: Record<string, string>,
+  requestTabReadAt: string | null,
+): Map<string, MessagesInboxSummary<TMessage>> {
+  const summaries = new Map<string, MessagesInboxSummary<TMessage>>();
+  const seenMessageIds = new Set<string>();
+  const requestCutoff = Date.parse(requestTabReadAt || '') || 0;
+  const contactCutoffs = new Map<string, number>(Object.entries(readAtByContact).map(([contactId, value]): [string, number] => (
+    [contactId, Date.parse(value || '') || 0]
+  )));
+
+  orderedMessages.forEach(message => {
+    if (hiddenMessageIds.has(message.id) || seenMessageIds.has(message.id)) return;
+    seenMessageIds.add(message.id);
+
+    const contactId = message.sender_id === actorId
+      ? message.recipient_id
+      : message.recipient_id === actorId
+        ? message.sender_id
+        : '';
+    if (!contactId) return;
+
+    const summary = summaries.get(contactId);
+    if (!summary) summaries.set(contactId, { lastMessage: message, unreadCount: 0 });
+
+    if (message.recipient_id !== actorId || message.read_at) return;
+    const messageTime = Date.parse(message.created_at) || 0;
+    const cutoff = Math.max(contactCutoffs.get(contactId) || 0, requestCutoff);
+    if (messageTime > cutoff) {
+      const current = summaries.get(contactId);
+      if (current) current.unreadCount += 1;
+    }
+  });
+
+  return summaries;
+}
+
+export function legacyInboxDeliveryMessageIds<TMessage extends LegacyInboxMessage>(
+  messages: readonly TMessage[],
+  hiddenMessageIds: ReadonlySet<string>,
+  actorId: string,
+): string[] {
+  const messageIds = new Set<string>();
+  messages.forEach(message => {
+    if (message.recipient_id === actorId
+      && !message.delivered_at
+      && !hiddenMessageIds.has(message.id)) {
+      messageIds.add(message.id);
+    }
+  });
+  return [...messageIds];
+}
+
 export async function fetchMessagesInboxSummaries<TMessage>(
   request: (args: MessagesInboxRpcArguments) => Promise<{ data: unknown; error: unknown | null }>,
   readAtByContact: Record<string, string>,
   requestTabReadAt: string | null,
   normalizeMessage: (value: unknown) => TMessage | null,
-): Promise<{ data: Map<string, MessagesInboxSummary<TMessage>>; error: unknown | null }> {
+  confirmMissingRpc?: () => Promise<{ data: unknown; error: unknown | null }>,
+  fallback?: () => Promise<{
+    data: Map<string, MessagesInboxSummary<TMessage>>;
+    error: unknown | null;
+    deliveryMessageIds?: string[];
+  }>,
+): Promise<InboxSummaryResult<TMessage>> {
+  const emptyResult = (error: unknown | null): InboxSummaryResult<TMessage> => ({
+    data: new Map(),
+    error,
+    usedFallback: false,
+    deliveryMessageIds: [],
+  });
+
   const result = await request(messagesInboxRpcArguments(readAtByContact, requestTabReadAt));
-  if (result.error) return { data: new Map(), error: result.error };
-  return { data: normalizeMessagesInboxSummaries(result.data, normalizeMessage), error: null };
+  if (!result.error) {
+    return {
+      data: normalizeMessagesInboxSummaries(result.data, normalizeMessage),
+      error: null,
+      usedFallback: false,
+      deliveryMessageIds: [],
+    };
+  }
+  if (!isPotentialMissingInboxSummaryRpc(result.error) || !confirmMissingRpc || !fallback) {
+    return emptyResult(result.error);
+  }
+
+  let confirmation: { data: unknown; error: unknown | null };
+  try {
+    confirmation = await confirmMissingRpc();
+  } catch (error) {
+    return emptyResult(error);
+  }
+  if (!confirmation.error) return emptyResult(result.error);
+  if (!isConfirmedMissingMessagesInboxRpc(confirmation.error)) {
+    return emptyResult(confirmation.error);
+  }
+
+  try {
+    const fallbackResult = await fallback();
+    if (fallbackResult.error) return emptyResult(fallbackResult.error);
+    return {
+      data: fallbackResult.data,
+      error: null,
+      usedFallback: true,
+      deliveryMessageIds: fallbackResult.deliveryMessageIds || [],
+    };
+  } catch (error) {
+    return emptyResult(error);
+  }
 }
 
 export function createInboxRequestTracker(): InboxRequestTracker {
