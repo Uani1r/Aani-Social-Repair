@@ -6,6 +6,19 @@
 
 begin;
 
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'create role anon';
+  end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'create role authenticated';
+  end if;
+end $$;
+
+grant usage on schema public to anon, authenticated;
+grant select, insert, update on public.messages to anon, authenticated;
+
 drop trigger if exists aani_validate_message_reply_target_insert on public.messages;
 drop trigger if exists aani_validate_message_reply_target_update on public.messages;
 drop trigger if exists aani_sync_message_reply_ids on public.messages;

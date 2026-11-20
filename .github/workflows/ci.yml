@@ -123,8 +123,13 @@ jobs:
       - name: Apply the migration from the triggerless state
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
 
-      # Re-applying proves the restored functions/triggers and indexes are idempotent.
-      - name: Re-apply the migration (idempotency)
+      # Seed direct grants to both roles so the next migration run must revoke them.
+      - name: Seed validator EXECUTE grants for ACL regression test
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_execute_acl_scenario.sql
+
+      # Re-applying proves the restored functions/triggers and indexes are idempotent,
+      # and removes the direct validator grants seeded above.
+      - name: Re-apply the migration (idempotency and ACL revocation)
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
 
       - name: Assert the resulting messages schema
