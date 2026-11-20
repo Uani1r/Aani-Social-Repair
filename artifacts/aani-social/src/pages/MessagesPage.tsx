@@ -24,6 +24,20 @@ import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
+import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
+import {
+  REALTIME_CHANNEL_IDS,
+  createRealtimeChannelSupervisor,
+  type RealtimeChannelId,
+} from '@/lib/realtimeChannelHealth';
+import {
+  createOlderRequestTracker,
+  initialOlderPageProgress,
+  mergeThreadRows,
+  progressAfterLatestPage,
+  progressAfterOlderPage,
+  type OlderPageProgress,
+} from '@/lib/messagesThread';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -497,6 +511,8 @@ interface CachedMessageThread {
 const conversationCacheKey = (userId: string) => `aani_messages_conversations_v1_${userId}`;
 const threadCacheKey = (userId: string, contactId: string) => `aani_messages_thread_v1_${userId}_${contactId}`;
 const MESSAGE_THREAD_CACHE_LIMIT = 300;
+// حجم دفعة المحادثة: أحدث 60 رسالة عند الفتح، ثم 60 أقدم عند التمرير لأعلى.
+const MESSAGE_THREAD_PAGE_SIZE = 60;
 
 function readConversationCache(userId: string): ConversationSummary[] | null {
   if (typeof window === 'undefined') return null;
@@ -589,21 +605,37 @@ async function queryMessageRows(
   filter: string,
   ascending: boolean,
   includeMetadata = false,
+  page?: { limit: number; before?: { createdAt: string; id: string } },
 ): Promise<{ data: unknown; error: unknown | null }> {
   let includeDeliveryColumns = true;
   let includeMessageMetadata = includeMetadata;
-  let includeReplyMetadata = includeMetadata;
+  // عمود الردود يختلف بين البيئات: reply_to_message_id (ترحيل 20261205000000)
+  // أو reply_to_id (الإنتاج القديم). المحاولة الأولى على العمود الحديث، ثم
+  // القراءة من القديم مع إسناده إلى الاسم الحديث، ثم إسقاطه إن غاب الاثنان.
+  let replySelect: string | null = includeMetadata ? 'reply_to_message_id' : null;
   let includeStoryReplyFlag = includeMetadata;
   let includeStoryReplyMedia = includeMetadata;
 
   // الحد الأقصى للمحاولات يغطي إسقاط كل مجموعة أعمدة اختيارية بالتتابع.
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeStoryReplyFlag ? ', story_reply' : ''}${includeStoryReplyMedia ? ', story_media_url, story_thumbnail_url, story_media_type' : ''}${includeReplyMetadata ? ', reply_to_message_id' : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
-    const result = await retrySupabaseQuery(async () => await supabase
-      .from('messages')
-      .select(fields)
-      .or(filter)
-      .order('created_at', { ascending }));
+  for (let attempt = 0; attempt < 9; attempt += 1) {
+    const fields = `id, sender_id, recipient_id, content${includeMessageMetadata ? ', post_id, story_id' : ''}${includeStoryReplyFlag ? ', story_reply' : ''}${includeStoryReplyMedia ? ', story_media_url, story_thumbnail_url, story_media_type' : ''}${replySelect ? `, ${replySelect}` : ''}, created_at${includeDeliveryColumns ? ', delivered_at, read_at' : ''}`;
+    const result = await retrySupabaseQuery(async () => {
+      let query = supabase
+        .from('messages')
+        .select(fields)
+        .or(filter);
+      if (page?.before) {
+        const created = `"${page.before.createdAt.replace(/"/g, '\\"')}"`;
+        const id = `"${page.before.id.replace(/"/g, '\\"')}"`;
+        // ترتيب ثابت: created_at ثم id، فلا تتكرر رسالة أو تُفقد بين الدفعات.
+        query = query.or(`created_at.lt.${created},and(created_at.eq.${created},id.lt.${id})`);
+      }
+      query = query
+        .order('created_at', { ascending })
+        .order('id', { ascending });
+      if (page) query = query.limit(page.limit);
+      return await query;
+    });
     if (!result.error) return { data: result.data, error: null };
 
     const errorText = messageDeliveryErrorText(result.error);
@@ -619,8 +651,10 @@ async function queryMessageRows(
       includeStoryReplyFlag = false;
       continue;
     }
-    if (includeReplyMetadata && /reply_to_message_id/i.test(errorText)) {
-      includeReplyMetadata = false;
+    if (replySelect && /reply_to_/i.test(errorText)) {
+      replySelect = replySelect === 'reply_to_message_id'
+        ? 'reply_to_message_id:reply_to_id'
+        : null;
       continue;
     }
     if (includeMessageMetadata && /post_id|story_id/i.test(errorText)) {
@@ -639,14 +673,6 @@ function createMessageId(): string {
     const random = Math.floor(Math.random() * 16);
     return (character === 'x' ? random : (random & 0x3) | 0x8).toString(16);
   });
-}
-
-function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): MessageRow[] {
-  const messages = new Map(existing.map(message => [message.id, message]));
-  incoming.forEach(message => messages.set(message.id, message));
-  return [...messages.values()].sort((left, right) => (
-    (Date.parse(left.created_at) || 0) - (Date.parse(right.created_at) || 0)
-  ));
 }
 
 function isEditableTextMessage(message: MessageRow): boolean {
@@ -835,6 +861,9 @@ export default function MessagesPage({
   const [conversationCacheReady, setConversationCacheReady] = useState(initialConversationCache !== null);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
+  // هل توجد رسائل أقدم لم تُجلب بعد (تُطلب عند التمرير لأعلى).
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
   const [threadCacheReady, setThreadCacheReady] = useState(Boolean(initialThreadCache));
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageRow | null>(null);
@@ -893,6 +922,21 @@ export default function MessagesPage({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
+  // يمنع قفزة التمرير إلى الأسفل مرة واحدة عند إضافة دفعة أقدم في الأعلى.
+  const suppressAutoScrollRef = useRef(false);
+  // معرّف طلب الدفعة الأقدم منفصل عن threadRequestRef: تحميل المحادثة من
+  // جديد (Realtime أو إعادة اتصال) يُبطله ويحرّر حالته، فلا يعلّق التحميل.
+  const olderRequestTrackerRef = useRef(createOlderRequestTracker());
+  // مؤشر الدفعة الأقدم من آخر صف خام أعادته القاعدة، لا من الصفوف المصفّاة،
+  // مع عدد الدفعات المحمّلة كي لا يمسّ تحديث Realtime تقدّماً موجوداً.
+  const olderProgressRef = useRef<OlderPageProgress>(initialOlderPageProgress());
+  // كل زيادة تُعيد إنشاء قنوات Realtime من الصفر: القناة المغلقة تُزال من
+  // عميل Realtime ولا تُعاد تلقائياً، وإعادة تشغيل الـsocket وحدها لا تكفي.
+  const [realtimeEpoch, setRealtimeEpoch] = useState(0);
+  // لكل قناة (القائمة والمحادثة) حالتها ومؤقت تعافيها المستقل.
+  const realtimeChannelsRef = useRef(createRealtimeChannelSupervisor());
+  const realtimeResubscribeTimerRef = useRef<number | null>(null);
+  const realtimeResubscribeAtRef = useRef<number | null>(null);
   const contactsRequestRef = useRef(0);
   // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
   // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
@@ -1293,15 +1337,36 @@ export default function MessagesPage({
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
     const requestId = ++threadRequestRef.current;
+    // تحميل كامل جديد للمحادثة يُبطل أي دفعة أقدم جارية ويحرّر حالتها، وإلا
+    // بقيت واجهة التحميل معلّقة إن لم يعد ذلك الطلب هو الطلب الحالي.
+    olderRequestTrackerRef.current.invalidate();
+    setOlderMessagesLoading(false);
     const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
     const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
 
     try {
       await purgeExpiredMessages();
-      const { data, error } = await queryMessageRows(threadFilter, true, true);
+      // أحدث دفعة فقط (مرتّبة تنازلياً من القاعدة) ثم تُعكس للعرض تصاعدياً.
+      const { data, error } = await queryMessageRows(
+        threadFilter,
+        false,
+        true,
+        { limit: MESSAGE_THREAD_PAGE_SIZE },
+      );
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
       if (error) throw error;
-      const visibleMessages = normalizeMessageRows(data)
+      const latestRows = normalizeMessageRows(data);
+      if (requestId === threadRequestRef.current) {
+        // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
+        // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
+        const nextProgress = progressAfterLatestPage(olderProgressRef.current, latestRows, MESSAGE_THREAD_PAGE_SIZE);
+        if (nextProgress !== olderProgressRef.current) {
+          olderProgressRef.current = nextProgress;
+          setHasOlderMessages(nextProgress.hasOlder);
+        }
+      }
+      const visibleMessages = latestRows
+        .reverse()
         .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id))
         .map(message => {
           const mediaMessage = parseChatMediaMessage(message.content);
@@ -1365,6 +1430,67 @@ export default function MessagesPage({
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
 
+  // تحميل دفعة أقدم عند التمرير إلى أعلى المحادثة، مع الحفاظ على موضع القراءة.
+  const loadOlderThread = useCallback(async () => {
+    if (!supabaseConfigured || !selectedId) return;
+    const progressAtStart = olderProgressRef.current;
+    if (olderRequestTrackerRef.current.isLoading() || !progressAtStart.hasOlder) return;
+    const cursor = progressAtStart.cursor;
+    if (!cursor) return;
+
+    // معرّف خاص بهذه الدفعة، مستقل عن threadRequestRef: تحديث المحادثة من
+    // Realtime لا يمنع هذا الطلب من تحرير راية التحميل التي يملكها.
+    const conversationIdAtStart = selectedId;
+    const olderRequestId = olderRequestTrackerRef.current.begin(conversationIdAtStart);
+    const isStillCurrent = () => olderRequestTrackerRef.current.isCurrent(olderRequestId, selectedIdRef.current);
+
+    setOlderMessagesLoading(true);
+    const threadList = threadListRef.current;
+    const previousScrollHeight = threadList?.scrollHeight ?? 0;
+    const previousScrollTop = threadList?.scrollTop ?? 0;
+    const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
+
+    try {
+      const { data, error } = await queryMessageRows(threadFilter, false, true, {
+        limit: MESSAGE_THREAD_PAGE_SIZE,
+        before: cursor,
+      });
+      if (!isStillCurrent()) return;
+      if (error) throw error;
+      const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
+      if (!isStillCurrent()) return;
+
+      const rawOlderRows = normalizeMessageRows(data);
+      const olderRows = rawOlderRows
+        .slice()
+        .reverse()
+        .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id));
+
+      // المؤشر يتقدم من الصفوف الخام حتى لو كانت الدفعة كلها مخفية أو محذوفة.
+      const nextProgress = progressAfterOlderPage(olderProgressRef.current, rawOlderRows, MESSAGE_THREAD_PAGE_SIZE);
+      olderProgressRef.current = nextProgress;
+      setHasOlderMessages(nextProgress.hasOlder);
+
+      suppressAutoScrollRef.current = true;
+      setThread(current => mergeThreadRows(current, olderRows));
+      window.requestAnimationFrame(() => {
+        const list = threadListRef.current;
+        if (!list) return;
+        list.scrollTop = list.scrollHeight - previousScrollHeight + previousScrollTop;
+      });
+    } catch (error) {
+      if (!isStillCurrent()) return;
+      console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
+    } finally {
+      // يحرّر هذا الطلب رايته دائماً إن كان هو الطلب الجاري، حتى لو تغيّر
+      // threadRequestRef بسبب Realtime أو إعادة اتصال؛ ولا يلمس حالة طلب
+      // أحدث ولا راية محادثة أخرى.
+      if (olderRequestTrackerRef.current.finish(olderRequestId)) {
+        setOlderMessagesLoading(false);
+      }
+    }
+  }, [currentUserId, selectedId]);
+
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
     const targetMedia = targetMessage ? parseChatMediaMessage(targetMessage.content) : null;
@@ -1425,10 +1551,64 @@ export default function MessagesPage({
     realtimeRefreshThreadRef.current = false;
   }, []);
 
+  // إعادة إنشاء قنوات Realtime عند استحقاق مؤقت أي قناة. القناة المغلقة
+  // تُزال من عميل Realtime ولا تُعاد تلقائياً، والتأخير يمنع حلقة إعادة اتصال.
+  const scheduleRealtimeResubscribe = useCallback(function schedule(retryAt: number) {
+    const delayMs = Math.max(0, retryAt - Date.now());
+    const pending = realtimeResubscribeTimerRef.current;
+    if (pending !== null) {
+      // مؤقت أقرب موجود: نبقيه ونكتفي به.
+      const scheduledAt = realtimeResubscribeAtRef.current;
+      if (scheduledAt !== null && scheduledAt <= retryAt) return;
+      window.clearTimeout(pending);
+    }
+
+    realtimeResubscribeAtRef.current = retryAt;
+    realtimeResubscribeTimerRef.current = window.setTimeout(() => {
+      realtimeResubscribeTimerRef.current = null;
+      realtimeResubscribeAtRef.current = null;
+      // لا نُعيد الإنشاء إلا إذا كانت قناة مستحقة فعلاً وقت التنفيذ.
+      if (realtimeChannelsRef.current.claimDueChannels(Date.now()).length > 0) {
+        setRealtimeEpoch(epoch => epoch + 1);
+        return;
+      }
+      // قناة أخرى ما زال مؤقتها بعيداً: نُعيد ضبط المؤقت لأقرب استحقاق.
+      const next = realtimeChannelsRef.current.earliestRetryAt();
+      if (next !== null) schedule(next);
+    }, delayMs);
+  }, []);
+
+  // حالة قناة Realtime: عودة الـWebSocket وحدها لا تعني أن الاشتراك سليم.
+  // كل حالة غير SUBSCRIBED تعني اشتراكاً غير موثوق: مزامنة تعويضية وإعادة
+  // إنشاء مجدولة لهذه القناة وحدها، دون أن يمسّ ذلك القناة الأخرى.
+  const handleRealtimeStatus = useCallback((
+    channelId: RealtimeChannelId,
+    token: number,
+    status: string,
+    includeThread: boolean,
+  ) => {
+    const decision = realtimeChannelsRef.current.handleStatus(channelId, token, status, Date.now());
+    if (decision.resync) scheduleMessageRefresh(includeThread);
+    if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
+  }, [scheduleMessageRefresh, scheduleRealtimeResubscribe]);
+
+  useEffect(() => () => {
+    if (realtimeResubscribeTimerRef.current !== null) {
+      window.clearTimeout(realtimeResubscribeTimerRef.current);
+      realtimeResubscribeTimerRef.current = null;
+    }
+    realtimeResubscribeAtRef.current = null;
+  }, []);
+
   useEffect(() => {
     void loadConversationList();
     if (!supabaseConfigured) return;
-    const channel = supabase.channel(`messages-inbox-${currentUserId}`)
+    // اسم القناة يحمل الـepoch: إعادة الإنشاء تُنتج قناة جديدة فعلاً بدل أن
+    // يعيد العميل قناة قديمة ما زالت في قائمة قنواته.
+    // القناة تُغلق عند إزالتها في التنظيف، ولا نعدّ ذلك فشلاً.
+    let removedByUs = false;
+    const token = realtimeChannelsRef.current.beginChannel('inbox');
+    const channel = supabase.channel(`messages-inbox-${currentUserId}-${realtimeEpoch}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -1452,13 +1632,20 @@ export default function MessagesPage({
         schema: 'public',
         table: 'message_conversation_requests',
       }, () => scheduleMessageRefresh(false))
-      .subscribe();
+      .subscribe(status => {
+        // عودة الـWebSocket لا تعني نجاح الاشتراك: نتعامل مع الحالات الأربع
+        // صراحةً ونعيد المزامنة وإعادة الاشتراك عند الحاجة.
+        if (removedByUs) return;
+        handleRealtimeStatus('inbox', token, status, false);
+      });
     return () => {
+      removedByUs = true;
+      realtimeChannelsRef.current.markIntentionalClose('inbox', token);
       contactsRequestRef.current += 1;
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, loadConversationList, markMessagesDelivered, scheduleMessageRefresh, clearScheduledMessageRefresh]);
+  }, [currentUserId, realtimeEpoch, loadConversationList, markMessagesDelivered, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -1494,6 +1681,10 @@ export default function MessagesPage({
     setMessageExpirationSeconds(null);
     const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
     setThread(cachedThread?.messages || []);
+    setHasOlderMessages(false);
+    setOlderMessagesLoading(false);
+    olderRequestTrackerRef.current.invalidate();
+    olderProgressRef.current = initialOlderPageProgress();
     setThreadCacheReady(Boolean(cachedThread));
     commitReactionsByMessage(cachedThread?.reactionsByMessage || {});
   }, [commitReactionsByMessage, currentUserId, selectedId]);
@@ -1507,7 +1698,10 @@ export default function MessagesPage({
 
     void loadThread();
     if (!supabaseConfigured) return;
-    const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}`)
+    let removedByUs = false;
+    const token = realtimeChannelsRef.current.beginChannel('thread');
+    // الـepoch في اسم القناة يضمن قناة جديدة عند إعادة إنشاء الاشتراك.
+    const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}-${realtimeEpoch}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
         if (payload.eventType === 'DELETE') {
           const messageId = (payload.old as { id?: unknown } | null)?.id;
@@ -1525,13 +1719,34 @@ export default function MessagesPage({
         table: 'message_hides',
         filter: `user_id=eq.${currentUserId}`,
       }, () => scheduleMessageRefresh(true))
-      .subscribe();
+      .subscribe(status => {
+        // الحالات الأربع صراحةً: SUBSCRIBED يعني اشتراكاً سليماً، وأي حالة
+        // أخرى تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
+        if (removedByUs) return;
+        handleRealtimeStatus('thread', token, status, true);
+      });
     return () => {
+      removedByUs = true;
+      realtimeChannelsRef.current.markIntentionalClose('thread', token);
       threadRequestRef.current += 1;
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, selectedId, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh]);
+  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+
+  // بعد عودة الشبكة أو التطبيق: مزامنة تعويضية للقائمة والمحادثة المفتوحة،
+  // لأن عودة القناة وحدها لا تضمن وصول ما فُقد أثناء الانقطاع.
+  useEffect(() => registerRealtimeReconnect(() => {
+    void loadConversationList();
+    if (selectedIdRef.current) void loadThread();
+    // عودة الـWebSocket وحدها لا تعني أن جميع القنوات عادت للاشتراك: نتحقق
+    // من كل قناة على حدة ونعيد إنشاء ما لم يعد مشتركاً.
+    const now = Date.now();
+    for (const channelId of REALTIME_CHANNEL_IDS) {
+      const decision = realtimeChannelsRef.current.ensureHealthy(channelId, now);
+      if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
+    }
+  }), [loadConversationList, loadThread, scheduleRealtimeResubscribe]);
 
   useEffect(() => {
     if (!selectedId || !threadCacheReady) return;
@@ -1566,6 +1781,11 @@ export default function MessagesPage({
   }, [scrollThreadToBottom]);
 
   useLayoutEffect(() => {
+    // بعد إضافة دفعة أقدم لا نقفز إلى الأسفل: موضع القراءة محفوظ في loadOlderThread.
+    if (suppressAutoScrollRef.current) {
+      suppressAutoScrollRef.current = false;
+      return;
+    }
     scrollThreadToBottom();
   }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
 
@@ -3071,6 +3291,10 @@ export default function MessagesPage({
                   if (voiceMessageIsUploading
                     && threadList.scrollHeight - threadList.clientHeight - threadList.scrollTop > 1) {
                     scrollThreadToBottom();
+                  }
+                  // الوصول إلى أعلى القائمة يطلب دفعة أقدم بدل جلب السجل كاملاً مسبقاً.
+                  if (threadList.scrollTop < 80 && hasOlderMessages && !olderMessagesLoading) {
+                    void loadOlderThread();
                   }
                 }}
                 onWheel={() => messageInputRef.current?.blur()}

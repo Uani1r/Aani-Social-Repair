@@ -57,12 +57,109 @@ jobs:
       # Runs only the reels unit tests added by this work. The wider test:unit
       # script also runs mediaCompressor.test.ts, which already fails on main
       # (12 failing subtests at mediaCompressor.test.ts:381) independently of
-      # this change, so it is not a gate here.
+      # this change, so it is not a gate here. messagesThread covers the DM
+      # pagination/merge/guard helpers, realtimeChannelHealth the channel
+      # status handling added with the messages fix.
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/realtimeChannelHealth.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
 
       - name: Build @workspace/api-server
         run: pnpm --filter @workspace/api-server run build
+
+  # Applies the messages reply-compat migration to a throwaway PostgreSQL and
+  # runs the reply compatibility SQL test against it. The harness builds only
+  # the part of the schema the migration and the test touch, so this proves the
+  # migration's logic (backfill, sync trigger, validation trigger on both
+  # paths, single reply index) but not the production schema as a whole.
+  messages-sql:
+    name: Messages SQL and reply compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The runner image usually ships psql; install it when it does not.
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the minimal messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_legacy_schema.sql
+
+      - name: Apply the reply compatibility migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      # The migration must be safe to re-run: no duplicate reply index, the
+      # sync trigger is recreated, and the validation trigger keeps reply_to_id.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the resulting messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_compat_schema.sql
+
+      - name: Run the reply compatibility tests
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reply_compat.test.sql
+
+      # Index equivalence scenario. The setup drops the reply indexes in this
+      # throwaway database only (never in a Supabase database) and creates two
+      # non-equivalent ones: a partial index with a narrower predicate (does not
+      # cover every required row) and a two-key-column index. The migration must
+      # still create the correct index, and a second run must not duplicate it.
+      - name: Prepare the non-equivalent reply index scenario
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_index_scenarios.sql
+
+      - name: Apply the migration with only non-equivalent reply indexes present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the correct reply index was created exactly once
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql
+
+      # Re-applying with the correct index present must not create a duplicate:
+      # the same assertions require exactly one equivalent index and exactly
+      # three indexes whose first key column is reply_to_message_id.
+      - name: Re-apply the migration with the correct index present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the correct reply index was not duplicated
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql
+
+      # Full-index scenario: a non-partial index on the same single column
+      # covers every row, so it is equivalent and the migration must not add a
+      # second index.
+      - name: Prepare the full reply index scenario
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_index_full_scenario.sql
+
+      - name: Apply the migration with a full covering reply index present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the full reply index already covered the required rows
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_full_covered.sql
