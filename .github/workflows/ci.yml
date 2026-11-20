@@ -151,3 +151,15 @@ jobs:
 
       - name: Assert the correct reply index was not duplicated
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql
+
+      # Full-index scenario: a non-partial index on the same single column
+      # covers every row, so it is equivalent and the migration must not add a
+      # second index.
+      - name: Prepare the full reply index scenario
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_index_full_scenario.sql
+
+      - name: Apply the migration with a full covering reply index present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the full reply index already covered the required rows
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_full_covered.sql
