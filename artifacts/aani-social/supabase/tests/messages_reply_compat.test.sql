@@ -1,11 +1,15 @@
 -- ============================================================================
--- اختبار توافق عمودي الردود (لا يُشغَّل تلقائياً في CI؛ يُطبَّق على قاعدة اختبار)
+-- اختبار توافق عمودي الردود (يُطبَّق على قاعدة اختبار أو على مخطط CI المصغّر)
 --
 -- يتحقق من:
 --   1) لا تعارض بين reply_to_id و reply_to_message_id في البيانات الحالية.
 --   2) لا روابط ردود يتيمة في أي من العمودين.
 --   3) مزامنة الاتجاهين في INSERT وUPDATE: كل حالة تلمس عموداً واحداً فقط
 --      وتتحقق من تعبئة العمود الآخر.
+--   4) رفض ربط رد برسالة من محادثة أخرى عند تحديث reply_to_id وحده، وعند
+--      تحديث reply_to_message_id وحده (هذا ما يثبت أن trigger التحقق يعمل
+--      على مساري التحديث معاً).
+--   5) استمرار قبول الردود الصحيحة، وأن التعارض الصريح يُحسم للعمود الجديد.
 -- ثم يُلغى كل شيء (rollback).
 --
 -- يتطلب وجود العمود القديم reply_to_id (بيئة التوافق) وtrigger المزامنة
@@ -48,15 +52,17 @@ begin
   end if;
 end $$;
 
--- مزامنة الاتجاهين: أربع حالات، وكل حالة تلمس عموداً واحداً فقط.
+-- مزامنة الاتجاهين والتحقق: كل حالة تلمس عموداً واحداً فقط.
 do $$
 declare
   v_sender uuid;
   v_recipient uuid;
   v_parent_one uuid;
   v_parent_two uuid;
+  v_foreign_parent uuid;
   v_child_via_legacy uuid;
   v_child_via_new uuid;
+  v_child_with_both uuid;
   v_legacy_reply uuid;
   v_new_reply uuid;
 begin
@@ -141,7 +147,84 @@ begin
     raise exception 'اختبار الردود (د): UPDATE بـ reply_to_message_id فقط لم يحدّث reply_to_id.';
   end if;
 
-  raise notice 'اختبار الردود: نجح فحص التعارض واليتيم ومزامنة INSERT/UPDATE في الاتجاهين.';
+  -- الحالة و: INSERT يكتب العمودين بقيمتين صريحتين مختلفتين.
+  -- الأولوية للعمود الجديد كما في trigger المزامنة.
+  insert into public.messages (sender_id, recipient_id, content, reply_to_id, reply_to_message_id)
+  values (v_sender, v_recipient, '[test] child with both', v_parent_one, v_parent_two)
+  returning id, reply_to_id, reply_to_message_id into v_child_with_both, v_legacy_reply, v_new_reply;
+
+  if v_legacy_reply is distinct from v_parent_two or v_new_reply is distinct from v_parent_two then
+    raise exception 'اختبار الردود (و): العمودان لم يتزامنا إلى قيمة reply_to_message_id عند تعارض صريح.';
+  end if;
+
+  -- الحالة ز: رد صحيح بعمود واحد من كل اتجاه ما زال مقبولاً.
+  insert into public.messages (sender_id, recipient_id, content, reply_to_id, reply_to_message_id)
+  values (v_sender, v_recipient, '[test] child with both equal', v_parent_one, v_parent_one)
+  returning id, reply_to_id, reply_to_message_id into v_child_with_both, v_legacy_reply, v_new_reply;
+
+  if v_legacy_reply is distinct from v_parent_one or v_new_reply is distinct from v_parent_one then
+    raise exception 'اختبار الردود (ز): الرد الصحيح لم يُقبل أو لم يتزامن العمودان عليه.';
+  end if;
+
+  -- رسالة أصل من محادثة أخرى لاختبار الرفض. تُؤخذ من البيانات الحالية.
+  select id into v_foreign_parent
+  from public.messages
+  where id <> v_parent_one
+    and id <> v_parent_two
+    and id <> v_child_with_both
+    and not (
+      (sender_id = v_sender and recipient_id = v_recipient)
+      or (sender_id = v_recipient and recipient_id = v_sender)
+    )
+  limit 1;
+
+  if v_foreign_parent is null then
+    raise notice 'اختبار الردود: لا توجد محادثة ثانية لاختبار رفض الرد عبر المحادثات؛ تم تخطي الحالتين (هـ) و(ي).';
+    raise notice 'اختبار الردود: نجح فحص التعارض واليتيم ومزامنة INSERT/UPDATE في الاتجاهين.';
+    return;
+  end if;
+
+  -- الحالة هـ: UPDATE يغيّر reply_to_id وحده إلى رسالة من محادثة أخرى.
+  -- يجب أن يرفضه trigger التحقق (23503)، لا أن يمرّ لأنه يقرأ reply_to_message_id.
+  begin
+    update public.messages
+       set reply_to_id = v_foreign_parent
+     where id = v_child_via_legacy;
+
+    raise exception 'اختبار الردود (هـ): قُبل ربط الرد برسالة من محادثة أخرى عبر reply_to_id وحده.';
+  exception
+    when sqlstate '23503' then
+      null; -- المتوقع: رفض من trigger التحقق
+  end;
+
+  -- لا يُطبَّق أي جزء من التحديث المرفوض.
+  select reply_to_id, reply_to_message_id into v_legacy_reply, v_new_reply
+  from public.messages where id = v_child_via_legacy;
+
+  if v_legacy_reply is distinct from v_parent_two or v_new_reply is distinct from v_parent_two then
+    raise exception 'اختبار الردود (هـ): الرد المرفوض غيّر القيم رغم الرفض.';
+  end if;
+
+  -- الحالة ي: UPDATE يغيّر reply_to_message_id وحده إلى رسالة من محادثة أخرى.
+  begin
+    update public.messages
+       set reply_to_message_id = v_foreign_parent
+     where id = v_child_via_new;
+
+    raise exception 'اختبار الردود (ي): قُبل ربط الرد برسالة من محادثة أخرى عبر reply_to_message_id وحده.';
+  exception
+    when sqlstate '23503' then
+      null; -- المتوقع: رفض من trigger التحقق
+  end;
+
+  select reply_to_id, reply_to_message_id into v_legacy_reply, v_new_reply
+  from public.messages where id = v_child_via_new;
+
+  if v_legacy_reply is distinct from v_parent_two or v_new_reply is distinct from v_parent_two then
+    raise exception 'اختبار الردود (ي): الرد المرفوض غيّر القيم رغم الرفض.';
+  end if;
+
+  raise notice 'اختبار الردود: نجح التعارض واليتيم والمزامنة والتحقق في الاتجاهين ورفض الردود عبر المحادثات.';
 end $$;
 
 rollback;

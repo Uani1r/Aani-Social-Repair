@@ -41,6 +41,52 @@ export function hasOlderPage(rawRowsCount: number, pageSize: number): boolean {
   return rawRowsCount === pageSize;
 }
 
+export interface OlderPageProgress {
+  /** أقدم صف معروف؛ الدفعة التالية تُجلب قبله. */
+  cursor: OlderMessagesCursor | null;
+  /** عدد الدفعات الأقدم التي حُمّلت (٠ = لم يُحمَّل شيء بعد). */
+  olderPagesLoaded: number;
+  /** هل قد توجد رسائل أقدم؟ */
+  hasOlder: boolean;
+}
+
+export function initialOlderPageProgress(): OlderPageProgress {
+  return { cursor: null, olderPagesLoaded: 0, hasOlder: false };
+}
+
+/**
+ * بعد جلب أحدث صفحة (Realtime أو إعادة اتصال): لا نمسّ التقدّم إن كانت هناك
+ * دفعات أقدم محمّلة، وإلا لعدنا إلى مؤشر أحدث صفحة وأعدنا جلب ما حُمّل.
+ */
+export function progressAfterLatestPage<T extends ThreadMessageLike>(
+  progress: OlderPageProgress,
+  rawLatestRowsDescending: T[],
+  pageSize: number,
+): OlderPageProgress {
+  if (progress.olderPagesLoaded > 0) return progress;
+  return {
+    cursor: olderCursorFromRows(rawLatestRowsDescending),
+    olderPagesLoaded: 0,
+    hasOlder: hasOlderPage(rawLatestRowsDescending.length, pageSize),
+  };
+}
+
+/**
+ * بعد جلب دفعة أقدم: المؤشر يتقدّم دائماً من الصفوف الخام (قبل تصفية المخفي
+ * والمحذوف) حتى لا تتوقف الدفعات قبل نهاية السجل.
+ */
+export function progressAfterOlderPage<T extends ThreadMessageLike>(
+  progress: OlderPageProgress,
+  rawOlderRowsDescending: T[],
+  pageSize: number,
+): OlderPageProgress {
+  return {
+    cursor: olderCursorFromRows(rawOlderRowsDescending) ?? progress.cursor,
+    olderPagesLoaded: progress.olderPagesLoaded + 1,
+    hasOlder: hasOlderPage(rawOlderRowsDescending.length, pageSize),
+  };
+}
+
 export interface OlderRequestTracker {
   /** يبدأ طلباً جديداً، ويُبطل ما قبله، ويُرجع معرّف الطلب. */
   begin(conversationId: string): number;

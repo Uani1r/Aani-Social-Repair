@@ -8,12 +8,20 @@
 --    العمودين في الاتجاهين عبر trigger حتى لا تفقد كتابة أي عميل روابط الردود.
 --    لا يُحذف reply_to_id ولا يُعاد تسميته.
 --
--- 2) فهارس:
+-- 2) فهرس عمود الردود: لا يُنشأ فهرس مكافئ ثانٍ (انظر الشرح عند موضعه).
+--
+-- 3) trigger التحقق من هدف الرد على مسار UPDATE يشمل reply_to_id أيضاً،
+--    فلا يمكن تجاوز التحقق بتحديث العمود القديم وحده.
+--
+-- 4) فهارس:
 --    aani_messages_thread_created_idx و aani_messages_thread_created_rev_idx
 --    لدعم جلب المحادثة الثنائية بترتيب ثابت (created_at, id) في الاتجاهين،
 --    ودعم صفحة أحدث الرسائل أولاً.
 --
--- لا يغيّر: أي عمود آخر، أو سياسة RLS، أو صلاحية، أو دالة، أو trigger قائم.
+-- 5) التحقق من ترتيب تشغيل الـtriggers على مساري الإدراج والتحديث.
+--
+-- لا يغيّر: أي عمود آخر، أو سياسة RLS، أو صلاحية، أو دالة قائمة. التغيير
+-- الوحيد على trigger قائم هو إعادة إنشاء تحقق UPDATE بقائمة أعمدة أوسع.
 -- ============================================================================
 
 begin;
@@ -25,6 +33,7 @@ declare
   v_has_reply_message_id boolean;
   v_conflicts integer;
   v_orphans integer;
+  v_cross_conversation integer;
 begin
   select exists (
     select 1 from pg_attribute
@@ -89,13 +98,34 @@ begin
     end if;
   end if;
 
-  -- (ج) الآن فقط نضيف العمود إن غاب (قيمة reply_to_id تبقى المصدر).
+  -- (ج) ردود قديمة تشير إلى رسالة من محادثة أخرى: التعبئة ستُشغّل trigger
+  --     التحقق فيُفشل الترحيل برسالة غامضة. نفحصها الآن ونوقف الترحيل ببيان
+  --     واضح قبل أي تعديل، بلا أي كتابة.
+  if v_has_reply_id then
+    execute $cross$
+      select count(*)
+      from public.messages as message
+      join public.messages as parent on parent.id = message.reply_to_id
+      where message.reply_to_id is not null
+        and not (
+          (parent.sender_id = message.sender_id and parent.recipient_id = message.recipient_id)
+          or (parent.sender_id = message.recipient_id and parent.recipient_id = message.sender_id)
+        )
+    $cross$ into v_cross_conversation;
+
+    if v_cross_conversation > 0 then
+      raise exception 'ردود تشير إلى رسالة من محادثة أخرى في reply_to_id: % صفاً. أوقف الترحيل دون أي تعديل؛ صحّح هذه الصفوف يدوياً.', v_cross_conversation
+        using errcode = '23503';
+    end if;
+  end if;
+
+  -- (د) الآن فقط نضيف العمود إن غاب (قيمة reply_to_id تبقى المصدر).
   if not v_has_reply_message_id then
     alter table public.messages
       add column reply_to_message_id uuid;
   end if;
 
-  -- (د) تعبئة بلا فقدان: كل صف له reply_to_id ولم يُعبَّأ بعد يأخذ القيمة نفسها.
+  -- (هـ) تعبئة بلا فقدان: كل صف له reply_to_id ولم يُعبَّأ بعد يأخذ القيمة نفسها.
   if v_has_reply_id then
     execute $fill$
       update public.messages
@@ -128,11 +158,51 @@ begin
 
 end $$;
 
-create index if not exists aani_messages_reply_to_message_id_idx
-  on public.messages (reply_to_message_id)
-  where reply_to_message_id is not null;
+-- 2) فهرس عمود الردود الجديد.
+-- الفهرس aani_messages_reply_to_idx (أُنشئ في الترحيل 20261205000000) مبني
+-- على العمود نفسه بنفس الشروط: btree على reply_to_message_id حيث ليس null.
+-- فإضافة فهرس ثانٍ مكافئ إهدار للكتابة والمساحة. نتحقق من التكافؤ بالأعمدة
+-- والشرط وطريقة الفهرسة لا بالاسم، وننشئ الجديد فقط عند غياب أي مكافئ.
+do $$
+declare
+  v_reply_attribute smallint;
+  v_equivalent_index text;
+begin
+  select attnum into v_reply_attribute
+  from pg_attribute
+  where attrelid = 'public.messages'::regclass
+    and attname = 'reply_to_message_id'
+    and attnum > 0
+    and not attisdropped;
 
--- 2) مزامنة العمودين إن وُجد reply_to_id، حتى تعمل كتابة أي عميل.
+  if v_reply_attribute is null then
+    return;
+  end if;
+
+  -- أي فهرس btree أول عمود فيه هو reply_to_message_id يخدم نفس الاستعلام،
+  -- سواء كان جزئياً على هذا العمود أو عاماً عليه.
+  select index_row.relname into v_equivalent_index
+  from pg_index as index_row
+  join pg_class as table_row on table_row.oid = index_row.indrelid
+  join pg_namespace as schema_row on schema_row.oid = table_row.relnamespace
+  join pg_am as access_method on access_method.oid = index_row.relam
+  where schema_row.nspname = 'public'
+    and table_row.relname = 'messages'
+    and access_method.amname = 'btree'
+    and index_row.indnatts > 0
+    and index_row.indkey[0] = v_reply_attribute
+  limit 1;
+
+  if v_equivalent_index is null then
+    create index aani_messages_reply_to_message_id_idx
+      on public.messages (reply_to_message_id)
+      where reply_to_message_id is not null;
+  else
+    raise notice 'فهرس مكافئ لعمود الردود موجود مسبقاً (%)؛ لم نُنشئ فهرساً جديداً.', v_equivalent_index;
+  end if;
+end $$;
+
+-- 3) مزامنة العمودين إن وُجد reply_to_id، حتى تعمل كتابة أي عميل.
 do $$
 begin
   if exists (
@@ -172,14 +242,44 @@ begin
   end if;
 end $$;
 
--- 3) فهارس المحادثة الثنائية بترتيب ثابت.
+-- 4) التحقق من هدف الرد يجب أن يعمل على مسار التحديث عند تغيير reply_to_id
+--    وحده أيضاً. في الترحيل 20261205000000 كان trigger التحديث مقصوراً على
+--    reply_to_message_id وsender_id وrecipient_id، فتحديث reply_to_id وحده
+--    يُزامَن عبر aani_sync… لكنه لا يُتحقق منه، فيمكن ربط رد برسالة من
+--    محادثة أخرى. نعيد إنشاء الـtrigger بقائمة الأعمدة الكاملة.
+--    الترتيب يبقى صحيحاً: aani_sync… يسبق aani_validate… أبجدياً.
+do $$
+begin
+  if exists (
+    select 1 from pg_attribute
+    where attrelid = 'public.messages'::regclass
+      and attname = 'reply_to_id'
+      and attnum > 0 and not attisdropped
+  ) and exists (
+    select 1 from pg_trigger
+    where tgrelid = 'public.messages'::regclass
+      and tgname = 'aani_validate_message_reply_target_update'
+      and not tgisinternal
+  ) and exists (
+    select 1 from pg_proc
+    where proname = 'aani_validate_message_reply_target'
+      and pronamespace = 'public'::regnamespace
+  ) then
+    drop trigger aani_validate_message_reply_target_update on public.messages;
+    create trigger aani_validate_message_reply_target_update
+      before update of reply_to_id, reply_to_message_id, sender_id, recipient_id on public.messages
+      for each row execute function public.aani_validate_message_reply_target();
+  end if;
+end $$;
+
+-- 5) فهارس المحادثة الثنائية بترتيب ثابت.
 create index if not exists aani_messages_thread_created_idx
   on public.messages (sender_id, recipient_id, created_at desc, id desc);
 
 create index if not exists aani_messages_thread_created_rev_idx
   on public.messages (recipient_id, sender_id, created_at desc, id desc);
 
--- 4) ترتيب تشغيل الـtriggers: المزامنة تقرأ/تكتب العمودين قبل تحقق هدف الرد.
+-- 6) ترتيب تشغيل الـtriggers: المزامنة تقرأ/تكتب العمودين قبل تحقق هدف الرد.
 --    أسماء BEFORE ROW triggers تُنفَّذ أبجدياً، فيجب أن يسبق aani_sync…
 --    كلاً من aani_validate…_insert (مسار الإدراج) وaani_validate…_update
 --    (مسار التحديث) معاً، لا مسار الإدراج وحده.

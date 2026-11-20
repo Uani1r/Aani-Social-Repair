@@ -68,3 +68,63 @@ jobs:
 
       - name: Build @workspace/api-server
         run: pnpm --filter @workspace/api-server run build
+
+  # Applies the messages reply-compat migration to a throwaway PostgreSQL and
+  # runs the reply compatibility SQL test against it. The harness builds only
+  # the part of the schema the migration and the test touch, so this proves the
+  # migration's logic (backfill, sync trigger, validation trigger on both
+  # paths, single reply index) but not the production schema as a whole.
+  messages-sql:
+    name: Messages SQL and reply compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The runner image usually ships psql; install it when it does not.
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the minimal messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_legacy_schema.sql
+
+      - name: Apply the reply compatibility migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      # The migration must be safe to re-run: no duplicate reply index, the
+      # sync trigger is recreated, and the validation trigger keeps reply_to_id.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the resulting messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_compat_schema.sql
+
+      - name: Run the reply compatibility tests
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reply_compat.test.sql

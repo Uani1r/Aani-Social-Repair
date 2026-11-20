@@ -25,13 +25,18 @@ import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/
 import { uploadMedia } from '@/lib/storyUpload';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
-import { createRealtimeChannelHealthTracker } from '@/lib/realtimeChannelHealth';
+import {
+  REALTIME_CHANNEL_IDS,
+  createRealtimeChannelSupervisor,
+  type RealtimeChannelId,
+} from '@/lib/realtimeChannelHealth';
 import {
   createOlderRequestTracker,
-  hasOlderPage,
+  initialOlderPageProgress,
   mergeThreadRows,
-  olderCursorFromRows,
-  type OlderMessagesCursor,
+  progressAfterLatestPage,
+  progressAfterOlderPage,
+  type OlderPageProgress,
 } from '@/lib/messagesThread';
 import { displayName, type Profile } from '@/lib/types';
 
@@ -922,16 +927,16 @@ export default function MessagesPage({
   // معرّف طلب الدفعة الأقدم منفصل عن threadRequestRef: تحميل المحادثة من
   // جديد (Realtime أو إعادة اتصال) يُبطله ويحرّر حالته، فلا يعلّق التحميل.
   const olderRequestTrackerRef = useRef(createOlderRequestTracker());
-  // مؤشر الدفعة الأقدم من آخر صف خام أعادته القاعدة، لا من الصفوف المصفّاة.
-  const olderCursorRef = useRef<OlderMessagesCursor | null>(null);
+  // مؤشر الدفعة الأقدم من آخر صف خام أعادته القاعدة، لا من الصفوف المصفّاة،
+  // مع عدد الدفعات المحمّلة كي لا يمسّ تحديث Realtime تقدّماً موجوداً.
+  const olderProgressRef = useRef<OlderPageProgress>(initialOlderPageProgress());
   // كل زيادة تُعيد إنشاء قنوات Realtime من الصفر: القناة المغلقة تُزال من
   // عميل Realtime ولا تُعاد تلقائياً، وإعادة تشغيل الـsocket وحدها لا تكفي.
   const [realtimeEpoch, setRealtimeEpoch] = useState(0);
-  const realtimeHealthTrackerRef = useRef(createRealtimeChannelHealthTracker());
-  // آخر وقت نجح فيه اشتراك أي من القناتين؛ إن تعافى الاشتراك بنفسه فلا داعي
-  // لإعادة إنشائه عند انتهاء المهلة المجدولة.
-  const realtimeSubscribedAtRef = useRef(0);
+  // لكل قناة (القائمة والمحادثة) حالتها ومؤقت تعافيها المستقل.
+  const realtimeChannelsRef = useRef(createRealtimeChannelSupervisor());
   const realtimeResubscribeTimerRef = useRef<number | null>(null);
+  const realtimeResubscribeAtRef = useRef<number | null>(null);
   const contactsRequestRef = useRef(0);
   // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
   // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
@@ -1352,13 +1357,13 @@ export default function MessagesPage({
       if (error) throw error;
       const latestRows = normalizeMessageRows(data);
       if (requestId === threadRequestRef.current) {
-        // المؤشر ووجود دفعات أقدم يعتمدان على الصفوف الخام قبل أي تصفية.
-        // ولا نُقدّم مؤشراً قائماً بعد تحميل دفعات أقدم: تحديث المحادثة يجلب
-        // أحدث صفحة فقط، فإعادته إلى الأحدث تُعيد جلب ما حُمّل سابقاً.
-        if (!olderCursorRef.current) {
-          olderCursorRef.current = olderCursorFromRows(latestRows);
+        // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
+        // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
+        const nextProgress = progressAfterLatestPage(olderProgressRef.current, latestRows, MESSAGE_THREAD_PAGE_SIZE);
+        if (nextProgress !== olderProgressRef.current) {
+          olderProgressRef.current = nextProgress;
+          setHasOlderMessages(nextProgress.hasOlder);
         }
-        setHasOlderMessages(hasOlderPage(latestRows.length, MESSAGE_THREAD_PAGE_SIZE));
       }
       const visibleMessages = latestRows
         .reverse()
@@ -1428,8 +1433,9 @@ export default function MessagesPage({
   // تحميل دفعة أقدم عند التمرير إلى أعلى المحادثة، مع الحفاظ على موضع القراءة.
   const loadOlderThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
-    if (olderRequestTrackerRef.current.isLoading() || !hasOlderMessages) return;
-    const cursor = olderCursorRef.current;
+    const progressAtStart = olderProgressRef.current;
+    if (olderRequestTrackerRef.current.isLoading() || !progressAtStart.hasOlder) return;
+    const cursor = progressAtStart.cursor;
     if (!cursor) return;
 
     // معرّف خاص بهذه الدفعة، مستقل عن threadRequestRef: تحديث المحادثة من
@@ -1461,9 +1467,9 @@ export default function MessagesPage({
         .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id));
 
       // المؤشر يتقدم من الصفوف الخام حتى لو كانت الدفعة كلها مخفية أو محذوفة.
-      const nextCursor = olderCursorFromRows(rawOlderRows);
-      if (nextCursor) olderCursorRef.current = nextCursor;
-      setHasOlderMessages(hasOlderPage(rawOlderRows.length, MESSAGE_THREAD_PAGE_SIZE));
+      const nextProgress = progressAfterOlderPage(olderProgressRef.current, rawOlderRows, MESSAGE_THREAD_PAGE_SIZE);
+      olderProgressRef.current = nextProgress;
+      setHasOlderMessages(nextProgress.hasOlder);
 
       suppressAutoScrollRef.current = true;
       setThread(current => mergeThreadRows(current, olderRows));
@@ -1483,7 +1489,7 @@ export default function MessagesPage({
         setOlderMessagesLoading(false);
       }
     }
-  }, [currentUserId, hasOlderMessages, selectedId]);
+  }, [currentUserId, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -1545,36 +1551,45 @@ export default function MessagesPage({
     realtimeRefreshThreadRef.current = false;
   }, []);
 
-  // إعادة إنشاء قنوات Realtime بعد تأخير متزايد. القناة المغلقة تُزال من
-  // عميل Realtime ولا تُعاد تلقائياً، والتأخير يمنع حلقة إعادة اتصال.
-  const scheduleRealtimeResubscribe = useCallback((delayMs: number) => {
-    // إشارتان من القناتين في اللحظة نفسها تُدمجان في إعادة إنشاء واحدة.
-    if (realtimeResubscribeTimerRef.current !== null) return;
-    const failedAt = Date.now();
+  // إعادة إنشاء قنوات Realtime عند استحقاق مؤقت أي قناة. القناة المغلقة
+  // تُزال من عميل Realtime ولا تُعاد تلقائياً، والتأخير يمنع حلقة إعادة اتصال.
+  const scheduleRealtimeResubscribe = useCallback(function schedule(retryAt: number) {
+    const delayMs = Math.max(0, retryAt - Date.now());
+    const pending = realtimeResubscribeTimerRef.current;
+    if (pending !== null) {
+      // مؤقت أقرب موجود: نبقيه ونكتفي به.
+      const scheduledAt = realtimeResubscribeAtRef.current;
+      if (scheduledAt !== null && scheduledAt <= retryAt) return;
+      window.clearTimeout(pending);
+    }
+
+    realtimeResubscribeAtRef.current = retryAt;
     realtimeResubscribeTimerRef.current = window.setTimeout(() => {
       realtimeResubscribeTimerRef.current = null;
-      // إن نجح اشتراك بعد الفشل فقد تعافى الاشتراك بنفسه، فلا نعيد إنشاءه.
-      if (realtimeSubscribedAtRef.current > failedAt) return;
-      setRealtimeEpoch(epoch => epoch + 1);
+      realtimeResubscribeAtRef.current = null;
+      // لا نُعيد الإنشاء إلا إذا كانت قناة مستحقة فعلاً وقت التنفيذ.
+      if (realtimeChannelsRef.current.claimDueChannels(Date.now()).length > 0) {
+        setRealtimeEpoch(epoch => epoch + 1);
+        return;
+      }
+      // قناة أخرى ما زال مؤقتها بعيداً: نُعيد ضبط المؤقت لأقرب استحقاق.
+      const next = realtimeChannelsRef.current.earliestRetryAt();
+      if (next !== null) schedule(next);
     }, delayMs);
   }, []);
 
-  // حالة قناة Realtime: عودة الـWebSocket وحدها لا تعني أن الاشتراك سليم،
-  // فكل حالة غير SUBSCRIBED تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
-  const handleRealtimeStatus = useCallback((status: string, includeThread: boolean) => {
-    const now = Date.now();
-    if (status === 'SUBSCRIBED') {
-      realtimeHealthTrackerRef.current.handleStatus(status, now);
-      realtimeSubscribedAtRef.current = now;
-      return;
-    }
-    // مزامنة تعويضية لما فات من رسائل أثناء اشتراك غير موثوق.
-    scheduleMessageRefresh(includeThread);
-    // إعادة إنشاء واحدة فقط في كل مرة حتى لا تتسابق القناتان على نفس الـepoch.
-    if (realtimeResubscribeTimerRef.current !== null) return;
-    const decision = realtimeHealthTrackerRef.current.handleStatus(status, now);
-    if (decision.resubscribeAfterMs === null) return;
-    scheduleRealtimeResubscribe(decision.resubscribeAfterMs);
+  // حالة قناة Realtime: عودة الـWebSocket وحدها لا تعني أن الاشتراك سليم.
+  // كل حالة غير SUBSCRIBED تعني اشتراكاً غير موثوق: مزامنة تعويضية وإعادة
+  // إنشاء مجدولة لهذه القناة وحدها، دون أن يمسّ ذلك القناة الأخرى.
+  const handleRealtimeStatus = useCallback((
+    channelId: RealtimeChannelId,
+    token: number,
+    status: string,
+    includeThread: boolean,
+  ) => {
+    const decision = realtimeChannelsRef.current.handleStatus(channelId, token, status, Date.now());
+    if (decision.resync) scheduleMessageRefresh(includeThread);
+    if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
   }, [scheduleMessageRefresh, scheduleRealtimeResubscribe]);
 
   useEffect(() => () => {
@@ -1582,6 +1597,7 @@ export default function MessagesPage({
       window.clearTimeout(realtimeResubscribeTimerRef.current);
       realtimeResubscribeTimerRef.current = null;
     }
+    realtimeResubscribeAtRef.current = null;
   }, []);
 
   useEffect(() => {
@@ -1591,6 +1607,7 @@ export default function MessagesPage({
     // يعيد العميل قناة قديمة ما زالت في قائمة قنواته.
     // القناة تُغلق عند إزالتها في التنظيف، ولا نعدّ ذلك فشلاً.
     let removedByUs = false;
+    const token = realtimeChannelsRef.current.beginChannel('inbox');
     const channel = supabase.channel(`messages-inbox-${currentUserId}-${realtimeEpoch}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -1619,10 +1636,11 @@ export default function MessagesPage({
         // عودة الـWebSocket لا تعني نجاح الاشتراك: نتعامل مع الحالات الأربع
         // صراحةً ونعيد المزامنة وإعادة الاشتراك عند الحاجة.
         if (removedByUs) return;
-        handleRealtimeStatus(status, false);
+        handleRealtimeStatus('inbox', token, status, false);
       });
     return () => {
       removedByUs = true;
+      realtimeChannelsRef.current.markIntentionalClose('inbox', token);
       contactsRequestRef.current += 1;
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
@@ -1666,7 +1684,7 @@ export default function MessagesPage({
     setHasOlderMessages(false);
     setOlderMessagesLoading(false);
     olderRequestTrackerRef.current.invalidate();
-    olderCursorRef.current = null;
+    olderProgressRef.current = initialOlderPageProgress();
     setThreadCacheReady(Boolean(cachedThread));
     commitReactionsByMessage(cachedThread?.reactionsByMessage || {});
   }, [commitReactionsByMessage, currentUserId, selectedId]);
@@ -1681,6 +1699,7 @@ export default function MessagesPage({
     void loadThread();
     if (!supabaseConfigured) return;
     let removedByUs = false;
+    const token = realtimeChannelsRef.current.beginChannel('thread');
     // الـepoch في اسم القناة يضمن قناة جديدة عند إعادة إنشاء الاشتراك.
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}-${realtimeEpoch}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
@@ -1704,10 +1723,11 @@ export default function MessagesPage({
         // الحالات الأربع صراحةً: SUBSCRIBED يعني اشتراكاً سليماً، وأي حالة
         // أخرى تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
         if (removedByUs) return;
-        handleRealtimeStatus(status, true);
+        handleRealtimeStatus('thread', token, status, true);
       });
     return () => {
       removedByUs = true;
+      realtimeChannelsRef.current.markIntentionalClose('thread', token);
       threadRequestRef.current += 1;
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
@@ -1719,7 +1739,14 @@ export default function MessagesPage({
   useEffect(() => registerRealtimeReconnect(() => {
     void loadConversationList();
     if (selectedIdRef.current) void loadThread();
-  }), [loadConversationList, loadThread]);
+    // عودة الـWebSocket وحدها لا تعني أن جميع القنوات عادت للاشتراك: نتحقق
+    // من كل قناة على حدة ونعيد إنشاء ما لم يعد مشتركاً.
+    const now = Date.now();
+    for (const channelId of REALTIME_CHANNEL_IDS) {
+      const decision = realtimeChannelsRef.current.ensureHealthy(channelId, now);
+      if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
+    }
+  }), [loadConversationList, loadThread, scheduleRealtimeResubscribe]);
 
   useEffect(() => {
     if (!selectedId || !threadCacheReady) return;
