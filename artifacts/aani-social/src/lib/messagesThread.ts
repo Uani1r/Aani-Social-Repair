@@ -41,15 +41,62 @@ export function hasOlderPage(rawRowsCount: number, pageSize: number): boolean {
   return rawRowsCount === pageSize;
 }
 
-export interface OlderRequestGuard {
-  requestedConversationId: string;
-  requestedThreadRequestId: number;
-  currentConversationId: string | null;
-  currentThreadRequestId: number;
+export interface OlderRequestTracker {
+  /** يبدأ طلباً جديداً، ويُبطل ما قبله، ويُرجع معرّف الطلب. */
+  begin(conversationId: string): number;
+  /** تحميل كامل جديد للمحادثة يُبطل الطلب الجاري ويحرّر راية التحميل. */
+  invalidate(): void;
+  /** هل ما زال الطلب هو الجاري لنفس المحادثة؟ تُستخدم قبل تطبيق أي بيانات. */
+  isCurrent(requestId: number, conversationId: string | null | undefined): boolean;
+  /** يُنهي الطلب ويحرّر التحميل، فقط إن كان هو الطلب الجاري. */
+  finish(requestId: number): boolean;
+  /** هل هناك دفعة أقدم قيد التحميل الآن؟ */
+  isLoading(): boolean;
 }
 
-/** هل ما زال طلب الدفعة الأقدم يخص المحادثة المفتوحة والطلب الحالي؟ */
-export function canApplyOlderPage(guard: OlderRequestGuard): boolean {
-  return guard.currentConversationId === guard.requestedConversationId
-    && guard.currentThreadRequestId === guard.requestedThreadRequestId;
+/**
+ * متتبّع طلبات الدفعات الأقدم.
+ *
+ * معرّفه منفصل عن `threadRequestRef`: تحديث المحادثة (Realtime أو إعادة
+ * اتصال) يُبطل طلب الدفعة الأقدم ويحرّر حالته، لكنه لا يترك طلباً قديماً
+ * يعلّق راية التحميل إلى الأبد، ولا يسمح له بلمس حالة طلب أحدث.
+ */
+export function createOlderRequestTracker(): OlderRequestTracker {
+  let sequence = 0;
+  let current: number | null = null;
+  let currentConversationId: string | null = null;
+  let loading = false;
+
+  return {
+    begin(conversationId: string): number {
+      sequence += 1;
+      current = sequence;
+      currentConversationId = conversationId;
+      loading = true;
+      return sequence;
+    },
+    invalidate(): void {
+      current = null;
+      currentConversationId = null;
+      loading = false;
+    },
+    isCurrent(requestId: number, conversationId: string | null | undefined): boolean {
+      // المحادثة تُقارَن هنا كي لا يُطبَّق طلب محادثة سابقة على المفتوحة الآن.
+      return current === requestId
+        && conversationId != null
+        && currentConversationId === conversationId;
+    },
+    finish(requestId: number): boolean {
+      // طلب غير جارٍ (أبطله تحميل كامل) لا يملك الحالة فلا يحرّرها،
+      // والطلب الجاري يُحرّرها دائماً حتى لو صار تحميل المحادثة أحدث منه.
+      if (current !== requestId) return false;
+      current = null;
+      currentConversationId = null;
+      loading = false;
+      return true;
+    },
+    isLoading(): boolean {
+      return loading;
+    },
+  };
 }

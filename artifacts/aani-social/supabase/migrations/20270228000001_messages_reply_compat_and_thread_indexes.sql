@@ -180,23 +180,46 @@ create index if not exists aani_messages_thread_created_rev_idx
   on public.messages (recipient_id, sender_id, created_at desc, id desc);
 
 -- 4) ترتيب تشغيل الـtriggers: المزامنة تقرأ/تكتب العمودين قبل تحقق هدف الرد.
---    أسماء BEFORE ROW triggers تُنفَّذ أبجدياً، وaani_sync… يسبق aani_validate…
+--    أسماء BEFORE ROW triggers تُنفَّذ أبجدياً، فيجب أن يسبق aani_sync…
+--    كلاً من aani_validate…_insert (مسار الإدراج) وaani_validate…_update
+--    (مسار التحديث) معاً، لا مسار الإدراج وحده.
 do $$
 declare
   v_sync_trigger text := 'aani_sync_message_reply_ids';
-  v_validation_trigger text := 'aani_validate_message_reply_target_insert';
+  v_insert_trigger text := 'aani_validate_message_reply_target_insert';
+  v_update_trigger text := 'aani_validate_message_reply_target_update';
+  v_has_sync boolean;
+  v_has_insert boolean;
+  v_has_update boolean;
 begin
-  if exists (
+  select exists (
     select 1 from pg_trigger
     where tgrelid = 'public.messages'::regclass and tgname = v_sync_trigger and not tgisinternal
-  ) and exists (
+  ) into v_has_sync;
+
+  select exists (
     select 1 from pg_trigger
-    where tgrelid = 'public.messages'::regclass and tgname = v_validation_trigger and not tgisinternal
-  ) then
-    if v_sync_trigger > v_validation_trigger then
-      raise exception 'ترتيب triggers خاطئ: % يجب أن يُنفَّذ قبل %، لكن اسمه يأتي بعده أبجدياً.', v_sync_trigger, v_validation_trigger
-        using errcode = '55000';
-    end if;
+    where tgrelid = 'public.messages'::regclass and tgname = v_insert_trigger and not tgisinternal
+  ) into v_has_insert;
+
+  select exists (
+    select 1 from pg_trigger
+    where tgrelid = 'public.messages'::regclass and tgname = v_update_trigger and not tgisinternal
+  ) into v_has_update;
+
+  -- بيئة بلا ردود قديمة: لا trigger مزامنة ولا ترتيب نتحقق منه.
+  if not v_has_sync then
+    return;
+  end if;
+
+  if v_has_insert and v_sync_trigger > v_insert_trigger then
+    raise exception 'ترتيب triggers خاطئ في مسار INSERT: يجب أن يُنفَّذ % قبل %، لكن اسمه يأتي بعده أبجدياً.', v_sync_trigger, v_insert_trigger
+      using errcode = '55000';
+  end if;
+
+  if v_has_update and v_sync_trigger > v_update_trigger then
+    raise exception 'ترتيب triggers خاطئ في مسار UPDATE: يجب أن يُنفَّذ % قبل %، لكن اسمه يأتي بعده أبجدياً.', v_sync_trigger, v_update_trigger
+      using errcode = '55000';
   end if;
 end $$;
 

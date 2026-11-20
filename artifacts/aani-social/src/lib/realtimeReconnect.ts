@@ -19,13 +19,13 @@ function attemptReconnect(): void {
   if (now - lastAttemptAt < MIN_ATTEMPT_INTERVAL_MS) return;
   lastAttemptAt = now;
 
-  // إن كان socket القنوات مقطوعاً فأعد تشغيله؛ كل القنوات تعيد الاشتراك تلقائياً.
   try {
     const realtime = supabase.realtime;
-    if (!realtime.isConnected()) {
-      realtime.disconnect();
-      realtime.connect();
-    }
+    // لا نستدعي disconnect() قبل connect(): disconnect() يضع عميل Realtime
+    // في حالة «disconnecting»، فيفشل connect() المتزامن بعده ويعود دون
+    // إعادة اتصال، ويبقى الـsocket ميتاً. connect() وحدها تتجاهل الاتصال
+    // القائم وتعيد الاتصال عند الحاجة.
+    if (!realtime.isConnected()) realtime.connect();
   } catch {
     /* تجاهل أخطاء إعادة الاتصال الصامتة */
   }

@@ -25,8 +25,9 @@ import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/
 import { uploadMedia } from '@/lib/storyUpload';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
+import { createRealtimeChannelHealthTracker } from '@/lib/realtimeChannelHealth';
 import {
-  canApplyOlderPage,
+  createOlderRequestTracker,
   hasOlderPage,
   mergeThreadRows,
   olderCursorFromRows,
@@ -918,9 +919,19 @@ export default function MessagesPage({
   const threadRequestRef = useRef(0);
   // يمنع قفزة التمرير إلى الأسفل مرة واحدة عند إضافة دفعة أقدم في الأعلى.
   const suppressAutoScrollRef = useRef(false);
-  const olderMessagesLoadingRef = useRef(false);
+  // معرّف طلب الدفعة الأقدم منفصل عن threadRequestRef: تحميل المحادثة من
+  // جديد (Realtime أو إعادة اتصال) يُبطله ويحرّر حالته، فلا يعلّق التحميل.
+  const olderRequestTrackerRef = useRef(createOlderRequestTracker());
   // مؤشر الدفعة الأقدم من آخر صف خام أعادته القاعدة، لا من الصفوف المصفّاة.
   const olderCursorRef = useRef<OlderMessagesCursor | null>(null);
+  // كل زيادة تُعيد إنشاء قنوات Realtime من الصفر: القناة المغلقة تُزال من
+  // عميل Realtime ولا تُعاد تلقائياً، وإعادة تشغيل الـsocket وحدها لا تكفي.
+  const [realtimeEpoch, setRealtimeEpoch] = useState(0);
+  const realtimeHealthTrackerRef = useRef(createRealtimeChannelHealthTracker());
+  // آخر وقت نجح فيه اشتراك أي من القناتين؛ إن تعافى الاشتراك بنفسه فلا داعي
+  // لإعادة إنشائه عند انتهاء المهلة المجدولة.
+  const realtimeSubscribedAtRef = useRef(0);
+  const realtimeResubscribeTimerRef = useRef<number | null>(null);
   const contactsRequestRef = useRef(0);
   // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
   // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
@@ -1321,6 +1332,10 @@ export default function MessagesPage({
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
     const requestId = ++threadRequestRef.current;
+    // تحميل كامل جديد للمحادثة يُبطل أي دفعة أقدم جارية ويحرّر حالتها، وإلا
+    // بقيت واجهة التحميل معلّقة إن لم يعد ذلك الطلب هو الطلب الحالي.
+    olderRequestTrackerRef.current.invalidate();
+    setOlderMessagesLoading(false);
     const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
     const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
 
@@ -1338,7 +1353,11 @@ export default function MessagesPage({
       const latestRows = normalizeMessageRows(data);
       if (requestId === threadRequestRef.current) {
         // المؤشر ووجود دفعات أقدم يعتمدان على الصفوف الخام قبل أي تصفية.
-        olderCursorRef.current = olderCursorFromRows(latestRows);
+        // ولا نُقدّم مؤشراً قائماً بعد تحميل دفعات أقدم: تحديث المحادثة يجلب
+        // أحدث صفحة فقط، فإعادته إلى الأحدث تُعيد جلب ما حُمّل سابقاً.
+        if (!olderCursorRef.current) {
+          olderCursorRef.current = olderCursorFromRows(latestRows);
+        }
         setHasOlderMessages(hasOlderPage(latestRows.length, MESSAGE_THREAD_PAGE_SIZE));
       }
       const visibleMessages = latestRows
@@ -1409,17 +1428,16 @@ export default function MessagesPage({
   // تحميل دفعة أقدم عند التمرير إلى أعلى المحادثة، مع الحفاظ على موضع القراءة.
   const loadOlderThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
-    if (olderMessagesLoadingRef.current || !hasOlderMessages) return;
+    if (olderRequestTrackerRef.current.isLoading() || !hasOlderMessages) return;
     const cursor = olderCursorRef.current;
     if (!cursor) return;
 
-    // لقطة المحادثة والطلب: أي تغيير بعدهما يُسقط نتيجة هذا الطلب كاملةً.
+    // معرّف خاص بهذه الدفعة، مستقل عن threadRequestRef: تحديث المحادثة من
+    // Realtime لا يمنع هذا الطلب من تحرير راية التحميل التي يملكها.
     const conversationIdAtStart = selectedId;
-    const threadRequestIdAtStart = threadRequestRef.current;
-    const isStillCurrent = () => selectedIdRef.current === conversationIdAtStart
-      && threadRequestRef.current === threadRequestIdAtStart;
+    const olderRequestId = olderRequestTrackerRef.current.begin(conversationIdAtStart);
+    const isStillCurrent = () => olderRequestTrackerRef.current.isCurrent(olderRequestId, selectedIdRef.current);
 
-    olderMessagesLoadingRef.current = true;
     setOlderMessagesLoading(true);
     const threadList = threadListRef.current;
     const previousScrollHeight = threadList?.scrollHeight ?? 0;
@@ -1458,8 +1476,10 @@ export default function MessagesPage({
       if (!isStillCurrent()) return;
       console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
     } finally {
-      if (isStillCurrent()) {
-        olderMessagesLoadingRef.current = false;
+      // يحرّر هذا الطلب رايته دائماً إن كان هو الطلب الجاري، حتى لو تغيّر
+      // threadRequestRef بسبب Realtime أو إعادة اتصال؛ ولا يلمس حالة طلب
+      // أحدث ولا راية محادثة أخرى.
+      if (olderRequestTrackerRef.current.finish(olderRequestId)) {
         setOlderMessagesLoading(false);
       }
     }
@@ -1525,10 +1545,53 @@ export default function MessagesPage({
     realtimeRefreshThreadRef.current = false;
   }, []);
 
+  // إعادة إنشاء قنوات Realtime بعد تأخير متزايد. القناة المغلقة تُزال من
+  // عميل Realtime ولا تُعاد تلقائياً، والتأخير يمنع حلقة إعادة اتصال.
+  const scheduleRealtimeResubscribe = useCallback((delayMs: number) => {
+    // إشارتان من القناتين في اللحظة نفسها تُدمجان في إعادة إنشاء واحدة.
+    if (realtimeResubscribeTimerRef.current !== null) return;
+    const failedAt = Date.now();
+    realtimeResubscribeTimerRef.current = window.setTimeout(() => {
+      realtimeResubscribeTimerRef.current = null;
+      // إن نجح اشتراك بعد الفشل فقد تعافى الاشتراك بنفسه، فلا نعيد إنشاءه.
+      if (realtimeSubscribedAtRef.current > failedAt) return;
+      setRealtimeEpoch(epoch => epoch + 1);
+    }, delayMs);
+  }, []);
+
+  // حالة قناة Realtime: عودة الـWebSocket وحدها لا تعني أن الاشتراك سليم،
+  // فكل حالة غير SUBSCRIBED تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
+  const handleRealtimeStatus = useCallback((status: string, includeThread: boolean) => {
+    const now = Date.now();
+    if (status === 'SUBSCRIBED') {
+      realtimeHealthTrackerRef.current.handleStatus(status, now);
+      realtimeSubscribedAtRef.current = now;
+      return;
+    }
+    // مزامنة تعويضية لما فات من رسائل أثناء اشتراك غير موثوق.
+    scheduleMessageRefresh(includeThread);
+    // إعادة إنشاء واحدة فقط في كل مرة حتى لا تتسابق القناتان على نفس الـepoch.
+    if (realtimeResubscribeTimerRef.current !== null) return;
+    const decision = realtimeHealthTrackerRef.current.handleStatus(status, now);
+    if (decision.resubscribeAfterMs === null) return;
+    scheduleRealtimeResubscribe(decision.resubscribeAfterMs);
+  }, [scheduleMessageRefresh, scheduleRealtimeResubscribe]);
+
+  useEffect(() => () => {
+    if (realtimeResubscribeTimerRef.current !== null) {
+      window.clearTimeout(realtimeResubscribeTimerRef.current);
+      realtimeResubscribeTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     void loadConversationList();
     if (!supabaseConfigured) return;
-    const channel = supabase.channel(`messages-inbox-${currentUserId}`)
+    // اسم القناة يحمل الـepoch: إعادة الإنشاء تُنتج قناة جديدة فعلاً بدل أن
+    // يعيد العميل قناة قديمة ما زالت في قائمة قنواته.
+    // القناة تُغلق عند إزالتها في التنظيف، ولا نعدّ ذلك فشلاً.
+    let removedByUs = false;
+    const channel = supabase.channel(`messages-inbox-${currentUserId}-${realtimeEpoch}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -1553,18 +1616,18 @@ export default function MessagesPage({
         table: 'message_conversation_requests',
       }, () => scheduleMessageRefresh(false))
       .subscribe(status => {
-        // عودة الـWebSocket لا تعني نجاح الاشتراك: نتعامل مع حالات القناة صراحةً
-        // ونعيد المزامنة عند الخطأ أو المهلة بدل اعتبار القناة حيّة.
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          scheduleMessageRefresh(false);
-        }
+        // عودة الـWebSocket لا تعني نجاح الاشتراك: نتعامل مع الحالات الأربع
+        // صراحةً ونعيد المزامنة وإعادة الاشتراك عند الحاجة.
+        if (removedByUs) return;
+        handleRealtimeStatus(status, false);
       });
     return () => {
+      removedByUs = true;
       contactsRequestRef.current += 1;
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, loadConversationList, markMessagesDelivered, scheduleMessageRefresh, clearScheduledMessageRefresh]);
+  }, [currentUserId, realtimeEpoch, loadConversationList, markMessagesDelivered, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -1602,7 +1665,7 @@ export default function MessagesPage({
     setThread(cachedThread?.messages || []);
     setHasOlderMessages(false);
     setOlderMessagesLoading(false);
-    olderMessagesLoadingRef.current = false;
+    olderRequestTrackerRef.current.invalidate();
     olderCursorRef.current = null;
     setThreadCacheReady(Boolean(cachedThread));
     commitReactionsByMessage(cachedThread?.reactionsByMessage || {});
@@ -1617,7 +1680,9 @@ export default function MessagesPage({
 
     void loadThread();
     if (!supabaseConfigured) return;
-    const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}`)
+    let removedByUs = false;
+    // الـepoch في اسم القناة يضمن قناة جديدة عند إعادة إنشاء الاشتراك.
+    const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}-${realtimeEpoch}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
         if (payload.eventType === 'DELETE') {
           const messageId = (payload.old as { id?: unknown } | null)?.id;
@@ -1636,16 +1701,18 @@ export default function MessagesPage({
         filter: `user_id=eq.${currentUserId}`,
       }, () => scheduleMessageRefresh(true))
       .subscribe(status => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          scheduleMessageRefresh(true);
-        }
+        // الحالات الأربع صراحةً: SUBSCRIBED يعني اشتراكاً سليماً، وأي حالة
+        // أخرى تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
+        if (removedByUs) return;
+        handleRealtimeStatus(status, true);
       });
     return () => {
+      removedByUs = true;
       threadRequestRef.current += 1;
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, selectedId, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh]);
+  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   // بعد عودة الشبكة أو التطبيق: مزامنة تعويضية للقائمة والمحادثة المفتوحة،
   // لأن عودة القناة وحدها لا تضمن وصول ما فُقد أثناء الانقطاع.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  canApplyOlderPage,
+  createOlderRequestTracker,
   hasOlderPage,
   mergeThreadRows,
   olderCursorFromRows,
@@ -68,9 +68,62 @@ test('pagination stops only when the database returns a short page', () => {
 });
 
 test('a page that arrived after switching conversations is dropped', () => {
-  const base = { requestedConversationId: 'contact-a', requestedThreadRequestId: 7 };
-  assert.equal(canApplyOlderPage({ ...base, currentConversationId: 'contact-a', currentThreadRequestId: 7 }), true);
-  assert.equal(canApplyOlderPage({ ...base, currentConversationId: 'contact-b', currentThreadRequestId: 7 }), false);
-  assert.equal(canApplyOlderPage({ ...base, currentConversationId: 'contact-a', currentThreadRequestId: 8 }), false);
-  assert.equal(canApplyOlderPage({ ...base, currentConversationId: null, currentThreadRequestId: 7 }), false);
+  const tracker = createOlderRequestTracker();
+  const requestId = tracker.begin('contact-a');
+
+  assert.equal(tracker.isCurrent(requestId, 'contact-a'), true);
+  assert.equal(tracker.isCurrent(requestId, 'contact-b'), false);
+  assert.equal(tracker.isCurrent(requestId, null), false);
+  assert.equal(tracker.isCurrent(requestId + 1, 'contact-a'), false);
+});
+
+test('a stale older page cannot wedge pagination after a realtime reload', () => {
+  const tracker = createOlderRequestTracker();
+  const firstRequestId = tracker.begin('contact-a');
+  assert.equal(tracker.isLoading(), true);
+
+  // Realtime أو إعادة اتصال: تحميل كامل جديد للمحادثة نفسها.
+  tracker.invalidate();
+  assert.equal(tracker.isLoading(), false);
+  assert.equal(tracker.isCurrent(firstRequestId, 'contact-a'), false);
+
+  // الطلب القديم ينتهي بعد ذلك: لا يحرّر شيئاً ولا يعيد تعليق التحميل.
+  assert.equal(tracker.finish(firstRequestId), false);
+  assert.equal(tracker.isLoading(), false);
+
+  // لذلك التمرير التالي يجلب دفعة جديدة بدل أن يبقى محجوزاً.
+  const secondRequestId = tracker.begin('contact-a');
+  assert.notEqual(secondRequestId, firstRequestId);
+  assert.equal(tracker.isCurrent(secondRequestId, 'contact-a'), true);
+  assert.equal(tracker.isLoading(), true);
+
+  assert.equal(tracker.finish(secondRequestId), true);
+  assert.equal(tracker.isLoading(), false);
+});
+
+test('an older request never clears the state of a newer one', () => {
+  const tracker = createOlderRequestTracker();
+  const firstRequestId = tracker.begin('contact-a');
+  tracker.invalidate();
+  const secondRequestId = tracker.begin('contact-a');
+
+  assert.equal(tracker.finish(firstRequestId), false);
+  assert.equal(tracker.isLoading(), true);
+  assert.equal(tracker.isCurrent(secondRequestId, 'contact-a'), true);
+
+  assert.equal(tracker.finish(secondRequestId), true);
+  assert.equal(tracker.isLoading(), false);
+});
+
+test('finishing an unknown request changes nothing', () => {
+  const tracker = createOlderRequestTracker();
+  const requestId = tracker.begin('contact-a');
+
+  assert.equal(tracker.finish(requestId + 99), false);
+  assert.equal(tracker.isLoading(), true);
+  assert.equal(tracker.isCurrent(requestId, 'contact-a'), true);
+
+  assert.equal(tracker.finish(requestId), true);
+  assert.equal(tracker.isLoading(), false);
+  assert.equal(tracker.isCurrent(requestId, 'contact-a'), false);
 });
