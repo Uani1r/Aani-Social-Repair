@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  canApplyOlderPage,
+  hasOlderPage,
+  mergeThreadRows,
+  olderCursorFromRows,
+  sortThreadRows,
+} from './messagesThread';
+
+type Row = { id: string; created_at: string; hidden?: boolean };
+
+const row = (id: string, createdAt: string): Row => ({ id, created_at: createdAt });
+
+test('merge keeps a stable created_at then id order and never duplicates', () => {
+  const page = [row('b', '2026-01-01T10:00:01Z'), row('a', '2026-01-01T10:00:00Z')];
+  const realtime = [
+    row('c', '2026-01-01T10:00:02Z'),
+    row('b', '2026-01-01T10:00:01Z'),
+  ];
+  const merged = mergeThreadRows(page, realtime);
+  assert.deepEqual(merged.map(item => item.id), ['a', 'b', 'c']);
+
+  const realtimeAgain = mergeThreadRows(merged, [row('b', '2026-01-01T10:00:01Z')]);
+  assert.deepEqual(realtimeAgain.map(item => item.id), ['a', 'b', 'c']);
+});
+
+test('equal timestamps fall back to id ordering', () => {
+  const sorted = sortThreadRows([row('z', '2026-01-01T00:00:00Z'), row('a', '2026-01-01T00:00:00Z')]);
+  assert.deepEqual(sorted.map(item => item.id), ['a', 'z']);
+});
+
+test('cursor comes from the oldest raw row even when visible rows are filtered out', () => {
+  const rawPageDescending = [
+    row('c', '2026-01-01T10:00:05Z'),
+    row('b', '2026-01-01T10:00:03Z', { hidden: true }),
+    row('a', '2026-01-01T10:00:01Z', { hidden: true }),
+  ];
+  const visible = rawPageDescending.filter(item => !item.hidden);
+
+  assert.equal(visible.length, 1);
+  assert.deepEqual(olderCursorFromRows(rawPageDescending), {
+    createdAt: '2026-01-01T10:00:01Z',
+    id: 'a',
+  });
+});
+
+test('an all-hidden page still advances the cursor and keeps pagination open', () => {
+  const rawPageDescending = [row('c', '2026-01-01T10:00:05Z', { hidden: true }), row('b', '2026-01-01T10:00:04Z', { hidden: true })];
+  const cursor = olderCursorFromRows(rawPageDescending);
+  const visible = rawPageDescending.filter(item => !item.hidden);
+
+  assert.equal(visible.length, 0);
+  assert.deepEqual(cursor, { createdAt: '2026-01-01T10:00:04Z', id: 'b' });
+  // صفحة كاملة (حتى لو كلها مخفية) تعني أن هناك ما هو أقدم.
+  assert.equal(hasOlderPage(rawPageDescending.length, 2), true);
+});
+
+test('pagination stops only when the database returns a short page', () => {
+  assert.equal(hasOlderPage(60, 60), true);
+  assert.equal(hasOlderPage(59, 60), false);
+  assert.equal(hasOlderPage(0, 60), false);
+});
+
+test('a page that arrived after switching conversations is dropped', () => {
+  const base = { requestedConversationId: 'contact-a', requestedThreadRequestId: 7 };
+  assert.equal(canApplyOlderPage({ ...base, currentConversationId: 'contact-a', currentThreadRequestId: 7 }), true);
+  assert.equal(canApplyOlderPage({ ...base, currentConversationId: 'contact-b', currentThreadRequestId: 7 }), false);
+  assert.equal(canApplyOlderPage({ ...base, currentConversationId: 'contact-a', currentThreadRequestId: 8 }), false);
+  assert.equal(canApplyOlderPage({ ...base, currentConversationId: null, currentThreadRequestId: 7 }), false);
+});

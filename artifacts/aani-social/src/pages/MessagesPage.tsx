@@ -25,6 +25,13 @@ import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/
 import { uploadMedia } from '@/lib/storyUpload';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
+import {
+  canApplyOlderPage,
+  hasOlderPage,
+  mergeThreadRows,
+  olderCursorFromRows,
+  type OlderMessagesCursor,
+} from '@/lib/messagesThread';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -662,19 +669,6 @@ function createMessageId(): string {
   });
 }
 
-function mergeThreadRows(existing: MessageRow[], incoming: MessageRow[]): MessageRow[] {
-  const messages = new Map(existing.map(message => [message.id, message]));
-  incoming.forEach(message => messages.set(message.id, message));
-  // ترتيب ثابت يطابق قاعدة البحث: created_at ثم id، فلا يهتز ترتيب
-  // الرسائل المتزامنة عند وصولها من Realtime أو من دفعة أقدم.
-  return [...messages.values()].sort((left, right) => {
-    const timeDifference = (Date.parse(left.created_at) || 0) - (Date.parse(right.created_at) || 0);
-    if (timeDifference !== 0) return timeDifference;
-    if (left.id === right.id) return 0;
-    return left.id < right.id ? -1 : 1;
-  });
-}
-
 function isEditableTextMessage(message: MessageRow): boolean {
   const content = message.content.trim();
   return Boolean(content)
@@ -925,6 +919,8 @@ export default function MessagesPage({
   // يمنع قفزة التمرير إلى الأسفل مرة واحدة عند إضافة دفعة أقدم في الأعلى.
   const suppressAutoScrollRef = useRef(false);
   const olderMessagesLoadingRef = useRef(false);
+  // مؤشر الدفعة الأقدم من آخر صف خام أعادته القاعدة، لا من الصفوف المصفّاة.
+  const olderCursorRef = useRef<OlderMessagesCursor | null>(null);
   const contactsRequestRef = useRef(0);
   // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
   // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
@@ -1341,7 +1337,9 @@ export default function MessagesPage({
       if (error) throw error;
       const latestRows = normalizeMessageRows(data);
       if (requestId === threadRequestRef.current) {
-        setHasOlderMessages(latestRows.length === MESSAGE_THREAD_PAGE_SIZE);
+        // المؤشر ووجود دفعات أقدم يعتمدان على الصفوف الخام قبل أي تصفية.
+        olderCursorRef.current = olderCursorFromRows(latestRows);
+        setHasOlderMessages(hasOlderPage(latestRows.length, MESSAGE_THREAD_PAGE_SIZE));
       }
       const visibleMessages = latestRows
         .reverse()
@@ -1412,8 +1410,14 @@ export default function MessagesPage({
   const loadOlderThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
     if (olderMessagesLoadingRef.current || !hasOlderMessages) return;
-    const oldest = thread[0];
-    if (!oldest) return;
+    const cursor = olderCursorRef.current;
+    if (!cursor) return;
+
+    // لقطة المحادثة والطلب: أي تغيير بعدهما يُسقط نتيجة هذا الطلب كاملةً.
+    const conversationIdAtStart = selectedId;
+    const threadRequestIdAtStart = threadRequestRef.current;
+    const isStillCurrent = () => selectedIdRef.current === conversationIdAtStart
+      && threadRequestRef.current === threadRequestIdAtStart;
 
     olderMessagesLoadingRef.current = true;
     setOlderMessagesLoading(true);
@@ -1425,29 +1429,41 @@ export default function MessagesPage({
     try {
       const { data, error } = await queryMessageRows(threadFilter, false, true, {
         limit: MESSAGE_THREAD_PAGE_SIZE,
-        before: { createdAt: oldest.created_at, id: oldest.id },
+        before: cursor,
       });
+      if (!isStillCurrent()) return;
       if (error) throw error;
       const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
-      const olderRows = normalizeMessageRows(data)
+      if (!isStillCurrent()) return;
+
+      const rawOlderRows = normalizeMessageRows(data);
+      const olderRows = rawOlderRows
+        .slice()
         .reverse()
         .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id));
 
+      // المؤشر يتقدم من الصفوف الخام حتى لو كانت الدفعة كلها مخفية أو محذوفة.
+      const nextCursor = olderCursorFromRows(rawOlderRows);
+      if (nextCursor) olderCursorRef.current = nextCursor;
+      setHasOlderMessages(hasOlderPage(rawOlderRows.length, MESSAGE_THREAD_PAGE_SIZE));
+
       suppressAutoScrollRef.current = true;
-      setThread(current => mergeThreadRows(olderRows, current));
-      setHasOlderMessages(olderRows.length === MESSAGE_THREAD_PAGE_SIZE);
+      setThread(current => mergeThreadRows(current, olderRows));
       window.requestAnimationFrame(() => {
         const list = threadListRef.current;
         if (!list) return;
         list.scrollTop = list.scrollHeight - previousScrollHeight + previousScrollTop;
       });
     } catch (error) {
+      if (!isStillCurrent()) return;
       console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
     } finally {
-      olderMessagesLoadingRef.current = false;
-      setOlderMessagesLoading(false);
+      if (isStillCurrent()) {
+        olderMessagesLoadingRef.current = false;
+        setOlderMessagesLoading(false);
+      }
     }
-  }, [currentUserId, hasOlderMessages, selectedId, thread]);
+  }, [currentUserId, hasOlderMessages, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -1587,6 +1603,7 @@ export default function MessagesPage({
     setHasOlderMessages(false);
     setOlderMessagesLoading(false);
     olderMessagesLoadingRef.current = false;
+    olderCursorRef.current = null;
     setThreadCacheReady(Boolean(cachedThread));
     commitReactionsByMessage(cachedThread?.reactionsByMessage || {});
   }, [commitReactionsByMessage, currentUserId, selectedId]);

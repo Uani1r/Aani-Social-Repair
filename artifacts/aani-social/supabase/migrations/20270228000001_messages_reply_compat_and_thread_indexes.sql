@@ -23,6 +23,8 @@ do $$
 declare
   v_has_reply_id boolean;
   v_has_reply_message_id boolean;
+  v_conflicts integer;
+  v_orphans integer;
 begin
   select exists (
     select 1 from pg_attribute
@@ -38,12 +40,62 @@ begin
       and attnum > 0 and not attisdropped
   ) into v_has_reply_message_id;
 
+  -- (أ) تعارض القيمتين: لا نستبدل أي قيمة بصمت. كل الفحوص قبل أي تعديل.
+  if v_has_reply_id and v_has_reply_message_id then
+    execute $conflicts$
+      select count(*)
+      from public.messages
+      where reply_to_id is not null
+        and reply_to_message_id is not null
+        and reply_to_id is distinct from reply_to_message_id
+    $conflicts$ into v_conflicts;
+
+    if v_conflicts > 0 then
+      raise exception 'تعارض في أعمدة الردود: % صفاً يحمل reply_to_id و reply_to_message_id بقيمتين مختلفتين. أوقف الترحيل دون أي تعديل؛ راجع الصفوف يدوياً.', v_conflicts
+        using errcode = '23514';
+    end if;
+  end if;
+
+  -- (ب) روابط يتيمة قبل التعبئة وقبل إضافة المفتاح الأجنبي.
+  if v_has_reply_id then
+    execute $orphans$
+      select count(*)
+      from public.messages as message
+      where message.reply_to_id is not null
+        and not exists (
+          select 1 from public.messages as parent where parent.id = message.reply_to_id
+        )
+    $orphans$ into v_orphans;
+
+    if v_orphans > 0 then
+      raise exception 'روابط ردود يتيمة في reply_to_id: % صفاً يشير إلى رسالة غير موجودة. أوقف الترحيل دون أي تعديل.', v_orphans
+        using errcode = '23503';
+    end if;
+  end if;
+
+  if v_has_reply_message_id then
+    execute $orphans$
+      select count(*)
+      from public.messages as message
+      where message.reply_to_message_id is not null
+        and not exists (
+          select 1 from public.messages as parent where parent.id = message.reply_to_message_id
+        )
+    $orphans$ into v_orphans;
+
+    if v_orphans > 0 then
+      raise exception 'روابط ردود يتيمة في reply_to_message_id: % صفاً يشير إلى رسالة غير موجودة. أوقف الترحيل دون أي تعديل.', v_orphans
+        using errcode = '23503';
+    end if;
+  end if;
+
+  -- (ج) الآن فقط نضيف العمود إن غاب (قيمة reply_to_id تبقى المصدر).
   if not v_has_reply_message_id then
     alter table public.messages
       add column reply_to_message_id uuid;
   end if;
 
-  -- تعبئة بلا فقدان: كل صف له reply_to_id ولم يُعبَّأ بعد يأخذ القيمة نفسها.
+  -- (د) تعبئة بلا فقدان: كل صف له reply_to_id ولم يُعبَّأ بعد يأخذ القيمة نفسها.
   if v_has_reply_id then
     execute $fill$
       update public.messages
@@ -126,5 +178,26 @@ create index if not exists aani_messages_thread_created_idx
 
 create index if not exists aani_messages_thread_created_rev_idx
   on public.messages (recipient_id, sender_id, created_at desc, id desc);
+
+-- 4) ترتيب تشغيل الـtriggers: المزامنة تقرأ/تكتب العمودين قبل تحقق هدف الرد.
+--    أسماء BEFORE ROW triggers تُنفَّذ أبجدياً، وaani_sync… يسبق aani_validate…
+do $$
+declare
+  v_sync_trigger text := 'aani_sync_message_reply_ids';
+  v_validation_trigger text := 'aani_validate_message_reply_target_insert';
+begin
+  if exists (
+    select 1 from pg_trigger
+    where tgrelid = 'public.messages'::regclass and tgname = v_sync_trigger and not tgisinternal
+  ) and exists (
+    select 1 from pg_trigger
+    where tgrelid = 'public.messages'::regclass and tgname = v_validation_trigger and not tgisinternal
+  ) then
+    if v_sync_trigger > v_validation_trigger then
+      raise exception 'ترتيب triggers خاطئ: % يجب أن يُنفَّذ قبل %، لكن اسمه يأتي بعده أبجدياً.', v_sync_trigger, v_validation_trigger
+        using errcode = '55000';
+    end if;
+  end if;
+end $$;
 
 commit;
