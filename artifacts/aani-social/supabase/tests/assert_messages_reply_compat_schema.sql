@@ -14,6 +14,10 @@ do $$
 declare
   v_reply_attribute smallint;
   v_equivalent_count integer;
+  v_validator_oid oid;
+  v_validator_security_definer boolean;
+  v_validator_config text[];
+  v_insert_trigger_def text;
   v_update_trigger_def text;
 begin
   select attnum into v_reply_attribute
@@ -50,6 +54,42 @@ begin
     raise exception 'عدد فهارس الردود المكافئة %، والمتوقع 1 (لا فهرس مكرر).', v_equivalent_count;
   end if;
 
+  select procedure_row.oid, procedure_row.prosecdef, procedure_row.proconfig
+    into v_validator_oid, v_validator_security_definer, v_validator_config
+  from pg_proc as procedure_row
+  join pg_namespace as schema_row on schema_row.oid = procedure_row.pronamespace
+  where schema_row.nspname = 'public'
+    and procedure_row.proname = 'aani_validate_message_reply_target'
+    and procedure_row.prokind = 'f'
+    and procedure_row.pronargs = 0;
+
+  if v_validator_oid is null then
+    raise exception 'دالة التحقق public.aani_validate_message_reply_target() غير موجودة.';
+  end if;
+
+  if not v_validator_security_definer then
+    raise exception 'دالة التحقق لا تعمل بصفة SECURITY DEFINER.';
+  end if;
+
+  if not ('search_path=""' = any(coalesce(v_validator_config, array[]::text[]))) then
+    raise exception 'دالة التحقق لا تضبط SET search_path = ''.';
+  end if;
+
+  select pg_get_triggerdef(trigger_row.oid) into v_insert_trigger_def
+  from pg_trigger as trigger_row
+  where trigger_row.tgrelid = 'public.messages'::regclass
+    and trigger_row.tgname = 'aani_validate_message_reply_target_insert'
+    and not trigger_row.tgisinternal;
+
+  if v_insert_trigger_def is null then
+    raise exception 'trigger التحقق من هدف الرد على مسار INSERT غير موجود.';
+  end if;
+
+  if position('INSERT' in v_insert_trigger_def) = 0
+    or position('aani_validate_message_reply_target()' in v_insert_trigger_def) = 0 then
+    raise exception 'تعريف trigger التحقق على مسار INSERT غير صحيح: %', v_insert_trigger_def;
+  end if;
+
   select pg_get_triggerdef(trigger_row.oid) into v_update_trigger_def
   from pg_trigger as trigger_row
   where trigger_row.tgrelid = 'public.messages'::regclass
@@ -60,7 +100,20 @@ begin
     raise exception 'trigger التحقق من هدف الرد على مسار UPDATE غير موجود.';
   end if;
 
-  if position('reply_to_id' in v_update_trigger_def) = 0 then
+  if position('UPDATE' in v_update_trigger_def) = 0
+    or position('reply_to_message_id' in v_update_trigger_def) = 0
+    or position('sender_id' in v_update_trigger_def) = 0
+    or position('recipient_id' in v_update_trigger_def) = 0
+    or position('aani_validate_message_reply_target()' in v_update_trigger_def) = 0 then
+    raise exception 'تعريف trigger التحقق على مسار UPDATE غير صحيح: %', v_update_trigger_def;
+  end if;
+
+  if exists (
+    select 1 from pg_attribute
+    where attrelid = 'public.messages'::regclass
+      and attname = 'reply_to_id'
+      and attnum > 0 and not attisdropped
+  ) and position('reply_to_id' in v_update_trigger_def) = 0 then
     raise exception 'trigger التحقق على مسار UPDATE لا يراقب reply_to_id: %', v_update_trigger_def;
   end if;
 
