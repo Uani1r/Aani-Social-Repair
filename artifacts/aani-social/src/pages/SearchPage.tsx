@@ -222,14 +222,27 @@ export default function SearchPage({ userId }: { userId: string }) {
       const buildFilters = (
         fields: readonly string[],
         match: 'exact' | 'prefix' | 'contains',
-      ) => variants.flatMap(variant => fields.map((field) => {
+      ) => variants.flatMap(variant => {
         const pattern = match === 'exact'
           ? variant
           : match === 'prefix'
             ? `${variant}%`
             : `%${variant}%`;
-        return `${field}.ilike.${quotePostgrestValue(pattern)}`;
-      }));
+
+        return fields.flatMap((field) => {
+          // اسم المستخدم مخزَّن بأحرف لاتينية صغيرة (a-z 0-9 _ .) وفق قيد
+          // الجدول، فالمقارنة الدقيقة eq والبادئة/الجزء بـ LIKE بلا حاجة إلى
+          // ILIKE. الأسماء تبقى على ILIKE لأنها قد تحمل حالة مختلفة.
+          if (field === 'username') {
+            return [
+              match === 'exact'
+                ? `username.eq.${quotePostgrestValue(variant)}`
+                : `username.like.${quotePostgrestValue(pattern)}`,
+            ];
+          }
+          return [`${field}.ilike.${quotePostgrestValue(pattern)}`];
+        });
+      });
 
       // استعلام مستقل لكل درجة صلة، كلها مرتّبة من القاعدة (username ثم id)
       // ليكون كل صف جالب هو الأفضل داخل درجته تحت نفس فاصل التعادل.
