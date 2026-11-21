@@ -45,6 +45,7 @@ import {
   progressAfterOlderPage,
   type OlderPageProgress,
 } from '@/lib/messagesThread';
+import { loadHiddenMessageIds as loadHiddenMessageIdsFromQuery, loadVisibleMessagesWithHiddenIds } from '@/lib/messagesHidden';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -468,17 +469,16 @@ async function retrySupabaseQuery<T>(query: () => Promise<T>, maxAttempts = 3): 
   throw new Error('تعذر الاتصال بالخادم.');
 }
 
-async function loadHiddenMessageIds(userId: string, required = false): Promise<Set<string>> {
-  const { data, error } = await retrySupabaseQuery(async () => await supabase
-    .from('message_hides')
-    .select('message_id')
-    .eq('user_id', userId));
-  if (error) {
+async function loadHiddenMessageIds(userId: string): Promise<Set<string>> {
+  try {
+    return await loadHiddenMessageIdsFromQuery(() => retrySupabaseQuery(async () => await supabase
+      .from('message_hides')
+      .select('message_id')
+      .eq('user_id', userId)));
+  } catch (error) {
     console.warn('[messages] تعذر جلب الرسائل المخفية:', error);
-    if (required) throw error;
-    return new Set();
+    throw error;
   }
-  return new Set((data || []).flatMap(row => typeof row.message_id === 'string' ? [row.message_id] : []));
 }
 
 function normalizeMessageRows(value: unknown): MessageRow[] {
@@ -1217,7 +1217,7 @@ export default function MessagesPage({
           async () => {
             const [messagesResult, hiddenMessageIds] = await Promise.all([
               queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
-              loadHiddenMessageIds(currentUserId, true),
+              loadHiddenMessageIds(currentUserId),
             ]);
             if (messagesResult.error) {
               return { data: new Map(), error: messagesResult.error };
@@ -1394,9 +1394,12 @@ export default function MessagesPage({
         true,
         { limit: MESSAGE_THREAD_PAGE_SIZE },
       );
-      const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
-      if (error) throw error;
       const latestRows = normalizeMessageRows(data);
+      const { hiddenMessageIds, visibleMessages: hiddenFilteredLatestRows } = await loadVisibleMessagesWithHiddenIds(
+        latestRows.slice().reverse(),
+        () => loadHiddenMessageIds(currentUserId),
+      );
+      if (error) throw error;
       if (requestId === threadRequestRef.current) {
         // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
         // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
@@ -1406,9 +1409,8 @@ export default function MessagesPage({
           setHasOlderMessages(nextProgress.hasOlder);
         }
       }
-      const visibleMessages = latestRows
-        .reverse()
-        .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id))
+      const visibleMessages = hiddenFilteredLatestRows
+        .filter(message => !deletedMessageIdsRef.current.has(message.id))
         .map(message => {
           const mediaMessage = parseChatMediaMessage(message.content);
           return mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
@@ -1498,14 +1500,15 @@ export default function MessagesPage({
       });
       if (!isStillCurrent()) return;
       if (error) throw error;
-      const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
-      if (!isStillCurrent()) return;
 
       const rawOlderRows = normalizeMessageRows(data);
-      const olderRows = rawOlderRows
-        .slice()
-        .reverse()
-        .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id));
+      const { visibleMessages: hiddenFilteredOlderRows } = await loadVisibleMessagesWithHiddenIds(
+        rawOlderRows.slice().reverse(),
+        () => loadHiddenMessageIds(currentUserId),
+      );
+      if (!isStillCurrent()) return;
+      const olderRows = hiddenFilteredOlderRows
+        .filter(message => !deletedMessageIdsRef.current.has(message.id));
 
       // المؤشر يتقدم من الصفوف الخام حتى لو كانت الدفعة كلها مخفية أو محذوفة.
       const nextProgress = progressAfterOlderPage(olderProgressRef.current, rawOlderRows, MESSAGE_THREAD_PAGE_SIZE);

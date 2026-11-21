@@ -11,6 +11,7 @@ import {
   progressAfterOlderPage,
   sortThreadRows,
 } from './messagesThread';
+import { loadVisibleMessagesWithHiddenIds } from './messagesHidden';
 
 type Row = { id: string; created_at: string; hidden?: boolean };
 
@@ -18,6 +19,32 @@ const row = (id: string, createdAt: string, extra: { hidden?: boolean } = {}): R
   id,
   created_at: createdAt,
   ...extra,
+});
+
+test('hidden message rows are removed after a successful hide lookup', async () => {
+  const result = await loadVisibleMessagesWithHiddenIds([
+    row('hidden-message', '2026-01-01T10:00:00Z'),
+    row('visible-message', '2026-01-01T10:00:01Z'),
+  ], async () => ({
+    data: [{ message_id: 'hidden-message' }],
+    error: null,
+  }));
+
+  assert.deepEqual([...result.hiddenMessageIds], ['hidden-message']);
+  assert.deepEqual(result.visibleMessages.map(message => message.id), ['visible-message']);
+});
+
+test('a failed hide lookup rejects instead of returning an unfiltered message page', async () => {
+  const queryError = new Error('message_hides query failed');
+  const result = loadVisibleMessagesWithHiddenIds([
+    row('possibly-hidden', '2026-01-01T10:00:00Z'),
+    row('visible-message', '2026-01-01T10:00:01Z'),
+  ], async () => ({
+    data: [{ message_id: 'possibly-hidden' }],
+    error: queryError,
+  }));
+
+  await assert.rejects(result, error => error === queryError);
 });
 
 test('merge keeps a stable created_at then id order and never duplicates', () => {
