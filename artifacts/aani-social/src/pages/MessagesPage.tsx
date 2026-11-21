@@ -31,13 +31,22 @@ import {
   type RealtimeChannelId,
 } from '@/lib/realtimeChannelHealth';
 import {
+  applyRealtimeInboxInsert,
   buildLegacyMessagesInboxSummaries,
+  compareInboxMessageRecency,
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
+  isInboxMessageAtLeastAsNew,
   legacyInboxDeliveryMessageIds,
+  mergeInboxConversationsWithRealtime,
+  mergeRealtimeThreadMessages,
+  messageBelongsToInboxThread,
+  messagesInboxContactId,
   messagesInboxRealtimeInsertFilters,
   requestUnreadCounts as buildRequestUnreadCounts,
   shouldRefreshInboxForSentMessage,
+  writeMessagesInboxCache,
+  type RealtimeMessageSnapshot,
 } from '@/lib/messagesInbox';
 import {
   createOlderRequestTracker,
@@ -599,7 +608,7 @@ function readThreadCache(userId: string, contactId: string): CachedMessageThread
 
 function writeConversationCache(userId: string, conversations: ConversationSummary[]): void {
   try {
-    localStorage.setItem(conversationCacheKey(userId), JSON.stringify(conversations));
+    writeMessagesInboxCache(localStorage, conversationCacheKey(userId), conversations);
   } catch {
     /* التخزين المحلي غير متاح أو ممتلئ */
   }
@@ -988,6 +997,14 @@ export default function MessagesPage({
   const realtimeResubscribeTimerRef = useRef<number | null>(null);
   const realtimeResubscribeAtRef = useRef<number | null>(null);
   const contactsRequestTrackerRef = useRef(createInboxRequestTracker());
+  const realtimeMessageRevisionRef = useRef(0);
+  const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
+  const realtimeThreadMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
+  const seenRealtimeMessageIdsRef = useRef(new Set<string>());
+  const knownConversationProfilesRef = useRef(new Map<string, Profile>(
+    (initialConversationCache || []).map(conversation => [conversation.profile.id, conversation.profile] as [string, Profile]),
+  ));
+  const mutualContactIdsRef = useRef(new Set<string>());
   // معرّفات القصص النشطة لكل جهة اتصال: تُستخدم لتحديث حلقة «غير مشاهد»
   // فور مشاهدة القصص في شريط القصص دون إعادة تحميل قائمة المحادثات.
   const storyIdsByContactRef = useRef<Record<string, string[]>>({});
@@ -995,6 +1012,10 @@ export default function MessagesPage({
   const readAtByContactRef = useRef(readAtByContact);
   readAtByContactRef.current = readAtByContact;
   const selectedIdRef = useRef(selectedId);
+  const threadConversationIdRef = useRef(threadConversationId);
+  threadConversationIdRef.current = threadConversationId;
+  const conversationsRef = useRef(conversations);
+  conversationsRef.current = conversations;
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
   const previousThreadScrollTopRef = useRef(0);
@@ -1239,6 +1260,7 @@ export default function MessagesPage({
 
   const loadConversationList = useCallback(async () => {
     const requestId = contactsRequestTrackerRef.current.begin();
+    const realtimeRevisionAtStart = realtimeMessageRevisionRef.current;
     if (!supabaseConfigured) {
       setCurrentProfile(null);
       setConversations([]);
@@ -1324,6 +1346,7 @@ export default function MessagesPage({
         if (follow.following_id === currentUserId) followerIds.add(follow.follower_id);
       });
       const mutualIds = [...followingIds].filter(id => followerIds.has(id) && id !== currentUserId);
+      mutualContactIdsRef.current = new Set(mutualIds);
       const profileIds = [...new Set([...contactIds, ...mutualIds])];
       const profilesResult = profileIds.length
         ? await retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds))
@@ -1362,6 +1385,7 @@ export default function MessagesPage({
       const seenStoryIds = readSeenStoryIds(currentUserId);
       const mutualIdSet = new Set(mutualIds);
       const profileById = new Map<string, Profile>(((profilesResult.data || []) as Profile[]).map(profile => [profile.id, profile] as [string, Profile]));
+      profileById.forEach((profile, profileId) => knownConversationProfilesRef.current.set(profileId, profile));
       setMutualFollowers(mutualIds.flatMap(id => {
         const profile = profileById.get(id);
         return profile ? [profile] : [];
@@ -1389,10 +1413,41 @@ export default function MessagesPage({
       });
       const requestContactIds = new Set(nextConversations.filter(conversation => conversation.isRequest).map(conversation => conversation.profile.id));
       if (readAtByContactRef.current === readAtByContactSnapshot
-        && requestTabReadAtRef.current === requestTabReadAtSnapshot) {
+        && requestTabReadAtRef.current === requestTabReadAtSnapshot
+        && realtimeMessageRevisionRef.current === realtimeRevisionAtStart) {
         setRequestUnreadByContact(buildRequestUnreadCounts(summariesByContact, requestContactIds));
       }
-      setConversations(nextConversations);
+      setConversations(current => mergeInboxConversationsWithRealtime(
+        nextConversations,
+        current,
+        realtimeInboxMessagesRef.current,
+        currentUserId,
+        (contactId, message) => {
+          const profile = knownConversationProfilesRef.current.get(contactId) || {
+            id: contactId,
+            username: contactId,
+            full_name: '',
+            avatar_url: null,
+            bio: '',
+          };
+          const isRequest = message.recipient_id === currentUserId && !mutualContactIdsRef.current.has(contactId);
+          return {
+            profile,
+            lastMessage: message,
+            hasStory: false,
+            hasUnseenStory: false,
+            isRequest,
+            requestRecipientId: isRequest ? currentUserId : null,
+            requestStatus: null,
+          };
+        },
+      ));
+      realtimeInboxMessagesRef.current.forEach((snapshot, contactId) => {
+        const fetchedConversation = nextConversations.find(conversation => conversation.profile.id === contactId);
+        if (isInboxMessageAtLeastAsNew(fetchedConversation?.lastMessage, snapshot.message)) {
+          realtimeInboxMessagesRef.current.delete(contactId);
+        }
+      });
       setConversationCacheReady(true);
     } catch (error) {
       if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
@@ -1520,10 +1575,27 @@ export default function MessagesPage({
           if (voiceScrollLockRef.current.has(message.id)) voiceScrollConfirmedRef.current.add(message.id);
         });
         setThreadConversationId(conversationIdAtStart);
-        setThread(current => mergeThreadRows(
+        const realtimeThreadMessages = [...realtimeThreadMessagesRef.current.values()]
+          .map(snapshot => snapshot.message)
+          .filter(message => messageBelongsToInboxThread(message, currentUserId, conversationIdAtStart)
+            && !hiddenMessageIds.has(message.id)
+            && !deletedMessageIdsRef.current.has(message.id));
+        setThread(current => mergeRealtimeThreadMessages(
           current.filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id)),
           visibleMessages,
+          realtimeThreadMessages,
+          currentUserId,
+          conversationIdAtStart,
+          mergeThreadRows,
         ));
+        const fetchedMessageIds = new Set(visibleMessages.map(message => message.id));
+        realtimeThreadMessagesRef.current.forEach((_snapshot, messageId) => {
+          if (hiddenMessageIds.has(messageId)
+            || deletedMessageIdsRef.current.has(messageId)
+            || fetchedMessageIds.has(messageId)) {
+            realtimeThreadMessagesRef.current.delete(messageId);
+          }
+        });
         setThreadCacheReady(true);
         initialThreadScrollStateRef.current = markInitialThreadServerLoaded(
           initialThreadScrollStateRef.current,
@@ -1741,6 +1813,110 @@ export default function MessagesPage({
     if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
   }, [scheduleMessageRefresh, scheduleRealtimeResubscribe]);
 
+  const handleRealtimeMessageInsert = useCallback((value: unknown) => {
+    const normalizedMessage = normalizeMessageRows([value])[0];
+    if (!normalizedMessage || deletedMessageIdsRef.current.has(normalizedMessage.id)) return;
+    const mediaMessage = parseChatMediaMessage(normalizedMessage.content);
+    const message = mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, normalizedMessage.id))
+      ? { ...normalizedMessage, content: openedChatMediaContent(normalizedMessage.content) }
+      : normalizedMessage;
+    const contactId = messagesInboxContactId(message, currentUserId);
+    if (!contactId) return;
+
+    const firstRealtimeDelivery = !seenRealtimeMessageIdsRef.current.has(message.id);
+    if (firstRealtimeDelivery) {
+      seenRealtimeMessageIdsRef.current.add(message.id);
+      if (seenRealtimeMessageIdsRef.current.size > 1000) {
+        const oldestId = seenRealtimeMessageIdsRef.current.values().next().value;
+        if (oldestId !== undefined) seenRealtimeMessageIdsRef.current.delete(oldestId);
+      }
+      realtimeMessageRevisionRef.current += 1;
+      const previousInboxMessage = realtimeInboxMessagesRef.current.get(contactId)?.message;
+      const latestInboxMessage = previousInboxMessage
+        && compareInboxMessageRecency(previousInboxMessage, message) > 0
+        ? previousInboxMessage
+        : message;
+      realtimeInboxMessagesRef.current.set(contactId, { message: latestInboxMessage });
+    }
+
+    setConversations(current => applyRealtimeInboxInsert(
+      current,
+      message,
+      currentUserId,
+      (newContactId, incomingMessage) => {
+        const profile = knownConversationProfilesRef.current.get(newContactId) || {
+          id: newContactId,
+          username: newContactId,
+          full_name: '',
+          avatar_url: null,
+          bio: '',
+        };
+        const isRequest = incomingMessage.recipient_id === currentUserId
+          && !mutualContactIdsRef.current.has(newContactId);
+        return {
+          profile,
+          lastMessage: incomingMessage,
+          hasStory: false,
+          hasUnseenStory: false,
+          isRequest,
+          requestRecipientId: isRequest ? currentUserId : null,
+          requestStatus: null,
+        };
+      },
+    ));
+    setConversationCacheReady(true);
+
+    if (firstRealtimeDelivery && message.recipient_id === currentUserId) {
+      void markMessagesDelivered([message.id]);
+      const conversation = conversationsRef.current.find(item => item.profile.id === contactId);
+      const isRequest = conversation?.isRequest ?? !mutualContactIdsRef.current.has(contactId);
+      const messageTime = Date.parse(message.created_at) || 0;
+      const readCutoff = Math.max(
+        Date.parse(readAtByContactRef.current[contactId] || '') || 0,
+        Date.parse(requestTabReadAtRef.current || '') || 0,
+      );
+      if (isRequest && !message.read_at && messageTime > readCutoff) {
+        setRequestUnreadByContact(current => ({
+          ...current,
+          [contactId]: (current[contactId] || 0) + 1,
+        }));
+      }
+    }
+
+    if (messageBelongsToInboxThread(message, currentUserId, selectedIdRef.current)) {
+      if (!realtimeThreadMessagesRef.current.has(message.id)) {
+        realtimeThreadMessagesRef.current.set(message.id, { message });
+      }
+      setThread(current => mergeRealtimeThreadMessages(
+        current,
+        [],
+        [message],
+        currentUserId,
+        contactId,
+        mergeThreadRows,
+      ));
+      if (threadConversationIdRef.current === contactId) setThreadCacheReady(true);
+    }
+  }, [currentUserId, markMessagesDelivered]);
+
+  const invalidateRealtimeMessageLoads = useCallback(() => {
+    contactsRequestTrackerRef.current.invalidate();
+    threadRequestRef.current += 1;
+    olderRequestTrackerRef.current.invalidate();
+    setOlderMessagesLoading(false);
+  }, []);
+
+  const clearRealtimeMessage = useCallback((messageId: unknown) => {
+    if (typeof messageId !== 'string' || !messageId) return;
+    deletedMessageIdsRef.current.add(messageId);
+    realtimeThreadMessagesRef.current.delete(messageId);
+    realtimeInboxMessagesRef.current.forEach((snapshot, contactId) => {
+      if (snapshot.message.id === messageId) realtimeInboxMessagesRef.current.delete(contactId);
+    });
+    invalidateRealtimeMessageLoads();
+    setThread(current => current.filter(message => message.id !== messageId));
+  }, [invalidateRealtimeMessageLoads]);
+
   useEffect(() => () => {
     if (realtimeResubscribeTimerRef.current !== null) {
       window.clearTimeout(realtimeResubscribeTimerRef.current);
@@ -1765,8 +1941,7 @@ export default function MessagesPage({
         table: 'messages',
         filter: insertFilters.recipient,
       }, payload => {
-        const messageId = (payload.new as { id?: unknown } | null)?.id;
-        if (typeof messageId === 'string') void markMessagesDelivered([messageId]);
+        handleRealtimeMessageInsert(payload.new);
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', {
@@ -1777,16 +1952,26 @@ export default function MessagesPage({
       }, payload => {
         const message = payload.new as { sender_id?: unknown; recipient_id?: unknown } | null;
         if (!shouldRefreshInboxForSentMessage(message, currentUserId)) return;
+        handleRealtimeMessageInsert(payload.new);
         scheduleMessageRefresh(false);
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => {
+        invalidateRealtimeMessageLoads();
+        scheduleMessageRefresh(false);
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
+        clearRealtimeMessage((payload.old as { id?: unknown } | null)?.id);
+        scheduleMessageRefresh(false);
+      })
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'message_hides',
         filter: `user_id=eq.${currentUserId}`,
-      }, () => scheduleMessageRefresh(false))
+      }, payload => {
+        clearRealtimeMessage((payload.new as { message_id?: unknown } | null)?.message_id);
+        scheduleMessageRefresh(false);
+      })
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -1805,7 +1990,7 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, realtimeEpoch, loadConversationList, markMessagesDelivered, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+  }, [currentUserId, realtimeEpoch, loadConversationList, handleRealtimeMessageInsert, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -1879,14 +2064,16 @@ export default function MessagesPage({
     const token = realtimeChannelsRef.current.beginChannel('thread');
     // الـepoch في اسم القناة يضمن قناة جديدة عند إعادة إنشاء الاشتراك.
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}-${realtimeEpoch}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, payload => {
-        if (payload.eventType === 'DELETE') {
-          const messageId = (payload.old as { id?: unknown } | null)?.id;
-          if (typeof messageId === 'string') {
-            deletedMessageIdsRef.current.add(messageId);
-            setThread(current => current.filter(message => message.id !== messageId));
-          }
-        }
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
+        handleRealtimeMessageInsert(payload.new);
+        scheduleMessageRefresh(true);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => {
+        invalidateRealtimeMessageLoads();
+        scheduleMessageRefresh(true);
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
+        clearRealtimeMessage((payload.old as { id?: unknown } | null)?.id);
         scheduleMessageRefresh(true);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
@@ -1895,7 +2082,10 @@ export default function MessagesPage({
         schema: 'public',
         table: 'message_hides',
         filter: `user_id=eq.${currentUserId}`,
-      }, () => scheduleMessageRefresh(true))
+      }, payload => {
+        clearRealtimeMessage((payload.new as { message_id?: unknown } | null)?.message_id);
+        scheduleMessageRefresh(true);
+      })
       .subscribe(status => {
         // الحالات الأربع صراحةً: SUBSCRIBED يعني اشتراكاً سليماً، وأي حالة
         // أخرى تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
@@ -1909,7 +2099,7 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, handleRealtimeMessageInsert, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   // بعد عودة الشبكة أو التطبيق: مزامنة تعويضية للقائمة والمحادثة المفتوحة،
   // لأن عودة القناة وحدها لا تضمن وصول ما فُقد أثناء الانقطاع.
