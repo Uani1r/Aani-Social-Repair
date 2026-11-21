@@ -51,7 +51,13 @@ import {
   type ThreadLoadStatus,
 } from '@/lib/messagesThread';
 import {
+  cancelInitialThreadScroll,
+  claimInitialThreadScroll,
+  createInitialThreadScrollState,
+  isCurrentThreadLoad,
   isThreadNearBottom,
+  isUserInitiatedUpwardScroll,
+  markInitialThreadServerLoaded,
   scrollTopPreservingAnchor,
   shouldLoadOlderMessagesFromScroll,
   THREAD_SCROLL_EDGE_THRESHOLD,
@@ -885,6 +891,7 @@ export default function MessagesPage({
   const [conversationCacheReady, setConversationCacheReady] = useState(initialConversationCache !== null);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
+  const [threadConversationId, setThreadConversationId] = useState<string | null>(() => selectedId || null);
   const [threadLoadStatus, setThreadLoadStatus] = useState<ThreadLoadStatus>(
     () => supabaseConfigured && selectedId ? 'loading' : 'loaded',
   );
@@ -951,8 +958,18 @@ export default function MessagesPage({
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
   const shouldFollowLatestRef = useRef(true);
-  const initialThreadScrollPendingRef = useRef(Boolean(selectedId));
-  const initialThreadScrollReadyRef = useRef(!selectedId || !supabaseConfigured);
+  const initialThreadScrollStateRef = useRef(createInitialThreadScrollState(
+    selectedId || null,
+    Boolean(initialThreadCache?.messages.length),
+  ));
+  const previousThreadScrollContentRef = useRef({
+    conversationId: selectedId || null,
+    threadLength: initialThreadCache?.messages.length || 0,
+    lastMessageId: initialThreadCache
+      ? initialThreadCache.messages[initialThreadCache.messages.length - 1]?.id
+      : undefined,
+    pendingMediaId: null as string | null,
+  });
   const userScrollActiveRef = useRef(false);
   const olderScrollIntentRef = useRef(false);
   const threadScrollIdleTimerRef = useRef<number | null>(null);
@@ -980,6 +997,7 @@ export default function MessagesPage({
   const selectedIdRef = useRef(selectedId);
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
+  const previousThreadScrollTopRef = useRef(0);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const sheetDragStartYRef = useRef<number | null>(null);
@@ -1199,6 +1217,9 @@ export default function MessagesPage({
     if (!selectedId) return;
     const viewport = window.visualViewport;
     const syncVisualViewport = () => {
+      userScrollActiveRef.current = false;
+      olderScrollIntentRef.current = false;
+      previousThreadScrollTopRef.current = threadListRef.current?.scrollTop ?? 0;
       const view = messagesViewRef.current;
       if (!view) return;
       view.style.setProperty('--messages-visual-viewport-height', `${Math.round(viewport?.height ?? window.innerHeight)}px`);
@@ -1402,11 +1423,18 @@ export default function MessagesPage({
   }, [currentUserId]);
 
   const loadThread = useCallback(async () => {
-    if (!supabaseConfigured || !selectedId) return;
-    initialThreadScrollReadyRef.current = false;
+    if (!supabaseConfigured || !selectedId || selectedIdRef.current !== selectedId) return;
+    const conversationIdAtStart = selectedId;
+    olderScrollIntentRef.current = false;
     setThreadLoadStatus('loading');
     setOlderMessagesError(false);
     const requestId = ++threadRequestRef.current;
+    const isCurrentRequest = () => isCurrentThreadLoad(
+      requestId,
+      threadRequestRef.current,
+      conversationIdAtStart,
+      selectedIdRef.current,
+    );
     // تحميل كامل جديد للمحادثة يُبطل أي دفعة أقدم جارية ويحرّر حالتها، وإلا
     // بقيت واجهة التحميل معلّقة إن لم يعد ذلك الطلب هو الطلب الحالي.
     olderRequestTrackerRef.current.invalidate();
@@ -1429,7 +1457,7 @@ export default function MessagesPage({
         latestRows.slice().reverse(),
         () => loadHiddenMessageIds(currentUserId),
       );
-      if (requestId === threadRequestRef.current) {
+      if (isCurrentRequest()) {
         // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
         // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
         const nextProgress = progressAfterLatestPage(olderProgressRef.current, latestRows, MESSAGE_THREAD_PAGE_SIZE);
@@ -1487,16 +1515,20 @@ export default function MessagesPage({
         else delete nextReactions[messageId];
       });
 
-      if (requestId === threadRequestRef.current) {
+      if (isCurrentRequest()) {
         visibleMessages.forEach(message => {
           if (voiceScrollLockRef.current.has(message.id)) voiceScrollConfirmedRef.current.add(message.id);
         });
+        setThreadConversationId(conversationIdAtStart);
         setThread(current => mergeThreadRows(
           current.filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id)),
           visibleMessages,
         ));
         setThreadCacheReady(true);
-        initialThreadScrollReadyRef.current = true;
+        initialThreadScrollStateRef.current = markInitialThreadServerLoaded(
+          initialThreadScrollStateRef.current,
+          conversationIdAtStart,
+        );
         setThreadLoadStatus('loaded');
         commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
@@ -1506,17 +1538,17 @@ export default function MessagesPage({
     } catch (error) {
       if (handleCurrentHiddenMessagesLookupFailure(
         error,
-        () => requestId === threadRequestRef.current,
+        isCurrentRequest,
         lookupError => {
           setThreadLoadStatus('error');
           setThread([]);
           commitReactionsByMessage({});
           setThreadCacheReady(false);
-          removeThreadCache(currentUserId, selectedId);
+          removeThreadCache(currentUserId, conversationIdAtStart);
           console.error('[messages] تعذر جلب المحادثة:', lookupError);
         },
       )) return;
-      if (requestId !== threadRequestRef.current) return;
+      if (!isCurrentRequest()) return;
       setThreadLoadStatus('error');
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
@@ -1524,7 +1556,10 @@ export default function MessagesPage({
 
   // تحميل دفعة أقدم عند التمرير إلى أعلى المحادثة، مع الحفاظ على موضع القراءة.
   const loadOlderThread = useCallback(async () => {
-    if (!supabaseConfigured || !selectedId) return;
+    if (!supabaseConfigured
+      || !selectedId
+      || selectedIdRef.current !== selectedId
+      || threadConversationId !== selectedId) return;
     const progressAtStart = olderProgressRef.current;
     if (olderRequestTrackerRef.current.isLoading() || !progressAtStart.hasOlder) return;
     const cursor = progressAtStart.cursor;
@@ -1539,7 +1574,7 @@ export default function MessagesPage({
     setOlderMessagesLoading(true);
     setOlderMessagesError(false);
     shouldFollowLatestRef.current = false;
-    initialThreadScrollPendingRef.current = false;
+    initialThreadScrollStateRef.current = cancelInitialThreadScroll(initialThreadScrollStateRef.current, selectedId);
     olderScrollIntentRef.current = false;
     threadScrollAnchorRef.current = null;
     const threadFilter = messagesThreadFilter(currentUserId, selectedId);
@@ -1603,7 +1638,7 @@ export default function MessagesPage({
         setOlderMessagesLoading(false);
       }
     }
-  }, [commitReactionsByMessage, currentUserId, selectedId]);
+  }, [commitReactionsByMessage, currentUserId, selectedId, threadConversationId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
@@ -1805,17 +1840,22 @@ export default function MessagesPage({
     setThreadSearchIndex(0);
     setMessageExpirationSeconds(null);
     const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
+    initialThreadScrollStateRef.current = createInitialThreadScrollState(
+      selectedId || null,
+      Boolean(cachedThread?.messages.length),
+    );
+    setThreadConversationId(selectedId || null);
+    previousThreadScrollTopRef.current = threadListRef.current?.scrollTop ?? 0;
     setThreadLoadStatus(supabaseConfigured && selectedId ? 'loading' : 'loaded');
     setThread(cachedThread?.messages || []);
     setHasOlderMessages(false);
     setOlderMessagesLoading(false);
     setOlderMessagesError(false);
     shouldFollowLatestRef.current = true;
-    initialThreadScrollPendingRef.current = Boolean(selectedId);
-    initialThreadScrollReadyRef.current = !selectedId || !supabaseConfigured;
     userScrollActiveRef.current = false;
     olderScrollIntentRef.current = false;
     threadScrollAnchorRef.current = null;
+    threadScrollTouchOriginRef.current = null;
     if (threadScrollIdleTimerRef.current !== null) {
       window.clearTimeout(threadScrollIdleTimerRef.current);
       threadScrollIdleTimerRef.current = null;
@@ -1895,12 +1935,16 @@ export default function MessagesPage({
     if (selectedId) markConversationRead(selectedId);
   }, [selectedId, lastThreadMessageId, markConversationRead]);
 
-  const scrollThreadToBottom = useCallback(() => {
+  const scrollThreadToBottom = useCallback((conversationId = selectedId) => {
+    if (!conversationId
+      || selectedIdRef.current !== conversationId
+      || threadConversationId !== conversationId) return;
     const threadList = threadListRef.current;
     if (!threadList) return;
+    olderScrollIntentRef.current = false;
     threadList.scrollTop = threadList.scrollHeight;
     shouldFollowLatestRef.current = true;
-  }, []);
+  }, [selectedId, threadConversationId]);
 
   const resetThreadScrollIdleTimer = useCallback(() => {
     if (threadScrollIdleTimerRef.current !== null) window.clearTimeout(threadScrollIdleTimerRef.current);
@@ -1914,6 +1958,13 @@ export default function MessagesPage({
   const markThreadUserScroll = useCallback((towardOlderMessages: boolean) => {
     userScrollActiveRef.current = true;
     olderScrollIntentRef.current = towardOlderMessages;
+    if (towardOlderMessages) {
+      shouldFollowLatestRef.current = false;
+      initialThreadScrollStateRef.current = cancelInitialThreadScroll(
+        initialThreadScrollStateRef.current,
+        selectedIdRef.current,
+      );
+    }
     resetThreadScrollIdleTimer();
   }, [resetThreadScrollIdleTimer]);
 
@@ -1956,16 +2007,47 @@ export default function MessagesPage({
   }, [thread, selectedId]);
 
   useLayoutEffect(() => {
-    if (!selectedId) return;
-    if (initialThreadScrollPendingRef.current) {
-      if (!initialThreadScrollReadyRef.current || threadLoadStatus !== 'loaded') return;
-      initialThreadScrollPendingRef.current = false;
-      shouldFollowLatestRef.current = true;
-      scrollThreadToBottom();
+    if (threadConversationId !== selectedId) return;
+    olderScrollIntentRef.current = false;
+    previousThreadScrollTopRef.current = threadListRef.current?.scrollTop ?? 0;
+  }, [thread, selectedId, threadConversationId]);
+
+  useLayoutEffect(() => {
+    if (!selectedId || threadConversationId !== selectedId) return;
+
+    const pendingMediaId = pendingMediaMessage?.recipientId === selectedId ? pendingMediaMessage.id : null;
+    const previousContent = previousThreadScrollContentRef.current;
+    const contentChanged = previousContent.conversationId !== selectedId
+      || previousContent.threadLength !== thread.length
+      || previousContent.lastMessageId !== lastThreadMessageId
+      || previousContent.pendingMediaId !== pendingMediaId;
+    previousThreadScrollContentRef.current = {
+      conversationId: selectedId,
+      threadLength: thread.length,
+      lastMessageId: lastThreadMessageId,
+      pendingMediaId,
+    };
+
+    const initialClaim = claimInitialThreadScroll(
+      initialThreadScrollStateRef.current,
+      selectedId,
+      threadConversationId,
+      threadLoadStatus,
+      thread.length > 0,
+    );
+    initialThreadScrollStateRef.current = initialClaim.state;
+    if (initialClaim.completed) {
+      if (initialClaim.shouldScroll) {
+        shouldFollowLatestRef.current = true;
+        scrollThreadToBottom(selectedId);
+      }
       return;
     }
-    if (shouldFollowLatestRef.current) scrollThreadToBottom();
-  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, threadLoadStatus, scrollThreadToBottom]);
+
+    const phase = initialThreadScrollStateRef.current.phase;
+    if (phase !== 'completed' && phase !== 'cancelled') return;
+    if (contentChanged && shouldFollowLatestRef.current) scrollThreadToBottom(selectedId);
+  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, pendingMediaMessage?.recipientId, selectedId, threadConversationId, threadLoadStatus, scrollThreadToBottom]);
 
   useLayoutEffect(() => {
     if (!pendingMediaMessage
@@ -3488,18 +3570,35 @@ export default function MessagesPage({
                     scrollHeight: threadList.scrollHeight,
                     clientHeight: threadList.clientHeight,
                   };
+                  const previousScrollTop = previousThreadScrollTopRef.current;
+                  const hasUpwardScrollIntent = isUserInitiatedUpwardScroll(
+                    previousScrollTop,
+                    metrics.scrollTop,
+                    userScrollActiveRef.current,
+                    olderScrollIntentRef.current,
+                  );
+                  previousThreadScrollTopRef.current = metrics.scrollTop;
+                  olderScrollIntentRef.current = false;
+                  if (!selectedId
+                    || selectedIdRef.current !== selectedId
+                    || threadConversationId !== selectedId) return;
+
                   if (userScrollActiveRef.current) {
                     shouldFollowLatestRef.current = isThreadNearBottom(metrics);
-                    if (!shouldFollowLatestRef.current) initialThreadScrollPendingRef.current = false;
                     resetThreadScrollIdleTimer();
+                  }
+                  if (hasUpwardScrollIntent) {
+                    initialThreadScrollStateRef.current = cancelInitialThreadScroll(
+                      initialThreadScrollStateRef.current,
+                      selectedId,
+                    );
                   }
                   const voiceMessageIsUploading = thread.some(message => voiceScrollLockRef.current.has(message.id));
                   if (voiceMessageIsUploading
                     && shouldFollowLatestRef.current
                     && threadList.scrollHeight - threadList.clientHeight - threadList.scrollTop > 1) {
-                    scrollThreadToBottom();
+                    scrollThreadToBottom(selectedId);
                   }
-                  const hasUpwardScrollIntent = olderScrollIntentRef.current;
                   const shouldLoadOlder = shouldLoadOlderMessagesFromScroll(
                     metrics,
                     hasOlderMessages,
@@ -3507,9 +3606,6 @@ export default function MessagesPage({
                     hasUpwardScrollIntent,
                     THREAD_SCROLL_EDGE_THRESHOLD,
                   );
-                  if (hasUpwardScrollIntent && threadList.scrollTop <= THREAD_SCROLL_EDGE_THRESHOLD) {
-                    olderScrollIntentRef.current = false;
-                  }
                   if (shouldLoadOlder) void loadOlderThread();
                 }}
                 onWheel={event => {
@@ -3530,7 +3626,7 @@ export default function MessagesPage({
                   if (deltaY > 8 && deltaY > deltaX) {
                     markThreadUserScroll(touch.clientY > origin.y);
                     messageInputRef.current?.blur();
-                    threadScrollTouchOriginRef.current = null;
+                    threadScrollTouchOriginRef.current = { x: touch.clientX, y: touch.clientY };
                   }
                 }}
                 onTouchEnd={() => { threadScrollTouchOriginRef.current = null; }}
