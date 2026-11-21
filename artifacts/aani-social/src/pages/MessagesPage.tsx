@@ -45,6 +45,13 @@ import {
   progressAfterOlderPage,
   type OlderPageProgress,
 } from '@/lib/messagesThread';
+import {
+  handleCurrentHiddenMessagesLookupFailure,
+  loadHiddenMessageIds as loadHiddenMessageIdsFromQuery,
+  loadVisibleMessagesWithHiddenIds,
+  removeThreadCache,
+  threadCacheKey,
+} from '@/lib/messagesHidden';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -468,17 +475,16 @@ async function retrySupabaseQuery<T>(query: () => Promise<T>, maxAttempts = 3): 
   throw new Error('تعذر الاتصال بالخادم.');
 }
 
-async function loadHiddenMessageIds(userId: string, required = false): Promise<Set<string>> {
-  const { data, error } = await retrySupabaseQuery(async () => await supabase
-    .from('message_hides')
-    .select('message_id')
-    .eq('user_id', userId));
-  if (error) {
+async function loadHiddenMessageIds(userId: string): Promise<Set<string>> {
+  try {
+    return await loadHiddenMessageIdsFromQuery(() => retrySupabaseQuery(async () => await supabase
+      .from('message_hides')
+      .select('message_id')
+      .eq('user_id', userId)));
+  } catch (error) {
     console.warn('[messages] تعذر جلب الرسائل المخفية:', error);
-    if (required) throw error;
-    return new Set();
+    throw error;
   }
-  return new Set((data || []).flatMap(row => typeof row.message_id === 'string' ? [row.message_id] : []));
 }
 
 function normalizeMessageRows(value: unknown): MessageRow[] {
@@ -517,7 +523,6 @@ interface CachedMessageThread {
 }
 
 const conversationCacheKey = (userId: string) => `aani_messages_conversations_v1_${userId}`;
-const threadCacheKey = (userId: string, contactId: string) => `aani_messages_thread_v1_${userId}_${contactId}`;
 const MESSAGE_THREAD_CACHE_LIMIT = 300;
 // حجم دفعة المحادثة: أحدث 60 رسالة عند الفتح، ثم 60 أقدم عند التمرير لأعلى.
 const MESSAGE_THREAD_PAGE_SIZE = 60;
@@ -1217,7 +1222,7 @@ export default function MessagesPage({
           async () => {
             const [messagesResult, hiddenMessageIds] = await Promise.all([
               queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
-              loadHiddenMessageIds(currentUserId, true),
+              loadHiddenMessageIds(currentUserId),
             ]);
             if (messagesResult.error) {
               return { data: new Map(), error: messagesResult.error };
@@ -1394,9 +1399,12 @@ export default function MessagesPage({
         true,
         { limit: MESSAGE_THREAD_PAGE_SIZE },
       );
-      const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
       if (error) throw error;
       const latestRows = normalizeMessageRows(data);
+      const { hiddenMessageIds, visibleMessages: hiddenFilteredLatestRows } = await loadVisibleMessagesWithHiddenIds(
+        latestRows.slice().reverse(),
+        () => loadHiddenMessageIds(currentUserId),
+      );
       if (requestId === threadRequestRef.current) {
         // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
         // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
@@ -1406,9 +1414,8 @@ export default function MessagesPage({
           setHasOlderMessages(nextProgress.hasOlder);
         }
       }
-      const visibleMessages = latestRows
-        .reverse()
-        .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id))
+      const visibleMessages = hiddenFilteredLatestRows
+        .filter(message => !deletedMessageIdsRef.current.has(message.id))
         .map(message => {
           const mediaMessage = parseChatMediaMessage(message.content);
           return mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
@@ -1466,6 +1473,17 @@ export default function MessagesPage({
           .map(message => message.id));
       }
     } catch (error) {
+      if (handleCurrentHiddenMessagesLookupFailure(
+        error,
+        () => requestId === threadRequestRef.current,
+        lookupError => {
+          setThread([]);
+          commitReactionsByMessage({});
+          setThreadCacheReady(false);
+          removeThreadCache(currentUserId, selectedId);
+          console.error('[messages] تعذر جلب المحادثة:', lookupError);
+        },
+      )) return;
       if (requestId !== threadRequestRef.current) return;
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
@@ -1498,14 +1516,15 @@ export default function MessagesPage({
       });
       if (!isStillCurrent()) return;
       if (error) throw error;
-      const hiddenMessageIds = await loadHiddenMessageIds(currentUserId);
-      if (!isStillCurrent()) return;
 
       const rawOlderRows = normalizeMessageRows(data);
-      const olderRows = rawOlderRows
-        .slice()
-        .reverse()
-        .filter(message => !hiddenMessageIds.has(message.id) && !deletedMessageIdsRef.current.has(message.id));
+      const { visibleMessages: hiddenFilteredOlderRows } = await loadVisibleMessagesWithHiddenIds(
+        rawOlderRows.slice().reverse(),
+        () => loadHiddenMessageIds(currentUserId),
+      );
+      if (!isStillCurrent()) return;
+      const olderRows = hiddenFilteredOlderRows
+        .filter(message => !deletedMessageIdsRef.current.has(message.id));
 
       // المؤشر يتقدم من الصفوف الخام حتى لو كانت الدفعة كلها مخفية أو محذوفة.
       const nextProgress = progressAfterOlderPage(olderProgressRef.current, rawOlderRows, MESSAGE_THREAD_PAGE_SIZE);
@@ -1520,6 +1539,13 @@ export default function MessagesPage({
         list.scrollTop = list.scrollHeight - previousScrollHeight + previousScrollTop;
       });
     } catch (error) {
+      if (handleCurrentHiddenMessagesLookupFailure(error, isStillCurrent, lookupError => {
+        setThread([]);
+        commitReactionsByMessage({});
+        setThreadCacheReady(false);
+        removeThreadCache(currentUserId, conversationIdAtStart);
+        console.warn('[messages] تعذر تحميل رسائل أقدم:', lookupError);
+      })) return;
       if (!isStillCurrent()) return;
       console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
     } finally {
@@ -1530,7 +1556,7 @@ export default function MessagesPage({
         setOlderMessagesLoading(false);
       }
     }
-  }, [currentUserId, selectedId]);
+  }, [commitReactionsByMessage, currentUserId, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);
