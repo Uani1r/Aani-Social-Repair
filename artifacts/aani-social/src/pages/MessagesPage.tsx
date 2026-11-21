@@ -1330,6 +1330,10 @@ export default function MessagesPage({
       summariesByContact.forEach((summary, contactId) => {
         const message = summary.lastMessage;
         if (!message) return;
+        if (deletedMessageIdsRef.current.has(message.id)) {
+          summariesByContact.delete(contactId);
+          return;
+        }
         const mediaMessage = parseChatMediaMessage(message.content);
         const safeMessage = mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
           ? { ...message, content: openedChatMediaContent(message.content) }
