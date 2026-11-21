@@ -51,6 +51,12 @@ import {
   type ThreadLoadStatus,
 } from '@/lib/messagesThread';
 import {
+  isThreadNearBottom,
+  scrollTopPreservingAnchor,
+  shouldLoadOlderMessagesFromScroll,
+  THREAD_SCROLL_EDGE_THRESHOLD,
+} from '@/lib/messagesThreadScroll';
+import {
   handleCurrentHiddenMessagesLookupFailure,
   loadHiddenMessageIds as loadHiddenMessageIdsFromQuery,
   loadVisibleMessagesWithHiddenIds,
@@ -944,8 +950,13 @@ export default function MessagesPage({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [moderationBusy, setModerationBusy] = useState(false);
   const threadRequestRef = useRef(0);
-  // يمنع قفزة التمرير إلى الأسفل مرة واحدة عند إضافة دفعة أقدم في الأعلى.
-  const suppressAutoScrollRef = useRef(false);
+  const shouldFollowLatestRef = useRef(true);
+  const initialThreadScrollPendingRef = useRef(Boolean(selectedId));
+  const initialThreadScrollReadyRef = useRef(!selectedId || !supabaseConfigured);
+  const userScrollActiveRef = useRef(false);
+  const olderScrollIntentRef = useRef(false);
+  const threadScrollIdleTimerRef = useRef<number | null>(null);
+  const threadScrollAnchorRef = useRef<{ messageId: string; top: number; conversationId: string } | null>(null);
   // معرّف طلب الدفعة الأقدم منفصل عن threadRequestRef: تحميل المحادثة من
   // جديد (Realtime أو إعادة اتصال) يُبطله ويحرّر حالته، فلا يعلّق التحميل.
   const olderRequestTrackerRef = useRef(createOlderRequestTracker());
@@ -1002,6 +1013,7 @@ export default function MessagesPage({
 
   useEffect(() => () => {
     if (emojiPickerCloseTimerRef.current !== null) window.clearTimeout(emojiPickerCloseTimerRef.current);
+    if (threadScrollIdleTimerRef.current !== null) window.clearTimeout(threadScrollIdleTimerRef.current);
     if (voiceRecordingTimerRef.current !== null) window.clearInterval(voiceRecordingTimerRef.current);
     const session = voiceRecordingSessionRef.current;
     if (session) {
@@ -1391,6 +1403,7 @@ export default function MessagesPage({
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
+    initialThreadScrollReadyRef.current = false;
     setThreadLoadStatus('loading');
     setOlderMessagesError(false);
     const requestId = ++threadRequestRef.current;
@@ -1483,6 +1496,7 @@ export default function MessagesPage({
           visibleMessages,
         ));
         setThreadCacheReady(true);
+        initialThreadScrollReadyRef.current = true;
         setThreadLoadStatus('loaded');
         commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
@@ -1524,9 +1538,10 @@ export default function MessagesPage({
 
     setOlderMessagesLoading(true);
     setOlderMessagesError(false);
-    const threadList = threadListRef.current;
-    const previousScrollHeight = threadList?.scrollHeight ?? 0;
-    const previousScrollTop = threadList?.scrollTop ?? 0;
+    shouldFollowLatestRef.current = false;
+    initialThreadScrollPendingRef.current = false;
+    olderScrollIntentRef.current = false;
+    threadScrollAnchorRef.current = null;
     const threadFilter = messagesThreadFilter(currentUserId, selectedId);
 
     try {
@@ -1549,15 +1564,25 @@ export default function MessagesPage({
       // المؤشر يتقدم من الصفوف الخام حتى لو كانت الدفعة كلها مخفية أو محذوفة.
       const nextProgress = progressAfterOlderPage(olderProgressRef.current, rawOlderRows, MESSAGE_THREAD_PAGE_SIZE);
       olderProgressRef.current = nextProgress;
-      setHasOlderMessages(nextProgress.hasOlder);
 
-      suppressAutoScrollRef.current = true;
+      // خذ المرساة بعد اكتمال الشبكة مباشرةً، لا من scrollHeight/scrollTop
+      // قديمين؛ قد يكون حجم الـviewport أو موضع القراءة تغيّر أثناء الانتظار.
+      const list = threadListRef.current;
+      if (list) {
+        const listTop = list.getBoundingClientRect().top + list.clientTop;
+        const anchorRow = Array.from(list.querySelectorAll<HTMLElement>('[data-message-id]'))
+          .find(row => row.getBoundingClientRect().bottom > listTop);
+        const messageId = anchorRow?.dataset.messageId;
+        if (anchorRow && messageId) {
+          threadScrollAnchorRef.current = {
+            messageId,
+            top: anchorRow.getBoundingClientRect().top - listTop,
+            conversationId: conversationIdAtStart,
+          };
+        }
+      }
+      setHasOlderMessages(nextProgress.hasOlder);
       setThread(current => mergeThreadRows(current, olderRows));
-      window.requestAnimationFrame(() => {
-        const list = threadListRef.current;
-        if (!list) return;
-        list.scrollTop = list.scrollHeight - previousScrollHeight + previousScrollTop;
-      });
     } catch (error) {
       if (handleCurrentHiddenMessagesLookupFailure(error, isStillCurrent, lookupError => {
         setThreadLoadStatus('error');
@@ -1785,6 +1810,16 @@ export default function MessagesPage({
     setHasOlderMessages(false);
     setOlderMessagesLoading(false);
     setOlderMessagesError(false);
+    shouldFollowLatestRef.current = true;
+    initialThreadScrollPendingRef.current = Boolean(selectedId);
+    initialThreadScrollReadyRef.current = !selectedId || !supabaseConfigured;
+    userScrollActiveRef.current = false;
+    olderScrollIntentRef.current = false;
+    threadScrollAnchorRef.current = null;
+    if (threadScrollIdleTimerRef.current !== null) {
+      window.clearTimeout(threadScrollIdleTimerRef.current);
+      threadScrollIdleTimerRef.current = null;
+    }
     olderRequestTrackerRef.current.invalidate();
     olderProgressRef.current = initialOlderPageProgress();
     setThreadCacheReady(Boolean(cachedThread));
@@ -1864,18 +1899,36 @@ export default function MessagesPage({
     const threadList = threadListRef.current;
     if (!threadList) return;
     threadList.scrollTop = threadList.scrollHeight;
+    shouldFollowLatestRef.current = true;
   }, []);
 
+  const resetThreadScrollIdleTimer = useCallback(() => {
+    if (threadScrollIdleTimerRef.current !== null) window.clearTimeout(threadScrollIdleTimerRef.current);
+    threadScrollIdleTimerRef.current = window.setTimeout(() => {
+      userScrollActiveRef.current = false;
+      olderScrollIntentRef.current = false;
+      threadScrollIdleTimerRef.current = null;
+    }, 160);
+  }, []);
+
+  const markThreadUserScroll = useCallback((towardOlderMessages: boolean) => {
+    userScrollActiveRef.current = true;
+    olderScrollIntentRef.current = towardOlderMessages;
+    resetThreadScrollIdleTimer();
+  }, [resetThreadScrollIdleTimer]);
+
   const scheduleVoiceThreadBottom = useCallback((recipientId: string, messageId: string) => {
-    const keepBottom = () => {
-      if (selectedIdRef.current === recipientId && voiceScrollLockRef.current.has(messageId)) {
+    const keepBottomIfFollowing = () => {
+      if (selectedIdRef.current === recipientId
+        && voiceScrollLockRef.current.has(messageId)
+        && shouldFollowLatestRef.current) {
         scrollThreadToBottom();
       }
     };
     window.requestAnimationFrame(() => {
-      keepBottom();
+      keepBottomIfFollowing();
       window.requestAnimationFrame(() => {
-        keepBottom();
+        keepBottomIfFollowing();
         voiceScrollLockRef.current.delete(messageId);
         voiceScrollConfirmedRef.current.delete(messageId);
       });
@@ -1883,21 +1936,48 @@ export default function MessagesPage({
   }, [scrollThreadToBottom]);
 
   useLayoutEffect(() => {
-    // بعد إضافة دفعة أقدم لا نقفز إلى الأسفل: موضع القراءة محفوظ في loadOlderThread.
-    if (suppressAutoScrollRef.current) {
-      suppressAutoScrollRef.current = false;
+    const pendingAnchor = threadScrollAnchorRef.current;
+    if (!pendingAnchor) return;
+    if (pendingAnchor.conversationId !== selectedId) {
+      threadScrollAnchorRef.current = null;
       return;
     }
-    scrollThreadToBottom();
-  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, scrollThreadToBottom]);
+    const list = threadListRef.current;
+    const anchorRow = list
+      ? Array.from(list.querySelectorAll<HTMLElement>('[data-message-id]'))
+        .find(row => row.dataset.messageId === pendingAnchor.messageId)
+      : null;
+    if (list && anchorRow) {
+      const listTop = list.getBoundingClientRect().top + list.clientTop;
+      const anchorTop = anchorRow.getBoundingClientRect().top - listTop;
+      list.scrollTop = scrollTopPreservingAnchor(list.scrollTop, pendingAnchor.top, anchorTop);
+    }
+    threadScrollAnchorRef.current = null;
+  }, [thread, selectedId]);
 
   useLayoutEffect(() => {
-    if (!pendingMediaMessage || pendingMediaMessage.recipientId !== selectedId) return;
-    scrollThreadToBottom();
-    let secondFrame = 0;
-    const firstFrame = window.requestAnimationFrame(() => {
+    if (!selectedId) return;
+    if (initialThreadScrollPendingRef.current) {
+      if (!initialThreadScrollReadyRef.current || threadLoadStatus !== 'loaded') return;
+      initialThreadScrollPendingRef.current = false;
+      shouldFollowLatestRef.current = true;
       scrollThreadToBottom();
-      secondFrame = window.requestAnimationFrame(scrollThreadToBottom);
+      return;
+    }
+    if (shouldFollowLatestRef.current) scrollThreadToBottom();
+  }, [thread.length, lastThreadMessageId, pendingMediaMessage?.id, selectedId, threadLoadStatus, scrollThreadToBottom]);
+
+  useLayoutEffect(() => {
+    if (!pendingMediaMessage
+      || pendingMediaMessage.recipientId !== selectedId
+      || !shouldFollowLatestRef.current) return;
+    let secondFrame = 0;
+    const keepLatestMessageVisible = () => {
+      if (shouldFollowLatestRef.current) scrollThreadToBottom();
+    };
+    const firstFrame = window.requestAnimationFrame(() => {
+      keepLatestMessageVisible();
+      secondFrame = window.requestAnimationFrame(keepLatestMessageVisible);
     });
     return () => {
       window.cancelAnimationFrame(firstFrame);
@@ -1911,9 +1991,9 @@ export default function MessagesPage({
 
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
-      if (hasPendingVoiceMessage()) scrollThreadToBottom();
+      if (hasPendingVoiceMessage() && shouldFollowLatestRef.current) scrollThreadToBottom();
       secondFrame = window.requestAnimationFrame(() => {
-        if (hasPendingVoiceMessage()) scrollThreadToBottom();
+        if (hasPendingVoiceMessage() && shouldFollowLatestRef.current) scrollThreadToBottom();
         voiceScrollConfirmedRef.current.forEach(messageId => {
           voiceScrollConfirmedRef.current.delete(messageId);
           voiceScrollLockRef.current.delete(messageId);
@@ -1929,11 +2009,19 @@ export default function MessagesPage({
   useEffect(() => {
     if (!selectedId) return;
     const viewport = window.visualViewport;
+    let resizeTimer: number | null = null;
     let animationFrame = 0;
     const keepLatestMessageVisible = () => {
-      scrollThreadToBottom();
-      if (animationFrame) window.cancelAnimationFrame(animationFrame);
-      animationFrame = window.requestAnimationFrame(scrollThreadToBottom);
+      if (!shouldFollowLatestRef.current) return;
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        resizeTimer = null;
+        if (!shouldFollowLatestRef.current) return;
+        animationFrame = window.requestAnimationFrame(() => {
+          animationFrame = 0;
+          if (shouldFollowLatestRef.current) scrollThreadToBottom();
+        });
+      }, 80);
     };
 
     viewport?.addEventListener('resize', keepLatestMessageVisible);
@@ -1941,6 +2029,7 @@ export default function MessagesPage({
     return () => {
       viewport?.removeEventListener('resize', keepLatestMessageVisible);
       window.removeEventListener('resize', keepLatestMessageVisible);
+      if (resizeTimer !== null) window.clearTimeout(resizeTimer);
       if (animationFrame) window.cancelAnimationFrame(animationFrame);
     };
   }, [selectedId, scrollThreadToBottom]);
@@ -2079,11 +2168,16 @@ export default function MessagesPage({
         ? current
         : [...current, optimisticMessage]);
       setThreadCacheReady(true);
-      scrollThreadToBottom();
-      window.requestAnimationFrame(() => {
+      if (shouldFollowLatestRef.current) {
         scrollThreadToBottom();
-        window.requestAnimationFrame(scrollThreadToBottom);
-      });
+        window.requestAnimationFrame(() => {
+          if (!shouldFollowLatestRef.current) return;
+          scrollThreadToBottom();
+          window.requestAnimationFrame(() => {
+            if (shouldFollowLatestRef.current) scrollThreadToBottom();
+          });
+        });
+      }
     }
 
     const path = `${session.userId}/messages/${messageId}.${format.extension}`;
@@ -3389,20 +3483,43 @@ export default function MessagesPage({
                 aria-live="polite"
                 onScroll={event => {
                   const threadList = event.currentTarget;
+                  const metrics = {
+                    scrollTop: threadList.scrollTop,
+                    scrollHeight: threadList.scrollHeight,
+                    clientHeight: threadList.clientHeight,
+                  };
+                  if (userScrollActiveRef.current) {
+                    shouldFollowLatestRef.current = isThreadNearBottom(metrics);
+                    if (!shouldFollowLatestRef.current) initialThreadScrollPendingRef.current = false;
+                    resetThreadScrollIdleTimer();
+                  }
                   const voiceMessageIsUploading = thread.some(message => voiceScrollLockRef.current.has(message.id));
                   if (voiceMessageIsUploading
+                    && shouldFollowLatestRef.current
                     && threadList.scrollHeight - threadList.clientHeight - threadList.scrollTop > 1) {
                     scrollThreadToBottom();
                   }
-                  // الوصول إلى أعلى القائمة يطلب دفعة أقدم بدل جلب السجل كاملاً مسبقاً.
-                  if (threadList.scrollTop < 80 && hasOlderMessages && !olderMessagesLoading) {
-                    void loadOlderThread();
+                  const hasUpwardScrollIntent = olderScrollIntentRef.current;
+                  const shouldLoadOlder = shouldLoadOlderMessagesFromScroll(
+                    metrics,
+                    hasOlderMessages,
+                    olderRequestTrackerRef.current.isLoading(),
+                    hasUpwardScrollIntent,
+                    THREAD_SCROLL_EDGE_THRESHOLD,
+                  );
+                  if (hasUpwardScrollIntent && threadList.scrollTop <= THREAD_SCROLL_EDGE_THRESHOLD) {
+                    olderScrollIntentRef.current = false;
                   }
+                  if (shouldLoadOlder) void loadOlderThread();
                 }}
-                onWheel={() => messageInputRef.current?.blur()}
+                onWheel={event => {
+                  if (event.deltaY !== 0) markThreadUserScroll(event.deltaY < 0);
+                  messageInputRef.current?.blur();
+                }}
                 onTouchStart={event => {
                   const touch = event.touches[0];
                   threadScrollTouchOriginRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+                  olderScrollIntentRef.current = false;
                 }}
                 onTouchMove={event => {
                   const origin = threadScrollTouchOriginRef.current;
@@ -3411,6 +3528,7 @@ export default function MessagesPage({
                   const deltaX = Math.abs(touch.clientX - origin.x);
                   const deltaY = Math.abs(touch.clientY - origin.y);
                   if (deltaY > 8 && deltaY > deltaX) {
+                    markThreadUserScroll(touch.clientY > origin.y);
                     messageInputRef.current?.blur();
                     threadScrollTouchOriginRef.current = null;
                   }
@@ -3721,7 +3839,14 @@ export default function MessagesPage({
                     <div className="messages-image-message messages-media-pending" aria-label={selectedPendingMediaMessage.isUploading ? 'جارٍ رفع الصور' : 'تم رفع الصور'}>
                       <div className={`messages-image-grid messages-media-pending-grid${selectedPendingMediaMessage.urls.length > 1 ? ' has-multiple' : ''}`}>
                         {selectedPendingMediaMessage.urls.map((url, index) => (
-                          <SignedImage key={`${selectedPendingMediaMessage.id}-${index}`} src={url} alt={`صورة مرسلة ${index + 1}`} onLoad={scrollThreadToBottom} />
+                          <SignedImage
+                            key={`${selectedPendingMediaMessage.id}-${index}`}
+                            src={url}
+                            alt={`صورة مرسلة ${index + 1}`}
+                            onLoad={() => {
+                              if (shouldFollowLatestRef.current) scrollThreadToBottom();
+                            }}
+                          />
                         ))}
                         <span
                           className={`messages-media-pending-indicator${selectedPendingMediaMessage.isUploading ? '' : ' is-complete'}`}
@@ -3853,8 +3978,11 @@ export default function MessagesPage({
                         value={text}
                         onChange={event => setText(event.target.value)}
                         onFocus={() => {
+                          if (!shouldFollowLatestRef.current) return;
                           scrollThreadToBottom();
-                          window.requestAnimationFrame(scrollThreadToBottom);
+                          window.requestAnimationFrame(() => {
+                            if (shouldFollowLatestRef.current) scrollThreadToBottom();
+                          });
                         }}
                         onKeyDown={event => {
                           if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
