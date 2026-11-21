@@ -35,7 +35,9 @@ import {
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
   legacyInboxDeliveryMessageIds,
+  messagesInboxRealtimeInsertFilters,
   requestUnreadCounts as buildRequestUnreadCounts,
+  shouldRefreshInboxForSentMessage,
 } from '@/lib/messagesInbox';
 import {
   createOlderRequestTracker,
@@ -1675,15 +1677,26 @@ export default function MessagesPage({
     // القناة تُغلق عند إزالتها في التنظيف، ولا نعدّ ذلك فشلاً.
     let removedByUs = false;
     const token = realtimeChannelsRef.current.beginChannel('inbox');
+    const insertFilters = messagesInboxRealtimeInsertFilters(currentUserId);
     const channel = supabase.channel(`messages-inbox-${currentUserId}-${realtimeEpoch}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
         table: 'messages',
-        filter: `recipient_id=eq.${currentUserId}`,
+        filter: insertFilters.recipient,
       }, payload => {
         const messageId = (payload.new as { id?: unknown } | null)?.id;
         if (typeof messageId === 'string') void markMessagesDelivered([messageId]);
+        scheduleMessageRefresh(false);
+      })
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: insertFilters.sender,
+      }, payload => {
+        const message = payload.new as { sender_id?: unknown; recipient_id?: unknown } | null;
+        if (!shouldRefreshInboxForSentMessage(message, currentUserId)) return;
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => scheduleMessageRefresh(false))

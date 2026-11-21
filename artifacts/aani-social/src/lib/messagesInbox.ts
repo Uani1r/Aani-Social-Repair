@@ -30,6 +30,20 @@ export interface InboxSummaryResult<TMessage> {
   deliveryMessageIds: string[];
 }
 
+export function messagesInboxRealtimeInsertFilters(userId: string): { recipient: string; sender: string } {
+  return {
+    recipient: `recipient_id=eq.${userId}`,
+    sender: `sender_id=eq.${userId}`,
+  };
+}
+
+export function shouldRefreshInboxForSentMessage(
+  message: { sender_id?: unknown; recipient_id?: unknown } | null,
+  userId: string,
+): boolean {
+  return message?.sender_id === userId && message.recipient_id !== userId;
+}
+
 const INBOX_SUMMARY_RPC = 'aani_get_messages_inbox_summaries';
 const UNIX_EPOCH = '1970-01-01T00:00:00.000Z';
 

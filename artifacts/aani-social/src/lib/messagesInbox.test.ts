@@ -6,10 +6,26 @@ import {
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
   legacyInboxDeliveryMessageIds,
+  messagesInboxRealtimeInsertFilters,
   messagesInboxRpcArguments,
   normalizeMessagesInboxSummaries,
   requestUnreadCounts,
+  shouldRefreshInboxForSentMessage,
 } from './messagesInbox';
+
+test('inbox realtime filters cover both message directions and suppress duplicate self-send refreshes', () => {
+  const filters = messagesInboxRealtimeInsertFilters('me');
+
+  assert.deepEqual(filters, {
+    recipient: 'recipient_id=eq.me',
+    sender: 'sender_id=eq.me',
+  });
+  assert.notEqual(filters.recipient, filters.sender);
+  assert.equal(shouldRefreshInboxForSentMessage({ sender_id: 'me', recipient_id: 'contact-a' }, 'me'), true);
+  assert.equal(shouldRefreshInboxForSentMessage({ sender_id: 'me', recipient_id: 'me' }, 'me'), false);
+  assert.equal(shouldRefreshInboxForSentMessage({ sender_id: 'contact-a', recipient_id: 'me' }, 'me'), false);
+  assert.equal(shouldRefreshInboxForSentMessage(null, 'me'), false);
+});
 
 interface MessageLike {
   id: string;
