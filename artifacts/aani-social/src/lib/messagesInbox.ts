@@ -30,6 +30,142 @@ export interface InboxSummaryResult<TMessage> {
   deliveryMessageIds: string[];
 }
 
+export interface RealtimeMessageSnapshot<TMessage> {
+  message: TMessage;
+}
+
+export interface RealtimeInboxConversation<TMessage extends LegacyInboxMessage> {
+  profile: { id: string };
+  lastMessage: TMessage | null;
+}
+
+export function messagesInboxContactId(message: Pick<LegacyInboxMessage, 'sender_id' | 'recipient_id'>, userId: string): string | null {
+  if (message.sender_id === userId && message.recipient_id !== userId) return message.recipient_id || null;
+  if (message.recipient_id === userId && message.sender_id !== userId) return message.sender_id || null;
+  return null;
+}
+
+export function messageBelongsToInboxThread(
+  message: Pick<LegacyInboxMessage, 'sender_id' | 'recipient_id'>,
+  userId: string,
+  contactId: string | undefined,
+): boolean {
+  return Boolean(contactId) && messagesInboxContactId(message, userId) === contactId;
+}
+
+/** Positive means left is newer; ties follow the inbox's created_at, id order. */
+export function compareInboxMessageRecency(
+  left: Pick<LegacyInboxMessage, 'id' | 'created_at'>,
+  right: Pick<LegacyInboxMessage, 'id' | 'created_at'>,
+): number {
+  const leftTime = Date.parse(left.created_at) || 0;
+  const rightTime = Date.parse(right.created_at) || 0;
+  if (leftTime !== rightTime) return leftTime - rightTime;
+  if (left.id === right.id) return 0;
+  return left.id > right.id ? 1 : -1;
+}
+
+export function isInboxMessageAtLeastAsNew(
+  candidate: Pick<LegacyInboxMessage, 'id' | 'created_at'> | null | undefined,
+  reference: Pick<LegacyInboxMessage, 'id' | 'created_at'>,
+): boolean {
+  return candidate != null && compareInboxMessageRecency(candidate, reference) >= 0;
+}
+
+function sortInboxConversations<
+  TMessage extends LegacyInboxMessage,
+  TConversation extends RealtimeInboxConversation<TMessage>,
+>(conversations: TConversation[]): TConversation[] {
+  return conversations.sort((left, right) => {
+    const leftMessage = left.lastMessage;
+    const rightMessage = right.lastMessage;
+    if (!leftMessage) return rightMessage ? 1 : 0;
+    if (!rightMessage) return -1;
+    return compareInboxMessageRecency(rightMessage, leftMessage);
+  });
+}
+
+export function applyRealtimeInboxInsert<
+  TMessage extends LegacyInboxMessage,
+  TConversation extends RealtimeInboxConversation<TMessage>,
+>(
+  conversations: TConversation[],
+  message: TMessage,
+  userId: string,
+  createConversation?: (contactId: string, message: TMessage) => TConversation,
+): TConversation[] {
+  const contactId = messagesInboxContactId(message, userId);
+  if (!contactId) return conversations;
+
+  const index = conversations.findIndex(conversation => conversation.profile.id === contactId);
+  const next = [...conversations];
+  if (index < 0) {
+    const created = createConversation?.(contactId, message);
+    if (!created) return conversations;
+    next.push({ ...created, lastMessage: message } as TConversation);
+  } else {
+    const current = conversations[index];
+    if (isInboxMessageAtLeastAsNew(current.lastMessage, message)) return conversations;
+    next[index] = { ...current, lastMessage: message } as TConversation;
+  }
+
+  return sortInboxConversations(next);
+}
+
+export function mergeInboxConversationsWithRealtime<
+  TMessage extends LegacyInboxMessage,
+  TConversation extends RealtimeInboxConversation<TMessage>,
+>(
+  fetched: TConversation[],
+  current: TConversation[],
+  realtimeMessages: ReadonlyMap<string, RealtimeMessageSnapshot<TMessage>>,
+  userId: string,
+  createConversation?: (contactId: string, message: TMessage) => TConversation,
+): TConversation[] {
+  let merged = fetched.map(conversation => {
+    const currentConversation = current.find(item => item.profile.id === conversation.profile.id);
+    if (!currentConversation?.lastMessage || !conversation.lastMessage
+      || compareInboxMessageRecency(currentConversation.lastMessage, conversation.lastMessage) <= 0) {
+      return conversation;
+    }
+    return { ...conversation, lastMessage: currentConversation.lastMessage };
+  });
+  realtimeMessages.forEach(({ message }, contactId) => {
+    if (messagesInboxContactId(message, userId) !== contactId) return;
+    if (!merged.some(conversation => conversation.profile.id === contactId)) {
+      const currentConversation = current.find(conversation => conversation.profile.id === contactId);
+      if (currentConversation) merged = [...merged, currentConversation];
+    }
+    merged = applyRealtimeInboxInsert(merged, message, userId, createConversation);
+  });
+  return sortInboxConversations(merged);
+}
+
+export function mergeRealtimeThreadMessages<TMessage extends LegacyInboxMessage>(
+  existing: TMessage[],
+  fetched: TMessage[],
+  realtimeMessages: readonly TMessage[],
+  userId: string,
+  contactId: string,
+  mergeRows: (existing: TMessage[], incoming: TMessage[]) => TMessage[],
+): TMessage[] {
+  const merged = mergeRows(existing, fetched);
+  const matchingRealtimeMessages = realtimeMessages.filter(message => messageBelongsToInboxThread(message, userId, contactId));
+  return matchingRealtimeMessages.length ? mergeRows(merged, matchingRealtimeMessages) : merged;
+}
+
+export function writeMessagesInboxCache<TValue>(
+  storage: { setItem(key: string, value: string): void },
+  key: string,
+  value: TValue,
+): void {
+  try {
+    storage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Local storage may be unavailable or full. */
+  }
+}
+
 export function messagesInboxRealtimeInsertFilters(userId: string): { recipient: string; sender: string } {
   return {
     recipient: `recipient_id=eq.${userId}`,

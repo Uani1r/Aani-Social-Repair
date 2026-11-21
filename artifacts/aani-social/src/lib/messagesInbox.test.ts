@@ -2,16 +2,23 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applyRealtimeInboxInsert,
   buildLegacyMessagesInboxSummaries,
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
+  isInboxMessageAtLeastAsNew,
   legacyInboxDeliveryMessageIds,
+  mergeInboxConversationsWithRealtime,
+  mergeRealtimeThreadMessages,
+  messagesInboxContactId,
   messagesInboxRealtimeInsertFilters,
   messagesInboxRpcArguments,
   normalizeMessagesInboxSummaries,
   requestUnreadCounts,
   shouldRefreshInboxForSentMessage,
+  writeMessagesInboxCache,
 } from './messagesInbox';
+import { mergeThreadRows } from './messagesThread';
 
 test('inbox realtime filters cover both message directions and suppress duplicate self-send refreshes', () => {
   const filters = messagesInboxRealtimeInsertFilters('me');
@@ -34,6 +41,7 @@ interface MessageLike {
   created_at: string;
   read_at: string | null;
   delivered_at: string | null;
+  content?: string;
 }
 
 function normalizeMessage(value: unknown): MessageLike | null {
@@ -65,6 +73,108 @@ const confirmedMissingRpcError = {
 };
 
 const emptyFallback = async () => ({ data: new Map(), error: null });
+
+interface InboxConversationLike {
+  profile: { id: string };
+  lastMessage: MessageLike | null;
+  isRequest: boolean;
+}
+
+function inboxMessage(
+  id: string,
+  senderId: string,
+  recipientId: string,
+  createdAt: string,
+  content = id,
+): MessageLike {
+  return {
+    id,
+    sender_id: senderId,
+    recipient_id: recipientId,
+    created_at: createdAt,
+    read_at: null,
+    delivered_at: null,
+    content,
+  };
+}
+
+function inboxConversation(profileId: string, lastMessage: MessageLike | null): InboxConversationLike {
+  return { profile: { id: profileId }, lastMessage, isRequest: false };
+}
+
+test('Realtime INSERT immediately refreshes inbox preview, timestamp, order, and serialized cache', () => {
+  const oldA = inboxMessage('old-a', 'me', 'contact-a', '2027-01-01T10:00:00Z', 'old preview');
+  const lastB = inboxMessage('last-b', 'contact-b', 'me', '2027-01-01T10:30:00Z');
+  const conversations = [inboxConversation('contact-b', lastB), inboxConversation('contact-a', oldA)];
+  const incoming = inboxMessage('new-a', 'contact-a', 'me', '2027-01-01T11:00:00Z', 'instant preview');
+  const updated = applyRealtimeInboxInsert(conversations, incoming, 'me');
+
+  assert.deepEqual(updated.map(conversation => conversation.profile.id), ['contact-a', 'contact-b']);
+  assert.equal(updated[0]?.lastMessage?.content, 'instant preview');
+  assert.equal(updated[0]?.lastMessage?.created_at, '2027-01-01T11:00:00Z');
+  assert.equal(messagesInboxContactId(incoming, 'me'), 'contact-a');
+  assert.strictEqual(applyRealtimeInboxInsert(updated, incoming, 'me'), updated);
+
+  let cachedValue = '';
+  writeMessagesInboxCache({ setItem: (_key, value) => { cachedValue = value; } }, 'inbox', updated);
+  const cached = JSON.parse(cachedValue) as InboxConversationLike[];
+  assert.equal(cached[0].lastMessage?.content, 'instant preview');
+  assert.equal(cached[0].lastMessage?.created_at, '2027-01-01T11:00:00Z');
+});
+
+test('Realtime INSERT can immediately add a new contact conversation', () => {
+  const incoming = inboxMessage('new-contact', 'contact-c', 'me', '2027-01-01T11:00:00Z');
+  const updated = applyRealtimeInboxInsert([], incoming, 'me', contactId => inboxConversation(contactId, null));
+
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].profile.id, 'contact-c');
+  assert.equal(updated[0].lastMessage?.id, 'new-contact');
+});
+
+test('late inbox and thread fetches merge Realtime inserts once without losing the latest message', () => {
+  const stale = inboxMessage('stale-a', 'me', 'contact-a', '2027-01-01T10:00:00Z', 'stale');
+  const live = inboxMessage('live-a', 'contact-a', 'me', '2027-01-01T11:00:00Z', 'live');
+  const fetched = [inboxConversation('contact-a', stale)];
+  const current = [inboxConversation('contact-a', live)];
+  const realtime = new Map([['contact-a', { message: live }]]);
+  const mergedInbox = mergeInboxConversationsWithRealtime(fetched, current, realtime, 'me');
+  const mergedThread = mergeRealtimeThreadMessages(
+    [live],
+    [stale, live],
+    [live, live],
+    'me',
+    'contact-a',
+    mergeThreadRows,
+  );
+
+  assert.equal(mergedInbox.length, 1);
+  assert.equal(mergedInbox[0]?.lastMessage?.id, 'live-a');
+  assert.deepEqual(mergedThread.map(message => message.id), ['stale-a', 'live-a']);
+  assert.equal(mergedThread.filter(message => message.id === 'live-a').length, 1);
+  assert.equal(mergedThread[1].content, 'live');
+});
+
+test('a stale inbox response cannot replace a newer current preview after its Realtime marker is consumed', () => {
+  const stale = inboxMessage('stale-a', 'me', 'contact-a', '2027-01-01T10:00:00Z', 'stale');
+  const live = inboxMessage('live-a', 'contact-a', 'me', '2027-01-01T11:00:00Z', 'live');
+  const merged = mergeInboxConversationsWithRealtime(
+    [inboxConversation('contact-a', stale)],
+    [inboxConversation('contact-a', live)],
+    new Map(),
+    'me',
+  );
+
+  assert.equal(isInboxMessageAtLeastAsNew(live, stale), true);
+  assert.equal(merged[0].lastMessage?.id, 'live-a');
+  assert.equal(merged[0].lastMessage?.content, 'live');
+});
+
+test('thread Realtime inserts from another contact are rejected', () => {
+  const foreign = inboxMessage('foreign', 'contact-b', 'me', '2027-01-01T11:00:00Z');
+  const merged = mergeRealtimeThreadMessages([], [], [foreign], 'me', 'contact-a', mergeThreadRows);
+
+  assert.deepEqual(merged, []);
+});
 
 test('inbox loading uses one successful summary request and normalizes its response', async () => {
   let requestCount = 0;
