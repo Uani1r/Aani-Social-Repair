@@ -58,6 +58,7 @@ import {
   isThreadNearBottom,
   isUserInitiatedUpwardScroll,
   markInitialThreadServerLoaded,
+  scrollTopAfterContentResize,
   scrollTopPreservingAnchor,
   shouldLoadOlderMessagesFromScroll,
   THREAD_SCROLL_EDGE_THRESHOLD,
@@ -998,6 +999,7 @@ export default function MessagesPage({
   const messagesViewRef = useRef<HTMLElement>(null);
   const threadListRef = useRef<HTMLDivElement>(null);
   const previousThreadScrollTopRef = useRef(0);
+  const previousThreadScrollSizeRef = useRef<{ scrollHeight: number; clientHeight: number } | null>(null);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const sheetDragStartYRef = useRef<number | null>(null);
@@ -1221,9 +1223,17 @@ export default function MessagesPage({
       olderScrollIntentRef.current = false;
       previousThreadScrollTopRef.current = threadListRef.current?.scrollTop ?? 0;
       const view = messagesViewRef.current;
-      if (!view) return;
-      view.style.setProperty('--messages-visual-viewport-height', `${Math.round(viewport?.height ?? window.innerHeight)}px`);
-      view.style.setProperty('--messages-visual-viewport-top', `${Math.round(viewport?.offsetTop ?? 0)}px`);
+      if (view) {
+        view.style.setProperty('--messages-visual-viewport-height', `${Math.round(viewport?.height ?? window.innerHeight)}px`);
+        view.style.setProperty('--messages-visual-viewport-top', `${Math.round(viewport?.offsetTop ?? 0)}px`);
+      }
+      const threadList = threadListRef.current;
+      if (threadList) {
+        previousThreadScrollSizeRef.current = {
+          scrollHeight: threadList.scrollHeight,
+          clientHeight: threadList.clientHeight,
+        };
+      }
     };
 
     syncVisualViewport();
@@ -1943,6 +1953,10 @@ export default function MessagesPage({
     if (!threadList) return;
     olderScrollIntentRef.current = false;
     threadList.scrollTop = threadList.scrollHeight;
+    previousThreadScrollSizeRef.current = {
+      scrollHeight: threadList.scrollHeight,
+      clientHeight: threadList.clientHeight,
+    };
     shouldFollowLatestRef.current = true;
   }, [selectedId, threadConversationId]);
 
@@ -2005,6 +2019,62 @@ export default function MessagesPage({
     }
     threadScrollAnchorRef.current = null;
   }, [thread, selectedId]);
+
+  // Lazy-loaded media can enlarge historical rows after the one-time cache scroll.
+  // Track row sizes so following readers stay at the latest edge without overriding manual reading.
+  useLayoutEffect(() => {
+    const list = threadListRef.current;
+    if (!selectedId || threadConversationId !== selectedId || !list) {
+      previousThreadScrollSizeRef.current = null;
+      return;
+    }
+
+    const readScrollSize = () => ({
+      scrollHeight: list.scrollHeight,
+      clientHeight: list.clientHeight,
+    });
+    previousThreadScrollSizeRef.current = readScrollSize();
+    if (typeof ResizeObserver === 'undefined') return;
+
+    const observedRows = new WeakSet<Element>();
+    const resizeObserver = new ResizeObserver(() => {
+      if (threadListRef.current !== list || selectedIdRef.current !== selectedId) return;
+      const previousSize = previousThreadScrollSizeRef.current;
+      const nextSize = readScrollSize();
+      if (previousSize) {
+        const nextScrollTop = scrollTopAfterContentResize(
+          list.scrollTop,
+          previousSize,
+          nextSize,
+          shouldFollowLatestRef.current,
+        );
+        if (nextScrollTop !== list.scrollTop) list.scrollTop = nextScrollTop;
+      }
+      previousThreadScrollSizeRef.current = nextSize;
+    });
+    const observeRowsWithin = (node: Node) => {
+      if (!(node instanceof Element)) return;
+      const observeRow = (row: Element) => {
+        if (observedRows.has(row)) return;
+        observedRows.add(row);
+        resizeObserver.observe(row);
+      };
+      if (node.matches('[data-message-id]')) observeRow(node);
+      node.querySelectorAll('[data-message-id]').forEach(observeRow);
+    };
+    list.querySelectorAll('[data-message-id]').forEach(observeRowsWithin);
+    const mutationObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(records => {
+        records.forEach(record => record.addedNodes.forEach(observeRowsWithin));
+      });
+    mutationObserver?.observe(list, { childList: true, subtree: true });
+
+    return () => {
+      resizeObserver.disconnect();
+      mutationObserver?.disconnect();
+    };
+  }, [selectedId, threadConversationId]);
 
   useLayoutEffect(() => {
     if (threadConversationId !== selectedId) return;
@@ -3578,6 +3648,15 @@ export default function MessagesPage({
                     olderScrollIntentRef.current,
                   );
                   previousThreadScrollTopRef.current = metrics.scrollTop;
+                  const previousScrollSize = previousThreadScrollSizeRef.current;
+                  if (!previousScrollSize
+                    || (previousScrollSize.scrollHeight === metrics.scrollHeight
+                      && previousScrollSize.clientHeight === metrics.clientHeight)) {
+                    previousThreadScrollSizeRef.current = {
+                      scrollHeight: metrics.scrollHeight,
+                      clientHeight: metrics.clientHeight,
+                    };
+                  }
                   olderScrollIntentRef.current = false;
                   if (!selectedId
                     || selectedIdRef.current !== selectedId

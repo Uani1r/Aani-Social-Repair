@@ -21,6 +21,7 @@ import {
   isThreadNearBottom,
   isUserInitiatedUpwardScroll,
   markInitialThreadServerLoaded,
+  scrollTopAfterContentResize,
   scrollTopPreservingAnchor,
   shouldLoadOlderMessagesFromScroll,
 } from './messagesThreadScroll';
@@ -74,6 +75,32 @@ test('cached messages claim the initial scroll before Supabase responds and only
   assert.equal(serverRender.shouldScroll, false);
   initialScrollCount += Number(serverRender.shouldScroll);
   assert.equal(initialScrollCount, 1);
+});
+
+test('lazy media reflow after opening cached history preserves latest, but never pulls a history reader down', () => {
+  // Opening the cache initially reaches the bottom; a lazy image in an older row then expands.
+  const beforeImageLoad = { scrollTop: 400, scrollHeight: 1000, clientHeight: 600 };
+  const afterImageLoad = { scrollTop: 400, scrollHeight: 1280, clientHeight: 600 };
+  const followedScrollTop = scrollTopAfterContentResize(
+    beforeImageLoad.scrollTop,
+    beforeImageLoad,
+    afterImageLoad,
+    true,
+  );
+  assert.equal(followedScrollTop, 680);
+  assert.equal(afterImageLoad.scrollHeight - afterImageLoad.clientHeight - followedScrollTop, 0);
+
+  // Once the user reads older messages, the same async media resize cannot force the bottom.
+  const readerScrollTop = 180;
+  assert.equal(scrollTopAfterContentResize(
+    readerScrollTop,
+    { scrollHeight: 1280, clientHeight: 600 },
+    { scrollHeight: 1510, clientHeight: 600 },
+    false,
+  ), readerScrollTop);
+
+  // A later older-page prepend still restores the actual visible anchor after layout changes.
+  assert.equal(scrollTopPreservingAnchor(readerScrollTop, 45, 285), 420);
 });
 
 test('without cache, initial scroll waits for a successful server render', () => {
