@@ -3193,6 +3193,7 @@ body.aani-immersive .unified-top-bar {
   flex-direction: column;
   gap: 4px;
   overflow-y: auto;
+  /* MessagesPage restores a message-row anchor after prepending; avoid native double-adjustment. */
   overflow-anchor: none;
   overscroll-behavior: contain;
   scroll-behavior: auto;
@@ -3201,6 +3202,7 @@ body.aani-immersive .unified-top-bar {
   scrollbar-color: #383838 transparent;
 }
 
+/* Keep short histories bottom-aligned; the explicit row anchor handles prepends in long histories. */
 .messages-thread-list > :first-child {
   margin-top: auto;
 }

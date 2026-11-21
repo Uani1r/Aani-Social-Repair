@@ -14,6 +14,11 @@ import {
   shouldShowEmptyThreadMessage,
 } from './messagesThread';
 import {
+  isThreadNearBottom,
+  scrollTopPreservingAnchor,
+  shouldLoadOlderMessagesFromScroll,
+} from './messagesThreadScroll';
+import {
   handleCurrentHiddenMessagesLookupFailure,
   HiddenMessagesLookupError,
   loadHiddenMessageIds,
@@ -43,6 +48,25 @@ test('a failed or incomplete thread load does not show the empty-conversation pr
   assert.equal(shouldShowEmptyThreadMessage(0, 'loaded', true), false);
   assert.equal(shouldShowEmptyThreadMessage(0, 'loaded'), true);
   assert.equal(shouldShowEmptyThreadMessage(1, 'error'), false);
+});
+
+test('latest-message following uses the bottom threshold', () => {
+  assert.equal(isThreadNearBottom({ scrollTop: 600, scrollHeight: 1000, clientHeight: 320 }), true);
+  assert.equal(isThreadNearBottom({ scrollTop: 500, scrollHeight: 1000, clientHeight: 320 }), false);
+});
+
+test('older paging requires an upward user scroll at the top edge', () => {
+  const atTop = { scrollTop: 30, scrollHeight: 1800, clientHeight: 600 };
+  assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, false, true), true);
+  assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, false, false), false);
+  assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, true, true), false);
+  assert.equal(shouldLoadOlderMessagesFromScroll(atTop, false, false, true), false);
+  assert.equal(shouldLoadOlderMessagesFromScroll({ ...atTop, scrollTop: 120 }, true, false, true), false);
+});
+
+test('older-page restoration keeps the current visible anchor in place', () => {
+  assert.equal(scrollTopPreservingAnchor(300, 40, 340), 600);
+  assert.equal(scrollTopPreservingAnchor(20, 80, 10), 0);
 });
 
 test('hidden message rows are removed after a successful hide lookup', async () => {
