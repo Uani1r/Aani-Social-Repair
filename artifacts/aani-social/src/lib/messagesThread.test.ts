@@ -6,10 +6,12 @@ import {
   hasOlderPage,
   initialOlderPageProgress,
   mergeThreadRows,
+  messagesThreadFilter,
   olderCursorFromRows,
   progressAfterLatestPage,
   progressAfterOlderPage,
   sortThreadRows,
+  shouldShowEmptyThreadMessage,
 } from './messagesThread';
 import {
   handleCurrentHiddenMessagesLookupFailure,
@@ -26,6 +28,21 @@ const row = (id: string, createdAt: string, extra: { hidden?: boolean } = {}): R
   id,
   created_at: createdAt,
   ...extra,
+});
+
+test('thread filter includes messages in both participant directions', () => {
+  assert.equal(
+    messagesThreadFilter('user-a', 'user-b'),
+    'and(sender_id.eq.user-a,recipient_id.eq.user-b),and(sender_id.eq.user-b,recipient_id.eq.user-a)',
+  );
+});
+
+test('a failed or incomplete thread load does not show the empty-conversation prompt', () => {
+  assert.equal(shouldShowEmptyThreadMessage(0, 'error'), false);
+  assert.equal(shouldShowEmptyThreadMessage(0, 'loading'), false);
+  assert.equal(shouldShowEmptyThreadMessage(0, 'loaded', true), false);
+  assert.equal(shouldShowEmptyThreadMessage(0, 'loaded'), true);
+  assert.equal(shouldShowEmptyThreadMessage(1, 'error'), false);
 });
 
 test('hidden message rows are removed after a successful hide lookup', async () => {

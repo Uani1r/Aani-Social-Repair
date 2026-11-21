@@ -8,6 +8,20 @@ export interface OlderMessagesCursor {
   id: string;
 }
 
+export type ThreadLoadStatus = 'loading' | 'loaded' | 'error';
+
+export function messagesThreadFilter(currentUserId: string, contactId: string): string {
+  return `and(sender_id.eq.${currentUserId},recipient_id.eq.${contactId}),and(sender_id.eq.${contactId},recipient_id.eq.${currentUserId})`;
+}
+
+export function shouldShowEmptyThreadMessage(
+  messageCount: number,
+  loadStatus: ThreadLoadStatus,
+  hasOlderMessages = false,
+): boolean {
+  return messageCount === 0 && loadStatus === 'loaded' && !hasOlderMessages;
+}
+
 /** ترتيب ثابت: created_at ثم id، كما في الاستعلام (created_at, id). */
 export function sortThreadRows<T extends ThreadMessageLike>(rows: T[]): T[] {
   return [...rows].sort((left, right) => {
