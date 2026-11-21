@@ -117,6 +117,19 @@ export function shouldLoadOlderMessagesFromScroll(
     && metrics.scrollTop <= threshold;
 }
 
+/** Keep the reader's distance from the latest edge when message rows resize. */
+export function scrollTopAfterContentResize(
+  currentScrollTop: number,
+  previous: Pick<ThreadScrollMetrics, 'scrollHeight' | 'clientHeight'>,
+  next: Pick<ThreadScrollMetrics, 'scrollHeight' | 'clientHeight'>,
+  shouldFollowLatest: boolean,
+): number {
+  if (!shouldFollowLatest) return currentScrollTop;
+  const contentHeightChange = next.scrollHeight - previous.scrollHeight;
+  const viewportHeightChange = next.clientHeight - previous.clientHeight;
+  return Math.max(0, currentScrollTop + contentHeightChange - viewportHeightChange);
+}
+
 /** Adjust the current scroll position by the visible anchor's actual layout shift. */
 export function scrollTopPreservingAnchor(
   currentScrollTop: number,
