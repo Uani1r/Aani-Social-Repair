@@ -105,15 +105,24 @@ function isPotentialMissingInboxSummaryRpc(error: unknown): boolean {
  * PGRST202 also covers stale function signatures. Confirm with a no-argument
  * call before falling back; the inbox RPC's arguments have defaults, so an
  * exposed function with a different named signature will still resolve. Ignore
- * details here because PostgREST can include search details for a missing RPC.
+ * details because PostgREST can include search details for a missing RPC, but
+ * reject a hint that points to this RPC with a nonempty argument signature.
  * PGRST203, permission failures, and transport failures never trigger fallback.
  */
 export function isConfirmedMissingMessagesInboxRpc(error: unknown): boolean {
   const message = errorField(error, 'message');
+  const hint = errorField(error, 'hint');
   if (errorField(error, 'code') !== 'PGRST202' || typeof message !== 'string') return false;
-  const functionName = `(?:public\\.)?${INBOX_SUMMARY_RPC}\\(\\)`;
-  return new RegExp(`Could not find the function\\s+${functionName}\\s+in the schema cache`, 'i').test(message)
-    || new RegExp(`Could not find\\s+${functionName}\\s+function\\s+in the schema cache`, 'i').test(message);
+
+  const functionName = `(?:public\\.)?${INBOX_SUMMARY_RPC}`;
+  const hintedSignature = typeof hint === 'string'
+    && new RegExp(`${functionName}\\s*\\(\\s*[^\\s)][^)]*\\)`, 'i').test(hint);
+  if (hintedSignature) return false;
+
+  return new RegExp(
+    `Could not find\\s+(?:the\\s+)?(?:function\\s+)?${functionName}\\(\\)\\s+(?:function\\s+)?in the schema cache`,
+    'i',
+  ).test(message);
 }
 
 export function buildLegacyMessagesInboxSummaries<TMessage extends LegacyInboxMessage>(

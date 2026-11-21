@@ -239,6 +239,27 @@ test('a signature mismatch that succeeds without named arguments does not fall b
   assert.equal(fallbackCount, 0);
 });
 
+test('a no-argument probe hinting at a required RPC signature does not fall back', async () => {
+  const signatureError = {
+    code: 'PGRST202',
+    message: 'Could not find the public.aani_get_messages_inbox_summaries() function in the schema cache',
+    details: 'Searched for the function with no parameters, but no match was found in the schema cache.',
+    hint: 'Perhaps you meant to call the function public.aani_get_messages_inbox_summaries(p_account_id uuid)',
+  };
+  let fallbackCount = 0;
+  const result = await fetchMessagesInboxSummaries(async () => ({ data: null, error: missingRpcError }), {}, null, normalizeMessage, async () => ({
+    data: null,
+    error: signatureError,
+  }), async () => {
+    fallbackCount += 1;
+    return emptyFallback();
+  });
+
+  assert.equal(result.error, signatureError);
+  assert.equal(result.usedFallback, false);
+  assert.equal(fallbackCount, 0);
+});
+
 test('stale function-signature errors do not use the legacy fallback', async () => {
   const signatureError = {
     code: 'PGRST202',
