@@ -43,9 +43,12 @@ import {
   createOlderRequestTracker,
   initialOlderPageProgress,
   mergeThreadRows,
+  messagesThreadFilter,
   progressAfterLatestPage,
   progressAfterOlderPage,
+  shouldShowEmptyThreadMessage,
   type OlderPageProgress,
+  type ThreadLoadStatus,
 } from '@/lib/messagesThread';
 import {
   handleCurrentHiddenMessagesLookupFailure,
@@ -876,9 +879,13 @@ export default function MessagesPage({
   const [conversationCacheReady, setConversationCacheReady] = useState(initialConversationCache !== null);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
+  const [threadLoadStatus, setThreadLoadStatus] = useState<ThreadLoadStatus>(
+    () => supabaseConfigured && selectedId ? 'loading' : 'loaded',
+  );
   // هل توجد رسائل أقدم لم تُجلب بعد (تُطلب عند التمرير لأعلى).
   const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const [olderMessagesLoading, setOlderMessagesLoading] = useState(false);
+  const [olderMessagesError, setOlderMessagesError] = useState(false);
   const [threadCacheReady, setThreadCacheReady] = useState(Boolean(initialThreadCache));
   const [replyMessage, setReplyMessage] = useState<MessageRow | null>(null);
   const [editingMessage, setEditingMessage] = useState<MessageRow | null>(null);
@@ -1384,13 +1391,15 @@ export default function MessagesPage({
 
   const loadThread = useCallback(async () => {
     if (!supabaseConfigured || !selectedId) return;
+    setThreadLoadStatus('loading');
+    setOlderMessagesError(false);
     const requestId = ++threadRequestRef.current;
     // تحميل كامل جديد للمحادثة يُبطل أي دفعة أقدم جارية ويحرّر حالتها، وإلا
     // بقيت واجهة التحميل معلّقة إن لم يعد ذلك الطلب هو الطلب الحالي.
     olderRequestTrackerRef.current.invalidate();
     setOlderMessagesLoading(false);
     const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
-    const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
+    const threadFilter = messagesThreadFilter(currentUserId, selectedId);
 
     try {
       await purgeExpiredMessages();
@@ -1425,9 +1434,14 @@ export default function MessagesPage({
             : message;
         });
       type MessageReactionRow = { message_id: string; user_id: string; emoji: string };
-      const reactionResult: { data: MessageReactionRow[] | null; error: unknown } = visibleMessages.length
-        ? await retrySupabaseQuery(async () => await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id)))
-        : { data: [], error: null };
+      let reactionResult: { data: MessageReactionRow[] | null; error: unknown };
+      try {
+        reactionResult = visibleMessages.length
+          ? await retrySupabaseQuery(async () => await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id)))
+          : { data: [], error: null };
+      } catch (error) {
+        reactionResult = { data: null, error };
+      }
       const nextReactions: Record<string, MessageReaction[]> = {};
       if (reactionResult.error) {
         console.warn('[messages] تعذر جلب تفاعلات الرسائل:', reactionResult.error);
@@ -1469,6 +1483,7 @@ export default function MessagesPage({
           visibleMessages,
         ));
         setThreadCacheReady(true);
+        setThreadLoadStatus('loaded');
         commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
           .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
@@ -1479,6 +1494,7 @@ export default function MessagesPage({
         error,
         () => requestId === threadRequestRef.current,
         lookupError => {
+          setThreadLoadStatus('error');
           setThread([]);
           commitReactionsByMessage({});
           setThreadCacheReady(false);
@@ -1487,6 +1503,7 @@ export default function MessagesPage({
         },
       )) return;
       if (requestId !== threadRequestRef.current) return;
+      setThreadLoadStatus('error');
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
@@ -1506,10 +1523,11 @@ export default function MessagesPage({
     const isStillCurrent = () => olderRequestTrackerRef.current.isCurrent(olderRequestId, selectedIdRef.current);
 
     setOlderMessagesLoading(true);
+    setOlderMessagesError(false);
     const threadList = threadListRef.current;
     const previousScrollHeight = threadList?.scrollHeight ?? 0;
     const previousScrollTop = threadList?.scrollTop ?? 0;
-    const threadFilter = `and(sender_id.eq.${currentUserId},recipient_id.eq.${selectedId}),and(sender_id.eq.${selectedId},recipient_id.eq.${currentUserId})`;
+    const threadFilter = messagesThreadFilter(currentUserId, selectedId);
 
     try {
       const { data, error } = await queryMessageRows(threadFilter, false, true, {
@@ -1542,6 +1560,7 @@ export default function MessagesPage({
       });
     } catch (error) {
       if (handleCurrentHiddenMessagesLookupFailure(error, isStillCurrent, lookupError => {
+        setThreadLoadStatus('error');
         setThread([]);
         commitReactionsByMessage({});
         setThreadCacheReady(false);
@@ -1549,6 +1568,7 @@ export default function MessagesPage({
         console.warn('[messages] تعذر تحميل رسائل أقدم:', lookupError);
       })) return;
       if (!isStillCurrent()) return;
+      setOlderMessagesError(true);
       console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
     } finally {
       // يحرّر هذا الطلب رايته دائماً إن كان هو الطلب الجاري، حتى لو تغيّر
@@ -1760,9 +1780,11 @@ export default function MessagesPage({
     setThreadSearchIndex(0);
     setMessageExpirationSeconds(null);
     const cachedThread = selectedId ? readThreadCache(currentUserId, selectedId) : null;
+    setThreadLoadStatus(supabaseConfigured && selectedId ? 'loading' : 'loaded');
     setThread(cachedThread?.messages || []);
     setHasOlderMessages(false);
     setOlderMessagesLoading(false);
+    setOlderMessagesError(false);
     olderRequestTrackerRef.current.invalidate();
     olderProgressRef.current = initialOlderPageProgress();
     setThreadCacheReady(Boolean(cachedThread));
@@ -3396,7 +3418,19 @@ export default function MessagesPage({
                 onTouchEnd={() => { threadScrollTouchOriginRef.current = null; }}
                 onTouchCancel={() => { threadScrollTouchOriginRef.current = null; }}
               >
-                {thread.length === 0 && !selectedPendingMediaMessage && (
+                {threadLoadStatus === 'error' && (
+                  <div className="messages-list-status" role="alert">
+                    <span>تعذر تحميل رسائل المحادثة الآن.</span>
+                    <button type="button" onClick={() => void loadThread()}>إعادة المحاولة</button>
+                  </div>
+                )}
+                {olderMessagesError && (
+                  <div className="messages-list-status" role="alert">
+                    <span>تعذر تحميل الرسائل الأقدم الآن.</span>
+                    <button type="button" onClick={() => void loadOlderThread()}>إعادة المحاولة</button>
+                  </div>
+                )}
+                {shouldShowEmptyThreadMessage(thread.length, threadLoadStatus, hasOlderMessages) && !selectedPendingMediaMessage && (
                   <div className="messages-thread-start">أرسل أول رسالة لبدء المحادثة.</div>
                 )}
                 {thread.map((message, index) => {
