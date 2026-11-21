@@ -44,7 +44,7 @@ const missingRpcError = {
 const confirmedMissingRpcError = {
   code: 'PGRST202',
   message: 'Could not find the public.aani_get_messages_inbox_summaries() function in the schema cache',
-  details: null,
+  details: 'Searched for the function public.aani_get_messages_inbox_summaries with no parameters and no matches were found in the schema cache.',
   hint: null,
 };
 
@@ -242,8 +242,8 @@ test('a signature mismatch that succeeds without named arguments does not fall b
 test('stale function-signature errors do not use the legacy fallback', async () => {
   const signatureError = {
     code: 'PGRST202',
-    message: 'Could not find the public.aani_get_messages_inbox_summaries() function in the schema cache',
-    details: 'Searched for the function with the supplied parameters, but no matches were found in the schema cache.',
+    message: 'Could not find the public.aani_get_messages_inbox_summaries(p_read_at_by_contact) function in the schema cache',
+    details: 'Searched for the function with the supplied parameter but no matching signature was found in the schema cache.',
     hint: null,
   };
   let fallbackCount = 0;
@@ -331,11 +331,32 @@ test('request badges use summary counts only for request contacts', () => {
   });
 });
 
-test('an older inbox response is ignored after a newer load or invalidation', () => {
+test('an older legacy fallback response stays stale after a newer load or invalidation', async () => {
   const tracker = createInboxRequestTracker();
   const firstRequest = tracker.begin();
+  let resolveFallback!: (value: {
+    data: Map<string, { lastMessage: MessageLike | null; unreadCount: number }>;
+    error: unknown | null;
+  }) => void;
+  const pendingFallback = new Promise<{
+    data: Map<string, { lastMessage: MessageLike | null; unreadCount: number }>;
+    error: unknown | null;
+  }>(resolve => {
+    resolveFallback = resolve;
+  });
+  const resultPromise = fetchMessagesInboxSummaries(async () => ({ data: null, error: missingRpcError }), {}, null, normalizeMessage, async () => ({
+    data: null,
+    error: confirmedMissingRpcError,
+  }), async () => await pendingFallback);
   const secondRequest = tracker.begin();
+  resolveFallback({ data: new Map(), error: null });
 
+  const result = await resultPromise;
+  let applied = false;
+  if (tracker.isCurrent(firstRequest)) applied = true;
+
+  assert.equal(result.usedFallback, true);
+  assert.equal(applied, false);
   assert.equal(tracker.isCurrent(firstRequest), false);
   assert.equal(tracker.isCurrent(secondRequest), true);
 
