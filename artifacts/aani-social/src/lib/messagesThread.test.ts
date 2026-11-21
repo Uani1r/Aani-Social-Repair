@@ -12,10 +12,12 @@ import {
   sortThreadRows,
 } from './messagesThread';
 import {
-  handleHiddenMessagesLookupFailure,
+  handleCurrentHiddenMessagesLookupFailure,
   HiddenMessagesLookupError,
   loadHiddenMessageIds,
   loadVisibleMessagesWithHiddenIds,
+  removeThreadCache,
+  threadCacheKey,
 } from './messagesHidden';
 
 type Row = { id: string; created_at: string; hidden?: boolean };
@@ -36,37 +38,33 @@ test('hidden message rows are removed after a successful hide lookup', async () 
   assert.deepEqual(result.visibleMessages.map(message => message.id), ['visible-message']);
 });
 
-test('a failed hide lookup clears stale thread state and preserves the original error', async () => {
+test('a hide lookup failure runs current-conversation cleanup and removes its local cache key', async () => {
   const queryError = new Error('message_hides query failed');
-  const cachedRows = [
-    row('possibly-hidden', '2026-01-01T10:00:00Z'),
-    row('visible-message', '2026-01-01T10:00:01Z'),
-  ];
-  let visibleRows = cachedRows;
-  let cachedThreadPresent = true;
-  let reactionsByMessage: Record<string, string[]> = { 'possibly-hidden': ['👍'] };
-  let threadCacheReady = true;
-  const result = loadVisibleMessagesWithHiddenIds(cachedRows, () => loadHiddenMessageIds(async () => ({
+  const userId = 'user-1';
+  const contactId = 'contact-a';
+  const targetKey = threadCacheKey(userId, contactId);
+  const otherKey = threadCacheKey(userId, 'contact-b');
+  const cache = new Map([[targetKey, 'cached thread'], [otherKey, 'other conversation']]);
+  const fakeLocalStorage = { removeItem: (key: string) => cache.delete(key) };
+  let cleanupCount = 0;
+
+  await assert.rejects(loadHiddenMessageIds(async () => ({
     data: [{ message_id: 'possibly-hidden' }],
     error: queryError,
-  })));
-
-  await assert.rejects(result, error => {
+  })), error => {
     assert(error instanceof HiddenMessagesLookupError);
     assert.equal(error.originalError, queryError);
-    assert.equal(handleHiddenMessagesLookupFailure(error, () => {
-      visibleRows = [];
-      cachedThreadPresent = false;
-      reactionsByMessage = {};
-      threadCacheReady = false;
+    assert.equal(handleCurrentHiddenMessagesLookupFailure(error, () => true, lookupError => {
+      assert.equal(lookupError, error);
+      cleanupCount += 1;
+      removeThreadCache(userId, contactId, fakeLocalStorage);
     }), true);
     return true;
   });
 
-  assert.deepEqual(visibleRows, []);
-  assert.equal(cachedThreadPresent, false);
-  assert.deepEqual(reactionsByMessage, {});
-  assert.equal(threadCacheReady, false);
+  assert.equal(cleanupCount, 1);
+  assert.equal(cache.has(targetKey), false);
+  assert.equal(cache.has(otherKey), true);
 });
 
 test('a rejected hide query is wrapped without losing its original error', async () => {
@@ -77,15 +75,66 @@ test('a rejected hide query is wrapped without losing its original error', async
   }), error => error instanceof HiddenMessagesLookupError && error.originalError === queryError);
 });
 
-test('ordinary message errors do not clear cached thread state', () => {
-  const cachedRows = [row('cached-message', '2026-01-01T10:00:00Z')];
-  let visibleRows = cachedRows;
-  const handled = handleHiddenMessagesLookupFailure(new Error('messages query failed'), () => {
-    visibleRows = [];
+test('ordinary message errors do not run cleanup or remove the conversation cache', () => {
+  const userId = 'user-1';
+  const contactId = 'contact-a';
+  const key = threadCacheKey(userId, contactId);
+  const cache = new Map([[key, 'cached thread']]);
+  const fakeLocalStorage = { removeItem: (storageKey: string) => cache.delete(storageKey) };
+  let cleanupCount = 0;
+  const handled = handleCurrentHiddenMessagesLookupFailure(new Error('messages query failed'), () => true, () => {
+    cleanupCount += 1;
+    removeThreadCache(userId, contactId, fakeLocalStorage);
   });
 
   assert.equal(handled, false);
-  assert.deepEqual(visibleRows, cachedRows);
+  assert.equal(cleanupCount, 0);
+  assert.equal(cache.has(key), true);
+});
+
+test('a stale older hide lookup failure after switching conversations preserves the new thread and cache', async () => {
+  const userId = 'user-1';
+  const oldContactId = 'contact-a';
+  const newContactId = 'contact-b';
+  const oldKey = threadCacheKey(userId, oldContactId);
+  const newKey = threadCacheKey(userId, newContactId);
+  const cache = new Map([[oldKey, 'old thread'], [newKey, 'new thread']]);
+  const fakeLocalStorage = { removeItem: (key: string) => cache.delete(key) };
+  const tracker = createOlderRequestTracker();
+  const requestId = tracker.begin(oldContactId);
+  let selectedContactId = oldContactId;
+  let displayedThread = ['new conversation message'];
+  let reactionsByMessage: Record<string, string[]> = { 'new conversation message': ['👍'] };
+  let rejectLookup!: (error: Error) => void;
+  const pendingLookup = loadHiddenMessageIds(() => new Promise<never>((_resolve, reject) => {
+    rejectLookup = reject;
+  }));
+  selectedContactId = newContactId;
+  rejectLookup(new Error('message_hides query failed'));
+
+  let lookupFailure: unknown;
+  try {
+    await pendingLookup;
+  } catch (error) {
+    lookupFailure = error;
+  }
+
+  assert(lookupFailure instanceof HiddenMessagesLookupError);
+  const handled = handleCurrentHiddenMessagesLookupFailure(
+    lookupFailure,
+    () => tracker.isCurrent(requestId, selectedContactId),
+    () => {
+      displayedThread = [];
+      reactionsByMessage = {};
+      removeThreadCache(userId, oldContactId, fakeLocalStorage);
+    },
+  );
+
+  assert.equal(handled, false);
+  assert.deepEqual(displayedThread, ['new conversation message']);
+  assert.deepEqual(reactionsByMessage, { 'new conversation message': ['👍'] });
+  assert.equal(cache.has(oldKey), true);
+  assert.equal(cache.has(newKey), true);
 });
 
 test('merge keeps a stable created_at then id order and never duplicates', () => {

@@ -46,11 +46,12 @@ import {
   type OlderPageProgress,
 } from '@/lib/messagesThread';
 import {
-  handleHiddenMessagesLookupFailure,
+  handleCurrentHiddenMessagesLookupFailure,
   loadHiddenMessageIds as loadHiddenMessageIdsFromQuery,
   loadVisibleMessagesWithHiddenIds,
+  removeThreadCache,
+  threadCacheKey,
 } from '@/lib/messagesHidden';
-import type { HiddenMessagesLookupError } from '@/lib/messagesHidden';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -522,7 +523,6 @@ interface CachedMessageThread {
 }
 
 const conversationCacheKey = (userId: string) => `aani_messages_conversations_v1_${userId}`;
-const threadCacheKey = (userId: string, contactId: string) => `aani_messages_thread_v1_${userId}_${contactId}`;
 const MESSAGE_THREAD_CACHE_LIMIT = 300;
 // حجم دفعة المحادثة: أحدث 60 رسالة عند الفتح، ثم 60 أقدم عند التمرير لأعلى.
 const MESSAGE_THREAD_PAGE_SIZE = 60;
@@ -607,14 +607,6 @@ function writeThreadCache(
     localStorage.setItem(threadCacheKey(userId, contactId), JSON.stringify({ messages: cachedMessages, reactions }));
   } catch {
     /* التخزين المحلي غير متاح أو ممتلئ */
-  }
-}
-
-function removeThreadCache(userId: string, contactId: string): void {
-  try {
-    localStorage.removeItem(threadCacheKey(userId, contactId));
-  } catch {
-    /* التخزين المحلي غير متاح */
   }
 }
 
@@ -1481,14 +1473,18 @@ export default function MessagesPage({
           .map(message => message.id));
       }
     } catch (error) {
+      if (handleCurrentHiddenMessagesLookupFailure(
+        error,
+        () => requestId === threadRequestRef.current,
+        lookupError => {
+          setThread([]);
+          commitReactionsByMessage({});
+          setThreadCacheReady(false);
+          removeThreadCache(currentUserId, selectedId);
+          console.error('[messages] تعذر جلب المحادثة:', lookupError);
+        },
+      )) return;
       if (requestId !== threadRequestRef.current) return;
-      if (handleHiddenMessagesLookupFailure(error, (lookupError: HiddenMessagesLookupError) => {
-        setThread([]);
-        commitReactionsByMessage({});
-        setThreadCacheReady(false);
-        removeThreadCache(currentUserId, selectedId);
-        console.error('[messages] تعذر جلب المحادثة:', lookupError);
-      })) return;
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
@@ -1543,14 +1539,14 @@ export default function MessagesPage({
         list.scrollTop = list.scrollHeight - previousScrollHeight + previousScrollTop;
       });
     } catch (error) {
-      if (!isStillCurrent()) return;
-      if (handleHiddenMessagesLookupFailure(error, (lookupError: HiddenMessagesLookupError) => {
+      if (handleCurrentHiddenMessagesLookupFailure(error, isStillCurrent, lookupError => {
         setThread([]);
         commitReactionsByMessage({});
         setThreadCacheReady(false);
         removeThreadCache(currentUserId, conversationIdAtStart);
         console.warn('[messages] تعذر تحميل رسائل أقدم:', lookupError);
       })) return;
+      if (!isStillCurrent()) return;
       console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
     } finally {
       // يحرّر هذا الطلب رايته دائماً إن كان هو الطلب الجاري، حتى لو تغيّر

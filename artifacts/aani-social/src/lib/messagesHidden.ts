@@ -7,6 +7,10 @@ export interface HiddenMessageQueryResult {
   error: unknown | null;
 }
 
+export interface ThreadCacheStorage {
+  removeItem(key: string): void;
+}
+
 export class HiddenMessagesLookupError extends Error {
   readonly originalError: unknown;
 
@@ -17,11 +21,29 @@ export class HiddenMessagesLookupError extends Error {
   }
 }
 
-export function handleHiddenMessagesLookupFailure(
+export function threadCacheKey(userId: string, contactId: string): string {
+  return `aani_messages_thread_v1_${userId}_${contactId}`;
+}
+
+export function removeThreadCache(
+  userId: string,
+  contactId: string,
+  storage?: ThreadCacheStorage,
+): void {
+  try {
+    if (storage) storage.removeItem(threadCacheKey(userId, contactId));
+    else localStorage.removeItem(threadCacheKey(userId, contactId));
+  } catch {
+    /* التخزين المحلي غير متاح */
+  }
+}
+
+export function handleCurrentHiddenMessagesLookupFailure(
   error: unknown,
+  isCurrent: () => boolean,
   onFailure: (error: HiddenMessagesLookupError) => void,
 ): boolean {
-  if (!(error instanceof HiddenMessagesLookupError)) return false;
+  if (!isCurrent() || !(error instanceof HiddenMessagesLookupError)) return false;
   onFailure(error);
   return true;
 }
