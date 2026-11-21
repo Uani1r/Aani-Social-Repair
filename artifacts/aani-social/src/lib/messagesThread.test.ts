@@ -14,7 +14,13 @@ import {
   shouldShowEmptyThreadMessage,
 } from './messagesThread';
 import {
+  cancelInitialThreadScroll,
+  claimInitialThreadScroll,
+  createInitialThreadScrollState,
+  isCurrentThreadLoad,
   isThreadNearBottom,
+  isUserInitiatedUpwardScroll,
+  markInitialThreadServerLoaded,
   scrollTopPreservingAnchor,
   shouldLoadOlderMessagesFromScroll,
 } from './messagesThreadScroll';
@@ -50,14 +56,123 @@ test('a failed or incomplete thread load does not show the empty-conversation pr
   assert.equal(shouldShowEmptyThreadMessage(1, 'error'), false);
 });
 
+test('cached messages claim the initial scroll before Supabase responds and only once', () => {
+  let state = createInitialThreadScrollState('contact-a', true);
+  let initialScrollCount = 0;
+
+  const cacheRender = claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loading', true);
+  assert.equal(cacheRender.completed, true);
+  assert.equal(cacheRender.shouldScroll, true);
+  initialScrollCount += Number(cacheRender.shouldScroll);
+  state = cacheRender.state;
+  assert.equal(state.phase, 'completed');
+
+  // Server load start/completion cannot put a completed conversation back into an initial phase.
+  assert.strictEqual(markInitialThreadServerLoaded(state, 'contact-a'), state);
+  const serverRender = claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loaded', true);
+  assert.equal(serverRender.completed, false);
+  assert.equal(serverRender.shouldScroll, false);
+  initialScrollCount += Number(serverRender.shouldScroll);
+  assert.equal(initialScrollCount, 1);
+});
+
+test('without cache, initial scroll waits for a successful server render', () => {
+  let state = createInitialThreadScrollState('contact-a', false);
+  let initialScrollCount = 0;
+
+  assert.equal(claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loading', true).completed, false);
+  assert.equal(claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'error', true).completed, false);
+  assert.equal(state.phase, 'waiting-for-server');
+
+  state = markInitialThreadServerLoaded(state, 'contact-a');
+  assert.equal(state.phase, 'waiting-for-server-render');
+  assert.equal(claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loading', true).completed, false);
+
+  const firstServerRender = claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loaded', true);
+  assert.equal(firstServerRender.completed, true);
+  assert.equal(firstServerRender.shouldScroll, true);
+  initialScrollCount += Number(firstServerRender.shouldScroll);
+  state = firstServerRender.state;
+
+  const repeatedRender = claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loaded', true);
+  assert.equal(repeatedRender.completed, false);
+  initialScrollCount += Number(repeatedRender.shouldScroll);
+  assert.equal(initialScrollCount, 1);
+});
+
+test('cached history stays ready while Supabase is delayed and automatic layout events cannot page older rows', () => {
+  let state = createInitialThreadScrollState('contact-a', true);
+  const cachedRender = claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loading', true);
+  state = cachedRender.state;
+  assert.equal(state.phase, 'completed');
+  assert.strictEqual(markInitialThreadServerLoaded(state, 'contact-a'), state);
+
+  const atTop = { scrollTop: 30, scrollHeight: 1800, clientHeight: 600 };
+  for (const automaticCause of ['open', 'cache-render', 'programmatic-scroll', 'DOM-update', 'Supabase-update', 'resize', 'keyboard']) {
+    const upwardUserScroll = isUserInitiatedUpwardScroll(100, 30, true, false);
+    assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, false, upwardUserScroll), false, automaticCause);
+  }
+  const upwardUserScroll = isUserInitiatedUpwardScroll(100, 30, true, true);
+  assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, false, upwardUserScroll), true);
+});
+
+test('server updates preserve completed initial state and merge without duplicates while following latest', () => {
+  let state = createInitialThreadScrollState('contact-a', true);
+  const cacheRender = claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loading', true);
+  state = cacheRender.state;
+  state = markInitialThreadServerLoaded(state, 'contact-a');
+
+  const merged = mergeThreadRows(
+    [row('cached', '2026-01-01T10:00:00Z')],
+    [row('cached', '2026-01-01T10:00:00Z'), row('latest', '2026-01-01T10:00:01Z')],
+  );
+  assert.deepEqual(merged.map(message => message.id), ['cached', 'latest']);
+  assert.equal(isThreadNearBottom({ scrollTop: 700, scrollHeight: 1000, clientHeight: 300 }), true);
+  assert.equal(state.phase, 'completed');
+  assert.equal(claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loaded', true).completed, false);
+});
+
+test('a stale conversation load cannot change a newer conversation scroll state or DOM source', () => {
+  const stateB = createInitialThreadScrollState('contact-b', true);
+
+  assert.equal(isCurrentThreadLoad(1, 1, 'contact-a', 'contact-b'), false);
+  assert.strictEqual(markInitialThreadServerLoaded(stateB, 'contact-a'), stateB);
+  assert.equal(claimInitialThreadScroll(stateB, 'contact-b', 'contact-a', 'loaded', true).completed, false);
+
+  const currentCacheRender = claimInitialThreadScroll(stateB, 'contact-b', 'contact-b', 'loading', true);
+  assert.equal(currentCacheRender.completed, true);
+  assert.equal(currentCacheRender.shouldScroll, true);
+});
+
+test('manual upward reading cancels initial scroll without cancelling a completed scroll', () => {
+  const pending = createInitialThreadScrollState('contact-a', false);
+  const cancelled = cancelInitialThreadScroll(pending, 'contact-a');
+  assert.equal(cancelled.phase, 'cancelled');
+  assert.strictEqual(markInitialThreadServerLoaded(cancelled, 'contact-a'), cancelled);
+  assert.equal(claimInitialThreadScroll(cancelled, 'contact-a', 'contact-a', 'loaded', true).completed, false);
+
+  const completed = createInitialThreadScrollState('contact-a', true);
+  const afterCache = claimInitialThreadScroll(completed, 'contact-a', 'contact-a', 'loading', true).state;
+  assert.strictEqual(cancelInitialThreadScroll(afterCache, 'contact-a'), afterCache);
+});
+
 test('latest-message following uses the bottom threshold', () => {
   assert.equal(isThreadNearBottom({ scrollTop: 600, scrollHeight: 1000, clientHeight: 320 }), true);
   assert.equal(isThreadNearBottom({ scrollTop: 500, scrollHeight: 1000, clientHeight: 320 }), false);
 });
 
-test('older paging requires an upward user scroll at the top edge', () => {
+test('older paging requires actual user-initiated upward movement at the top edge', () => {
   const atTop = { scrollTop: 30, scrollHeight: 1800, clientHeight: 600 };
-  assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, false, true), true);
+  assert.equal(isUserInitiatedUpwardScroll(31, 30, true, true), true);
+  assert.equal(isUserInitiatedUpwardScroll(30, 30, true, true), false);
+  assert.equal(isUserInitiatedUpwardScroll(31, 30, false, true), false);
+  assert.equal(isUserInitiatedUpwardScroll(31, 30, true, false), false);
+  assert.equal(shouldLoadOlderMessagesFromScroll(
+    atTop,
+    true,
+    false,
+    isUserInitiatedUpwardScroll(31, 30, true, true),
+  ), true);
   assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, false, false), false);
   assert.equal(shouldLoadOlderMessagesFromScroll(atTop, true, true, true), false);
   assert.equal(shouldLoadOlderMessagesFromScroll(atTop, false, false, true), false);
