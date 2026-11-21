@@ -45,7 +45,12 @@ import {
   progressAfterOlderPage,
   type OlderPageProgress,
 } from '@/lib/messagesThread';
-import { loadHiddenMessageIds as loadHiddenMessageIdsFromQuery, loadVisibleMessagesWithHiddenIds } from '@/lib/messagesHidden';
+import {
+  handleHiddenMessagesLookupFailure,
+  loadHiddenMessageIds as loadHiddenMessageIdsFromQuery,
+  loadVisibleMessagesWithHiddenIds,
+} from '@/lib/messagesHidden';
+import type { HiddenMessagesLookupError } from '@/lib/messagesHidden';
 import { displayName, type Profile } from '@/lib/types';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -602,6 +607,14 @@ function writeThreadCache(
     localStorage.setItem(threadCacheKey(userId, contactId), JSON.stringify({ messages: cachedMessages, reactions }));
   } catch {
     /* التخزين المحلي غير متاح أو ممتلئ */
+  }
+}
+
+function removeThreadCache(userId: string, contactId: string): void {
+  try {
+    localStorage.removeItem(threadCacheKey(userId, contactId));
+  } catch {
+    /* التخزين المحلي غير متاح */
   }
 }
 
@@ -1469,6 +1482,13 @@ export default function MessagesPage({
       }
     } catch (error) {
       if (requestId !== threadRequestRef.current) return;
+      if (handleHiddenMessagesLookupFailure(error, (lookupError: HiddenMessagesLookupError) => {
+        setThread([]);
+        commitReactionsByMessage({});
+        setThreadCacheReady(false);
+        removeThreadCache(currentUserId, selectedId);
+        console.error('[messages] تعذر جلب المحادثة:', lookupError);
+      })) return;
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
@@ -1524,6 +1544,13 @@ export default function MessagesPage({
       });
     } catch (error) {
       if (!isStillCurrent()) return;
+      if (handleHiddenMessagesLookupFailure(error, (lookupError: HiddenMessagesLookupError) => {
+        setThread([]);
+        commitReactionsByMessage({});
+        setThreadCacheReady(false);
+        removeThreadCache(currentUserId, conversationIdAtStart);
+        console.warn('[messages] تعذر تحميل رسائل أقدم:', lookupError);
+      })) return;
       console.warn('[messages] تعذر تحميل رسائل أقدم:', error);
     } finally {
       // يحرّر هذا الطلب رايته دائماً إن كان هو الطلب الجاري، حتى لو تغيّر
@@ -1533,7 +1560,7 @@ export default function MessagesPage({
         setOlderMessagesLoading(false);
       }
     }
-  }, [currentUserId, selectedId]);
+  }, [commitReactionsByMessage, currentUserId, selectedId]);
 
   const markViewOnceMessageOpened = useCallback(async (messageId: string, urls: string[]) => {
     const targetMessage = thread.find(message => message.id === messageId);

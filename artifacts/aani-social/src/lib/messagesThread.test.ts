@@ -11,7 +11,12 @@ import {
   progressAfterOlderPage,
   sortThreadRows,
 } from './messagesThread';
-import { loadVisibleMessagesWithHiddenIds } from './messagesHidden';
+import {
+  handleHiddenMessagesLookupFailure,
+  HiddenMessagesLookupError,
+  loadHiddenMessageIds,
+  loadVisibleMessagesWithHiddenIds,
+} from './messagesHidden';
 
 type Row = { id: string; created_at: string; hidden?: boolean };
 
@@ -31,16 +36,56 @@ test('hidden message rows are removed after a successful hide lookup', async () 
   assert.deepEqual(result.visibleMessages.map(message => message.id), ['visible-message']);
 });
 
-test('a failed hide lookup rejects instead of returning an unfiltered message page', async () => {
+test('a failed hide lookup clears stale thread state and preserves the original error', async () => {
   const queryError = new Error('message_hides query failed');
-  const result = loadVisibleMessagesWithHiddenIds([
+  const cachedRows = [
     row('possibly-hidden', '2026-01-01T10:00:00Z'),
     row('visible-message', '2026-01-01T10:00:01Z'),
-  ], async () => {
-    throw queryError;
+  ];
+  let visibleRows = cachedRows;
+  let cachedThreadPresent = true;
+  let reactionsByMessage: Record<string, string[]> = { 'possibly-hidden': ['👍'] };
+  let threadCacheReady = true;
+  const result = loadVisibleMessagesWithHiddenIds(cachedRows, () => loadHiddenMessageIds(async () => ({
+    data: [{ message_id: 'possibly-hidden' }],
+    error: queryError,
+  })));
+
+  await assert.rejects(result, error => {
+    assert(error instanceof HiddenMessagesLookupError);
+    assert.equal(error.originalError, queryError);
+    assert.equal(handleHiddenMessagesLookupFailure(error, () => {
+      visibleRows = [];
+      cachedThreadPresent = false;
+      reactionsByMessage = {};
+      threadCacheReady = false;
+    }), true);
+    return true;
   });
 
-  await assert.rejects(result, error => error === queryError);
+  assert.deepEqual(visibleRows, []);
+  assert.equal(cachedThreadPresent, false);
+  assert.deepEqual(reactionsByMessage, {});
+  assert.equal(threadCacheReady, false);
+});
+
+test('a rejected hide query is wrapped without losing its original error', async () => {
+  const queryError = new Error('message_hides request rejected');
+
+  await assert.rejects(loadHiddenMessageIds(async () => {
+    throw queryError;
+  }), error => error instanceof HiddenMessagesLookupError && error.originalError === queryError);
+});
+
+test('ordinary message errors do not clear cached thread state', () => {
+  const cachedRows = [row('cached-message', '2026-01-01T10:00:00Z')];
+  let visibleRows = cachedRows;
+  const handled = handleHiddenMessagesLookupFailure(new Error('messages query failed'), () => {
+    visibleRows = [];
+  });
+
+  assert.equal(handled, false);
+  assert.deepEqual(visibleRows, cachedRows);
 });
 
 test('merge keeps a stable created_at then id order and never duplicates', () => {

@@ -7,13 +7,37 @@ export interface HiddenMessageQueryResult {
   error: unknown | null;
 }
 
+export class HiddenMessagesLookupError extends Error {
+  readonly originalError: unknown;
+
+  constructor(originalError: unknown) {
+    super('Failed to load hidden message IDs');
+    this.name = 'HiddenMessagesLookupError';
+    this.originalError = originalError;
+  }
+}
+
+export function handleHiddenMessagesLookupFailure(
+  error: unknown,
+  onFailure: (error: HiddenMessagesLookupError) => void,
+): boolean {
+  if (!(error instanceof HiddenMessagesLookupError)) return false;
+  onFailure(error);
+  return true;
+}
+
 export async function loadHiddenMessageIds(
   query: () => Promise<HiddenMessageQueryResult>,
 ): Promise<Set<string>> {
-  const { data, error } = await query();
-  if (error) throw error;
+  let result: HiddenMessageQueryResult;
+  try {
+    result = await query();
+  } catch (error) {
+    throw new HiddenMessagesLookupError(error);
+  }
+  if (result.error) throw new HiddenMessagesLookupError(result.error);
 
-  return new Set((data || []).flatMap(row => typeof row.message_id === 'string' ? [row.message_id] : []));
+  return new Set((result.data || []).flatMap(row => typeof row.message_id === 'string' ? [row.message_id] : []));
 }
 
 export async function loadVisibleMessagesWithHiddenIds<TMessage extends { id: string }>(
