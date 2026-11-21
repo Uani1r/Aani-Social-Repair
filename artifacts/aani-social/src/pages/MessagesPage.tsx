@@ -1394,12 +1394,12 @@ export default function MessagesPage({
         true,
         { limit: MESSAGE_THREAD_PAGE_SIZE },
       );
+      if (error) throw error;
       const latestRows = normalizeMessageRows(data);
       const { hiddenMessageIds, visibleMessages: hiddenFilteredLatestRows } = await loadVisibleMessagesWithHiddenIds(
         latestRows.slice().reverse(),
         () => loadHiddenMessageIds(currentUserId),
       );
-      if (error) throw error;
       if (requestId === threadRequestRef.current) {
         // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
         // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
