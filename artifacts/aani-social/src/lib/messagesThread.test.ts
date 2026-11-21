@@ -25,10 +25,7 @@ test('hidden message rows are removed after a successful hide lookup', async () 
   const result = await loadVisibleMessagesWithHiddenIds([
     row('hidden-message', '2026-01-01T10:00:00Z'),
     row('visible-message', '2026-01-01T10:00:01Z'),
-  ], async () => ({
-    data: [{ message_id: 'hidden-message' }],
-    error: null,
-  }));
+  ], async () => new Set(['hidden-message']));
 
   assert.deepEqual([...result.hiddenMessageIds], ['hidden-message']);
   assert.deepEqual(result.visibleMessages.map(message => message.id), ['visible-message']);
@@ -39,10 +36,9 @@ test('a failed hide lookup rejects instead of returning an unfiltered message pa
   const result = loadVisibleMessagesWithHiddenIds([
     row('possibly-hidden', '2026-01-01T10:00:00Z'),
     row('visible-message', '2026-01-01T10:00:01Z'),
-  ], async () => ({
-    data: [{ message_id: 'possibly-hidden' }],
-    error: queryError,
-  }));
+  ], async () => {
+    throw queryError;
+  });
 
   await assert.rejects(result, error => error === queryError);
 });

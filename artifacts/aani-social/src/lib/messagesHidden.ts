@@ -18,9 +18,9 @@ export async function loadHiddenMessageIds(
 
 export async function loadVisibleMessagesWithHiddenIds<TMessage extends { id: string }>(
   messages: readonly TMessage[],
-  query: () => Promise<HiddenMessageQueryResult>,
+  query: () => Promise<Set<string>>,
 ): Promise<{ hiddenMessageIds: Set<string>; visibleMessages: TMessage[] }> {
-  const hiddenMessageIds = await loadHiddenMessageIds(query);
+  const hiddenMessageIds = await query();
   return {
     hiddenMessageIds,
     visibleMessages: messages.filter(message => !hiddenMessageIds.has(message.id)),
