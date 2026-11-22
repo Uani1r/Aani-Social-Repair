@@ -20,6 +20,7 @@ import { resolveMediaUrl } from '@/lib/mediaAccess';
 import { resumeBackgroundMedia, suspendBackgroundMedia } from '@/lib/activeVideo';
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
+import { messagesRealtimeEventFromPayload, publishMessagesRealtimeEvent } from '@/lib/messagesRealtimeEvents';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { reportPublishFailure, type PublishPhase } from '@/lib/publishDiagnostics';
@@ -1180,7 +1181,9 @@ export default function Shell({
   }, []);
 
   // استماع Realtime لجدول messages: أي رسالة واردة أو تعليم قراءة أو حذف
-  // يُحدّث شارة الرسائل فوراً دون الحاجة لفتح واجهة المحادثات
+  // يُحدّث شارة الرسائل فوراً دون الحاجة لفتح واجهة المحادثات، ويُمرّر الحدث
+  // نفسه إلى MessagesPage عبر الناقل الداخلي، فتصل القائمة والخيط من الـpayload
+  // مباشرةً حتى لو كانت قنوات الصفحة غير مشتركة أو فاتتها الأحداث.
   useEffect(() => {
     if (!supabaseConfigured || !userId) return undefined;
     const channel = supabase.channel(`aani-messages-unread-${userId}`)
@@ -1189,19 +1192,28 @@ export default function Shell({
         schema: 'public',
         table: 'messages',
         filter: `recipient_id=eq.${userId}`,
-      }, refreshMessagesUnreadCount)
+      }, payload => {
+        publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('INSERT', payload));
+        refreshMessagesUnreadCount();
+      })
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
         table: 'messages',
         filter: `recipient_id=eq.${userId}`,
-      }, refreshMessagesUnreadCount)
+      }, payload => {
+        publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('UPDATE', payload));
+        refreshMessagesUnreadCount();
+      })
       .on('postgres_changes', {
         event: 'DELETE',
         schema: 'public',
         table: 'messages',
         filter: `recipient_id=eq.${userId}`,
-      }, refreshMessagesUnreadCount)
+      }, payload => {
+        publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('DELETE', payload));
+        refreshMessagesUnreadCount();
+      })
       .subscribe();
     return () => {
       void supabase.removeChannel(channel);

@@ -139,6 +139,29 @@ export function applyRealtimeInboxInsert<
   return sortInboxConversations(next);
 }
 
+/**
+ * حذف رسالة أُكّد حذفها من الخادم: تختفي من معاينة المحادثة فوراً بدل انتظار
+ * REST، ويبقى صف المحادثة نفسه في القائمة حتى تعيد المزامنة آخر رسالة متبقية.
+ */
+export function applyRealtimeInboxDelete<
+  TMessage extends LegacyInboxMessage,
+  TConversation extends RealtimeInboxConversation<TMessage>,
+>(
+  conversations: TConversation[],
+  messageId: string,
+): TConversation[] {
+  if (!conversations.some(conversation => conversation.lastMessage?.id === messageId)) {
+    return conversations;
+  }
+
+  const next = conversations.map(conversation => (
+    conversation.lastMessage?.id === messageId
+      ? { ...conversation, lastMessage: null } as TConversation
+      : conversation
+  ));
+  return sortInboxConversations(next);
+}
+
 export function mergeInboxConversationsWithRealtime<
   TMessage extends LegacyInboxMessage,
   TConversation extends RealtimeInboxConversation<TMessage>,

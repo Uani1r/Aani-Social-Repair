@@ -31,6 +31,7 @@ import {
   type RealtimeChannelId,
 } from '@/lib/realtimeChannelHealth';
 import {
+  applyRealtimeInboxDelete,
   applyRealtimeInboxInsert,
   buildLegacyMessagesInboxSummaries,
   compareInboxMessageRecency,
@@ -51,12 +52,24 @@ import {
   type RealtimeMessageSnapshot,
 } from '@/lib/messagesInbox';
 import {
+  createMessagesPurgeScheduler,
+  removeExpiredMessageRows,
+  type MessagesPurgeScheduler,
+} from '@/lib/messagesPurge';
+import {
+  createMessagesRealtimeEventDedupe,
+  createMessagesRealtimeEventDispatcher,
+  messagesRealtimeEventFromPayload,
+  messagesRealtimeEvents,
+} from '@/lib/messagesRealtimeEvents';
+import {
   createOlderRequestTracker,
   initialOlderPageProgress,
   mergeThreadRows,
   messagesThreadFilter,
   progressAfterLatestPage,
   progressAfterOlderPage,
+  removeThreadRow,
   shouldShowEmptyThreadMessage,
   type OlderPageProgress,
   type ThreadLoadStatus,
@@ -1033,6 +1046,12 @@ export default function MessagesPage({
   const inboxDeliveryRpcMissingRef = useRef(false);
   const inboxDeliveryFallbackInFlightRef = useRef(false);
   const inboxDeliveryFallbackAtRef = useRef(0);
+  // تنظيف الرسائل المنتهية في الخلفية: طلب واحد في الوقت نفسه، وغياب RPC
+  // محفوظ لهذه الجلسة حتى لا يُعاد طلب فاشل مع كل تحديث.
+  const purgeSchedulerRef = useRef<MessagesPurgeScheduler | null>(null);
+  // الحدث الواحد قد يصل من قناة الصفحة ومن الحدث الداخلي القادم من Shell،
+  // فيُطبَّق مرة واحدة فقط.
+  const realtimeEventDedupeRef = useRef(createMessagesRealtimeEventDedupe());
   const lifecycleResyncAtRef = useRef(0);
   const realtimeMessageRevisionRef = useRef(0);
   const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
@@ -1221,23 +1240,32 @@ export default function MessagesPage({
     }
   };
 
-  const purgeExpiredMessages = useCallback(async () => {
+  const purgeExpiredMessages = useCallback(() => {
     if (!supabaseConfigured) return;
-    try {
-      const { data, error } = await supabase.rpc('aani_purge_expired_messages');
-      if (error) {
-        console.warn('[messages] تعذر تنظيف الرسائل المؤقتة المنتهية:', error);
-        return;
-      }
-      const expiredIds = Array.isArray(data) ? data.filter((id): id is string => typeof id === 'string') : [];
-      if (expiredIds.length) {
-        expiredIds.forEach(id => deletedMessageIdsRef.current.add(id));
-        const expiredIdSet = new Set(expiredIds);
-        setThread(current => current.filter(message => !expiredIdSet.has(message.id)));
-      }
-    } catch (error) {
-      console.warn('[messages] تعذر تنظيف الرسائل المؤقتة المنتهية:', error);
+    if (!purgeSchedulerRef.current) {
+      purgeSchedulerRef.current = createMessagesPurgeScheduler(
+        async () => {
+          const { data, error } = await supabase.rpc('aani_purge_expired_messages');
+          return { data, error };
+        },
+        expiredIds => {
+          // لا تظهر رسالة منتهية بعد اكتمال التنظيف، ولا تعود من استجابة جلب
+          // بدأت قبل التنظيف: المعرّفات تُسجَّل فتُصفّى من أي نتيجة لاحقة.
+          const expiredIdSet = new Set(expiredIds);
+          expiredIds.forEach(id => deletedMessageIdsRef.current.add(id));
+          setThread(current => removeExpiredMessageRows(current, expiredIdSet));
+          setConversations(current => current.map(conversation => (
+            conversation.lastMessage && expiredIdSet.has(conversation.lastMessage.id)
+              ? { ...conversation, lastMessage: null }
+              : conversation
+          )));
+        },
+        error => console.warn('[messages] تعذر تنظيف الرسائل المؤقتة المنتهية:', error),
+      );
     }
+    // في الخلفية: التحميل لا ينتظر التنظيف. المتتبع يمنع الطلبات المتزامنة
+    // ويكفّ عن الاستدعاء بعد تأكيد غياب الدالة في هذه الصفحة.
+    purgeSchedulerRef.current.run();
   }, []);
 
   const markMessagesDelivered = useCallback(async (messageIds: string[]) => {
@@ -1356,7 +1384,9 @@ export default function MessagesPage({
       setMutualFollowersLoading(true);
     }
     try {
-      await purgeExpiredMessages();
+      // تحميل القائمة لا ينتظر RPC تنظيف الرسائل: يبدأ التنظيف في الخلفية
+      // بالتوازي مع الجلب، وكل معرّف ينتهي يُزال من العرض والكاش بعد عودته.
+      purgeExpiredMessages();
       const readAtByContactSnapshot = readAtByContactRef.current;
       const requestTabReadAtSnapshot = requestTabReadAtRef.current;
       const [profileResult, summaryResult, followsResult, requestStatesResult] = await Promise.all([
@@ -1593,7 +1623,7 @@ export default function MessagesPage({
     const threadFilter = messagesThreadFilter(currentUserId, selectedId);
 
     try {
-      await purgeExpiredMessages();
+      purgeExpiredMessages();
       // أحدث دفعة فقط (مرتّبة تنازلياً من القاعدة) ثم تُعكس للعرض تصاعدياً.
       const { data, error } = await queryMessageRows(
         threadFilter,
@@ -1914,6 +1944,32 @@ export default function MessagesPage({
     if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
   }, [scheduleMessageRefresh, scheduleRealtimeResubscribe]);
 
+  // صف محادثة مؤقت لرسالة من جهة لا صف لها في القائمة بعد؛ تُستبدل بياناتها
+  // بالملف الكامل عند أول مزامنة.
+  const createRealtimeConversation = useCallback((
+    contactId: string,
+    message: MessageRow,
+  ): ConversationSummary => {
+    const profile = knownConversationProfilesRef.current.get(contactId) || {
+      id: contactId,
+      username: contactId,
+      full_name: '',
+      avatar_url: null,
+      bio: '',
+    };
+    const isRequest = message.recipient_id === currentUserId
+      && !mutualContactIdsRef.current.has(contactId);
+    return {
+      profile,
+      lastMessage: message,
+      hasStory: false,
+      hasUnseenStory: false,
+      isRequest,
+      requestRecipientId: isRequest ? currentUserId : null,
+      requestStatus: null,
+    };
+  }, [currentUserId]);
+
   const handleRealtimeMessageInsert = useCallback((value: unknown) => {
     const normalizedMessage = normalizeMessageRows([value])[0];
     if (!normalizedMessage || deletedMessageIdsRef.current.has(normalizedMessage.id)) return;
@@ -1944,26 +2000,7 @@ export default function MessagesPage({
       current,
       message,
       currentUserId,
-      (newContactId, incomingMessage) => {
-        const profile = knownConversationProfilesRef.current.get(newContactId) || {
-          id: newContactId,
-          username: newContactId,
-          full_name: '',
-          avatar_url: null,
-          bio: '',
-        };
-        const isRequest = incomingMessage.recipient_id === currentUserId
-          && !mutualContactIdsRef.current.has(newContactId);
-        return {
-          profile,
-          lastMessage: incomingMessage,
-          hasStory: false,
-          hasUnseenStory: false,
-          isRequest,
-          requestRecipientId: isRequest ? currentUserId : null,
-          requestStatus: null,
-        };
-      },
+      createRealtimeConversation,
     ));
     setConversationCacheReady(true);
 
@@ -1998,7 +2035,7 @@ export default function MessagesPage({
       ));
       if (threadConversationIdRef.current === contactId) setThreadCacheReady(true);
     }
-  }, [currentUserId, markMessagesDelivered]);
+  }, [createRealtimeConversation, currentUserId, markMessagesDelivered]);
 
   const invalidateRealtimeMessageLoads = useCallback(() => {
     contactsRequestTrackerRef.current.invalidate();
@@ -2035,16 +2072,29 @@ export default function MessagesPage({
     if (belongsToOpenThread) realtimeThreadMessagesRef.current.set(message.id, { message });
 
     invalidateRealtimeMessageLoads();
-    setConversations(current => current.map(conversation => {
-      if (conversation.profile.id !== contactId || conversation.lastMessage?.id !== message.id) return conversation;
-      return { ...conversation, lastMessage: mergeMessageSnapshot(conversation.lastMessage, message) };
-    }));
+    setConversations(current => {
+      const contactConversation = current.find(conversation => conversation.profile.id === contactId);
+      const currentLast = contactConversation?.lastMessage;
+      if (currentLast?.id === message.id) {
+        return current.map(conversation => (
+          conversation.profile.id === contactId
+            ? { ...conversation, lastMessage: mergeMessageSnapshot(currentLast, message) }
+            : conversation
+        ));
+      }
+      // قد تكون رسالة INSERT لهذه الرسالة قد فاتت: لا تُترك المعاينة أقدم من
+      // رسالة مؤكدة من الخادم.
+      if (!currentLast || compareInboxMessageRecency(message, currentLast) > 0) {
+        return applyRealtimeInboxInsert(current, message, currentUserId, createRealtimeConversation);
+      }
+      return current;
+    });
     if (belongsToOpenThread) {
       setThread(current => mergeThreadRows(current, [message]));
       if (threadConversationIdRef.current === contactId) setThreadCacheReady(true);
     }
     setConversationCacheReady(true);
-  }, [currentUserId, invalidateRealtimeMessageLoads]);
+  }, [createRealtimeConversation, currentUserId, invalidateRealtimeMessageLoads]);
 
   const clearRealtimeMessage = useCallback((messageId: unknown) => {
     if (typeof messageId !== 'string' || !messageId) return;
@@ -2054,8 +2104,31 @@ export default function MessagesPage({
       if (snapshot.message.id === messageId) realtimeInboxMessagesRef.current.delete(contactId);
     });
     invalidateRealtimeMessageLoads();
-    setThread(current => current.filter(message => message.id !== messageId));
+    setThread(current => removeThreadRow(current, messageId));
+    // آخر رسالة محذوفة تختفي من معاينة القائمة فوراً؛ المزامنة التالية ترجع
+    // آخر رسالة متبقية فعلاً.
+    setConversations(current => applyRealtimeInboxDelete(current, messageId));
+    setConversationCacheReady(true);
   }, [invalidateRealtimeMessageLoads]);
+
+  // مسار واحد لتطبيق أحداث messages: قنوات MessagesPage نفسها والحدث الداخلي
+  // القادم من Shell. الحدث نفسه قد يصل من المسارين، فلا يُطبَّق مرتين (لا رسالة
+  // مكررة، ولا إيصال يُعاد إرساله).
+  const applyRealtimeMessageEvent = useMemo(
+    () => createMessagesRealtimeEventDispatcher({
+      insert: handleRealtimeMessageInsert,
+      update: handleRealtimeMessageUpdate,
+      delete: clearRealtimeMessage,
+    }, realtimeEventDedupeRef.current),
+    [clearRealtimeMessage, handleRealtimeMessageInsert, handleRealtimeMessageUpdate],
+  );
+
+  useEffect(() => messagesRealtimeEvents.subscribe(event => {
+    applyRealtimeMessageEvent(event);
+    // الحدث الداخلي يحمل التغيير نفسه الذي تحمله قناة الصفحة؛ الجدولة
+    // debounced إلى طلب واحد، فتقع مزامنة REST واحدة لكل دفعة أحداث.
+    scheduleMessageRefresh(Boolean(selectedIdRef.current));
+  }), [applyRealtimeMessageEvent, scheduleMessageRefresh]);
 
   useEffect(() => () => {
     if (realtimeResubscribeTimerRef.current !== null) {
@@ -2081,7 +2154,7 @@ export default function MessagesPage({
         table: 'messages',
         filter: insertFilters.recipient,
       }, payload => {
-        handleRealtimeMessageInsert(payload.new);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('INSERT', payload));
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', {
@@ -2092,15 +2165,15 @@ export default function MessagesPage({
       }, payload => {
         const message = payload.new as { sender_id?: unknown; recipient_id?: unknown } | null;
         if (!shouldRefreshInboxForSentMessage(message, currentUserId)) return;
-        handleRealtimeMessageInsert(payload.new);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('INSERT', payload));
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, payload => {
-        handleRealtimeMessageUpdate(payload.new);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('UPDATE', payload));
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
-        clearRealtimeMessage((payload.old as { id?: unknown } | null)?.id);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('DELETE', payload));
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', {
@@ -2130,7 +2203,7 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, realtimeEpoch, loadConversationList, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+  }, [currentUserId, realtimeEpoch, loadConversationList, applyRealtimeMessageEvent, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -2205,15 +2278,15 @@ export default function MessagesPage({
     // الـepoch في اسم القناة يضمن قناة جديدة عند إعادة إنشاء الاشتراك.
     const channel = supabase.channel(`realtime-msgs-${currentUserId}-${selectedId}-${realtimeEpoch}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
-        handleRealtimeMessageInsert(payload.new);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('INSERT', payload));
         scheduleMessageRefresh(true);
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, payload => {
-        handleRealtimeMessageUpdate(payload.new);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('UPDATE', payload));
         scheduleMessageRefresh(true);
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
-        clearRealtimeMessage((payload.old as { id?: unknown } | null)?.id);
+        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('DELETE', payload));
         scheduleMessageRefresh(true);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
@@ -2239,7 +2312,7 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, applyRealtimeMessageEvent, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   // المزامنة التعويضية لا تعتمد على حدث Realtime: عند pageshow/focus، عودة
   // الشبكة، أو كل خمس دقائق أثناء بقاء الرسائل ظاهرة، تُجلب الفجوات من القاعدة.
@@ -3169,7 +3242,7 @@ export default function MessagesPage({
   useEffect(() => {
     if ((!selectedId || messageExpirationSeconds === null) && globalExpirationSeconds === null) return;
     if (!supabaseConfigured) return;
-    const timer = window.setInterval(() => { void purgeExpiredMessages(); }, 30_000);
+    const timer = window.setInterval(() => { purgeExpiredMessages(); }, 30_000);
     return () => window.clearInterval(timer);
   }, [globalExpirationSeconds, messageExpirationSeconds, purgeExpiredMessages, selectedId]);
 
