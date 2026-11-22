@@ -125,7 +125,7 @@ test('the page subscribes to private conversation broadcast channels only', () =
   const messagesPage = readSource('../pages/MessagesPage.tsx');
 
   assert.equal(/private:\s*true/.test(messagesPage), true);
-  assert.equal(/messagesConversationBroadcastTopic\(/.test(messagesPage), true);
+  assert.equal(/messagesConversationTopic\(/.test(messagesPage), true);
   assert.equal(messagesPage.includes('MESSAGES_MESSAGE_DELETED_EVENT'), true);
   assert.equal(messagesPage.includes('MESSAGES_REACTION_DELETED_EVENT'), true);
 });

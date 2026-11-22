@@ -2383,7 +2383,7 @@ export default function MessagesPage({
     if (!supabaseConfigured || !currentUserId || !selectedId || selectedId === currentUserId) return undefined;
 
     const conversationId = selectedId;
-    const topic = messagesConversationBroadcastTopic(currentUserId, selectedId);
+    const topic = messagesConversationTopic(currentUserId, selectedId);
     let removedByUs = false;
     const channel = supabase.channel(topic, {
       config: { private: true, broadcast: { self: false } },
@@ -2432,7 +2432,7 @@ export default function MessagesPage({
     const channel = conversationBroadcastChannelRef.current;
     if (!channel) return;
     const otherId = event.senderId === currentUserId ? event.recipientId : event.senderId;
-    if (channel.topic !== messagesConversationBroadcastTopic(currentUserId, otherId)) return;
+    if (channel.topic !== messagesConversationTopic(currentUserId, otherId)) return;
 
     void channel.send({
       type: 'broadcast',
@@ -2447,7 +2447,7 @@ export default function MessagesPage({
   const publishConversationReactionDeleted = useCallback((messageId: string, otherId: string) => {
     const channel = conversationBroadcastChannelRef.current;
     if (!channel) return;
-    if (channel.topic !== messagesConversationBroadcastTopic(currentUserId, otherId)) return;
+    if (channel.topic !== messagesConversationTopic(currentUserId, otherId)) return;
 
     void channel.send({
       type: 'broadcast',
