@@ -14,7 +14,19 @@
 -- Only the two participants can read their membership row, join the topic, or
 -- publish to it.
 --
--- Requires (dashboard): Realtime Settings -> disable "Allow public access".
+-- Do NOT disable "Allow public access" in Realtime Settings. With it off the
+-- Realtime server rejects every channel that is not joined with `private: true`
+-- ("This project only allows private channels" / :private_only), so disabling it
+-- would break the app's other channels: unread badge, notifications, inbox,
+-- thread, presence, call signaling, comments, interactions, story viewers.
+-- Marking all of them private is a separate change outside this PR's scope.
+--
+-- The conversation channel below is joined with `private: true`, so Realtime
+-- evaluates these policies for it and rejects a non-participant. While public
+-- access stays enabled, a client that joins the same topic as a *public*
+-- channel bypasses them; the protection that always holds is the payload, which
+-- carries ids only and never message content or a reaction emoji.
+--
 -- Applying this migration to Supabase is required before private channels work;
 -- without it the app keeps syncing deletions through the REST resync path.
 

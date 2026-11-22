@@ -38,7 +38,14 @@ create table public.messages (
   constraint messages_not_self_check check (sender_id <> recipient_id)
 );
 
-revoke all on public.messages from public, anon, authenticated;
+create table public.message_hides (
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  message_id uuid not null references public.messages (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (user_id, message_id)
+);
+
+revoke all on public.messages, public.message_hides from public, anon, authenticated;
 
 -- Stand-in for Supabase's realtime schema and the authorization topic helper.
 create schema realtime;
