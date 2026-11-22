@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   REALTIME_CHANNEL_HEALTHY_AFTER_MS,
+  REALTIME_CHANNEL_IDS,
   REALTIME_CHANNEL_RESUBSCRIBE_MAX_DELAY_MS,
   createRealtimeChannelSupervisor,
   realtimeChannelResubscribeDelay,
@@ -286,4 +287,99 @@ test('reset clears both channels', () => {
   assert.equal(supervisor.snapshot('inbox').retryAt, null);
   assert.equal(supervisor.snapshot('thread').retryAt, null);
   assert.equal(supervisor.earliestRetryAt(), null);
+});
+
+
+test('the unread badge channel registers SUBSCRIBED and resyncs exactly once', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const token = supervisor.beginChannel('unread');
+
+  assert.deepEqual(supervisor.handleStatus('unread', token, 'SUBSCRIBED', 1000), {
+    resync: true,
+    retryAt: null,
+  });
+  assert.equal(supervisor.snapshot('unread').status, 'SUBSCRIBED');
+  assert.deepEqual(supervisor.handleStatus('unread', token, 'SUBSCRIBED', 1200), NO_ACTION);
+});
+
+test('an unread channel failure schedules one delayed recreation and a recreated channel is fresh', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const firstToken = supervisor.beginChannel('unread');
+
+  assert.deepEqual(supervisor.handleStatus('unread', firstToken, 'CHANNEL_ERROR', 1000), {
+    resync: true,
+    retryAt: 2000,
+  });
+  // إشارة ثانية أثناء الانتظار لا تُجدول محاولة أخرى.
+  assert.deepEqual(supervisor.handleStatus('unread', firstToken, 'CLOSED', 1500), {
+    resync: true,
+    retryAt: 2000,
+  });
+  assert.equal(supervisor.snapshot('unread').failureCount, 1);
+  assert.equal(supervisor.earliestRetryAt(), 2000);
+
+  assert.deepEqual(supervisor.claimDueChannels(2000), ['unread']);
+  const secondToken = supervisor.beginChannel('unread');
+  assert.notEqual(secondToken, firstToken);
+  assert.equal(supervisor.snapshot('unread').status, 'IDLE');
+  assert.equal(supervisor.snapshot('unread').recreating, false);
+
+  // القناة الجديدة تعود للاشتراك: مزامنة تعويضية واحدة لسد فجوة الانقطاع.
+  assert.deepEqual(supervisor.handleStatus('unread', secondToken, 'SUBSCRIBED', 2100), {
+    resync: true,
+    retryAt: null,
+  });
+});
+
+test('a closed unread channel is recreated as a new channel, not just reconnected', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const token = supervisor.beginChannel('unread');
+  supervisor.handleStatus('unread', token, 'SUBSCRIBED', 500);
+
+  const decision = supervisor.handleStatus('unread', token, 'CLOSED', 900);
+  assert.notEqual(decision.retryAt, null);
+  assert.equal(decision.retryAt, 900 + realtimeChannelResubscribeDelay(supervisor.snapshot('unread').failureCount - 1));
+  assert.deepEqual(supervisor.claimDueChannels(decision.retryAt as number), ['unread']);
+
+  const recreated = supervisor.beginChannel('unread');
+  assert.notEqual(recreated, token);
+  assert.equal(supervisor.snapshot('unread').intentionalClose, false);
+});
+
+test('a late callback from the previous unread channel generation is ignored', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const oldToken = supervisor.beginChannel('unread');
+  supervisor.handleStatus('unread', oldToken, 'CHANNEL_ERROR', 1000);
+  supervisor.claimDueChannels(2000);
+
+  const newToken = supervisor.beginChannel('unread');
+  assert.deepEqual(supervisor.handleStatus('unread', oldToken, 'CLOSED', 2100), NO_ACTION);
+  assert.equal(supervisor.snapshot('unread').retryAt, null);
+  assert.equal(supervisor.snapshot('unread').token, newToken);
+});
+
+test('an intentional unread close is not rescheduled', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const token = supervisor.beginChannel('unread');
+  supervisor.handleStatus('unread', token, 'SUBSCRIBED', 1000);
+  supervisor.markIntentionalClose('unread', token);
+
+  assert.deepEqual(supervisor.handleStatus('unread', token, 'CLOSED', 1100), NO_ACTION);
+  assert.equal(supervisor.snapshot('unread').retryAt, null);
+  assert.deepEqual(supervisor.claimDueChannels(999999), []);
+});
+
+test('reset clears the unread channel too', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const token = supervisor.beginChannel('unread');
+  supervisor.handleStatus('unread', token, 'CHANNEL_ERROR', 1000);
+  supervisor.reset();
+
+  assert.equal(supervisor.snapshot('unread').status, 'IDLE');
+  assert.equal(supervisor.snapshot('unread').retryAt, null);
+  assert.equal(supervisor.earliestRetryAt(), null);
+});
+
+test('the shared MessagesPage channel list stays inbox and thread only', () => {
+  assert.deepEqual([...REALTIME_CHANNEL_IDS], ['inbox', 'thread']);
 });
