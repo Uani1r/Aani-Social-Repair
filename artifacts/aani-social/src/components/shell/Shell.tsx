@@ -22,6 +22,7 @@ import { resumeBackgroundMedia, suspendBackgroundMedia } from '@/lib/activeVideo
 import { pickDefaultSound, warmDefaultSounds } from '@/lib/defaultSounds';
 import { fetchUnreadMessagesCount } from '@/lib/unreadMessages';
 import { messagesRealtimeEventFromPayload, publishMessagesRealtimeEvent } from '@/lib/messagesRealtimeEvents';
+import { createMessagesDeliveryReceipts } from '@/lib/messagesDeliveryReceipts';
 import { toast } from 'sonner';
 import { handleAppError, markAppErrorReported, wasAppErrorReported } from '@/lib/appErrors';
 import { reportPublishFailure, type PublishPhase } from '@/lib/publishDiagnostics';
@@ -1187,17 +1188,37 @@ export default function Shell({
   // دورة حياة قناة الشارة: المتتبع نفسه المستخدم لقنوات MessagesPage، لكن
   // بمؤقت و«جيل» خاصين بهذه القناة. لا قناة مغلقة أو فاشلة تبقى بلا إعادة
   // إنشاء، ولا مؤقتات مكررة، ولا نداء من قناة قديمة يمس حالة مستخدم جديد.
+  const messagesDeliveryReceipts = useMemo(
+    () => createMessagesDeliveryReceipts({
+      userId,
+      markDelivered: async messageIds => {
+        const { error } = await supabase.rpc('aani_mark_messages_delivered', { p_message_ids: messageIds });
+        return { error };
+      },
+      markInboxDelivered: async () => {
+        const { error } = await supabase.rpc('aani_mark_inbox_messages_delivered');
+        return { error };
+      },
+      onError: (rpc, error) => console.warn(`[messages] تعذر تأكيد تسليم الرسائل (${rpc}):`, error),
+    }),
+    [userId],
+  );
+
   const unreadRealtimeLifecycle = useMemo(
     () => createRealtimeChannelLifecycle({
       id: 'unread',
       supervisor: unreadRealtimeSupervisorRef.current,
-      onResync: refreshMessagesUnreadCount,
+      onResync: () => {
+        // الشارة كما هي، ثم تأكيد تعويضي للرسائل التي فاتت أثناء الانقطاع.
+        refreshMessagesUnreadCount();
+        messagesDeliveryReceipts.confirmMissed();
+      },
       onRecreate: () => setUnreadRealtimeEpoch(epoch => epoch + 1),
       onStatusError: (status, error) => console.warn(`[messages] Realtime unread ${status}:`, error),
       setTimer: (handler, timeout) => window.setTimeout(handler, timeout),
       clearTimer: handle => window.clearTimeout(handle),
     }),
-    [refreshMessagesUnreadCount],
+    [messagesDeliveryReceipts, refreshMessagesUnreadCount],
   );
 
   // استماع Realtime لجدول messages: أي رسالة واردة أو تعليم قراءة أو حذف
@@ -1219,6 +1240,8 @@ export default function Shell({
       }, payload => {
         publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('INSERT', payload));
         refreshMessagesUnreadCount();
+        // تأكيد استلام فوري بلا انتظار: فشله لا يمس الحدث الداخلي ولا الشارة.
+        messagesDeliveryReceipts.confirmIncoming(payload.new);
       })
       .on('postgres_changes', {
         event: 'UPDATE',
@@ -1249,7 +1272,7 @@ export default function Shell({
       unreadRealtimeLifecycle.finish(token);
       void supabase.removeChannel(channel);
     };
-  }, [userId, unreadRealtimeEpoch, unreadRealtimeLifecycle, refreshMessagesUnreadCount]);
+  }, [userId, unreadRealtimeEpoch, unreadRealtimeLifecycle, messagesDeliveryReceipts, refreshMessagesUnreadCount]);
 
   useEffect(() => {
     if (!supabaseConfigured || !userId) return undefined;
