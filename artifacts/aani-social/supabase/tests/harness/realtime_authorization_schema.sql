@@ -1,6 +1,5 @@
--- Minimal throwaway schema for the Realtime Authorization policy test.
--- Mimics the parts of Supabase's realtime schema the migration touches.
--- CI only; never connects to a Supabase project.
+-- Minimal throwaway schema for the conversation membership + Realtime
+-- Authorization migration test. CI only; never connects to a Supabase project.
 
 begin;
 
@@ -25,6 +24,21 @@ $$;
 
 grant usage on schema public, auth to anon, authenticated;
 grant execute on function auth.uid() to anon, authenticated;
+
+create table public.profiles (
+  id uuid primary key
+);
+
+create table public.messages (
+  id uuid primary key,
+  sender_id uuid not null references public.profiles (id) on delete cascade,
+  recipient_id uuid not null references public.profiles (id) on delete cascade,
+  content text not null default '',
+  created_at timestamptz not null default now(),
+  constraint messages_not_self_check check (sender_id <> recipient_id)
+);
+
+revoke all on public.messages from public, anon, authenticated;
 
 -- Stand-in for Supabase's realtime schema and the authorization topic helper.
 create schema realtime;
@@ -51,5 +65,15 @@ grant usage on schema realtime to anon, authenticated;
 grant select, insert on realtime.messages to authenticated;
 
 alter table realtime.messages enable row level security;
+
+-- Existing conversations the migration must backfill from.
+insert into public.profiles (id) values
+  ('00000000-0000-0000-0000-00000000000a'),
+  ('00000000-0000-0000-0000-00000000000b'),
+  ('00000000-0000-0000-0000-00000000000c');
+
+insert into public.messages (id, sender_id, recipient_id, content) values
+  ('10000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000b', 'A to B'),
+  ('10000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-00000000000c', 'B to C');
 
 commit;

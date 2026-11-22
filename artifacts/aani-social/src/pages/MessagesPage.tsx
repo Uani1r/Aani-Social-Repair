@@ -105,10 +105,12 @@ import {
   createMessagesDeleteBroadcastDedupe,
   messageDeletedBroadcastKey,
   messageDeletedContactId,
+  messageDeletedEventMatchesConversation,
   messagesConversationTopic,
   normalizeMessageDeletedBroadcast,
   normalizeReactionDeletedBroadcast,
   reactionDeletedBroadcastKey,
+  shouldBroadcastMessageDeletion,
 } from '@/lib/messagesDeleteBroadcast';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
@@ -2391,6 +2393,8 @@ export default function MessagesPage({
       .on('broadcast', { event: MESSAGES_MESSAGE_DELETED_EVENT }, ({ payload }) => {
         const event = normalizeMessageDeletedBroadcast(payload);
         if (!event) return;
+        // التحقق من هوية أطراف الحدث قبل أي تعديل على الحالة المحلية.
+        if (!messageDeletedEventMatchesConversation(event, currentUserId, conversationId)) return;
         if (conversationDeleteBroadcastDedupeRef.current.isDuplicate(messageDeletedBroadcastKey(event))) return;
 
         clearRealtimeMessage(event.messageId);
@@ -2403,6 +2407,8 @@ export default function MessagesPage({
       .on('broadcast', { event: MESSAGES_REACTION_DELETED_EVENT }, ({ payload }) => {
         const event = normalizeReactionDeletedBroadcast(payload);
         if (!event) return;
+        // لا نمسّ تفاعل رسالة لا تخص المحادثة المفتوحة.
+        if (!threadMessagesRef.current.some(message => message.id === event.messageId)) return;
         if (conversationDeleteBroadcastDedupeRef.current.isDuplicate(reactionDeletedBroadcastKey(event))) return;
         removeMessageReaction(event.messageId, event.userId);
       })
@@ -3856,11 +3862,14 @@ export default function MessagesPage({
         { p_message_id: message.id },
       );
       if (error) throw error;
-      publishConversationMessageDeleted({
-        messageId: message.id,
-        senderId: message.sender_id,
-        recipientId: message.recipient_id,
-      });
+      // الحذف الشخصي (إخفاء لدى المستخدم) لا يغيّر ما يراه الطرف الآخر.
+      if (shouldBroadcastMessageDeletion(forEveryone ? 'everyone' : 'me')) {
+        publishConversationMessageDeleted({
+          messageId: message.id,
+          senderId: message.sender_id,
+          recipientId: message.recipient_id,
+        });
+      }
       deletedMessageIdsRef.current.add(message.id);
       setThread(current => current.filter(item => item.id !== message.id));
       const nextReactions = { ...reactionsByMessageRef.current };

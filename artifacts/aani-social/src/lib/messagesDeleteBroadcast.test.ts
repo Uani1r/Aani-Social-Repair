@@ -8,11 +8,13 @@ import {
   isMessagesConversationTopicFor,
   messageDeletedBroadcastKey,
   messageDeletedContactId,
+  messageDeletedEventMatchesConversation,
   messagesConversationTopic,
   messagesConversationTopicMembers,
   normalizeMessageDeletedBroadcast,
   normalizeReactionDeletedBroadcast,
   reactionDeletedBroadcastKey,
+  shouldBroadcastMessageDeletion,
 } from './messagesDeleteBroadcast';
 
 const userA = '00000000-0000-0000-0000-00000000000a';
@@ -76,6 +78,32 @@ test('a deleted message resolves the contact of the current participant', () => 
   assert.equal(messageDeletedContactId(selfMessage, userA), null);
 });
 
+test('a delete event only applies to its own conversation and participants', () => {
+  const fromA = normalizeMessageDeletedBroadcast({ messageId: 'm1', senderId: userA, recipientId: userB });
+  assert.ok(fromA);
+
+  // الطرفان يطابقان المحادثة المفتوحة نفسها.
+  assert.equal(messageDeletedEventMatchesConversation(fromA, userA, userB), true);
+  assert.equal(messageDeletedEventMatchesConversation(fromA, userB, userA), true);
+
+  // محادثة أخرى، أو مستخدم ثالث، أو حدث مُلفّق باسم المستخدم فقط: مرفوض.
+  assert.equal(messageDeletedEventMatchesConversation(fromA, userA, userC), false);
+  assert.equal(messageDeletedEventMatchesConversation(fromA, userC, userA), false);
+
+  const forged = normalizeMessageDeletedBroadcast({ messageId: 'm2', senderId: userB, recipientId: userC });
+  assert.ok(forged);
+  assert.equal(messageDeletedEventMatchesConversation(forged, userA, userB), false);
+
+  const selfMessage = normalizeMessageDeletedBroadcast({ messageId: 'm3', senderId: userA, recipientId: userA });
+  assert.ok(selfMessage);
+  assert.equal(messageDeletedEventMatchesConversation(selfMessage, userA, userB), false);
+});
+
+test('only a delete-for-everyone is broadcast to the other participant', () => {
+  assert.equal(shouldBroadcastMessageDeletion('everyone'), true);
+  assert.equal(shouldBroadcastMessageDeletion('me'), false);
+});
+
 test('duplicate delete broadcasts are applied once', () => {
   const dedupe = createMessagesDeleteBroadcastDedupe();
   const messageKey = messageDeletedBroadcastKey({ messageId: 'm1', senderId: userA, recipientId: userB });
@@ -126,6 +154,8 @@ test('the page subscribes to private conversation broadcast channels only', () =
 
   assert.equal(/private:\s*true/.test(messagesPage), true);
   assert.equal(/messagesConversationTopic\(/.test(messagesPage), true);
+  assert.equal(/messageDeletedEventMatchesConversation\(/.test(messagesPage), true);
+  assert.equal(/shouldBroadcastMessageDeletion\(/.test(messagesPage), true);
   assert.equal(messagesPage.includes('MESSAGES_MESSAGE_DELETED_EVENT'), true);
   assert.equal(messagesPage.includes('MESSAGES_REACTION_DELETED_EVENT'), true);
 });

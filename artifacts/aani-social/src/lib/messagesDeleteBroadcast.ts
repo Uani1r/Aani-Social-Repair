@@ -125,3 +125,27 @@ export function messageDeletedContactId(event: MessageDeletedBroadcast, userId: 
   if (event.recipientId === userId && event.senderId !== userId) return event.senderId;
   return null;
 }
+
+/**
+ * هل يخص حدث الحذف المحادثة المفتوحة والمستخدم الحالي؟ يُتحقق من هوية أطراف
+ * الحدث قبل أي تعديل على الحالة المحلية، فلا يمس حدثٌ مُلفّق محادثة أخرى.
+ */
+export function messageDeletedEventMatchesConversation(
+  event: MessageDeletedBroadcast,
+  userId: string,
+  contactId: string | null | undefined,
+): boolean {
+  if (!contactId || event.senderId === event.recipientId) return false;
+  if (event.senderId !== userId && event.recipientId !== userId) return false;
+  return messageDeletedContactId(event, userId) === contactId;
+}
+
+export type MessageDeletionScope = 'me' | 'everyone';
+
+/**
+ * الحذف الشخصي (إخفاء لدى المستخدم) لا يُبث للطرف الآخر. فقط الحذف للطرفين
+ * يغيّر ما يراه المشارك الآخر.
+ */
+export function shouldBroadcastMessageDeletion(scope: MessageDeletionScope): boolean {
+  return scope === 'everyone';
+}
