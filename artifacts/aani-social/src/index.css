@@ -3663,12 +3663,15 @@ body.aani-immersive .unified-top-bar {
   background: #171717;
 }
 
-/* مؤشر «جاري الكتابة»: ارتفاع ثابت يُحجز دائماً، فلا يتحرك الخيط أو مربع الكتابة. */
+/* مؤشر «جاري الكتابة»: ارتفاع ثابت يُحجز دائماً، فلا يتحرك الخيط أو مربع الكتابة.
+   في RTL يبدأ صف flex من اليمين (جهة رسائلي)، لذا نُلزم المحتوى بالنهاية
+   inline-end ليظهر على اليسار تحت رسائل الطرف الآخر. */
 .messages-typing-indicator {
   display: flex;
   height: 22px;
   flex: 0 0 auto;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
   margin: 0 20px;
   color: var(--messages-secondary);
