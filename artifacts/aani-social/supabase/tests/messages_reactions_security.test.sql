@@ -96,7 +96,7 @@ begin
   if not exists (
     select 1
     from pg_publication_rel as publication_rel
-    join pg_publication as publication on publication.oid = publication_rel.pubid
+    join pg_publication as publication on publication.oid = publication_rel.prpubid
     where publication.pubname = 'supabase_realtime'
       and publication_rel.relid = 'public.message_reactions'::regclass
   ) then
