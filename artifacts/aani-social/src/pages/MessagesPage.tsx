@@ -100,18 +100,32 @@ import {
 } from '@/lib/messagesHidden';
 import { displayName, type Profile } from '@/lib/types';
 import {
+  MESSAGES_CONVERSATION_DELETED_EVENT,
   MESSAGES_MESSAGE_DELETED_EVENT,
   MESSAGES_REACTION_DELETED_EVENT,
+  conversationDeletedBroadcastKey,
+  conversationDeletedEventMatchesConversation,
   createMessagesDeleteBroadcastDedupe,
+  enqueueConversationBroadcast,
   messageDeletedBroadcastKey,
   messageDeletedContactId,
   messageDeletedEventMatchesConversation,
   messagesConversationTopic,
+  normalizeConversationDeletedBroadcast,
   normalizeMessageDeletedBroadcast,
   normalizeReactionDeletedBroadcast,
   reactionDeletedBroadcastKey,
   shouldBroadcastMessageDeletion,
+  type QueuedConversationBroadcast,
 } from '@/lib/messagesDeleteBroadcast';
+import {
+  MESSAGES_TYPING_EVENT,
+  MESSAGES_TYPING_TTL_MS,
+  createTypingPublisher,
+  normalizeTypingBroadcast,
+  typingEventMatchesConversation,
+  type TypingPublisher,
+} from '@/lib/messagesTypingIndicator';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
 
@@ -1071,7 +1085,14 @@ export default function MessagesPage({
   const realtimeEventDedupeRef = useRef(createMessagesRealtimeEventDedupe());
   // أحداث حذف الرسائل والتفاعلات تصل عبر قناة المحادثة الخاصة، بمعرّفات فقط.
   const conversationBroadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  // لا نُسقط حدثاً أُرسل قبل اكتمال الاشتراك: يُحتجز هنا ويُرسل عند SUBSCRIBED.
+  const conversationBroadcastSubscribedRef = useRef(false);
+  const conversationBroadcastQueueRef = useRef<QueuedConversationBroadcast[]>([]);
   const conversationDeleteBroadcastDedupeRef = useRef(createMessagesDeleteBroadcastDedupe());
+  // مؤشر «جاري الكتابة»: ناشر الإشارات في المحادثة المفتوحة وحالة الطرف الآخر.
+  const typingPublisherRef = useRef<TypingPublisher | null>(null);
+  const typingContactTimerRef = useRef<number | null>(null);
+  const [typingContactId, setTypingContactId] = useState<string | null>(null);
   const lifecycleResyncAtRef = useRef(0);
   const realtimeMessageRevisionRef = useRef(0);
   const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
@@ -2166,8 +2187,15 @@ export default function MessagesPage({
     // آخر رسالة محذوفة تختفي من معاينة القائمة فوراً؛ المزامنة التالية ترجع
     // آخر رسالة متبقية فعلاً.
     setConversations(current => applyRealtimeInboxDelete(current, messageId));
+    // تفاعلات الرسالة المحذوفة تُحذف تلقائياً في القاعدة (cascade)، فنُزيلها من
+    // الكاش المحلي أيضاً بدل إبقائها معلّقة على رسالة غير موجودة.
+    const nextReactions = { ...reactionsByMessageRef.current };
+    if (nextReactions[messageId]) {
+      delete nextReactions[messageId];
+      commitReactionsByMessage(nextReactions);
+    }
     setConversationCacheReady(true);
-  }, [invalidateRealtimeMessageLoads]);
+  }, [commitReactionsByMessage, invalidateRealtimeMessageLoads]);
 
   // حذف تفاعل مستخدم من الحالة المحلية (يصل عبر قناة المحادثة الخاصة).
   const removeMessageReaction = useCallback((messageId: string, userId: string) => {
@@ -2180,6 +2208,52 @@ export default function MessagesPage({
     else delete next[messageId];
     commitReactionsByMessage(next);
   }, [commitReactionsByMessage]);
+
+  // بث حدث على قناة المحادثة المفتوحة. إن لم يكتمل الاشتراك بعد يُحتجز الحدث
+  // ويُرسل عند SUBSCRIBED بدل ضياعه، والمفتاح نفسه يُستبدل بأحدث حالة.
+  const sendConversationBroadcast = useCallback((
+    event: string,
+    payload: Record<string, unknown>,
+    key: string = event,
+  ) => {
+    const channel = conversationBroadcastChannelRef.current;
+    if (!channel) return;
+
+    if (!conversationBroadcastSubscribedRef.current) {
+      conversationBroadcastQueueRef.current = enqueueConversationBroadcast(
+        conversationBroadcastQueueRef.current,
+        { key, event, payload },
+      );
+      return;
+    }
+
+    void channel.send({ type: 'broadcast', event, payload }).then(result => {
+      // نتيجة send قد تكون 'ok' أو 'timed out' أو 'error'، وكل ما ليس 'ok'
+      // يعني أن الحدث لم يُرسل فعلياً، فيُسجّل بدل تجاهله بصمت.
+      if (result !== 'ok') {
+        console.warn(`[messages] تعذر إرسال حدث ${event}:`, result);
+      }
+    }).catch(error => {
+      console.warn(`[messages] تعذر إرسال حدث ${event}:`, error);
+    });
+  }, []);
+
+  const clearTypingContact = useCallback(() => {
+    if (typingContactTimerRef.current !== null) window.clearTimeout(typingContactTimerRef.current);
+    typingContactTimerRef.current = null;
+    setTypingContactId(null);
+  }, []);
+
+  // ظهور المؤشر محدود بمهلة: إن انقطعت إشارات الطرف الآخر (إغلاق، فقدان شبكة،
+  // خروج من المحادثة) يختفي المؤشر تلقائياً بدل أن يبقى معلّقاً.
+  const showTypingContact = useCallback((contactId: string) => {
+    if (typingContactTimerRef.current !== null) window.clearTimeout(typingContactTimerRef.current);
+    setTypingContactId(contactId);
+    typingContactTimerRef.current = window.setTimeout(() => {
+      typingContactTimerRef.current = null;
+      setTypingContactId(null);
+    }, MESSAGES_TYPING_TTL_MS);
+  }, []);
 
   // مسار واحد لتطبيق أحداث messages: قنوات MessagesPage نفسها والحدث الداخلي
   // القادم من Shell. الحدث نفسه قد يصل من المسارين، فلا يُطبَّق مرتين (لا رسالة
@@ -2377,16 +2451,21 @@ export default function MessagesPage({
     };
   }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, applyRealtimeMessageEvent, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
-  // قناة المحادثة الخاصة لأحداث الحذف: لا نشترك في DELETE على messages أو
-  // message_reactions في القنوات العامة، لأن الصف المحذوف قد يحمل محتوى الرسالة.
-  // هنا تصل معرّفات فقط، ولا يمكن لغير طرفي المحادثة الانضمام إلى الموضوع
-  // (سياسات Realtime Authorization على realtime.messages).
+  // قناة المحادثة الخاصة لأحداث الحذف والكتابة: لا نشترك في DELETE على messages
+  // أو message_reactions في القنوات العامة، لأن الصف المحذوف قد يحمل محتوى
+  // الرسالة. هنا تصل معرّفات فقط، ولا يمكن لغير طرفي المحادثة الانضمام إلى
+  // الموضوع (سياسات Realtime Authorization على realtime.messages).
   useEffect(() => {
     if (!supabaseConfigured || !currentUserId || !selectedId || selectedId === currentUserId) return undefined;
 
     const conversationId = selectedId;
     const topic = messagesConversationTopic(currentUserId, selectedId);
     let removedByUs = false;
+
+    // قناة جديدة لكل محادثة: لا نعتبرها مشتركة حتى يؤكد SUBSCRIBED.
+    conversationBroadcastSubscribedRef.current = false;
+    conversationBroadcastQueueRef.current = [];
+
     const channel = supabase.channel(topic, {
       config: { private: true, broadcast: { self: false } },
     })
@@ -2400,9 +2479,8 @@ export default function MessagesPage({
         clearRealtimeMessage(event.messageId);
         const contactId = messageDeletedContactId(event, currentUserId);
         if (!contactId) return;
-        // المزامنة التالية ترجع آخر رسالة متبقية فعلاً في المعاينة.
-        if (selectedIdRef.current === contactId) void loadThread({ quiet: true });
-        void loadConversationList({ quiet: true });
+        // مزامنة واحدة مجمّعة بدل طلب لكل حدث عند حذف محادثة كاملة.
+        scheduleMessageRefresh(selectedIdRef.current === contactId);
       })
       .on('broadcast', { event: MESSAGES_REACTION_DELETED_EVENT }, ({ payload }) => {
         const event = normalizeReactionDeletedBroadcast(payload);
@@ -2412,22 +2490,72 @@ export default function MessagesPage({
         if (conversationDeleteBroadcastDedupeRef.current.isDuplicate(reactionDeletedBroadcastKey(event))) return;
         removeMessageReaction(event.messageId, event.userId);
       })
+      .on('broadcast', { event: MESSAGES_TYPING_EVENT }, ({ payload }) => {
+        const event = normalizeTypingBroadcast(payload);
+        if (!event) return;
+        // مؤشر الطرف الآخر في المحادثة المفتوحة فقط، ولا مؤشر المستخدم نفسه.
+        if (!typingEventMatchesConversation(event, currentUserId, conversationId)) return;
+        if (event.isTyping) showTypingContact(event.userId);
+        else clearTypingContact();
+      })
+      .on('broadcast', { event: MESSAGES_CONVERSATION_DELETED_EVENT }, ({ payload }) => {
+        const event = normalizeConversationDeletedBroadcast(payload);
+        if (!event) return;
+        if (!conversationDeletedEventMatchesConversation(event, currentUserId, conversationId)) return;
+        if (conversationDeleteBroadcastDedupeRef.current.isDuplicate(conversationDeletedBroadcastKey(event))) return;
+
+        // رسائل المحادثة حُذفت من القاعدة عبر RPC؛ نُفرّغ الخيط والكاش فوراً
+        // بدل انتظار المزامنة التالية.
+        clearTypingContact();
+        setThread([]);
+        setThreadCacheReady(true);
+        removeThreadCache(currentUserId, conversationId);
+        scheduleMessageRefresh(true);
+      })
       .subscribe((status, statusError) => {
         if (removedByUs) return;
-        if (status !== 'SUBSCRIBED' && statusError) {
+        if (status === 'SUBSCRIBED') {
+          // الآن فقط نعتبر القناة جاهزة، ونرسل ما احتُجز قبل اكتمال الاشتراك.
+          conversationBroadcastSubscribedRef.current = true;
+          const queued = conversationBroadcastQueueRef.current;
+          conversationBroadcastQueueRef.current = [];
+          for (const item of queued) {
+            void channel.send({ type: 'broadcast', event: item.event, payload: item.payload }).then(result => {
+              if (result !== 'ok') {
+                console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, result);
+              }
+            }).catch(error => {
+              console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, error);
+            });
+          }
+          return;
+        }
+        // أي حالة غير SUBSCRIBED (انقطاع، انتهاء مهلة، إغلاق) تعني أن القناة لم
+        // تعد موثوقة: لا نرسل عبرها حتى يؤكد اشتراك جديد، ونُخفي مؤشر الكتابة
+        // الوارد لأن إشاراته قد فاتت.
+        conversationBroadcastSubscribedRef.current = false;
+        conversationBroadcastQueueRef.current = [];
+        clearTypingContact();
+        if (statusError) {
           // قد تكون سياسات Realtime Authorization غير مطبقة بعد؛ المزامنة
           // التعويضية REST تبقى شبكة الأمان ولا نُظهر خطأ للمستخدم.
-          console.warn(`[messages] تعذر الاتصال بقناة حذف الرسائل (${status}):`, statusError);
+          console.warn(`[messages] تعذر الاتصال بقناة المحادثة (${status}):`, statusError);
         }
       });
 
     conversationBroadcastChannelRef.current = channel;
     return () => {
       removedByUs = true;
+      // ترتيب التنظيف مهم: نوقف الكتابة أولاً والقناة ما زالت مرجعاً حياً،
+      // ثم نفصل المرجع، ثم نزيل القناة. هكذا يصل إيقاف الكتابة إلى القناة الصحيحة.
+      typingPublisherRef.current?.stop();
+      clearTypingContact();
+      conversationBroadcastSubscribedRef.current = false;
+      conversationBroadcastQueueRef.current = [];
       if (conversationBroadcastChannelRef.current === channel) conversationBroadcastChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
-  }, [clearRealtimeMessage, currentUserId, loadConversationList, loadThread, removeMessageReaction, realtimeEpoch, selectedId]);
+  }, [clearRealtimeMessage, clearTypingContact, currentUserId, realtimeEpoch, removeMessageReaction, scheduleMessageRefresh, selectedId, showTypingContact]);
 
   // نشر حدث حذف رسالة على قناة المحادثة المفتوحة (معرّفات فقط، بلا محتوى).
   const publishConversationMessageDeleted = useCallback((event: {
@@ -2435,34 +2563,52 @@ export default function MessagesPage({
     senderId: string;
     recipientId: string;
   }) => {
-    const channel = conversationBroadcastChannelRef.current;
-    if (!channel) return;
     const otherId = event.senderId === currentUserId ? event.recipientId : event.senderId;
-    if (channel.topic !== messagesConversationTopic(currentUserId, otherId)) return;
+    if (selectedIdRef.current !== otherId) return;
 
-    void channel.send({
-      type: 'broadcast',
-      event: MESSAGES_MESSAGE_DELETED_EVENT,
-      payload: { messageId: event.messageId, senderId: event.senderId, recipientId: event.recipientId },
-    }).catch(error => {
-      console.warn('[messages] تعذر إرسال حدث حذف الرسالة:', error);
-    });
-  }, [currentUserId]);
+    sendConversationBroadcast(
+      MESSAGES_MESSAGE_DELETED_EVENT,
+      { messageId: event.messageId, senderId: event.senderId, recipientId: event.recipientId },
+      `message:${event.messageId}`,
+    );
+  }, [currentUserId, sendConversationBroadcast]);
 
   // نشر حذف تفاعل المستخدم نفسه على قناة المحادثة المفتوحة (معرّفات فقط).
   const publishConversationReactionDeleted = useCallback((messageId: string, otherId: string) => {
-    const channel = conversationBroadcastChannelRef.current;
-    if (!channel) return;
-    if (channel.topic !== messagesConversationTopic(currentUserId, otherId)) return;
+    if (selectedIdRef.current !== otherId) return;
 
-    void channel.send({
-      type: 'broadcast',
-      event: MESSAGES_REACTION_DELETED_EVENT,
-      payload: { messageId, userId: currentUserId },
-    }).catch(error => {
-      console.warn('[messages] تعذر إرسال حدث حذف التفاعل:', error);
+    sendConversationBroadcast(
+      MESSAGES_REACTION_DELETED_EVENT,
+      { messageId, userId: currentUserId },
+      `reaction:${messageId}:${currentUserId}`,
+    );
+  }, [currentUserId, sendConversationBroadcast]);
+
+  // ناشر إشارات الكتابة على قناة المحادثة المفتوحة (معرّفات فقط، بلا صفوف).
+  useEffect(() => {
+    typingPublisherRef.current = createTypingPublisher({
+      send: isTyping => sendConversationBroadcast(
+        MESSAGES_TYPING_EVENT,
+        { userId: currentUserId, isTyping },
+        MESSAGES_TYPING_EVENT,
+      ),
     });
-  }, [currentUserId]);
+
+    return () => {
+      typingPublisherRef.current?.stop();
+      typingPublisherRef.current = null;
+    };
+  }, [currentUserId, selectedId, sendConversationBroadcast]);
+
+  // مسح النص يوقف المؤشر فوراً؛ إرسال الرسالة يُفرغ النص فتصله نفس الإشارة.
+  useEffect(() => {
+    if (!text.trim()) typingPublisherRef.current?.stop();
+  }, [text]);
+
+  useEffect(() => () => {
+    if (typingContactTimerRef.current !== null) window.clearTimeout(typingContactTimerRef.current);
+    typingContactTimerRef.current = null;
+  }, []);
 
   // المزامنة التعويضية لا تعتمد على حدث Realtime: عند pageshow/focus، عودة
   // الشبكة، أو كل خمس دقائق أثناء بقاء الرسائل ظاهرة، تُجلب الفجوات من القاعدة.
@@ -3116,6 +3262,8 @@ export default function MessagesPage({
     }
 
     const recipientId = selectedId;
+    // الإرسال يُنهي الكتابة فوراً عند الطرف الآخر، قبل أي انتظار للشبكة.
+    typingPublisherRef.current?.stop();
     if (editingMessage) {
       const messageToEdit = editingMessage;
       if (messageToEdit.sender_id !== currentUserId || !isEditableTextMessage(messageToEdit)) {
@@ -3658,6 +3806,17 @@ export default function MessagesPage({
         { p_other_user_id: conversation.profile.id },
       );
       if (error) throw error;
+      // حذف المحادثة لدى الجميع يمسّ رسائل الطرفين في القاعدة؛ يُبلَّغ الطرف
+      // الآخر فوراً ليفرّغ المحادثة المفتوحة لديه. الحذف الشخصي يبقى محلياً.
+      // لا يُبث إلا إن كانت المحادثة المحذوفة هي المفتوحة على قناتها الحالية.
+      if (forEveryone && selectedIdRef.current === conversation.profile.id) {
+        const eventId = createMessageId();
+        sendConversationBroadcast(
+          MESSAGES_CONVERSATION_DELETED_EVENT,
+          { userId: currentUserId, eventId },
+          `conversation-deleted:${eventId}`,
+        );
+      }
       setDeleteTarget(null);
       if (selectedId === conversation.profile.id) {
         setThread([]);
@@ -4624,6 +4783,22 @@ export default function MessagesPage({
                   </div>
                 )}
               </div>
+              {selectedConversation && (
+                <div
+                  className={`messages-typing-indicator${selectedConversation && typingContactId === selectedConversation.profile.id ? ' is-visible' : ''}`}
+                  role="status"
+                  aria-live="polite"
+                  aria-hidden={!(selectedConversation && typingContactId === selectedConversation.profile.id)}
+                  dir="rtl"
+                >
+                  <span className="messages-typing-label">جاري الكتابة</span>
+                  <span className="messages-typing-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
+              )}
               {selectedConversation?.isRequest ? (
                 <div className="messages-request-banner" role="group" aria-label="إجراء طلب المراسلة" dir="rtl">
                   <p>
@@ -4736,7 +4911,14 @@ export default function MessagesPage({
                       <textarea
                         ref={messageInputRef}
                         value={text}
-                        onChange={event => setText(event.target.value)}
+                        onChange={event => {
+                          const nextText = event.target.value;
+                          setText(nextText);
+                          // الكتابة تُعلن فقط بنص غير فارغ، وفي محادثة محددة فعلاً.
+                          if (nextText.trim() && selectedIdRef.current) typingPublisherRef.current?.notifyTyping();
+                          else typingPublisherRef.current?.stop();
+                        }}
+                        onBlur={() => typingPublisherRef.current?.stop()}
                         onFocus={() => {
                           if (!shouldFollowLatestRef.current) return;
                           scrollThreadToBottom();

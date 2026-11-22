@@ -149,3 +149,63 @@ export type MessageDeletionScope = 'me' | 'everyone';
 export function shouldBroadcastMessageDeletion(scope: MessageDeletionScope): boolean {
   return scope === 'everyone';
 }
+
+
+// حذف المحادثة كاملة لدى الجميع: حدث واحد يحمل معرّف من طلبه فقط. تُحذف
+// الرسائل فعلياً من قاعدة البيانات عبر RPC المحادثة، وهذا الحدث يجعل الطرف
+// الآخر يفرّغ المحادثة المفتوحة فوراً بدل انتظار المزامنة.
+export const MESSAGES_CONVERSATION_DELETED_EVENT = 'conversation_deleted';
+
+export interface ConversationDeletedBroadcast {
+  userId: string;
+  // معرّف فريد لكل عملية حذف، كي لا يُسقط المستقبِل حذفاً لاحقاً من الشخص نفسه.
+  eventId: string;
+}
+
+export function normalizeConversationDeletedBroadcast(payload: unknown): ConversationDeletedBroadcast | null {
+  if (!isRecord(payload)) return null;
+  const userId = trimmedId(payload.userId);
+  const eventId = trimmedId(payload.eventId);
+  return userId && eventId ? { userId, eventId } : null;
+}
+
+export function conversationDeletedBroadcastKey(event: ConversationDeletedBroadcast): string {
+  return `conversation:${event.userId}:${event.eventId}`;
+}
+
+/** هل يخص حذف المحادثة المحادثة المفتوحة مع هذا الطرف؟ */
+export function conversationDeletedEventMatchesConversation(
+  event: ConversationDeletedBroadcast,
+  userId: string,
+  contactId: string | null | undefined,
+): boolean {
+  return Boolean(contactId) && event.userId === contactId && contactId !== userId;
+}
+
+// بث ينتظر اكتمال الاشتراك في قناة المحادثة: لا نُسقط الأحداث ولا نُكرّرها.
+export const MESSAGES_CONVERSATION_BROADCAST_QUEUE_LIMIT = 32;
+
+export interface QueuedConversationBroadcast {
+  key: string;
+  event: string;
+  payload: Record<string, unknown>;
+}
+
+/**
+ * إضافة حدث إلى الطابور قبل اكتمال الاشتراك. المفتاح نفسه يُستبدل (أحدث حالة
+ * تكفي: مؤشر الكتابة مثلاً)، والطابور محدود الطول.
+ */
+export function enqueueConversationBroadcast(
+  queue: QueuedConversationBroadcast[],
+  next: QueuedConversationBroadcast,
+  limit = MESSAGES_CONVERSATION_BROADCAST_QUEUE_LIMIT,
+): QueuedConversationBroadcast[] {
+  const existing = queue.findIndex(item => item.key === next.key);
+  if (existing >= 0) {
+    const updated = queue.slice();
+    updated[existing] = next;
+    return updated;
+  }
+  if (queue.length >= limit) return [...queue.slice(queue.length - limit + 1), next];
+  return [...queue, next];
+}
