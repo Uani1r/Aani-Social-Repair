@@ -158,16 +158,19 @@ export const MESSAGES_CONVERSATION_DELETED_EVENT = 'conversation_deleted';
 
 export interface ConversationDeletedBroadcast {
   userId: string;
+  // معرّف فريد لكل عملية حذف، كي لا يُسقط المستقبِل حذفاً لاحقاً من الشخص نفسه.
+  eventId: string;
 }
 
 export function normalizeConversationDeletedBroadcast(payload: unknown): ConversationDeletedBroadcast | null {
   if (!isRecord(payload)) return null;
   const userId = trimmedId(payload.userId);
-  return userId ? { userId } : null;
+  const eventId = trimmedId(payload.eventId);
+  return userId && eventId ? { userId, eventId } : null;
 }
 
 export function conversationDeletedBroadcastKey(event: ConversationDeletedBroadcast): string {
-  return `conversation:${event.userId}`;
+  return `conversation:${event.userId}:${event.eventId}`;
 }
 
 /** هل يخص حذف المحادثة المحادثة المفتوحة مع هذا الطرف؟ */

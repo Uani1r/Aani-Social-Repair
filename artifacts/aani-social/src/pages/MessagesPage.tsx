@@ -2522,6 +2522,12 @@ export default function MessagesPage({
           }
           return;
         }
+        // أي حالة غير SUBSCRIBED (انقطاع، انتهاء مهلة، إغلاق) تعني أن القناة لم
+        // تعد موثوقة: لا نرسل عبرها حتى يؤكد اشتراك جديد، ونُخفي مؤشر الكتابة
+        // الوارد لأن إشاراته قد فاتت.
+        conversationBroadcastSubscribedRef.current = false;
+        conversationBroadcastQueueRef.current = [];
+        clearTypingContact();
         if (statusError) {
           // قد تكون سياسات Realtime Authorization غير مطبقة بعد؛ المزامنة
           // التعويضية REST تبقى شبكة الأمان ولا نُظهر خطأ للمستخدم.
@@ -2532,10 +2538,12 @@ export default function MessagesPage({
     conversationBroadcastChannelRef.current = channel;
     return () => {
       removedByUs = true;
+      // ترتيب التنظيف مهم: نوقف الكتابة أولاً والقناة ما زالت مرجعاً حياً،
+      // ثم نفصل المرجع، ثم نزيل القناة. هكذا يصل إيقاف الكتابة إلى القناة الصحيحة.
+      typingPublisherRef.current?.stop();
+      clearTypingContact();
       conversationBroadcastSubscribedRef.current = false;
       conversationBroadcastQueueRef.current = [];
-      clearTypingContact();
-      typingPublisherRef.current?.stop();
       if (conversationBroadcastChannelRef.current === channel) conversationBroadcastChannelRef.current = null;
       void supabase.removeChannel(channel);
     };
@@ -3246,6 +3254,8 @@ export default function MessagesPage({
     }
 
     const recipientId = selectedId;
+    // الإرسال يُنهي الكتابة فوراً عند الطرف الآخر، قبل أي انتظار للشبكة.
+    typingPublisherRef.current?.stop();
     if (editingMessage) {
       const messageToEdit = editingMessage;
       if (messageToEdit.sender_id !== currentUserId || !isEditableTextMessage(messageToEdit)) {
@@ -3790,11 +3800,13 @@ export default function MessagesPage({
       if (error) throw error;
       // حذف المحادثة لدى الجميع يمسّ رسائل الطرفين في القاعدة؛ يُبلَّغ الطرف
       // الآخر فوراً ليفرّغ المحادثة المفتوحة لديه. الحذف الشخصي يبقى محلياً.
-      if (forEveryone) {
+      // لا يُبث إلا إن كانت المحادثة المحذوفة هي المفتوحة على قناتها الحالية.
+      if (forEveryone && selectedIdRef.current === conversation.profile.id) {
+        const eventId = createMessageId();
         sendConversationBroadcast(
           MESSAGES_CONVERSATION_DELETED_EVENT,
-          { userId: currentUserId },
-          `conversation:${currentUserId}`,
+          { userId: currentUserId, eventId },
+          `conversation-deleted:${eventId}`,
         );
       }
       setDeleteTarget(null);
@@ -4763,6 +4775,22 @@ export default function MessagesPage({
                   </div>
                 )}
               </div>
+              {selectedConversation && (
+                <div
+                  className={`messages-typing-indicator${selectedConversation && typingContactId === selectedConversation.profile.id ? ' is-visible' : ''}`}
+                  role="status"
+                  aria-live="polite"
+                  aria-hidden={!(selectedConversation && typingContactId === selectedConversation.profile.id)}
+                  dir="rtl"
+                >
+                  <span className="messages-typing-label">جاري الكتابة</span>
+                  <span className="messages-typing-dots" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
+              )}
               {selectedConversation?.isRequest ? (
                 <div className="messages-request-banner" role="group" aria-label="إجراء طلب المراسلة" dir="rtl">
                   <p>
@@ -4875,7 +4903,14 @@ export default function MessagesPage({
                       <textarea
                         ref={messageInputRef}
                         value={text}
-                        onChange={event => setText(event.target.value)}
+                        onChange={event => {
+                          const nextText = event.target.value;
+                          setText(nextText);
+                          // الكتابة تُعلن فقط بنص غير فارغ، وفي محادثة محددة فعلاً.
+                          if (nextText.trim() && selectedIdRef.current) typingPublisherRef.current?.notifyTyping();
+                          else typingPublisherRef.current?.stop();
+                        }}
+                        onBlur={() => typingPublisherRef.current?.stop()}
                         onFocus={() => {
                           if (!shouldFollowLatestRef.current) return;
                           scrollThreadToBottom();

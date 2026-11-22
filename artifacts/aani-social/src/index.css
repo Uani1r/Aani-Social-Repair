@@ -3663,6 +3663,67 @@ body.aani-immersive .unified-top-bar {
   background: #171717;
 }
 
+/* مؤشر «جاري الكتابة»: ارتفاع ثابت يُحجز دائماً، فلا يتحرك الخيط أو مربع الكتابة. */
+.messages-typing-indicator {
+  display: flex;
+  height: 22px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  margin: 0 20px;
+  color: var(--messages-secondary);
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity .18s ease;
+  pointer-events: none;
+}
+
+.messages-typing-indicator.is-visible {
+  opacity: 1;
+}
+
+.messages-typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.messages-typing-dots span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .35;
+  animation: messages-typing-bounce 1.2s ease-in-out infinite;
+}
+
+.messages-typing-dots span:nth-child(2) {
+  animation-delay: .15s;
+}
+
+.messages-typing-dots span:nth-child(3) {
+  animation-delay: .3s;
+}
+
+@keyframes messages-typing-bounce {
+  0%, 60%, 100% {
+    opacity: .35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .messages-typing-dots span {
+    animation: none;
+    opacity: .7;
+  }
+}
+
 .messages-composer.is-emoji-panel-open {
   position: fixed;
   right: 0;

@@ -14,7 +14,12 @@ import {
   normalizeMessageDeletedBroadcast,
   normalizeReactionDeletedBroadcast,
   reactionDeletedBroadcastKey,
+  conversationDeletedBroadcastKey,
+  conversationDeletedEventMatchesConversation,
+  enqueueConversationBroadcast,
+  normalizeConversationDeletedBroadcast,
   shouldBroadcastMessageDeletion,
+  type QueuedConversationBroadcast,
 } from './messagesDeleteBroadcast';
 
 const userA = '00000000-0000-0000-0000-00000000000a';
@@ -158,4 +163,48 @@ test('the page subscribes to private conversation broadcast channels only', () =
   assert.equal(/shouldBroadcastMessageDeletion\(/.test(messagesPage), true);
   assert.equal(messagesPage.includes('MESSAGES_MESSAGE_DELETED_EVENT'), true);
   assert.equal(messagesPage.includes('MESSAGES_REACTION_DELETED_EVENT'), true);
+});
+
+
+
+test('a conversation deletion event carries a unique id and no content', () => {
+  const event = normalizeConversationDeletedBroadcast({ userId: userA, eventId: 'e1', content: 'secret' });
+  assert.deepEqual(event, { userId: userA, eventId: 'e1' });
+  assert.equal(normalizeConversationDeletedBroadcast({ userId: userA }), null);
+  assert.equal(normalizeConversationDeletedBroadcast({ eventId: 'e1' }), null);
+  assert.equal(normalizeConversationDeletedBroadcast(null), null);
+
+  assert.notEqual(
+    conversationDeletedBroadcastKey({ userId: userA, eventId: 'e1' }),
+    conversationDeletedBroadcastKey({ userId: userA, eventId: 'e2' }),
+  );
+});
+
+test('a conversation deletion only applies to the open conversation with its sender', () => {
+  const event = { userId: userB, eventId: 'e1' };
+  assert.equal(conversationDeletedEventMatchesConversation(event, userA, userB), true);
+  assert.equal(conversationDeletedEventMatchesConversation(event, userA, userC), false);
+  assert.equal(conversationDeletedEventMatchesConversation(event, userA, null), false);
+  assert.equal(conversationDeletedEventMatchesConversation({ userId: userA, eventId: 'e2' }, userA, userB), false);
+});
+
+test('repeated conversation deletions from the same user are each applied once', () => {
+  const dedupe = createMessagesDeleteBroadcastDedupe();
+  assert.equal(dedupe.isDuplicate(conversationDeletedBroadcastKey({ userId: userB, eventId: 'e1' })), false);
+  assert.equal(dedupe.isDuplicate(conversationDeletedBroadcastKey({ userId: userB, eventId: 'e1' })), true);
+  assert.equal(dedupe.isDuplicate(conversationDeletedBroadcastKey({ userId: userB, eventId: 'e2' })), false);
+});
+
+test('the pre-subscribe queue keeps the newest event per key and stays bounded', () => {
+  let queue: QueuedConversationBroadcast[] = [];
+  queue = enqueueConversationBroadcast(queue, { key: 'typing', event: 'typing', payload: { isTyping: true } }, 3);
+  queue = enqueueConversationBroadcast(queue, { key: 'typing', event: 'typing', payload: { isTyping: false } }, 3);
+  assert.equal(queue.length, 1);
+  assert.deepEqual(queue[0].payload, { isTyping: false });
+
+  queue = enqueueConversationBroadcast(queue, { key: 'a', event: 'message_deleted', payload: {} }, 3);
+  queue = enqueueConversationBroadcast(queue, { key: 'b', event: 'message_deleted', payload: {} }, 3);
+  queue = enqueueConversationBroadcast(queue, { key: 'c', event: 'message_deleted', payload: {} }, 3);
+  assert.equal(queue.length, 3);
+  assert.equal(queue.some(item => item.key === 'typing'), false);
 });
