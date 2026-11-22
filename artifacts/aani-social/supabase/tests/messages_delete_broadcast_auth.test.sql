@@ -71,13 +71,13 @@ declare
   visible integer;
 begin
   perform set_config('request.jwt.claim.sub', current_setting('test.a'), true);
+  perform set_config('realtime.topic', conversation_topic, true);
 
   -- A participant may publish to the conversation topic.
   insert into realtime.messages (topic, extension, payload)
   values (conversation_topic, 'broadcast', '{}'::jsonb);
 
   -- A participant sees the conversation rows.
-  perform set_config('realtime.topic', conversation_topic, true);
   select count(*) into visible from realtime.messages where topic = conversation_topic;
   if visible < 1 then
     raise exception 'A participant must read their conversation topic, saw %', visible;
