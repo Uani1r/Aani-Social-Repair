@@ -37,8 +37,10 @@ import {
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
   isInboxMessageAtLeastAsNew,
+  isMissingMessagesInboxDeliveryRpc,
   legacyInboxDeliveryMessageIds,
   mergeInboxConversationsWithRealtime,
+  mergeMessageSnapshot,
   mergeRealtimeThreadMessages,
   messageBelongsToInboxThread,
   messagesInboxContactId,
@@ -662,13 +664,16 @@ async function queryMessageRows(
     const result = await retrySupabaseQuery(async () => {
       let query = supabase
         .from('messages')
-        .select(fields)
-        .or(filter);
+        .select(fields);
       if (page?.before) {
         const created = `"${page.before.createdAt.replace(/"/g, '\\"')}"`;
         const id = `"${page.before.id.replace(/"/g, '\\"')}"`;
-        // ترتيب ثابت: created_at ثم id، فلا تتكرر رسالة أو تُفقد بين الدفعات.
-        query = query.or(`created_at.lt.${created},and(created_at.eq.${created},id.lt.${id})`);
+        // اجمع نطاق المحادثات والمؤشر في تعبير واحد؛ استدعاء .or مرتين
+        // ينشئ معاملَي or مكررين وقد يُسقط PostgREST أحدهما.
+        const cursorFilter = `created_at.lt.${created},and(created_at.eq.${created},id.lt.${id})`;
+        query = query.or(`and(or(${filter}),or(${cursorFilter}))`);
+      } else {
+        query = query.or(filter);
       }
       query = query
         .order('created_at', { ascending })
@@ -705,6 +710,30 @@ async function queryMessageRows(
   }
 
   return { data: null, error: new Error('تعذر تحميل الرسائل.') };
+}
+
+async function queryAllMessageRows(
+  filter: string,
+  shouldContinue?: () => boolean,
+): Promise<{ data: unknown[]; error: unknown | null }> {
+  const pageSize = 1000;
+  const rows: unknown[] = [];
+  let before: { createdAt: string; id: string } | undefined;
+
+  while (true) {
+    if (shouldContinue && !shouldContinue()) return { data: rows, error: null };
+    const result = await queryMessageRows(filter, false, false, { limit: pageSize, before });
+    if (result.error) return { data: [], error: result.error };
+    const pageRows = Array.isArray(result.data) ? result.data : [];
+    rows.push(...pageRows);
+    if (pageRows.length < pageSize) return { data: rows, error: null };
+
+    const lastMessage = normalizeMessageRows([pageRows[pageRows.length - 1]])[0];
+    if (!lastMessage || (before && before.createdAt === lastMessage.created_at && before.id === lastMessage.id)) {
+      return { data: [], error: new Error('تعذر متابعة صفحات الرسائل القديمة.') };
+    }
+    before = { createdAt: lastMessage.created_at, id: lastMessage.id };
+  }
 }
 
 function createMessageId(): string {
@@ -901,6 +930,8 @@ export default function MessagesPage({
   const [conversationCacheReady, setConversationCacheReady] = useState(initialConversationCache !== null);
   const [contactsError, setContactsError] = useState<string | null>(null);
   const [thread, setThread] = useState<MessageRow[]>(() => initialThreadCache?.messages || []);
+  const threadMessagesRef = useRef(thread);
+  threadMessagesRef.current = thread;
   const [threadConversationId, setThreadConversationId] = useState<string | null>(() => selectedId || null);
   const [threadLoadStatus, setThreadLoadStatus] = useState<ThreadLoadStatus>(
     () => supabaseConfigured && selectedId ? 'loading' : 'loaded',
@@ -998,6 +1029,11 @@ export default function MessagesPage({
   const realtimeResubscribeTimerRef = useRef<number | null>(null);
   const realtimeResubscribeAtRef = useRef<number | null>(null);
   const contactsRequestTrackerRef = useRef(createInboxRequestTracker());
+  const inboxSummaryRpcAvailabilityRef = useRef({ summaryMissing: false });
+  const inboxDeliveryRpcMissingRef = useRef(false);
+  const inboxDeliveryFallbackInFlightRef = useRef(false);
+  const inboxDeliveryFallbackAtRef = useRef(0);
+  const lifecycleResyncAtRef = useRef(0);
   const realtimeMessageRevisionRef = useRef(0);
   const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
   const realtimeThreadMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
@@ -1220,13 +1256,49 @@ export default function MessagesPage({
 
   const markInboxMessagesDelivered = useCallback(async () => {
     if (!supabaseConfigured) return;
+    if (!inboxDeliveryRpcMissingRef.current) {
+      try {
+        const { error } = await supabase.rpc('aani_mark_inbox_messages_delivered');
+        if (!error) return;
+        if (!isMissingMessagesInboxDeliveryRpc(error)) {
+          console.warn('[messages] تعذر تحديث حالة توصيل رسائل القائمة:', error);
+          return;
+        }
+        inboxDeliveryRpcMissingRef.current = true;
+      } catch (error) {
+        if (!isMissingMessagesInboxDeliveryRpc(error)) {
+          console.warn('[messages] تعذر تحديث حالة توصيل رسائل القائمة:', error);
+          return;
+        }
+        inboxDeliveryRpcMissingRef.current = true;
+      }
+    }
+
+    // عند غياب RPC في الإنتاج، لا نكرر فشل الاستدعاء مع كل تحديث للقائمة؛
+    // نستخدم المسار القديم بمعرّفات محدودة ونترك INSERT المفتوح يُؤكَّد فوراً.
+    const now = Date.now();
+    if (inboxDeliveryFallbackInFlightRef.current
+      || now - inboxDeliveryFallbackAtRef.current < 30_000) return;
+    inboxDeliveryFallbackAtRef.current = now;
+    inboxDeliveryFallbackInFlightRef.current = true;
     try {
-      const { error } = await supabase.rpc('aani_mark_inbox_messages_delivered');
-      if (error) console.warn('[messages] تعذر تحديث حالة توصيل رسائل القائمة:', error);
+      const [messagesResult, hiddenMessageIds] = await Promise.all([
+        queryMessageRows(`recipient_id.eq.${currentUserId}`, false, false, { limit: 500 }),
+        loadHiddenMessageIds(currentUserId),
+      ]);
+      if (messagesResult.error) throw messagesResult.error;
+      const messageIds = legacyInboxDeliveryMessageIds(
+        normalizeMessageRows(messagesResult.data),
+        hiddenMessageIds,
+        currentUserId,
+      );
+      await markMessagesDelivered(messageIds);
     } catch (error) {
       console.warn('[messages] تعذر تحديث حالة توصيل رسائل القائمة:', error);
+    } finally {
+      inboxDeliveryFallbackInFlightRef.current = false;
     }
-  }, []);
+  }, [currentUserId, markMessagesDelivered]);
 
   useLayoutEffect(() => {
     const input = messageInputRef.current;
@@ -1268,7 +1340,7 @@ export default function MessagesPage({
     };
   }, [selectedId]);
 
-  const loadConversationList = useCallback(async () => {
+  const loadConversationList = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
     const requestId = contactsRequestTrackerRef.current.begin();
     const realtimeRevisionAtStart = realtimeMessageRevisionRef.current;
     if (!supabaseConfigured) {
@@ -1279,8 +1351,10 @@ export default function MessagesPage({
       return;
     }
 
-    setContactsError(null);
-    setMutualFollowersLoading(true);
+    if (!quiet) {
+      setContactsError(null);
+      setMutualFollowersLoading(true);
+    }
     try {
       await purgeExpiredMessages();
       const readAtByContactSnapshot = readAtByContactRef.current;
@@ -1295,7 +1369,10 @@ export default function MessagesPage({
           () => retrySupabaseQuery(async () => await supabase.rpc('aani_get_messages_inbox_summaries')),
           async () => {
             const [messagesResult, hiddenMessageIds] = await Promise.all([
-              queryMessageRows(`sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`, false),
+              queryAllMessageRows(
+                `sender_id.eq.${currentUserId},recipient_id.eq.${currentUserId}`,
+                () => contactsRequestTrackerRef.current.isCurrent(requestId),
+              ),
               loadHiddenMessageIds(currentUserId),
             ]);
             if (messagesResult.error) {
@@ -1314,6 +1391,7 @@ export default function MessagesPage({
               deliveryMessageIds: legacyInboxDeliveryMessageIds(messages, hiddenMessageIds, currentUserId),
             };
           },
+          inboxSummaryRpcAvailabilityRef.current,
         ),
         retrySupabaseQuery(async () => await supabase
           .from('follows')
@@ -1329,6 +1407,7 @@ export default function MessagesPage({
       if (profileResult.error) throw profileResult.error;
       if (summaryResult.error) throw summaryResult.error;
       if (followsResult.error) throw followsResult.error;
+      setContactsError(null);
       setCurrentProfile((profileResult.data || null) as Profile | null);
       if (summaryResult.usedFallback) {
         void markMessagesDelivered(summaryResult.deliveryMessageIds);
@@ -1362,16 +1441,16 @@ export default function MessagesPage({
       const mutualIds = [...followingIds].filter(id => followerIds.has(id) && id !== currentUserId);
       mutualContactIdsRef.current = new Set(mutualIds);
       const profileIds = [...new Set([...contactIds, ...mutualIds])];
-      const profilesResult = profileIds.length
-        ? await retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds))
-        : { data: [], error: null };
+      const [profilesResult, storiesResult] = await Promise.all([
+        profileIds.length
+          ? retrySupabaseQuery(async () => await supabase.from('profiles').select(PROFILE_FIELDS).in('id', profileIds))
+          : Promise.resolve({ data: [], error: null }),
+        contactIds.length
+          ? retrySupabaseQuery(async () => await supabase.from('stories').select('id, user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString()))
+          : Promise.resolve({ data: [], error: null }),
+      ]);
       if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
       if (profilesResult.error) throw profilesResult.error;
-
-      const storiesResult = contactIds.length
-        ? await retrySupabaseQuery(async () => await supabase.from('stories').select('id, user_id').in('user_id', contactIds).gt('expires_at', new Date().toISOString()))
-        : { data: [], error: null };
-      if (!contactsRequestTrackerRef.current.isCurrent(requestId)) return;
       if (requestStatesResult.error) {
         console.warn('[messages] تعذر تحميل حالات طلبات المراسلة:', requestStatesResult.error);
       }
@@ -1491,12 +1570,14 @@ export default function MessagesPage({
     return () => window.removeEventListener(SEEN_STORY_IDS_CHANGED_EVENT, syncStoryRings);
   }, [currentUserId]);
 
-  const loadThread = useCallback(async () => {
+  const loadThread = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
     if (!supabaseConfigured || !selectedId || selectedIdRef.current !== selectedId) return;
     const conversationIdAtStart = selectedId;
-    olderScrollIntentRef.current = false;
-    setThreadLoadStatus('loading');
-    setOlderMessagesError(false);
+    if (!quiet) {
+      olderScrollIntentRef.current = false;
+      setThreadLoadStatus('loading');
+      setOlderMessagesError(false);
+    }
     const requestId = ++threadRequestRef.current;
     const isCurrentRequest = () => isCurrentThreadLoad(
       requestId,
@@ -1635,7 +1716,7 @@ export default function MessagesPage({
         },
       )) return;
       if (!isCurrentRequest()) return;
-      setThreadLoadStatus('error');
+      if (!quiet || threadMessagesRef.current.length === 0) setThreadLoadStatus('error');
       console.error('[messages] تعذر جلب المحادثة:', error);
     }
   }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
@@ -1821,7 +1902,13 @@ export default function MessagesPage({
     token: number,
     status: string,
     includeThread: boolean,
+    statusError?: unknown,
   ) => {
+    if (status !== 'SUBSCRIBED' && statusError) {
+      // أخطاء binding (ومنها mismatch في postgres_changes) تعني أن القناة
+      // لم تصبح جاهزة، حتى لو كان WebSocket نفسه متصلاً.
+      console.warn(`[messages] Realtime ${channelId} ${status}:`, statusError);
+    }
     const decision = realtimeChannelsRef.current.handleStatus(channelId, token, status, Date.now());
     if (decision.resync) scheduleMessageRefresh(includeThread);
     if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
@@ -1920,6 +2007,45 @@ export default function MessagesPage({
     setOlderMessagesLoading(false);
   }, []);
 
+  const handleRealtimeMessageUpdate = useCallback((value: unknown) => {
+    const normalizedMessage = normalizeMessageRows([value])[0];
+    if (!normalizedMessage || deletedMessageIdsRef.current.has(normalizedMessage.id)) return;
+    const contactId = messagesInboxContactId(normalizedMessage, currentUserId);
+    if (!contactId) return;
+
+    const conversationMessage = conversationsRef.current.find(item => item.profile.id === contactId)?.lastMessage;
+    const cachedInboxMessage = realtimeInboxMessagesRef.current.get(contactId)?.message;
+    let message = mergeMessageSnapshot(cachedInboxMessage, normalizedMessage);
+    if (conversationMessage?.id === message.id) {
+      message = mergeMessageSnapshot(conversationMessage, message);
+    }
+    const mediaMessage = parseChatMediaMessage(message.content);
+    if (mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))) {
+      message = { ...message, content: openedChatMediaContent(message.content) };
+    }
+
+    realtimeMessageRevisionRef.current += 1;
+    const previousSnapshot = realtimeInboxMessagesRef.current.get(contactId)?.message;
+    if (!previousSnapshot
+      || compareInboxMessageRecency(message, previousSnapshot) > 0
+      || message.id === previousSnapshot.id) {
+      realtimeInboxMessagesRef.current.set(contactId, { message });
+    }
+    const belongsToOpenThread = messageBelongsToInboxThread(message, currentUserId, selectedIdRef.current);
+    if (belongsToOpenThread) realtimeThreadMessagesRef.current.set(message.id, { message });
+
+    invalidateRealtimeMessageLoads();
+    setConversations(current => current.map(conversation => {
+      if (conversation.profile.id !== contactId || conversation.lastMessage?.id !== message.id) return conversation;
+      return { ...conversation, lastMessage: mergeMessageSnapshot(conversation.lastMessage, message) };
+    }));
+    if (belongsToOpenThread) {
+      setThread(current => mergeThreadRows(current, [message]));
+      if (threadConversationIdRef.current === contactId) setThreadCacheReady(true);
+    }
+    setConversationCacheReady(true);
+  }, [currentUserId, invalidateRealtimeMessageLoads]);
+
   const clearRealtimeMessage = useCallback((messageId: unknown) => {
     if (typeof messageId !== 'string' || !messageId) return;
     deletedMessageIdsRef.current.add(messageId);
@@ -1969,8 +2095,8 @@ export default function MessagesPage({
         handleRealtimeMessageInsert(payload.new);
         scheduleMessageRefresh(false);
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => {
-        invalidateRealtimeMessageLoads();
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, payload => {
+        handleRealtimeMessageUpdate(payload.new);
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
@@ -1991,11 +2117,11 @@ export default function MessagesPage({
         schema: 'public',
         table: 'message_conversation_requests',
       }, () => scheduleMessageRefresh(false))
-      .subscribe(status => {
-        // عودة الـWebSocket لا تعني نجاح الاشتراك: نتعامل مع الحالات الأربع
-        // صراحةً ونعيد المزامنة وإعادة الاشتراك عند الحاجة.
+      .subscribe((status, statusError) => {
+        // SUBSCRIBED هو تأكيد binding postgres_changes، ويطلق مزامنة لسد فجوة
+        // الأحداث قبل هذا التأكيد أو بعد عودة الاشتراك.
         if (removedByUs) return;
-        handleRealtimeStatus('inbox', token, status, false);
+        handleRealtimeStatus('inbox', token, status, false, statusError);
       });
     return () => {
       removedByUs = true;
@@ -2004,7 +2130,7 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, realtimeEpoch, loadConversationList, handleRealtimeMessageInsert, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+  }, [currentUserId, realtimeEpoch, loadConversationList, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
   useEffect(() => {
     if (!supabaseConfigured) return;
@@ -2082,8 +2208,8 @@ export default function MessagesPage({
         handleRealtimeMessageInsert(payload.new);
         scheduleMessageRefresh(true);
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, () => {
-        invalidateRealtimeMessageLoads();
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, payload => {
+        handleRealtimeMessageUpdate(payload.new);
         scheduleMessageRefresh(true);
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
@@ -2100,11 +2226,11 @@ export default function MessagesPage({
         clearRealtimeMessage((payload.new as { message_id?: unknown } | null)?.message_id);
         scheduleMessageRefresh(true);
       })
-      .subscribe(status => {
-        // الحالات الأربع صراحةً: SUBSCRIBED يعني اشتراكاً سليماً، وأي حالة
-        // أخرى تعني اشتراكاً غير موثوق يحتاج مزامنة وإعادة إنشاء.
+      .subscribe((status, statusError) => {
+        // فشل تأكيد postgres_changes يعالج كقناة غير موثوقة، مع تضمين السبب
+        // التشخيصي الذي توفره Supabase دون إظهار خطأ واجهة للمستخدم.
         if (removedByUs) return;
-        handleRealtimeStatus('thread', token, status, true);
+        handleRealtimeStatus('thread', token, status, true, statusError);
       });
     return () => {
       removedByUs = true;
@@ -2113,21 +2239,50 @@ export default function MessagesPage({
       clearScheduledMessageRefresh();
       void supabase.removeChannel(channel);
     };
-  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, handleRealtimeMessageInsert, clearRealtimeMessage, invalidateRealtimeMessageLoads, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+  }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
 
-  // بعد عودة الشبكة أو التطبيق: مزامنة تعويضية للقائمة والمحادثة المفتوحة،
-  // لأن عودة القناة وحدها لا تضمن وصول ما فُقد أثناء الانقطاع.
-  useEffect(() => registerRealtimeReconnect(() => {
-    void loadConversationList();
-    if (selectedIdRef.current) void loadThread();
-    // عودة الـWebSocket وحدها لا تعني أن جميع القنوات عادت للاشتراك: نتحقق
-    // من كل قناة على حدة ونعيد إنشاء ما لم يعد مشتركاً.
+  // المزامنة التعويضية لا تعتمد على حدث Realtime: عند pageshow/focus، عودة
+  // الشبكة، أو كل خمس دقائق أثناء بقاء الرسائل ظاهرة، تُجلب الفجوات من القاعدة.
+  const resyncMessages = useCallback(() => {
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
     const now = Date.now();
+    if (now - lifecycleResyncAtRef.current < 4_000) return;
+    lifecycleResyncAtRef.current = now;
+
+    try {
+      if (supabaseConfigured && !supabase.realtime.isConnected()) supabase.realtime.connect();
+    } catch {
+      /* مزامنة REST أدناه تبقى صالحة حتى إن تعذرت إعادة الـsocket */
+    }
+    void loadConversationList({ quiet: true });
+    if (selectedIdRef.current && !olderRequestTrackerRef.current.isLoading()) {
+      void loadThread({ quiet: true });
+    }
+
+    // القناة التي بقيت ظاهرياً SUBSCRIBED لا يمكن اعتبارها دليلاً على عدم
+    // فقد الأحداث؛ فحص الحالة يعالج القنوات التي أعلنت صراحةً عن الانقطاع.
     for (const channelId of REALTIME_CHANNEL_IDS) {
       const decision = realtimeChannelsRef.current.ensureHealthy(channelId, now);
       if (decision.retryAt !== null) scheduleRealtimeResubscribe(decision.retryAt);
     }
-  }), [loadConversationList, loadThread, scheduleRealtimeResubscribe]);
+  }, [loadConversationList, loadThread, scheduleRealtimeResubscribe]);
+
+  useEffect(() => registerRealtimeReconnect(resyncMessages), [resyncMessages]);
+
+  // iOS Safari قد يستعيد صفحة من bfcache دون online أو SUBSCRIBED جديد؛ كما أن
+  // Realtime لا يعيد تشغيل الأحداث التي فاتت أثناء بقاء socket ظاهرياً متصلاً.
+  useEffect(() => {
+    window.addEventListener('pageshow', resyncMessages);
+    window.addEventListener('focus', resyncMessages);
+    // لا نعيد تنزيل سجل الرسائل كله بوتيرة عالية عند غياب summary RPC؛ يظل
+    // التعافي الفوري عبر focus/pageshow وRealtime، مع فحص دوري منخفض الوتيرة.
+    const watchdog = window.setInterval(resyncMessages, 5 * 60_000);
+    return () => {
+      window.removeEventListener('pageshow', resyncMessages);
+      window.removeEventListener('focus', resyncMessages);
+      window.clearInterval(watchdog);
+    };
+  }, [resyncMessages]);
 
   useEffect(() => {
     if (!selectedId || !threadCacheReady) return;
@@ -3649,6 +3804,7 @@ export default function MessagesPage({
             {orderedTabConversations.map(conversation => {
               const isUnread = Boolean(conversation.lastMessage
                 && conversation.lastMessage.sender_id !== currentUserId
+                && !conversation.lastMessage.read_at
                 && Date.parse(conversation.lastMessage.created_at) > (Date.parse(readAtByContact[conversation.profile.id] || '') || 0));
               const matchesSearch = `${displayName(conversation.profile)} ${conversation.profile.username || ''}`
                 .toLocaleLowerCase()

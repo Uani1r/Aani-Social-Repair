@@ -19,6 +19,7 @@ export interface LegacyInboxMessage {
   sender_id: string;
   recipient_id: string;
   created_at: string;
+  content?: unknown;
   read_at?: string | null;
   delivered_at?: string | null;
 }
@@ -28,6 +29,10 @@ export interface InboxSummaryResult<TMessage> {
   error: unknown | null;
   usedFallback: boolean;
   deliveryMessageIds: string[];
+}
+
+export interface MessagesInboxRpcAvailability {
+  summaryMissing: boolean;
 }
 
 export interface RealtimeMessageSnapshot<TMessage> {
@@ -85,6 +90,19 @@ function sortInboxConversations<
   });
 }
 
+export function mergeMessageSnapshot<TMessage extends LegacyInboxMessage>(
+  existing: TMessage | null | undefined,
+  incoming: TMessage,
+): TMessage {
+  if (!existing || existing.id !== incoming.id) return incoming;
+
+  const merged = { ...existing, ...incoming } as TMessage;
+  // إيصالات الرسالة غير قابلة للتراجع أو إعادة الكتابة بعد تثبيتها محلياً.
+  if (existing.delivered_at) merged.delivered_at = existing.delivered_at;
+  if (existing.read_at) merged.read_at = existing.read_at;
+  return merged;
+}
+
 export function applyRealtimeInboxInsert<
   TMessage extends LegacyInboxMessage,
   TConversation extends RealtimeInboxConversation<TMessage>,
@@ -105,8 +123,17 @@ export function applyRealtimeInboxInsert<
     next.push({ ...created, lastMessage: message } as TConversation);
   } else {
     const current = conversations[index];
-    if (isInboxMessageAtLeastAsNew(current.lastMessage, message)) return conversations;
-    next[index] = { ...current, lastMessage: message } as TConversation;
+    if (isInboxMessageAtLeastAsNew(current.lastMessage, message)) {
+      if (current.lastMessage?.id !== message.id) return conversations;
+      const lastMessage = mergeMessageSnapshot(current.lastMessage, message);
+      if (lastMessage === current.lastMessage
+        || (lastMessage.delivered_at === current.lastMessage.delivered_at
+          && lastMessage.read_at === current.lastMessage.read_at
+          && lastMessage.content === current.lastMessage.content)) return conversations;
+      next[index] = { ...current, lastMessage } as TConversation;
+    } else {
+      next[index] = { ...current, lastMessage: message } as TConversation;
+    }
   }
 
   return sortInboxConversations(next);
@@ -124,11 +151,18 @@ export function mergeInboxConversationsWithRealtime<
 ): TConversation[] {
   let merged = fetched.map(conversation => {
     const currentConversation = current.find(item => item.profile.id === conversation.profile.id);
-    if (!currentConversation?.lastMessage || !conversation.lastMessage
-      || compareInboxMessageRecency(currentConversation.lastMessage, conversation.lastMessage) <= 0) {
-      return conversation;
+    const currentMessage = currentConversation?.lastMessage;
+    const fetchedMessage = conversation.lastMessage;
+    if (!currentMessage || !fetchedMessage) return conversation;
+    const recency = compareInboxMessageRecency(currentMessage, fetchedMessage);
+    if (recency > 0) return { ...conversation, lastMessage: currentMessage };
+    if (recency === 0) {
+      return {
+        ...conversation,
+        lastMessage: mergeMessageSnapshot(currentMessage, fetchedMessage),
+      };
     }
-    return { ...conversation, lastMessage: currentConversation.lastMessage };
+    return conversation;
   });
   realtimeMessages.forEach(({ message }, contactId) => {
     if (messagesInboxContactId(message, userId) !== contactId) return;
@@ -275,6 +309,14 @@ export function isConfirmedMissingMessagesInboxRpc(error: unknown): boolean {
   ).test(message);
 }
 
+export function isMissingMessagesInboxDeliveryRpc(error: unknown): boolean {
+  const message = errorField(error, 'message');
+  return errorField(error, 'code') === 'PGRST202'
+    && typeof message === 'string'
+    && /(?:public\.)?aani_mark_inbox_messages_delivered\s*\(/i.test(message)
+    && /schema cache/i.test(message);
+}
+
 export function buildLegacyMessagesInboxSummaries<TMessage extends LegacyInboxMessage>(
   orderedMessages: readonly TMessage[],
   hiddenMessageIds: ReadonlySet<string>,
@@ -342,6 +384,7 @@ export async function fetchMessagesInboxSummaries<TMessage>(
     error: unknown | null;
     deliveryMessageIds?: string[];
   }>,
+  availability?: MessagesInboxRpcAvailability,
 ): Promise<InboxSummaryResult<TMessage>> {
   const emptyResult = (error: unknown | null): InboxSummaryResult<TMessage> => ({
     data: new Map(),
@@ -349,6 +392,25 @@ export async function fetchMessagesInboxSummaries<TMessage>(
     usedFallback: false,
     deliveryMessageIds: [],
   });
+  const runFallback = async (error: unknown | null): Promise<InboxSummaryResult<TMessage>> => {
+    if (!fallback) return emptyResult(error);
+    try {
+      const fallbackResult = await fallback();
+      if (fallbackResult.error) return emptyResult(fallbackResult.error);
+      return {
+        data: fallbackResult.data,
+        error: null,
+        usedFallback: true,
+        deliveryMessageIds: fallbackResult.deliveryMessageIds || [],
+      };
+    } catch (fallbackError) {
+      return emptyResult(fallbackError);
+    }
+  };
+
+  // Once the exact missing-function schema-cache error has been confirmed, do
+  // not pay for another failing RPC plus an empty-argument probe on every refresh.
+  if (availability?.summaryMissing) return runFallback(null);
 
   const result = await request(messagesInboxRpcArguments(readAtByContact, requestTabReadAt));
   if (!result.error) {
@@ -374,18 +436,8 @@ export async function fetchMessagesInboxSummaries<TMessage>(
     return emptyResult(confirmation.error);
   }
 
-  try {
-    const fallbackResult = await fallback();
-    if (fallbackResult.error) return emptyResult(fallbackResult.error);
-    return {
-      data: fallbackResult.data,
-      error: null,
-      usedFallback: true,
-      deliveryMessageIds: fallbackResult.deliveryMessageIds || [],
-    };
-  } catch (error) {
-    return emptyResult(error);
-  }
+  if (availability) availability.summaryMissing = true;
+  return runFallback(null);
 }
 
 export function createInboxRequestTracker(): InboxRequestTracker {
