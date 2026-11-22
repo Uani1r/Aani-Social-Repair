@@ -57,9 +57,11 @@ jobs:
       # Run focused unit tests; the wider test:unit script includes unrelated
       # mediaCompressor failures already present on main. messagesInbox covers
       # summary mapping and stale inbox requests; messagesThread covers pagination
-      # and merge guards; realtimeChannelHealth covers channel status recovery.
+      # and merge guards; realtimeChannelHealth covers channel status recovery;
+      # messagesRealtimeEvents covers the Shell-to-MessagesPage relay, duplicate
+      # event suppression, and background expiry cleanup.
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/realtimeChannelHealth.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck

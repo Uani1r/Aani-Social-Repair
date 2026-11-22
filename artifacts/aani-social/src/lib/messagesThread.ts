@@ -34,6 +34,13 @@ export function sortThreadRows<T extends ThreadMessageLike>(rows: T[]): T[] {
   });
 }
 
+/** إزالة رسالة محذوفة من الخيط مع الحفاظ على هوية المصفوفة إن لم تكن فيه. */
+export function removeThreadRow<T extends ThreadMessageLike>(rows: T[], messageId: string | null): T[] {
+  if (!messageId) return rows;
+  const remaining = rows.filter(row => row.id !== messageId);
+  return remaining.length === rows.length ? rows : remaining;
+}
+
 /** دمج بلا تكرار (Map بالمعرّف) مع الحفاظ على الترتيب الثابت. */
 export function mergeThreadRows<T extends ThreadMessageLike>(existing: T[], incoming: T[]): T[] {
   const byId = new Map<string, T>(existing.map(row => [row.id, row]));
