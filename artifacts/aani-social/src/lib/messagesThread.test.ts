@@ -8,11 +8,16 @@ import {
   mergeThreadRows,
   messagesThreadFilter,
   olderCursorFromRows,
+  overlayLocalReactions,
   progressAfterLatestPage,
   progressAfterOlderPage,
+  reactionsForVisibleMessages,
+  reactionsFromThreadRows,
+  runThreadFirstPaint,
   sortThreadRows,
   shouldShowEmptyThreadMessage,
 } from './messagesThread';
+import { mergeRealtimeThreadMessages } from './messagesInbox';
 import {
   cancelInitialThreadScroll,
   claimInitialThreadScroll,
@@ -550,4 +555,305 @@ test('an empty older page advances nothing but closes paging', () => {
   assert.equal(afterEmpty.cursor, progress.cursor);
   assert.equal(afterEmpty.hasOlder, false);
   assert.equal(afterEmpty.olderPagesLoaded, 1);
+});
+
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushMicrotasks(times = 4): Promise<void> {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve();
+  }
+}
+
+interface ThreadMessageLike {
+  id: string;
+  created_at: string;
+  sender_id: string;
+  recipient_id: string;
+  delivered_at: string | null;
+  read_at: string | null;
+  content?: string;
+}
+
+function threadMessage(id: string, createdAt: string, senderId = 'user-b', recipientId = 'user-a'): ThreadMessageLike {
+  return {
+    id,
+    created_at: createdAt,
+    sender_id: senderId,
+    recipient_id: recipientId,
+    delivered_at: null,
+    read_at: null,
+    content: id,
+  };
+}
+
+test('thread messages paint before the reactions request settles', async () => {
+  const reactionsRequest = createDeferred<void>();
+  const events: string[] = [];
+  let threadStatus = 'loading';
+  let paintedCount = 0;
+
+  const paint = runThreadFirstPaint({
+    load: async () => ['m1', 'm2'],
+    show: messages => {
+      events.push('messages');
+      paintedCount = messages.length;
+      // في الصفحة: setThread ثم setThreadLoadStatus('loaded').
+      threadStatus = 'loaded';
+    },
+    loadReactions: () => {
+      events.push('reactions:start');
+      return reactionsRequest.promise;
+    },
+    onLoadError: () => {
+      threadStatus = 'error';
+    },
+  });
+
+  // الرسائل حُلّت والتفاعلات ما زالت معلّقة.
+  await paint;
+
+  assert.equal(events[0], 'messages');
+  assert.equal(paintedCount, 2);
+  assert.equal(threadStatus, 'loaded');
+
+  reactionsRequest.resolve();
+  await reactionsRequest.promise;
+  await flushMicrotasks(2);
+
+  assert.deepEqual(events, ['messages', 'reactions:start']);
+});
+
+test('a slow or failed reactions request never changes the loaded thread state', async () => {
+  const reactionsRequest = createDeferred<void>();
+  let threadStatus = 'loading';
+  let painted = false;
+  let reactionsError: unknown = null;
+
+  const paint = runThreadFirstPaint({
+    load: async () => ['m1'],
+    show: () => {
+      painted = true;
+      threadStatus = 'loaded';
+    },
+    loadReactions: () => reactionsRequest.promise,
+    onLoadError: () => {
+      threadStatus = 'error';
+    },
+    onReactionsError: error => {
+      reactionsError = error;
+    },
+  });
+
+  await paint;
+  assert.equal(painted, true);
+  assert.equal(threadStatus, 'loaded');
+  assert.equal(reactionsError, null);
+
+  reactionsRequest.reject(new Error('reactions unavailable'));
+  await flushMicrotasks();
+  await flushMicrotasks();
+
+  // فشل التفاعلات لا يخفي الرسائل ولا يحوّل المحادثة إلى خطأ.
+  assert.equal(painted, true);
+  assert.equal(threadStatus, 'loaded');
+  assert.equal(reactionsError instanceof Error, true);
+});
+
+test('a hidden-messages lookup failure prevents any thread paint', async () => {
+  let threadStatus = 'loading';
+  let painted = false;
+  let loadFailure: unknown = null;
+
+  await runThreadFirstPaint({
+    load: async () => {
+      // فشل التحقق من الإخفاء يصل من loadVisibleMessagesWithHiddenIds كما هو.
+      throw new HiddenMessagesLookupError(new Error('hides unavailable'));
+    },
+    show: () => {
+      painted = true;
+    },
+    loadReactions: async () => {
+      throw new Error('should not run after a failed paint gate');
+    },
+    onLoadError: error => {
+      loadFailure = error;
+      threadStatus = 'error';
+    },
+  });
+
+  assert.equal(painted, false);
+  assert.equal(threadStatus, 'error');
+  assert.equal(loadFailure instanceof HiddenMessagesLookupError, true);
+});
+
+test('hidden and deleted messages never reach the painted thread', async () => {
+  const rows = [
+    row('visible', '2027-01-01T10:00:00Z'),
+    row('hidden', '2027-01-01T10:01:00Z'),
+    row('deleted', '2027-01-01T10:02:00Z'),
+  ];
+
+  const { hiddenMessageIds, visibleMessages } = await loadVisibleMessagesWithHiddenIds(
+    rows,
+    async () => new Set(['hidden']),
+  );
+  const deletedMessageIds = new Set(['deleted']);
+  const painted = visibleMessages.filter(message => !deletedMessageIds.has(message.id));
+
+  assert.equal(hiddenMessageIds.has('hidden'), true);
+  assert.deepEqual(painted.map(message => message.id), ['visible']);
+});
+
+test('the hidden-messages lookup starts before the message page arrives', async () => {
+  const messagePage = createDeferred<Row[]>();
+  const events: string[] = [];
+
+  // نفس ترتيب loadThread: التحقق يبدأ قبل وعد الرسائل، ثم يُنتظر بعد وصولها.
+  const hiddenRequest = (async () => {
+    events.push('hidden:start');
+    await Promise.resolve();
+    events.push('hidden:done');
+    return new Set(['hidden']);
+  })();
+
+  const paintMessages = (async () => {
+    const rows = await messagePage.promise;
+    const { visibleMessages } = await loadVisibleMessagesWithHiddenIds(rows, () => hiddenRequest);
+    return visibleMessages;
+  })();
+
+  messagePage.resolve([
+    row('visible', '2027-01-01T10:00:00Z'),
+    row('hidden', '2027-01-01T10:01:00Z'),
+  ]);
+
+  const visible = await paintMessages;
+
+  assert.deepEqual(events.slice(0, 2), ['hidden:start', 'hidden:done']);
+  assert.deepEqual(visible.map(message => message.id), ['visible']);
+});
+
+test('a Realtime message that arrives during the load survives the merge', () => {
+  const fetched = [threadMessage('m1', '2027-01-01T10:00:00Z')];
+  const realtime = [threadMessage('m2', '2027-01-01T10:05:00Z')];
+
+  const merged = mergeRealtimeThreadMessages(
+    [],
+    fetched,
+    realtime,
+    'user-a',
+    'user-b',
+    mergeThreadRows,
+  );
+
+  assert.deepEqual(merged.map(message => message.id), ['m1', 'm2']);
+});
+
+test('merging a fetched page with the same Realtime event never duplicates a message', () => {
+  const fetched = [
+    threadMessage('m1', '2027-01-01T10:00:00Z'),
+    threadMessage('m2', '2027-01-01T10:05:00Z'),
+  ];
+  const realtime = [threadMessage('m2', '2027-01-01T10:05:00Z')];
+
+  const merged = mergeRealtimeThreadMessages(
+    [threadMessage('m1', '2027-01-01T10:00:00Z')],
+    fetched,
+    realtime,
+    'user-a',
+    'user-b',
+    mergeThreadRows,
+  );
+
+  assert.deepEqual(merged.map(message => message.id), ['m1', 'm2']);
+  assert.equal(merged.filter(message => message.id === 'm2').length, 1);
+});
+
+test('an older thread request is not current once a newer load or conversation starts', () => {
+  assert.equal(isCurrentThreadLoad(1, 2, 'contact-a', 'contact-a'), false);
+  assert.equal(isCurrentThreadLoad(2, 2, 'contact-a', 'contact-b'), false);
+  assert.equal(isCurrentThreadLoad(2, 2, 'contact-a', 'contact-a'), true);
+});
+
+test('a local reaction edit made while reactions load is not overwritten', async () => {
+  const reactionsRequest = createDeferred<Array<{ message_id: string; user_id: string; emoji: string }>>();
+  const visibleMessageIds = new Set(['m1']);
+  const versionsAtRequestStart = new Map([['m1', 1]]);
+  const mutationVersions = new Map(versionsAtRequestStart);
+  const currentReactions = {
+    m1: [{ user_id: 'other', emoji: '❤️' }, { user_id: 'user-a', emoji: '👍' }],
+  };
+
+  // المستخدم يعدّل تفاعله بعد بدء طلب التفاعلات.
+  mutationVersions.set('m1', 2);
+  reactionsRequest.resolve([
+    { message_id: 'm1', user_id: 'other', emoji: '❤️' },
+    { message_id: 'm1', user_id: 'user-a', emoji: '😢' },
+  ]);
+
+  const next = overlayLocalReactions(
+    reactionsFromThreadRows(await reactionsRequest.promise, visibleMessageIds),
+    {
+      actorId: 'user-a',
+      visibleMessageIds,
+      mutationVersions,
+      versionsAtRequestStart,
+      currentReactions,
+      pendingReactions: new Map(),
+    },
+  );
+
+  assert.deepEqual(next.m1, [
+    { user_id: 'other', emoji: '❤️' },
+    { user_id: 'user-a', emoji: '👍' },
+  ]);
+});
+
+test('a pending reaction removal wins over a stale server row', () => {
+  const visibleMessageIds = new Set(['m1']);
+  const next = overlayLocalReactions(
+    reactionsFromThreadRows([{ message_id: 'm1', user_id: 'user-a', emoji: '😢' }], visibleMessageIds),
+    {
+      actorId: 'user-a',
+      visibleMessageIds,
+      mutationVersions: new Map(),
+      versionsAtRequestStart: new Map(),
+      currentReactions: {},
+      pendingReactions: new Map([['m1', { emoji: null }]]),
+    },
+  );
+
+  assert.equal(next.m1, undefined);
+});
+
+test('a failed reactions request keeps the visible local reactions', () => {
+  const current = {
+    m1: [{ user_id: 'other', emoji: '❤️' }],
+    m2: [{ user_id: 'other', emoji: '👍' }],
+  };
+  const next = reactionsForVisibleMessages(current, new Set(['m1']));
+
+  assert.deepEqual(Object.keys(next), ['m1']);
+  assert.strictEqual(next.m1, current.m1);
+});
+
+test('reaction rows for messages outside the painted page are ignored', () => {
+  const next = reactionsFromThreadRows([
+    { message_id: 'm1', user_id: 'other', emoji: '❤️' },
+    { message_id: 'old-page', user_id: 'other', emoji: '👍' },
+    { message_id: 'm1', user_id: 'other', emoji: 5 },
+  ] as Array<{ message_id: string; user_id: string; emoji: string }>, new Set(['m1']));
+
+  assert.deepEqual(Object.keys(next), ['m1']);
+  assert.deepEqual(next.m1, [{ user_id: 'other', emoji: '❤️' }]);
 });

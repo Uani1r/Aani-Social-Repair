@@ -123,6 +123,140 @@ export function progressAfterOlderPage<T extends ThreadMessageLike>(
   };
 }
 
+export interface ThreadReactionRow {
+  message_id: string;
+  user_id: string;
+  emoji: string;
+}
+
+export interface ThreadMessageReaction {
+  user_id: string;
+  emoji: string;
+}
+
+export type ThreadReactionsByMessage = Record<string, ThreadMessageReaction[]>;
+
+export interface LocalReactionOverlayOptions {
+  actorId: string;
+  visibleMessageIds: ReadonlySet<string>;
+  /** كل نسخ تعديل التفاعل المحلية حتى الآن. */
+  mutationVersions: ReadonlyMap<string, number>;
+  /** نسخ تعديلات التفاعل عند بدء طلب التفاعلات. */
+  versionsAtRequestStart: ReadonlyMap<string, number>;
+  /** تفاعلات الحالة المحلية، وتشمل تعديلات المستخدم. */
+  currentReactions: ThreadReactionsByMessage;
+  /** انتظارات لم تُكتب على الخادم بعد. */
+  pendingReactions: ReadonlyMap<string, { emoji: string | null }>;
+}
+
+/**
+ * صفوف message_reactions إلى خريطة بالرسالة. الصفوف غير الصالحة أو الخارجة عن
+ * الرسائل المعروضة تُهمل، فلا تظهر تفاعلات رسالة غير موجودة.
+ */
+export function reactionsFromThreadRows(
+  rows: readonly ThreadReactionRow[] | null | undefined,
+  visibleMessageIds: ReadonlySet<string>,
+): ThreadReactionsByMessage {
+  const reactions: ThreadReactionsByMessage = {};
+  (rows || []).forEach(row => {
+    if (typeof row.message_id !== 'string'
+      || typeof row.user_id !== 'string'
+      || typeof row.emoji !== 'string'
+      || !visibleMessageIds.has(row.message_id)) return;
+    (reactions[row.message_id] ||= []).push({ user_id: row.user_id, emoji: row.emoji });
+  });
+  return reactions;
+}
+
+/**
+ * عند فشل استعلام التفاعلات: تبقى تفاعلات الرسائل المعروضة كما هي في الحالة
+ * المحلية، بدل مسحها أو تحويل المحادثة إلى خطأ.
+ */
+export function reactionsForVisibleMessages(
+  current: ThreadReactionsByMessage,
+  visibleMessageIds: ReadonlySet<string>,
+): ThreadReactionsByMessage {
+  const reactions: ThreadReactionsByMessage = {};
+  Object.entries(current).forEach(([messageId, rows]) => {
+    if (!visibleMessageIds.has(messageId) || rows.length === 0) return;
+    reactions[messageId] = rows;
+  });
+  return reactions;
+}
+
+/**
+ * تعديلات المستخدم بعد بدء الطلب تعلو على نتيجة الخادم، وكذلك الانتظارات
+ * المعلّقة، فلا تُعيد نتيجة قديمة تفاعلاً حُذف أو تغيّر.
+ */
+export function overlayLocalReactions(
+  fetched: ThreadReactionsByMessage,
+  options: LocalReactionOverlayOptions,
+): ThreadReactionsByMessage {
+  const next: ThreadReactionsByMessage = {};
+  Object.entries(fetched).forEach(([messageId, rows]) => {
+    if (rows.length) next[messageId] = [...rows];
+  });
+
+  options.mutationVersions.forEach((version, messageId) => {
+    if (version <= (options.versionsAtRequestStart.get(messageId) || 0)) return;
+    const localReaction = options.currentReactions[messageId]
+      ?.find(reaction => reaction.user_id === options.actorId);
+    const rows = (next[messageId] || []).filter(reaction => reaction.user_id !== options.actorId);
+    if (localReaction) rows.push(localReaction);
+    if (rows.length) next[messageId] = rows;
+    else delete next[messageId];
+  });
+
+  options.pendingReactions.forEach(({ emoji }, messageId) => {
+    if (!options.visibleMessageIds.has(messageId)) return;
+    const rows = (next[messageId] || []).filter(reaction => reaction.user_id !== options.actorId);
+    if (emoji) rows.push({ user_id: options.actorId, emoji });
+    if (rows.length) next[messageId] = rows;
+    else delete next[messageId];
+  });
+
+  return next;
+}
+
+export interface ThreadFirstPaintPlan<TResult> {
+  /** جلب الرسائل والتحقق من الإخفاء؛ لا يُعرض شيء إن فشل. */
+  load(): Promise<TResult>;
+  /** عرض الرسائل بعد نجاح التحقق فقط. */
+  show(result: TResult): void;
+  /** التفاعلات بعد العرض؛ لا تُنتظر ولا تؤثر في نجاح الرسائل. */
+  loadReactions(result: TResult): Promise<void>;
+  /** فشل مسار الرسائل: حالة الخطأ كما هي. */
+  onLoadError(error: unknown): void;
+  onReactionsError?(error: unknown): void;
+}
+
+/**
+ * ترتيب أول عرض للمحادثة: الرسائل أولاً، ثم التفاعلات في الخلفية.
+ * لا يُنتظر وعد التفاعلات، وفشلها لا يُفشل تحميل المحادثة.
+ */
+export async function runThreadFirstPaint<TResult>(
+  plan: ThreadFirstPaintPlan<TResult>,
+): Promise<void> {
+  let result: TResult;
+  try {
+    result = await plan.load();
+  } catch (error) {
+    plan.onLoadError(error);
+    return;
+  }
+
+  try {
+    plan.show(result);
+  } catch (error) {
+    plan.onLoadError(error);
+    return;
+  }
+
+  void Promise.resolve()
+    .then(() => plan.loadReactions(result))
+    .catch(error => plan.onReactionsError?.(error));
+}
+
 export interface OlderRequestTracker {
   /** يبدأ طلباً جديداً، ويُبطل ما قبله، ويُرجع معرّف الطلب. */
   begin(conversationId: string): number;
