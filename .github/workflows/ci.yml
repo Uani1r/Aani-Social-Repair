@@ -322,12 +322,12 @@ jobs:
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_single_delete_schema.sql
 
       - name: Apply the single-message delete RPC migration
-        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000000_restore_single_message_delete_rpcs.sql
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000100_restore_single_message_delete_rpcs.sql
 
       # Re-applying proves CREATE OR REPLACE and the REVOKE/GRANT pair are safe
       # to repeat.
       - name: Re-apply the migration (idempotency)
-        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000000_restore_single_message_delete_rpcs.sql
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000100_restore_single_message_delete_rpcs.sql
 
       - name: Test hide and delete-for-everyone semantics and grants
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_single_delete_rpcs.test.sql
