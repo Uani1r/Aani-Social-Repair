@@ -157,14 +157,17 @@ export function createRealtimeChannelSupervisor(): RealtimeChannelSupervisor {
       // نداء من قناة استُبدلت: لا يخصّ الحالة الحالية إطلاقاً.
       if (token !== state.token) return NO_ACTION;
 
+      const wasSubscribed = state.status === 'SUBSCRIBED';
       const normalized = normalizeStatus(status);
       state.status = normalized;
 
       if (normalized === 'SUBSCRIBED') {
-        state.subscribedAt = now;
-        // تعافي القناة بنفسها يلغي محاولتها المجدولة دون المساس بالقناة الأخرى.
+        if (!wasSubscribed) state.subscribedAt = now;
+        // SUBSCRIBED يؤكد أن إعدادات postgres_changes قُبلت. أول تأكيد
+        // وبعد كل انقطاع يستلزمان مزامنة لسد الفجوة التي لا يعيدها Realtime.
+        // التكرارات أثناء الاشتراك السليم لا تطلق طلبات شبكة إضافية.
         state.retryAt = null;
-        return NO_ACTION;
+        return wasSubscribed ? NO_ACTION : { resync: true, retryAt: null };
       }
 
       if (state.intentionalClose) return NO_ACTION;

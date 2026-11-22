@@ -159,6 +159,27 @@ test('server updates preserve completed initial state and merge without duplicat
   assert.equal(claimInitialThreadScroll(state, 'contact-a', 'contact-a', 'loaded', true).completed, false);
 });
 
+test('thread refreshes keep monotonic receipts while accepting fresh message content', () => {
+  const delivered = {
+    ...row('message-a', '2026-01-01T10:00:00Z'),
+    delivered_at: '2026-01-01T10:01:00Z',
+    read_at: '2026-01-01T10:02:00Z',
+    content: 'before edit',
+  };
+  const refreshed = {
+    ...row('message-a', '2026-01-01T10:00:00Z'),
+    delivered_at: '2026-01-01T10:00:30Z',
+    read_at: '2026-01-01T10:01:00Z',
+    content: 'fresh edit',
+  };
+
+  const merged = mergeThreadRows([delivered], [refreshed]);
+  assert.equal(merged[0].delivered_at, delivered.delivered_at);
+  assert.equal(merged[0].read_at, delivered.read_at);
+  assert.equal(merged[0].content, 'fresh edit');
+  assert.equal(merged.length, 1);
+});
+
 test('a stale conversation load cannot change a newer conversation scroll state or DOM source', () => {
   const stateB = createInitialThreadScrollState('contact-b', true);
 

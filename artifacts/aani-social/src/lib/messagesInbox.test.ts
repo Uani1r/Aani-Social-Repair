@@ -7,7 +7,9 @@ import {
   createInboxRequestTracker,
   fetchMessagesInboxSummaries,
   isInboxMessageAtLeastAsNew,
+  isMissingMessagesInboxDeliveryRpc,
   legacyInboxDeliveryMessageIds,
+  mergeMessageSnapshot,
   mergeInboxConversationsWithRealtime,
   mergeRealtimeThreadMessages,
   messagesInboxContactId,
@@ -167,6 +169,57 @@ test('a stale inbox response cannot replace a newer current preview after its Re
   assert.equal(isInboxMessageAtLeastAsNew(live, stale), true);
   assert.equal(merged[0].lastMessage?.id, 'live-a');
   assert.equal(merged[0].lastMessage?.content, 'live');
+});
+
+test('Realtime receipt updates refresh a matching inbox preview without replaying a newer message', () => {
+  const read = {
+    ...inboxMessage('same', 'contact-a', 'me', '2027-01-01T10:00:00Z', 'message'),
+    delivered_at: null,
+    read_at: '2027-01-01T10:02:00Z',
+  };
+  const delivered = { ...read, delivered_at: '2027-01-01T10:01:00Z' };
+  const updated = applyRealtimeInboxInsert([inboxConversation('contact-a', read)], delivered, 'me');
+
+  assert.equal(updated[0].lastMessage?.delivered_at, delivered.delivered_at);
+  assert.equal(updated[0].lastMessage?.read_at, read.read_at);
+  assert.equal(applyRealtimeInboxInsert(updated, delivered, 'me'), updated);
+});
+
+test('same-message snapshots keep monotonic receipts while accepting a fresh preview', () => {
+  const delivered = {
+    ...inboxMessage('same', 'contact-a', 'me', '2027-01-01T10:00:00Z', 'before edit'),
+    delivered_at: '2027-01-01T10:01:00Z',
+    read_at: '2027-01-01T10:02:00Z',
+  };
+  const refreshed = {
+    ...inboxMessage('same', 'contact-a', 'me', '2027-01-01T10:00:00Z', 'fresh edit'),
+    delivered_at: '2027-01-01T10:00:30Z',
+    read_at: '2027-01-01T10:01:00Z',
+  };
+  const mergedSnapshot = mergeMessageSnapshot(delivered, refreshed);
+  const mergedInbox = mergeInboxConversationsWithRealtime(
+    [inboxConversation('contact-a', refreshed)],
+    [inboxConversation('contact-a', delivered)],
+    new Map(),
+    'me',
+  );
+
+  assert.equal(mergedSnapshot.content, 'fresh edit');
+  assert.equal(mergedSnapshot.delivered_at, delivered.delivered_at);
+  assert.equal(mergedSnapshot.read_at, delivered.read_at);
+  assert.equal(mergedInbox[0].lastMessage?.content, 'fresh edit');
+  assert.equal(mergedInbox[0].lastMessage?.read_at, delivered.read_at);
+});
+
+test('missing inbox delivery RPC is recognized only for its schema-cache error', () => {
+  assert.equal(isMissingMessagesInboxDeliveryRpc({
+    code: 'PGRST202',
+    message: 'Could not find the public.aani_mark_inbox_messages_delivered() function in the schema cache',
+  }), true);
+  assert.equal(isMissingMessagesInboxDeliveryRpc({
+    code: '42501',
+    message: 'permission denied for function aani_mark_inbox_messages_delivered',
+  }), false);
 });
 
 test('thread Realtime inserts from another contact are rejected', () => {
@@ -476,6 +529,35 @@ test('request badges use summary counts only for request contacts', () => {
   assert.deepEqual(requestUnreadCounts(summaries, new Set(['request-a', 'request-c'])), {
     'request-a': 2,
   });
+});
+
+test('confirmed missing inbox RPC skips repeated failing requests and probes', async () => {
+  const availability = { summaryMissing: false };
+  let requestCount = 0;
+  let confirmationCount = 0;
+  let fallbackCount = 0;
+  const request = async () => {
+    requestCount += 1;
+    return { data: null, error: missingRpcError };
+  };
+  const confirmMissing = async () => {
+    confirmationCount += 1;
+    return { data: null, error: confirmedMissingRpcError };
+  };
+  const fallback = async () => {
+    fallbackCount += 1;
+    return emptyFallback();
+  };
+
+  const first = await fetchMessagesInboxSummaries(request, {}, null, normalizeMessage, confirmMissing, fallback, availability);
+  const second = await fetchMessagesInboxSummaries(request, {}, null, normalizeMessage, confirmMissing, fallback, availability);
+
+  assert.equal(first.usedFallback, true);
+  assert.equal(second.usedFallback, true);
+  assert.equal(availability.summaryMissing, true);
+  assert.equal(requestCount, 1);
+  assert.equal(confirmationCount, 1);
+  assert.equal(fallbackCount, 2);
 });
 
 test('an older legacy fallback response stays stale after a newer load or invalidation', async () => {

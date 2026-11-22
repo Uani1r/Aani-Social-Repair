@@ -10,12 +10,27 @@ import {
 
 const NO_ACTION = { resync: false, retryAt: null };
 
-test('a subscribed channel asks for neither resync nor resubscription', () => {
+test('the first SUBSCRIBED confirmation resyncs once, then stays quiet while healthy', () => {
   const supervisor = createRealtimeChannelSupervisor();
   const token = supervisor.beginChannel('inbox');
-  assert.deepEqual(supervisor.handleStatus('inbox', token, 'SUBSCRIBED', 1000), NO_ACTION);
+  assert.deepEqual(supervisor.handleStatus('inbox', token, 'SUBSCRIBED', 1000), {
+    resync: true,
+    retryAt: null,
+  });
+  assert.deepEqual(supervisor.handleStatus('inbox', token, 'SUBSCRIBED', 1100), NO_ACTION);
   assert.equal(supervisor.snapshot('inbox').status, 'SUBSCRIBED');
   assert.equal(supervisor.snapshot('inbox').subscribedAt, 1000);
+});
+
+test('a recovered subscription confirms readiness and requests a gap-filling resync', () => {
+  const supervisor = createRealtimeChannelSupervisor();
+  const token = supervisor.beginChannel('thread');
+  supervisor.handleStatus('thread', token, 'CHANNEL_ERROR', 1000);
+  assert.deepEqual(supervisor.handleStatus('thread', token, 'SUBSCRIBED', 1500), {
+    resync: true,
+    retryAt: null,
+  });
+  assert.equal(supervisor.snapshot('thread').retryAt, null);
 });
 
 test('a channel error or timeout resyncs and schedules a resubscription', () => {

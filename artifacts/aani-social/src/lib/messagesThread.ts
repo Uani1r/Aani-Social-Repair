@@ -1,6 +1,8 @@
 export interface ThreadMessageLike {
   id: string;
   created_at: string;
+  delivered_at?: string | null;
+  read_at?: string | null;
 }
 
 export interface OlderMessagesCursor {
@@ -35,7 +37,20 @@ export function sortThreadRows<T extends ThreadMessageLike>(rows: T[]): T[] {
 /** دمج بلا تكرار (Map بالمعرّف) مع الحفاظ على الترتيب الثابت. */
 export function mergeThreadRows<T extends ThreadMessageLike>(existing: T[], incoming: T[]): T[] {
   const byId = new Map<string, T>(existing.map(row => [row.id, row]));
-  incoming.forEach(row => byId.set(row.id, row));
+  incoming.forEach(row => {
+    const current = byId.get(row.id);
+    if (!current) {
+      byId.set(row.id, row);
+      return;
+    }
+
+    // إيصالات التسليم والقراءة انتقال أحادي الاتجاه. استجابة HTTP بدأت قبل
+    // حدث Realtime لا يجوز أن تعيدها إلى null عند دمج الرسالة نفسها.
+    const merged = { ...current, ...row } as T;
+    if (current.delivered_at) merged.delivered_at = current.delivered_at;
+    if (current.read_at) merged.read_at = current.read_at;
+    byId.set(row.id, merged);
+  });
   return sortThreadRows([...byId.values()]);
 }
 
