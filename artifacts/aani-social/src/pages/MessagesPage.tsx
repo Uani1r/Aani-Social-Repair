@@ -2228,7 +2228,9 @@ export default function MessagesPage({
     }
 
     void channel.send({ type: 'broadcast', event, payload }).then(result => {
-      if (result === 'error') {
+      // نتيجة send قد تكون 'ok' أو 'timed out' أو 'error'، وكل ما ليس 'ok'
+      // يعني أن الحدث لم يُرسل فعلياً، فيُسجّل بدل تجاهله بصمت.
+      if (result !== 'ok') {
         console.warn(`[messages] تعذر إرسال حدث ${event}:`, result);
       }
     }).catch(error => {
@@ -2519,7 +2521,7 @@ export default function MessagesPage({
           conversationBroadcastQueueRef.current = [];
           for (const item of queued) {
             void channel.send({ type: 'broadcast', event: item.event, payload: item.payload }).then(result => {
-              if (result === 'error') {
+              if (result !== 'ok') {
                 console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, result);
               }
             }).catch(error => {
