@@ -67,9 +67,13 @@ import {
   initialOlderPageProgress,
   mergeThreadRows,
   messagesThreadFilter,
+  overlayLocalReactions,
   progressAfterLatestPage,
   progressAfterOlderPage,
+  reactionsForVisibleMessages,
+  reactionsFromThreadRows,
   removeThreadRow,
+  runThreadFirstPaint,
   shouldShowEmptyThreadMessage,
   type OlderPageProgress,
   type ThreadLoadStatus,
@@ -1600,6 +1604,61 @@ export default function MessagesPage({
     return () => window.removeEventListener(SEEN_STORY_IDS_CHANGED_EVENT, syncStoryRings);
   }, [currentUserId]);
 
+  // التفاعلات تُجلب في الخلفية بعد عرض الرسائل. نتيجة قديمة لا تلمس محادثة
+  // تغيّرت أو طلباً أحدث، وتعديلات المستخدم المحلية والانتظارات المعلّقة تعلو
+  // على نتيجة الخادم.
+  const loadThreadReactions = useCallback(async (
+    visibleMessages: MessageRow[],
+    isCurrentRequest: () => boolean,
+    reactionVersionsAtRequestStart: Map<string, number>,
+  ) => {
+    const visibleMessageIds = new Set(visibleMessages.map(message => message.id));
+    type MessageReactionRow = { message_id: string; user_id: string; emoji: string };
+    let reactionResult: { data: MessageReactionRow[] | null; error: unknown };
+    try {
+      reactionResult = visibleMessages.length
+        ? await retrySupabaseQuery(async () => await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id)))
+        : { data: [], error: null };
+    } catch (error) {
+      reactionResult = { data: null, error };
+    }
+
+    // المحادثة المفتوحة تغيّرت أو صار هناك تحميل أحدث: لا تُطبَّق النتيجة.
+    if (!isCurrentRequest()) return;
+
+    const pendingReactions = new Map<string, { emoji: string | null }>();
+    pendingReactionByMessageRef.current.forEach(({ emoji }, messageId) => {
+      pendingReactions.set(messageId, { emoji });
+    });
+
+    if (reactionResult.error) {
+      console.warn('[messages] تعذر جلب تفاعلات الرسائل:', reactionResult.error);
+    }
+    // فشل الاستعلام يبقي التفاعلات المحلية للرسائل الظاهرة: الرسائل تبقى
+    // معروضة ولا تتحول حالة تحميل المحادثة إلى خطأ.
+    const nextReactions = overlayLocalReactions(
+      reactionResult.error
+        ? reactionsForVisibleMessages(reactionsByMessageRef.current, visibleMessageIds)
+        : reactionsFromThreadRows(reactionResult.data, visibleMessageIds),
+      {
+        actorId: currentUserId,
+        visibleMessageIds,
+        mutationVersions: new Map(reactionMutationVersionRef.current),
+        versionsAtRequestStart: reactionVersionsAtRequestStart,
+        currentReactions: reactionsByMessageRef.current,
+        pendingReactions,
+      },
+    );
+    commitReactionsByMessage(nextReactions);
+  }, [commitReactionsByMessage, currentUserId]);
+
+  // نتيجة المرحلة الأولى: الرسائل الظاهرة بعد التحقق من الإخفاء والحذف.
+  type ThreadFirstPaintData = {
+    hiddenMessageIds: Set<string>;
+    latestRows: MessageRow[];
+    visibleMessages: MessageRow[];
+  };
+
   const loadThread = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
     if (!supabaseConfigured || !selectedId || selectedIdRef.current !== selectedId) return;
     const conversationIdAtStart = selectedId;
@@ -1622,22 +1681,44 @@ export default function MessagesPage({
     const reactionVersionsAtRequestStart = new Map(reactionMutationVersionRef.current);
     const threadFilter = messagesThreadFilter(currentUserId, selectedId);
 
-    try {
-      purgeExpiredMessages();
-      // أحدث دفعة فقط (مرتّبة تنازلياً من القاعدة) ثم تُعكس للعرض تصاعدياً.
-      const { data, error } = await queryMessageRows(
-        threadFilter,
-        false,
-        true,
-        { limit: MESSAGE_THREAD_PAGE_SIZE },
-      );
-      if (error) throw error;
-      const latestRows = normalizeMessageRows(data);
-      const { hiddenMessageIds, visibleMessages: hiddenFilteredLatestRows } = await loadVisibleMessagesWithHiddenIds(
-        latestRows.slice().reverse(),
-        () => loadHiddenMessageIds(currentUserId),
-      );
-      if (isCurrentRequest()) {
+    await runThreadFirstPaint<ThreadFirstPaintData>({
+      // المسار الأساسي: الرسائل والتحقق من الإخفاء. لا تُعرض رسالة قبل نجاح
+      // التحقق (fail closed)، ولا يُنتظر استعلام التفاعلات.
+      load: async () => {
+        purgeExpiredMessages();
+        // التحقق من الرسائل المخفية يبدأ مع طلب الرسائل نفسه، فلا يضيف زمنه
+        // إلى زمن العرض.
+        const hiddenMessageIdsRequest = loadHiddenMessageIds(currentUserId);
+        // إن فشل طلب الرسائل أولاً فلا نترك وعد التحقق مرفوضاً بلا معالجة.
+        hiddenMessageIdsRequest.catch(() => undefined);
+
+        // أحدث دفعة فقط (مرتّبة تنازلياً من القاعدة) ثم تُعكس للعرض تصاعدياً.
+        const { data, error } = await queryMessageRows(
+          threadFilter,
+          false,
+          true,
+          { limit: MESSAGE_THREAD_PAGE_SIZE },
+        );
+        if (error) throw error;
+        const latestRows = normalizeMessageRows(data);
+        const { hiddenMessageIds, visibleMessages: hiddenFilteredLatestRows } = await loadVisibleMessagesWithHiddenIds(
+          latestRows.slice().reverse(),
+          () => hiddenMessageIdsRequest,
+        );
+        const visibleMessages = hiddenFilteredLatestRows
+          .filter(message => !deletedMessageIdsRef.current.has(message.id))
+          .map(message => {
+            const mediaMessage = parseChatMediaMessage(message.content);
+            return mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
+              ? { ...message, content: openedChatMediaContent(message.content) }
+              : message;
+          });
+        return { hiddenMessageIds, latestRows, visibleMessages };
+      },
+
+      // أول عرض: يُنفَّذ فور اكتمال جلب الرسائل والتحقق من الإخفاء.
+      show: ({ hiddenMessageIds, latestRows, visibleMessages }) => {
+        if (!isCurrentRequest()) return;
         // بعد تحميل دفعات أقدم لا نُعيد ضبط المؤشر ولا وجود الأقدم: تحديث
         // المحادثة يجلب أحدث صفحة فقط، فإعادة الضبط تُعيد جلب ما حُمّل سابقاً.
         const nextProgress = progressAfterLatestPage(olderProgressRef.current, latestRows, MESSAGE_THREAD_PAGE_SIZE);
@@ -1645,57 +1726,6 @@ export default function MessagesPage({
           olderProgressRef.current = nextProgress;
           setHasOlderMessages(nextProgress.hasOlder);
         }
-      }
-      const visibleMessages = hiddenFilteredLatestRows
-        .filter(message => !deletedMessageIdsRef.current.has(message.id))
-        .map(message => {
-          const mediaMessage = parseChatMediaMessage(message.content);
-          return mediaMessage?.viewOnce && (mediaMessage.opened || hasViewedOnce(currentUserId, message.id))
-            ? { ...message, content: openedChatMediaContent(message.content) }
-            : message;
-        });
-      type MessageReactionRow = { message_id: string; user_id: string; emoji: string };
-      let reactionResult: { data: MessageReactionRow[] | null; error: unknown };
-      try {
-        reactionResult = visibleMessages.length
-          ? await retrySupabaseQuery(async () => await supabase.from('message_reactions').select('message_id, user_id, emoji').in('message_id', visibleMessages.map(message => message.id)))
-          : { data: [], error: null };
-      } catch (error) {
-        reactionResult = { data: null, error };
-      }
-      const nextReactions: Record<string, MessageReaction[]> = {};
-      if (reactionResult.error) {
-        console.warn('[messages] تعذر جلب تفاعلات الرسائل:', reactionResult.error);
-        const visibleMessageIds = new Set(visibleMessages.map(message => message.id));
-        Object.entries(reactionsByMessageRef.current).forEach(([messageId, rows]) => {
-          if (visibleMessageIds.has(messageId)) nextReactions[messageId] = rows;
-        });
-      } else {
-        (reactionResult.data || []).forEach(row => {
-          if (typeof row.message_id !== 'string' || typeof row.user_id !== 'string' || typeof row.emoji !== 'string') return;
-          (nextReactions[row.message_id] ||= []).push({ user_id: row.user_id, emoji: row.emoji });
-        });
-      }
-
-      reactionMutationVersionRef.current.forEach((version, messageId) => {
-        if (version <= (reactionVersionsAtRequestStart.get(messageId) || 0)) return;
-        const localReaction = reactionsByMessageRef.current[messageId]?.find(reaction => reaction.user_id === currentUserId);
-        const rows = (nextReactions[messageId] || []).filter(reaction => reaction.user_id !== currentUserId);
-        if (localReaction) rows.push(localReaction);
-        if (rows.length) nextReactions[messageId] = rows;
-        else delete nextReactions[messageId];
-      });
-
-      const visibleMessageIds = new Set(visibleMessages.map(message => message.id));
-      pendingReactionByMessageRef.current.forEach(({ emoji }, messageId) => {
-        if (!visibleMessageIds.has(messageId)) return;
-        const rows = (nextReactions[messageId] || []).filter(reaction => reaction.user_id !== currentUserId);
-        if (emoji) rows.push({ user_id: currentUserId, emoji });
-        if (rows.length) nextReactions[messageId] = rows;
-        else delete nextReactions[messageId];
-      });
-
-      if (isCurrentRequest()) {
         visibleMessages.forEach(message => {
           if (voiceScrollLockRef.current.has(message.id)) voiceScrollConfirmedRef.current.add(message.id);
         });
@@ -1727,29 +1757,41 @@ export default function MessagesPage({
           conversationIdAtStart,
         );
         setThreadLoadStatus('loaded');
-        commitReactionsByMessage(nextReactions);
         void markMessagesDelivered(visibleMessages
           .filter(message => message.recipient_id === currentUserId && !message.delivered_at)
           .map(message => message.id));
-      }
-    } catch (error) {
-      if (handleCurrentHiddenMessagesLookupFailure(
-        error,
-        isCurrentRequest,
-        lookupError => {
-          setThreadLoadStatus('error');
-          setThread([]);
-          commitReactionsByMessage({});
-          setThreadCacheReady(false);
-          removeThreadCache(currentUserId, conversationIdAtStart);
-          console.error('[messages] تعذر جلب المحادثة:', lookupError);
-        },
-      )) return;
-      if (!isCurrentRequest()) return;
-      if (!quiet || threadMessagesRef.current.length === 0) setThreadLoadStatus('error');
-      console.error('[messages] تعذر جلب المحادثة:', error);
-    }
-  }, [commitReactionsByMessage, currentUserId, markMessagesDelivered, purgeExpiredMessages, selectedId]);
+      },
+
+      // التفاعلات بعد العرض: لا تُنتظر، وفشلها لا يمس حالة المحادثة.
+      loadReactions: ({ visibleMessages }) => {
+        if (!isCurrentRequest()) return Promise.resolve();
+        return loadThreadReactions(visibleMessages, isCurrentRequest, reactionVersionsAtRequestStart);
+      },
+
+      onLoadError: error => {
+        if (handleCurrentHiddenMessagesLookupFailure(
+          error,
+          isCurrentRequest,
+          lookupError => {
+            setThreadLoadStatus('error');
+            setThread([]);
+            commitReactionsByMessage({});
+            setThreadCacheReady(false);
+            removeThreadCache(currentUserId, conversationIdAtStart);
+            console.error('[messages] تعذر جلب المحادثة:', lookupError);
+          },
+        )) return;
+        if (!isCurrentRequest()) return;
+        if (!quiet || threadMessagesRef.current.length === 0) setThreadLoadStatus('error');
+        console.error('[messages] تعذر جلب المحادثة:', error);
+      },
+
+      // فشل تطبيق التفاعلات لا يمس الرسائل المعروضة ولا حالة تحميل المحادثة.
+      onReactionsError: error => {
+        console.warn('[messages] تعذر تطبيق تفاعلات الرسائل:', error);
+      },
+    });
+  }, [commitReactionsByMessage, currentUserId, loadThreadReactions, markMessagesDelivered, purgeExpiredMessages, selectedId]);
 
   // تحميل دفعة أقدم عند التمرير إلى أعلى المحادثة، مع الحفاظ على موضع القراءة.
   const loadOlderThread = useCallback(async () => {
