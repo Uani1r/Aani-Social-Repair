@@ -21,8 +21,8 @@ begin
   insert into public.messages (id, sender_id, recipient_id, content)
   values (
     '10000000-0000-0000-0000-0000000000c3',
-    current_setting('test.c'),
-    current_setting('test.a'),
+    current_setting('test.c')::uuid,
+    current_setting('test.a')::uuid,
     'C to A'
   );
 
