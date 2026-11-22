@@ -1252,15 +1252,6 @@ export default function Shell({
         publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('UPDATE', payload));
         refreshMessagesUnreadCount();
       })
-      .on('postgres_changes', {
-        event: 'DELETE',
-        schema: 'public',
-        table: 'messages',
-        filter: `recipient_id=eq.${userId}`,
-      }, payload => {
-        publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('DELETE', payload));
-        refreshMessagesUnreadCount();
-      })
       .subscribe((status, statusError) => {
         // SUBSCRIBED يؤكد الاشتراك ويطلب مزامنة تعويضية واحدة للشارة؛ أي حالة
         // أخرى تُجدول إعادة إنشاء مؤجلة بدل ترك القناة ميتة.

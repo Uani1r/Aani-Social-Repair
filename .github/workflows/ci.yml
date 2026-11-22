@@ -63,7 +63,7 @@ jobs:
       # messagesRealtimeEvents covers the Shell-to-MessagesPage relay, duplicate
       # event suppression, and background expiry cleanup.
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
@@ -276,6 +276,63 @@ jobs:
 
       - name: Test policies, grants, RLS, replica identity and publication
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reactions_security.test.sql
+
+
+  # Verifies the Realtime Authorization policies that let only conversation
+  # participants join and publish on the private message-deletion broadcast
+  # channel. Runs against a throwaway PostgreSQL that mimics realtime.messages,
+  # never a Supabase project.
+  messages-delete-broadcast-sql:
+    name: Message delete broadcast auth SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_realtime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_realtime_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary realtime authorization schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/realtime_authorization_schema.sql
+
+      - name: Apply the conversation broadcast authorization migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000000_aani_conversation_broadcast_auth.sql
+
+      # Applies the single-message delete migration right after this one, in the
+      # order the timestamps give in production, to prove the two migrations are
+      # compatible on one database.
+      - name: Apply the single-message delete migration (cross-migration order)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000100_restore_single_message_delete_rpcs.sql
+
+      - name: Test participant-only read and publish authorization
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_delete_broadcast_auth.test.sql
 
 
   # Restores and verifies the two single-message delete RPCs MessagesPage calls

@@ -99,6 +99,19 @@ import {
   threadCacheKey,
 } from '@/lib/messagesHidden';
 import { displayName, type Profile } from '@/lib/types';
+import {
+  MESSAGES_MESSAGE_DELETED_EVENT,
+  MESSAGES_REACTION_DELETED_EVENT,
+  createMessagesDeleteBroadcastDedupe,
+  messageDeletedBroadcastKey,
+  messageDeletedContactId,
+  messageDeletedEventMatchesConversation,
+  messagesConversationTopic,
+  normalizeMessageDeletedBroadcast,
+  normalizeReactionDeletedBroadcast,
+  reactionDeletedBroadcastKey,
+  shouldBroadcastMessageDeletion,
+} from '@/lib/messagesDeleteBroadcast';
 
 type MessageSendState = 'pending' | 'sent' | 'failed';
 
@@ -1056,6 +1069,9 @@ export default function MessagesPage({
   // الحدث الواحد قد يصل من قناة الصفحة ومن الحدث الداخلي القادم من Shell،
   // فيُطبَّق مرة واحدة فقط.
   const realtimeEventDedupeRef = useRef(createMessagesRealtimeEventDedupe());
+  // أحداث حذف الرسائل والتفاعلات تصل عبر قناة المحادثة الخاصة، بمعرّفات فقط.
+  const conversationBroadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const conversationDeleteBroadcastDedupeRef = useRef(createMessagesDeleteBroadcastDedupe());
   const lifecycleResyncAtRef = useRef(0);
   const realtimeMessageRevisionRef = useRef(0);
   const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
@@ -2153,6 +2169,18 @@ export default function MessagesPage({
     setConversationCacheReady(true);
   }, [invalidateRealtimeMessageLoads]);
 
+  // حذف تفاعل مستخدم من الحالة المحلية (يصل عبر قناة المحادثة الخاصة).
+  const removeMessageReaction = useCallback((messageId: string, userId: string) => {
+    const rows = reactionsByMessageRef.current[messageId];
+    if (!rows || !rows.some(reaction => reaction.user_id === userId)) return;
+
+    const next = { ...reactionsByMessageRef.current };
+    const remaining = rows.filter(reaction => reaction.user_id !== userId);
+    if (remaining.length) next[messageId] = remaining;
+    else delete next[messageId];
+    commitReactionsByMessage(next);
+  }, [commitReactionsByMessage]);
+
   // مسار واحد لتطبيق أحداث messages: قنوات MessagesPage نفسها والحدث الداخلي
   // القادم من Shell. الحدث نفسه قد يصل من المسارين، فلا يُطبَّق مرتين (لا رسالة
   // مكررة، ولا إيصال يُعاد إرساله).
@@ -2212,10 +2240,6 @@ export default function MessagesPage({
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, payload => {
         applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('UPDATE', payload));
-        scheduleMessageRefresh(false);
-      })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
-        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('DELETE', payload));
         scheduleMessageRefresh(false);
       })
       .on('postgres_changes', {
@@ -2327,11 +2351,8 @@ export default function MessagesPage({
         applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('UPDATE', payload));
         scheduleMessageRefresh(true);
       })
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'messages' }, payload => {
-        applyRealtimeMessageEvent(messagesRealtimeEventFromPayload('DELETE', payload));
-        scheduleMessageRefresh(true);
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'message_reactions' }, () => scheduleMessageRefresh(true))
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -2355,6 +2376,93 @@ export default function MessagesPage({
       void supabase.removeChannel(channel);
     };
   }, [currentUserId, selectedId, realtimeEpoch, loadConversationList, loadThread, applyRealtimeMessageEvent, handleRealtimeMessageInsert, handleRealtimeMessageUpdate, clearRealtimeMessage, scheduleMessageRefresh, clearScheduledMessageRefresh, handleRealtimeStatus]);
+
+  // قناة المحادثة الخاصة لأحداث الحذف: لا نشترك في DELETE على messages أو
+  // message_reactions في القنوات العامة، لأن الصف المحذوف قد يحمل محتوى الرسالة.
+  // هنا تصل معرّفات فقط، ولا يمكن لغير طرفي المحادثة الانضمام إلى الموضوع
+  // (سياسات Realtime Authorization على realtime.messages).
+  useEffect(() => {
+    if (!supabaseConfigured || !currentUserId || !selectedId || selectedId === currentUserId) return undefined;
+
+    const conversationId = selectedId;
+    const topic = messagesConversationTopic(currentUserId, selectedId);
+    let removedByUs = false;
+    const channel = supabase.channel(topic, {
+      config: { private: true, broadcast: { self: false } },
+    })
+      .on('broadcast', { event: MESSAGES_MESSAGE_DELETED_EVENT }, ({ payload }) => {
+        const event = normalizeMessageDeletedBroadcast(payload);
+        if (!event) return;
+        // التحقق من هوية أطراف الحدث قبل أي تعديل على الحالة المحلية.
+        if (!messageDeletedEventMatchesConversation(event, currentUserId, conversationId)) return;
+        if (conversationDeleteBroadcastDedupeRef.current.isDuplicate(messageDeletedBroadcastKey(event))) return;
+
+        clearRealtimeMessage(event.messageId);
+        const contactId = messageDeletedContactId(event, currentUserId);
+        if (!contactId) return;
+        // المزامنة التالية ترجع آخر رسالة متبقية فعلاً في المعاينة.
+        if (selectedIdRef.current === contactId) void loadThread({ quiet: true });
+        void loadConversationList({ quiet: true });
+      })
+      .on('broadcast', { event: MESSAGES_REACTION_DELETED_EVENT }, ({ payload }) => {
+        const event = normalizeReactionDeletedBroadcast(payload);
+        if (!event) return;
+        // لا نمسّ تفاعل رسالة لا تخص المحادثة المفتوحة.
+        if (!threadMessagesRef.current.some(message => message.id === event.messageId)) return;
+        if (conversationDeleteBroadcastDedupeRef.current.isDuplicate(reactionDeletedBroadcastKey(event))) return;
+        removeMessageReaction(event.messageId, event.userId);
+      })
+      .subscribe((status, statusError) => {
+        if (removedByUs) return;
+        if (status !== 'SUBSCRIBED' && statusError) {
+          // قد تكون سياسات Realtime Authorization غير مطبقة بعد؛ المزامنة
+          // التعويضية REST تبقى شبكة الأمان ولا نُظهر خطأ للمستخدم.
+          console.warn(`[messages] تعذر الاتصال بقناة حذف الرسائل (${status}):`, statusError);
+        }
+      });
+
+    conversationBroadcastChannelRef.current = channel;
+    return () => {
+      removedByUs = true;
+      if (conversationBroadcastChannelRef.current === channel) conversationBroadcastChannelRef.current = null;
+      void supabase.removeChannel(channel);
+    };
+  }, [clearRealtimeMessage, currentUserId, loadConversationList, loadThread, removeMessageReaction, realtimeEpoch, selectedId]);
+
+  // نشر حدث حذف رسالة على قناة المحادثة المفتوحة (معرّفات فقط، بلا محتوى).
+  const publishConversationMessageDeleted = useCallback((event: {
+    messageId: string;
+    senderId: string;
+    recipientId: string;
+  }) => {
+    const channel = conversationBroadcastChannelRef.current;
+    if (!channel) return;
+    const otherId = event.senderId === currentUserId ? event.recipientId : event.senderId;
+    if (channel.topic !== messagesConversationTopic(currentUserId, otherId)) return;
+
+    void channel.send({
+      type: 'broadcast',
+      event: MESSAGES_MESSAGE_DELETED_EVENT,
+      payload: { messageId: event.messageId, senderId: event.senderId, recipientId: event.recipientId },
+    }).catch(error => {
+      console.warn('[messages] تعذر إرسال حدث حذف الرسالة:', error);
+    });
+  }, [currentUserId]);
+
+  // نشر حذف تفاعل المستخدم نفسه على قناة المحادثة المفتوحة (معرّفات فقط).
+  const publishConversationReactionDeleted = useCallback((messageId: string, otherId: string) => {
+    const channel = conversationBroadcastChannelRef.current;
+    if (!channel) return;
+    if (channel.topic !== messagesConversationTopic(currentUserId, otherId)) return;
+
+    void channel.send({
+      type: 'broadcast',
+      event: MESSAGES_REACTION_DELETED_EVENT,
+      payload: { messageId, userId: currentUserId },
+    }).catch(error => {
+      console.warn('[messages] تعذر إرسال حدث حذف التفاعل:', error);
+    });
+  }, [currentUserId]);
 
   // المزامنة التعويضية لا تعتمد على حدث Realtime: عند pageshow/focus، عودة
   // الشبكة، أو كل خمس دقائق أثناء بقاء الرسائل ظاهرة، تُجلب الفجوات من القاعدة.
@@ -3631,6 +3739,10 @@ export default function MessagesPage({
           if (result.error) throw result.error;
           return result;
         });
+        publishConversationReactionDeleted(
+          message.id,
+          message.sender_id === currentUserId ? message.recipient_id : message.sender_id,
+        );
       } else {
         await retrySupabaseQuery(async () => {
           const result = await supabase.from('message_reactions').upsert({
@@ -3750,6 +3862,14 @@ export default function MessagesPage({
         { p_message_id: message.id },
       );
       if (error) throw error;
+      // الحذف الشخصي (إخفاء لدى المستخدم) لا يغيّر ما يراه الطرف الآخر.
+      if (shouldBroadcastMessageDeletion(forEveryone ? 'everyone' : 'me')) {
+        publishConversationMessageDeleted({
+          messageId: message.id,
+          senderId: message.sender_id,
+          recipientId: message.recipient_id,
+        });
+      }
       deletedMessageIdsRef.current.add(message.id);
       setThread(current => current.filter(item => item.id !== message.id));
       const nextReactions = { ...reactionsByMessageRef.current };
