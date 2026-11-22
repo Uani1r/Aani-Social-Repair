@@ -220,3 +220,59 @@ jobs:
 
       - name: Test summary semantics, hiding, delivery and permissions
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_inbox_summary.test.sql
+
+
+  # Verifies the message_reactions RLS/grant/Realtime migration against a
+  # throwaway PostgreSQL: policies, anon denial, authenticated privileges, RLS,
+  # REPLICA IDENTITY FULL, and publication membership, with the migration
+  # applied twice to prove it is idempotent. No Supabase project is contacted.
+  messages-reactions-sql:
+    name: Message reactions security SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_reactions_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_reactions_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary message_reactions schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reactions_schema.sql
+
+      - name: Apply the message_reactions security migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20261122150000_messages_reactions_realtime_security.sql
+
+      # Re-applying proves the policy drops, grants, replica identity, and the
+      # publication membership are all safe to repeat.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20261122150000_messages_reactions_realtime_security.sql
+
+      - name: Test policies, grants, RLS, replica identity and publication
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reactions_security.test.sql
