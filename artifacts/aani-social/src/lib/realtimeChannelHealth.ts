@@ -15,11 +15,18 @@
 // فقط لأنها تُعاد لكل القنوات معاً؛ ولذلك تُجمَّع الإشارات المتزامنة في
 // إعادة إنشاء واحدة بدل إنشاء قنوات مكررة.
 
-export type RealtimeChannelId = 'inbox' | 'thread';
+export type RealtimeChannelId = 'inbox' | 'thread' | 'unread';
 
 export type RealtimeChannelStatus = 'SUBSCRIBED' | 'CHANNEL_ERROR' | 'TIMED_OUT' | 'CLOSED';
 
+/** قنوات MessagesPage فقط. قناة شارة الرسائل في Shell تُراقَب عبر نفس المتتبع. */
 export const REALTIME_CHANNEL_IDS: readonly RealtimeChannelId[] = ['inbox', 'thread'];
+
+/**
+ * كل القنوات التي يراقبها المتتبع. منفصلة عن REALTIME_CHANNEL_IDS كي تبقى
+ * حلقات MessagesPage على قناتيها وحدها، ولا تتأثر بإضافة قناة الشارة.
+ */
+const SUPERVISED_CHANNEL_IDS: readonly RealtimeChannelId[] = [...REALTIME_CHANNEL_IDS, 'unread'];
 
 export interface RealtimeChannelDecision {
   /** مزامنة تعويضية: قد تكون رسائل فاتت أثناء انقطاع الاشتراك. */
@@ -112,6 +119,7 @@ export function createRealtimeChannelSupervisor(): RealtimeChannelSupervisor {
   const channels: Record<RealtimeChannelId, ChannelState> = {
     inbox: createState(),
     thread: createState(),
+    unread: createState(),
   };
 
   /** جدولة محاولة جديدة لهذه القناة وحدها، دون المساس بالقناة الأخرى. */
@@ -185,7 +193,7 @@ export function createRealtimeChannelSupervisor(): RealtimeChannelSupervisor {
 
     earliestRetryAt(): number | null {
       let earliest: number | null = null;
-      for (const id of REALTIME_CHANNEL_IDS) {
+      for (const id of SUPERVISED_CHANNEL_IDS) {
         const retryAt = channels[id].retryAt;
         if (retryAt === null) continue;
         if (earliest === null || retryAt < earliest) earliest = retryAt;
@@ -194,7 +202,7 @@ export function createRealtimeChannelSupervisor(): RealtimeChannelSupervisor {
     },
 
     claimDueChannels(now: number): RealtimeChannelId[] {
-      const due = REALTIME_CHANNEL_IDS.filter(id => {
+      const due = SUPERVISED_CHANNEL_IDS.filter(id => {
         const retryAt = channels[id].retryAt;
         return retryAt !== null && retryAt <= now;
       });
@@ -202,7 +210,7 @@ export function createRealtimeChannelSupervisor(): RealtimeChannelSupervisor {
 
       // إعادة الإنشاء تشمل كل القنوات (epoch واحد)، فلا نترك مؤقتاً قديماً
       // لقناة أخرى كي لا تُجدول إعادة إنشاء ثانية بعد الأولى.
-      for (const id of REALTIME_CHANNEL_IDS) {
+      for (const id of SUPERVISED_CHANNEL_IDS) {
         const state = channels[id];
         if (state.retryAt === null) continue;
         state.retryAt = null;
@@ -218,6 +226,135 @@ export function createRealtimeChannelSupervisor(): RealtimeChannelSupervisor {
     reset(): void {
       channels.inbox = createState();
       channels.thread = createState();
+      channels.unread = createState();
+    },
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// دورة حياة قناة واحدة (قناة شارة الرسائل في Shell).
+//
+// المتتبع أعلاه يقرّر الحالة والتأخير، وهذه الطبقة تُدير الجيل والمؤقت
+// والتنظيف لقناة واحدة: لا مؤقتات مكررة، ولا إنشاء جديد بعد مغادرة الشاشة
+// أو تبديل المستخدم، ولا نداء من قناة قديمة يمس الحالة الجديدة.
+// ---------------------------------------------------------------------------
+
+export type RealtimeTimerHandle = number;
+
+export interface RealtimeChannelLifecycleOptions {
+  id: RealtimeChannelId;
+  supervisor: RealtimeChannelSupervisor;
+  /** مزامنة تعويضية واحدة عند الاشتراك الناجح أو التعافي من الانقطاع. */
+  onResync: () => void;
+  /** إنشاء قناة جديدة فعلياً (اسم جديد) بعد استحقاق إعادة الإنشاء. */
+  onRecreate: () => void;
+  onStatusError?: (status: string, error: unknown) => void;
+  now?: () => number;
+  setTimer: (handler: () => void, timeout: number) => RealtimeTimerHandle;
+  clearTimer: (handle: RealtimeTimerHandle) => void;
+}
+
+export interface RealtimeChannelLifecycle {
+  /** جيل جديد للقناة عند كل إنشاء؛ يُلغي أي مؤقت معلّق. */
+  begin(): number;
+  handleStatus(token: number, status: string, error?: unknown): RealtimeChannelDecision;
+  /** عند عودة الشبكة أو التطبيق: جدولة قناة ليست مشتركة. */
+  ensureHealthy(): RealtimeChannelDecision;
+  /** مغادرة الشاشة أو تبديل المستخدم: إغلاق مقصود وإلغاء المؤقت. */
+  finish(token: number): void;
+  cancel(): void;
+  pendingRetryAt(): number | null;
+}
+
+export function createRealtimeChannelLifecycle(
+  options: RealtimeChannelLifecycleOptions,
+): RealtimeChannelLifecycle {
+  const now = options.now ?? (() => Date.now());
+  const setTimer = options.setTimer;
+  const clearTimer = options.clearTimer;
+
+  let timer: RealtimeTimerHandle | null = null;
+  let retryAt: number | null = null;
+  let cancelled = false;
+
+  function cancelTimer(): void {
+    if (timer !== null) {
+      clearTimer(timer);
+      timer = null;
+    }
+    retryAt = null;
+  }
+
+  function schedule(nextRetryAt: number): void {
+    if (cancelled) return;
+    const delayMs = Math.max(0, nextRetryAt - now());
+
+    if (timer !== null) {
+      // محاولة مجدولة أقرب أو مماثلة: لا نكرّر الجدولة ولا ننشئ مؤقتاً ثانياً.
+      if (retryAt !== null && retryAt <= nextRetryAt) return;
+      clearTimer(timer);
+      timer = null;
+    }
+
+    retryAt = nextRetryAt;
+    timer = setTimer(() => {
+      timer = null;
+      retryAt = null;
+      if (cancelled) return;
+
+      // لا إعادة إنشاء إلا إذا صارت القناة مستحقة فعلاً وقت التنفيذ.
+      if (options.supervisor.claimDueChannels(now()).length === 0) {
+        const next = options.supervisor.earliestRetryAt();
+        if (next !== null) schedule(next);
+        return;
+      }
+      options.onRecreate();
+    }, delayMs);
+  }
+
+  return {
+    begin(): number {
+      cancelled = false;
+      cancelTimer();
+      return options.supervisor.beginChannel(options.id);
+    },
+
+    handleStatus(token: number, status: string, error?: unknown): RealtimeChannelDecision {
+      if (cancelled) return NO_ACTION;
+      if (status !== 'SUBSCRIBED' && error) options.onStatusError?.(status, error);
+
+      const decision = options.supervisor.handleStatus(options.id, token, status, now());
+      // المزامنة التعويضية عند تأكيد الاشتراك أو التعافي فقط، لا مع كل خطأ.
+      if (decision.resync && status === 'SUBSCRIBED') {
+        // عادت القناة للاشتراك قبل مؤقت التعافي: لا نترك محاولة قديمة معلّقة.
+        cancelTimer();
+        options.onResync();
+      }
+      if (decision.retryAt !== null) schedule(decision.retryAt);
+      return decision;
+    },
+
+    ensureHealthy(): RealtimeChannelDecision {
+      if (cancelled) return NO_ACTION;
+      const decision = options.supervisor.ensureHealthy(options.id, now());
+      if (decision.retryAt !== null) schedule(decision.retryAt);
+      return decision;
+    },
+
+    finish(token: number): void {
+      cancelled = true;
+      cancelTimer();
+      options.supervisor.markIntentionalClose(options.id, token);
+    },
+
+    cancel(): void {
+      cancelled = true;
+      cancelTimer();
+    },
+
+    pendingRetryAt(): number | null {
+      return retryAt;
     },
   };
 }

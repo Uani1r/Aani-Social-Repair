@@ -14,6 +14,7 @@ import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
+import { createRealtimeChannelLifecycle, createRealtimeChannelSupervisor } from '@/lib/realtimeChannelHealth';
 import { USE_SOUND_EVENT } from '@/lib/sounds';
 import { playInstant, warmAudioContext } from '@/lib/instantAudio';
 import { resolveMediaUrl } from '@/lib/mediaAccess';
@@ -261,6 +262,9 @@ export default function Shell({
   const [unreadCount, setUnreadCount] = useState(0);
   // شارة الرسائل غير المقروءة على أيقونة الرسائل في الشريط السفلي
   const [messagesUnreadCount, setMessagesUnreadCount] = useState(0);
+  // قناة الشارة تُراقَب بنفس متتبع قنوات MessagesPage: جيل جديد عند كل إنشاء.
+  const [unreadRealtimeEpoch, setUnreadRealtimeEpoch] = useState(0);
+  const unreadRealtimeSupervisorRef = useRef(createRealtimeChannelSupervisor());
   const seenNotificationIdsRef = useRef(new Set<string>());
   const handledCallLogsRef = useRef(new Set<string>());
   const messagesCountTimerRef = useRef<number | null>(null);
@@ -1180,13 +1184,33 @@ export default function Shell({
     if (messagesCountTimerRef.current !== null) window.clearTimeout(messagesCountTimerRef.current);
   }, []);
 
+  // دورة حياة قناة الشارة: المتتبع نفسه المستخدم لقنوات MessagesPage، لكن
+  // بمؤقت و«جيل» خاصين بهذه القناة. لا قناة مغلقة أو فاشلة تبقى بلا إعادة
+  // إنشاء، ولا مؤقتات مكررة، ولا نداء من قناة قديمة يمس حالة مستخدم جديد.
+  const unreadRealtimeLifecycle = useMemo(
+    () => createRealtimeChannelLifecycle({
+      id: 'unread',
+      supervisor: unreadRealtimeSupervisorRef.current,
+      onResync: refreshMessagesUnreadCount,
+      onRecreate: () => setUnreadRealtimeEpoch(epoch => epoch + 1),
+      onStatusError: (status, error) => console.warn(`[messages] Realtime unread ${status}:`, error),
+      setTimer: (handler, timeout) => window.setTimeout(handler, timeout),
+      clearTimer: handle => window.clearTimeout(handle),
+    }),
+    [refreshMessagesUnreadCount],
+  );
+
   // استماع Realtime لجدول messages: أي رسالة واردة أو تعليم قراءة أو حذف
   // يُحدّث شارة الرسائل فوراً دون الحاجة لفتح واجهة المحادثات، ويُمرّر الحدث
   // نفسه إلى MessagesPage عبر الناقل الداخلي، فتصل القائمة والخيط من الـpayload
   // مباشرةً حتى لو كانت قنوات الصفحة غير مشتركة أو فاتتها الأحداث.
   useEffect(() => {
     if (!supabaseConfigured || !userId) return undefined;
-    const channel = supabase.channel(`aani-messages-unread-${userId}`)
+    let removedByUs = false;
+    const token = unreadRealtimeLifecycle.begin();
+    // الـepoch في اسم القناة يضمن قناة جديدة فعلاً عند إعادة الإنشاء، ولا
+    // يعيد العميل قناة قديمة ما زالت في قائمة قنواته.
+    const channel = supabase.channel(`aani-messages-unread-${userId}-${unreadRealtimeEpoch}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
@@ -1214,11 +1238,18 @@ export default function Shell({
         publishMessagesRealtimeEvent(messagesRealtimeEventFromPayload('DELETE', payload));
         refreshMessagesUnreadCount();
       })
-      .subscribe();
+      .subscribe((status, statusError) => {
+        // SUBSCRIBED يؤكد الاشتراك ويطلب مزامنة تعويضية واحدة للشارة؛ أي حالة
+        // أخرى تُجدول إعادة إنشاء مؤجلة بدل ترك القناة ميتة.
+        if (removedByUs) return;
+        unreadRealtimeLifecycle.handleStatus(token, status, statusError);
+      });
     return () => {
+      removedByUs = true;
+      unreadRealtimeLifecycle.finish(token);
       void supabase.removeChannel(channel);
     };
-  }, [refreshMessagesUnreadCount, userId]);
+  }, [userId, unreadRealtimeEpoch, unreadRealtimeLifecycle, refreshMessagesUnreadCount]);
 
   useEffect(() => {
     if (!supabaseConfigured || !userId) return undefined;
@@ -1409,8 +1440,11 @@ export default function Shell({
       void fetchUnreadMessagesCount(userId).then(count => {
         if (count !== null) setMessagesUnreadCount(count);
       });
+      // عودة الـWebSocket وحدها لا تعني أن القناة ما زالت مشتركة: قناة أُغلقت
+      // أو فشل اشتراكها تُجدوَل لإعادة الإنشاء بدل أن تبقى ميتة.
+      unreadRealtimeLifecycle.ensureHealthy();
     });
-  }, [userId]);
+  }, [userId, unreadRealtimeLifecycle]);
 
   // Select and start the cached suggestion during the trusted tap that opens
   // the native file picker, before the OS dialog can consume transient activation.
