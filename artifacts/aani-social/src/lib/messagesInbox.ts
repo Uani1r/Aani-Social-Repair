@@ -19,6 +19,7 @@ export interface LegacyInboxMessage {
   sender_id: string;
   recipient_id: string;
   created_at: string;
+  content?: unknown;
   read_at?: string | null;
   delivered_at?: string | null;
 }
