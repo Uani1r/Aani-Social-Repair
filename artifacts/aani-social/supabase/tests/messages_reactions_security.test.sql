@@ -98,7 +98,7 @@ begin
     from pg_publication_rel as publication_rel
     join pg_publication as publication on publication.oid = publication_rel.prpubid
     where publication.pubname = 'supabase_realtime'
-      and publication_rel.relid = 'public.message_reactions'::regclass
+      and publication_rel.prrelid = 'public.message_reactions'::regclass
   ) then
     raise exception 'public.message_reactions must belong to the supabase_realtime publication';
   end if;
