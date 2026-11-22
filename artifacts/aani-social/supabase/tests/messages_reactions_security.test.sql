@@ -27,7 +27,7 @@ begin
     raise exception 'RLS must be enabled on public.message_reactions';
   end if;
 
-  if not (select relreplicaidentity = 'f' from pg_class where oid = 'public.message_reactions'::regclass) then
+  if not (select relreplident = 'f' from pg_class where oid = 'public.message_reactions'::regclass) then
     raise exception 'public.message_reactions must use REPLICA IDENTITY FULL';
   end if;
 
