@@ -2228,7 +2228,7 @@ export default function MessagesPage({
     }
 
     void channel.send({ type: 'broadcast', event, payload }).then(result => {
-      if (result && typeof result === 'object' && 'status' in result && result.status === 'error') {
+      if (result === 'error') {
         console.warn(`[messages] تعذر إرسال حدث ${event}:`, result);
       }
     }).catch(error => {
@@ -2518,7 +2518,13 @@ export default function MessagesPage({
           const queued = conversationBroadcastQueueRef.current;
           conversationBroadcastQueueRef.current = [];
           for (const item of queued) {
-            void channel.send({ type: 'broadcast', event: item.event, payload: item.payload }).catch(() => undefined);
+            void channel.send({ type: 'broadcast', event: item.event, payload: item.payload }).then(result => {
+              if (result === 'error') {
+                console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, result);
+              }
+            }).catch(error => {
+              console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, error);
+            });
           }
           return;
         }

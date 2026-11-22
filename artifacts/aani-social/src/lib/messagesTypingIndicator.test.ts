@@ -220,13 +220,20 @@ test('the page wires typing to the composer, send, and channel lifecycle', () =>
 test('a non-subscribed channel state resets typing and the send path', () => {
   const messagesPage = readSource('../pages/MessagesPage.tsx');
 
-  // أي حالة غير SUBSCRIBED تُعيد القناة إلى غير المشتركة وتُخفي المؤشر الوارد.
-  const start = messagesPage.indexOf("if (status === 'SUBSCRIBED') {");
-  const end = messagesPage.indexOf('conversationBroadcastChannelRef.current = channel;', start);
-  assert.ok(start > 0 && end > start, 'the subscribe callback must be found');
+  // Anchor on the conversation channel's own comment, since the same
+  // `if (status === 'SUBSCRIBED') {` appears in other channels earlier in the file.
+  const anchor = 'الآن فقط نعتبر القناة جاهزة';
+  const anchorIndex = messagesPage.indexOf(anchor);
+  assert.ok(anchorIndex > 0, 'the conversation channel subscribe block must be found');
+  const start = messagesPage.lastIndexOf("if (status === 'SUBSCRIBED') {", anchorIndex);
+  const end = messagesPage.indexOf('conversationBroadcastChannelRef.current = channel;', anchorIndex);
+  assert.ok(start > 0 && end > start, 'the subscribe callback must be bounded');
+
   const subscribeBlock = messagesPage.slice(start, end);
-  // الجزء بعد فرع SUBSCRIBED (الذي ينتهي بـ return) هو مسار الحالات غير المشتركة.
-  const unsubscribedBranch = subscribeBlock.slice(subscribeBlock.indexOf('return;\n        }') + 'return;\n        }'.length);
+  // Everything after the SUBSCRIBED branch's closing `return;` is the non-subscribed path.
+  const branchEnd = subscribeBlock.indexOf('return;');
+  assert.ok(branchEnd > 0, 'the SUBSCRIBED branch must return early');
+  const unsubscribedBranch = subscribeBlock.slice(branchEnd);
   assert.equal(unsubscribedBranch.includes('conversationBroadcastSubscribedRef.current = false;'), true);
   assert.equal(unsubscribedBranch.includes('clearTypingContact();'), true);
 });
