@@ -70,6 +70,8 @@ export default function ChatMediaPicker({
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
+  // منع تكرار إرسال الفيديو المسجل (نقرة مزدوجة أو استدعاء متزامن).
+  const videoSendInFlightRef = useRef(false);
 
   const selectedMedia = useMemo(() => mediaItems.filter(item => selectedIds.includes(item.id)), [mediaItems, selectedIds]);
   const editingPhoto = mediaItems.find(item => item.id === editingPhotoId) || null;
@@ -325,11 +327,13 @@ export default function ChatMediaPicker({
     }
   };
 
-  const handleVideoRecorded = async (videoUrl: string, durationSeconds: number, viewOnceRecorded: boolean) => {
+  const handleVideoRecorded = async (videoUrl: string, durationSeconds: number, viewOnceRecorded: boolean): Promise<boolean> => {
     if (!activeRecipientId || !supabaseConfigured) {
       toast.error('تعذر إرسال الفيديو لأن المحادثة غير جاهزة.');
-      return;
+      return false;
     }
+    // منع تكرار الرسالة إذا كان هناك إرسال جارٍ بالفعل
+    if (videoSendInFlightRef.current) return false;
 
     const recipientIdSnapshot = activeRecipientId;
     const captionSnapshot = caption.trim();
@@ -344,9 +348,11 @@ export default function ChatMediaPicker({
       isUploading: true,
     };
 
+    videoSendInFlightRef.current = true;
     setSending(true);
     notifyCaptionChange('');
     onSendStart?.(pendingMessage);
+    let messageInserted = false;
     try {
       const content = `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls: [videoUrl], caption: captionSnapshot, viewOnce: viewOnceSnapshot })}`;
       const { error } = await supabase.from('messages').insert({
@@ -355,19 +361,35 @@ export default function ChatMediaPicker({
         content,
       });
       if (error) throw error;
+      messageInserted = true;
       onUploaded?.(pendingMessage.id, recipientIdSnapshot, [videoUrl]);
       await new Promise(resolve => window.setTimeout(resolve, 200));
       await onSent?.(pendingMessage.id, recipientIdSnapshot);
       setCaption('');
       setViewOnce(false);
       notifyCaptionChange('');
+      // نجاح فعلي: أعد المستخدم إلى منتقي الوسائط وأغلق وضع التسجيل
+      setRecordingVideo(false);
       toast.success('تم إرسال الفيديو');
+      return true;
     } catch (error) {
+      if (messageInserted) {
+        // الرسالة أُدرجت بالفعل؛ لا نعيد الإرسال (لمنع التكرار) ونعتبر العملية نجاحاً
+        setCaption('');
+        setViewOnce(false);
+        notifyCaptionChange('');
+        setRecordingVideo(false);
+        toast.success('تم إرسال الفيديو');
+        return true;
+      }
+      // فشل الإدراج: أبقِ المعاينة مفتوحة للسماح بإعادة المحاولة دون إعلان نجاح
       onSendFailed?.(pendingMessage.id);
       notifyCaptionChange(captionSnapshot);
       console.error('[messages] تعذر إرسال الفيديو المسجل:', error);
       toast.error(error instanceof Error ? error.message : 'تعذر إرسال الفيديو. حاول مرة أخرى.');
+      return false;
     } finally {
+      videoSendInFlightRef.current = false;
       setSending(false);
     }
   };

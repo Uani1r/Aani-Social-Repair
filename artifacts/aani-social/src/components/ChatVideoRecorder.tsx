@@ -7,7 +7,7 @@ import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 type ChatVideoRecorderProps = {
   currentUserId: string;
   recipientId: string | null | undefined;
-  onRecorded?: (videoUrl: string, durationSeconds: number, viewOnce: boolean) => void;
+  onRecorded?: (videoUrl: string, durationSeconds: number, viewOnce: boolean) => void | Promise<boolean>;
   onCancel?: () => void;
 };
 
@@ -102,6 +102,9 @@ export default function ChatVideoRecorder({
   const cameraInFlightRef = useRef(false);
   const pendingCameraModeRef = useRef<FacingMode | null>(null);
   const cameraRequestIdRef = useRef(0);
+
+  // منع تنفيذ أكثر من عملية إرسال فيديو بالتزامن (نقرة مزدوجة على زر الإرسال).
+  const sendInFlightRef = useRef(false);
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -441,6 +444,8 @@ export default function ChatVideoRecorder({
   }, []);
 
   const sendVideo = useCallback(async () => {
+    // منع نقرة مزدوجة أو إرسال متزامن
+    if (sendInFlightRef.current) return;
     const previewBlob = previewBlobRef.current;
     if (!previewBlob || uploading) return;
     if (!recipientId || !supabaseConfigured) {
@@ -468,6 +473,7 @@ export default function ChatVideoRecorder({
     // إذا كانت النتيجة WebM، نستخدم امتداد .webm و type video/webm
     // إذا لم يدعم الجهاز MP4، فقد تم منع التسجيل مسبقاً في toggleRecording
 
+    sendInFlightRef.current = true;
     setUploading(true);
     try {
       const safeName = `video-${Date.now()}.${extension}`;
@@ -488,16 +494,25 @@ export default function ChatVideoRecorder({
       const { data: publicUrlData } = supabase.storage.from(storageBucket).getPublicUrl(path);
       const videoUrl = publicUrlData.publicUrl;
 
-      onRecorded?.(videoUrl, elapsedSeconds, viewOnce);
+      // انتظر اكتمال إدراج الرسالة فعلياً قبل إعلان النجاح أو إغلاق المعاينة.
+      // onRecorded يعيد true فقط إذا تم إدراج الرسالة بنجاح؛ false يعني فشلاً ووجوب إعادة المحاولة.
+      const recorded = onRecorded ? await onRecorded(videoUrl, elapsedSeconds, viewOnce) : true;
 
-      // تنظيف بعد الإرسال الناجح (الكاميرا متوقفة بالفعل)
+      if (recorded === false) {
+        // فشل إدراج الرسالة: أبقِ المعاينة مفتوحة وأتح إعادة المحاولة دون إعلان نجاح.
+        console.warn('[ChatVideoRecorder] فشل إدراج الرسالة؛ المعاينة باقية لإعادة المحاولة.');
+        return;
+      }
+
+      // نجاح فعلي: أغلق الكاميرا والمعاينة (العرض يعود لمنتقي الوسائط عبر onRecorded).
       cleanup();
-      toast.success('تم إرسال الفيديو');
     } catch (error) {
+      // فشل الرفع أو الاتصال: أبقِ المعاينة مفتوحة لإعادة المحاولة.
       console.error('[ChatVideoRecorder] تعذر إرسال الفيديو:', error);
       toast.error(error instanceof Error ? error.message : 'تعذر إرسال الفيديو. حاول مرة أخرى.');
     } finally {
       setUploading(false);
+      sendInFlightRef.current = false;
     }
   }, [uploading, recipientId, currentUserId, elapsedSeconds, viewOnce, onRecorded, cleanup, selectedMimeType]);
 
