@@ -10,7 +10,7 @@ import {
   type VoiceFinalizeEvent,
 } from './voiceUploadFinalize';
 
-const URL = 'https://ik.imagekit.io/anisocial/aani/user-1/messages/msg-1.m4a';
+const MEDIA_URL = 'https://ik.imagekit.io/anisocial/aani/user-1/messages/msg-1.m4a';
 
 interface Recorder {
   ledger: number;
@@ -51,7 +51,7 @@ function createDeps(options: {
 
 test('success is only reported after the ledger write succeeds', async () => {
   const { calls, deps } = createDeps({});
-  const outcome = await finalizeVoiceUpload(URL, deps);
+  const outcome = await finalizeVoiceUpload(MEDIA_URL, deps);
 
   assert.deepEqual(outcome, { ok: true });
   assert.equal(calls.ledger, 1);
@@ -61,7 +61,7 @@ test('success is only reported after the ledger write succeeds', async () => {
 
 test('a transient ledger failure is retried before reporting success', async () => {
   const { calls, deps } = createDeps({ ledgerFailsOnce: true });
-  const outcome = await finalizeVoiceUpload(URL, deps);
+  const outcome = await finalizeVoiceUpload(MEDIA_URL, deps);
 
   assert.deepEqual(outcome, { ok: true });
   assert.equal(calls.ledger, 2);
@@ -69,7 +69,7 @@ test('a transient ledger failure is retried before reporting success', async () 
 
 test('ImageKit success + ledger failure schedules the file instead of leaving an unrecorded orphan', async () => {
   const { calls, deps } = createDeps({ ledgerFails: true });
-  const outcome = await finalizeVoiceUpload(URL, deps);
+  const outcome = await finalizeVoiceUpload(MEDIA_URL, deps);
 
   // لا نجاح للعميل
   assert.equal(outcome.ok, false);
@@ -84,7 +84,7 @@ test('ImageKit success + ledger failure schedules the file instead of leaving an
 
 test('when the outbox is also down, an explicitly unreferenced file is deleted', async () => {
   const { calls, deps } = createDeps({ ledgerFails: true, enqueueFails: true, liveReference: false });
-  const outcome = await finalizeVoiceUpload(URL, deps);
+  const outcome = await finalizeVoiceUpload(MEDIA_URL, deps);
 
   assert.equal(outcome.ok === false && outcome.reason, 'ledger-failed-cleaned');
   assert.equal(calls.enqueued, VOICE_DELETION_ENQUEUE_ATTEMPTS);
@@ -93,7 +93,7 @@ test('when the outbox is also down, an explicitly unreferenced file is deleted',
 
 test('a file with a live reference is never deleted', async () => {
   const { calls, deps } = createDeps({ ledgerFails: true, enqueueFails: true, liveReference: true });
-  const outcome = await finalizeVoiceUpload(URL, deps);
+  const outcome = await finalizeVoiceUpload(MEDIA_URL, deps);
 
   assert.equal(outcome.ok === false && outcome.reason, 'ledger-failed-referenced');
   assert.equal(calls.deleted, 0);
@@ -102,7 +102,7 @@ test('a file with a live reference is never deleted', async () => {
 
 test('if the reference check cannot be proven, nothing is deleted and the risk is reported', async () => {
   const { calls, deps } = createDeps({ ledgerFails: true, enqueueFails: true, liveReference: 'throws' });
-  const outcome = await finalizeVoiceUpload(URL, deps);
+  const outcome = await finalizeVoiceUpload(MEDIA_URL, deps);
 
   assert.equal(outcome.ok === false && outcome.reason, 'ledger-failed-orphan-risk');
   assert.equal(calls.deleted, 0);
@@ -111,7 +111,7 @@ test('if the reference check cannot be proven, nothing is deleted and the risk i
 
 test('the ledger write is bounded, not retried forever', async () => {
   const { calls, deps } = createDeps({ ledgerFails: true });
-  await finalizeVoiceUpload(URL, deps);
+  await finalizeVoiceUpload(MEDIA_URL, deps);
 
   assert.equal(calls.ledger, VOICE_LEDGER_ATTEMPTS);
   assert.equal(VOICE_LEDGER_ATTEMPTS, 3);
