@@ -34,7 +34,13 @@ import {
   type VoiceMessagePayload,
 } from '@/lib/messagesVoice';
 import { resolveMediaUrl } from '@/lib/mediaAccess';
-import { claimVoicePlayback, failVoicePlayback, resolveVoicePlaybackSource, toggleVoicePlayback } from '@/lib/messagesVoicePlayback';
+import {
+  claimVoicePlayback,
+  failVoicePlayback,
+  needsVoicePlaybackSourceRefresh,
+  resolveVoicePlaybackSource,
+  toggleVoicePlayback,
+} from '@/lib/messagesVoicePlayback';
 import { prepareVoiceMessageSource } from '@/lib/messagesVoiceServer';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
@@ -304,6 +310,8 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const [mediaDurationMs, setMediaDurationMs] = useState(0);
   const loadingTimeoutRef = useRef<number | null>(null);
   const releaseClaimRef = useRef<(() => void) | null>(null);
+  const retrySourceReadyRef = useRef(false);
+  const retrySourceRefreshRef = useRef<Promise<string | null> | null>(null);
   const resolveSource = useCallback(
     () => resolveVoicePlaybackSource(url, resolveMediaUrl, isTrustedVoiceUrl),
     [url],
@@ -374,6 +382,8 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
 
   useEffect(() => {
     let active = true;
+    retrySourceReadyRef.current = false;
+    retrySourceRefreshRef.current = null;
     setPlaybackUrl(null);
     setIsResolvingSource(true);
     setHasError(false);
@@ -385,20 +395,43 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
     });
     return () => {
       active = false;
+      retrySourceRefreshRef.current = null;
     };
+  }, [resolveSource]);
+
+  const refreshSourceForRetry = useCallback(() => {
+    if (retrySourceRefreshRef.current) return;
+    setIsResolvingSource(true);
+    const pending = resolveSource();
+    retrySourceRefreshRef.current = pending;
+    void pending.then(source => {
+      if (retrySourceRefreshRef.current !== pending) return;
+      if (source) {
+        setPlaybackUrl(source);
+        retrySourceReadyRef.current = true;
+      }
+    }).catch(() => {
+      if (retrySourceRefreshRef.current === pending) retrySourceReadyRef.current = false;
+    }).finally(() => {
+      if (retrySourceRefreshRef.current !== pending) return;
+      retrySourceRefreshRef.current = null;
+      setIsResolvingSource(false);
+    });
   }, [resolveSource]);
 
   const handlePlaybackError = useCallback((error: unknown) => {
     clearLoadingTimeout();
     setHasError(true);
+    retrySourceReadyRef.current = false;
     releasePlaybackClaim();
     console.warn('[messages] تعذر تشغيل/تحميل الرسالة الصوتية:', error);
-  }, [clearLoadingTimeout, releasePlaybackClaim]);
+    refreshSourceForRetry();
+  }, [clearLoadingTimeout, refreshSourceForRetry, releasePlaybackClaim]);
 
   const togglePlayback = async () => {
     const audio = audioRef.current;
     if (!audio || isResolvingSource) return;
-    if (audio.paused && (!playbackUrl || hasError)) {
+    if (needsVoicePlaybackSourceRefresh(audio.paused, playbackUrl, hasError, retrySourceReadyRef.current)) {
       setIsResolvingSource(true);
       const refreshedUrl = await resolveSource();
       setIsResolvingSource(false);
@@ -407,9 +440,10 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         return;
       }
       setPlaybackUrl(refreshedUrl);
-      setHasError(false);
+      retrySourceReadyRef.current = true;
       // لا نؤخر audio.play() عبر await عند تجهيز/تجديد الرابط؛ يتطلب iOS Safari
-      // تفعيلاً مباشراً من المستخدم، لذا يصبح الزر جاهزاً لضغطة تشغيل جديدة.
+      // تفعيلاً مباشراً من المستخدم؛ يجري التجديد استباقياً بعد الخطأ لتكفي
+      // ضغطة واحدة عادةً لإعادة المحاولة. هذا المسار احتياطي إذا لم يكتمل التجديد.
       return;
     }
     if (audio.paused) {
@@ -479,7 +513,7 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         src={playbackUrl ?? undefined}
         aria-hidden="true"
         tabIndex={-1}
-        onPlay={() => { setHasError(false); }}
+        onPlay={() => { setHasError(false); retrySourceReadyRef.current = false; }}
         onPlaying={() => { clearLoadingTimeout(); setIsLoading(false); setIsPlaying(true); }}
         onWaiting={() => { setIsLoading(true); startLoadingTimeout(); }}
         onCanPlay={() => { clearLoadingTimeout(); setIsLoading(false); }}

@@ -30,6 +30,16 @@ export function failVoicePlayback(handlers: VoicePlaybackHandlers, error: unknow
 export type VoicePlaybackUrlResolver = (storedUrl: string) => Promise<string | null>;
 export type VoicePlaybackUrlValidator = (resolvedUrl: string) => boolean;
 
+/** بعد فشل التشغيل، لا نؤخر ضغطة المستخدم بتجديد الرابط إذا اكتمل تجديده مسبقاً. */
+export function needsVoicePlaybackSourceRefresh(
+  audioPaused: boolean,
+  playbackUrl: string | null,
+  hasError: boolean,
+  retrySourceReady: boolean,
+): boolean {
+  return audioPaused && (!playbackUrl || (hasError && !retrySourceReady));
+}
+
 /**
  * يحلّ رابط الرسالة الصوتية إلى عنوان العرض النهائي، ويرفض النتيجة الفارغة أو
  * غير الموثوقة أو المتأخرة. المهلة تمنع مؤشر تجهيز المصدر من البقاء إلى الأبد.

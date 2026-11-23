@@ -21,6 +21,7 @@ const IMAGEKIT_URL = `https://ik.imagekit.io/anisocial${IMAGEKIT_PATH}`;
 // نفس المسار على نطاق ImageKit بلا معرّف endpoint (شكل بديل مشروع)
 const IMAGEKIT_URL_WITHOUT_ENDPOINT = `https://ik.imagekit.io${IMAGEKIT_PATH}`;
 const SUPABASE_URL = `${supabaseUrl}/storage/v1/object/public/${storageBucket}/00000000-0000-0000-0000-000000000001/messages/11111111-1111-4111-8111-111111111111.webm`;
+const SUPABASE_SIGNED_URL = `${supabaseUrl}/storage/v1/object/sign/${storageBucket}/00000000-0000-0000-0000-000000000001/messages/11111111-1111-4111-8111-111111111111.m4a?token=signed-token`;
 
 test('ImageKit voice URLs inside the upload folder are trusted', () => {
   assert.equal(isTrustedImageKitVoiceUrl(IMAGEKIT_URL), true);
@@ -71,6 +72,46 @@ test('legacy Supabase Storage voice URLs keep working', () => {
     isTrustedSupabaseVoiceUrl(SUPABASE_URL.replace(`/${storageBucket}/`, '/other-bucket/')),
     false,
   );
+});
+
+test('a Supabase public object URL for the approved bucket and audio file is trusted', () => {
+  assert.equal(isTrustedSupabaseVoiceUrl(SUPABASE_URL), true);
+});
+
+test('a Supabase signed object URL with a token is trusted', () => {
+  assert.equal(isTrustedSupabaseVoiceUrl(SUPABASE_SIGNED_URL), true);
+  assert.equal(isTrustedVoiceUrl(SUPABASE_SIGNED_URL), true);
+});
+
+test('a signed Supabase object URL without a token is rejected', () => {
+  assert.equal(isTrustedSupabaseVoiceUrl(SUPABASE_SIGNED_URL.replace('?token=signed-token', '')), false);
+});
+
+test('a Supabase URL from another project is rejected', () => {
+  assert.equal(
+    isTrustedSupabaseVoiceUrl(SUPABASE_SIGNED_URL.replace(supabaseUrl, 'https://anotherproject.supabase.co')),
+    false,
+  );
+});
+
+test('a Supabase URL from an unapproved bucket is rejected', () => {
+  assert.equal(
+    isTrustedSupabaseVoiceUrl(SUPABASE_URL.replace(`/${storageBucket}/`, '/other-bucket/')),
+    false,
+  );
+});
+
+test('Supabase URLs without a valid object path or audio extension are rejected', () => {
+  assert.equal(isTrustedSupabaseVoiceUrl(`${supabaseUrl}/storage/v1/object/public/${storageBucket}/`), false);
+  assert.equal(
+    isTrustedSupabaseVoiceUrl(SUPABASE_URL.replace('.webm', '.jpg')),
+    false,
+  );
+});
+
+test('a signed ImageKit voice URL remains trusted', () => {
+  assert.equal(isTrustedImageKitVoiceUrl(`${IMAGEKIT_URL}?ik-t=1999999999&ik-s=validsignature`), true);
+  assert.equal(isTrustedVoiceUrl(`${IMAGEKIT_URL}?ik-t=1999999999&ik-s=validsignature`), true);
 });
 
 test('untrusted schemes and hosts are rejected', () => {

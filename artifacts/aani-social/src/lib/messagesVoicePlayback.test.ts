@@ -6,12 +6,14 @@ import test from 'node:test';
 import {
   claimVoicePlayback,
   failVoicePlayback,
+  needsVoicePlaybackSourceRefresh,
   resolveVoicePlaybackSource,
   stopActiveVoicePlayback,
   toggleVoicePlayback,
   type VoiceAudioLike,
 } from './messagesVoicePlayback';
-import { isTrustedImageKitVoiceUrl } from './messagesVoice';
+import { isTrustedImageKitVoiceUrl, isTrustedVoiceUrl } from './messagesVoice';
+import { storageBucket, supabaseUrl } from './supabase';
 
 const srcRoot = new URL('..', import.meta.url);
 const read = (relativePath: string): string =>
@@ -113,6 +115,21 @@ test('a valid signed M4A source is preserved for iOS-compatible audio playback',
   assert.match(result ?? '', /\.m4a\?ik-t=/);
 });
 
+test('a signed Supabase object URL resolves as a valid voice playback source', async () => {
+  const stored = `${supabaseUrl}/storage/v1/object/public/${storageBucket}/user/messages/voice.m4a`;
+  const signed = `${supabaseUrl}/storage/v1/object/sign/${storageBucket}/user/messages/voice.m4a?token=signed-token`;
+
+  assert.equal(await resolveVoicePlaybackSource(stored, async () => signed, isTrustedVoiceUrl), signed);
+});
+
+test('a pre-refreshed source lets the next error retry skip resolution and use one tap', () => {
+  const refreshedSignedUrl = `${supabaseUrl}/storage/v1/object/sign/${storageBucket}/user/messages/voice.m4a?token=signed-token`;
+
+  assert.equal(needsVoicePlaybackSourceRefresh(true, refreshedSignedUrl, true, true), false);
+  assert.equal(needsVoicePlaybackSourceRefresh(true, refreshedSignedUrl, true, false), true);
+  assert.equal(needsVoicePlaybackSourceRefresh(false, refreshedSignedUrl, true, false), false);
+});
+
 test('a hanging URL resolver times out instead of leaving source loading active', async () => {
   const result = await resolveVoicePlaybackSource(
     'https://ik.imagekit.io/anisocial/aani/u/messages/voice-1.m4a',
@@ -198,7 +215,9 @@ test('the audio element is inline, preloads metadata, and keeps a retryable erro
   assert.equal(page.includes('reloadOnError: hasError'), true);
   // لا مؤشر عالق: مسار الفشل ينهي التحميل
   assert.equal(page.includes('onError: handlePlaybackError'), true);
-  assert.equal(page.includes('onPlay={() => { setHasError(false); }}'), true);
+  assert.equal(page.includes('refreshSourceForRetry();'), true);
+  assert.equal(page.includes('needsVoicePlaybackSourceRefresh(audio.paused, playbackUrl, hasError, retrySourceReadyRef.current)'), true);
+  assert.equal(page.includes('onPlay={() => { setHasError(false); retrySourceReadyRef.current = false; }}'), true);
   assert.equal(page.includes('onPlaying={() => { clearLoadingTimeout(); setIsLoading(false); setIsPlaying(true); }}'), true);
   assert.equal(page.includes('onWaiting={() => { setIsLoading(true); startLoadingTimeout(); }}'), true);
   assert.equal(page.includes('if (loadingTimeoutRef.current !== null) return;'), true);
