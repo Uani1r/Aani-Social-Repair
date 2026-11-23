@@ -450,7 +450,13 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
           setIsPlaying(false);
           setIsLoading(false);
           setHasError(true);
-          console.warn('[messages] تعذر تحميل الرسالة الصوتية:', event.currentTarget.error?.code ?? 'unknown');
+          // رمز الخطأ والرسالة والرابط: يكشف إن كان الملف نفسه غير متاح
+          console.warn(
+            '[messages] تعذر تحميل الرسالة الصوتية:',
+            event.currentTarget.error?.code ?? 'unknown',
+            event.currentTarget.error?.message ?? '',
+            url.slice(0, 160),
+          );
         }}
       />
     </>
@@ -3162,6 +3168,10 @@ export default function MessagesPage({
       }
 
       console.info('[messages][voice-metrics]', prepared.metrics);
+      if (prepared.source === 'direct-m4a') {
+        // تشخيص صريح: التحويل الخادمي لم يعمل، فرُفع تسجيل iPhone كما هو.
+        console.warn('[messages] رُفع تسجيل M4A مباشرة إلى ImageKit بعد تعذر التحويل على الخادم.');
+      }
       const content = voiceMessageContent(prepared.url, durationMs);
       if (content.length > 4000) throw new Error('بيانات الرسالة الصوتية كبيرة جداً.');
       const { error } = await supabase.from('messages').insert({
