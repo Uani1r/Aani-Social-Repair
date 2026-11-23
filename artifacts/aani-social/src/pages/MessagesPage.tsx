@@ -3162,6 +3162,10 @@ export default function MessagesPage({
       }
 
       console.info('[messages][voice-metrics]', prepared.metrics);
+      if (prepared.source === 'direct-m4a') {
+        // تشخيص صريح: التحويل الخادمي لم يعمل، فرُفع تسجيل iPhone كما هو.
+        console.warn('[messages] رُفع تسجيل M4A مباشرة إلى ImageKit بعد تعذر التحويل على الخادم.');
+      }
       const content = voiceMessageContent(prepared.url, durationMs);
       if (content.length > 4000) throw new Error('بيانات الرسالة الصوتية كبيرة جداً.');
       const { error } = await supabase.from('messages').insert({
