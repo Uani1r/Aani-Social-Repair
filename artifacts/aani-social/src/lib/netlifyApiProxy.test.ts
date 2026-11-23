@@ -61,8 +61,8 @@ test('the single /api rule covers the voice conversion and the ImageKit signatur
 });
 
 test('both API calls are same-origin relative paths, so one rule serves them', () => {
-  const upload = read('./storyUpload.ts');
-  const voice = read('./messagesVoiceServer.ts');
+  const upload = read('./lib/storyUpload.ts');
+  const voice = read('./lib/messagesVoiceServer.ts');
 
   // توقيع رفع الوسائط (الصور والفيديو والرسائل الصوتية) من نفس المضيف
   assert.equal(upload.includes("fetch('/api/media/imagekit-auth'"), true);
@@ -89,8 +89,8 @@ test('the build writes the redirects file from the build-time target', () => {
 });
 
 test('a host that answers API calls with the SPA reports the missing proxy', () => {
-  const upload = read('./storyUpload.ts');
-  const voice = read('./messagesVoiceServer.ts');
+  const upload = read('./lib/storyUpload.ts');
+  const voice = read('./lib/messagesVoiceServer.ts');
 
   // رسالة صريحة بدل خطأ غامض عندما يعيد المضيف صفحة بدل JSON
   assert.equal(upload.includes('API_PROXY_TARGET'), true);
