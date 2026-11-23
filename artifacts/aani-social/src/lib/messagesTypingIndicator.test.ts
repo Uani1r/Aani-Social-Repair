@@ -351,17 +351,17 @@ test('the inbox subscribes to each listed private conversation exactly once', ()
   // المحادثة المفتوحة تُستثنى: قناة الخيط قائمة بالفعل.
   assert.equal(messagesPage.includes('contactId === selectedId) continue;'), true);
   // لا اشتراك ثانٍ لجهة اتصال مشتركة بالفعل.
-  assert.equal(messagesPage.includes('if (channels.has(contactId)) continue;'), true);
+  assert.equal(messagesPage.includes('if (sessions.has(contactId)) continue;'), true);
   // لا يُقبل حدث إلا من طرف المحادثة نفسه.
   assert.equal(
     messagesPage.includes('typingEventMatchesConversation(event, currentUserId, contactId)'),
     true,
   );
   // القناة غير الجاهزة أو المنقطعة تُخفي المؤشر بدل إبقائه عالقاً.
-  assert.equal(messagesPage.includes("if (status !== 'SUBSCRIBED') tracker?.clear(contactId);"), true);
+  assert.equal(messagesPage.includes('onNotSubscribed: () => tracker?.clear(contactId)'), true);
   // مغادرة الصفحة تُغلق اشتراكات القائمة.
   assert.equal(
-    messagesPage.includes('inboxTypingChannelsRef.current.forEach(channel => { void supabase.removeChannel(channel); });'),
+    messagesPage.includes('inboxTypingSessionsRef.current.forEach(session => session.cancel());'),
     true,
   );
 });

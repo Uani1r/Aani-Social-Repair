@@ -72,7 +72,7 @@ test('both the open conversation and the inbox prepare membership first', () => 
   const messagesPage = read('./pages/MessagesPage.tsx');
 
   // المسار نفسه للقناتين
-  const opens = messagesPage.split('openMessagesConversationChannel({').length - 1;
+  const opens = messagesPage.split('openMessagesConversationChannel<').length - 1;
   assert.equal(opens, 2);
   const ensures = messagesPage.split('ensureMessagesConversationMembership(currentUserId,').length - 1;
   assert.equal(ensures, 2);
