@@ -12,10 +12,12 @@
 import express, { Router, type NextFunction, type Request, type Response } from "express";
 
 import { logger } from "../lib/logger";
+import { deleteImageKitFilesByUrls } from "../lib/imagekitAdmin";
 import { ImageKitUploadError, uploadFileToImageKit } from "../lib/imagekitUpload";
-import { normalizeMediaUrl, recordUploadLedger } from "../lib/mediaDb";
+import { enqueueMediaDeletionJobs, mediaInActiveUse, recordUploadLedger } from "../lib/mediaDb";
 import { readSupabaseAdminConfig, type SupabaseAdminConfig } from "../lib/supabaseAdmin";
 import { createVoiceGate } from "../lib/voiceGate";
+import { finalizeVoiceUpload } from "../lib/voiceUploadFinalize";
 import { VOICE_MAX_SOURCE_BYTES, VoiceProcessingError, transcodeVoiceToM4a } from "../lib/voiceProcessing";
 
 const router = Router();
@@ -109,12 +111,30 @@ router.post(
           ? Math.round((1 - finalBytes / originalBytes) * 1000) / 10
           : 0;
 
-        // 3) تسجيل الملف في سجل الرفع بعد نجاح الرفع (فحص اليتامى يعتمد عليه).
-        //    فشل التسجيل لا يُفشل الرفع، لكنه يُسجَّل بوضوح للمتابعة.
-        try {
-          await recordUploadLedger(config, normalizeMediaUrl(uploaded.url));
-        } catch (ledgerError) {
-          logger.warn({ err: ledgerError, messageId }, "Voice upload ledger write failed");
+        // 3) لا نجاح قبل تسجيل الرابط في Upload Ledger. فشل التسجيل يُطلق
+        //    مساراً تعويضياً موثوقاً (طابور حذف يفحص المراجع الحية)، أو فشلاً
+        //    صريحاً للعميل — لا يُترك ملف يتيم غير مسجل.
+        const finalized = await finalizeVoiceUpload(uploaded.url, {
+          recordLedger: url => recordUploadLedger(config, url, uploaded.fileId ?? undefined),
+          enqueueDeletion: url => enqueueMediaDeletionJobs(config, [url]).then(() => undefined),
+          hasLiveReference: url => mediaInActiveUse(config, [url]),
+          deleteUnreferenced: url => deleteImageKitFilesByUrls([url]).then(() => undefined),
+          log: (event, detail) => {
+            logger.warn({ event, messageId, detail }, "Voice upload finalization event");
+          },
+        });
+
+        if (!finalized.ok) {
+          logger.error({ userId, messageId, reason: finalized.reason }, "Voice upload could not be recorded in the upload ledger");
+          return res.status(502).json({
+            success: false,
+            code: finalized.reason,
+            error: finalized.reason === "ledger-failed-cleaned"
+              ? "The voice file could not be recorded and was discarded."
+              : finalized.reason === "ledger-failed-referenced"
+                ? "The voice file is referenced by a message but could not be recorded."
+                : "The voice file could not be recorded or reliably discarded.",
+          });
         }
 
         logger.info({

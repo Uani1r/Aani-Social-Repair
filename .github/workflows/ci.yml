@@ -72,7 +72,7 @@ jobs:
       # output verification, the pre-transcode guards, and the auth/rate/concurrency
       # gate that runs before the request body is read. No ffmpeg binary is needed.
       - name: Unit tests @workspace/api-server (voice)
-        run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/voiceProcessing.test.ts ./src/lib/voiceGate.test.ts
+        run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/voiceProcessing.test.ts ./src/lib/voiceGate.test.ts ./src/lib/voiceUploadFinalize.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
