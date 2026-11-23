@@ -26,9 +26,12 @@ const VIDEO_CONSTRAINTS = {
 } as const;
 
 const MAX_DURATION_SECONDS = 60;
+const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 const TARGET_BITRATE_BPS = 1_500_000; // 1.5 Mbps
 
-// ترتيب أولوية MIME للفيديو: MP4/H.264 أولاً للتوافق مع iPhone Safari
+// ترتيب أولوية MIME للفيديو: نتحقق من الدعم الفعلي عبر MediaRecorder.isTypeSupported
+// لا نفترض أن كل الأجهزة تدعم MP4/H.264 — إذا لم يدعم الجهاز الصيغة المطلوبة، نوقف الإرسال
+// ونعرض رسالة واضحة للمستخدم بدلاً من رفع ملف غير متوافق.
 const VIDEO_MIME_CANDIDATES = [
   'video/mp4;codecs=avc1.42001E,mp4a.40.2', // H.264 Baseline + AAC
   'video/mp4;codecs=avc1.42E01E,mp4a.40.2', // H.264 Main + AAC
@@ -61,6 +64,18 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+// تحديد الامتداد الصحيح ونوع MIME بناءً على الصيغة الفعلية المدعومة
+function getFileExtensionAndMimeType(mimeType: string): { extension: string; mimeType: string } {
+  if (mimeType.startsWith('video/mp4')) {
+    return { extension: 'mp4', mimeType: 'video/mp4' };
+  }
+  if (mimeType.startsWith('video/webm')) {
+    return { extension: 'webm', mimeType: 'video/webm' };
+  }
+  // fallback - لا ينبغي الوصول إليه لأننا نتحقق من الدعم مسبقاً
+  return { extension: 'mp4', mimeType: 'video/mp4' };
+}
+
 export default function ChatVideoRecorder({
   currentUserId,
   recipientId,
@@ -68,71 +83,76 @@ export default function ChatVideoRecorder({
   onCancel,
 }: ChatVideoRecorderProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
-  const [recorder, setRecorder] = useState<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const [chunks, setChunks] = useState<BlobPart[]>([]);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const timerRef = useRef<number | null>(null);
+  const maxDurationReachedRef = useRef(false);
+  const previewUrlRef = useRef<string | null>(null);
+  const previewBlobRef = useRef<Blob | null>(null);
+  const isMountedRef = useRef(true);
+  const startCameraCalledRef = useRef(false);
+
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('user');
   const [audioEnabled, setAudioEnabled] = useState(true);
   const [uploading, setUploading] = useState(false);
-  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [viewOnce, setViewOnce] = useState(false);
+  const [selectedMimeType, setSelectedMimeType] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
-  const timerRef = useRef<number | null>(null);
-  const maxDurationReachedRef = useRef(false);
-
-  // تحديث ref عند تغيير recorder
-  useEffect(() => {
-    recorderRef.current = recorder;
-  }, [recorder]);
-
-  // تنظيف الموارد عند إلغاء التسجيل أو مغادرة المكون
+  // تنظيف الموارد
   const cleanup = useCallback(() => {
     if (timerRef.current !== null) {
       window.clearInterval(timerRef.current);
       timerRef.current = null;
     }
-    if (recorder) {
+    if (recorderRef.current) {
       try {
-        if (recorder.state === 'recording' || recorder.state === 'paused') {
-          recorder.stop();
+        if (recorderRef.current.state === 'recording' || recorderRef.current.state === 'paused') {
+          recorderRef.current.stop();
         }
       } catch {
         // تجاهل
       }
+      recorderRef.current = null;
     }
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
-    setStream(null);
-    setRecorder(null);
-    setChunks([]);
+    chunksRef.current = [];
     setRecording(false);
     setPaused(false);
     setElapsedSeconds(0);
     maxDurationReachedRef.current = false;
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(null);
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
     }
-    setPreviewBlob(null);
+    previewBlobRef.current = null;
     setShowPreview(false);
-  }, [recorder, stream, previewUrl]);
+  }, []);
 
   // إيقاف الكاميرا وجميع المسارات فور إلغاء التصوير أو الانتهاء منه
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
+      isMountedRef.current = false;
       cleanup();
     };
   }, [cleanup]);
 
   const startCamera = useCallback(async () => {
+    // منع تشغيل متزامن متعدد
+    if (startCameraCalledRef.current) return;
+    startCameraCalledRef.current = true;
+
     try {
+      setCameraError(null);
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: {
           ...VIDEO_CONSTRAINTS.video,
@@ -140,7 +160,14 @@ export default function ChatVideoRecorder({
         },
         audio: audioEnabled ? VIDEO_CONSTRAINTS.audio : false,
       });
-      setStream(mediaStream);
+      
+      if (!isMountedRef.current) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        startCameraCalledRef.current = false;
+        return;
+      }
+
+      streamRef.current = mediaStream;
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
         await videoRef.current.play().catch(() => {});
@@ -148,52 +175,77 @@ export default function ChatVideoRecorder({
     } catch (error) {
       console.error('[ChatVideoRecorder] تعذر الوصول للكاميرا:', error);
       const err = error as Error & { name?: string };
+      let errorMessage = 'تعذر تشغيل الكاميرا. تحقق من الأذونات وحاول مرة أخرى.';
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-        toast.error('تم رفض إذن الكاميرا/الميكروفون. يرجى السماح بالوصول من إعدادات المتصفح.');
+        errorMessage = 'تم رفض إذن الكاميرا/الميكروفون. يرجى السماح بالوصول من إعدادات المتصفح.';
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        toast.error('لم يتم العثور على كاميرا/ميكروفون على هذا الجهاز.');
-      } else {
-        toast.error('تعذر تشغيل الكاميرا. تحقق من الأذونات وحاول مرة أخرى.');
+        errorMessage = 'لم يتم العثور على كاميرا/ميكروفون على هذا الجهاز.';
+      } else if (err.name === 'OverconstrainedError') {
+        errorMessage = 'إعدادات الكاميرا المطلوبة غير مدعومة على هذا الجهاز.';
       }
+      setCameraError(errorMessage);
       onCancel?.();
+    } finally {
+      startCameraCalledRef.current = false;
     }
   }, [facingMode, audioEnabled, onCancel]);
 
+  // تشغيل الكاميرا مرة واحدة فقط عند التركيب (mount)
   useEffect(() => {
     startCamera();
     return () => {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
     };
-  }, [startCamera, stream]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- نريد تشغيل الكاميرا مرة واحدة فقط
 
   const toggleRecording = useCallback(async () => {
-    if (!stream || recorder) return;
+    if (!streamRef.current || recorderRef.current) return;
 
     const mimeType = pickSupportedMimeType();
     if (!mimeType && typeof MediaRecorder !== 'undefined') {
-      // لا يوجد نوع مدعوم — نحاول بدون تحديد نوع (سيسجل بالافتراضي)
       console.warn('[ChatVideoRecorder] لا يوجد نوع MIME مدعوم صريحاً، سيُستخدم الافتراضي');
     }
 
+    // التحقق من دعم الصيغة المطلوبة (MP4) — إذا لم يدعم الجهاز MP4، نوقف ونعرض رسالة
+    const needsMp4 = true; // المتطلب: فيديوهات المحادثات يجب أن تكون MP4 للتوافق
+    const supportsMp4 = mimeType?.startsWith('video/mp4') ?? false;
+    
+    if (needsMp4 && !supportsMp4) {
+      const msg = 'هذا المتصفح/الجهاز لا يدعم تسجيل الفيديو بصيغة MP4/H.264 المطلوبة للتوافق مع جميع الأجهزة. يرجى استخدام متصفح حديث (Chrome، Firefox، Safari 14+) أو جهاز أحدث.';
+      toast.error(msg);
+      console.error('[ChatVideoRecorder] MP4/H.264 غير مدعوم:', mimeType);
+      return;
+    }
+
     try {
-      const mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: TARGET_BITRATE_BPS } : { videoBitsPerSecond: TARGET_BITRATE_BPS });
-      setRecorder(mediaRecorder);
-      setChunks([]);
+      chunksRef.current = [];
+      setSelectedMimeType(mimeType);
+
+      const mediaRecorder = new MediaRecorder(
+        streamRef.current,
+        mimeType ? { mimeType, videoBitsPerSecond: TARGET_BITRATE_BPS } : { videoBitsPerSecond: TARGET_BITRATE_BPS }
+      );
+      recorderRef.current = mediaRecorder;
 
       mediaRecorder.ondataavailable = event => {
         if (event.data.size > 0) {
-          setChunks(prev => [...prev, event.data]);
+          chunksRef.current.push(event.data);
         }
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'video/mp4' });
+        if (!isMountedRef.current) return;
+        
+        const recordedMimeType = mediaRecorder.mimeType || mimeType || 'video/mp4';
+        const blob = new Blob(chunksRef.current, { type: recordedMimeType });
+        
         if (blob.size > 0) {
-          setPreviewBlob(blob);
+          previewBlobRef.current = blob;
           const url = URL.createObjectURL(blob);
-          setPreviewUrl(url);
+          previewUrlRef.current = url;
           setShowPreview(true);
         }
         setRecording(false);
@@ -202,6 +254,7 @@ export default function ChatVideoRecorder({
           window.clearInterval(timerRef.current);
           timerRef.current = null;
         }
+        recorderRef.current = null;
       };
 
       mediaRecorder.onerror = event => {
@@ -233,19 +286,19 @@ export default function ChatVideoRecorder({
       console.error('[ChatVideoRecorder] تعذر بدء التسجيل:', error);
       toast.error('تعذر بدء التسجيل. تحقق من دعم المتصفح.');
     }
-  }, [stream, recorder, chunks, cleanup]);
+  }, [cleanup]);
 
   const pauseResumeRecording = useCallback(() => {
-    if (!recorder) return;
-    if (recorder.state === 'recording') {
-      recorder.pause();
+    if (!recorderRef.current) return;
+    if (recorderRef.current.state === 'recording') {
+      recorderRef.current.pause();
       setPaused(true);
       if (timerRef.current !== null) {
         window.clearInterval(timerRef.current);
         timerRef.current = null;
       }
-    } else if (recorder.state === 'paused') {
-      recorder.resume();
+    } else if (recorderRef.current.state === 'paused') {
+      recorderRef.current.resume();
       setPaused(false);
       timerRef.current = window.setInterval(() => {
         setElapsedSeconds(prev => {
@@ -261,48 +314,50 @@ export default function ChatVideoRecorder({
         });
       }, 1000);
     }
-  }, [recorder]);
+  }, []);
 
   const stopRecording = useCallback(() => {
-    if (recorder && (recorder.state === 'recording' || recorder.state === 'paused')) {
-      recorder.stop();
+    if (recorderRef.current && (recorderRef.current.state === 'recording' || recorderRef.current.state === 'paused')) {
+      recorderRef.current.stop();
     }
-  }, [recorder]);
+  }, []);
 
   const retake = useCallback(() => {
     setShowPreview(false);
-    if (previewUrl) {
-      URL.revokeObjectURL(previewUrl);
-      setPreviewUrl(null);
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
     }
-    setPreviewBlob(null);
-    setChunks([]);
-    setRecorder(null);
+    previewBlobRef.current = null;
+    chunksRef.current = [];
+    recorderRef.current = null;
     setElapsedSeconds(0);
     maxDurationReachedRef.current = false;
-  }, [previewUrl]);
+  }, []);
 
   const flipCamera = useCallback(() => {
     const nextMode = facingMode === 'user' ? 'environment' : 'user';
     setFacingMode(nextMode);
-    // إعادة تشغيل الكاميرا مع الوضع الجديد
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
+    // إيقاف المسار السابق ثم تشغيل الكاميرا المطلوبة مرة واحدة
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
     }
     startCamera();
-  }, [facingMode, stream, startCamera]);
+  }, [facingMode, startCamera]);
 
   const toggleAudio = useCallback(() => {
     const nextEnabled = !audioEnabled;
     setAudioEnabled(nextEnabled);
-    if (stream) {
-      stream.getAudioTracks().forEach(track => {
+    if (streamRef.current) {
+      streamRef.current.getAudioTracks().forEach(track => {
         track.enabled = nextEnabled;
       });
     }
-  }, [audioEnabled, stream]);
+  }, [audioEnabled]);
 
   const sendVideo = useCallback(async () => {
+    const previewBlob = previewBlobRef.current;
     if (!previewBlob || uploading) return;
     if (!recipientId || !supabaseConfigured) {
       toast.error('تعذر إرسال الفيديو: المحادثة غير جاهزة.');
@@ -310,8 +365,7 @@ export default function ChatVideoRecorder({
     }
 
     // التحقق من الحجم (25MB كحد أقصى)
-    const MAX_SIZE = 25 * 1024 * 1024;
-    if (previewBlob.size > MAX_SIZE) {
+    if (previewBlob.size > MAX_FILE_SIZE_BYTES) {
       toast.error('حجم الفيديو يتجاوز 25 ميغابايت. سجل مقطعاً أقصر.');
       return;
     }
@@ -322,15 +376,24 @@ export default function ChatVideoRecorder({
       return;
     }
 
+    // التحقق من نوع MIME الفعلي للتسجيل
+    const recordedMimeType = recorderRef.current?.mimeType || selectedMimeType || 'video/mp4';
+    const { extension, mimeType } = getFileExtensionAndMimeType(recordedMimeType);
+
+    // لا نسمح برفع WebM بامتداد MP4 أو type video/mp4
+    // إذا كانت النتيجة WebM، نستخدم امتداد .webm و type video/webm
+    // إذا لم يدعم الجهاز MP4، فقد تم منع التسجيل مسبقاً في toggleRecording
+
     setUploading(true);
     try {
-      const safeName = `video-${Date.now()}.mp4`;
+      const safeName = `video-${Date.now()}.${extension}`;
       const path = `${currentUserId}/messages/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
       
       await uploadMedia({
-        file: new File([previewBlob], safeName, { type: 'video/mp4', lastModified: Date.now() }),
+        file: new File([previewBlob], safeName, { type: mimeType, lastModified: Date.now() }),
         path,
         preset: 'video',
+        skipCompression: true, // رفع مباشر دون ضغط للفيديوهات المسجلة بالكاميرا
         onPhase: (phase, percent) => {
           if (phase === 'uploading' && percent) {
             // يمكن إضافة مؤشر تقدم هنا
@@ -352,7 +415,7 @@ export default function ChatVideoRecorder({
     } finally {
       setUploading(false);
     }
-  }, [previewBlob, uploading, recipientId, currentUserId, elapsedSeconds, viewOnce, onRecorded, cleanup]);
+  }, [uploading, recipientId, currentUserId, elapsedSeconds, viewOnce, onRecorded, cleanup, selectedMimeType]);
 
   const handleClose = useCallback(() => {
     cleanup();
@@ -361,6 +424,20 @@ export default function ChatVideoRecorder({
 
   // واجهة التسجيل
   if (!showPreview) {
+    if (cameraError) {
+      return (
+        <div className="chat-video-recorder" role="dialog" aria-modal="true" aria-label="خطأ الكاميرا" dir="rtl">
+          <div className="chat-video-recorder-error">
+            <X size={48} className="chat-video-recorder-error-icon" />
+            <p>{cameraError}</p>
+            <button type="button" className="chat-video-recorder-retry-btn" onClick={handleClose}>
+              إغلاق
+            </button>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="chat-video-recorder" role="dialog" aria-modal="true" aria-label="تسجيل فيديو" dir="rtl">
         <header className="chat-video-recorder-header">
@@ -426,7 +503,7 @@ export default function ChatVideoRecorder({
               className="chat-video-recorder-record-btn"
               aria-label="بدء التسجيل"
               onClick={toggleRecording}
-              disabled={!stream}
+              disabled={!streamRef.current}
             >
               <Circle size={28} className="chat-video-recorder-record-icon" />
               <span>ابدأ التسجيل</span>
@@ -520,7 +597,7 @@ export default function ChatVideoRecorder({
 
       <div className="chat-video-recorder-preview">
         <video
-          src={previewUrl || ''}
+          src={previewUrlRef.current || ''}
           controls
           playsInline
           className="chat-video-recorder-video"

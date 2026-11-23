@@ -255,7 +255,10 @@ export default function ChatMediaPicker({
         const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || (item.type === 'video' ? 'video.mp4' : 'photo.jpg');
         const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
         const preset = item.type === 'video' ? 'video' : 'chatImage';
-        await uploadMedia({ file: item.file, path, preset, quality: hdSnapshot ? 'hd' : 'data-saving' });
+        // فيديوهات المحادثات (من الاستوديو أو الكاميرا): رفع مباشر دون ضغط
+        // الصور: ضغط دائم كما هو محدد في preset chatImage
+        const skipCompression = item.type === 'video';
+        await uploadMedia({ file: item.file, path, preset, quality: hdSnapshot ? 'hd' : 'data-saving', skipCompression });
         uploadedPaths.push(path);
         return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
       }));
