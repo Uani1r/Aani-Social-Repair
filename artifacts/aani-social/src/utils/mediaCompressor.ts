@@ -561,7 +561,8 @@ const IMAGE_TARGETS: Record<ImagePreset, {
   // صور المنشورات: 1440px للضلع الأطول
   feedImage: { maxSide: 1440, targetBytes: 300 * 1024, startQuality: 0.82, minQuality: 0.6 },
   // صور الرسائل والتعليقات والملصقات: 1280px للضلع الأطول (الشفافية محفوظة عبر WebP/PNG)
-  chatImage: { maxSide: 1280, targetBytes: 250 * 1024, startQuality: 0.82, minQuality: 0.55 },
+  // جودة مستهدفة 75-80% — لا ننزلق تحت 75% حفاظاً على الوضوح
+  chatImage: { maxSide: 1280, targetBytes: 250 * 1024, startQuality: 0.80, minQuality: 0.75 },
 };
 
 let webpEncodeSupported: boolean | null = null;
