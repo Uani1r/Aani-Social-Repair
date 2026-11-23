@@ -2953,6 +2953,12 @@ body.aani-immersive .unified-top-bar {
   white-space: nowrap;
 }
 
+/* مؤشر كتابة الطرف الآخر داخل بطاقة المحادثة، مكان معاينة آخر رسالة. */
+.messages-chat-preview.is-typing {
+  color: #7fe0a6;
+  font-weight: 600;
+}
+
 .messages-unread-dot {
   width: 8px;
   height: 8px;
@@ -3665,24 +3671,16 @@ body.aani-immersive .unified-top-bar {
 
 /* مؤشر «جاري الكتابة»: ارتفاع ثابت يُحجز دائماً، فلا يتحرك الخيط أو مربع الكتابة.
    في RTL يبدأ صف flex من اليمين (جهة رسائلي)، لذا نُلزم المحتوى بالنهاية
-   inline-end ليظهر على اليسار تحت رسائل الطرف الآخر.
-
-   زر «تشخيص التوقيع» ثابت في أسفل يسار الشاشة (left: 12px، عرضه ~130px،
-   bottom: 5.5rem + safe area)، وحزامه الرأسي يبدأ عند 88px من الأسفل. صفّ
-   المؤشر يجلس فوق مربع الكتابة، فإذا تمدد المربع إلى سطرين أو ثلاثة ارتفع
-   الصف إلى حزام الزر. لذلك نحجز مساحة أفقية آمنة على اليسار تُبقي النص يمين
-   منطقة الزر على أي ارتفاع للمربع، دون تحريك الزر أو المساس بمحاذاة الفقاعات
-   أو اتجاه RTL. ارتفاع الصف ثابت، فلا يتحرك شيء عند ظهور المؤشر. */
+   inline-end ليظهر في أقصى اليسار فوق مربع الكتابة، تحت رسائل الطرف الآخر. */
 .messages-typing-indicator {
   display: flex;
   height: 22px;
   flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  /* يسار: 130px (عرض الزر العائم) + 20px هامشاً آمناً = 150px من الحافة. */
-  margin: 0 20px 0 150px;
-  color: var(--messages-secondary);
+  gap: 5px;
+  margin: 0 12px;
+  color: var(--messages-muted);
   font-size: 12px;
   line-height: 1;
   opacity: 0;
@@ -3691,7 +3689,7 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-typing-indicator.is-visible {
-  opacity: 1;
+  opacity: .9;
 }
 
 .messages-typing-dots {
@@ -3701,8 +3699,8 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-typing-dots span {
-  width: 5px;
-  height: 5px;
+  width: 4px;
+  height: 4px;
   border-radius: 50%;
   background: currentColor;
   opacity: .35;
