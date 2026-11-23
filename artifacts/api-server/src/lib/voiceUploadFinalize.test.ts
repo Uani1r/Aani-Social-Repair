@@ -97,6 +97,7 @@ test('a file with a live reference is never deleted', async () => {
 
   assert.equal(outcome.ok === false && outcome.reason, 'ledger-failed-referenced');
   assert.equal(calls.deleted, 0);
+  assert.equal(calls.events.includes('still-referenced'), true);
 });
 
 test('if the reference check cannot be proven, nothing is deleted and the risk is reported', async () => {

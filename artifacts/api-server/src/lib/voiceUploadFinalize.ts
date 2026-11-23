@@ -29,6 +29,7 @@ export type VoiceFinalizeEvent =
   | 'ledger-failed'
   | 'deletion-enqueued'
   | 'deleted-unreferenced'
+  | 'still-referenced'
   | 'reference-check-failed'
   | 'orphan-risk';
 
@@ -95,6 +96,7 @@ export async function finalizeVoiceUpload(
     const liveReference = await deps.hasLiveReference(url);
     if (liveReference) {
       // ملف مستخدم فعلاً: تركه آمن، وإعلان الفشل صريح.
+      log('still-referenced', url);
       return { ok: false, reason: 'ledger-failed-referenced' };
     }
     await deps.deleteUnreferenced(url);
