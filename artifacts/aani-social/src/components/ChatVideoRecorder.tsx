@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Video, X, Circle, StopCircle, RotateCcw, Mic, MicOff, Camera } from 'lucide-react';
 import { toast } from 'sonner';
 import { uploadMedia } from '@/lib/storyUpload';
-import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { supabaseConfigured } from '@/lib/supabase';
 
 type ChatVideoRecorderProps = {
   currentUserId: string;
@@ -105,6 +105,9 @@ export default function ChatVideoRecorder({
 
   // منع تنفيذ أكثر من عملية إرسال فيديو بالتزامن (نقرة مزدوجة على زر الإرسال).
   const sendInFlightRef = useRef(false);
+  // رابط الفيديو المرفوع مسبقاً لنفس الـBlob — يُعاد استخدامه عند إعادة المحاولة
+  // لتجنب رفع ملف مكرر إلى ImageKit.
+  const uploadedVideoRef = useRef<{ blob: Blob; url: string } | null>(null);
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -158,6 +161,7 @@ export default function ChatVideoRecorder({
       previewUrlRef.current = null;
     }
     previewBlobRef.current = null;
+    uploadedVideoRef.current = null;
     setShowPreview(false);
   }, [stopAllTracks]);
 
@@ -406,6 +410,7 @@ export default function ChatVideoRecorder({
       previewUrlRef.current = null;
     }
     previewBlobRef.current = null;
+    uploadedVideoRef.current = null;
     chunksRef.current = [];
     recorderRef.current = null;
     setElapsedSeconds(0);
@@ -476,23 +481,31 @@ export default function ChatVideoRecorder({
     sendInFlightRef.current = true;
     setUploading(true);
     try {
-      const safeName = `video-${Date.now()}.${extension}`;
-      const path = `${currentUserId}/messages/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
+      // إن كان هذا الـBlob قد رُفع سابقاً (محاولة فشل) أعد استخدام الرابط لتجنب تكرار الملف.
+      let videoUrl: string | null = null;
+      if (uploadedVideoRef.current && uploadedVideoRef.current.blob === previewBlob) {
+        videoUrl = uploadedVideoRef.current.url;
+      }
 
-      await uploadMedia({
-        file: new File([previewBlob], safeName, { type: mimeType, lastModified: Date.now() }),
-        path,
-        preset: 'video',
-        skipCompression: true, // رفع مباشر دون ضغط للفيديوهات المسجلة بالكاميرا
-        onPhase: (phase, percent) => {
-          if (phase === 'uploading' && percent) {
-            // يمكن إضافة مؤشر تقدم هنا
-          }
-        },
-      });
+      if (!videoUrl) {
+        const safeName = `video-${Date.now()}.${extension}`;
+        const path = `${currentUserId}/messages/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
 
-      const { data: publicUrlData } = supabase.storage.from(storageBucket).getPublicUrl(path);
-      const videoUrl = publicUrlData.publicUrl;
+        // uploadMedia يعيد رابط الملف الفعلي الذي رفعه ImageKit — نستخدمه مباشرة.
+        const uploadedUrl = await uploadMedia({
+          file: new File([previewBlob], safeName, { type: mimeType, lastModified: Date.now() }),
+          path,
+          preset: 'video',
+          skipCompression: true, // رفع مباشر دون ضغط للفيديوهات المسجلة بالكاميرا
+          onPhase: (phase, percent) => {
+            if (phase === 'uploading' && percent) {
+              // يمكن إضافة مؤشر تقدم هنا
+            }
+          },
+        });
+        videoUrl = uploadedUrl;
+        uploadedVideoRef.current = { blob: previewBlob, url: uploadedUrl };
+      }
 
       // انتظر اكتمال إدراج الرسالة فعلياً قبل إعلان النجاح أو إغلاق المعاينة.
       // onRecorded يعيد true فقط إذا تم إدراج الرسالة بنجاح؛ false يعني فشلاً ووجوب إعادة المحاولة.
@@ -505,6 +518,7 @@ export default function ChatVideoRecorder({
       }
 
       // نجاح فعلي: أغلق الكاميرا والمعاينة (العرض يعود لمنتقي الوسائط عبر onRecorded).
+      uploadedVideoRef.current = null;
       cleanup();
     } catch (error) {
       // فشل الرفع أو الاتصال: أبقِ المعاينة مفتوحة لإعادة المحاولة.

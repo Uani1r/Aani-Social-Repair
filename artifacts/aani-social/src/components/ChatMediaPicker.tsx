@@ -72,6 +72,8 @@ export default function ChatMediaPicker({
   const objectUrlsRef = useRef(new Set<string>());
   // منع تكرار إرسال الفيديو المسجل (نقرة مزدوجة أو استدعاء متزامن).
   const videoSendInFlightRef = useRef(false);
+  // روابط الفيديوهات (الاستوديو) المرفوعة مسبقاً لكل عنصر — تُعاد استخدامها عند إعادة المحاولة.
+  const uploadedVideoUrlsRef = useRef(new Map<string, string>());
 
   const selectedMedia = useMemo(() => mediaItems.filter(item => selectedIds.includes(item.id)), [mediaItems, selectedIds]);
   const editingPhoto = mediaItems.find(item => item.id === editingPhotoId) || null;
@@ -148,6 +150,7 @@ export default function ChatMediaPicker({
   const closePicker = () => {
     setOpen(false);
     setEditingPhotoId(null);
+    uploadedVideoUrlsRef.current.clear();
     notifyCaptionChange(caption);
   };
 
@@ -254,14 +257,25 @@ export default function ChatMediaPicker({
     let messageInserted = false;
     try {
       const uploadResults = await Promise.allSettled(selectedMediaSnapshot.map(async (item, index) => {
+        // فيديوهات الاستوديو: أعد استخدام الرابط المرفوع مسبقاً عند إعادة المحاولة
+        // لتجنب رفع ملف مكرر إلى ImageKit.
+        if (item.type === 'video') {
+          const cachedUrl = uploadedVideoUrlsRef.current.get(item.id);
+          if (cachedUrl) return cachedUrl;
+        }
         const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || (item.type === 'video' ? 'video.mp4' : 'photo.jpg');
         const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
         const preset = item.type === 'video' ? 'video' : 'chatImage';
         // فيديوهات المحادثات (من الاستوديو أو الكاميرا): رفع مباشر دون ضغط
         // الصور: ضغط دائم كما هو محدد في preset chatImage
         const skipCompression = item.type === 'video';
-        await uploadMedia({ file: item.file, path, preset, quality: hdSnapshot ? 'hd' : 'data-saving', skipCompression });
+        // uploadMedia يعيد رابط الملف الفعلي الذي رفعه ImageKit — نستخدمه مباشرة للفيديو.
+        const uploadedUrl = await uploadMedia({ file: item.file, path, preset, quality: hdSnapshot ? 'hd' : 'data-saving', skipCompression });
         uploadedPaths.push(path);
+        if (item.type === 'video') {
+          uploadedVideoUrlsRef.current.set(item.id, uploadedUrl);
+          return uploadedUrl;
+        }
         return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
       }));
       const failedUpload = uploadResults.find(result => result.status === 'rejected');
@@ -281,6 +295,7 @@ export default function ChatMediaPicker({
       await new Promise(resolve => window.setTimeout(resolve, 200));
       await onSent?.(pendingMessage.id, recipientIdSnapshot);
       releaseLocalUrls();
+      uploadedVideoUrlsRef.current.clear();
 
       mediaSnapshot.forEach(item => {
         URL.revokeObjectURL(item.url);
@@ -295,6 +310,7 @@ export default function ChatMediaPicker({
     } catch (error) {
       if (messageInserted) {
         releaseLocalUrls();
+        uploadedVideoUrlsRef.current.clear();
         mediaSnapshot.forEach(item => {
           URL.revokeObjectURL(item.url);
           objectUrlsRef.current.delete(item.url);
