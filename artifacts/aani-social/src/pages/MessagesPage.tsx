@@ -1107,6 +1107,7 @@ export default function MessagesPage({
   }
   const inboxTypingChannelsRef = useRef(new Map<string, ReturnType<typeof supabase.channel>>());
   const inboxTypingEpochRef = useRef(realtimeEpoch);
+  const inboxTypingUserRef = useRef(currentUserId);
   const lifecycleResyncAtRef = useRef(0);
   const realtimeMessageRevisionRef = useRef(0);
   const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
@@ -3451,9 +3452,10 @@ export default function MessagesPage({
     const channels = inboxTypingChannelsRef.current;
     const tracker = typingInboxTrackerRef.current;
 
-    // epoch جديد يعني أن القنوات أُغلقت: نعيد إنشاءها من الصفر.
-    if (inboxTypingEpochRef.current !== realtimeEpoch) {
+    // epoch جديد أو مستخدم آخر يعني أن القنوات السابقة لم تعد صالحة.
+    if (inboxTypingEpochRef.current !== realtimeEpoch || inboxTypingUserRef.current !== currentUserId) {
       inboxTypingEpochRef.current = realtimeEpoch;
+      inboxTypingUserRef.current = currentUserId;
       channels.forEach(channel => { void supabase.removeChannel(channel); });
       channels.clear();
       tracker?.clearAll();
