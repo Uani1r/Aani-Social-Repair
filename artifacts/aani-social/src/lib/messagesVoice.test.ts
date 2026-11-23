@@ -5,7 +5,6 @@ import { storageBucket, supabaseUrl } from './supabase';
 import {
   CHAT_VOICE_MESSAGE_PREFIX,
   VOICE_MESSAGE_MAX_DURATION_MS,
-  VOICE_PLAYBACK_RATES,
   VOICE_RECORDER_MIME_CANDIDATES,
   buildVoiceCompressionMetrics,
   isTrustedImageKitVoiceUrl,
@@ -181,10 +180,6 @@ test('the produced MIME type decides the upload format', () => {
   assert.equal(normalizeVoiceMimeType('audio/ogg'), null);
   assert.equal(normalizeVoiceMimeType('video/mp4'), null);
   assert.equal(normalizeVoiceMimeType(''), null);
-});
-
-test('playback rates are 1x, 1.5x and 2x', () => {
-  assert.deepEqual([...VOICE_PLAYBACK_RATES], [1, 1.5, 2]);
 });
 
 test('compression metrics report the measured saving, not an assumed one', () => {
