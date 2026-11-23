@@ -12,10 +12,10 @@ import {
 
 export interface MessagesConversationChannelOptions<TChannel extends object> {
   /**
-   * يتحقق من العضوية (RPC) قبل إنشاء القناة. يستقبل مسبار إلغاء الجلسة، فلا
-   * تُستأنف إعادة المحاولة بعد مغادرة المحادثة أو إغلاق الاشتراك.
+   * يتحقق من العضوية (RPC) قبل إنشاء القناة. يستقبل إشارة إلغاء الجلسة، فيقطع
+   * انتظار المحاولة أو الطلب الجاري فوراً عند مغادرة المحادثة أو إغلاقها.
    */
-  ensureMembership: (isCancelled: () => boolean) => Promise<boolean>;
+  ensureMembership: (signal: AbortSignal) => Promise<boolean>;
   /** ينشئ القناة ويربط مستمعيها ثم يشترك، ويبلّغ onStatus بحالة الاشتراك. */
   createChannel: (onStatus: (status: string, error?: unknown) => void) => TChannel;
   onSubscribed: (channel: TChannel) => void;
@@ -56,6 +56,8 @@ export function openMessagesConversationChannel<TChannel extends object>(
   let attempt = 0;
   let current: TChannel | null = null;
   let retryTimer: unknown = null;
+  // إلغاء انتظار العضوية فوراً عند مغادرة المحادثة، لا بعد انتهاء تأخير المحاولة.
+  const membershipAbort = new AbortController();
 
   const dropCurrent = () => {
     const channel = current;
@@ -82,7 +84,7 @@ export function openMessagesConversationChannel<TChannel extends object>(
 
     let ready = false;
     try {
-      ready = await ensureMembership(() => cancelled);
+      ready = await ensureMembership(membershipAbort.signal);
     } catch {
       ready = false;
     }
@@ -125,6 +127,8 @@ export function openMessagesConversationChannel<TChannel extends object>(
   return {
     cancel() {
       cancelled = true;
+      // يقطع انتظار العضوية وطلبها الجاري فوراً.
+      membershipAbort.abort();
       if (retryTimer !== null) {
         clearTimer(retryTimer);
         retryTimer = null;

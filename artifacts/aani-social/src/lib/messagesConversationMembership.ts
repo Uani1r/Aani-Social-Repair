@@ -6,10 +6,14 @@
 // من هوية الطرفين وقاعدة الحجب نفسها المطبَّقة في سياسة إرسال الرسائل، ويكتب
 // السجل مرة واحدة (idempotent).
 //
-// الشبكة قد تنقطع لحظة الفتح، وكان فشل واحد يُعطّل المؤشر حتى مغادرة الصفحة.
+// الشبكة قد تنقطع لحظة الفتح، فكان فشل واحد يُعطّل المؤشر حتى مغادرة الصفحة.
 // لذلك تُعاد المحاولة عند أخطاء الاتصال المؤقتة فقط، بثلاث محاولات إضافية
 // وتأخيرات متدرجة. أخطاء الصلاحيات والحجب والدالة غير المثبّتة لا تُعاد أبداً:
 // تكرارها لا ينجح وقد يُغرق الطلبات.
+//
+// الإلغاء (مغادرة المحادثة أو تسجيل الخروج) يقطع الانتظار فوراً — لا ينتظر
+// انتهاء تأخير المحاولة ولا نتيجة RPC التي بدأت قبل الإلغاء. ونتيجة أي طلب
+// تابع لجلسة سابقة لا تُخزَّن ولا تمسّ الجلسة الجديدة.
 //
 // لا تُخزَّن أي حالة في قاعدة البيانات هنا غير سجل العضوية نفسه، ولا تُوسَّع
 // صلاحيات: القناة تبقى private: true والسياسات كما هي.
@@ -123,17 +127,64 @@ export function classifyMessagesMembershipFailure(error: unknown): 'transient' |
   return 'permanent';
 }
 
-function defaultDelay(delayMs: number): Promise<void> {
+/**
+ * انتظار مهلة المحاولة، لكنه ينتهي فوراً عند إلغاء الإشارة بدل انتظار انتهاء
+ * الـ600/1500/3500ms كاملة.
+ */
+function waitForRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    return new Promise<void>(resolve => {
+      setTimeout(resolve, delayMs);
+    });
+  }
+  if (signal.aborted) return Promise.resolve();
+
   return new Promise<void>(resolve => {
-    globalThis.setTimeout(resolve, delayMs);
+    const finish = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, delayMs);
+    signal.addEventListener('abort', finish, { once: true });
+  });
+}
+
+/**
+ * استدعاء RPC مع إمكانية التخلي عنه فوراً عند الإلغاء: الوعد المُعاد يتحول إلى
+ * 'aborted' مباشرة، ونتيجة الطلب الأصلي تُهمَل عند وصولها (لا تُخزَّن ولا تُطبَّق).
+ */
+function callUntilAborted(
+  call: () => Promise<MessagesMembershipOutcome>,
+  signal?: AbortSignal,
+): Promise<MessagesMembershipOutcome | 'aborted'> {
+  if (!signal) {
+    return call().catch(() => 'permanent' as const);
+  }
+  if (signal.aborted) return Promise.resolve('aborted');
+
+  return new Promise<MessagesMembershipOutcome | 'aborted'>(resolve => {
+    let settled = false;
+    const settle = (value: MessagesMembershipOutcome | 'aborted') => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(value);
+    };
+    const onAbort = () => settle('aborted');
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    call().then(
+      outcome => settle(outcome),
+      () => settle('permanent'),
+    );
   });
 }
 
 export interface MessagesMembershipRetryOptions {
-  /** إلغاء الجلسة (مغادرة الصفحة/تبديل المحادثة): لا محاولة جديدة بعدها. */
-  isCancelled?: () => boolean;
+  /** إلغاء الجلسة (مغادرة الصفحة/تبديل المحادثة/الخروج). */
+  signal?: AbortSignal;
   retryDelaysMs?: readonly number[];
-  sleep?: (delayMs: number) => Promise<void>;
   onGiveUp?: () => void;
   /** حقن الاستدعاء في الاختبارات؛ الإنتاج يستخدم RPC أدناه. */
   call?: () => Promise<MessagesMembershipOutcome>;
@@ -141,29 +192,24 @@ export interface MessagesMembershipRetryOptions {
 
 /**
  * محاولة واحدة ثم إعادات محدودة عند الأخطاء المؤقتة فقط. بلا حلقة لا نهائية:
- * بعد استنفاد التأخيرات تتوقف المحاولات. الإلغاء يُفحص قبل كل محاولة وبينها،
- * فيتوقف العمل فوراً عند الخروج أو تبديل الحساب.
+ * بعد استنفاد التأخيرات تتوقف المحاولات. الإلغاء يقطع الانتظار أو الطلب الجاري
+ * فوراً ويتحول إلى نتيجة سلبية دون أي محاولة إضافية.
  */
 export async function ensureMessagesMembershipWithRetry(
   call: () => Promise<MessagesMembershipOutcome>,
   options: Omit<MessagesMembershipRetryOptions, 'call'> = {},
 ): Promise<boolean> {
   const {
-    isCancelled = () => false,
+    signal,
     retryDelaysMs = MESSAGES_MEMBERSHIP_RETRY_DELAYS_MS,
-    sleep = defaultDelay,
     onGiveUp,
   } = options;
 
   for (let attempt = 0; ; attempt += 1) {
-    if (isCancelled()) return false;
+    if (signal?.aborted) return false;
 
-    let outcome: MessagesMembershipOutcome;
-    try {
-      outcome = await call();
-    } catch {
-      outcome = 'permanent';
-    }
+    const outcome = await callUntilAborted(call, signal);
+    if (outcome === 'aborted' || signal?.aborted) return false;
 
     if (outcome === 'ready') return true;
     // خطأ دائم: لا إعادة محاولة على الصلاحيات أو الحجب أو الدالة الغائبة.
@@ -174,16 +220,25 @@ export async function ensureMessagesMembershipWithRetry(
       return false;
     }
 
-    if (isCancelled()) return false;
-    await sleep(retryDelaysMs[attempt]);
+    await waitForRetry(retryDelaysMs[attempt], signal);
+    if (signal?.aborted) return false;
   }
 }
 
 const knownMembers = new Set<string>();
-const inFlight = new Map<string, Promise<boolean>>();
+
+interface InFlightEntry {
+  /** الجيل الذي أنشأ الطلب: طلب جيل سابق لا يُعاد استخدامه لجلسة جديدة. */
+  epoch: number;
+  promise: Promise<boolean>;
+}
+
+const inFlight = new Map<string, InFlightEntry>();
 let cacheOwner: string | null = null;
 // جيل يزداد مع كل إفراغ: محاولة بدأت قبل الخروج أو تبديل الحساب تتوقف فوراً.
 let membershipEpoch = 0;
+// إشارة إلغاء واحدة لكل جيل: إفراغ الذاكرة يقطع كل الطلبات الجارية فوراً.
+let epochController = new AbortController();
 
 /** إفراغ الذاكرة المحلية للعضوية عند تبديل المستخدم أو الخروج. */
 export function resetMessagesConversationMembershipCache(ownerId?: string | null): void {
@@ -191,6 +246,37 @@ export function resetMessagesConversationMembershipCache(ownerId?: string | null
   cacheOwner = ownerId || null;
   knownMembers.clear();
   inFlight.clear();
+
+  const previous = epochController;
+  epochController = new AbortController();
+  previous.abort();
+}
+
+/** دمج إشارتي إلغاء (الطلب والجيل) في إشارة واحدة، مع تنظيف المستمعين. */
+function linkAbortSignals(signals: Array<AbortSignal | undefined>): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const removers: Array<() => void> = [];
+  const abort = () => controller.abort();
+
+  for (const source of signals) {
+    if (!source) continue;
+    if (source.aborted) {
+      abort();
+      break;
+    }
+    source.addEventListener('abort', abort, { once: true });
+    removers.push(() => source.removeEventListener('abort', abort));
+  }
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const remove of removers) remove();
+    },
+  };
 }
 
 /** استدعاء RPC العضوية مرة واحدة وتصنيف نتيجته. */
@@ -229,30 +315,39 @@ export async function ensureMessagesConversationMembership(
   const key = messagesConversationMembershipKey(userId, contactId);
   if (knownMembers.has(key)) return true;
 
-  // طلب جارٍ للزوج نفسه: نشاركه بدل إرسال RPC ثانٍ.
-  const pending = inFlight.get(key);
-  if (pending) return pending;
-
   const epoch = membershipEpoch;
-  const callerCancelled = options.isCancelled ?? (() => false);
+  const pending = inFlight.get(key);
+  if (pending) {
+    // طلب جارٍ للجيل نفسه: نشاركه بدل إرسال RPC ثانٍ.
+    // طلب جيل سابق (جلسة أُلغيت) لا يُعاد استخدامه أبداً لجلسة جديدة.
+    if (pending.epoch === epoch) return pending.promise;
+    inFlight.delete(key);
+  }
+
+  const { signal, dispose } = linkAbortSignals([options.signal, epochController.signal]);
+  if (signal.aborted) {
+    dispose();
+    return false;
+  }
+
   const call = options.call ?? (() => callMembershipRpc(contactId));
-  // الخروج أو تبديل الحساب يُبطل كل محاولة بدأت قبله.
-  const isCancelled = () => callerCancelled() || membershipEpoch !== epoch;
 
   const run = async (): Promise<boolean> => {
     let gaveUp = false;
     const ready = await ensureMessagesMembershipWithRetry(call, {
+      signal,
       retryDelaysMs: options.retryDelaysMs,
-      sleep: options.sleep,
-      isCancelled,
       onGiveUp: () => {
         gaveUp = true;
         options.onGiveUp?.();
       },
     });
 
+    // إعادة فحص الإلغاء بعد عودة RPC وقبل أي تخزين: عضوية طلب أُلغي لا تُحفظ.
+    if (signal.aborted || membershipEpoch !== epoch) return false;
+
     if (!ready) {
-      if (gaveUp && !isCancelled()) {
+      if (gaveUp) {
         // بلا تفاصيل خطأ: قد تحمل معرّفات. القناة تبقى غير مشتركة بأمان.
         console.warn('[messages] تعذر تجهيز عضوية المحادثة قبل الاشتراك في قناتها.');
       }
@@ -263,13 +358,18 @@ export async function ensureMessagesConversationMembership(
     return true;
   };
 
-  const request = run();
-  inFlight.set(key, request);
-  // لا يبقى الوعد عالقاً في inFlight بعد النجاح أو الفشل أو الإلغاء.
-  const cleanup = () => {
-    if (inFlight.get(key) === request) inFlight.delete(key);
-  };
-  void request.then(cleanup, cleanup);
+  const promise = run();
+  const entry: InFlightEntry = { epoch, promise };
+  inFlight.set(key, entry);
 
-  return request;
+  // الطلب الملغى يُزال فوراً من inFlight، فلا تعيد محادثة أُعيد فتحها استخدامه.
+  const cleanup = () => {
+    dispose();
+    signal.removeEventListener('abort', cleanup);
+    if (inFlight.get(key) === entry) inFlight.delete(key);
+  };
+  signal.addEventListener('abort', cleanup, { once: true });
+  void promise.then(cleanup, cleanup);
+
+  return promise;
 }

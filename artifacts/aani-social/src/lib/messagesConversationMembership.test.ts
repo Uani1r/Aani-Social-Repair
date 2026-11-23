@@ -13,6 +13,7 @@ import {
   messagesConversationMembershipKey,
   nextMessagesConversationChannelRetryDelay,
   resetMessagesConversationMembershipCache,
+  type MessagesMembershipOutcome,
 } from './messagesConversationMembership';
 
 const srcRoot = new URL('..', import.meta.url);
@@ -101,37 +102,29 @@ test('the migration file is present for review but not required by the build', (
   assert.equal(exists('../supabase/migrations/20270304000000_aani_ensure_message_conversation_membership.sql'), true);
 });
 
-
-
 // ===== إعادة محاولة تجهيز العضوية =====
 
-const noSleep = async (): Promise<void> => undefined;
+const userKey = (suffix: string) => `00000000-0000-0000-0000-0000000000${suffix}`;
 
 test('membership retries are bounded to three extra attempts', () => {
   assert.deepEqual([...MESSAGES_MEMBERSHIP_RETRY_DELAYS_MS], [600, 1_500, 3_500]);
   assert.equal(MESSAGES_MEMBERSHIP_RETRY_DELAYS_MS.length, 3);
 });
 
-test('a ready RPC succeeds on the first attempt without sleeping', async () => {
+test('a ready RPC succeeds on the first attempt', async () => {
   let calls = 0;
-  let slept = 0;
 
-  const ready = await ensureMessagesMembershipWithRetry(
-    async () => {
-      calls += 1;
-      return 'ready';
-    },
-    { sleep: async () => { slept += 1; } },
-  );
+  const ready = await ensureMessagesMembershipWithRetry(async () => {
+    calls += 1;
+    return 'ready';
+  });
 
   assert.equal(ready, true);
   assert.equal(calls, 1);
-  assert.equal(slept, 0);
 });
 
 test('a transient failure is retried and succeeds on the next attempt', async () => {
   const outcomes: Array<'transient' | 'ready'> = ['transient', 'ready'];
-  const delays: number[] = [];
   let calls = 0;
 
   const ready = await ensureMessagesMembershipWithRetry(
@@ -140,53 +133,41 @@ test('a transient failure is retried and succeeds on the next attempt', async ()
       calls += 1;
       return outcome;
     },
-    { sleep: async delayMs => { delays.push(delayMs); } },
+    { retryDelaysMs: [1] },
   );
 
   assert.equal(ready, true);
   assert.equal(calls, 2);
-  // أول تأخير فقط، ثم نجحت المحاولة.
-  assert.deepEqual(delays, [600]);
 });
 
 test('persistent transient failures stop after the bounded attempts', async () => {
   let calls = 0;
   let gaveUp = 0;
-  const delays: number[] = [];
 
   const ready = await ensureMessagesMembershipWithRetry(
     async () => {
       calls += 1;
       return 'transient';
     },
-    {
-      sleep: async delayMs => { delays.push(delayMs); },
-      onGiveUp: () => { gaveUp += 1; },
-    },
+    { retryDelaysMs: [1, 1, 1], onGiveUp: () => { gaveUp += 1; } },
   );
 
   assert.equal(ready, false);
   // المحاولة الأولى + ثلاث إعادات.
   assert.equal(calls, 4);
-  assert.deepEqual(delays, [600, 1_500, 3_500]);
   assert.equal(gaveUp, 1);
 });
 
 test('a permanent failure is never retried', async () => {
   let calls = 0;
-  let slept = 0;
 
-  const ready = await ensureMessagesMembershipWithRetry(
-    async () => {
-      calls += 1;
-      return 'permanent';
-    },
-    { sleep: async () => { slept += 1; } },
-  );
+  const ready = await ensureMessagesMembershipWithRetry(async () => {
+    calls += 1;
+    return 'permanent';
+  });
 
   assert.equal(ready, false);
   assert.equal(calls, 1);
-  assert.equal(slept, 0);
 });
 
 test('permission, block and missing-RPC errors are classified as permanent', () => {
@@ -220,33 +201,27 @@ test('an unknown failure is treated as permanent instead of being retried', asyn
   assert.equal(classifyMessagesMembershipFailure({ code: 'XX000' }), 'permanent');
 
   let calls = 0;
-  const ready = await ensureMessagesMembershipWithRetry(
-    async () => {
-      calls += 1;
-      return classifyMessagesMembershipFailure({ code: 'XX000' });
-    },
-    { sleep: noSleep },
-  );
+  const ready = await ensureMessagesMembershipWithRetry(async () => {
+    calls += 1;
+    return classifyMessagesMembershipFailure({ code: 'XX000' });
+  });
   assert.equal(ready, false);
   assert.equal(calls, 1);
 });
 
 test('a throwing RPC call is treated as a permanent failure, not an unhandled rejection', async () => {
   let calls = 0;
-  const ready = await ensureMessagesMembershipWithRetry(
-    async () => {
-      calls += 1;
-      throw new Error('unexpected');
-    },
-    { sleep: noSleep },
-  );
+  const ready = await ensureMessagesMembershipWithRetry(async () => {
+    calls += 1;
+    throw new Error('unexpected');
+  });
   assert.equal(ready, false);
   assert.equal(calls, 1);
 });
 
 test('concurrent membership requests for one conversation share a single RPC call', async () => {
-  const user = '00000000-0000-0000-0000-0000000000d1';
-  const contact = '00000000-0000-0000-0000-0000000000d2';
+  const user = userKey('d1');
+  const contact = userKey('d2');
   let calls = 0;
   const call = async (): Promise<'ready'> => {
     calls += 1;
@@ -269,8 +244,8 @@ test('concurrent membership requests for one conversation share a single RPC cal
 });
 
 test('a failed membership is not cached and leaves nothing pending', async () => {
-  const user = '00000000-0000-0000-0000-0000000000e1';
-  const contact = '00000000-0000-0000-0000-0000000000e2';
+  const user = userKey('e1');
+  const contact = userKey('e2');
   let calls = 0;
   const call = async (): Promise<'permanent'> => {
     calls += 1;
@@ -285,67 +260,187 @@ test('a failed membership is not cached and leaves nothing pending', async () =>
   assert.equal(calls, 2);
 });
 
-test('membership retries stop as soon as the caller cancels', async () => {
-  let calls = 0;
-  let cancelled = false;
+test('an already-cancelled caller never starts a membership attempt', async () => {
+  const controller = new AbortController();
+  controller.abort();
 
-  const ready = await ensureMessagesMembershipWithRetry(
-    async () => {
-      calls += 1;
-      return 'transient';
-    },
-    {
-      isCancelled: () => cancelled,
-      sleep: async () => {
-        // المستخدم غادر أثناء انتظار المحاولة التالية.
-        cancelled = true;
-      },
-    },
-  );
-
-  assert.equal(ready, false);
-  assert.equal(calls, 1);
-});
-
-test('logging out during a retry wait stops the in-flight attempt', async () => {
-  const user = '00000000-0000-0000-0000-0000000000f1';
-  const contact = '00000000-0000-0000-0000-0000000000f2';
-  let calls = 0;
-
-  const ready = await ensureMessagesConversationMembership(user, contact, {
-    call: async () => {
-      calls += 1;
-      return 'transient';
-    },
-    sleep: async () => {
-      // خروج/تبديل حساب أثناء الانتظار: الجيل يتغيّر فوراً.
-      resetMessagesConversationMembershipCache(null);
-    },
-  });
-
-  assert.equal(ready, false);
-  assert.equal(calls, 1);
-});
-
-test('a cancelled caller never starts a membership attempt', async () => {
   let calls = 0;
   const ready = await ensureMessagesMembershipWithRetry(
     async () => {
       calls += 1;
       return 'ready';
     },
-    { isCancelled: () => true, sleep: noSleep },
+    { signal: controller.signal },
   );
+
   assert.equal(ready, false);
   assert.equal(calls, 0);
 });
 
-test('the page forwards its cancellation probe into the membership retries', () => {
+test('a pending retry wait is aborted immediately, not after the delay', async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  const startedAt = Date.now();
+
+  const pending = ensureMessagesMembershipWithRetry(
+    async () => {
+      calls += 1;
+      return 'transient';
+    },
+    { signal: controller.signal, retryDelaysMs: [60_000] },
+  );
+  setTimeout(() => controller.abort(), 5);
+
+  assert.equal(await pending, false);
+  assert.equal(calls, 1);
+  // التأخير المُهيَّأ دقيقة كاملة: العودة السريعة تعني أن الانتظار قُطع فعلاً.
+  assert.ok(Date.now() - startedAt < 2_000, 'the retry wait must resolve on abort');
+});
+
+test('cancelling during the RPC resolves at once and ignores the late result', async () => {
+  const controller = new AbortController();
+  let settle: ((outcome: MessagesMembershipOutcome) => void) | null = null;
+  let calls = 0;
+
+  const pending = ensureMessagesMembershipWithRetry(
+    () => new Promise<MessagesMembershipOutcome>(resolve => {
+      calls += 1;
+      settle = resolve;
+    }),
+    { signal: controller.signal },
+  );
+
+  // ننتظر حتى يبدأ RPC فعلاً ثم نلغي.
+  await Promise.resolve();
+  controller.abort();
+
+  assert.equal(await pending, false);
+  assert.equal(calls, 1);
+
+  // وصول النتيجة المتأخرة لا يغيّر أي شيء.
+  settle!('ready');
+  await Promise.resolve();
+  assert.equal(calls, 1);
+});
+
+test('a cancelled request is never cached for the next session', async () => {
+  const user = userKey('b1');
+  const contact = userKey('b2');
+  let settleOld: ((outcome: MessagesMembershipOutcome) => void) | null = null;
+  let oldCalls = 0;
+
+  const old = ensureMessagesConversationMembership(user, contact, {
+    call: () => new Promise<MessagesMembershipOutcome>(resolve => {
+      oldCalls += 1;
+      settleOld = resolve;
+    }),
+  });
+
+  // تسجيل الخروج أثناء RPC الجاري.
+  resetMessagesConversationMembershipCache(null);
+  assert.equal(await old, false);
+
+  // النتيجة القديمة تصل بعد الخروج: يجب ألا تُحفظ عضوية لها.
+  settleOld!('ready');
+  await Promise.resolve();
+
+  // عودة المستخدم: RPC جديدة تُستدعى فعلاً (لو خُزِّنت القديمة لما استُدعيت).
+  let freshCalls = 0;
+  const fresh = await ensureMessagesConversationMembership(user, contact, {
+    call: async () => {
+      freshCalls += 1;
+      return 'permanent';
+    },
+  });
+
+  assert.equal(fresh, false);
+  assert.equal(freshCalls, 1);
+  assert.equal(oldCalls, 1);
+});
+
+test('reopening the conversation before the old RPC finishes starts a new request', async () => {
+  const user = userKey('c1');
+  const contact = userKey('c2');
+  const firstSession = new AbortController();
+  let settleOld: ((outcome: MessagesMembershipOutcome) => void) | null = null;
+  let oldCalls = 0;
+
+  const old = ensureMessagesConversationMembership(user, contact, {
+    signal: firstSession.signal,
+    call: () => new Promise<MessagesMembershipOutcome>(resolve => {
+      oldCalls += 1;
+      settleOld = resolve;
+    }),
+  });
+
+  // إغلاق المحادثة (إلغاء الجلسة) ثم فتحها فوراً من جديد.
+  firstSession.abort();
+  assert.equal(await old, false);
+
+  let newCalls = 0;
+  const reopened = await ensureMessagesConversationMembership(user, contact, {
+    call: async () => {
+      newCalls += 1;
+      return 'ready';
+    },
+  });
+
+  assert.equal(reopened, true);
+  // طلب جديد تماماً، لا إعادة استخدام لوعد مرتبط بالإشارة القديمة.
+  assert.equal(oldCalls, 1);
+  assert.equal(newCalls, 1);
+
+  // النتيجة القديمة المتأخرة لا تمسّ العضوية المخزّنة من الجلسة الجديدة.
+  settleOld!('ready');
+  await Promise.resolve();
+
+  let afterCalls = 0;
+  const after = await ensureMessagesConversationMembership(user, contact, {
+    call: async () => {
+      afterCalls += 1;
+      return 'permanent';
+    },
+  });
+  assert.equal(after, true);
+  assert.equal(afterCalls, 0);
+});
+
+test('logging out during a retry wait stops the in-flight attempt', async () => {
+  const user = userKey('f1');
+  const contact = userKey('f2');
+  let calls = 0;
+
+  const ready = ensureMessagesConversationMembership(user, contact, {
+    call: async () => {
+      calls += 1;
+      return 'transient';
+    },
+    retryDelaysMs: [60_000],
+  });
+
+  // خروج/تبديل حساب أثناء الانتظار: الجيل يتغيّر فيُقطع الانتظار فوراً.
+  setTimeout(() => resetMessagesConversationMembershipCache(null), 5);
+
+  assert.equal(await ready, false);
+  assert.equal(calls, 1);
+});
+
+test('the page forwards its cancellation signal into the membership retries', () => {
   const messagesPage = read('./pages/MessagesPage.tsx');
-  // القناتان (الخيط والقائمة) تمرران مسبار الإلغاء نفسه.
+  // القناتان (الخيط والقائمة) تمرران إشارة الإلغاء نفسها.
   assert.equal(
     messagesPage.split('ensureMessagesConversationMembership(currentUserId,').length - 1,
     2,
   );
-  assert.equal(messagesPage.split('{ isCancelled }').length - 1, 2);
+  assert.equal(messagesPage.split('{ signal }').length - 1, 2);
+});
+
+test('the auth lifecycle resets the membership cache on sign-out and account switch', () => {
+  const appSession = read('./hooks/useAppSession.ts');
+  assert.equal(appSession.includes('resetMessagesConversationMembershipCache'), true);
+  // قبل تطبيق الجلسة الجديدة، وقبل مسح الجلسة عند الخروج.
+  assert.equal(
+    appSession.split('syncMembershipOwner(').length - 1 >= 4,
+    true,
+  );
 });

@@ -235,16 +235,16 @@ test('cancelling clears a pending retry and removes the live channel', async () 
 
 
 
-test('the membership step receives the session cancellation probe', async () => {
+test('the membership step receives the session cancellation signal', async () => {
   const scheduler = createScheduler();
-  let probe: (() => boolean) | null = null;
+  let probe: AbortSignal | null = null;
   let ensured = 0;
   let created = 0;
 
   const session = openMessagesConversationChannel<FakeChannel>({
-    ensureMembership: async isCancelled => {
+    ensureMembership: async signal => {
       ensured += 1;
-      probe = isCancelled;
+      probe = signal;
       return true;
     },
     createChannel: () => {
@@ -261,12 +261,12 @@ test('the membership step receives the session cancellation probe', async () => 
   await tick();
   assert.equal(ensured, 1);
   assert.equal(created, 1);
-  assert.ok(probe, 'the cancellation probe must be handed to the membership step');
-  assert.equal(probe!(), false);
+  assert.ok(probe, 'the cancellation signal must be handed to the membership step');
+  assert.equal(probe!.aborted, false);
 
   session.cancel();
-  // بعد الإلغاء يرى مسار العضوية أنه أُلغي، فلا يُستأنف أي انتظار لإعادة المحاولة.
-  assert.equal(probe!(), true);
+  // بعد الإلغاء ترى إشارة العضوية أنه أُلغي، فلا يُستأنف أي انتظار لإعادة المحاولة.
+  assert.equal(probe!.aborted, true);
 });
 
 test('no private channel exists while the membership is still unresolved', async () => {

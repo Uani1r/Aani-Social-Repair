@@ -2493,7 +2493,7 @@ export default function MessagesPage({
     // العضوية أولاً: لا اشتراك في القناة الخاصة قبل تأكيد سجل المحادثة، فلا
     // يُرفض الانضمام بعد فتح محادثة جديدة قبل أول رسالة.
     const session = openMessagesConversationChannel<ReturnType<typeof supabase.channel>>({
-      ensureMembership: isCancelled => ensureMessagesConversationMembership(currentUserId, conversationId, { isCancelled }),
+      ensureMembership: signal => ensureMessagesConversationMembership(currentUserId, conversationId, { signal }),
       isCancelled: () => removedByUs,
       removeChannel: channel => { void supabase.removeChannel(channel); },
       createChannel: onStatus => supabase.channel(topic, {
@@ -3505,7 +3505,7 @@ export default function MessagesPage({
       if (contactId === currentUserId || contactId === selectedId) continue;
       if (sessions.has(contactId)) continue;
       const session = openMessagesConversationChannel<ReturnType<typeof supabase.channel>>({
-        ensureMembership: isCancelled => ensureMessagesConversationMembership(currentUserId, contactId, { isCancelled }),
+        ensureMembership: signal => ensureMessagesConversationMembership(currentUserId, contactId, { signal }),
         removeChannel: channel => { void supabase.removeChannel(channel); },
         createChannel: onStatus => supabase
           .channel(messagesConversationTopic(currentUserId, contactId), {
