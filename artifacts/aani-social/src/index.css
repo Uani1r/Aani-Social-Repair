@@ -6766,31 +6766,22 @@ body.aani-immersive .unified-top-bar {
 }
 
 .messages-voice-bubble {
-  max-width: min(86vw, 360px);
+  width: auto;
+  max-width: min(68%, 230px);
   white-space: normal;
+}
+
+/* الواردة تبقى بعيداً عن الصورة الرمزية، وبالعرض المدمج نفسه */
+.messages-message-row.is-theirs .messages-voice-bubble {
+  max-width: min(calc(100% - 44px), 68%, 230px);
 }
 
 .messages-voice-line {
   display: flex;
-  width: 100%;
   min-width: 0;
   align-items: center;
   gap: 8px;
   direction: ltr;
-}
-
-.messages-voice-player {
-  display: flex;
-  min-width: 0;
-  flex: 1 1 auto;
-  align-items: center;
-  gap: 6px;
-  direction: ltr;
-  color: rgb(255 255 255 / 78%);
-}
-
-.messages-voice-player > svg {
-  flex: 0 0 auto;
 }
 
 .messages-voice-play {
@@ -6825,7 +6816,7 @@ body.aani-immersive .unified-top-bar {
 
 .messages-voice-timeline {
   display: flex;
-  min-width: 0;
+  min-width: 96px;
   flex: 1 1 auto;
   align-items: center;
   gap: 5px;
@@ -6883,7 +6874,6 @@ body.aani-immersive .unified-top-bar {
   background: #fff;
 }
 
-.messages-voice-elapsed,
 .messages-voice-duration {
   flex: 0 0 auto;
   color: rgb(255 255 255 / 70%);
@@ -6952,40 +6942,6 @@ body.aani-immersive .unified-top-bar {
 .messages-voice-retry-discard:disabled {
   opacity: .65;
   cursor: wait;
-}
-
-.messages-voice-rate-group {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-  direction: ltr;
-}
-
-.messages-voice-rate {
-  min-width: 26px;
-  padding: 2px 4px;
-  border: 0;
-  border-radius: 999px;
-  color: rgb(255 255 255 / 62%);
-  background: transparent;
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
-  line-height: 1.4;
-  cursor: pointer;
-}
-
-.messages-voice-rate:hover,
-.messages-voice-rate:focus-visible {
-  outline: none;
-  color: #fff;
-  background: rgb(255 255 255 / 14%);
-}
-
-.messages-voice-rate.is-active {
-  color: #06210f;
-  background: #7fe0a6;
-  font-weight: 700;
 }
 
 .messages-voice-spinner {
@@ -7362,10 +7318,6 @@ select,
   border-radius: 12px;
   padding: 10px;
   background: rgba(255, 255, 255, .035);
-}
-
-.messages-sheet-voice-entry .messages-voice-player {
-  width: 100%;
 }
 
 .messages-sheet-empty {

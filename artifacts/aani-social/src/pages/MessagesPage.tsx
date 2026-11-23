@@ -24,7 +24,6 @@ import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
 import {
   CHAT_VOICE_MESSAGE_PREFIX,
-  VOICE_PLAYBACK_RATES,
   VOICE_RECORDER_BITS_PER_SECOND,
   VOICE_RECORDER_MIME_CANDIDATES,
   normalizeVoiceMimeType,
@@ -32,8 +31,8 @@ import {
   pickVoiceRecorderMimeType,
   voiceMessageContent,
   type VoiceMessagePayload,
-  type VoicePlaybackRate,
 } from '@/lib/messagesVoice';
+import { claimVoicePlayback, toggleVoicePlayback } from '@/lib/messagesVoicePlayback';
 import { prepareVoiceMessageSource } from '@/lib/messagesVoiceServer';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
@@ -299,27 +298,44 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const [hasError, setHasError] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [mediaDurationMs, setMediaDurationMs] = useState(0);
-  const [playbackRate, setPlaybackRate] = useState<VoicePlaybackRate>(1);
   const loadingTimeoutRef = useRef<number | null>(null);
+  const releaseClaimRef = useRef<(() => void) | null>(null);
   // مدة التسجيل الحقيقية المقاسة عند التسجيل أولاً؛ ومدة الوسيط بديل عند غيابها.
   const totalDurationMs = durationMs > 0 ? durationMs : mediaDurationMs;
 
-  const clearLoadingTimeout = () => {
+  const clearLoadingTimeout = useCallback(() => {
     if (loadingTimeoutRef.current !== null) window.clearTimeout(loadingTimeoutRef.current);
     loadingTimeoutRef.current = null;
-  };
+  }, []);
 
-  const startLoadingTimeout = () => {
+  const startLoadingTimeout = useCallback(() => {
     clearLoadingTimeout();
     loadingTimeoutRef.current = window.setTimeout(() => {
       audioRef.current?.pause();
       setIsLoading(false);
+      setIsPlaying(false);
       setHasError(true);
       loadingTimeoutRef.current = null;
     }, 15_000);
-  };
+  }, [clearLoadingTimeout]);
+
+  const stopPlaying = useCallback(() => {
+    const audio = audioRef.current;
+    if (audio && !audio.paused) {
+      try {
+        audio.pause();
+      } catch {
+        /* العنصر قد يكون أفلت مرجعه */
+      }
+    }
+    clearLoadingTimeout();
+    setIsLoading(false);
+    setIsPlaying(false);
+  }, [clearLoadingTimeout]);
 
   useEffect(() => () => {
+    releaseClaimRef.current?.();
+    releaseClaimRef.current = null;
     if (loadingTimeoutRef.current !== null) window.clearTimeout(loadingTimeoutRef.current);
     // إيقاف الصوت وتفريغ المصدر عند مغادرة الرسالة حتى لا يستمر
     // تشغيل الرسالة الصوتية بعد الخروج من المحادثة.
@@ -335,43 +351,36 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
     }
   }, []);
 
-  // سرعة التشغيل تُطبَّق الآن وعلى كل تحميل جديد للوسيط (يعيد المتصفح ضبطها).
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    try {
-      audio.defaultPlaybackRate = playbackRate;
-      audio.playbackRate = playbackRate;
-    } catch {
-      /* بعض المتصفحات ترفض سرعة غير مدعومة — تبقى السرعة السابقة */
+  const claimPlayback = () => {
+    if (!releaseClaimRef.current) {
+      releaseClaimRef.current = claimVoicePlayback(stopPlaying);
     }
-  }, [playbackRate]);
+  };
 
   const togglePlayback = async () => {
     const audio = audioRef.current;
     if (!audio) return;
-    setHasError(false);
     if (audio.paused) {
-      if (hasError) {
-        audio.load();
-        setCurrentTimeMs(0);
-      }
-      setIsLoading(true);
+      // رسالة واحدة تعمل في الوقت نفسه: تشغيل هذه يوقف السابقة.
+      claimPlayback();
       startLoadingTimeout();
-      try {
-        await audio.play();
-      } catch (error) {
-        clearLoadingTimeout();
-        console.warn('[messages] تعذر تشغيل الرسالة الصوتية:', error);
-        setIsLoading(false);
-        setIsPlaying(false);
-        setHasError(true);
-      }
-    } else {
-      audio.pause();
-      clearLoadingTimeout();
-      setIsLoading(false);
     }
+    const result = await toggleVoicePlayback(
+      audio,
+      {
+        onLoading: loading => setIsLoading(loading),
+        onPlaying: playing => setIsPlaying(playing),
+        onError: error => {
+          clearLoadingTimeout();
+          setHasError(true);
+          console.warn('[messages] تعذر تشغيل الرسالة الصوتية:', error);
+        },
+      },
+      { reloadOnError: hasError },
+    );
+    if (result === 'error') return;
+    if (hasError) setHasError(false);
+    if (result !== 'playing') clearLoadingTimeout();
   };
 
   const seekPlayback = (value: string) => {
@@ -393,13 +402,12 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
       <button
         type="button"
         className={`messages-voice-play${hasError ? ' is-error' : ''}`}
-        aria-label={hasError ? 'تعذر تشغيل الرسالة الصوتية، حاول مرة أخرى' : isPlaying ? 'إيقاف الرسالة الصوتية' : 'تشغيل الرسالة الصوتية'}
+        aria-label={hasError ? 'تعذر تشغيل الرسالة الصوتية، اضغط لإعادة المحاولة' : isPlaying ? 'إيقاف الرسالة الصوتية' : 'تشغيل الرسالة الصوتية'}
         onClick={() => { void togglePlayback(); }}
       >
         {isLoading ? <span className="messages-voice-spinner" aria-hidden="true" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
       <div className="messages-voice-timeline">
-        <time className="messages-voice-elapsed" dir="ltr">{formatVoiceDuration(currentTimeMs)}</time>
         <input
           className="messages-voice-progress"
           type="range"
@@ -414,22 +422,10 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         />
         <time className="messages-voice-duration" dir="ltr">{formatVoiceDuration(totalDurationMs)}</time>
       </div>
-      <div className="messages-voice-rate-group" role="group" aria-label="سرعة تشغيل الرسالة الصوتية">
-        {VOICE_PLAYBACK_RATES.map(rate => (
-          <button
-            key={rate}
-            type="button"
-            className={`messages-voice-rate${rate === playbackRate ? ' is-active' : ''}`}
-            aria-pressed={rate === playbackRate}
-            onClick={() => setPlaybackRate(rate)}
-          >
-            {rate}×
-          </button>
-        ))}
-      </div>
       <audio
         ref={audioRef}
         className="messages-voice-hidden-audio"
+        playsInline
         preload="metadata"
         src={url}
         aria-hidden="true"
@@ -441,14 +437,8 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         onPause={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); }}
         onTimeUpdate={event => setCurrentTimeMs(event.currentTarget.currentTime * 1000)}
         onLoadedMetadata={event => {
-          const audio = event.currentTarget;
-          const duration = audio.duration;
+          const duration = event.currentTarget.duration;
           if (Number.isFinite(duration) && duration > 0) setMediaDurationMs(duration * 1000);
-          try {
-            audio.playbackRate = playbackRate;
-          } catch {
-            /* سرعة غير مدعومة على هذا الجهاز */
-          }
         }}
         onDurationChange={event => {
           const duration = event.currentTarget.duration;
@@ -4789,10 +4779,7 @@ export default function MessagesPage({
                             <div className={`messages-bubble messages-voice-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}
                               <div className="messages-voice-line">
-                                <div className="messages-voice-player">
-                                  <Mic size={17} aria-hidden="true" />
-                                  <VoiceMessagePlayer url={voiceMessage.url} durationMs={voiceMessage.durationMs} />
-                                </div>
+                                <VoiceMessagePlayer url={voiceMessage.url} durationMs={voiceMessage.durationMs} />
                                 <span className="messages-bubble-footer">
                                   <time className="messages-bubble-time" dateTime={message.created_at}>{formatMessageTime(message.created_at)}</time>
                                   {isMine && <MessageDeliveryStatus message={message} />}

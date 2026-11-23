@@ -177,13 +177,6 @@ export function normalizeVoiceMimeType(value: string): VoiceRecordingFormat | nu
   return null;
 }
 
-// ===== المشغّل =====
-
-/** سرعات التشغيل المتاحة للمستخدم. */
-export const VOICE_PLAYBACK_RATES = [1, 1.5, 2] as const;
-
-export type VoicePlaybackRate = (typeof VOICE_PLAYBACK_RATES)[number];
-
 // ===== قياسات الضغط =====
 
 export type VoiceCompressionOutcome = 'transcoded' | 'passthrough' | 'failed';
