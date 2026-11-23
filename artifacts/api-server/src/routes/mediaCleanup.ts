@@ -6,9 +6,10 @@
 //   والإشعارات القديمة) — وTriggers جدول media_deletion_jobs يسجلان روابط
 //   الوسائط داخل نفس المعاملة، ثم Worker الخادم يحذف ملفات ImageKit بعد فحص المراجع.
 //
-// POST /api/media/imagekit-delete  { kind: "post" | "story" | "message", id }
+// POST /api/media/imagekit-delete  { kind: "post" | "story", id }
 //   يُستدعى من جلسة مستخدم للتحقق من الملكية وإضافة روابط الوسائط إلى الطابور.
 //   لا يحذف أي ملف مباشرة — Worker يفحص المراجع الحية قبل الحذف.
+//   الرسائل لا تمرّ من هنا: حذفها يُجدول داخل قاعدة البيانات عبر Trigger.
 
 import { Router, type Request, type Response } from "express";
 import { timingSafeEqual } from "node:crypto";
@@ -25,7 +26,6 @@ import {
   runExpiredRecordsCleanup,
 } from "../lib/mediaDb";
 import { isDeletionWorkerRunning, processDeletionJobs } from "../lib/mediaDeletionWorker";
-import { parseVoiceMessageUrl } from "../lib/voiceMessageContent";
 
 const router = Router();
 
@@ -139,7 +139,7 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
     }
 
     const body = (req.body || {}) as { kind?: unknown; id?: unknown };
-    const kind = body.kind === "post" || body.kind === "story" || body.kind === "message" ? body.kind : "";
+    const kind = body.kind === "post" || body.kind === "story" ? body.kind : "";
     const id = typeof body.id === "string" ? body.id : "";
     if (!kind || !id) {
       return res.status(400).json({ success: false, error: "kind and id are required." });
@@ -173,34 +173,9 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
         return res.status(200).json({ success: true, enqueued });
       }
 
-      // رسالة دردشة صوتية: يملك جدولتها مرسلها فقط، والرابط يُستخرج من محتوى
-      // الرسالة بعد التحقق من أنه ملف ImageKit داخل /aani/. الرسائل القديمة
-      // على Supabase Storage تُتخطى بلا جدولة (لا هدف حذف في ImageKit).
-      if (kind === "message") {
-        const messages = asRows((await restRequest(config, "GET", "messages", {
-          select: "id,sender_id,content",
-          id: `eq.${id}`,
-          limit: "1",
-        })).data);
-        const message = messages[0];
-        if (!message || message.sender_id !== userId) {
-          return res.status(404).json({ success: false, error: "Message not found." });
-        }
-
-        const mediaUrl = parseVoiceMessageUrl(String(message.content || ""));
-        if (!mediaUrl) {
-          return res.status(200).json({ success: true, enqueued: 0, skipped: true, reason: "no-voice-media" });
-        }
-
-        // فحص صارم لبقية المراجع، مع استثناء صف الرسالة نفسه.
-        if (await mediaInActiveUse(config, [mediaUrl], { excludeMessageId: id })) {
-          return res.status(200).json({ success: true, enqueued: 0, skipped: true, reason: "media-still-referenced" });
-        }
-
-        const enqueued = await enqueueMediaDeletionJobs(config, [mediaUrl]);
-        return res.status(200).json({ success: true, enqueued });
-      }
-
+      // الرسائل: الجدولة تقع في قاعدة البيانات عبر Trigger
+      // aani_queue_deleted_message_media (AFTER DELETE على public.messages)،
+      // فلا مسار ثانٍ هنا. هذه النقطة للقصص والمنشورات فقط.
       const stories = asRows((await restRequest(config, "GET", "stories", {
         select: "id,user_id,media_url",
         id: `eq.${id}`,

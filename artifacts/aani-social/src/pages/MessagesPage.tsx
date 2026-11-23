@@ -22,26 +22,19 @@ import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
-import { uploadMedia } from '@/lib/storyUpload';
 import {
   CHAT_VOICE_MESSAGE_PREFIX,
   VOICE_PLAYBACK_RATES,
   VOICE_RECORDER_BITS_PER_SECOND,
   VOICE_RECORDER_MIME_CANDIDATES,
-  buildVoiceCompressionMetrics,
-  isTrustedVoiceUrl,
   normalizeVoiceMimeType,
   parseVoiceMessage,
   pickVoiceRecorderMimeType,
   voiceMessageContent,
-  type VoiceCompressionMetrics,
   type VoiceMessagePayload,
   type VoicePlaybackRate,
 } from '@/lib/messagesVoice';
-import {
-  enqueueVoiceMessageMediaDeletion,
-  transcodeVoiceMessageOnServer,
-} from '@/lib/messagesVoiceServer';
+import { prepareVoiceMessageSource } from '@/lib/messagesVoiceServer';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import {
@@ -196,6 +189,15 @@ interface VoiceRecordingSession {
   recorder: MediaRecorder | null;
   chunks: Blob[];
   startedAt: number | null;
+}
+
+/** تسجيل بقي في الجهاز بعد فشل التحويل على الخادم، جاهز لإعادة المحاولة. */
+interface PendingVoiceRetry {
+  messageId: string;
+  blob: Blob;
+  durationMs: number;
+  localUrl: string;
+  session: VoiceRecordingSession;
 }
 
 const CHAT_CALL_MESSAGE_PREFIX = '[aani-call:v1]';
@@ -1045,6 +1047,8 @@ export default function MessagesPage({
   const [pendingMediaMessage, setPendingMediaMessage] = useState<PendingChatMediaMessage | null>(null);
   const [voiceRecordingStatus, setVoiceRecordingStatus] = useState<VoiceRecordingStatus>('idle');
   const [voiceRecordingElapsedMs, setVoiceRecordingElapsedMs] = useState(0);
+  const [voiceSending, setVoiceSending] = useState(false);
+  const [voiceRetry, setVoiceRetry] = useState<PendingVoiceRetry | null>(null);
   const [reactionsByMessage, setReactionsByMessage] = useState<Record<string, MessageReaction[]>>(() => initialThreadCache?.reactionsByMessage || {});
   const [messageAction, setMessageAction] = useState<MessageActionState | null>(null);
   const [emojiTargetMessage, setEmojiTargetMessage] = useState<MessageRow | null>(null);
@@ -3097,15 +3101,19 @@ export default function MessagesPage({
     session.stream = null;
   }, []);
 
-  const uploadRecordedVoice = async (session: VoiceRecordingSession, blob: Blob, durationMs: number) => {
+  const uploadRecordedVoice = async (
+    session: VoiceRecordingSession,
+    blob: Blob,
+    durationMs: number,
+    existing?: { messageId: string; localUrl: string },
+  ) => {
     if (conversations.some(conversation => conversation.profile.id === session.recipientId && isConversationRequestLocked(conversation))) return;
-    const format = normalizeVoiceMimeType(blob.type);
-    if (!format) {
+    if (!normalizeVoiceMimeType(blob.type)) {
       toast.error('صيغة التسجيل الصوتي غير مدعومة على هذا الجهاز.');
       return;
     }
-    const messageId = createMessageId();
-    const localUrl = URL.createObjectURL(blob);
+    const messageId = existing?.messageId ?? createMessageId();
+    const localUrl = existing?.localUrl ?? URL.createObjectURL(blob);
     voiceObjectUrlsRef.current.add(localUrl);
     const localContent = voiceMessageContent(localUrl, durationMs);
     const createdAt = new Date().toISOString();
@@ -3141,34 +3149,30 @@ export default function MessagesPage({
       }
     }
 
-    const path = `${session.userId}/messages/${messageId}.${format.extension}`;
-    const transcodeStartedAt = Date.now();
+    setVoiceSending(true);
     try {
-      // 1) التحويل الثقيل على الخادم (FFmpeg → M4A/AAC أحادي) — لا ترميز على
-      //    iPhone Safari. التسجيل الأصلي يبقى في الجهاز حتى ينجح كل شيء.
-      const transcoded = await transcodeVoiceMessageOnServer(blob, messageId);
-      let audioUrl: string;
-      let metrics: VoiceCompressionMetrics;
-      if (transcoded) {
-        audioUrl = transcoded.url;
-        metrics = transcoded.metrics;
-      } else {
-        // 2) مسار احتياطي: رفع التسجيل بصيغته الفعلية بلا أي ترميز على الجهاز
-        //    (لا preset: لا يمر عبر extractAudio الثقيل).
-        const file = new File([blob], `voice-${messageId}.${format.extension}`, { type: format.mimeType });
-        audioUrl = await uploadMedia({ file, path });
-        metrics = buildVoiceCompressionMetrics({
-          originalBytes: blob.size,
-          finalBytes: file.size,
-          processingMs: Date.now() - transcodeStartedAt,
-          sourceMimeType: blob.type,
-          targetMimeType: format.mimeType,
-          outcome: 'passthrough',
-        });
+      // التحويل والتحقق على الخادم فقط: لا يُرسل WebM/Opus الخام كرسالة صوتية،
+      // ولا يُقبل حتى M4A الأصلي قبل تحويله والتحقق منه (FFmpeg + ffprobe).
+      const prepared = await prepareVoiceMessageSource(blob, messageId);
+      if (!prepared.ok) {
+        // التسجيل يبقى في الجهاز مع حالة قابلة لإعادة المحاولة بدل إرسال
+        // صيغة قد لا تُشغَّل على iPhone Safari.
+        setVoiceRetry({ messageId, blob, durationMs, localUrl, session });
+        if (selectedIdRef.current === session.recipientId) {
+          setThread(current => current.map(message => message.id === messageId && message.sendState === 'pending'
+            ? { ...message, sendState: 'failed' }
+            : message));
+        }
+        if (isConversationOpen) scheduleVoiceThreadBottom(session.recipientId, messageId);
+        console.warn('[messages] تعذر تجهيز الرسالة الصوتية على الخادم:', prepared.reason);
+        toast.error(prepared.reason === 'empty-recording'
+          ? 'لم يُسجَّل صوت. أعد التسجيل.'
+          : 'تعذر تجهيز الرسالة الصوتية. التسجيل محفوظ ويمكنك إعادة المحاولة.');
+        return;
       }
-      console.info('[messages][voice-metrics]', metrics);
-      if (!isTrustedVoiceUrl(audioUrl)) throw new Error('رابط التسجيل الصوتي غير موثوق.');
-      const content = voiceMessageContent(audioUrl, durationMs);
+
+      console.info('[messages][voice-metrics]', prepared.metrics);
+      const content = voiceMessageContent(prepared.url, durationMs);
       if (content.length > 4000) throw new Error('بيانات الرسالة الصوتية كبيرة جداً.');
       const { error } = await supabase.from('messages').insert({
         id: messageId,
@@ -3177,12 +3181,15 @@ export default function MessagesPage({
         content,
         ...(session.replyToMessageId ? { reply_to_message_id: session.replyToMessageId } : {}),
       });
-      if (error) throw error;
+      // إعادة محاولة بعد نجاح فعلي قد تصطدم بمفتاح مكرر (الصف أُنشئ والرد فُقد):
+      // الصف موجود بالفعل، فتُعتبر المحاولة ناجحة بدل تكرار السجل.
+      if (error && error.code !== '23505') throw error;
       if (selectedIdRef.current === session.recipientId) {
         setThread(current => current.map(message => message.id === messageId
           ? { ...message, content, sendState: 'sent' }
           : message));
       }
+      setVoiceRetry(current => current?.messageId === messageId ? null : current);
       URL.revokeObjectURL(localUrl);
       voiceObjectUrlsRef.current.delete(localUrl);
       if (selectedIdRef.current === session.recipientId) void loadThread();
@@ -3198,7 +3205,32 @@ export default function MessagesPage({
       if (isConversationOpen) scheduleVoiceThreadBottom(session.recipientId, messageId);
       console.error('[messages] تعذر إرسال الرسالة الصوتية:', error);
       toast.error('تعذر إرسال الرسالة الصوتية. تحقق من الاتصال وحاول مرة أخرى.');
+    } finally {
+      setVoiceSending(false);
     }
+  };
+
+  const retryPendingVoice = async () => {
+    const pending = voiceRetry;
+    if (!pending || voiceSending) return;
+    setVoiceRetry(null);
+    setThread(current => current.map(message => message.id === pending.messageId
+      ? { ...message, sendState: 'pending' }
+      : message));
+    await uploadRecordedVoice(pending.session, pending.blob, pending.durationMs, {
+      messageId: pending.messageId,
+      localUrl: pending.localUrl,
+    });
+  };
+
+  const discardPendingVoice = () => {
+    const pending = voiceRetry;
+    if (!pending) return;
+    URL.revokeObjectURL(pending.localUrl);
+    voiceObjectUrlsRef.current.delete(pending.localUrl);
+    voiceScrollLockRef.current.delete(pending.messageId);
+    setThread(current => current.filter(message => message.id !== pending.messageId));
+    setVoiceRetry(null);
   };
 
   const beginVoiceRecording = async (session: VoiceRecordingSession) => {
@@ -4216,12 +4248,9 @@ export default function MessagesPage({
           recipientId: message.recipient_id,
         });
       }
-      // رسالة صوتية: جدولة حذف ملفها من ImageKit بعد حذف الصف. الخادم يتحقق
-      // من الملكية ومن عدم بقاء أي مرجع حي قبل الحذف الفعلي (لا حذف أعمى).
-      if (forEveryone) {
-        const voiceMessage = parseVoiceMessage(message.content);
-        if (voiceMessage) void enqueueVoiceMessageMediaDeletion(message.id);
-      }
+      // حذف الملف الصوتي من ImageKit يُجدول داخل قاعدة البيانات عبر Trigger
+      // aani_queue_deleted_message_media (AFTER DELETE على messages) وهو المسار
+      // الوحيد؛ لا نداء من العميل بعد الـRPC لأن الصف لم يعد موجوداً.
       deletedMessageIdsRef.current.add(message.id);
       setThread(current => current.filter(item => item.id !== message.id));
       const nextReactions = { ...reactionsByMessageRef.current };
@@ -5040,6 +5069,32 @@ export default function MessagesPage({
                   if (session?.pointerId === event.pointerId) cancelVoiceRecording(session);
                 }}
               >
+                {voiceRetry && selectedId === voiceRetry.session.recipientId && (
+                  <div className="messages-voice-retry" role="alert" dir="rtl">
+                    <div className="messages-voice-retry-copy">
+                      <strong>تعذر تجهيز الرسالة الصوتية</strong>
+                      <span>التسجيل محفوظ. أعد المحاولة أو احذفه.</span>
+                    </div>
+                    <div className="messages-voice-retry-actions">
+                      <button
+                        type="button"
+                        className="messages-voice-retry-action"
+                        onClick={() => { void retryPendingVoice(); }}
+                        disabled={voiceSending}
+                      >
+                        {voiceSending ? 'جارٍ التحويل...' : 'إعادة المحاولة'}
+                      </button>
+                      <button
+                        type="button"
+                        className="messages-voice-retry-discard"
+                        onClick={discardPendingVoice}
+                        disabled={voiceSending}
+                      >
+                        حذف
+                      </button>
+                    </div>
+                  </div>
+                )}
                 {editingMessage && (
                   <div className="messages-reply-preview messages-edit-preview">
                     <div className="messages-reply-preview-copy">

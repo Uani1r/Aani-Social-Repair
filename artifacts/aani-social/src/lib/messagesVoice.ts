@@ -20,7 +20,10 @@ export interface VoiceMessagePayload {
   durationMs: number;
 }
 
-const IMAGEKIT_HOST_PATTERN = /(^|\.)ik\.imagekit\.io$/i;
+// المضيف المعتمد بدقة: الصورة الرسمية لـImageKit هي `ik.imagekit.io` وحدها.
+// لا تُقبل نطاقات مشابهة (`ik.imagekit.io.evil.example`) ولا نطاقات فرعية
+// (`<id>.ik.imagekit.io`) غير مستخدمة في هذا المشروع.
+const IMAGEKIT_HOST = 'ik.imagekit.io';
 const AUDIO_FILE_EXTENSION_PATTERN = /\.(?:m4a|mp4|webm|ogg|oga|mp3|wav|aac|opus)$/i;
 /**
  * مسار الرفع الموحّد الذي يبنيه التطبيق: `<userId>/messages/<file>` ويعاد إلى
@@ -38,6 +41,10 @@ function parseUrl(value: string): URL | null {
   }
 }
 
+function isApprovedImageKitHost(hostname: string): boolean {
+  return hostname.toLowerCase() === IMAGEKIT_HOST;
+}
+
 /**
  * رابط صوت على نطاق ImageKit المعتمد للمشروع، داخل مجلد الرسائل الصوتية فقط،
  * وفي ملف بامتداد صوتي. ما عداه (نطاق خارجي، مجلد آخر، امتداد غير صوتي) مرفوض.
@@ -46,7 +53,7 @@ export function isTrustedImageKitVoiceUrl(value: string): boolean {
   if (typeof value !== 'string') return false;
   const url = parseUrl(value.trim());
   if (!url || url.protocol !== 'https:') return false;
-  if (!IMAGEKIT_HOST_PATTERN.test(url.hostname)) return false;
+  if (!isApprovedImageKitHost(url.hostname)) return false;
   if (!AUDIO_FILE_EXTENSION_PATTERN.test(url.pathname)) return false;
   return IMAGEKIT_VOICE_PATH_PATTERN.test(url.pathname);
 }

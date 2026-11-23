@@ -6896,6 +6896,64 @@ body.aani-immersive .unified-top-bar {
   display: none;
 }
 
+.messages-voice-retry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid rgb(255 176 92 / 38%);
+  border-radius: 12px;
+  background: rgb(255 176 92 / 12%);
+  color: #ffe9d2;
+}
+
+.messages-voice-retry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.messages-voice-retry-copy strong {
+  font-size: 13px;
+}
+
+.messages-voice-retry-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.messages-voice-retry-action,
+.messages-voice-retry-discard {
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.messages-voice-retry-action {
+  color: #21150a;
+  background: #ffb05c;
+  font-weight: 700;
+}
+
+.messages-voice-retry-discard {
+  color: #ffe9d2;
+  background: rgb(255 255 255 / 12%);
+}
+
+.messages-voice-retry-action:disabled,
+.messages-voice-retry-discard:disabled {
+  opacity: .65;
+  cursor: wait;
+}
+
 .messages-voice-rate-group {
   display: flex;
   flex: 0 0 auto;

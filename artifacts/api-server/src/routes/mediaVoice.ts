@@ -5,25 +5,23 @@
 // Safari، والتسجيل الخام (Opus) قد لا يعمل على iOS. التسجيل الأصلي يبقى في
 // جهاز المستخدم حتى تنجح كل الخطوات؛ فلا يُحذف أصل قبل نجاح التحويل والتحقق
 // والرفع والتسجيل في سجل الرفع.
+//
+// ترتيب الوسائط مهم: المصادقة والحدود قبل express.raw، فلا يقرأ طلب غير
+// مصادق عليه جسم الملف، ولا يستهلك عملية FFmpeg.
 
-import express, { Router, type Request, type Response } from "express";
+import express, { Router, type NextFunction, type Request, type Response } from "express";
 
 import { logger } from "../lib/logger";
 import { ImageKitUploadError, uploadFileToImageKit } from "../lib/imagekitUpload";
 import { normalizeMediaUrl, recordUploadLedger } from "../lib/mediaDb";
 import { readSupabaseAdminConfig, type SupabaseAdminConfig } from "../lib/supabaseAdmin";
+import { createVoiceGate } from "../lib/voiceGate";
 import { VOICE_MAX_SOURCE_BYTES, VoiceProcessingError, transcodeVoiceToM4a } from "../lib/voiceProcessing";
 
 const router = Router();
 
 const UPLOAD_LIMIT_MB = Math.ceil(VOICE_MAX_SOURCE_BYTES / (1024 * 1024));
 const MESSAGE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function readBearerToken(req: Request): string {
-  const authorization = req.header("authorization") || "";
-  const match = authorization.match(/^Bearer\s+(.+)$/i);
-  return match?.[1]?.trim() || "";
-}
 
 async function getAuthenticatedUserId(
   config: SupabaseAdminConfig,
@@ -40,6 +38,23 @@ async function getAuthenticatedUserId(
   return typeof user?.id === "string" && user.id ? user.id : null;
 }
 
+const voiceGate = createVoiceGate({
+  verifyToken: async token => {
+    const config = readSupabaseAdminConfig();
+    if (!config) return null;
+    return getAuthenticatedUserId(config, token);
+  },
+});
+
+/** 503 مبكر قبل المصادقة: لا معنى لقبول جسم ملف بلا خدمة تسجيل مهيأة. */
+function requireVoiceConfigured(_req: Request, res: Response, next: NextFunction): void {
+  if (!readSupabaseAdminConfig()) {
+    res.status(503).json({ success: false, error: "Authentication service is not configured." });
+    return;
+  }
+  next();
+}
+
 router.get("/media/voice", (_req: Request, res: Response) => {
   return res.status(200).json({
     success: true,
@@ -50,16 +65,16 @@ router.get("/media/voice", (_req: Request, res: Response) => {
 
 router.post(
   "/media/voice",
+  requireVoiceConfigured,
+  voiceGate.middleware,
   express.raw({ type: "*/*", limit: `${UPLOAD_LIMIT_MB}mb` }),
   (req: Request, res: Response) => {
     void (async () => {
       const config = readSupabaseAdminConfig();
-      if (!config) {
-        return res.status(503).json({ success: false, error: "Authentication service is not configured." });
+      const userId = typeof res.locals.voiceUserId === "string" ? res.locals.voiceUserId : "";
+      if (!config || !userId) {
+        return res.status(401).json({ success: false, error: "Authentication is required." });
       }
-
-      const accessToken = readBearerToken(req);
-      if (!accessToken) return res.status(401).json({ success: false, error: "Authentication is required." });
 
       const messageId = (req.header("x-aani-message-id") || "").trim();
       if (!MESSAGE_ID_PATTERN.test(messageId)) {
@@ -78,9 +93,6 @@ router.post(
       const originalBytes = body.byteLength;
 
       try {
-        const userId = await getAuthenticatedUserId(config, accessToken);
-        if (!userId) return res.status(401).json({ success: false, error: "The session is invalid or expired." });
-
         // 1) تحويل + تحقق من الناتج (AAC أحادي بمدة موجبة) — لا رفع قبل ذلك
         const transcoded = await transcodeVoiceToM4a({ bytes: body, sourceMimeType });
 

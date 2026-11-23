@@ -40,6 +40,8 @@ test('ImageKit URLs outside the approved host or folder are rejected', () => {
   assert.equal(isTrustedImageKitVoiceUrl(IMAGEKIT_URL.replace('ik.imagekit.io', 'evil.example')), false);
   // نطاق يشبه ImageKit لكنه ليس تابعاً له (خدعة اللاحقة)
   assert.equal(isTrustedImageKitVoiceUrl(IMAGEKIT_URL.replace('ik.imagekit.io', 'ik.imagekit.io.evil.example')), false);
+  // نطاق فرعي غير معتمد: المضيف المعتمد هو ik.imagekit.io حرفياً
+  assert.equal(isTrustedImageKitVoiceUrl(IMAGEKIT_URL.replace('ik.imagekit.io', 'edge.ik.imagekit.io')), false);
   // مجلد غير مجلد الرسائل
   assert.equal(isTrustedImageKitVoiceUrl(IMAGEKIT_URL.replace('/messages/', '/posts/')), false);
   // خارج /aani كلياً
