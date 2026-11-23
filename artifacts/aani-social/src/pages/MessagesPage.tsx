@@ -450,7 +450,13 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
           setIsPlaying(false);
           setIsLoading(false);
           setHasError(true);
-          console.warn('[messages] تعذر تحميل الرسالة الصوتية:', event.currentTarget.error?.code ?? 'unknown');
+          // رمز الخطأ والرسالة والرابط: يكشف إن كان الملف نفسه غير متاح
+          console.warn(
+            '[messages] تعذر تحميل الرسالة الصوتية:',
+            event.currentTarget.error?.code ?? 'unknown',
+            event.currentTarget.error?.message ?? '',
+            url.slice(0, 160),
+          );
         }}
       />
     </>
