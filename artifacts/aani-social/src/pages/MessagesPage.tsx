@@ -2492,7 +2492,7 @@ export default function MessagesPage({
 
     // العضوية أولاً: لا اشتراك في القناة الخاصة قبل تأكيد سجل المحادثة، فلا
     // يُرفض الانضمام بعد فتح محادثة جديدة قبل أول رسالة.
-    const session = openMessagesConversationChannel({
+    const session = openMessagesConversationChannel<ReturnType<typeof supabase.channel>>({
       ensureMembership: () => ensureMessagesConversationMembership(currentUserId, conversationId),
       isCancelled: () => removedByUs,
       removeChannel: channel => { void supabase.removeChannel(channel); },
@@ -3504,7 +3504,7 @@ export default function MessagesPage({
     for (const contactId of desired) {
       if (contactId === currentUserId || contactId === selectedId) continue;
       if (sessions.has(contactId)) continue;
-      const session = openMessagesConversationChannel({
+      const session = openMessagesConversationChannel<ReturnType<typeof supabase.channel>>({
         ensureMembership: () => ensureMessagesConversationMembership(currentUserId, contactId),
         removeChannel: channel => { void supabase.removeChannel(channel); },
         createChannel: onStatus => supabase
