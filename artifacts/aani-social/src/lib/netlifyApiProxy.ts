@@ -34,6 +34,20 @@ export function normalizeApiProxyTarget(raw: string | null | undefined): string 
 }
 
 /**
+ * عنوان خدمة الـAPI المنشورة (Render)، مؤكَّد من مالك النشر.
+ * يُستخدم افتراضياً عند غياب API_PROXY_TARGET، ويمكن تجاوزه بالمتغير دون تعديل كود.
+ */
+export const DEFAULT_API_PROXY_TARGET = 'https://aani-social-repair.onrender.com';
+
+/**
+ * الهدف الفعلي للتوجيه: قيمة البيئة إن كانت صالحة، وإلا العنوان الافتراضي
+ * المؤكَّد. لا يعيد null أبداً، فيعمل نشر Netlify بلا أي إعداد إضافي.
+ */
+export function resolveApiProxyTarget(raw?: string | null): string {
+  return normalizeApiProxyTarget(raw) ?? DEFAULT_API_PROXY_TARGET;
+}
+
+/**
  * محتوى ملف `_redirects` النهائي: قاعدة توجيه /api أولاً عند ضبط عنوان
  * موثوق، ثم قاعدة SPA دائماً. الترتيب مقصود: Netlify يعتمد أول قاعدة مطابقة.
  */

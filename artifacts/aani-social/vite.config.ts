@@ -9,6 +9,8 @@ import {
   API_PROXY_TARGET_ENV,
   NETLIFY_REDIRECTS_FILE,
   buildNetlifyRedirects,
+  normalizeApiProxyTarget,
+  resolveApiProxyTarget,
 } from './src/lib/netlifyApiProxy';
 
 const appDir = path.resolve(import.meta.dirname);
@@ -48,12 +50,19 @@ export default defineConfig(async ({ mode }) => {
     );
   }
 
-  // عنوان خدمة الـAPI الذي يُوجَّه إليه /api على Netlify. يُقرأ من بيئة البناء
-  // أو من ملفات .env؛ لا قيمة افتراضية مخترعة: بلا عنوان تبقى قاعدة SPA وحدها.
+  // عنوان خدمة الـAPI الذي يُوجَّه إليه /api على Netlify: قيمة البيئة إن
+  // كانت صالحة، وإلا العنوان الافتراضي المؤكَّد من مالك النشر. لا يُخترع عنوان.
   const allEnv = loadEnv(mode, appDir, '');
-  const apiProxyTarget = String(
+  const rawApiProxyTarget = String(
     process.env[API_PROXY_TARGET_ENV] || allEnv[API_PROXY_TARGET_ENV] || '',
   ).trim();
+  const apiProxyTarget = resolveApiProxyTarget(rawApiProxyTarget);
+  if (rawApiProxyTarget && normalizeApiProxyTarget(rawApiProxyTarget) === null) {
+    console.warn(
+      '[vite] API_PROXY_TARGET غير صالح — سيُستخدم العنوان الافتراضي المؤكد:',
+      apiProxyTarget,
+    );
+  }
 
   const rawPort = process.env.PORT || '5000';
   const port = Number(rawPort) || 5000;
@@ -92,9 +101,9 @@ export default defineConfig(async ({ mode }) => {
     }
     if (!warnedAboutMissingProxy && !redirects.includes('https:') && process.env.NETLIFY === 'true') {
       warnedAboutMissingProxy = true;
-      // نشر Netlify بلا عنوان API: كل /api يخدمه SPA، فلا توقيع ولا تحويل صوت.
+      // لا يحدث عملياً مع العنوان الافتراضي، ويبقى حماية إن عُدّل لاحقاً.
       console.warn(
-        '[vite] بناء Netlify بلا API_PROXY_TARGET: مسارات /api ستُخدم من SPA بدل خدمة الـAPI '
+        '[vite] بناء Netlify بلا هدف لـ/api: مسارات /api ستُخدم من SPA بدل خدمة الـAPI '
           + '(يفشل توقيع رفع الوسائط وتحويل الرسائل الصوتية).',
       );
     }

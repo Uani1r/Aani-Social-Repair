@@ -35,36 +35,39 @@
 **مع قاعدة التوجيه:**
 
 1. البناء يكتب `_redirects` في `dist/public` بقاعدة `/api/*` أولاً:
-   `/api/*   https://<api-host>/api/:splat   200`
+   `/api/*   https://aani-social-repair.onrender.com/api/:splat   200`
 2. Netlify يمرّر الطلب كما هو إلى خدمة الـAPI، فيصل إلى `POST /api/media/voice`
    و`GET /api/media/imagekit-auth` مع الترويسات والجسم.
 3. بقية المسارات تسقط على قاعدة SPA كما كانت.
 
 ## الإعداد
 
-في Netlify: **Site settings → Build & deploy → Environment variables**
+**لا حاجة لأي إعداد في Netlify.** العنوان الافتراضي المُلتزم في
+`src/lib/netlifyApiProxy.ts` (`DEFAULT_API_PROXY_TARGET`) هو عنوان الخدمة
+المؤكَّد من مالك النشر:
 
 ```
-API_PROXY_TARGET=https://<your-api-host>
+https://aani-social-repair.onrender.com
 ```
 
-- عنوان **مثبت** من مالك النشر؛ لا توجد قيمة افتراضية في المستودع.
+- لتجاوز العنوان (بيئة أخرى مثلاً) اضبط في
+  **Site settings → Build & deploy → Environment variables**:
+  `API_PROXY_TARGET=https://<other-api-host>`
 - `https` فقط، ويُقبل مسار بادئة إن كان الـAPI خلف وسيط.
 - الشرطة المائلة الأخيرة والمسافات تُزال تلقائياً؛ أي قيمة غير صالحة تُتجاهل
-  ويبقى ملف التوجيه على قاعدة SPA وحدها.
+  ويُستخدم العنوان الافتراضي (مع تحذير أثناء البناء).
 
-البناء (في `vite.config.ts`) يكتب `_redirects` بعد نسخ `public/`، و`src/lib/netlifyApiProxy.ts`
-هو المنطق المختبَر. على Netlify بلا هذا المتغير يظهر تحذير صريح أثناء البناء.
+البناء (في `vite.config.ts`) يكتب `_redirects` في `dist/public` بعد نسخ `public/`،
+و`src/lib/netlifyApiProxy.ts` هو المنطق المختبَر. يُكتب الملف في `writeBundle`
+و`closeBundle` معاً حتى لا تطمسه نسخة `public/` أياً كان ترتيب Vite.
 
 ## تحقق يدوي بعد النشر
 
 ```bash
 # يجب أن يعيد JSON، لا HTML
-curl -sS -D- https://<site>.netlify.app/api/media/imagekit-auth
-curl -sS -D- https://<site>.netlify.app/api/media/voice
-curl -sS -D- https://<site>.netlify.app/api/health
-
-# صورة أو مقطع صوتي من التطبيق نفسه على Netlify
+curl -sS -D- https://<netlify-site>/api/health
+curl -sS -D- https://<netlify-site>/api/media/imagekit-auth   # 401 JSON بلا جلسة
+curl -sS -D- https://<netlify-site>/api/media/voice          # JSON من GET
 ```
 
 عند غياب التوجيه ستعيد المسارات `200 text/html` بصفحة التطبيق؛ وجود
@@ -72,18 +75,28 @@ curl -sS -D- https://<site>.netlify.app/api/health
 
 ## ما تم اختباره فعلياً وما لم يُختبر
 
-**مختبَر آلياً** (`src/lib/netlifyApiProxy.test.ts`):
+**مختبَر آلياً** (`src/lib/netlifyApiProxy.test.ts`، 11 اختباراً):
 
-- بلا عنوان: الملف الناتج قاعدة SPA فقط، وبلا أي أصل `https` مخترع.
-- بعنوان: قاعدة `/api/*` أولاً ثم SPA، والعنوان يُطبَّع.
-- عنوان غير صالح (`http://`، بلا مضيف، مسار نسبي) يُرفض.
-- `/api/media/voice` و`/api/media/imagekit-auth` و`/api/media/upload` كلها
-  تطابق القاعدة، و`/feed` لا تطابقها.
+- العنوان الافتراضي هو العنوان المؤكَّد بالضبط.
+- القاعدة المولَّدة: `/api/*` أولاً ثم SPA، ولا أصل آخر في الملف.
+- تجاوز العنوان بالمتغير، ووقوع القيمة غير الصالحة على الافتراضي.
+- تطبيع العنوان، ورفض `http://` وما ليس بعنوان.
+- `/api/media/voice` و`/api/media/imagekit-auth` و`/api/media/upload` و`/api/health`
+  تطابق القاعدة، و`/feed` و`/apiary` لا تطابقها.
 - الطلبان في المصدر مساران نسبيان على نفس الأصل، بلا مضيف مطلق.
-- `public/_redirects` الملتزم لا يحمل أي مضيف API.
-- `vite.config.ts` يكتب الملف من `API_PROXY_TARGET`، ورسالتا الخطأ في
-  `storyUpload.ts` و`messagesVoiceServer.ts` تذكران المتغير عند عودة HTML.
+- `public/_redirects` الملتزم لا يحمل أي مضيف.
+- `vite.config.ts` يحلّ الهدف ويكتب الملف، ورسالتا الخطأ في `storyUpload.ts`
+  و`messagesVoiceServer.ts` تذكران المتغير عند عودة HTML.
 
-**لم يُختبر:** طلب حقيقي عبر Netlify إلى Render (لا عنوان إنتاج ولا وصول لسجلات
-Netlify)، ولا رفع فعلي من iPhone. الاختبار أعلاه يثبت منطق التوليد والمطابقة،
-لا سلوك شبكة Netlify الحيّ.
+**مختبَر حياً على خدمة الـAPI مباشرة** (2026، بعد تلقي العنوان من المالك):
+
+- `GET https://aani-social-repair.onrender.com/api/health` →
+  `application/json` مع `{"success":true,"status":"ok","serverBuildVersion":"2027-01-24-hmac-signature-v6"}`.
+- `GET https://aani-social-repair.onrender.com/api/media/imagekit-auth` →
+  **401** مع `application/json` و`{"success":false,"error":"Authentication is required."}`
+  (المسار موجود ويعيد JSON لا HTML).
+
+**لم يُختبر:** رفع فعلي من iPhone، ولا طلب حقيقي عبر مضيف Netlify في هذه
+الجلسة (معاينة Netlify محمية بـ401)، ولا سجلات Netlify. التحقق الحي عبر
+Netlify يحتاج فتح الموقع ونفيذ أوامر `curl` أعلاه بعد النشر.
+
