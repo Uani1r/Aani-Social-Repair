@@ -20,6 +20,47 @@ export interface VoicePlaybackHandlers {
   onError?(error: unknown): void;
 }
 
+/** ينهي حالة الانتظار والتشغيل عند فشل play() أو حدث خطأ من مصدر الوسائط. */
+export function failVoicePlayback(handlers: VoicePlaybackHandlers, error: unknown): void {
+  handlers.onLoading?.(false);
+  handlers.onPlaying?.(false);
+  handlers.onError?.(error);
+}
+
+export type VoicePlaybackUrlResolver = (storedUrl: string) => Promise<string | null>;
+export type VoicePlaybackUrlValidator = (resolvedUrl: string) => boolean;
+
+/**
+ * يحلّ رابط الرسالة الصوتية إلى عنوان العرض النهائي، ويرفض النتيجة الفارغة أو
+ * غير الموثوقة أو المتأخرة. المهلة تمنع مؤشر تجهيز المصدر من البقاء إلى الأبد.
+ */
+export async function resolveVoicePlaybackSource(
+  storedUrl: string,
+  resolveUrl: VoicePlaybackUrlResolver,
+  isTrustedUrl: VoicePlaybackUrlValidator,
+  timeoutMs = 15_000,
+): Promise<string | null> {
+  const source = storedUrl.trim();
+  if (!source) return null;
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const resolved = await Promise.race([
+      resolveUrl(source),
+      new Promise<null>(resolve => {
+        timeout = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
+      }),
+    ]);
+    if (typeof resolved !== 'string' || !resolved.trim()) return null;
+    const normalized = resolved.trim();
+    return isTrustedUrl(normalized) ? normalized : null;
+  } catch {
+    return null;
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 /**
  * يبدأ أو يوقف التشغيل. عند `reloadOnError` يُعاد تحميل المصدر من أوله قبل
  * المحاولة (إعادة المحاولة بعد فشل سابق). أي فشل يعيد 'error' بعد إنهاء
@@ -55,9 +96,7 @@ export async function toggleVoicePlayback(
     onPlaying?.(true);
     return 'playing';
   } catch (error) {
-    onLoading?.(false);
-    onPlaying?.(false);
-    onError?.(error);
+    failVoicePlayback(handlers, error);
     return 'error';
   }
 }
