@@ -8,8 +8,10 @@ import {
   MESSAGES_TYPING_HEARTBEAT_MS,
   MESSAGES_TYPING_IDLE_MS,
   MESSAGES_TYPING_TTL_MS,
+  createTypingContactsTracker,
   createTypingPublisher,
   normalizeTypingBroadcast,
+  typingConversationIdsKey,
   typingEventMatchesConversation,
 } from './messagesTypingIndicator';
 
@@ -236,4 +238,148 @@ test('a non-subscribed channel state resets typing and the send path', () => {
   const unsubscribedBranch = subscribeBlock.slice(branchEnd);
   assert.equal(unsubscribedBranch.includes('conversationBroadcastSubscribedRef.current = false;'), true);
   assert.equal(unsubscribedBranch.includes('clearTypingContact();'), true);
+});
+
+function createTrackerWithClock() {
+  const clock = createFakeClock();
+  const snapshots: string[][] = [];
+  const tracker = createTypingContactsTracker({
+    onChange: contacts => snapshots.push([...contacts].sort()),
+    setTimer: clock.setTimer,
+    clearTimer: clock.clearTimer,
+  });
+  return { clock, snapshots, tracker };
+}
+
+function lastSnapshot(snapshots: string[][]): string[] {
+  return snapshots[snapshots.length - 1] ?? [];
+}
+
+test('the inbox typing key is stable, sorted and deduplicated', () => {
+  assert.equal(typingConversationIdsKey([userB, userA, userB]), `${userA},${userB}`);
+  // نفس المحادثات بترتيب مختلف تعطي المفتاح نفسه فلا يُعاد الاشتراك.
+  assert.equal(
+    typingConversationIdsKey([userA, userB]),
+    typingConversationIdsKey([userB, userA]),
+  );
+  assert.equal(typingConversationIdsKey([]), '');
+  assert.equal(typingConversationIdsKey(['', userA]), userA);
+});
+
+test('a conversation typing mark is reported once and refreshes on heartbeats', () => {
+  const { clock, snapshots, tracker } = createTrackerWithClock();
+
+  tracker.mark(userB);
+  assert.deepEqual(snapshots, [[userB]]);
+
+  // إشارة إبقاء من المحادثة نفسها تجدد المهلة دون إشعار جديد.
+  clock.advance(MESSAGES_TYPING_HEARTBEAT_MS);
+  tracker.mark(userB);
+  assert.deepEqual(snapshots, [[userB]]);
+  assert.equal(tracker.has(userB), true);
+});
+
+test('each conversation hides itself after the TTL without further signals', () => {
+  const { clock, snapshots, tracker } = createTrackerWithClock();
+
+  tracker.mark(userB);
+  tracker.mark(userC);
+  assert.deepEqual(lastSnapshot(snapshots), [userB, userC]);
+
+  clock.advance(MESSAGES_TYPING_TTL_MS - 1);
+  assert.equal(tracker.has(userB), true);
+  assert.equal(tracker.has(userC), true);
+
+  clock.advance(1);
+  assert.equal(tracker.has(userB), false);
+  assert.equal(tracker.has(userC), false);
+  assert.deepEqual(lastSnapshot(snapshots), []);
+});
+
+test('a heartbeat renews the TTL so a typing conversation stays visible', () => {
+  const { clock, tracker } = createTrackerWithClock();
+
+  tracker.mark(userB);
+  for (let i = 0; i < 4; i += 1) {
+    clock.advance(MESSAGES_TYPING_TTL_MS - 1_000);
+    tracker.mark(userB);
+    assert.equal(tracker.has(userB), true);
+  }
+
+  clock.advance(MESSAGES_TYPING_TTL_MS);
+  assert.equal(tracker.has(userB), false);
+});
+
+test('isTyping false hides only its own conversation immediately', () => {
+  const { clock, snapshots, tracker } = createTrackerWithClock();
+
+  tracker.mark(userB);
+  tracker.mark(userC);
+  tracker.clear(userB);
+
+  assert.equal(tracker.has(userB), false);
+  assert.equal(tracker.has(userC), true);
+
+  clock.advance(MESSAGES_TYPING_TTL_MS);
+  assert.deepEqual(lastSnapshot(snapshots), []);
+  // لا مؤقتات متروكة بعد الإخفاء والإخفاء التلقائي.
+  assert.equal(clock.pendingCount(), 0);
+});
+
+test('clearAll drops every timer so leaving the inbox leaves no work behind', () => {
+  const { clock, tracker } = createTrackerWithClock();
+
+  tracker.mark(userB);
+  tracker.mark(userC);
+  assert.equal(clock.pendingCount(), 2);
+
+  tracker.clearAll();
+  assert.equal(tracker.has(userB), false);
+  assert.equal(tracker.has(userC), false);
+  assert.equal(clock.pendingCount(), 0);
+
+  // مؤقتات ملغاة لا تُحيي مؤشراً بعد الإخفاء.
+  clock.advance(MESSAGES_TYPING_TTL_MS * 2);
+  assert.equal(tracker.has(userB), false);
+});
+
+test('the inbox subscribes to each listed private conversation exactly once', () => {
+  const messagesPage = readSource('../pages/MessagesPage.tsx');
+
+  // مفتاح مستقر يمنع إعادة الاشتراك عند تحديث القائمة نفسه.
+  assert.equal(messagesPage.includes('typingConversationIdsKey('), true);
+  // المحادثة المفتوحة تُستثنى: قناة الخيط قائمة بالفعل.
+  assert.equal(messagesPage.includes('contactId === selectedId) continue;'), true);
+  // لا اشتراك ثانٍ لجهة اتصال مشتركة بالفعل.
+  assert.equal(messagesPage.includes('if (channels.has(contactId)) continue;'), true);
+  // لا يُقبل حدث إلا من طرف المحادثة نفسه.
+  assert.equal(
+    messagesPage.includes('typingEventMatchesConversation(event, currentUserId, contactId)'),
+    true,
+  );
+  // القناة غير الجاهزة أو المنقطعة تُخفي المؤشر بدل إبقائه عالقاً.
+  assert.equal(messagesPage.includes("if (status !== 'SUBSCRIBED') tracker?.clear(contactId);"), true);
+  // مغادرة الصفحة تُغلق اشتراكات القائمة.
+  assert.equal(
+    messagesPage.includes('inboxTypingChannelsRef.current.forEach(channel => { void supabase.removeChannel(channel); });'),
+    true,
+  );
+});
+
+test('the conversation card shows typing in place of the last-message preview', () => {
+  const messagesPage = readSource('../pages/MessagesPage.tsx');
+
+  assert.equal(messagesPage.includes('messages-chat-preview is-typing'), true);
+  assert.equal(messagesPage.includes('جاري الكتابة...'), true);
+  assert.equal(messagesPage.includes('typingInboxContacts.has(conversation.profile.id)'), true);
+  // نقطة غير المقروءة تبقى خارج شرط المعاينة.
+  assert.equal(messagesPage.includes('messages-unread-dot'), true);
+});
+
+test('the typing indicator adds no database dependency', () => {
+  const lib = readSource('./messagesTypingIndicator.ts');
+
+  assert.equal(lib.includes('supabase'), false);
+  assert.equal(lib.includes(".from('"), false);
+  assert.equal(lib.includes('.rpc('), false);
 });

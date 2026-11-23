@@ -121,9 +121,12 @@ import {
 import {
   MESSAGES_TYPING_EVENT,
   MESSAGES_TYPING_TTL_MS,
+  createTypingContactsTracker,
   createTypingPublisher,
   normalizeTypingBroadcast,
+  typingConversationIdsKey,
   typingEventMatchesConversation,
+  type TypingContactsTracker,
   type TypingPublisher,
 } from '@/lib/messagesTypingIndicator';
 
@@ -1093,6 +1096,18 @@ export default function MessagesPage({
   const typingPublisherRef = useRef<TypingPublisher | null>(null);
   const typingContactTimerRef = useRef<number | null>(null);
   const [typingContactId, setTypingContactId] = useState<string | null>(null);
+  // مؤشر «جاري الكتابة» في قائمة المحادثات: حالة لكل جهة اتصال، ومهلة TTL
+  // مستقلة تُجدَّد مع كل إشارة، واشتراكات خاصة على موضوع المحادثة نفسه.
+  const [typingInboxContacts, setTypingInboxContacts] = useState<Set<string>>(() => new Set());
+  const typingInboxTrackerRef = useRef<TypingContactsTracker | null>(null);
+  if (!typingInboxTrackerRef.current) {
+    typingInboxTrackerRef.current = createTypingContactsTracker({
+      onChange: contacts => setTypingInboxContacts(new Set(contacts)),
+    });
+  }
+  const inboxTypingChannelsRef = useRef(new Map<string, ReturnType<typeof supabase.channel>>());
+  const inboxTypingEpochRef = useRef(realtimeEpoch);
+  const inboxTypingUserRef = useRef(currentUserId);
   const lifecycleResyncAtRef = useRef(0);
   const realtimeMessageRevisionRef = useRef(0);
   const realtimeInboxMessagesRef = useRef(new Map<string, RealtimeMessageSnapshot<MessageRow>>());
@@ -3417,6 +3432,72 @@ export default function MessagesPage({
     return media.urls.map((url, index) => ({ message, url, index, caption: media.caption }));
   });
 
+  // معرّفات المحادثات الظاهرة في القائمة الرئيسية فقط (بلا المؤرشفة ولا
+  // الطلبات)، بمفتاح نصي مستقر فلا تُعاد الاشتراكات عند تحديث القائمة نفسه.
+  const inboxTypingContactKey = useMemo(() => typingConversationIdsKey(
+    conversations
+      .filter(conversation => !conversation.isRequest
+        && conversation.profile.id !== currentUserId
+        && !conversationPreferences.archivedIds.includes(conversation.profile.id))
+      .map(conversation => conversation.profile.id),
+  ), [conversations, conversationPreferences.archivedIds, currentUserId]);
+
+  // إشارات الكتابة في القائمة: اشتراك خاص لكل محادثة ظاهرة على موضوعها نفسه
+  // (سياسات Realtime Authorization تسمح لطرفي المحادثة فقط). المحادثة المفتوحة
+  // تُستثنى لأن قناتها قائمة وتغذّي بطاقتها عبر typingContactId، فلا اشتراك
+  // مكرر ولا حدث مزدوج.
+  useEffect(() => {
+    if (!supabaseConfigured || !currentUserId) return;
+
+    const channels = inboxTypingChannelsRef.current;
+    const tracker = typingInboxTrackerRef.current;
+
+    // epoch جديد أو مستخدم آخر يعني أن القنوات السابقة لم تعد صالحة.
+    if (inboxTypingEpochRef.current !== realtimeEpoch || inboxTypingUserRef.current !== currentUserId) {
+      inboxTypingEpochRef.current = realtimeEpoch;
+      inboxTypingUserRef.current = currentUserId;
+      channels.forEach(channel => { void supabase.removeChannel(channel); });
+      channels.clear();
+      tracker?.clearAll();
+    }
+
+    const desired = new Set(inboxTypingContactKey ? inboxTypingContactKey.split(',') : []);
+    for (const [contactId, channel] of channels) {
+      // المحادثة المفتوحة الآن تتولاها قناة الخيط، فلا نُبقي اشتراكاً مكرراً لها.
+      if (desired.has(contactId) && contactId !== selectedId) continue;
+      channels.delete(contactId);
+      tracker?.clear(contactId);
+      void supabase.removeChannel(channel);
+    }
+
+    for (const contactId of desired) {
+      if (contactId === currentUserId || contactId === selectedId) continue;
+      if (channels.has(contactId)) continue;
+      const channel = supabase
+        .channel(messagesConversationTopic(currentUserId, contactId), {
+          config: { private: true, broadcast: { self: false } },
+        })
+        .on('broadcast', { event: MESSAGES_TYPING_EVENT }, ({ payload }) => {
+          const event = normalizeTypingBroadcast(payload);
+          if (!event || !typingEventMatchesConversation(event, currentUserId, contactId)) return;
+          if (event.isTyping) tracker?.mark(contactId);
+          else tracker?.clear(contactId);
+        })
+        .subscribe(status => {
+          // قناة غير جاهزة أو منقطعة: إشاراتها قد فاتت، فلا يبقى مؤشر قديم.
+          if (status !== 'SUBSCRIBED') tracker?.clear(contactId);
+        });
+      channels.set(contactId, channel);
+    }
+  }, [currentUserId, inboxTypingContactKey, realtimeEpoch, selectedId]);
+
+  // مغادرة صفحة الرسائل تُغلق اشتراكات القائمة وتلغي مؤقتاتها.
+  useEffect(() => () => {
+    inboxTypingChannelsRef.current.forEach(channel => { void supabase.removeChannel(channel); });
+    inboxTypingChannelsRef.current.clear();
+    typingInboxTrackerRef.current?.clearAll();
+  }, []);
+
   const decideMessageRequest = async (status: 'accepted' | 'declined') => {
     const conversation = selectedConversation;
     if (!conversation?.isRequest || !selectedId || requestActionBusy) return;
@@ -4206,6 +4287,8 @@ export default function MessagesPage({
               const isOnline = onlineUserIds.has(conversation.profile.id);
               const isPinned = conversationPreferences.pinnedIds.includes(conversation.profile.id);
               const isMuted = conversationPreferences.mutedIds.includes(conversation.profile.id);
+              const isTyping = typingContactId === conversation.profile.id
+                || typingInboxContacts.has(conversation.profile.id);
               return (
                 <Link
                   key={conversation.profile.id}
@@ -4282,7 +4365,11 @@ export default function MessagesPage({
                       </time>
                     </span>
                     <span className="messages-chat-preview-row">
-                      <span className={`messages-chat-preview${isUnread ? ' is-unread' : ''}`}>{messagePreview(conversation.lastMessage, currentUserId)}</span>
+                      {isTyping ? (
+                        <span className="messages-chat-preview is-typing" role="status" aria-live="polite">جاري الكتابة...</span>
+                      ) : (
+                        <span className={`messages-chat-preview${isUnread ? ' is-unread' : ''}`}>{messagePreview(conversation.lastMessage, currentUserId)}</span>
+                      )}
                       {isUnread && <span className="messages-unread-dot" aria-label="رسالة غير مقروءة" />}
                     </span>
                   </span>

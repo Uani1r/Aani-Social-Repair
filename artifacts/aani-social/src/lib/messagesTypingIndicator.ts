@@ -117,3 +117,89 @@ export function createTypingPublisher(options: TypingPublisherOptions): TypingPu
     },
   };
 }
+
+/**
+ * مفتاح مستقرّ لقائمة محادثات القائمة الرئيسية: ترتيب ثابت وإزالة التكرار،
+ * فإعادة رسم القائمة لا تُعيد إنشاء اشتراكات القنوات ما دامت المحادثات نفسها.
+ */
+export function typingConversationIdsKey(ids: Iterable<string>): string {
+  return [...new Set(ids)].filter(Boolean).sort().join(',');
+}
+
+export interface TypingContactsTrackerOptions {
+  /** مهلة إخفاء مؤشر جهة الاتصال بعد آخر إشارة صحيحة. */
+  ttlMs?: number;
+  setTimer?: (callback: () => void, delayMs: number) => unknown;
+  clearTimer?: (handle: unknown) => void;
+  onChange: (contacts: ReadonlySet<string>) => void;
+}
+
+export interface TypingContactsTracker {
+  /** إشارة `isTyping: true`: إظهار المؤشر وتجديد مهلته. */
+  mark(contactId: string): void;
+  /** إشارة `isTyping: false`: إخفاء المؤشر فوراً وإلغاء مهلته. */
+  clear(contactId: string): void;
+  /** مغادرة القائمة أو تبديل الحساب: إخفاء الكل وإلغاء كل المؤقتات. */
+  clearAll(): void;
+  has(contactId: string): boolean;
+}
+
+/**
+ * مؤشرات الكتابة لعدة محادثات في آن واحد (بطاقات قائمة المحادثات): حالة لكل
+ * جهة اتصال ومهلة مستقلة تُجدَّد مع كل إشارة، فإشارة إبقاء واحدة تُبقي مؤشر
+ * جهة اتصالها حياً ولا تمسّ غيرها. كل الإخفاءات تُبلَّغ إلى onChange واحدة.
+ */
+export function createTypingContactsTracker(options: TypingContactsTrackerOptions): TypingContactsTracker {
+  const {
+    ttlMs = MESSAGES_TYPING_TTL_MS,
+    setTimer = (callback: () => void, delayMs: number) =>
+      window.setTimeout(callback, delayMs) as unknown,
+    clearTimer = (handle: unknown) => window.clearTimeout(handle as number),
+    onChange,
+  } = options;
+
+  const contacts = new Set<string>();
+  const timers = new Map<string, unknown>();
+
+  const emit = () => onChange(new Set(contacts));
+
+  const clearTimerFor = (contactId: string) => {
+    const handle = timers.get(contactId);
+    if (handle === undefined) return;
+    clearTimer(handle);
+    timers.delete(contactId);
+  };
+
+  return {
+    mark(contactId) {
+      if (!contactId) return;
+      clearTimerFor(contactId);
+      timers.set(contactId, setTimer(() => {
+        timers.delete(contactId);
+        if (!contacts.delete(contactId)) return;
+        emit();
+      }, ttlMs));
+      if (contacts.has(contactId)) return;
+      contacts.add(contactId);
+      emit();
+    },
+
+    clear(contactId) {
+      clearTimerFor(contactId);
+      if (!contacts.delete(contactId)) return;
+      emit();
+    },
+
+    clearAll() {
+      timers.forEach(handle => clearTimer(handle));
+      timers.clear();
+      if (contacts.size === 0) return;
+      contacts.clear();
+      emit();
+    },
+
+    has(contactId) {
+      return contacts.has(contactId);
+    },
+  };
+}
