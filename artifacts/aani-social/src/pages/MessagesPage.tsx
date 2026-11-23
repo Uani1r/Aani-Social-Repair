@@ -119,6 +119,13 @@ import {
   type QueuedConversationBroadcast,
 } from '@/lib/messagesDeleteBroadcast';
 import {
+  ensureMessagesConversationMembership,
+} from '@/lib/messagesConversationMembership';
+import {
+  openMessagesConversationChannel,
+  type MessagesConversationChannelSession,
+} from '@/lib/messagesConversationChannel';
+import {
   MESSAGES_TYPING_EVENT,
   MESSAGES_TYPING_TTL_MS,
   createTypingContactsTracker,
@@ -1105,7 +1112,7 @@ export default function MessagesPage({
       onChange: contacts => setTypingInboxContacts(new Set(contacts)),
     });
   }
-  const inboxTypingChannelsRef = useRef(new Map<string, ReturnType<typeof supabase.channel>>());
+  const inboxTypingSessionsRef = useRef(new Map<string, MessagesConversationChannelSession>());
   const inboxTypingEpochRef = useRef(realtimeEpoch);
   const inboxTypingUserRef = useRef(currentUserId);
   const lifecycleResyncAtRef = useRef(0);
@@ -2232,9 +2239,11 @@ export default function MessagesPage({
     key: string = event,
   ) => {
     const channel = conversationBroadcastChannelRef.current;
-    if (!channel) return;
 
-    if (!conversationBroadcastSubscribedRef.current) {
+    if (!channel || !conversationBroadcastSubscribedRef.current) {
+      // إشارة الكتابة لا تُحجز في الطابور: heartbeat أو إعادة الإعلان بعد
+      // الاشتراك تغني عنها، فلا يُرسل حدث كتابة بعد انتهاء صلاحيته.
+      if (event === MESSAGES_TYPING_EVENT) return;
       conversationBroadcastQueueRef.current = enqueueConversationBroadcast(
         conversationBroadcastQueueRef.current,
         { key, event, payload },
@@ -2481,9 +2490,15 @@ export default function MessagesPage({
     conversationBroadcastSubscribedRef.current = false;
     conversationBroadcastQueueRef.current = [];
 
-    const channel = supabase.channel(topic, {
-      config: { private: true, broadcast: { self: false } },
-    })
+    // العضوية أولاً: لا اشتراك في القناة الخاصة قبل تأكيد سجل المحادثة، فلا
+    // يُرفض الانضمام بعد فتح محادثة جديدة قبل أول رسالة.
+    const session = openMessagesConversationChannel<ReturnType<typeof supabase.channel>>({
+      ensureMembership: signal => ensureMessagesConversationMembership(currentUserId, conversationId, { signal }),
+      isCancelled: () => removedByUs,
+      removeChannel: channel => { void supabase.removeChannel(channel); },
+      createChannel: onStatus => supabase.channel(topic, {
+        config: { private: true, broadcast: { self: false } },
+      })
       .on('broadcast', { event: MESSAGES_MESSAGE_DELETED_EVENT }, ({ payload }) => {
         const event = normalizeMessageDeletedBroadcast(payload);
         if (!event) return;
@@ -2527,28 +2542,37 @@ export default function MessagesPage({
         removeThreadCache(currentUserId, conversationId);
         scheduleMessageRefresh(true);
       })
-      .subscribe((status, statusError) => {
-        if (removedByUs) return;
-        if (status === 'SUBSCRIBED') {
-          // الآن فقط نعتبر القناة جاهزة، ونرسل ما احتُجز قبل اكتمال الاشتراك.
-          conversationBroadcastSubscribedRef.current = true;
-          const queued = conversationBroadcastQueueRef.current;
-          conversationBroadcastQueueRef.current = [];
-          for (const item of queued) {
-            void channel.send({ type: 'broadcast', event: item.event, payload: item.payload }).then(result => {
-              if (result !== 'ok') {
-                console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, result);
-              }
-            }).catch(error => {
-              console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, error);
-            });
-          }
-          return;
+      .subscribe((status, statusError) => onStatus(status, statusError)),
+
+      onSubscribed: channel => {
+        // الآن فقط نعتبر القناة جاهزة، ونرسل ما احتُجز قبل اكتمال الاشتراك.
+        conversationBroadcastSubscribedRef.current = true;
+        conversationBroadcastChannelRef.current = channel;
+        const queued = conversationBroadcastQueueRef.current;
+        conversationBroadcastQueueRef.current = [];
+        for (const item of queued) {
+          void channel.send({ type: 'broadcast', event: item.event, payload: item.payload }).then(result => {
+            if (result !== 'ok') {
+              console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, result);
+            }
+          }).catch(error => {
+            console.warn(`[messages] تعذر إرسال حدث مؤجل ${item.event}:`, error);
+          });
         }
-        // أي حالة غير SUBSCRIBED (انقطاع، انتهاء مهلة، إغلاق) تعني أن القناة لم
-        // تعد موثوقة: لا نرسل عبرها حتى يؤكد اشتراك جديد، ونُخفي مؤشر الكتابة
-        // الوارد لأن إشاراته قد فاتت.
+        // بدل إعادة إرسال إشارة كتابة قديمة من طابور منتهي الصلاحية: إن كان
+        // المستخدم ما زال يكتب نُعلن حالة جديدة واحدة الآن.
+        if (typingPublisherRef.current?.isTyping()) {
+          void channel.send({
+            type: 'broadcast',
+            event: MESSAGES_TYPING_EVENT,
+            payload: { userId: currentUserId, isTyping: true },
+          }).catch(() => undefined);
+        }
+      },
+
+      onNotSubscribed: (channel, status, statusError) => {
         conversationBroadcastSubscribedRef.current = false;
+        if (conversationBroadcastChannelRef.current === channel) conversationBroadcastChannelRef.current = null;
         conversationBroadcastQueueRef.current = [];
         clearTypingContact();
         if (statusError) {
@@ -2556,9 +2580,16 @@ export default function MessagesPage({
           // التعويضية REST تبقى شبكة الأمان ولا نُظهر خطأ للمستخدم.
           console.warn(`[messages] تعذر الاتصال بقناة المحادثة (${status}):`, statusError);
         }
-      });
+      },
 
-    conversationBroadcastChannelRef.current = channel;
+      onUnavailable: () => {
+        // لا عضوية أو استُنفدت المحاولات: الرسائل تبقى تعمل عبر REST، والمؤشر يبقى مخفياً.
+        conversationBroadcastSubscribedRef.current = false;
+        conversationBroadcastQueueRef.current = [];
+        clearTypingContact();
+      },
+    });
+
     return () => {
       removedByUs = true;
       // ترتيب التنظيف مهم: نوقف الكتابة أولاً والقناة ما زالت مرجعاً حياً،
@@ -2567,8 +2598,8 @@ export default function MessagesPage({
       clearTypingContact();
       conversationBroadcastSubscribedRef.current = false;
       conversationBroadcastQueueRef.current = [];
-      if (conversationBroadcastChannelRef.current === channel) conversationBroadcastChannelRef.current = null;
-      void supabase.removeChannel(channel);
+      conversationBroadcastChannelRef.current = null;
+      session.cancel();
     };
   }, [clearRealtimeMessage, clearTypingContact, currentUserId, realtimeEpoch, removeMessageReaction, scheduleMessageRefresh, selectedId, showTypingContact]);
 
@@ -3445,56 +3476,60 @@ export default function MessagesPage({
   // إشارات الكتابة في القائمة: اشتراك خاص لكل محادثة ظاهرة على موضوعها نفسه
   // (سياسات Realtime Authorization تسمح لطرفي المحادثة فقط). المحادثة المفتوحة
   // تُستثنى لأن قناتها قائمة وتغذّي بطاقتها عبر typingContactId، فلا اشتراك
-  // مكرر ولا حدث مزدوج.
+  // مكرر ولا حدث مزدوج. كل قناة تُفتح بعد تجهيز عضوية المحادثة نفسها.
   useEffect(() => {
     if (!supabaseConfigured || !currentUserId) return;
 
-    const channels = inboxTypingChannelsRef.current;
+    const sessions = inboxTypingSessionsRef.current;
     const tracker = typingInboxTrackerRef.current;
 
     // epoch جديد أو مستخدم آخر يعني أن القنوات السابقة لم تعد صالحة.
     if (inboxTypingEpochRef.current !== realtimeEpoch || inboxTypingUserRef.current !== currentUserId) {
       inboxTypingEpochRef.current = realtimeEpoch;
       inboxTypingUserRef.current = currentUserId;
-      channels.forEach(channel => { void supabase.removeChannel(channel); });
-      channels.clear();
+      sessions.forEach(session => session.cancel());
+      sessions.clear();
       tracker?.clearAll();
     }
 
     const desired = new Set(inboxTypingContactKey ? inboxTypingContactKey.split(',') : []);
-    for (const [contactId, channel] of channels) {
+    for (const [contactId, session] of sessions) {
       // المحادثة المفتوحة الآن تتولاها قناة الخيط، فلا نُبقي اشتراكاً مكرراً لها.
       if (desired.has(contactId) && contactId !== selectedId) continue;
-      channels.delete(contactId);
+      sessions.delete(contactId);
+      session.cancel();
       tracker?.clear(contactId);
-      void supabase.removeChannel(channel);
     }
 
     for (const contactId of desired) {
       if (contactId === currentUserId || contactId === selectedId) continue;
-      if (channels.has(contactId)) continue;
-      const channel = supabase
-        .channel(messagesConversationTopic(currentUserId, contactId), {
-          config: { private: true, broadcast: { self: false } },
-        })
-        .on('broadcast', { event: MESSAGES_TYPING_EVENT }, ({ payload }) => {
-          const event = normalizeTypingBroadcast(payload);
-          if (!event || !typingEventMatchesConversation(event, currentUserId, contactId)) return;
-          if (event.isTyping) tracker?.mark(contactId);
-          else tracker?.clear(contactId);
-        })
-        .subscribe(status => {
-          // قناة غير جاهزة أو منقطعة: إشاراتها قد فاتت، فلا يبقى مؤشر قديم.
-          if (status !== 'SUBSCRIBED') tracker?.clear(contactId);
-        });
-      channels.set(contactId, channel);
+      if (sessions.has(contactId)) continue;
+      const session = openMessagesConversationChannel<ReturnType<typeof supabase.channel>>({
+        ensureMembership: signal => ensureMessagesConversationMembership(currentUserId, contactId, { signal }),
+        removeChannel: channel => { void supabase.removeChannel(channel); },
+        createChannel: onStatus => supabase
+          .channel(messagesConversationTopic(currentUserId, contactId), {
+            config: { private: true, broadcast: { self: false } },
+          })
+          .on('broadcast', { event: MESSAGES_TYPING_EVENT }, ({ payload }) => {
+            const event = normalizeTypingBroadcast(payload);
+            if (!event || !typingEventMatchesConversation(event, currentUserId, contactId)) return;
+            if (event.isTyping) tracker?.mark(contactId);
+            else tracker?.clear(contactId);
+          })
+          .subscribe((status, statusError) => onStatus(status, statusError)),
+        onSubscribed: () => undefined,
+        onNotSubscribed: () => tracker?.clear(contactId),
+        onUnavailable: () => tracker?.clear(contactId),
+      });
+      sessions.set(contactId, session);
     }
   }, [currentUserId, inboxTypingContactKey, realtimeEpoch, selectedId]);
 
   // مغادرة صفحة الرسائل تُغلق اشتراكات القائمة وتلغي مؤقتاتها.
   useEffect(() => () => {
-    inboxTypingChannelsRef.current.forEach(channel => { void supabase.removeChannel(channel); });
-    inboxTypingChannelsRef.current.clear();
+    inboxTypingSessionsRef.current.forEach(session => session.cancel());
+    inboxTypingSessionsRef.current.clear();
     typingInboxTrackerRef.current?.clearAll();
   }, []);
 

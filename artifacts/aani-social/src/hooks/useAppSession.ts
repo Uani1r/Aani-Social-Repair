@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { resetMessagesConversationMembershipCache } from '@/lib/messagesConversationMembership';
 import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS, type PublicProfileRow } from '@/lib/profileFields';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
 import { flushUploadLedgerQueue } from '@/lib/uploadLedgerQueue';
@@ -15,6 +16,14 @@ export default function useAppSession() {
   const [authResolved, setAuthResolved] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const user = session?.user;
+  // جلسة المصادقة هي مالك ذاكرة عضوية المحادثات: الخروج أو تبديل الحساب يفرّغها
+  // ويقطع أي طلب عضوية جارٍ، فلا تتسرّب نتيجة جلسة سابقة إلى الجلسة الجديدة.
+  const authOwnerRef = useRef<string | null>(null);
+  const syncMembershipOwner = (nextUserId: string | null) => {
+    if (authOwnerRef.current === nextUserId) return;
+    authOwnerRef.current = nextUserId;
+    resetMessagesConversationMembershipCache(nextUserId);
+  };
 
   useEffect(() => {
     if (!supabaseConfigured) {
@@ -30,6 +39,7 @@ export default function useAppSession() {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
         if (mounted) {
+          syncMembershipOwner(data.session?.user?.id ?? null);
           setSession(data.session);
           // سجل الرفع: أي روابط فشل تسجيلها سابقاً تُعاد محاولة تسجيلها الآن
           // (فشلها لا يؤثر على الإقلاع أبداً)
@@ -37,7 +47,10 @@ export default function useAppSession() {
         }
       } catch (error) {
         console.error('تعذر استعادة جلسة المستخدم:', error);
-        if (mounted) setSession(null);
+        if (mounted) {
+          syncMembershipOwner(null);
+          setSession(null);
+        }
       } finally {
         if (mounted) {
           setAuthLoading(false);
@@ -59,6 +72,8 @@ export default function useAppSession() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
       setAuthResolved(true);
+      // قبل تطبيق الجلسة الجديدة: أي طلب عضوية تابع للجلسة السابقة يُلغى.
+      syncMembershipOwner(nextSession?.user?.id ?? null);
       setSession(nextSession);
       setProfile(null);
       if (event === 'SIGNED_IN' && nextSession?.user?.id) {
@@ -157,6 +172,7 @@ export default function useAppSession() {
 
   const signOut = async () => {
     if (supabaseConfigured) await supabase.auth.signOut();
+    syncMembershipOwner(null);
     setSession(null);
     setProfile(null);
   };

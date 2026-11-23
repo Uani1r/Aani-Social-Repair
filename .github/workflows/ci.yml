@@ -63,7 +63,7 @@ jobs:
       # messagesRealtimeEvents covers the Shell-to-MessagesPage relay, duplicate
       # event suppression, and background expiry cleanup.
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
@@ -333,6 +333,14 @@ jobs:
 
       - name: Test participant-only read and publish authorization
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_delete_broadcast_auth.test.sql
+
+      # The RPC the client calls before joining a conversation's private topic,
+      # so a conversation opened before its first message still authorizes.
+      - name: Apply the conversation membership RPC migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270304000000_aani_ensure_message_conversation_membership.sql
+
+      - name: Test the conversation membership RPC
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_conversation_member_rpc.test.sql
 
 
   # Restores and verifies the two single-message delete RPCs MessagesPage calls
