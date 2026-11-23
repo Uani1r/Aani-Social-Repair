@@ -118,7 +118,7 @@ test('the ledger write is bounded, not retried forever', async () => {
 });
 
 test('the route reports success only through the finalizer', () => {
-  const route = readFileSync(fileURLToPath(new URL('../../routes/mediaVoice.ts', import.meta.url)), 'utf8');
+  const route = readFileSync(fileURLToPath(new URL('../routes/mediaVoice.ts', import.meta.url)), 'utf8');
 
   assert.equal(route.includes('finalizeVoiceUpload('), true);
   // لا ابتلاع لفشل الـledger ثم متابعة النجاح
