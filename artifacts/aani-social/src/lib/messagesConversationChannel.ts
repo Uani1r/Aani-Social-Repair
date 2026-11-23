@@ -11,8 +11,11 @@ import {
 } from '@/lib/messagesConversationMembership';
 
 export interface MessagesConversationChannelOptions<TChannel extends object> {
-  /** يتحقق من العضوية (RPC) قبل إنشاء القناة. */
-  ensureMembership: () => Promise<boolean>;
+  /**
+   * يتحقق من العضوية (RPC) قبل إنشاء القناة. يستقبل مسبار إلغاء الجلسة، فلا
+   * تُستأنف إعادة المحاولة بعد مغادرة المحادثة أو إغلاق الاشتراك.
+   */
+  ensureMembership: (isCancelled: () => boolean) => Promise<boolean>;
   /** ينشئ القناة ويربط مستمعيها ثم يشترك، ويبلّغ onStatus بحالة الاشتراك. */
   createChannel: (onStatus: (status: string, error?: unknown) => void) => TChannel;
   onSubscribed: (channel: TChannel) => void;
@@ -79,7 +82,7 @@ export function openMessagesConversationChannel<TChannel extends object>(
 
     let ready = false;
     try {
-      ready = await ensureMembership();
+      ready = await ensureMembership(() => cancelled);
     } catch {
       ready = false;
     }

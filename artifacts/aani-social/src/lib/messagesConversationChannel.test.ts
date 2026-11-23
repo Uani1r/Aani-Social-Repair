@@ -232,3 +232,69 @@ test('cancelling clears a pending retry and removes the live channel', async () 
   assert.equal(created, 1);
   assert.deepEqual(removed, [1]);
 });
+
+
+
+test('the membership step receives the session cancellation probe', async () => {
+  const scheduler = createScheduler();
+  let probe: (() => boolean) | null = null;
+  let ensured = 0;
+  let created = 0;
+
+  const session = openMessagesConversationChannel<FakeChannel>({
+    ensureMembership: async isCancelled => {
+      ensured += 1;
+      probe = isCancelled;
+      return true;
+    },
+    createChannel: () => {
+      created += 1;
+      return { id: created, removed: false };
+    },
+    onSubscribed: () => undefined,
+    onNotSubscribed: () => undefined,
+    removeChannel: () => undefined,
+    setTimer: scheduler.setTimer,
+    clearTimer: scheduler.clearTimer,
+  });
+
+  await tick();
+  assert.equal(ensured, 1);
+  assert.equal(created, 1);
+  assert.ok(probe, 'the cancellation probe must be handed to the membership step');
+  assert.equal(probe!(), false);
+
+  session.cancel();
+  // بعد الإلغاء يرى مسار العضوية أنه أُلغي، فلا يُستأنف أي انتظار لإعادة المحاولة.
+  assert.equal(probe!(), true);
+});
+
+test('no private channel exists while the membership is still unresolved', async () => {
+  const scheduler = createScheduler();
+  let created = 0;
+  let unavailable: string | null = null;
+  let resolveReady: ((ready: boolean) => void) | null = null;
+
+  const session = openMessagesConversationChannel<FakeChannel>({
+    ensureMembership: () => new Promise<boolean>(resolve => { resolveReady = resolve; }),
+    createChannel: () => {
+      created += 1;
+      return { id: created, removed: false };
+    },
+    onSubscribed: () => undefined,
+    onNotSubscribed: () => undefined,
+    onUnavailable: reason => { unavailable = reason; },
+    removeChannel: () => undefined,
+    setTimer: scheduler.setTimer,
+    clearTimer: scheduler.clearTimer,
+  });
+
+  await tick();
+  assert.equal(created, 0);
+
+  resolveReady!(false);
+  await tick();
+  assert.equal(created, 0);
+  assert.equal(unavailable, 'membership');
+  session.cancel();
+});
