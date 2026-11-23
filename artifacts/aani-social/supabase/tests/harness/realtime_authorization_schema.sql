@@ -77,10 +77,43 @@ alter table realtime.messages enable row level security;
 insert into public.profiles (id) values
   ('00000000-0000-0000-0000-00000000000a'),
   ('00000000-0000-0000-0000-00000000000b'),
-  ('00000000-0000-0000-0000-00000000000c');
+  ('00000000-0000-0000-0000-00000000000c'),
+  ('00000000-0000-0000-0000-00000000000d');
 
 insert into public.messages (id, sender_id, recipient_id, content) values
   ('10000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000b', 'A to B'),
   ('10000000-0000-0000-0000-0000000000b2', '00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-00000000000c', 'B to C');
+
+-- Stand-in for the block rules the membership RPC reuses.
+create table public.user_blocks (
+  blocker_id uuid not null references public.profiles (id) on delete cascade,
+  blocked_user_id uuid not null references public.profiles (id) on delete cascade,
+  primary key (blocker_id, blocked_user_id)
+);
+
+grant select, insert, delete on public.user_blocks to authenticated;
+
+create or replace function public.aani_is_user_blocked(p_user_a uuid, p_user_b uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select coalesce(
+    auth.uid() is not null
+    and auth.uid() in (p_user_a, p_user_b)
+    and exists (
+      select 1
+      from public.user_blocks as blocked
+      where (blocked.blocker_id = p_user_a and blocked.blocked_user_id = p_user_b)
+         or (blocked.blocker_id = p_user_b and blocked.blocked_user_id = p_user_a)
+    ),
+    false
+  );
+$$;
+
+revoke all on function public.aani_is_user_blocked(uuid, uuid) from public, anon;
+grant execute on function public.aani_is_user_blocked(uuid, uuid) to authenticated;
 
 commit;
