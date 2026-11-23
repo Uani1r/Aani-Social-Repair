@@ -1,9 +1,15 @@
+import { writeFileSync } from 'node:fs';
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from 'vite';
 
 import { applyHtmlNoStoreInterceptors, type HttpResponseLike } from './src/utils/htmlNoStore';
+import {
+  API_PROXY_TARGET_ENV,
+  NETLIFY_REDIRECTS_FILE,
+  buildNetlifyRedirects,
+} from './src/lib/netlifyApiProxy';
 
 const appDir = path.resolve(import.meta.dirname);
 // The pnpm workspace root. A .env file may live here as well as in the app
@@ -42,6 +48,13 @@ export default defineConfig(async ({ mode }) => {
     );
   }
 
+  // عنوان خدمة الـAPI الذي يُوجَّه إليه /api على Netlify. يُقرأ من بيئة البناء
+  // أو من ملفات .env؛ لا قيمة افتراضية مخترعة: بلا عنوان تبقى قاعدة SPA وحدها.
+  const allEnv = loadEnv(mode, appDir, '');
+  const apiProxyTarget = String(
+    process.env[API_PROXY_TARGET_ENV] || allEnv[API_PROXY_TARGET_ENV] || '',
+  ).trim();
+
   const rawPort = process.env.PORT || '5000';
   const port = Number(rawPort) || 5000;
 
@@ -68,12 +81,52 @@ export default defineConfig(async ({ mode }) => {
     configurePreviewServer: injectHtmlNoStore,
   };
 
+  let warnedAboutMissingProxy = false;
+  const writeNetlifyRedirects = (): void => {
+    const redirects = buildNetlifyRedirects(apiProxyTarget);
+    const outputDir = path.resolve(import.meta.dirname, 'dist/public');
+    try {
+      writeFileSync(path.join(outputDir, NETLIFY_REDIRECTS_FILE), redirects);
+    } catch (error) {
+      console.warn('[vite] تعذر كتابة _redirects في ناتج البناء:', error);
+    }
+    if (!warnedAboutMissingProxy && !redirects.includes('https:') && process.env.NETLIFY === 'true') {
+      warnedAboutMissingProxy = true;
+      // نشر Netlify بلا عنوان API: كل /api يخدمه SPA، فلا توقيع ولا تحويل صوت.
+      console.warn(
+        '[vite] بناء Netlify بلا API_PROXY_TARGET: مسارات /api ستُخدم من SPA بدل خدمة الـAPI '
+          + '(يفشل توقيع رفع الوسائط وتحويل الرسائل الصوتية).',
+      );
+    }
+  };
+
+  // يكتب _redirects في ناتج البناء: قاعدة توجيه /api (عند ضبط العنوان) ثم
+  // قاعدة SPA. يُكتب في writeBundle وcloseBundle معاً (نفس المحتوى) حتى لا
+  // تطمسه نسخة public/ أياً كان ترتيب Vite، ويبقى آخر ما يُكتب هو الصحيح.
+  const netlifyRedirectsPlugin: Plugin = {
+    name: 'aani-netlify-redirects',
+    apply: 'build',
+    writeBundle: {
+      order: 'post',
+      handler() {
+        writeNetlifyRedirects();
+      },
+    },
+    closeBundle: {
+      order: 'post',
+      handler() {
+        writeNetlifyRedirects();
+      },
+    },
+  };
+
   return {
     base: '/',
     plugins: [
       react(),
       tailwindcss(),
       htmlNoStorePlugin,
+      netlifyRedirectsPlugin,
 
       ...(process.env.NODE_ENV !== 'production' &&
       process.env.REPL_ID !== undefined

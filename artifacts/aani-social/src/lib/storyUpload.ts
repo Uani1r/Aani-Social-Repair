@@ -93,10 +93,24 @@ async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthPara
     break;
   }
 
-  const result = await response.json().catch(() => null) as
-    | (ImageKitAuthParams & { success?: unknown; error?: unknown })
-    | null;
+  const rawBody = await response.text().catch(() => '');
+  let result: (ImageKitAuthParams & { success?: unknown; error?: unknown }) | null = null;
+  try {
+    result = JSON.parse(rawBody) as ImageKitAuthParams & { success?: unknown; error?: unknown };
+  } catch {
+    result = null;
+  }
   if (!response.ok || !result || result.success !== true) {
+    // استجابة HTML تعني أن المضيف الحالي لا يوجّه /api إلى خدمة الـAPI
+    // (يعيد صفحة SPA بـ200)، فلا يمكن الحصول على توقيع الرفع إطلاقاً.
+    if (!result && /^\s*</.test(rawBody)) {
+      throw new Error(
+        'مسارات /api لا تصل إلى خدمة الـAPI على هذا المضيف: '
+          + '/api/media/imagekit-auth أعاد صفحة بدل JSON. '
+          + 'أضف API_PROXY_TARGET في إعدادات بناء النشر (Netlify) بعنوان خدمة الـAPI، '
+          + 'أو افتح التطبيق من مضيف الـAPI نفسه.',
+      );
+    }
     const serverError = typeof result?.error === 'string' && result.error ? result.error : '';
     // أخطاء 5xx أثناء الإقلاع (بعد استنفاد المحاولات) تُعرض برمزها الحقيقي
     if (response.status >= 500) {

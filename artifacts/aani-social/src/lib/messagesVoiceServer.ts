@@ -90,8 +90,13 @@ export async function transcodeVoiceMessageOnServer(
   try {
     payload = JSON.parse(rawBody) as VoiceUploadResponse;
   } catch {
-    // استجابة ليست JSON غالباً صفحة SPA: المسار غير موجود على هذا المضيف
-    console.warn('[messages] خدمة تحويل الصوت لا تُعيد JSON — المسار غير منشور على هذا المضيف.', rawBody.slice(0, 120));
+    // استجابة ليست JSON غالباً صفحة SPA: المضيف الحالي لا يوجّه /api إلى
+    // خدمة الـAPI (Netlify بلا API proxy مثلاً)، فيفشل التحويل دائماً.
+    console.warn(
+      '[messages] خدمة تحويل الصوت لا تُعيد JSON — المسار غير منشور على هذا المضيف '
+        + 'أو /api غير موجّه إلى خدمة الـAPI. أضف API_PROXY_TARGET في إعدادات نشر الواجهة (Netlify).',
+      rawBody.slice(0, 120),
+    );
     return null;
   }
   if (!payload || payload.success !== true) {
