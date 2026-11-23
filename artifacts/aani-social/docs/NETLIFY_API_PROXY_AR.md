@@ -88,7 +88,7 @@ curl -sS -D- https://<netlify-site>/api/media/voice          # JSON من GET
 - `vite.config.ts` يحلّ الهدف ويكتب الملف، ورسالتا الخطأ في `storyUpload.ts`
   و`messagesVoiceServer.ts` تذكران المتغير عند عودة HTML.
 
-**مختبَر حياً على خدمة الـAPI مباشرة** (2026، بعد تلقي العنوان من المالك):
+**مختبَر حياً على خدمة الـAPI مباشرة** (بعد تلقي العنوان من المالك):
 
 - `GET https://aani-social-repair.onrender.com/api/health` →
   `application/json` مع `{"success":true,"status":"ok","serverBuildVersion":"2027-01-24-hmac-signature-v6"}`.
@@ -96,7 +96,13 @@ curl -sS -D- https://<netlify-site>/api/media/voice          # JSON من GET
   **401** مع `application/json` و`{"success":false,"error":"Authentication is required."}`
   (المسار موجود ويعيد JSON لا HTML).
 
-**لم يُختبر:** رفع فعلي من iPhone، ولا طلب حقيقي عبر مضيف Netlify في هذه
-الجلسة (معاينة Netlify محمية بـ401)، ولا سجلات Netlify. التحقق الحي عبر
-Netlify يحتاج فتح الموقع ونفيذ أوامر `curl` أعلاه بعد النشر.
+**مشاهَد حياً على موقع Netlify الإنتاجي** (بناء `main` قبل هذا التغيير):
+`GET https://serene-tapioca-6b79e1.netlify.app/api/health` أعاد صفحة التطبيق
+(HTML) لا JSON — أي أن `/api` كان يخدمه SPA فعلاً، وهو نفس سبب فشل التوقيع.
+
+**لم يُختبر:** مرور طلب حقيقي عبر معاينة Netlify لهذا الـPR؛ المعاينة محمية
+كاملة بكلمة مرور (`401` على `/` وعلى `/api/health` و`/api/media/imagekit-auth`)،
+فلا يمكن اختبار الرد الممرَّر من داخلها. لذلك بقي التحقق الحي عبر Netlify
+مؤجَّلاً إلى ما بعد النشر على الموقع الإنتاجي (أو إلغاء حماية المعاينة)، وينفَّذ
+حينها بأوامر `curl` أعلاه. كذلك لم يُختبر رفع فعلي من iPhone.
 
