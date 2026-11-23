@@ -13,16 +13,18 @@
 import express, { Router, type Request, type Response } from "express";
 
 import { logger } from "../lib/logger";
+import {
+  ImageKitUploadError,
+  normalizeImageKitFolder,
+  readImageKitPrivateKey,
+  uploadFileToImageKit,
+} from "../lib/imagekitUpload";
 import { SERVER_BUILD_VERSION } from "../lib/mediaDiagnostics";
 import { readSupabaseAdminConfig } from "../lib/supabaseAdmin";
 
 const router = Router();
 
 const MAX_UPLOAD_BYTES = 24 * 1024 * 1024; // 24MiB
-
-function readImageKitPrivateKey(): string {
-  return (process.env["IMAGEKIT_PRIVATE_KEY"] || "").trim();
-}
 
 function readBearerToken(req: Request): string {
   const authorization = req.header("authorization") || "";
@@ -43,15 +45,6 @@ async function getAuthenticatedUserId(
   if (!response.ok) return null;
   const user = await response.json().catch(() => null) as { id?: unknown } | null;
   return typeof user?.id === "string" && user.id ? user.id : null;
-}
-
-/** مجلد نظيف داخل /aani فقط — نفس قواعد العميل */
-function sanitizeFolder(raw: string): string {
-  const cleaned = (raw || "")
-    .replace(/[^a-zA-Z0-9._\-\/]/g, "-")
-    .replace(/\/+/g, "/")
-    .replace(/^\/+|\/+$/g, "");
-  return `/aani/${cleaned || "misc"}`;
 }
 
 // نقطة تحقق عملية: افتح GET /api/media/upload في المتصفح — الاستجابة JSON
@@ -76,10 +69,11 @@ router.post("/media/upload", express.raw({ type: "*/*", limit: "30mb" }), (req: 
     const accessToken = readBearerToken(req);
     if (!accessToken) return res.status(401).json({ success: false, error: "Authentication is required." });
 
-    const privateKey = readImageKitPrivateKey();
-    if (!privateKey) {
+    if (!readImageKitPrivateKey()) {
       return res.status(503).json({ success: false, error: "ImageKit is not configured (IMAGEKIT_PRIVATE_KEY)." });
     }
+
+    const folder = normalizeImageKitFolder(decodeURIComponent(req.header("x-aani-folder") || ""));
 
     try {
       const userId = await getAuthenticatedUserId(supabaseConfig, accessToken);
@@ -104,56 +98,17 @@ router.post("/media/upload", express.raw({ type: "*/*", limit: "30mb" }), (req: 
         .trim()
         .toLowerCase()
         || "application/octet-stream";
-      const folder = sanitizeFolder(decodeURIComponent(req.header("x-aani-folder") || ""));
 
       // رفع من خادم إلى خادم بالمفتاح الخاص (Basic auth) — بلا توقيع توكن
-      const form = new FormData();
-      form.append("file", new Blob([new Uint8Array(body)], { type: contentType }), fileName);
-      form.append("fileName", fileName);
-      form.append("folder", folder);
-      form.append("useUniqueFileName", "true");
-      // Restricted access: ملف خاص لا يُعرض إلا برابط موقّع، فلا يُرفع خاصاً
-      // إلا إذا كان العميل المنشور يوقّع إلزامياً. لذلك يُشترط علمان معاً:
-      //   IMAGEKIT_SIGNED_URLS_ENABLED=true  → النسخة المنشورة توقّع كل وسائطها
-      //   IMAGEKIT_PRIVATE_UPLOADS=true      → ارفع الملفات الجديدة كخاصة
-      // تفعيل الثاني وحده ينتج ملفات لا يمكن عرضها، فيُتجاهل مع تحذير.
-      const signedUrlsEnabled = (process.env["IMAGEKIT_SIGNED_URLS_ENABLED"] || "").trim().toLowerCase() === "true";
-      const privateUploadsRequested = (process.env["IMAGEKIT_PRIVATE_UPLOADS"] || "").trim().toLowerCase() === "true";
-      if (privateUploadsRequested && !signedUrlsEnabled) {
-        logger.warn("IMAGEKIT_PRIVATE_UPLOADS is set without IMAGEKIT_SIGNED_URLS_ENABLED — uploading public files instead");
-      }
-      if (privateUploadsRequested && signedUrlsEnabled) {
-        form.append("isPrivateFile", "true");
-      }
+      const uploaded = await uploadFileToImageKit({ bytes: body, fileName, folder, contentType });
 
-      const uploadResponse = await fetch("https://upload.imagekit.io/api/v1/files/upload", {
-        method: "POST",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${privateKey}:`).toString("base64")}`,
-        },
-        body: form,
-      });
-
-      const payload = await uploadResponse.json().catch(() => null) as
-        | { url?: unknown; message?: unknown; help?: unknown }
-        | null;
-
-      if (uploadResponse.ok && payload && typeof payload.url === "string" && payload.url) {
-        logger.info({ folder, fileName, size: body.byteLength }, "Server-side ImageKit upload succeeded");
-        return res.status(200).json({ success: true, url: payload.url });
-      }
-
-      const detail = typeof payload?.message === "string"
-        ? payload.message
-        : typeof payload?.help === "string"
-          ? payload.help
-          : `HTTP ${uploadResponse.status}`;
-      logger.warn({ status: uploadResponse.status, detail, folder }, "Server-side ImageKit upload failed");
-      return res.status(uploadResponse.status >= 400 ? uploadResponse.status : 502).json({
-        success: false,
-        error: `ImageKit upload failed: ${detail}`,
-      });
+      logger.info({ folder, fileName, size: body.byteLength }, "Server-side ImageKit upload succeeded");
+      return res.status(200).json({ success: true, url: uploaded.url });
     } catch (error) {
+      if (error instanceof ImageKitUploadError) {
+        logger.warn({ status: error.status, detail: error.detail, folder }, "Server-side ImageKit upload failed");
+        return res.status(error.status).json({ success: false, error: error.detail });
+      }
       logger.error({ err: error }, "Server-side media upload failed unexpectedly");
       return res.status(500).json({ success: false, error: "Could not upload the file via the server." });
     }

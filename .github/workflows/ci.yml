@@ -62,8 +62,17 @@ jobs:
       # messagesDeliveryReceipts covers the Shell delivery acknowledgements;
       # messagesRealtimeEvents covers the Shell-to-MessagesPage relay, duplicate
       # event suppression, and background expiry cleanup.
+      - name: Unit tests @workspace/aani-social (voice messages)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/messagesVoice.test.ts ./src/lib/messagesVoiceServer.test.ts ./src/lib/messagesVoiceDeletion.test.ts
+
       - name: Unit tests @workspace/aani-social
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts
+
+      # Server-side voice pipeline: FFmpeg argument building, ffprobe parsing and
+      # output verification, the pre-transcode guards, and the auth/rate/concurrency
+      # gate that runs before the request body is read. No ffmpeg binary is needed.
+      - name: Unit tests @workspace/api-server (voice)
+        run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/voiceProcessing.test.ts ./src/lib/voiceGate.test.ts ./src/lib/voiceUploadFinalize.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck

@@ -9,6 +9,7 @@
 // POST /api/media/imagekit-delete  { kind: "post" | "story", id }
 //   يُستدعى من جلسة مستخدم للتحقق من الملكية وإضافة روابط الوسائط إلى الطابور.
 //   لا يحذف أي ملف مباشرة — Worker يفحص المراجع الحية قبل الحذف.
+//   الرسائل لا تمرّ من هنا: حذفها يُجدول داخل قاعدة البيانات عبر Trigger.
 
 import { Router, type Request, type Response } from "express";
 import { timingSafeEqual } from "node:crypto";
@@ -172,6 +173,9 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
         return res.status(200).json({ success: true, enqueued });
       }
 
+      // الرسائل: الجدولة تقع في قاعدة البيانات عبر Trigger
+      // aani_queue_deleted_message_media (AFTER DELETE على public.messages)،
+      // فلا مسار ثانٍ هنا. هذه النقطة للقصص والمنشورات فقط.
       const stories = asRows((await restRequest(config, "GET", "stories", {
         select: "id,user_id,media_url",
         id: `eq.${id}`,
@@ -213,7 +217,8 @@ router.post("/media/upload-ledger", (req: Request, res: Response) => {
     }
     const body = (req.body || {}) as { url?: unknown };
     // تحقق صارم من الرابط: ملفات ImageKit فقط، داخل مجلد /aani/، والمجلد الفرعي
-    // الأول يطابق هوية المستخدم — كل عمليات الرفع في التطبيق ترفع تحت `${userId}/...`.
+    // الأول بعد /aani/ يطابق هوية المستخدم — كل عمليات الرفع في التطبيق ترفع تحت
+    // `${userId}/...`، وبادئة مسار الملف قد تحمل معرّف endpoint الحساب.
     // لا يُسجَّل رابط لا يملكه المستخدم حتى لا تُستخدم الندبة لتسجيل ملفات الغير.
     let mediaUrl = "";
     let ownerSegment = "";
@@ -222,10 +227,12 @@ router.post("/media/upload-ledger", (req: Request, res: Response) => {
       try {
         const parsed = new URL(base);
         if (parsed.hostname.endsWith("ik.imagekit.io")) {
-          const match = parsed.pathname.match(/^\/aani\/([^/]+)(\/|$)/);
-          if (match) {
+          const segments = parsed.pathname.split("/").filter(Boolean);
+          const aaniIndex = segments.indexOf("aani");
+          const candidate = aaniIndex >= 0 ? segments[aaniIndex + 1] : undefined;
+          if (candidate) {
             mediaUrl = base;
-            ownerSegment = decodeURIComponent(match[1]);
+            ownerSegment = decodeURIComponent(candidate);
           }
         }
       } catch {

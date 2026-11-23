@@ -107,11 +107,15 @@ export async function deleteImageKitFilesByUrls(
         verifiedAbsent += 1;
         continue;
       }
-      const folderPath = parsed.pathname.replace(/\/[^/]*$/, "");
-      if (!folderPath || !folderPath.includes("/aani/")) {
+      // مسار الملف يبدأ غالباً بمعرّف endpoint الحساب: /<endpoint>/aani/...
+      // وواجهة إدارة ImageKit تريد مجلد المكتبة بلا هذا المعرّف: /aani/...
+      const segments = parsed.pathname.split("/").filter(Boolean);
+      const aaniIndex = segments.indexOf("aani");
+      if (aaniIndex < 0 || segments.length <= aaniIndex + 1) {
         verifiedAbsent += 1;
         continue;
       }
+      const folderPath = `/${segments.slice(aaniIndex, -1).join("/")}`;
       targets.set(`${parsed.origin}${parsed.pathname}`, folderPath);
     } catch {
       // تعذر تحديد هدف الحذف — فشل صريح (لا نجاح وهمي)
