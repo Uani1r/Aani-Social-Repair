@@ -17,9 +17,10 @@ import {
   voiceMessageContent,
 } from './messagesVoice';
 
-const IMAGEKIT_URL = 'https://ik.imagekit.io/anisocial/aani/00000000-0000-0000-0000-000000000001/messages/11111111-1111-4111-8111-111111111111.m4a';
-const IMAGEKIT_ENDPOINT_PREFIX = IMAGEKIT_URL.slice(0, IMAGEKIT_URL.indexOf('/aani/'));
-const IMAGEKIT_URL_WITHOUT_ENDPOINT = IMAGEKIT_URL.slice(IMAGEKIT_ENDPOINT_PREFIX.length);
+const IMAGEKIT_PATH = '/aani/00000000-0000-0000-0000-000000000001/messages/11111111-1111-4111-8111-111111111111.m4a';
+const IMAGEKIT_URL = `https://ik.imagekit.io/anisocial${IMAGEKIT_PATH}`;
+// نفس المسار على نطاق ImageKit بلا معرّف endpoint (شكل بديل مشروع)
+const IMAGEKIT_URL_WITHOUT_ENDPOINT = `https://ik.imagekit.io${IMAGEKIT_PATH}`;
 const SUPABASE_URL = `${supabaseUrl}/storage/v1/object/public/${storageBucket}/00000000-0000-0000-0000-000000000001/messages/11111111-1111-4111-8111-111111111111.webm`;
 
 test('ImageKit voice URLs inside the upload folder are trusted', () => {
