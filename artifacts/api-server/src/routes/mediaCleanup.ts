@@ -6,7 +6,7 @@
 //   والإشعارات القديمة) — وTriggers جدول media_deletion_jobs يسجلان روابط
 //   الوسائط داخل نفس المعاملة، ثم Worker الخادم يحذف ملفات ImageKit بعد فحص المراجع.
 //
-// POST /api/media/imagekit-delete  { kind: "post" | "story", id }
+// POST /api/media/imagekit-delete  { kind: "post" | "story" | "message", id }
 //   يُستدعى من جلسة مستخدم للتحقق من الملكية وإضافة روابط الوسائط إلى الطابور.
 //   لا يحذف أي ملف مباشرة — Worker يفحص المراجع الحية قبل الحذف.
 
@@ -25,6 +25,7 @@ import {
   runExpiredRecordsCleanup,
 } from "../lib/mediaDb";
 import { isDeletionWorkerRunning, processDeletionJobs } from "../lib/mediaDeletionWorker";
+import { parseVoiceMessageUrl } from "../lib/voiceMessageContent";
 
 const router = Router();
 
@@ -138,7 +139,7 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
     }
 
     const body = (req.body || {}) as { kind?: unknown; id?: unknown };
-    const kind = body.kind === "post" || body.kind === "story" ? body.kind : "";
+    const kind = body.kind === "post" || body.kind === "story" || body.kind === "message" ? body.kind : "";
     const id = typeof body.id === "string" ? body.id : "";
     if (!kind || !id) {
       return res.status(400).json({ success: false, error: "kind and id are required." });
@@ -169,6 +170,34 @@ router.post("/media/imagekit-delete", (req: Request, res: Response) => {
         }
 
         const enqueued = await enqueueMediaDeletionJobs(config, mediaUrls);
+        return res.status(200).json({ success: true, enqueued });
+      }
+
+      // رسالة دردشة صوتية: يملك جدولتها مرسلها فقط، والرابط يُستخرج من محتوى
+      // الرسالة بعد التحقق من أنه ملف ImageKit داخل /aani/. الرسائل القديمة
+      // على Supabase Storage تُتخطى بلا جدولة (لا هدف حذف في ImageKit).
+      if (kind === "message") {
+        const messages = asRows((await restRequest(config, "GET", "messages", {
+          select: "id,sender_id,content",
+          id: `eq.${id}`,
+          limit: "1",
+        })).data);
+        const message = messages[0];
+        if (!message || message.sender_id !== userId) {
+          return res.status(404).json({ success: false, error: "Message not found." });
+        }
+
+        const mediaUrl = parseVoiceMessageUrl(String(message.content || ""));
+        if (!mediaUrl) {
+          return res.status(200).json({ success: true, enqueued: 0, skipped: true, reason: "no-voice-media" });
+        }
+
+        // فحص صارم لبقية المراجع، مع استثناء صف الرسالة نفسه.
+        if (await mediaInActiveUse(config, [mediaUrl], { excludeMessageId: id })) {
+          return res.status(200).json({ success: true, enqueued: 0, skipped: true, reason: "media-still-referenced" });
+        }
+
+        const enqueued = await enqueueMediaDeletionJobs(config, [mediaUrl]);
         return res.status(200).json({ success: true, enqueued });
       }
 
@@ -213,7 +242,8 @@ router.post("/media/upload-ledger", (req: Request, res: Response) => {
     }
     const body = (req.body || {}) as { url?: unknown };
     // تحقق صارم من الرابط: ملفات ImageKit فقط، داخل مجلد /aani/، والمجلد الفرعي
-    // الأول يطابق هوية المستخدم — كل عمليات الرفع في التطبيق ترفع تحت `${userId}/...`.
+    // الأول بعد /aani/ يطابق هوية المستخدم — كل عمليات الرفع في التطبيق ترفع تحت
+    // `${userId}/...`، وبادئة مسار الملف قد تحمل معرّف endpoint الحساب.
     // لا يُسجَّل رابط لا يملكه المستخدم حتى لا تُستخدم الندبة لتسجيل ملفات الغير.
     let mediaUrl = "";
     let ownerSegment = "";
@@ -222,10 +252,12 @@ router.post("/media/upload-ledger", (req: Request, res: Response) => {
       try {
         const parsed = new URL(base);
         if (parsed.hostname.endsWith("ik.imagekit.io")) {
-          const match = parsed.pathname.match(/^\/aani\/([^/]+)(\/|$)/);
-          if (match) {
+          const segments = parsed.pathname.split("/").filter(Boolean);
+          const aaniIndex = segments.indexOf("aani");
+          const candidate = aaniIndex >= 0 ? segments[aaniIndex + 1] : undefined;
+          if (candidate) {
             mediaUrl = base;
-            ownerSegment = decodeURIComponent(match[1]);
+            ownerSegment = decodeURIComponent(candidate);
           }
         }
       } catch {

@@ -21,8 +21,27 @@ import { SignedImage, SignedVideo } from '@/components/SignedMedia';
 import UserIdentity from '@/components/UserIdentity';
 import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
-import { storageBucket, supabase, supabaseConfigured, supabaseUrl } from '@/lib/supabase';
+import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
+import {
+  CHAT_VOICE_MESSAGE_PREFIX,
+  VOICE_PLAYBACK_RATES,
+  VOICE_RECORDER_BITS_PER_SECOND,
+  VOICE_RECORDER_MIME_CANDIDATES,
+  buildVoiceCompressionMetrics,
+  isTrustedVoiceUrl,
+  normalizeVoiceMimeType,
+  parseVoiceMessage,
+  pickVoiceRecorderMimeType,
+  voiceMessageContent,
+  type VoiceCompressionMetrics,
+  type VoiceMessagePayload,
+  type VoicePlaybackRate,
+} from '@/lib/messagesVoice';
+import {
+  enqueueVoiceMessageMediaDeletion,
+  transcodeVoiceMessageOnServer,
+} from '@/lib/messagesVoiceServer';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import {
@@ -166,11 +185,6 @@ interface MessageReaction {
 
 type VoiceRecordingStatus = 'idle' | 'requesting' | 'recording';
 
-interface VoiceMessagePayload {
-  url: string;
-  durationMs: number;
-}
-
 interface VoiceRecordingSession {
   pointerId: number;
   startX: number;
@@ -184,7 +198,6 @@ interface VoiceRecordingSession {
   startedAt: number | null;
 }
 
-const CHAT_VOICE_MESSAGE_PREFIX = '[aani-audio:v1]';
 const CHAT_CALL_MESSAGE_PREFIX = '[aani-call:v1]';
 
 type CallLogMessagePayload = Pick<CallLogEventDetail, 'callId' | 'mode' | 'outcome' | 'durationSeconds'>;
@@ -232,42 +245,11 @@ function callLogOutcomeLabel(outcome: CallLogOutcome): string {
   return 'مكالمة فائتة';
 }
 
-function parseVoiceMessage(content: string): VoiceMessagePayload | null {
-  if (!content.startsWith(CHAT_VOICE_MESSAGE_PREFIX)) return null;
-  try {
-    const parsed: unknown = JSON.parse(content.slice(CHAT_VOICE_MESSAGE_PREFIX.length));
-    if (!isRecord(parsed) || typeof parsed.url !== 'string' || typeof parsed.durationMs !== 'number' || !Number.isFinite(parsed.durationMs)) return null;
-    const url = new URL(parsed.url);
-    if (url.protocol === 'blob:') {
-      return { url: url.toString(), durationMs: Math.max(0, parsed.durationMs) };
-    }
-    const storageUrl = new URL(supabaseUrl);
-    const storagePath = `/storage/v1/object/public/${storageBucket}/`;
-    if ((url.protocol !== 'http:' && url.protocol !== 'https:')
-      || url.origin !== storageUrl.origin
-      || !url.pathname.startsWith(storagePath)) return null;
-    return { url: url.toString(), durationMs: Math.max(0, parsed.durationMs) };
-  } catch {
-    return null;
-  }
-}
-
-function voiceMessageContent(url: string, durationMs: number): string {
-  return `${CHAT_VOICE_MESSAGE_PREFIX}${JSON.stringify({ url, durationMs: Math.max(0, Math.round(durationMs)) })}`;
-}
-
 function formatVoiceDuration(durationMs: number): string {
   const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-}
-
-function normalizeVoiceMimeType(value: string): { mimeType: 'audio/mp4' | 'audio/webm'; extension: 'm4a' | 'webm' } | null {
-  const mimeType = value.split(';', 1)[0]?.trim().toLowerCase();
-  if (mimeType === 'audio/mp4') return { mimeType, extension: 'm4a' };
-  if (mimeType === 'audio/webm') return { mimeType, extension: 'webm' };
-  return null;
 }
 
 function isMicrophonePermissionDenied(error: unknown): boolean {
@@ -285,6 +267,29 @@ function isMicrophonePermissionDenied(error: unknown): boolean {
     || /not allowed|permission (?:was )?denied|user denied|dismiss(?:ed|al)?/i.test(message);
 }
 
+/**
+ * يفتح الميكروفون بقيود صوتية مناسبة للرسائل الصوتية: قناة واحدة (mono)،
+ * إزالة الصدى، كبت الضجيج، والتحكم التلقائي بالمستوى. لا تُفرض القيود على
+ * جهاز لا يدعمها: عند رفضها (OverconstrainedError) يُطلب الصوت وحده بدل
+ * إفشال التسجيل، أما رفض الإذن فلا يُعاد طلبه.
+ */
+async function openVoiceInputStream(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('تسجيل الصوت غير مدعوم في هذا المتصفح.');
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: { ideal: 1 },
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+  } catch (error) {
+    if (isMicrophonePermissionDenied(error)) throw error;
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
+
 function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -292,8 +297,10 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const [hasError, setHasError] = useState(false);
   const [currentTimeMs, setCurrentTimeMs] = useState(0);
   const [mediaDurationMs, setMediaDurationMs] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState<VoicePlaybackRate>(1);
   const loadingTimeoutRef = useRef<number | null>(null);
-  const totalDurationMs = mediaDurationMs || durationMs;
+  // مدة التسجيل الحقيقية المقاسة عند التسجيل أولاً؛ ومدة الوسيط بديل عند غيابها.
+  const totalDurationMs = durationMs > 0 ? durationMs : mediaDurationMs;
 
   const clearLoadingTimeout = () => {
     if (loadingTimeoutRef.current !== null) window.clearTimeout(loadingTimeoutRef.current);
@@ -318,12 +325,25 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
     if (!audio) return;
     try {
       audio.pause();
+      audio.currentTime = 0;
       audio.removeAttribute('src');
       audio.load();
     } catch {
       /* العنصر قد يكون أفلت مرجعه بالفعل */
     }
   }, []);
+
+  // سرعة التشغيل تُطبَّق الآن وعلى كل تحميل جديد للوسيط (يعيد المتصفح ضبطها).
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      audio.defaultPlaybackRate = playbackRate;
+      audio.playbackRate = playbackRate;
+    } catch {
+      /* بعض المتصفحات ترفض سرعة غير مدعومة — تبقى السرعة السابقة */
+    }
+  }, [playbackRate]);
 
   const togglePlayback = async () => {
     const audio = audioRef.current;
@@ -392,10 +412,23 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         />
         <time className="messages-voice-duration" dir="ltr">{formatVoiceDuration(totalDurationMs)}</time>
       </div>
+      <div className="messages-voice-rate-group" role="group" aria-label="سرعة تشغيل الرسالة الصوتية">
+        {VOICE_PLAYBACK_RATES.map(rate => (
+          <button
+            key={rate}
+            type="button"
+            className={`messages-voice-rate${rate === playbackRate ? ' is-active' : ''}`}
+            aria-pressed={rate === playbackRate}
+            onClick={() => setPlaybackRate(rate)}
+          >
+            {rate}×
+          </button>
+        ))}
+      </div>
       <audio
         ref={audioRef}
         className="messages-voice-hidden-audio"
-        preload="none"
+        preload="metadata"
         src={url}
         aria-hidden="true"
         tabIndex={-1}
@@ -406,15 +439,27 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         onPause={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); }}
         onTimeUpdate={event => setCurrentTimeMs(event.currentTarget.currentTime * 1000)}
         onLoadedMetadata={event => {
-          const duration = event.currentTarget.duration;
+          const audio = event.currentTarget;
+          const duration = audio.duration;
           if (Number.isFinite(duration) && duration > 0) setMediaDurationMs(duration * 1000);
+          try {
+            audio.playbackRate = playbackRate;
+          } catch {
+            /* سرعة غير مدعومة على هذا الجهاز */
+          }
         }}
         onDurationChange={event => {
           const duration = event.currentTarget.duration;
           if (Number.isFinite(duration) && duration > 0) setMediaDurationMs(duration * 1000);
         }}
         onEnded={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); setCurrentTimeMs(0); }}
-        onError={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); setHasError(true); }}
+        onError={event => {
+          clearLoadingTimeout();
+          setIsPlaying(false);
+          setIsLoading(false);
+          setHasError(true);
+          console.warn('[messages] تعذر تحميل الرسالة الصوتية:', event.currentTarget.error?.code ?? 'unknown');
+        }}
       />
     </>
   );
@@ -3097,14 +3142,32 @@ export default function MessagesPage({
     }
 
     const path = `${session.userId}/messages/${messageId}.${format.extension}`;
-    let uploadedPath = '';
-    let preserveUploadedFile = false;
+    const transcodeStartedAt = Date.now();
     try {
-      const uploadBlob = new Blob([blob], { type: format.mimeType });
-      const file = new File([uploadBlob], `voice-${messageId}.${format.extension}`, { type: format.mimeType });
-      await uploadMedia({ file, path, preset: 'voiceMessage' });
-      uploadedPath = path;
-      const audioUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+      // 1) التحويل الثقيل على الخادم (FFmpeg → M4A/AAC أحادي) — لا ترميز على
+      //    iPhone Safari. التسجيل الأصلي يبقى في الجهاز حتى ينجح كل شيء.
+      const transcoded = await transcodeVoiceMessageOnServer(blob, messageId);
+      let audioUrl: string;
+      let metrics: VoiceCompressionMetrics;
+      if (transcoded) {
+        audioUrl = transcoded.url;
+        metrics = transcoded.metrics;
+      } else {
+        // 2) مسار احتياطي: رفع التسجيل بصيغته الفعلية بلا أي ترميز على الجهاز
+        //    (لا preset: لا يمر عبر extractAudio الثقيل).
+        const file = new File([blob], `voice-${messageId}.${format.extension}`, { type: format.mimeType });
+        audioUrl = await uploadMedia({ file, path });
+        metrics = buildVoiceCompressionMetrics({
+          originalBytes: blob.size,
+          finalBytes: file.size,
+          processingMs: Date.now() - transcodeStartedAt,
+          sourceMimeType: blob.type,
+          targetMimeType: format.mimeType,
+          outcome: 'passthrough',
+        });
+      }
+      console.info('[messages][voice-metrics]', metrics);
+      if (!isTrustedVoiceUrl(audioUrl)) throw new Error('رابط التسجيل الصوتي غير موثوق.');
       const content = voiceMessageContent(audioUrl, durationMs);
       if (content.length > 4000) throw new Error('بيانات الرسالة الصوتية كبيرة جداً.');
       const { error } = await supabase.from('messages').insert({
@@ -3114,10 +3177,7 @@ export default function MessagesPage({
         content,
         ...(session.replyToMessageId ? { reply_to_message_id: session.replyToMessageId } : {}),
       });
-      if (error) {
-        preserveUploadedFile = isTransientNetworkError(error);
-        throw error;
-      }
+      if (error) throw error;
       if (selectedIdRef.current === session.recipientId) {
         setThread(current => current.map(message => message.id === messageId
           ? { ...message, content, sendState: 'sent' }
@@ -3128,15 +3188,8 @@ export default function MessagesPage({
       if (selectedIdRef.current === session.recipientId) void loadThread();
       void loadConversationList();
     } catch (error) {
-      if (uploadedPath && isTransientNetworkError(error)) preserveUploadedFile = true;
-      if (uploadedPath && !preserveUploadedFile) {
-        try {
-          const { error: cleanupError } = await supabase.storage.from(storageBucket).remove([uploadedPath]);
-          if (cleanupError) console.warn('[messages] تعذر تنظيف التسجيل الصوتي غير المرسل:', cleanupError);
-        } catch (cleanupError) {
-          console.warn('[messages] تعذر تنظيف التسجيل الصوتي غير المرسل:', cleanupError);
-        }
-      }
+      // الملف المرفوع (إن وُجد) مُسجَّل في سجل الرفع، وكنس اليتامى يحذفه بعد
+      // مهلة إن بقي بلا مرجع. لا حذف يدوي هنا: الصف قد يكون نجح بعد فشل الشبكة.
       if (selectedIdRef.current === session.recipientId) {
         setThread(current => current.map(message => message.id === messageId && message.sendState === 'pending'
           ? { ...message, sendState: 'failed' }
@@ -3153,26 +3206,44 @@ export default function MessagesPage({
       if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
         throw new Error('تسجيل الصوت غير مدعوم في هذا المتصفح.');
       }
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await openVoiceInputStream();
       if (session.cancelled || voiceRecordingSessionRef.current !== session) {
         stream.getTracks().forEach(track => track.stop());
         return;
       }
       session.stream = stream;
-      const preferredMimeTypes = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'];
+      // الصيغة المطلوبة تُفحص قبل الطلب (MP4 أولاً ثم WebM/Opus)، وما يُسجَّل
+      // فعلياً يُقرأ من recorder.mimeType بعد التوقف — لا نفترض النجاح.
+      const supportsMimeType = (mimeType: string): boolean => {
+        if (typeof MediaRecorder.isTypeSupported !== 'function') return true;
+        try {
+          return MediaRecorder.isTypeSupported(mimeType);
+        } catch {
+          return false;
+        }
+      };
+      const primaryMimeType = pickVoiceRecorderMimeType(supportsMimeType);
+      const candidateMimeTypes = [
+        ...(primaryMimeType ? [primaryMimeType] : []),
+        ...VOICE_RECORDER_MIME_CANDIDATES,
+      ].filter((mimeType, index, list) => list.indexOf(mimeType) === index);
       let recorder: MediaRecorder | null = null;
       let requestedMimeType = '';
-      for (const mimeType of preferredMimeTypes) {
+      for (const mimeType of candidateMimeTypes) {
         try {
-          if (typeof MediaRecorder.isTypeSupported === 'function' && !MediaRecorder.isTypeSupported(mimeType)) continue;
-          recorder = new MediaRecorder(stream, { mimeType });
+          recorder = new MediaRecorder(stream, {
+            mimeType,
+            audioBitsPerSecond: VOICE_RECORDER_BITS_PER_SECOND,
+          });
           requestedMimeType = mimeType;
           break;
         } catch {
-          /* try the next browser-supported recording format */
+          /* المرشح التالي */
         }
       }
-      const activeRecorder = recorder || new MediaRecorder(stream);
+      const activeRecorder = recorder || new MediaRecorder(stream, {
+        audioBitsPerSecond: VOICE_RECORDER_BITS_PER_SECOND,
+      });
       session.recorder = activeRecorder;
       activeRecorder.ondataavailable = event => {
         if (event.data.size > 0) session.chunks.push(event.data);
@@ -4144,6 +4215,12 @@ export default function MessagesPage({
           senderId: message.sender_id,
           recipientId: message.recipient_id,
         });
+      }
+      // رسالة صوتية: جدولة حذف ملفها من ImageKit بعد حذف الصف. الخادم يتحقق
+      // من الملكية ومن عدم بقاء أي مرجع حي قبل الحذف الفعلي (لا حذف أعمى).
+      if (forEveryone) {
+        const voiceMessage = parseVoiceMessage(message.content);
+        if (voiceMessage) void enqueueVoiceMessageMediaDeletion(message.id);
       }
       deletedMessageIdsRef.current.add(message.id);
       setThread(current => current.filter(item => item.id !== message.id));

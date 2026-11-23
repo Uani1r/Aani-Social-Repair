@@ -6,6 +6,7 @@ import feedDiagnosticsRouter from "./feedDiagnostics";
 import mediaCleanupRouter from "./mediaCleanup";
 import mediaProcessingRouter from "./mediaProcessing";
 import mediaUploadRouter from "./mediaUpload";
+import mediaVoiceRouter from "./mediaVoice";
 import pushNotificationsRouter from "./pushNotifications";
 
 const router: IRouter = Router();
@@ -17,6 +18,7 @@ router.use(feedDiagnosticsRouter);
 router.use(mediaCleanupRouter);
 router.use(mediaProcessingRouter);
 router.use(mediaUploadRouter);
+router.use(mediaVoiceRouter);
 router.use(pushNotificationsRouter);
 
 /**

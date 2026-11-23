@@ -233,7 +233,7 @@ export function buildMediaReferenceConditions(
 export async function mediaInActiveUse(
   config: SupabaseAdminConfig,
   mediaUrls: string[],
-  options: { excludePostId?: string; excludeStoryId?: string } = {},
+  options: { excludePostId?: string; excludeStoryId?: string; excludeMessageId?: string } = {},
 ): Promise<boolean> {
   const urls = [...new Set(mediaUrls.map(normalizeMediaUrl).filter(Boolean))];
   if (urls.length === 0 && !options.excludeStoryId) return false;
@@ -328,6 +328,11 @@ export async function mediaInActiveUse(
   const excludeStory: Record<string, string> | undefined = options.excludeStoryId
     ? { id: `neq.${options.excludeStoryId}` }
     : undefined;
+  // عند حذف رسالة صوتية: استثناء صف الرسالة نفسها من فحص المراجع حتى لا يمنع
+  // الملف من الحذف بسبب الصف الذي حُذف للتو (سباق مع نسخة قيد القراءة).
+  const excludeMessage: Record<string, string> | undefined = options.excludeMessageId
+    ? { id: `neq.${options.excludeMessageId}` }
+    : undefined;
 
   // كل فحص دالة كسولة تُنفَّذ عند بلوغها فقط: إنشاء كل الوعود مسبقاً كان
   // يترك وعوداً مرفوضة بلا مُنتَظِر (رفض غير معالج) يُسقط عملية Node.js كلها
@@ -345,7 +350,7 @@ export async function mediaInActiveUse(
     // أساسي: الأصوات النشطة — الفيديو الأصلي أو معاينة الصوت
     () => anyMatch("sounds", buildMediaReferenceConditions(urls, ["source_video_url", "preview_url"])),
     // أساسي: الرسائل ومرفقات الدردشة (الروابط داخل نص الرسالة)
-    () => anyMatch("messages", buildMediaReferenceConditions(urls, ["content"])),
+    () => anyMatch("messages", buildMediaReferenceConditions(urls, ["content"]), { extraParams: excludeMessage }),
     // أساسي: صور الحساب والأغلفة
     () => anyMatch("profiles", buildMediaReferenceConditions(urls, ["avatar_url", "cover_url"])),
     // أساسي: أصول الوسائط قيد المعالجة (الفيديو والصورة البارزة)

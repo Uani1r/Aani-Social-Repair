@@ -63,7 +63,13 @@ jobs:
       # messagesRealtimeEvents covers the Shell-to-MessagesPage relay, duplicate
       # event suppression, and background expiry cleanup.
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/messagesVoice.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts
+
+      # Server-side voice pipeline: FFmpeg argument building, ffprobe parsing and
+      # output verification, plus the pre-transcode size/type guards. No ffmpeg
+      # binary is needed — these are the pure parts of the module.
+      - name: Unit tests @workspace/api-server (voice)
+        run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/voiceProcessing.test.ts ./src/lib/voiceMessageContent.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck

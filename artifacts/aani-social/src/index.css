@@ -6896,6 +6896,40 @@ body.aani-immersive .unified-top-bar {
   display: none;
 }
 
+.messages-voice-rate-group {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  direction: ltr;
+}
+
+.messages-voice-rate {
+  min-width: 26px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 999px;
+  color: rgb(255 255 255 / 62%);
+  background: transparent;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.messages-voice-rate:hover,
+.messages-voice-rate:focus-visible {
+  outline: none;
+  color: #fff;
+  background: rgb(255 255 255 / 14%);
+}
+
+.messages-voice-rate.is-active {
+  color: #06210f;
+  background: #7fe0a6;
+  font-weight: 700;
+}
+
 .messages-voice-spinner {
   width: 15px;
   height: 15px;
