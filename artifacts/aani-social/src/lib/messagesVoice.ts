@@ -59,24 +59,49 @@ export function isTrustedImageKitVoiceUrl(value: string): boolean {
 }
 
 /**
- * رابط Supabase Storage القديم: نفس مشروع المشروع ونفس الـbucket، وبأي مسار
- * كائني — الصفوف القديمة قد تكون رُفعت قبل تثبيت مجلد الرفع.
+ * رابط Supabase Storage من المشروع والـbucket المعتمدين فقط. يقبل public وsign
+ * (مع token للرابط الموقّع)، بشرط وجود مسار ملف بامتداد صوتي صالح.
  */
 export function isTrustedSupabaseVoiceUrl(value: string): boolean {
+  if (typeof value !== 'string') return false;
   const url = parseUrl(value.trim());
   if (!url) return false;
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  if (url.username || url.password) return false;
 
   const storageUrl = parseUrl(supabaseUrl);
   if (!storageUrl) return false;
 
-  const storagePath = `/storage/v1/object/public/${storageBucket}/`;
-  return url.origin === storageUrl.origin && url.pathname.startsWith(storagePath);
+  if (url.origin !== storageUrl.origin) return false;
+
+  const match = url.pathname.match(/^\/storage\/v1\/object\/(public|sign)\/([^/]+)\/(.+)$/);
+  if (!match) return false;
+
+  const [, accessType, rawBucket, rawObjectPath] = match;
+  let bucket: string;
+  let objectPath: string;
+  try {
+    bucket = decodeURIComponent(rawBucket);
+    objectPath = decodeURIComponent(rawObjectPath);
+  } catch {
+    return false;
+  }
+
+  if (bucket !== storageBucket) return false;
+  if (accessType === 'sign' && !url.searchParams.get('token')) return false;
+  if (objectPath.startsWith('/') || objectPath.endsWith('/') || objectPath.includes('\\')) return false;
+
+  const pathSegments = objectPath.split('/');
+  if (pathSegments.some(segment => !segment || segment === '.' || segment === '..')) return false;
+  if (/[\u0000-\u001f\u007f]/.test(objectPath)) return false;
+
+  const fileName = pathSegments[pathSegments.length - 1] || '';
+  return AUDIO_FILE_EXTENSION_PATTERN.test(fileName);
 }
 
 /**
  * رابط صوت موثوق: رابط محلي مؤقت للمعاينة قبل الرفع (blob:)، أو رابط ImageKit
- * معتمد، أو رابط Supabase القديم. أي رابط خارجي آخر لا يُعرض ولا يُشغّل.
+ * معتمد، أو رابط Supabase public/signed معتمد. أي رابط خارجي آخر لا يُعرض ولا يُشغّل.
  */
 export function isTrustedVoiceUrl(value: string): boolean {
   if (typeof value !== 'string') return false;

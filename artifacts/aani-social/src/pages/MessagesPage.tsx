@@ -26,13 +26,21 @@ import {
   CHAT_VOICE_MESSAGE_PREFIX,
   VOICE_RECORDER_BITS_PER_SECOND,
   VOICE_RECORDER_MIME_CANDIDATES,
+  isTrustedVoiceUrl,
   normalizeVoiceMimeType,
   parseVoiceMessage,
   pickVoiceRecorderMimeType,
   voiceMessageContent,
   type VoiceMessagePayload,
 } from '@/lib/messagesVoice';
-import { claimVoicePlayback, toggleVoicePlayback } from '@/lib/messagesVoicePlayback';
+import { resolveMediaUrl } from '@/lib/mediaAccess';
+import {
+  claimVoicePlayback,
+  failVoicePlayback,
+  needsVoicePlaybackSourceRefresh,
+  resolveVoicePlaybackSource,
+  toggleVoicePlayback,
+} from '@/lib/messagesVoicePlayback';
 import { prepareVoiceMessageSource } from '@/lib/messagesVoiceServer';
 import { readSeenStoryIds, SEEN_STORY_IDS_CHANGED_EVENT } from '@/lib/seenStories';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
@@ -293,6 +301,8 @@ async function openVoiceInputStream(): Promise<MediaStream> {
 
 function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  const [isResolvingSource, setIsResolvingSource] = useState(true);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
@@ -300,6 +310,12 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
   const [mediaDurationMs, setMediaDurationMs] = useState(0);
   const loadingTimeoutRef = useRef<number | null>(null);
   const releaseClaimRef = useRef<(() => void) | null>(null);
+  const retrySourceReadyRef = useRef(false);
+  const retrySourceRefreshRef = useRef<Promise<string | null> | null>(null);
+  const resolveSource = useCallback(
+    () => resolveVoicePlaybackSource(url, resolveMediaUrl, isTrustedVoiceUrl),
+    [url],
+  );
   // مدة التسجيل الحقيقية المقاسة عند التسجيل أولاً؛ ومدة الوسيط بديل عند غيابها.
   const totalDurationMs = durationMs > 0 ? durationMs : mediaDurationMs;
 
@@ -308,16 +324,22 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
     loadingTimeoutRef.current = null;
   }, []);
 
+  const releasePlaybackClaim = useCallback(() => {
+    releaseClaimRef.current?.();
+    releaseClaimRef.current = null;
+  }, []);
+
   const startLoadingTimeout = useCallback(() => {
-    clearLoadingTimeout();
+    if (loadingTimeoutRef.current !== null) return;
     loadingTimeoutRef.current = window.setTimeout(() => {
       audioRef.current?.pause();
       setIsLoading(false);
       setIsPlaying(false);
       setHasError(true);
+      releasePlaybackClaim();
       loadingTimeoutRef.current = null;
     }, 15_000);
-  }, [clearLoadingTimeout]);
+  }, [clearLoadingTimeout, releasePlaybackClaim]);
 
   const stopPlaying = useCallback(() => {
     const audio = audioRef.current;
@@ -331,7 +353,8 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
     clearLoadingTimeout();
     setIsLoading(false);
     setIsPlaying(false);
-  }, [clearLoadingTimeout]);
+    releasePlaybackClaim();
+  }, [clearLoadingTimeout, releasePlaybackClaim]);
 
   useEffect(() => () => {
     releaseClaimRef.current?.();
@@ -357,9 +380,72 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
     }
   };
 
+  useEffect(() => {
+    let active = true;
+    retrySourceReadyRef.current = false;
+    retrySourceRefreshRef.current = null;
+    setPlaybackUrl(null);
+    setIsResolvingSource(true);
+    setHasError(false);
+    void resolveSource().then(source => {
+      if (!active) return;
+      setPlaybackUrl(source);
+      setHasError(!source);
+      setIsResolvingSource(false);
+    });
+    return () => {
+      active = false;
+      retrySourceRefreshRef.current = null;
+    };
+  }, [resolveSource]);
+
+  const refreshSourceForRetry = useCallback(() => {
+    if (retrySourceRefreshRef.current) return;
+    setIsResolvingSource(true);
+    const pending = resolveSource();
+    retrySourceRefreshRef.current = pending;
+    void pending.then(source => {
+      if (retrySourceRefreshRef.current !== pending) return;
+      if (source) {
+        setPlaybackUrl(source);
+        retrySourceReadyRef.current = true;
+      }
+    }).catch(() => {
+      if (retrySourceRefreshRef.current === pending) retrySourceReadyRef.current = false;
+    }).finally(() => {
+      if (retrySourceRefreshRef.current !== pending) return;
+      retrySourceRefreshRef.current = null;
+      setIsResolvingSource(false);
+    });
+  }, [resolveSource]);
+
+  const handlePlaybackError = useCallback((error: unknown) => {
+    clearLoadingTimeout();
+    setHasError(true);
+    retrySourceReadyRef.current = false;
+    releasePlaybackClaim();
+    console.warn('[messages] تعذر تشغيل/تحميل الرسالة الصوتية:', error);
+    refreshSourceForRetry();
+  }, [clearLoadingTimeout, refreshSourceForRetry, releasePlaybackClaim]);
+
   const togglePlayback = async () => {
     const audio = audioRef.current;
-    if (!audio) return;
+    if (!audio || isResolvingSource) return;
+    if (needsVoicePlaybackSourceRefresh(audio.paused, playbackUrl, hasError, retrySourceReadyRef.current)) {
+      setIsResolvingSource(true);
+      const refreshedUrl = await resolveSource();
+      setIsResolvingSource(false);
+      if (!refreshedUrl) {
+        setHasError(true);
+        return;
+      }
+      setPlaybackUrl(refreshedUrl);
+      retrySourceReadyRef.current = true;
+      // لا نؤخر audio.play() عبر await عند تجهيز/تجديد الرابط؛ يتطلب iOS Safari
+      // تفعيلاً مباشراً من المستخدم؛ يجري التجديد استباقياً بعد الخطأ لتكفي
+      // ضغطة واحدة عادةً لإعادة المحاولة. هذا المسار احتياطي إذا لم يكتمل التجديد.
+      return;
+    }
     if (audio.paused) {
       // رسالة واحدة تعمل في الوقت نفسه: تشغيل هذه يوقف السابقة.
       claimPlayback();
@@ -370,11 +456,7 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
       {
         onLoading: loading => setIsLoading(loading),
         onPlaying: playing => setIsPlaying(playing),
-        onError: error => {
-          clearLoadingTimeout();
-          setHasError(true);
-          console.warn('[messages] تعذر تشغيل الرسالة الصوتية:', error);
-        },
+        onError: handlePlaybackError,
       },
       { reloadOnError: hasError },
     );
@@ -402,10 +484,11 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
       <button
         type="button"
         className={`messages-voice-play${hasError ? ' is-error' : ''}`}
+        disabled={isResolvingSource}
         aria-label={hasError ? 'تعذر تشغيل الرسالة الصوتية، اضغط لإعادة المحاولة' : isPlaying ? 'إيقاف الرسالة الصوتية' : 'تشغيل الرسالة الصوتية'}
         onClick={() => { void togglePlayback(); }}
       >
-        {isLoading ? <span className="messages-voice-spinner" aria-hidden="true" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
+        {isLoading || isResolvingSource ? <span className="messages-voice-spinner" aria-hidden="true" /> : isPlaying ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
       </button>
       <div className="messages-voice-timeline">
         <input
@@ -427,14 +510,14 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
         className="messages-voice-hidden-audio"
         playsInline
         preload="metadata"
-        src={url}
+        src={playbackUrl ?? undefined}
         aria-hidden="true"
         tabIndex={-1}
-        onPlay={() => { setIsPlaying(true); setHasError(false); }}
-        onPlaying={() => { clearLoadingTimeout(); setIsLoading(false); }}
+        onPlay={() => { setHasError(false); retrySourceReadyRef.current = false; }}
+        onPlaying={() => { clearLoadingTimeout(); setIsLoading(false); setIsPlaying(true); }}
         onWaiting={() => { setIsLoading(true); startLoadingTimeout(); }}
         onCanPlay={() => { clearLoadingTimeout(); setIsLoading(false); }}
-        onPause={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); }}
+        onPause={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); releasePlaybackClaim(); }}
         onTimeUpdate={event => setCurrentTimeMs(event.currentTarget.currentTime * 1000)}
         onLoadedMetadata={event => {
           const duration = event.currentTarget.duration;
@@ -444,19 +527,14 @@ function VoiceMessagePlayer({ url, durationMs }: VoiceMessagePayload) {
           const duration = event.currentTarget.duration;
           if (Number.isFinite(duration) && duration > 0) setMediaDurationMs(duration * 1000);
         }}
-        onEnded={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); setCurrentTimeMs(0); }}
+        onEnded={() => { clearLoadingTimeout(); setIsPlaying(false); setIsLoading(false); setCurrentTimeMs(0); releasePlaybackClaim(); }}
         onError={event => {
-          clearLoadingTimeout();
-          setIsPlaying(false);
-          setIsLoading(false);
-          setHasError(true);
-          // رمز الخطأ والرسالة والرابط: يكشف إن كان الملف نفسه غير متاح
-          console.warn(
-            '[messages] تعذر تحميل الرسالة الصوتية:',
-            event.currentTarget.error?.code ?? 'unknown',
-            event.currentTarget.error?.message ?? '',
-            url.slice(0, 160),
-          );
+          // حدث المصدر يغطي 403 وHTML/JSON بدلاً من الملف وMIME/codec غير المدعوم.
+          failVoicePlayback({
+            onLoading: setIsLoading,
+            onPlaying: setIsPlaying,
+            onError: handlePlaybackError,
+          }, event.currentTarget.error);
         }}
       />
     </>
