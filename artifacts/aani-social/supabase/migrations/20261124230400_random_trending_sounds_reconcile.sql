@@ -3,12 +3,13 @@
 --
 -- create or replace: آمن لإعادة التطبيق. security invoker: سياسات RLS على
 -- public.sounds تُطبَّق على المستدعي (ممنوعة على anon، متاحة لـ authenticated).
+-- volatile بلا stable: random() يجب أن يُقيَّم في كل استدعاء، وstable يوهم
+-- بأن النتيجة ثابتة داخل الاستعلام الواحد.
 begin;
 
 create or replace function public.random_trending_sounds(pool_size integer default 10)
 returns table (id uuid, title text, source_video_url text)
 language sql
-stable
 security invoker
 set search_path = public, pg_temp
 as $$
