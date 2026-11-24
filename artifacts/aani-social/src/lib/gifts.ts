@@ -42,7 +42,72 @@ export type SendGiftResult = {
   price_paid?: number;
   popularity_points?: number;
   error?: string;
+  /**
+   * نتيجة غير محسومة: خطأ نقل/اتصال/مهلة زمنية/انقطاع شبكة، لا رفض نهائي من
+   * الخادم. بهذه الحالة تُحفظ المحاولة (نفس idempotencyKey) وتُعرض إعادة المحاولة،
+   * ولا يُعتبر الطلب مرفوضاً ولا ناجحاً.
+   */
+  inconclusive?: boolean;
 };
+
+/**
+ * محاولة إرسال معلّقة.
+ * - المفتاح (key) يُولّد مرة واحدة لكل عملية ويُعاد استخدامه عند إعادة المحاولة
+ *   بعد نتيجة غير محسومة (خطأ نقل/شبكة) لضمان عدم خصم الرصيد مرتين.
+ * - مرتبطة بالمستلم والهدية، فلا يُعاد استخدام مفتاح قديم مع مستلم أو هدية أخرى.
+ * - `status`:
+ *     'sending'     → الطلب جارٍ، الاختيار مقفل.
+ *     'inconclusive'→ نتيجة غير محسومة، نُبقي المفتاح ونقفل الاختيار حتى إعادة المحاولة.
+ */
+export type SendAttempt = {
+  key: string;
+  recipientId: string;
+  giftId: string;
+  status: 'sending' | 'inconclusive';
+};
+
+export type SendErrorKind = 'inconclusive' | 'definitive';
+
+/**
+ * تصنيف خطأ الإرسال:
+ * - 'definitive'  → رفض مؤكد من الخادم (خطأ عمل/صلاحية/رصيد) يحمل رمز خطأ
+ *   (code) من PostgREST/Postgres، فالطلب محسوم كفشل.
+ * - 'inconclusive'→ خطأ نقل/اتصال/مهلة زمنية/انقطاع شبكة (بلا رمز خطأ من
+ *   الخادم)، فالنتيجة غير محسومة ويجب الاحتفاظ بنفس المفتاح وإعادة المحاولة.
+ */
+export function classifySendError(error: unknown): SendErrorKind {
+  if (!error || typeof error !== 'object') return 'inconclusive';
+  const code = (error as { code?: unknown }).code;
+  const hasServerCode = typeof code === 'string' && code.trim().length > 0;
+  return hasServerCode ? 'definitive' : 'inconclusive';
+}
+
+/**
+ * تحديد المحاولة التي ستُستخدم للإرسال، بشكل نقي (قابل للاختبار):
+ * - إن وُجدت محاولة معلّقة (inconclusive) بنفس المستلم والهدية: تُعاد بنفس
+ *   المفتاح (لا يُولَّد مفتاح جديد) وتتحول إلى 'sending'.
+ * - غير ذلك (لا محاولة سابقة، أو تغيّر المستلم/الهدية): تُنشأ محاولة جديدة
+ *   بمفتاح جديد من `generateKey`.
+ */
+export function resolveSendAttempt(
+  previous: SendAttempt | null,
+  params: { recipientId: string; giftId: string; generateKey: () => string }
+): SendAttempt {
+  if (
+    previous &&
+    previous.status === 'inconclusive' &&
+    previous.recipientId === params.recipientId &&
+    previous.giftId === params.giftId
+  ) {
+    return { ...previous, status: 'sending' };
+  }
+  return {
+    key: params.generateKey(),
+    recipientId: params.recipientId,
+    giftId: params.giftId,
+    status: 'sending',
+  };
+}
 
 /**
  * تنسيق رقم الشعبية للعرض في الكبسولة والنافذة.
@@ -177,16 +242,38 @@ export async function sendGift(
   idempotencyKey?: string
 ): Promise<SendGiftResult> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    // لا اتصال بقاعدة البيانات: نتيجة غير محسومة (لا رفض نهائي).
+    return { ok: false, inconclusive: true, error: 'اتصال قاعدة البيانات غير متاح.' };
   }
-  const { data, error } = await supabase.rpc('aani_send_gift', {
-    p_sender_id: senderId,
-    p_recipient_id: recipientId,
-    p_gift_id: giftId,
-    p_idempotency_key: idempotencyKey ?? (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : null),
-  });
-  if (error) {
-    return { ok: false, error: error.message || 'فشل إرسال الهدية.' };
+  const key =
+    idempotencyKey ??
+    (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : null);
+  try {
+    const { data, error } = await supabase.rpc('aani_send_gift', {
+      p_sender_id: senderId,
+      p_recipient_id: recipientId,
+      p_gift_id: giftId,
+      p_idempotency_key: key,
+    });
+    if (error) {
+      // رفض مؤكد من الخادم (يحمل code) مقابل خطأ نقل/شبكة (بلا code).
+      if (classifySendError(error) === 'inconclusive') {
+        return {
+          ok: false,
+          inconclusive: true,
+          error: error.message || 'تعذّر الاتصال بالخادم. أعد المحاولة.',
+        };
+      }
+      return { ok: false, inconclusive: false, error: error.message || 'فشل إرسال الهدية.' };
+    }
+    return (data ?? { ok: false }) as SendGiftResult;
+  } catch (error) {
+    // خطأ نقل/اتصال/مهلة زمنية/انقطاع شبكة (الطلب رُفض قبل وصوله للخادم غالباً):
+    // النتيجة غير محسومة، نحتفظ بنفس المفتاح لإعادة المحاولة دون خصم مزدوج.
+    return {
+      ok: false,
+      inconclusive: true,
+      error: error instanceof Error ? error.message : 'تعذّر الاتصال بالخادم. أعد المحاولة.',
+    };
   }
-  return (data ?? { ok: false }) as SendGiftResult;
 }

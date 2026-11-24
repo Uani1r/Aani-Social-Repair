@@ -21,9 +21,11 @@ import {
   fetchMyBalance,
   fetchPopularity,
   fetchReceivedGifts,
+  resolveSendAttempt,
   sendGift,
   type Gift,
   type ReceivedGift,
+  type SendAttempt,
   type SendGiftResult,
 } from '@/lib/gifts';
 import { toast } from 'sonner';
@@ -38,22 +40,6 @@ type PopularityGiftsSheetProps = {
   onClose: () => void;
   /** يُستدعى عند تغيُّر شعبية المستلم بعد عملية إرسال ناجحة. */
   onPopularityChange?: (value: number) => void;
-};
-
-/**
- * محاولة إرسال معلّقة.
- * - المفتاح (key) يُولّد مرة واحدة لكل عملية ويُعاد استخدامه عند إعادة المحاولة
- *   بعد فشل غير محسوم (شبكة/انقطاع) لضمان عدم خصم الرصيد مرتين.
- * - مرتبطة بالمستلم والهدية، فلا يُعاد استخدام مفتاح قديم مع مستلم أو هدية أخرى.
- * - `status`:
- *     'sending'     → الطلب جارٍ، الاختيار مقفل.
- *     'inconclusive'→ فشل غير محسوم، نُبقي المفتاح ونقفل الاختيار حتى إعادة المحاولة.
- */
-type SendAttempt = {
-  key: string;
-  recipientId: string;
-  giftId: string;
-  status: 'sending' | 'inconclusive';
 };
 
 const MEDAL_SVG = (
@@ -205,29 +191,26 @@ export default function PopularityGiftsSheet({
   const handleSend = async () => {
     if (!selectedGift || sending || selectedGift.price > balance) return;
 
-    // تحديد المحاولة:
-    // - إن وُجدت محاولة معلّقة (فشل غير محسوم) نعيد استخدام نفس المفتاح والهدية
-    //   والمستلم، لأن تغييرها قبل الحسم ممنوع.
-    // - غير ذلك ننشئ محاولة جديدة بمفتاح جديد.
-    let activeAttempt: SendAttempt;
-    if (attempt && attempt.status === 'inconclusive') {
-      if (attempt.recipientId !== userId || attempt.giftId !== selectedGift.id) {
-        // لا ينبغي الوصول هنا (الاختيار مقفل)، لكن ندافع عن المفتاح.
-        toast.error('لا يمكن تغيير الهدية أو المستلم قبل حسم العملية المعلقة.');
-        return;
-      }
-      activeAttempt = attempt;
-    } else {
-      const key =
+    // تحديد المحاولة عبر دالة نقية:
+    // - محاولة معلّقة (نتيجة غير محسومة) بنفس المستلم/الهدية → نفس المفتاح.
+    // - غير ذلك → مفتاح جديد. (تغيير المستلم/الهدية قبل الحسم ممنوع في الواجهة.)
+    const activeAttempt: SendAttempt = resolveSendAttempt(attempt, {
+      recipientId: userId,
+      giftId: selectedGift.id,
+      generateKey: () =>
         typeof crypto !== 'undefined' && crypto.randomUUID
           ? crypto.randomUUID()
-          : `${currentUserId}-${userId}-${selectedGift.id}-${Date.now()}`;
-      activeAttempt = {
-        key,
-        recipientId: userId,
-        giftId: selectedGift.id,
-        status: 'sending',
-      };
+          : `${currentUserId}-${userId}-${selectedGift.id}-${Date.now()}`,
+    });
+    if (
+      attempt &&
+      attempt.status === 'inconclusive' &&
+      (attempt.recipientId !== activeAttempt.recipientId ||
+        attempt.giftId !== activeAttempt.giftId)
+    ) {
+      // درع: لا نعيد استخدام مفتاح قديم مع مستلم/هدية مختلفين.
+      toast.error('لا يمكن تغيير الهدية أو المستلم قبل حسم العملية المعلقة.');
+      return;
     }
 
     setAttempt(activeAttempt);
@@ -239,11 +222,19 @@ export default function PopularityGiftsSheet({
         activeAttempt.key
       );
       if (!result.ok) {
-        // رفض قاطع من الخادم (رصيد/هدية/صلاحية): العملية محسومة كفشل، نحرّر الاختيار.
+        if (result.inconclusive) {
+          // نتيجة غير محسومة (نقل/اتصال/مهلة/انقطاع): نُبقي نفس المحاولة والمفتاح
+          // ونعرض إعادة المحاولة، دون اعتبارها رفضاً نهائياً.
+          setAttempt({ ...activeAttempt, status: 'inconclusive' });
+          toast.error(result.error || 'تعذّر تأكيد الإرسال. أعد المحاولة.');
+          return;
+        }
+        // رفض مؤكد من الخادم (رصيد/هدية/صلاحية): العملية محسومة كفشل، نحرّر الاختيار.
         toast.error(result.error || 'فشل إرسال الهدية.');
         setAttempt(null);
         return;
       }
+      // نجاح مؤكد: تصفير المحاولة والاختيار.
       setSelectedGift(null);
       setStep('summary');
       setAttempt(null);
@@ -260,11 +251,11 @@ export default function PopularityGiftsSheet({
           : 'تم إرسال الهدية بنجاح.'
       );
     } catch (error) {
-      // فشل غير محسوم (شبكة/انقطاع): نُبقي المفتاح ونقفل الاختيار لإعادة المحاولة
-      // بنفس العملية دون خصم مزدوج.
+      // خطأ غير متوقع (نقل/شبكة): نتيجة غير محسومة، نُبقي المفتاح ونقفل الاختيار
+      // لإعادة المحاولة بنفس العملية دون خصم مزدوج.
       console.error('[popularity sheet] تعذر الإرسال:', error);
       setAttempt({ ...activeAttempt, status: 'inconclusive' });
-      toast.error(error instanceof Error ? error.message : 'فشل إرسال الهدية.');
+      toast.error(error instanceof Error ? error.message : 'تعذّر الإرسال. أعد المحاولة.');
     }
   };
 
