@@ -257,7 +257,7 @@ test('a video with missing dimensions is rejected instead of a zero-filled paylo
   assert.equal(result.failedVideos.length, 1);
 });
 
-test('a zero or negative dimension is rejected, and images still go through', async () => {
+test('a zero dimension is rejected, and images still go through', async () => {
   const { deps, calls } = createDeps({
     async prepareVideo() {
       return { ok: true, file: videoFile('c.mp4'), poster: null, durationMs: 5_000, metrics: { width: 0, height: 360 } };
