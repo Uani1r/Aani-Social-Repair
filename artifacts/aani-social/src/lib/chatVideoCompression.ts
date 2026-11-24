@@ -12,18 +12,21 @@ import {
   type ChatVideoRejectReason,
 } from '@/lib/chatVideo';
 import { createVideoPoster } from '@/lib/videoPoster';
-import { compressVideo, findMp4CodecMarkers, probeVideoMetadata } from '@/utils/mediaCompressor';
+import { compressVideo, inspectMp4Bytes, probeVideoMetadata } from '@/utils/mediaCompressor';
 
 export type ChatVideoPreparation =
   | { ok: true; file: File; poster: File | null; durationMs: number; metrics: ChatVideoMetrics }
   | { ok: false; reason: ChatVideoRejectReason; message: string };
 
-async function hasAacAudio(file: Blob): Promise<boolean> {
+/** معدل الإطارات المقاس من الملف الناتج فعلياً (inspectMp4Bytes) أو غير متاح. */
+async function measureFps(file: File): Promise<number | undefined> {
   try {
-    const bytes = new Uint8Array(await file.slice(0, 262_144).arrayBuffer());
-    return findMp4CodecMarkers([bytes]).hasAacAudio;
+    const bytes = new Uint8Array(await file.slice(0, 4 * 1024 * 1024).arrayBuffer());
+    const inspection = inspectMp4Bytes(bytes);
+    const videoTrack = inspection.tracks.find(track => track.kind === 'video');
+    return typeof videoTrack?.fps === 'number' && videoTrack.fps > 0 ? videoTrack.fps : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -89,7 +92,21 @@ export async function prepareChatVideo(
     poster = null;
   }
 
-  const hasAudioAfter = await hasAacAudio(compressed);
+  // التحقق الحقيقي من الصوت: مسار فعلي في الملف الناتج وترميزه AAC، مقروءاً
+  // عبر mediabunny من المسارات نفسها — لا مسح أول 256KB ولا قيمة موروثة.
+  const beforeHadAudio = before?.hasAudio === true;
+  if (after === null && beforeHadAudio) {
+    return { ok: false, reason: 'audio-unverified', message: chatVideoRejectMessage('audio-unverified') };
+  }
+  const hasAudioAfter = after?.hasAudio === true;
+  if (beforeHadAudio && !hasAudioAfter) {
+    return { ok: false, reason: 'audio-lost', message: chatVideoRejectMessage('audio-lost') };
+  }
+  if (beforeHadAudio && !/aac|mp4a/i.test(after?.audioCodec ?? '')) {
+    return { ok: false, reason: 'audio-unverified', message: chatVideoRejectMessage('audio-unverified') };
+  }
+
+  const fps = await measureFps(compressed);
   const metrics = buildChatVideoMetrics({
     originalBytes,
     finalBytes: compressed.size,
@@ -97,7 +114,8 @@ export async function prepareChatVideo(
     durationSeconds: compressedDuration,
     width: after?.width ?? before?.width ?? 0,
     height: after?.height ?? before?.height ?? 0,
-    hasAudioBefore: before?.hasAudio === true,
+    fps,
+    hasAudioBefore: beforeHadAudio,
     hasAudioAfter,
   });
   try {

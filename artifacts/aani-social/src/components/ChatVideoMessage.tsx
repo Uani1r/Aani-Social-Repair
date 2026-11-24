@@ -1,9 +1,9 @@
-// مشغّل فيديو داخل فقاعة المحادثة: صورة غلاف وزر تشغيل أولاً، ولا تشغيل تلقائي.
+// مشغّل فيديو داخل فقاعة المحادثة: غلاف وزر تشغيل أولاً، ولا تشغيل تلقائي.
 //
-// - قبل الضغط لا يوجد عنصر <video> إطلاقاً: لا يبدأ تنزيل الفيديو بمجرد ظهور الرسالة.
-// - بعد الضغط: preload="metadata" وplaysInline (iPhone Safari) بلا autoPlay.
-// - تشغيل واحد فقط: تشغيل مقطع يوقف السابق، ويُوقف عند مغادرة الرسالة أو إخفاء الصفحة.
-// - عناصر التحكم: تشغيل/إيقاف، شريط تقدم، الوقت الحالي والمدة، الكتم، ملء الشاشة، إعادة.
+// - عنصر <video> موجود دائماً بلا src وبلا autoPlay: لا يبدأ أي تنزيل قبل الضغط.
+// - أول ضغطة: startChatVideoOnUserTap يُسند المصدر ثم ينادي play() داخل معالج
+//   الضغط نفسه (شرط Safari)، لا في useEffect لاحق.
+// - تشغيل واحد فقط: تشغيل مقطع يوقف السابق، ويُوقف عند مغادرة المكوّن أو إخفاء الصفحة.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Maximize2, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
@@ -17,6 +17,7 @@ import {
   formatChatVideoTime,
   isChatVideoFullscreenSupported,
   nextChatVideoMuteState,
+  startChatVideoOnUserTap,
   toggleChatVideoPlayback,
 } from '@/lib/chatVideoPlayback';
 import { useMediaUrl } from '@/lib/mediaAccess';
@@ -40,7 +41,6 @@ export default function ChatVideoMessage({
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const releaseClaimRef = useRef<(() => void) | null>(null);
-  const shouldPlayRef = useRef(false);
   const [started, setStarted] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -67,6 +67,11 @@ export default function ChatVideoMessage({
     setLoading(false);
   }, []);
 
+  // حجز مشغّل واحد: مقطع جديد يوقف السابق، والتحرير عند المغادرة.
+  const claim = useCallback(() => {
+    if (!releaseClaimRef.current) releaseClaimRef.current = claimChatVideoPlayback(stop);
+  }, [stop]);
+
   useEffect(() => () => {
     releaseClaimRef.current?.();
     releaseClaimRef.current = null;
@@ -89,44 +94,38 @@ export default function ChatVideoMessage({
     return () => document.removeEventListener('visibilitychange', onHidden);
   }, [stop]);
 
-  const runPlayback = useCallback(async (reloadOnError: boolean) => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (!releaseClaimRef.current) releaseClaimRef.current = claimChatVideoPlayback(stop);
-    const result = await toggleChatVideoPlayback(
-      video,
-      {
-        onLoading: setLoading,
-        onPlaying: setPlaying,
-        onError: error => {
-          setFailed(true);
-          console.warn('[messages] تعذر تشغيل فيديو المحادثة:', error);
-        },
-      },
-      { reloadOnError },
-    );
-    if (result === 'playing') setFailed(false);
-  }, [stop]);
-
-  // التشغيل بعد تركيب عنصر <video> فقط (بلا autoPlay): يبدأ بضغطة المستخدم.
-  useEffect(() => {
-    if (!started || !shouldPlayRef.current) return;
-    shouldPlayRef.current = false;
-    void runPlayback(false);
-  }, [started, runPlayback]);
-
-  const start = () => {
-    if (!src) return;
-    shouldPlayRef.current = true;
-    setStarted(true);
+  const handlers = {
+    onLoading: setLoading,
+    onPlaying: setPlaying,
+    onError: (error: unknown) => {
+      setFailed(true);
+      setLoading(false);
+      console.warn('[messages] تعذر تشغيل فيديو المحادثة:', error);
+    },
   };
 
-  const toggle = () => {
-    if (!started) {
-      start();
+  /** كل تشغيل يمر من هنا مباشرة (بلا useEffect): أول ضغطة تُسند المصدر ثم play(). */
+  const onPressPlay = () => {
+    if (!src) {
+      setFailed(true);
       return;
     }
-    void runPlayback(failed);
+    claim();
+    const video = videoRef.current;
+    if (!video) {
+      setFailed(true);
+      return;
+    }
+    if (!started) {
+      setStarted(true);
+      void startChatVideoOnUserTap(video, src, handlers).then(result => {
+        if (result === 'playing') setFailed(false);
+      });
+      return;
+    }
+    void toggleChatVideoPlayback(video, handlers, { reloadOnError: failed }).then(result => {
+      if (result === 'playing') setFailed(false);
+    });
   };
 
   const seek = (value: string) => {
@@ -168,82 +167,84 @@ export default function ChatVideoMessage({
 
   return (
     <div className={`messages-chat-video${isMine ? ' is-mine' : ' is-theirs'}`} dir="rtl">
-      {!started ? (
+      <div className="messages-chat-video-stage">
+        <video
+          ref={videoRef}
+          className="messages-chat-video-element"
+          poster={poster ?? undefined}
+          playsInline
+          preload="metadata"
+          onClick={onPressPlay}
+          onPlay={() => { setPlaying(true); setFailed(false); }}
+          onPlaying={() => setLoading(false)}
+          onWaiting={() => setLoading(true)}
+          onCanPlay={() => setLoading(false)}
+          onPause={() => { setPlaying(false); setLoading(false); }}
+          onTimeUpdate={event => setCurrentMs(event.currentTarget.currentTime * 1000)}
+          onLoadedMetadata={event => {
+            const duration = event.currentTarget.duration;
+            if (Number.isFinite(duration) && duration > 0) setLoadedMs(duration * 1000);
+            event.currentTarget.muted = muted;
+            event.currentTarget.volume = volume;
+          }}
+          onEnded={() => { setPlaying(false); setLoading(false); setCurrentMs(0); }}
+          onError={() => {
+            setLoading(false);
+            setPlaying(false);
+            setFailed(true);
+            console.warn('[messages] تعذر تحميل فيديو المحادثة.');
+          }}
+        />
+
+        {!started && (
+          <button
+            type="button"
+            className="messages-chat-video-cover"
+            aria-label="تشغيل الفيديو"
+            onClick={onPressPlay}
+            disabled={!src}
+          >
+            {poster ? <SignedImage src={payload.posterUrl} alt="معاينة الفيديو" loading="lazy" /> : <span className="messages-chat-video-placeholder" />}
+            <span className="messages-chat-video-play"><Play size={22} fill="currentColor" /></span>
+            <span className="messages-chat-video-duration" dir="ltr">{formatChatVideoTime(payload.durationMs)}</span>
+          </button>
+        )}
+      </div>
+
+      <div className="messages-chat-video-controls" dir="ltr">
         <button
           type="button"
-          className="messages-chat-video-cover"
-          aria-label="تشغيل الفيديو"
-          onClick={start}
-          disabled={!src}
+          className="messages-chat-video-button"
+          aria-label={playing ? 'إيقاف مؤقت' : failed ? 'إعادة المحاولة' : 'تشغيل'}
+          onClick={onPressPlay}
         >
-          {poster ? <SignedImage src={payload.posterUrl} alt="معاينة الفيديو" loading="lazy" /> : <span className="messages-chat-video-placeholder" />}
-          <span className="messages-chat-video-play"><Play size={22} fill="currentColor" /></span>
-          <span className="messages-chat-video-duration" dir="ltr">{formatChatVideoTime(payload.durationMs)}</span>
+          {loading ? <span className="messages-voice-spinner" aria-hidden="true" />
+            : failed ? <RotateCcw size={16} />
+              : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
         </button>
-      ) : (
-        <div className="messages-chat-video-player">
-          <video
-            ref={videoRef}
-            className="messages-chat-video-element"
-            src={src ?? undefined}
-            poster={poster ?? undefined}
-            playsInline
-            preload="metadata"
-            onClick={() => void runPlayback(failed)}
-            onPlay={() => { setPlaying(true); setFailed(false); }}
-            onPlaying={() => setLoading(false)}
-            onWaiting={() => setLoading(true)}
-            onCanPlay={() => setLoading(false)}
-            onPause={() => { setPlaying(false); setLoading(false); }}
-            onTimeUpdate={event => setCurrentMs(event.currentTarget.currentTime * 1000)}
-            onLoadedMetadata={event => {
-              const duration = event.currentTarget.duration;
-              if (Number.isFinite(duration) && duration > 0) setLoadedMs(duration * 1000);
-              event.currentTarget.muted = muted;
-              event.currentTarget.volume = volume;
-            }}
-            onEnded={() => { setPlaying(false); setLoading(false); setCurrentMs(0); }}
-            onError={() => {
-              setLoading(false);
-              setPlaying(false);
-              setFailed(true);
-              console.warn('[messages] تعذر تحميل فيديو المحادثة.');
-            }}
-          >
-            <track kind="captions" />
-          </video>
-
-          <div className="messages-chat-video-controls" dir="ltr">
-            <button type="button" className="messages-chat-video-button" aria-label={playing ? 'إيقاف مؤقت' : failed ? 'إعادة المحاولة' : 'تشغيل'} onClick={toggle}>
-              {loading ? <span className="messages-voice-spinner" aria-hidden="true" />
-                : failed ? <RotateCcw size={16} />
-                  : playing ? <Pause size={16} fill="currentColor" /> : <Play size={16} fill="currentColor" />}
-            </button>
-            <input
-              className="messages-chat-video-progress"
-              type="range"
-              min={0}
-              max={Math.max(1, totalMs)}
-              step={100}
-              value={Math.min(currentMs, totalMs)}
-              onChange={event => seek(event.target.value)}
-              disabled={!totalMs || failed}
-              aria-label="موضع الفيديو"
-            />
-            <time className="messages-chat-video-time" dir="ltr">
-              {formatChatVideoTime(currentMs)} / {formatChatVideoTime(totalMs)}
-            </time>
-            <button type="button" className="messages-chat-video-button" aria-label={muted ? 'إلغاء الكتم' : 'كتم الصوت'} onClick={toggleMute}>
-              {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-            </button>
-            {isChatVideoFullscreenSupported(videoRef.current) && (
-              <button type="button" className="messages-chat-video-button" aria-label="ملء الشاشة" onClick={requestFullscreen}>
-                <Maximize2 size={16} />
-              </button>
-            )}
-          </div>
-        </div>
-      )}
+        <input
+          className="messages-chat-video-progress"
+          type="range"
+          min={0}
+          max={Math.max(1, totalMs)}
+          step={100}
+          value={Math.min(currentMs, totalMs)}
+          onChange={event => seek(event.target.value)}
+          disabled={!started || !totalMs || failed}
+          aria-label="موضع الفيديو"
+        />
+        <time className="messages-chat-video-time" dir="ltr">
+          {formatChatVideoTime(currentMs)} / {formatChatVideoTime(totalMs)}
+        </time>
+        <button type="button" className="messages-chat-video-button" aria-label={muted ? 'إلغاء الكتم' : 'كتم الصوت'} onClick={toggleMute}>
+          {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+        </button>
+        {isChatVideoFullscreenSupported(videoRef.current) && (
+          <button type="button" className="messages-chat-video-button" aria-label="ملء الشاشة" onClick={requestFullscreen}>
+            <Maximize2 size={16} />
+          </button>
+        )}
+      </div>
 
       {failed && (
         <span className="messages-chat-video-failed" role="alert">تعذر تشغيل الفيديو. اضغط إعادة المحاولة.</span>

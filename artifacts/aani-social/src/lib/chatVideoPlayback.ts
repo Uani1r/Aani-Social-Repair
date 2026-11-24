@@ -115,3 +115,33 @@ export function isChatVideoFullscreenSupported(video: unknown): boolean {
   return typeof element.requestFullscreen === 'function'
     || typeof element.webkitEnterFullscreen === 'function';
 }
+
+
+export interface ChatVideoSourceLike extends ChatVideoLike {
+  src?: string;
+}
+
+/**
+ * أول تشغيل: يُسند المصدر ثم ينادي play() **داخل معالج ضغط المستخدم نفسه**
+ * بلا أي await قبله، فيبقى تفعيل المستخدم صالحاً على Safari. عنصر الفيديو
+ * يبقى بلا مصدر قبل هذه الضغطة، فلا يبدأ أي تنزيل عند ظهور الرسالة.
+ */
+export function startChatVideoOnUserTap(
+  video: ChatVideoSourceLike,
+  src: string,
+  handlers: ChatVideoPlaybackHandlers = {},
+): Promise<ChatVideoPlaybackResult> {
+  if (!src) {
+    const error = new Error('missing video source');
+    handlers.onError?.(error);
+    return Promise.resolve('error');
+  }
+  try {
+    video.src = src;
+  } catch (error) {
+    handlers.onError?.(error);
+    return Promise.resolve('error');
+  }
+  // toggleChatVideoPlayback يستدعي play() قبل أول await: نفس مهمة المستخدم.
+  return toggleChatVideoPlayback(video, handlers);
+}

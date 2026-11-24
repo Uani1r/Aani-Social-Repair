@@ -6,6 +6,9 @@ import { toast } from 'sonner';
 import ChatPhotoEditor from '@/components/ChatPhotoEditor';
 import ChatVideoRecorder from '@/components/ChatVideoRecorder';
 import { CHAT_MEDIA_MESSAGE_PREFIX } from '@/components/ChatImageMessage';
+import { chatVideoMessageContent } from '@/lib/chatVideo';
+import { prepareChatVideo } from '@/lib/chatVideoCompression';
+import { sendChatMediaSelection } from '@/lib/chatVideoSend';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { readLocalUserPreferences } from '@/lib/userPreferences';
@@ -192,26 +195,6 @@ export default function ChatMediaPicker({
       return;
     }
 
-    // التحقق من قيود الفيديو قبل الرفع
-    for (const item of selectedMedia) {
-      if (item.type === 'video') {
-        if (item.file.size > MAX_VIDEO_SIZE_BYTES) {
-          toast.error(`حجم الفيديو "${item.file.name}" يتجاوز 25 ميغابايت. اختر ملفاً أصغر.`);
-          return;
-        }
-        try {
-          const duration = await checkVideoDuration(item.file);
-          if (duration > MAX_VIDEO_DURATION_SECONDS) {
-            toast.error(`مدة الفيديو "${item.file.name}" تتجاوز 60 ثانية (${formatDuration(Math.round(duration))}). اختر مقطعاً أقصر.`);
-            return;
-          }
-        } catch {
-          toast.error(`تعذر التحقق من مدة الفيديو "${item.file.name}".`);
-          return;
-        }
-      }
-    }
-
     const recipientIdSnapshot = activeRecipientId;
     const selectedMediaSnapshot = selectedMedia;
     const mediaSnapshot = mediaItems;
@@ -253,86 +236,84 @@ export default function ChatMediaPicker({
     setEditingPhotoId(null);
     notifyCaptionChange('');
     onSendStart?.(pendingMessage);
-    const uploadedPaths: string[] = [];
-    let messageInserted = false;
-    try {
-      const uploadResults = await Promise.allSettled(selectedMediaSnapshot.map(async (item, index) => {
-        // فيديوهات الاستوديو: أعد استخدام الرابط المرفوع مسبقاً عند إعادة المحاولة
-        // لتجنب رفع ملف مكرر إلى ImageKit.
-        if (item.type === 'video') {
-          const cachedUrl = uploadedVideoUrlsRef.current.get(item.id);
-          if (cachedUrl) return cachedUrl;
-        }
-        const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || (item.type === 'video' ? 'video.mp4' : 'photo.jpg');
-        const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
-        const preset = item.type === 'video' ? 'video' : 'chatImage';
-        // فيديوهات المحادثات (من الاستوديو أو الكاميرا): رفع مباشر دون ضغط
-        // الصور: ضغط دائم كما هو محدد في preset chatImage
-        const skipCompression = item.type === 'video';
-        // uploadMedia يعيد رابط الملف الفعلي الذي رفعه ImageKit — نستخدمه مباشرة للفيديو.
-        const uploadedUrl = await uploadMedia({ file: item.file, path, preset, quality: hdSnapshot ? 'hd' : 'data-saving', skipCompression });
-        uploadedPaths.push(path);
-        if (item.type === 'video') {
-          uploadedVideoUrlsRef.current.set(item.id, uploadedUrl);
-          return uploadedUrl;
-        }
-        return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
-      }));
-      const failedUpload = uploadResults.find(result => result.status === 'rejected');
-      if (failedUpload?.status === 'rejected') throw failedUpload.reason;
-      const urls = uploadResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-      const content = `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls, caption: captionSnapshot, viewOnce: viewOnceSnapshot })}`;
-      if (content.length > 4000) throw new Error('حجم بيانات الوسائط كبير جداً. قلل عدد العناصر وحاول مرة أخرى.');
 
-      const { error } = await supabase.from('messages').insert({
-        sender_id: currentUserId,
-        recipient_id: recipientIdSnapshot,
-        content,
-      });
-      if (error) throw error;
-      messageInserted = true;
-      onUploaded?.(pendingMessage.id, recipientIdSnapshot, urls);
+    try {
+      // الصور على مسارها القديم، والفيديو يمرّ عبر prepareChatVideo (ضغط + تحقق)
+      // قبل أي رفع، ثم يُرفع الملف المضغوط وحده ويُنشأ في رسالة فيديو مستقلة.
+      const result = await sendChatMediaSelection(
+        selectedMediaSnapshot.map(item => ({ id: item.id, type: item.type, file: item.file })),
+        {
+          imageMessagePrefix: CHAT_MEDIA_MESSAGE_PREFIX,
+          caption: captionSnapshot,
+          viewOnce: viewOnceSnapshot,
+          prepareVideo: file => prepareChatVideo(file),
+          uploadImage: async (item, index) => {
+            const safeName = item.file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'photo.jpg';
+            const path = `${currentUserId}/messages/${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}-${safeName}`;
+            await uploadMedia({ file: item.file, path, preset: 'chatImage', quality: hdSnapshot ? 'hd' : 'data-saving' });
+            return supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
+          },
+          uploadVideo: async (item, prepared) => {
+            const cached = uploadedVideoUrlsRef.current.get(item.id);
+            if (cached) return cached;
+            if (!prepared.file) throw new Error('الملف المضغوط مفقود.');
+            const path = `${currentUserId}/messages/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-video.mp4`;
+            const url = await uploadMedia({ file: prepared.file, path, preset: 'video' });
+            uploadedVideoUrlsRef.current.set(item.id, url);
+            return url;
+          },
+          uploadPoster: async (_item, posterFile) => {
+            const path = `${currentUserId}/messages/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-poster.jpg`;
+            return await uploadMedia({ file: posterFile, path, preset: 'chatImage' });
+          },
+          insertMessage: async content => {
+            if (content.length > 4000) throw new Error('حجم بيانات الوسائط كبير جداً. قلل عدد العناصر وحاول مرة أخرى.');
+            const { error } = await supabase.from('messages').insert({
+              sender_id: currentUserId,
+              recipient_id: recipientIdSnapshot,
+              content,
+            });
+            if (error) throw error;
+          },
+        },
+      );
+
+      if (result.failedVideos.length) {
+        result.failedVideos.forEach(failure => toast.error(failure.message));
+      }
+
+      const imageIds = selectedMediaSnapshot.filter(item => item.type === 'image').map(item => item.id);
+      const videoIds = selectedMediaSnapshot.filter(item => item.type === 'video').map(item => item.id);
+      const sentIds = new Set([
+        ...imageIds.slice(0, result.imageUrls.length),
+        ...videoIds.slice(0, result.videoUrls.length),
+      ]);
+      if (!result.ok && sentIds.size === 0) throw new Error(result.message);
+
+      onUploaded?.(pendingMessage.id, recipientIdSnapshot, [...result.imageUrls, ...result.videoUrls]);
       await new Promise(resolve => window.setTimeout(resolve, 200));
       await onSent?.(pendingMessage.id, recipientIdSnapshot);
       releaseLocalUrls();
-      uploadedVideoUrlsRef.current.clear();
 
+      // ما أُرسل فعلاً يُزال من التحديد، وما فشل يبقى لإعادة المحاولة دون تكرار.
       mediaSnapshot.forEach(item => {
+        if (!sentIds.has(item.id)) return;
         URL.revokeObjectURL(item.url);
         objectUrlsRef.current.delete(item.url);
+        uploadedVideoUrlsRef.current.delete(item.id);
       });
-      setMediaItems([]);
-      setSelectedIds([]);
-      setCaption('');
-      setViewOnce(false);
-      notifyCaptionChange('');
-      toast.success('تم إرسال الوسائط');
-    } catch (error) {
-      if (messageInserted) {
-        releaseLocalUrls();
-        uploadedVideoUrlsRef.current.clear();
-        mediaSnapshot.forEach(item => {
-          URL.revokeObjectURL(item.url);
-          objectUrlsRef.current.delete(item.url);
-        });
-        setMediaItems([]);
-        setSelectedIds([]);
+      setMediaItems(current => current.filter(item => !sentIds.has(item.id)));
+      setSelectedIds(current => current.filter(id => !sentIds.has(id)));
+      if (result.failedVideos.length === 0 && result.ok) {
         setCaption('');
         setViewOnce(false);
+        uploadedVideoUrlsRef.current.clear();
         notifyCaptionChange('');
-        onSendFailed?.(pendingMessage.id);
-        console.warn('[messages] تعذر تحديث المحادثة بعد إرسال الوسائط:', error);
         toast.success('تم إرسال الوسائط');
-        return;
+      } else {
+        notifyCaptionChange(captionSnapshot);
       }
-      if (uploadedPaths.length) {
-        try {
-          const { error: cleanupError } = await supabase.storage.from(storageBucket).remove(uploadedPaths);
-          if (cleanupError) console.warn('[messages] تعذر تنظيف الوسائط غير المرسلة:', cleanupError);
-        } catch (cleanupError) {
-          console.warn('[messages] تعذر تنظيف الوسائط غير المرسلة:', cleanupError);
-        }
-      }
+    } catch (error) {
       releaseLocalUrls();
       onSendFailed?.(pendingMessage.id);
       notifyCaptionChange(captionSnapshot);
@@ -370,7 +351,16 @@ export default function ChatMediaPicker({
     onSendStart?.(pendingMessage);
     let messageInserted = false;
     try {
-      const content = `${CHAT_MEDIA_MESSAGE_PREFIX}${JSON.stringify({ urls: [videoUrl], caption: captionSnapshot, viewOnce: viewOnceSnapshot })}`;
+      // فيديو الكاميرا يُرسل كرسالة فيديو (لا كصورة) ليفتحه ChatVideoMessage نفسه.
+      const content = chatVideoMessageContent({
+        url: videoUrl,
+        durationMs: Math.max(0, Math.round(durationSeconds * 1000)),
+        posterUrl: null,
+        caption: captionSnapshot,
+        viewOnce: viewOnceSnapshot,
+        width: 0,
+        height: 0,
+      });
       const { error } = await supabase.from('messages').insert({
         sender_id: currentUserId,
         recipient_id: recipientIdSnapshot,

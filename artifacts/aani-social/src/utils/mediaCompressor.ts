@@ -1000,8 +1000,16 @@ export async function compressVideo(
     if (!buffer) throw new Error('تعذر إنتاج ملف الفيديو المضغوط.');
     // التحقق من الصوت بعد الترميز: نجاح إنتاج MP4 ليس دليلاً على بقاء الصوت،
     // ولا يُرفع فيديو صامت إذا كان الأصل يحمل مساراً صوتياً.
-    if (sourceHasAudio
-      && !findMp4CodecMarkers([new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 262_144))]).hasAacAudio) {
+    // التحقق من المسار الصوتي الفعلي في الملف الناتج: نفتح الناتج بـmediabunny
+    // ونقرأ مسار الصوت وترميزه — لا مسح أول 256KB ولا قيمة موروثة.
+    const producedInput = new mb.Input({
+      source: new mb.BlobSource(new File([buffer], `${baseName}.mp4`, { type: 'video/mp4' })),
+      formats: mb.ALL_FORMATS,
+    });
+    const producedAudio = await producedInput.getPrimaryAudioTrack().catch(() => null);
+    const producedCodec = typeof producedAudio?.codec === 'string' ? producedAudio.codec : '';
+    producedHasAudio = Boolean(producedAudio);
+    if (sourceHasAudio && (!producedAudio || !/aac|mp4a/i.test(producedCodec))) {
       throw new Error('تعذر الحفاظ على المسار الصوتي في الفيديو المضغوط — لن يُرفع فيديو صامت.');
     }
     return new File([buffer], `${baseName}-720p.mp4`, { type: 'video/mp4', lastModified: Date.now() });
@@ -1042,6 +1050,9 @@ export async function compressVideo(
     ? `avc1${audioTrack ? `+${/aac|mp4a/i.test(audioCodec) ? 'aac' : audioCodec}` : '+no-audio'}`
     : undefined;
 
+  // هل بقي مسار صوت فعلي في الناتج؟ يُقاس من الملف الناتج نفسه، لا افتراضاً.
+  let producedHasAudio: boolean | null = null;
+
   function recordVideoMetric(
     outcome: 'ok' | 'skipped-passthrough' | 'failed',
     finalBytes: number,
@@ -1057,7 +1068,7 @@ export async function compressVideo(
       failureReason: extra.failureReason,
       finalVideoCodec: extra.finalVideoCodec ?? verifiedCodec,
       hasAudioBefore: sourceHasAudio,
-      hasAudioAfter: extra.hasAudioAfter ?? sourceHasAudio,
+      hasAudioAfter: extra.hasAudioAfter ?? producedHasAudio ?? sourceHasAudio,
     });
   }
 
@@ -1115,7 +1126,7 @@ export async function compressVideo(
       });
       throw new MediaTooLargeError();
     }
-    recordVideoMetric('ok', result.size, { finalVideoCodec: 'avc1+aac (reencoded)' });
+    recordVideoMetric('ok', result.size, { finalVideoCodec: 'avc1+aac (reencoded)', hasAudioAfter: producedHasAudio === true });
     onProgress?.(100);
     return result;
   } catch (error) {

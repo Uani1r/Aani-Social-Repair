@@ -72,7 +72,8 @@ export type ChatVideoRejectReason =
   | 'too-long'
   | 'too-large'
   | 'compression-failed'
-  | 'audio-lost';
+  | 'audio-lost'
+  | 'audio-unverified';
 
 /** رسالة عربية واضحة تُعرض للمستخدم بدل إخفاق صامت أو رفع الملف الأصلي. */
 export function chatVideoRejectMessage(reason: ChatVideoRejectReason, detail?: string): string {
@@ -87,6 +88,8 @@ export function chatVideoRejectMessage(reason: ChatVideoRejectReason, detail?: s
       return `حجم المقطع يتجاوز ${Math.round(CHAT_VIDEO_MAX_BYTES / 1000 / 1000)} ميغابايت. اختر مقطعاً أصغر — لم يُرفع أي ملف.`;
     case 'audio-lost':
       return 'تعذر الحفاظ على صوت المقطع أثناء الضغط. لم يُرفع فيديو صامت. جرّب مقطعاً آخر أو أعد المحاولة.';
+    case 'audio-unverified':
+      return 'تعذر التحقق من المسار الصوتي للمقطع بعد الضغط. لم يُرفع أي ملف — أعد المحاولة أو اختر مقطعاً آخر.';
     default:
       return `تعذر ضغط المقطع على هذا الجهاز${detail ? ` (${detail})` : ''}. لم يُرفع الملف الأصلي بصمت — جرّب مقطعاً أقصر أو متصفحاً حديثاً.`;
   }
@@ -115,7 +118,8 @@ export interface ChatVideoMetrics {
   durationSeconds: number;
   width: number;
   height: number;
-  fps: number;
+  /** معدل الإطارات المقاس من الملف الناتج — يبقى غير متاح (غائب) إن تعذر قياسه. */
+  fps?: number;
   hasAudioBefore: boolean;
   hasAudioAfter: boolean;
 }
@@ -144,7 +148,8 @@ export function buildChatVideoMetrics(input: {
     durationSeconds: readNumber(input.durationSeconds),
     width: Math.round(readNumber(input.width)),
     height: Math.round(readNumber(input.height)),
-    fps: Math.round(readNumber(input.fps) * 100) / 100,
+    // لا قيمة افتراضية: الحقل يغيب إن لم يُقس فعلياً من الملف الناتج.
+    ...(readNumber(input.fps) > 0 ? { fps: Math.round(readNumber(input.fps) * 100) / 100 } : {}),
     hasAudioBefore: input.hasAudioBefore === true,
     hasAudioAfter: input.hasAudioAfter === true,
   };
@@ -152,8 +157,9 @@ export function buildChatVideoMetrics(input: {
 
 /** نص تقرير واحد قابل للمراجعة بعد إغلاق الصفحة (Console وحده يضيع). */
 export function describeChatVideoMetrics(metrics: ChatVideoMetrics): string {
+  const fps = typeof metrics.fps === 'number' ? `${metrics.fps}fps` : 'fps غير مقاس';
   return `فيديو المحادثة: ${metrics.originalBytes}→${metrics.finalBytes}B `
     + `(${metrics.savingPct}% توفير) في ${metrics.processingMs}ms — `
-    + `${metrics.width}×${metrics.height}@${metrics.fps || '?'}fps، `
+    + `${metrics.width}×${metrics.height}@${fps}، `
     + `الصوت ${metrics.hasAudioBefore ? 'موجود' : 'غائب'}→${metrics.hasAudioAfter ? 'موجود' : 'غائب'}`;
 }
