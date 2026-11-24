@@ -4,9 +4,9 @@ name: CI
 # into main, and on every push to main itself.
 on:
   push:
-    branches: [main, feat/chat-video-audio]
+    branches: [main]
   pull_request:
-    branches: [main, feat/chat-video-audio]
+    branches: [main]
 
 # One run per ref: a new push to the same branch cancels the previous run.
 concurrency:
