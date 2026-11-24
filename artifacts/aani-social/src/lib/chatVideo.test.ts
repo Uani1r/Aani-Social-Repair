@@ -40,7 +40,9 @@ test('a malformed or non-video payload is rejected instead of rendered', () => {
   assert.equal(parseChatVideoMessage('[aani-image:v1]{"urls":[]}'), null);
   assert.equal(parseChatVideoMessage(`${CHAT_VIDEO_MESSAGE_PREFIX}{`), null);
   assert.equal(parseChatVideoMessage(`${CHAT_VIDEO_MESSAGE_PREFIX}{"url":"/aani/u1/v.mp4"}`), null);
-  assert.equal(parseChatVideoMessage(`${CHAT_VIDEO_MESSAGE_PREFIX}{"url":"https://x/v.mp4","posterUrl":"x"}`), null);
+  // غلاف غير صالح لا يُسقط الفيديو: يُحذف الغلاف ويبقى الفيديو صالحاً
+  const withoutPoster = parseChatVideoMessage(`${CHAT_VIDEO_MESSAGE_PREFIX}{"url":"https://ik.imagekit.io/anisocial/aani/u1/messages/v.mp4","posterUrl":"x"}`);
+  assert.equal(withoutPoster?.posterUrl, null);
 });
 
 test('the current send limits stay at 60 seconds and 25MB', () => {
@@ -56,8 +58,8 @@ test('the current send limits stay at 60 seconds and 25MB', () => {
 });
 
 test('every rejection has a clear Arabic message instead of a silent skip', () => {
-  for (const reason of ['not-a-video', 'too-long', 'too-large', 'compression-failed', 'audio-lost'] as const) {
-    const message = chatVideoRejectMessage(reason, 'detail');
+  for (const reason of ['not-a-video', 'too-long', 'too-large', 'compression-failed', 'audio-lost', 'audio-unverified'] as const) {
+    const message = chatVideoRejectMessage(reason);
     assert.ok(message.length > 20, `missing message for ${reason}`);
     assert.equal(/[a-z]{4,}/i.test(message), false, `message must be Arabic: ${message}`);
   }

@@ -36,17 +36,9 @@ type ChatMediaPickerProps = {
 };
 
 const MAX_SELECTED_MEDIA = 10;
-const MAX_VIDEO_DURATION_SECONDS = 60;
-const MAX_VIDEO_SIZE_BYTES = 25 * 1024 * 1024;
 
 function notifyCaptionChange(caption: string): void {
   window.dispatchEvent(new CustomEvent('aani-chat-media-caption-update', { detail: { caption } }));
-}
-
-function formatDuration(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 export default function ChatMediaPicker({
@@ -167,25 +159,6 @@ export default function ChatMediaPicker({
     objectUrlsRef.current.add(url);
     setMediaItems(current => current.map(item => item.id === id ? { ...item, file, url } : item));
     setEditingPhotoId(null);
-  };
-
-  // التحقق من مدة الفيديو عبر قراءة metadata دون تحميل الملف كاملاً
-  const checkVideoDuration = (file: File): Promise<number> => {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const video = document.createElement('video');
-      video.preload = 'metadata';
-      video.muted = true;
-      video.onloadedmetadata = () => {
-        URL.revokeObjectURL(url);
-        resolve(video.duration);
-      };
-      video.onerror = () => {
-        URL.revokeObjectURL(url);
-        reject(new Error('تعذر قراءة بيانات الفيديو.'));
-      };
-      video.src = url;
-    });
   };
 
   const sendSelectedMedia = async () => {
