@@ -173,7 +173,8 @@ export async function fetchReceivedGifts({
 export async function sendGift(
   senderId: string,
   recipientId: string,
-  giftId: string
+  giftId: string,
+  idempotencyKey?: string
 ): Promise<SendGiftResult> {
   if (!supabaseConfigured) {
     return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
@@ -182,6 +183,7 @@ export async function sendGift(
     p_sender_id: senderId,
     p_recipient_id: recipientId,
     p_gift_id: giftId,
+    p_idempotency_key: idempotencyKey ?? (typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : null),
   });
   if (error) {
     return { ok: false, error: error.message || 'فشل إرسال الهدية.' };
