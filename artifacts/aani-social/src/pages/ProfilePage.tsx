@@ -1673,7 +1673,7 @@ export default function ProfilePage({
           {popularity !== null && supabaseConfigured && (
             <button
               type="button"
-              aria-label="الشعبية والهدايا"
+              aria-label="وسم الشعبية"
               onClick={() => setShowPopularitySheet(true)}
               className="w-fit inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/45 backdrop-blur-md border border-white/15 shadow-sm hover:bg-black/60 transition"
             >
