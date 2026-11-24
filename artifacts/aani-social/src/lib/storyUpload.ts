@@ -4,6 +4,9 @@
 //   تحويل تلقائي إلى JPEG على iOS Safari + تصحيح EXIF.
 // - الفيديو: ضغط H.264+AAC داخل MP4 بحد أقصى 720p عبر mediabunny، مع مسار
 //   احتياطي آمن (متصفح قديم + ملف ≤24MB → يُرفع كما هو).
+//   فيديوهات المحادثات المباشرة (ChatVideoRecorder): رفع الملف الأصلي مباشرة
+//   دون ضغط عند تمرير خيار skipCompression=true، بعد اجتياز فحوصات الحجم
+//   والمدة والنوع (≤60 ثانية، ≤25MB، صيغة مدعومة).
 // - الصوت: voiceMessage يحوَّل إلى .m4a بتردد 44.1kHz متوافق مع iOS وAndroid.
 // التوقيع الآمن (token/expire/signature) يأتي من الخادم الخلفي:
 // GET /api/media/imagekit-auth (يستخدم IMAGEKIT_PRIVATE_KEY ولا يكشفه).
@@ -39,6 +42,8 @@ interface UploadOptions {
   signal?: AbortSignal;
   /** توافق قديم فقط — الضغط يعمل دائماً الآن بغض النظر عن هذه القيمة */
   quality?: 'hd' | 'data-saving';
+  /** تخطي ضغط الفيديو ورفع الملف الأصلي مباشرة (لفيديوهات المحادثات المسجلة بالكاميرا) */
+  skipCompression?: boolean;
 }
 
 type ImageKitAuthParams = {
@@ -93,10 +98,24 @@ async function fetchImageKitAuth(signal?: AbortSignal): Promise<ImageKitAuthPara
     break;
   }
 
-  const result = await response.json().catch(() => null) as
-    | (ImageKitAuthParams & { success?: unknown; error?: unknown })
-    | null;
+  const rawBody = await response.text().catch(() => '');
+  let result: (ImageKitAuthParams & { success?: unknown; error?: unknown }) | null = null;
+  try {
+    result = JSON.parse(rawBody) as ImageKitAuthParams & { success?: unknown; error?: unknown };
+  } catch {
+    result = null;
+  }
   if (!response.ok || !result || result.success !== true) {
+    // استجابة HTML تعني أن المضيف الحالي لا يوجّه /api إلى خدمة الـAPI
+    // (يعيد صفحة SPA بـ200)، فلا يمكن الحصول على توقيع الرفع إطلاقاً.
+    if (!result && /^\s*</.test(rawBody)) {
+      throw new Error(
+        'مسارات /api لا تصل إلى خدمة الـAPI على هذا المضيف: '
+          + '/api/media/imagekit-auth أعاد صفحة بدل JSON. '
+          + 'أضف API_PROXY_TARGET في إعدادات بناء النشر (Netlify) بعنوان خدمة الـAPI، '
+          + 'أو افتح التطبيق من مضيف الـAPI نفسه.',
+      );
+    }
     const serverError = typeof result?.error === 'string' && result.error ? result.error : '';
     // أخطاء 5xx أثناء الإقلاع (بعد استنفاد المحاولات) تُعرض برمزها الحقيقي
     if (response.status >= 500) {
@@ -148,6 +167,7 @@ async function uploadMediaUnsafe({
   onPhase,
   preset,
   signal,
+  skipCompression,
 }: UploadOptions): Promise<string> {
   if (signal?.aborted) throw new DOMException('أُلغيت العملية.', 'AbortError');
 
@@ -156,7 +176,7 @@ async function uploadMediaUnsafe({
   // متطابقة مثلاً) لا يمنع المستخدم من النشر.
   let serverProxyFailedWithSignature = false;
 
-  // 1) الضغط/العزل من جهة العميل — يعمل دائماً افتراضياً
+  // 1) الضغط/العزل من جهة العميل — يعمل دائماً افتراضياً ما لم يُطلب تخطي الضغط
   onPhase?.('compressing', 0);
   const effectivePreset = preset ?? detectPreset(file);
   let uploadFile = file;
@@ -185,10 +205,20 @@ async function uploadMediaUnsafe({
     && file.type !== 'image/gif'
     && file.type !== 'image/svg+xml';
 
+  // تخطي الضغط للفيديو عند طلب ذلك صراحةً (مسار فيديوهات المحادثات المباشرة)
+  const shouldSkipVideoCompression = skipCompression === true
+    && file.type.startsWith('video/')
+    && effectivePreset === 'video';
+
   if (effectivePreset && isImagePreset(effectivePreset) && isImageFile) {
     // كل إعدادات الصور (avatar/cover/feedImage/highlightCover/storyImage/chatImage)
     // تمر إجبارياً عبر الضغط المركزي — لا يُرفع الأصل بصمت عند فشل الضغط.
     uploadFile = await compressImage(file, effectivePreset, percent => onPhase?.('compressing', percent), signal);
+  } else if (shouldSkipVideoCompression) {
+    // فيديوهات المحادثات: نرفع الملف الأصلي مباشرة بعد اجتياز فحوصات الحجم والمدة والنوع
+    // (الفحوصات تتم في واجهة التسجيل/المنتقي قبل استدعاء uploadMedia)
+    onPhase?.('compressing', 100);
+    uploadFile = file;
   } else if (effectivePreset === 'video'
     || (effectivePreset && isImagePreset(effectivePreset) && file.type.startsWith('video/'))) {
     // preset صوري مفروض على ملف فيديو (مسار إنشاء القصص مثلاً) — نعامله كفيديو:
