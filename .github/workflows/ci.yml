@@ -80,6 +80,16 @@ jobs:
       - name: Build @workspace/api-server
         run: pnpm --filter @workspace/api-server run build
 
+      # سلوك فيديو المحادثة: الحمولة والحدود، ضغط/رفع الاستوديو، وتشغيل أول ضغطة.
+      - name: Unit tests @workspace/aani-social (chat video payload)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideo.test.ts
+
+      - name: Unit tests @workspace/aani-social (chat video send)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoSend.test.ts
+
+      - name: Unit tests @workspace/aani-social (chat video player)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoPlayer.test.ts
+
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
   # the part of the schema the migration and the test touch, so this proves the

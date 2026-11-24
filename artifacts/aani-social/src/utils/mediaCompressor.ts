@@ -89,6 +89,12 @@ export type MediaCompressionMetric = {
   outcome: 'ok' | 'skipped-passthrough' | 'failed';
   failureReason?: string;
   finalVideoCodec?: string;
+  /** هل كان في الأصل مسار صوتي (قبل الضغط)؟ */
+  hasAudioBefore?: boolean;
+  /** هل بقي مسار صوتي في الناتج (بعد الضغط)؟ تغيب إن لم يُفحص الناتج. */
+  hasAudioAfter?: boolean;
+  /** هل hasAudioAfter نتيجة فحص مستقل، أم غير متحققة؟ */
+  audioVerification?: VideoAudioVerification;
   savingPct: number;
 };
 
@@ -841,6 +847,77 @@ async function loadMediabunny(): Promise<MediabunnyModule | null> {
   return mediabunnyModule;
 }
 
+export interface VideoSourceMetadata {
+  durationSeconds: number;
+  width: number;
+  height: number;
+  hasAudio: boolean;
+  videoCodec: string;
+  audioCodec: string;
+}
+
+/**
+ * يقرأ مدة الفيديو وأبعاده ووجود مسار صوتي عبر mediabunny **بلا ترميز**.
+ * يُستخدم لفحص حدود الإرسال (60 ثانية) وللقياسات قبل أي رفع. null إن تعذّر.
+ */
+export async function probeVideoMetadata(file: Blob): Promise<VideoSourceMetadata | null> {
+  const mb = await loadMediabunny();
+  if (!mb) return null;
+  try {
+    const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
+    const durationSeconds = await input.computeDuration().catch(() => 0);
+    const videoTrack = await input.getPrimaryVideoTrack().catch(() => null);
+    const audioTrack = await input.getPrimaryAudioTrack().catch(() => null);
+    const width = videoTrack ? await videoTrack.getDisplayWidth().catch(() => 0) : 0;
+    const height = videoTrack ? await videoTrack.getDisplayHeight().catch(() => 0) : 0;
+    return {
+      durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0,
+      width: width > 0 ? width : 0,
+      height: height > 0 ? height : 0,
+      hasAudio: Boolean(audioTrack),
+      videoCodec: typeof videoTrack?.codec === 'string' ? videoTrack.codec : '',
+      audioCodec: typeof audioTrack?.codec === 'string' ? audioTrack.codec : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+export type VideoAudioVerification = 'measured' | 'unverified';
+
+export interface RecordedVideoAudioState {
+  /** نتيجة الفحص المستقل للملف الناتج — تغيب إن لم يُفحص. */
+  hasAudioAfter?: boolean;
+  audioVerification: VideoAudioVerification;
+}
+
+/**
+ * حالة الصوت في الملف الناتج من فحص مستقل واحد فقط. بلا فحص لا يُسجل وجود
+ * صوت، ولا يُستنتج من صوت الأصل: الحالة 'unverified' وhasAudioAfter غائبة.
+ */
+export function resolveRecordedAudioState(
+  measured: { hasAudio: boolean } | null | undefined,
+): RecordedVideoAudioState {
+  if (!measured || typeof measured.hasAudio !== 'boolean') {
+    return { audioVerification: 'unverified' };
+  }
+  return { hasAudioAfter: measured.hasAudio, audioVerification: 'measured' };
+}
+
+/** فحص مسار الصوت الفعلي لملف عبر mediabunny — null إن تعذر الفحص. */
+export async function inspectAudioTrack(
+  mb: MediabunnyModule,
+  file: Blob,
+): Promise<{ hasAudio: boolean } | null> {
+  try {
+    const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
+    const track = await input.getPrimaryAudioTrack().catch(() => null);
+    return { hasAudio: Boolean(track) };
+  } catch {
+    return null;
+  }
+}
+
 let aacEncoderReady = false;
 
 /** بعض المتصفحات (Safari القديم) تفتقر لتشفير AAC في WebCodecs — نضيف مُرمِّز libavcodec. */
@@ -907,6 +984,8 @@ export async function compressVideo(
         outcome: 'skipped-passthrough',
         failureReason: 'no-webcodecs: mp4-structure-verified',
         finalVideoCodec: 'avc1+avcC (structure-verified)',
+        // بلا WebCodecs لا يمكن فحص مسار الصوت: الحالة غير متحققة، لا موجودة.
+        audioVerification: 'unverified',
       });
       return file;
     }
@@ -958,6 +1037,20 @@ export async function compressVideo(
     }
     const buffer = output.target.buffer;
     if (!buffer) throw new Error('تعذر إنتاج ملف الفيديو المضغوط.');
+    // التحقق من الصوت بعد الترميز: نجاح إنتاج MP4 ليس دليلاً على بقاء الصوت،
+    // ولا يُرفع فيديو صامت إذا كان الأصل يحمل مساراً صوتياً.
+    // التحقق من المسار الصوتي الفعلي في الملف الناتج: نفتح الناتج بـmediabunny
+    // ونقرأ مسار الصوت وترميزه — لا مسح أول 256KB ولا قيمة موروثة.
+    const producedInput = new mb.Input({
+      source: new mb.BlobSource(new File([buffer], `${baseName}.mp4`, { type: 'video/mp4' })),
+      formats: mb.ALL_FORMATS,
+    });
+    const producedAudio = await producedInput.getPrimaryAudioTrack().catch(() => null);
+    const producedCodec = typeof producedAudio?.codec === 'string' ? producedAudio.codec : '';
+    producedAudioState = resolveRecordedAudioState({ hasAudio: Boolean(producedAudio) });
+    if (sourceHasAudio && (!producedAudio || !/aac|mp4a/i.test(producedCodec))) {
+      throw new Error('تعذر الحفاظ على المسار الصوتي في الفيديو المضغوط — لن يُرفع فيديو صامت.');
+    }
     return new File([buffer], `${baseName}-720p.mp4`, { type: 'video/mp4', lastModified: Date.now() });
   };
 
@@ -975,6 +1068,10 @@ export async function compressVideo(
   const videoCodec = typeof videoTrack?.codec === 'string' ? videoTrack.codec : '';
   const audioTrack = await probeInput.getPrimaryAudioTrack().catch(() => null);
   const audioCodec = typeof audioTrack?.codec === 'string' ? audioTrack.codec : '';
+  // تشفير AAC في WebCodecs غير مدعوم افتراضياً في Safari وChrome: بلا مُرمِّز
+  // AAC يُفقد المسار الصوتي أثناء التحويل، فيصل الفيديو بلا صوت (العطل الأساسي).
+  const sourceHasAudio = Boolean(audioTrack);
+  if (sourceHasAudio) await ensureAacEncoder(mb);
   const videoCodecOk = /avc|h264|h\.264/i.test(videoCodec);
   const audioCodecOk = !audioTrack || /aac|mp4a/i.test(audioCodec);
   const alreadyCompact = sourceWidth > 0 && sourceHeight > 0
@@ -992,11 +1089,19 @@ export async function compressVideo(
     ? `avc1${audioTrack ? `+${/aac|mp4a/i.test(audioCodec) ? 'aac' : audioCodec}` : '+no-audio'}`
     : undefined;
 
+  // هل بقي مسار صوت فعلي في الناتج؟ نتيجة فحص مستقل أو 'unverified' — لا افتراض.
+  let producedAudioState: RecordedVideoAudioState = { audioVerification: 'unverified' };
+
   function recordVideoMetric(
     outcome: 'ok' | 'skipped-passthrough' | 'failed',
     finalBytes: number,
-    extra: { failureReason?: string; finalVideoCodec?: string } = {},
+    extra: {
+      failureReason?: string;
+      finalVideoCodec?: string;
+      audio?: RecordedVideoAudioState;
+    } = {},
   ): void {
+    const audioState = extra.audio ?? { audioVerification: 'unverified' };
     recordCompressionMetric({
       kind: 'video',
       preset: 'video',
@@ -1006,11 +1111,18 @@ export async function compressVideo(
       outcome,
       failureReason: extra.failureReason,
       finalVideoCodec: extra.finalVideoCodec ?? verifiedCodec,
+      hasAudioBefore: sourceHasAudio,
+      // لا استنتاج من صوت الأصل: وجود الصوت بعد الضغط يُسجل بفحص فقط.
+      ...(audioState.hasAudioAfter === undefined ? {} : { hasAudioAfter: audioState.hasAudioAfter }),
+      audioVerification: audioState.audioVerification,
     });
   }
 
   if (isMp4 && alreadyCompact && structuralSpecVerified && file.size <= 6 * 1024 * 1024 && file.size <= maxBytes) {
-    recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'already H.264/AAC within spec (structure-verified)' });
+    recordVideoMetric('skipped-passthrough', file.size, {
+      failureReason: 'already H.264/AAC within spec (structure-verified)',
+      audio: resolveRecordedAudioState(await inspectAudioTrack(mb, file)),
+    });
     onProgress?.(100);
     return file;
   }
@@ -1052,7 +1164,10 @@ export async function compressVideo(
     // وأصغر من الناتج — نحتفظ بالأصل. غير ذلك يُرفع الناتج المعاد ترميزه
     // (بما فيه خفض 30fps) وإن كان أكبر قليلاً — الالتزام بالمواصفة أولاً.
     if (isMp4 && videoCodecOk && audioCodecOk && structuralSpecVerified && file.size <= maxBytes && result.size >= file.size) {
-      recordVideoMetric('skipped-passthrough', file.size, { failureReason: 'reencode-not-smaller-than-verified-original' });
+      recordVideoMetric('skipped-passthrough', file.size, {
+        failureReason: 'reencode-not-smaller-than-verified-original',
+        audio: resolveRecordedAudioState(await inspectAudioTrack(mb, file)),
+      });
       onProgress?.(100);
       return file;
     }
@@ -1063,7 +1178,10 @@ export async function compressVideo(
       });
       throw new MediaTooLargeError();
     }
-    recordVideoMetric('ok', result.size, { finalVideoCodec: 'avc1+aac (reencoded)' });
+    recordVideoMetric('ok', result.size, {
+      finalVideoCodec: 'avc1+aac (reencoded)',
+      audio: producedAudioState,
+    });
     onProgress?.(100);
     return result;
   } catch (error) {
