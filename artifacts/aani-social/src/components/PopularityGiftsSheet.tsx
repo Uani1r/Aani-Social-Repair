@@ -2,8 +2,7 @@ import {
   useCallback,
   useEffect,
   useState,
-  type PointerEvent as ReactPointerEvent,
-  type TouchEvent as ReactTouchEvent,
+  type SyntheticEvent as ReactSyntheticEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronRight, X } from 'lucide-react';
@@ -15,9 +14,8 @@ import { SignedImage } from '@/components/SignedMedia';
 import { useBottomSheetDismiss } from '@/hooks/useBottomSheetDismiss';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { displayName, formatDate } from '@/lib/types';
 import {
-  displayName,
-  formatDate,
   formatPopularity,
   fetchGiftCatalog,
   fetchMyBalance,
@@ -40,6 +38,22 @@ type PopularityGiftsSheetProps = {
   onClose: () => void;
   /** يُستدعى عند تغيُّر شعبية المستلم بعد عملية إرسال ناجحة. */
   onPopularityChange?: (value: number) => void;
+};
+
+/**
+ * محاولة إرسال معلّقة.
+ * - المفتاح (key) يُولّد مرة واحدة لكل عملية ويُعاد استخدامه عند إعادة المحاولة
+ *   بعد فشل غير محسوم (شبكة/انقطاع) لضمان عدم خصم الرصيد مرتين.
+ * - مرتبطة بالمستلم والهدية، فلا يُعاد استخدام مفتاح قديم مع مستلم أو هدية أخرى.
+ * - `status`:
+ *     'sending'     → الطلب جارٍ، الاختيار مقفل.
+ *     'inconclusive'→ فشل غير محسوم، نُبقي المفتاح ونقفل الاختيار حتى إعادة المحاولة.
+ */
+type SendAttempt = {
+  key: string;
+  recipientId: string;
+  giftId: string;
+  status: 'sending' | 'inconclusive';
 };
 
 const MEDAL_SVG = (
@@ -82,9 +96,11 @@ export default function PopularityGiftsSheet({
   const [balance, setBalance] = useState(0);
   const [popularity, setPopularity] = useState(0);
   const [selectedGift, setSelectedGift] = useState<Gift | null>(null);
-  const [sending, setSending] = useState(false);
   const [recipientLabel, setRecipientLabel] = useState(recipientName || '');
-  const [sendKey, setSendKey] = useState<string | null>(null);
+  // العملية المعلّقة (إن وُجدت) تقفل اختيار الهدية/المستلم وتحمل مفتاح العملية.
+  const [attempt, setAttempt] = useState<SendAttempt | null>(null);
+  // مشتق من حالة المحاولة: جارٍ الإرسال الآن (يمنع تكرار النقر).
+  const sending = attempt?.status === 'sending';
 
   const {
     dragOffset,
@@ -97,7 +113,7 @@ export default function PopularityGiftsSheet({
     onTouchCancel,
   } = useBottomSheetDismiss(open, onClose);
 
-  const stop = (event: ReactPointerEvent | ReactTouchEvent) => {
+  const stop = (event: ReactSyntheticEvent) => {
     event.stopPropagation();
   };
 
@@ -134,9 +150,14 @@ export default function PopularityGiftsSheet({
     if (!open) {
       setStep('summary');
       setSelectedGift(null);
-      setSendKey(null);
+      setAttempt(null);
       return;
     }
+    // تغيّر المستلم (userId) أو المستخدم الحالي (currentUserId) يلغي أي عملية
+    // معلّقة ويُعيد الاختيار، حتى لا يُعاد استخدام مفتاح عملية سابقة مع مستلم آخر.
+    setStep('summary');
+    setSelectedGift(null);
+    setAttempt(null);
     setLoading(true);
     setItems([]);
     setHasMore(false);
@@ -175,40 +196,75 @@ export default function PopularityGiftsSheet({
   }, [loadingMore, hasMore, userId, page]);
 
   const toggleGift = (gift: Gift) => {
+    // لا يُسمح بتغيير الهدية قبل حسم نتيجة العملية المعلقة.
+    if (attempt) return;
     if (gift.price > balance) return;
-    setSendKey(null);
     setSelectedGift(prev => (prev?.id === gift.id ? null : gift));
   };
 
   const handleSend = async () => {
     if (!selectedGift || sending || selectedGift.price > balance) return;
-    const key = sendKey ?? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (currentUserId + "-" + userId + "-" + selectedGift.id + "-" + Date.now()));
-    if (!sendKey) setSendKey(key);
-    setSending(true);
+
+    // تحديد المحاولة:
+    // - إن وُجدت محاولة معلّقة (فشل غير محسوم) نعيد استخدام نفس المفتاح والهدية
+    //   والمستلم، لأن تغييرها قبل الحسم ممنوع.
+    // - غير ذلك ننشئ محاولة جديدة بمفتاح جديد.
+    let activeAttempt: SendAttempt;
+    if (attempt && attempt.status === 'inconclusive') {
+      if (attempt.recipientId !== userId || attempt.giftId !== selectedGift.id) {
+        // لا ينبغي الوصول هنا (الاختيار مقفل)، لكن ندافع عن المفتاح.
+        toast.error('لا يمكن تغيير الهدية أو المستلم قبل حسم العملية المعلقة.');
+        return;
+      }
+      activeAttempt = attempt;
+    } else {
+      const key =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${currentUserId}-${userId}-${selectedGift.id}-${Date.now()}`;
+      activeAttempt = {
+        key,
+        recipientId: userId,
+        giftId: selectedGift.id,
+        status: 'sending',
+      };
+    }
+
+    setAttempt(activeAttempt);
     try {
-      const result: SendGiftResult = await sendGift(currentUserId, userId, selectedGift.id, key);
+      const result: SendGiftResult = await sendGift(
+        currentUserId,
+        userId,
+        selectedGift.id,
+        activeAttempt.key
+      );
       if (!result.ok) {
-        toast.error(result.error || "فشل إرسال الهدية.");
+        // رفض قاطع من الخادم (رصيد/هدية/صلاحية): العملية محسومة كفشل، نحرّر الاختيار.
+        toast.error(result.error || 'فشل إرسال الهدية.');
+        setAttempt(null);
         return;
       }
       setSelectedGift(null);
-      setStep("summary");
-      setSendKey(null);
-      if (typeof result.balance === "number") setBalance(result.balance);
+      setStep('summary');
+      setAttempt(null);
+      if (typeof result.balance === 'number') setBalance(result.balance);
       await refresh();
-      if (typeof result.popularity_points === "number") {
+      if (typeof result.popularity_points === 'number') {
         const nextPopularity = popularity + result.popularity_points;
         setPopularity(nextPopularity);
         onPopularityChange?.(nextPopularity);
       }
-      toast.success(result.duplicate
-        ? "تم استلام الطلب (مكرر، لم يُخصم رصيد إضافي)."
-        : "تم إرسال الهدية بنجاح.");
+      toast.success(
+        result.duplicate
+          ? 'تم استلام الطلب (مكرر، لم يُخصم رصيد إضافي).'
+          : 'تم إرسال الهدية بنجاح.'
+      );
     } catch (error) {
-      console.error("[popularity sheet] تعذر الإرسال:", error);
-      toast.error(error instanceof Error ? error.message : "فشل إرسال الهدية.");
-    } finally {
-      setSending(false);
+      // فشل غير محسوم (شبكة/انقطاع): نُبقي المفتاح ونقفل الاختيار لإعادة المحاولة
+      // بنفس العملية دون خصم مزدوج.
+      console.error('[popularity sheet] تعذر الإرسال:', error);
+      setAttempt({ ...activeAttempt, status: 'inconclusive' });
+      toast.error(error instanceof Error ? error.message : 'فشل إرسال الهدية.');
     }
   };
 
@@ -421,7 +477,7 @@ export default function PopularityGiftsSheet({
                       <button
                         key={gift.id}
                         type="button"
-                        disabled={gift.price > balance}
+                        disabled={gift.price > balance || attempt !== null}
                         onClick={() => toggleGift(gift)}
                         className={`
                           flex flex-col items-center gap-2 rounded-xl p-3 border transition
@@ -469,8 +525,18 @@ export default function PopularityGiftsSheet({
                     onClick={handleSend}
                     className="w-full rounded-full bg-white px-4 py-2 text-sm font-bold text-black transition disabled:opacity-60 disabled:cursor-not-allowed hover:bg-neutral-100"
                   >
-                    {sending ? 'جارٍ الإرسال…' : 'تأكيد الإرسال'}
+                    {sending
+                      ? 'جارٍ الإرسال…'
+                      : attempt?.status === 'inconclusive'
+                        ? 'إعادة المحاولة'
+                        : 'تأكيد الإرسال'}
                   </button>
+                  {attempt?.status === 'inconclusive' && (
+                    <p className="text-xs text-amber-400">
+                      تعذّر تأكيد نتيجة الإرسال. أعد المحاولة بنفس الهدية والمستلم؛ لن يُخصم
+                      الرصيد مرتين.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
