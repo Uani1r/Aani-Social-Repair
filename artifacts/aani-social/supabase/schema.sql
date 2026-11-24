@@ -1556,12 +1556,9 @@ grant execute on function public.random_trending_sounds(integer) to authenticate
 
 -- =====================================================================
 -- هدايا الملف الشخصي ونقاط الشعبية (Gifts & Popularity)
--- الحالة النهائية بعد الترحيلات:
---   20270405000000_gifts_and_popularity
---   20270406000000_gifts_fixes
---   20270407000000_gifts_correction
---   20270408000000_gifts_race_fix   (قفل التزامن عبر advisory lock)
---   20270409000000_gifts_privacy_read_policy (قراءة الزائر حسب الخصوصية والحظر)
+-- الحالة النهائية = الترحيل المطبَّق فعلياً على القاعدة الأساسية:
+--   20261124181406_aani_gifts_popularity_final
+-- (كان هناك 5 ترحيلات مؤرخة 2027/مستقبلية، أُدمجت في هذا الترحيل الواحد.)
 -- آمن للإعادة التشغيل: يُنشئ الجداول/الفهارس الناقصة فقط، ويُعيد إنشاء
 -- الدوال والسياسات بالنسخة النهائية، ولا يحذف بيانات موجودة.
 -- =====================================================================
@@ -1680,6 +1677,11 @@ begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_sender_id then raise exception 'forbidden' using errcode='42501'; end if;
   if p_sender_id = p_recipient_id then raise exception 'self' using errcode='22023'; end if;
+  -- منع إرسال هدية إلى مستخدم محظور (إن وجدت دالة الحظر في القاعدة).
+  if to_regprocedure('public.aani_is_user_blocked(uuid,uuid)') is not null
+     and public.aani_is_user_blocked(p_sender_id, p_recipient_id) then
+    raise exception 'blocked' using errcode='42501';
+  end if;
   if p_idempotency_key is null or length(trim(p_idempotency_key)) = 0 then
     raise exception 'idempotency key required' using errcode='22023';
   end if;

@@ -148,6 +148,26 @@ test('الرفض المؤكد وحده يسمح بإنشاء محاولة جدي
   assert.equal(fresh.key, 'fresh-1');
 });
 
+test('الرفض المؤكد (رصيد غير كافٍ/محظور/غير متاح) = inconclusive:false ويسمح بمحاولة جديدة', () => {
+  for (const [code, message] of [
+    ['42001', 'insufficient balance'],
+    ['42501', 'blocked'],
+    ['42704', 'gift unavailable'],
+  ] as const) {
+    const result = interpretSendResponse({ code, message }, null);
+    assert.equal(result.ok, false, code);
+    assert.equal(result.inconclusive, false, `${code} يجب أن يكون رفضاً مؤكداً`);
+  }
+  // بعد رفض مؤكد تُصفّر المحاولة → مفتاح جديد.
+  let generated = 0;
+  const fresh = resolveSendAttempt(null, {
+    recipientId: RECIPIENT,
+    giftId: GIFT,
+    generateKey: () => `k-${++generated}`,
+  });
+  assert.equal(fresh.key, 'k-1');
+});
+
 test('السلسلة الكاملة: خطأ شبكة يبقي المفتاح، ونجاح مؤكد يصفّر المحاولة', () => {
   let attempt = resolveSendAttempt(null, {
     recipientId: RECIPIENT,
