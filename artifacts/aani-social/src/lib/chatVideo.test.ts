@@ -9,7 +9,9 @@ import {
   CHAT_VIDEO_MESSAGE_PREFIX,
   buildChatVideoMetrics,
   chatVideoMessageContent,
+  chatVideoPreviewText,
   chatVideoRejectMessage,
+  chatVideoReplyPreviewText,
   checkChatVideoLimits,
   describeChatVideoMetrics,
   parseChatVideoMessage,
@@ -165,4 +167,39 @@ test('a skipped-passthrough metric with no audio check stays unverified, not "au
   assert.equal(stored?.audioVerification, 'unverified');
   // لا حقل صوت بعد الضغط: لا يُفترض بقاء صوت الأصل
   assert.equal(stored !== undefined && 'hasAudioAfter' in stored, false);
+});
+
+
+test('the conversation preview shows a readable video line, never the tag or JSON', () => {
+  const content = chatVideoMessageContent(payload);
+  assert.ok(parseChatVideoMessage(content));
+
+  const sent = chatVideoPreviewText(true);
+  const received = chatVideoPreviewText(false);
+
+  assert.equal(sent, 'أنت: أرسلت فيديو');
+  assert.equal(received, 'أرسل فيديو');
+  assert.equal(chatVideoReplyPreviewText(), 'فيديو');
+
+  for (const text of [sent, received, chatVideoReplyPreviewText()]) {
+    assert.equal(text.includes(CHAT_VIDEO_MESSAGE_PREFIX), false);
+    assert.equal(text.includes('[aani-'), false);
+    assert.equal(/[{}"]/.test(text), false);
+  }
+});
+
+test('an image message is never mistaken for a video preview', () => {
+  const imageContent = '[aani-image:v1]{"urls":["https://ik.imagekit.io/anisocial/aani/u1/messages/a.jpg"],"caption":"","viewOnce":false}';
+  assert.equal(parseChatVideoMessage(imageContent), null);
+});
+
+test('the message list checks video before it falls back to the raw content', () => {
+  const page = read('./pages/MessagesPage.tsx');
+
+  assert.equal(page.includes('if (chatVideoMessage) return chatVideoPreviewText(message.sender_id === currentUserId);'), true);
+  assert.equal(page.includes('if (chatVideoMessage) return chatVideoReplyPreviewText();'), true);
+  // الفحص بعد تحليل الحمولة وقبل أي إرجاع للمحتوى الخام في المعاينة
+  const parseIndex = page.indexOf('const chatVideoMessage = parseChatVideoMessage(content);');
+  const previewIndex = page.indexOf('if (chatVideoMessage) return chatVideoPreviewText(');
+  assert.ok(parseIndex >= 0 && previewIndex > parseIndex);
 });
