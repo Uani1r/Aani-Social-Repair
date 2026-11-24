@@ -73,7 +73,8 @@ export type ChatVideoRejectReason =
   | 'too-large'
   | 'compression-failed'
   | 'audio-lost'
-  | 'audio-unverified';
+  | 'audio-unverified'
+  | 'metadata-invalid';
 
 /** رسالة عربية واضحة تُعرض للمستخدم بدل إخفاق صامت أو رفع الملف الأصلي. */
 export function chatVideoRejectMessage(reason: ChatVideoRejectReason, detail?: string): string {
@@ -90,6 +91,8 @@ export function chatVideoRejectMessage(reason: ChatVideoRejectReason, detail?: s
       return 'تعذر الحفاظ على صوت المقطع أثناء الضغط. لم يُرفع فيديو صامت. جرّب مقطعاً آخر أو أعد المحاولة.';
     case 'audio-unverified':
       return 'تعذر التحقق من المسار الصوتي للمقطع بعد الضغط. لم يُرفع أي ملف — أعد المحاولة أو اختر مقطعاً آخر.';
+    case 'metadata-invalid':
+      return 'تعذر قراءة مدة المقطع أو أبعاده بعد الضغط. لم يُرفع أي ملف — أعد المحاولة أو اختر مقطعاً آخر.';
     default:
       return `تعذر ضغط المقطع على هذا الجهاز${detail ? ` (${detail})` : ''}. لم يُرفع الملف الأصلي بصمت — جرّب مقطعاً أقصر أو متصفحاً حديثاً.`;
   }

@@ -9,7 +9,7 @@
 // - فشل فيديو لا يمنع إرسال الصور، ولا يُنشئ رسالة فيديو.
 // - لا تُخلط روابط الصور والفيديو في حمولة واحدة.
 
-import { chatVideoMessageContent } from '@/lib/chatVideo';
+import { chatVideoMessageContent, chatVideoRejectMessage } from '@/lib/chatVideo';
 
 export interface ChatMediaSelectionItem {
   id: string;
@@ -22,10 +22,34 @@ export interface ChatVideoPreparationLike {
   ok: boolean;
   file?: File | null;
   poster?: File | null;
+  /** المدة المقاسة بعد الضغط (ms) — إلزامية عند النجاح، لا قيمة افتراضية. */
   durationMs?: number;
+  /** الأبعاد المقاسة بعد الضغط — إلزامية عند النجاح، لا أصفار تعويضية. */
   metrics?: { width?: number; height?: number } | null;
   message?: string;
   reason?: string;
+}
+
+export interface ChatVideoPreparedDimensions {
+  durationMs: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * المدة والأبعاد المقاسة بعد الضغط: تُشتق بلا أي قيمة افتراضية. أي حقل مفقود
+ * أو غير صالح (NaN، ≤0) يعني أن الحمولة ناقصة، فلا رفع ولا رسالة فيديو.
+ */
+export function readPreparedDimensions(
+  prepared: ChatVideoPreparationLike,
+): ChatVideoPreparedDimensions | null {
+  const durationMs = prepared.durationMs;
+  const width = prepared.metrics?.width;
+  const height = prepared.metrics?.height;
+  const valid = typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > 0
+    && typeof width === 'number' && Number.isFinite(width) && width > 0
+    && typeof height === 'number' && Number.isFinite(height) && height > 0;
+  return valid ? { durationMs, width, height } : null;
 }
 
 export interface ChatMediaSendDeps {
@@ -73,8 +97,13 @@ export async function sendChatMediaSelection(
   const images = items.filter(item => item.type === 'image');
   const videos = items.filter(item => item.type === 'video');
 
-  // 1) تحضير كل فيديو قبل أي رفع: فشل التحضير يمنع رفع ذلك الفيديو فقط.
-  const preparedVideos: Array<{ item: ChatMediaSelectionItem; prepared: ChatVideoPreparationLike }> = [];
+  // 1) تحضير كل فيديو قبل أي رفع: فشل التحضير أو نقص المدة/الأبعاد يمنع
+  //    رفع ذلك الفيديو وإنشاء رسالته، بلا أي قيمة افتراضية.
+  const preparedVideos: Array<{
+    item: ChatMediaSelectionItem;
+    prepared: ChatVideoPreparationLike;
+    dimensions: ChatVideoPreparedDimensions;
+  }> = [];
   const failedVideos: ChatVideoSendFailure[] = [];
   for (const item of videos) {
     let prepared: ChatVideoPreparationLike;
@@ -90,7 +119,12 @@ export async function sendChatMediaSelection(
       });
       continue;
     }
-    preparedVideos.push({ item, prepared });
+    const dimensions = readPreparedDimensions(prepared);
+    if (!dimensions) {
+      failedVideos.push({ itemId: item.id, message: chatVideoRejectMessage('metadata-invalid') });
+      continue;
+    }
+    preparedVideos.push({ item, prepared, dimensions });
   }
 
   const imageUrls: string[] = [];
@@ -120,8 +154,9 @@ export async function sendChatMediaSelection(
     }
   }
 
-  // 3) كل فيديو: رفع الملف المضغوط فقط، ثم غلافه، ثم رسالة فيديو مستقلة.
-  for (const { item, prepared } of preparedVideos) {
+  // 3) كل فيديو: رفع الملف المضغوط فقط، ثم غلافه، ثم رسالة فيديو مستقلة
+  //    بالمدة والأبعاد المقاسة بعد الضغط (بلا أي قيمة بديلة).
+  for (const { item, prepared, dimensions } of preparedVideos) {
     let videoUrl: string;
     try {
       videoUrl = await deps.uploadVideo(item, prepared);
@@ -145,12 +180,12 @@ export async function sendChatMediaSelection(
       await deps.insertMessage(
         chatVideoMessageContent({
           url: videoUrl,
-          durationMs: prepared.durationMs ?? 0,
+          durationMs: dimensions.durationMs,
           posterUrl,
           caption: deps.caption,
           viewOnce: deps.viewOnce,
-          width: prepared.metrics?.width ?? 0,
-          height: prepared.metrics?.height ?? 0,
+          width: dimensions.width,
+          height: dimensions.height,
         }),
         'video',
       );

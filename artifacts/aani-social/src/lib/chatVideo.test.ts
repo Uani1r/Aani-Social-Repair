@@ -14,6 +14,7 @@ import {
   describeChatVideoMetrics,
   parseChatVideoMessage,
 } from './chatVideo';
+import { getCompressionMetrics, recordCompressionMetric, resolveRecordedAudioState } from '../utils/mediaCompressor';
 
 const srcRoot = new URL('..', import.meta.url);
 const read = (relativePath: string): string =>
@@ -125,4 +126,43 @@ test('the chat video player never autoplays and loads only after a tap', () => {
   for (const part of ['type="range"', 'formatChatVideoTime(currentMs)', 'formatChatVideoTime(totalMs)', 'nextChatVideoMuteState', 'isChatVideoFullscreenSupported', 'RotateCcw']) {
     assert.equal(player.includes(part), true, `missing ${part}`);
   }
+});
+
+
+test('audio after compression is never inherited from the source audio', () => {
+  // بلا فحص مستقل: الحالة غير متحققة، ولا يُسجّل وجود صوت إطلاقاً
+  assert.deepEqual(resolveRecordedAudioState(null), { audioVerification: 'unverified' });
+  assert.deepEqual(resolveRecordedAudioState(undefined), { audioVerification: 'unverified' });
+  assert.equal('hasAudioAfter' in resolveRecordedAudioState(null), false);
+
+  // مع فحص مستقل: النتيجة كما فُحصت (وجوداً أو غياباً)
+  assert.deepEqual(resolveRecordedAudioState({ hasAudio: true }), {
+    hasAudioAfter: true,
+    audioVerification: 'measured',
+  });
+  assert.deepEqual(resolveRecordedAudioState({ hasAudio: false }), {
+    hasAudioAfter: false,
+    audioVerification: 'measured',
+  });
+});
+
+test('a skipped-passthrough metric with no audio check stays unverified, not "audio kept"', () => {
+  recordCompressionMetric({
+    kind: 'video',
+    preset: 'video',
+    originalBytes: 1_000,
+    finalBytes: 1_000,
+    durationMs: 1,
+    outcome: 'skipped-passthrough',
+    failureReason: 'no-webcodecs: mp4-structure-verified',
+    audioVerification: 'unverified',
+  });
+
+  const metrics = getCompressionMetrics();
+  const stored = metrics[metrics.length - 1];
+
+  assert.equal(stored?.outcome, 'skipped-passthrough');
+  assert.equal(stored?.audioVerification, 'unverified');
+  // لا حقل صوت بعد الضغط: لا يُفترض بقاء صوت الأصل
+  assert.equal(stored !== undefined && 'hasAudioAfter' in stored, false);
 });

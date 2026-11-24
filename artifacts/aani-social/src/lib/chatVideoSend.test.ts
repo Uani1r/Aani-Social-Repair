@@ -224,3 +224,58 @@ test('a video without a poster still sends a valid payload with a null poster', 
   assert.equal(payload!.durationMs, 5_000);
   assert.equal(payload!.width, 640);
 });
+
+
+test('a video without a measured duration is rejected before any upload or message', async () => {
+  const { deps, calls } = createDeps({
+    async prepareVideo() {
+      return { ok: true, file: videoFile('c.mp4'), poster: null, durationMs: Number.NaN, metrics: { width: 640, height: 360 } };
+    },
+  });
+
+  const result = await sendChatMediaSelection([{ id: 'v1', type: 'video', file: videoFile() }], deps);
+
+  assert.equal(result.ok, false);
+  assert.equal(calls.uploadedVideos.length, 0);
+  assert.equal(calls.uploadedPosters.length, 0);
+  assert.equal(calls.inserted.length, 0);
+  assert.equal(result.failedVideos.length, 1);
+});
+
+test('a video with missing dimensions is rejected instead of a zero-filled payload', async () => {
+  const { deps, calls } = createDeps({
+    async prepareVideo() {
+      return { ok: true, file: videoFile('c.mp4'), poster: null, durationMs: 5_000, metrics: null };
+    },
+  });
+
+  const result = await sendChatMediaSelection([{ id: 'v1', type: 'video', file: videoFile() }], deps);
+
+  assert.equal(result.ok, false);
+  assert.equal(calls.uploadedVideos.length, 0);
+  assert.equal(calls.inserted.length, 0);
+  assert.equal(result.failedVideos.length, 1);
+});
+
+test('a zero or negative dimension is rejected, and images still go through', async () => {
+  const { deps, calls } = createDeps({
+    async prepareVideo() {
+      return { ok: true, file: videoFile('c.mp4'), poster: null, durationMs: 5_000, metrics: { width: 0, height: 360 } };
+    },
+  });
+
+  const result = await sendChatMediaSelection(
+    [
+      { id: 'i1', type: 'image', file: imageFile('a.jpg') },
+      { id: 'v1', type: 'video', file: videoFile() },
+    ],
+    deps,
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(calls.uploadedVideos.length, 0);
+  assert.equal(calls.uploadedImages.length, 1);
+  assert.equal(calls.inserted.length, 1);
+  assert.equal(calls.inserted[0]!.kind, 'image');
+  assert.equal(result.failedVideos.length, 1);
+});
