@@ -39,6 +39,14 @@ export async function prepareChatVideo(
   const originalBytes = file.size;
   const before = await probeVideoMetadata(file);
   const durationSeconds = before?.durationSeconds ?? 0;
+  // المدة إلزامية: مدة مجهولة أو غير صالحة ترفض الفيديو قبل أي ضغط أو رفع.
+  if (!(durationSeconds > 0) || !Number.isFinite(durationSeconds)) {
+    return {
+      ok: false,
+      reason: 'duration-unknown',
+      message: chatVideoRejectMessage('duration-unknown'),
+    };
+  }
   const initialLimit = checkChatVideoLimits({ durationSeconds, sizeBytes: originalBytes });
   if (initialLimit) {
     return { ok: false, reason: initialLimit, message: chatVideoRejectMessage(initialLimit) };
@@ -57,7 +65,17 @@ export async function prepareChatVideo(
     return { ok: false, reason, message: chatVideoRejectMessage(reason, detail) };
   }
 
-  const afterLimit = checkChatVideoLimits({ durationSeconds, sizeBytes: compressed.size });
+  // المدة بعد الضغط تُقاس من الملف المضغوط نفسه، لا من المدة الأصلية.
+  const after = await probeVideoMetadata(compressed);
+  const compressedDuration = after?.durationSeconds ?? 0;
+  if (!(compressedDuration > 0) || !Number.isFinite(compressedDuration)) {
+    return {
+      ok: false,
+      reason: 'duration-unknown',
+      message: chatVideoRejectMessage('duration-unknown'),
+    };
+  }
+  const afterLimit = checkChatVideoLimits({ durationSeconds: compressedDuration, sizeBytes: compressed.size });
   if (afterLimit) {
     return { ok: false, reason: afterLimit, message: chatVideoRejectMessage(afterLimit) };
   }
@@ -71,13 +89,12 @@ export async function prepareChatVideo(
     poster = null;
   }
 
-  const after = await probeVideoMetadata(compressed);
   const hasAudioAfter = await hasAacAudio(compressed);
   const metrics = buildChatVideoMetrics({
     originalBytes,
     finalBytes: compressed.size,
     processingMs: Date.now() - startedAt,
-    durationSeconds: after?.durationSeconds ?? durationSeconds,
+    durationSeconds: compressedDuration,
     width: after?.width ?? before?.width ?? 0,
     height: after?.height ?? before?.height ?? 0,
     hasAudioBefore: before?.hasAudio === true,

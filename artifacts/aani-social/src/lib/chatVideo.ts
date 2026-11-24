@@ -68,6 +68,7 @@ export function chatVideoMessageContent(payload: ChatVideoPayload): string {
 
 export type ChatVideoRejectReason =
   | 'not-a-video'
+  | 'duration-unknown'
   | 'too-long'
   | 'too-large'
   | 'compression-failed'
@@ -78,6 +79,8 @@ export function chatVideoRejectMessage(reason: ChatVideoRejectReason, detail?: s
   switch (reason) {
     case 'not-a-video':
       return 'الملف المختار ليس فيديو. اختر مقطع فيديو من الجهاز.';
+    case 'duration-unknown':
+      return 'تعذر قياس مدة المقطع. اختر مقطعاً آخر — لم يُرفع أي ملف (المدة إلزامية قبل الرفع وبعده).';
     case 'too-long':
       return `مدة المقطع تتجاوز ${Math.round(CHAT_VIDEO_MAX_DURATION_MS / 1000)} ثانية. اختر مقطعاً أقصر — لم يُرفع أي ملف.`;
     case 'too-large':
