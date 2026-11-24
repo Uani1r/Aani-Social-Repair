@@ -8555,3 +8555,136 @@ html[data-video-test-mode='true'] [role='alert']:not([data-video-test-visible]),
 html[data-video-test-mode='true'] .status-box:not([data-video-test-visible]) {
   display: none !important;
 }
+
+
+/* فيديو المحادثة: فقاعة مدمجة، غلاف ثابت، وزر تشغيل — لا تشغيل تلقائي */
+.messages-bubble:has(.messages-chat-video) {
+  padding: 6px 8px 4px;
+  max-width: min(74%, 300px);
+}
+
+.messages-chat-video {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.messages-chat-video-cover {
+  position: relative;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  background: #1b1b1b;
+  cursor: pointer;
+}
+
+.messages-chat-video-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.messages-chat-video-placeholder {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #262626, #141414);
+}
+
+.messages-chat-video-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  color: #fff;
+  background: rgb(0 0 0 / 55%);
+  pointer-events: none;
+}
+
+.messages-chat-video-duration {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(0 0 0 / 62%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.messages-chat-video-player {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.messages-chat-video-element {
+  display: block;
+  width: 100%;
+  max-height: 46vh;
+  border-radius: 12px;
+  background: #000;
+}
+
+.messages-chat-video-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.messages-chat-video-button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  color: #fff;
+  background: rgb(255 255 255 / 12%);
+  cursor: pointer;
+}
+
+.messages-chat-video-progress {
+  width: 100%;
+  min-width: 40px;
+  height: 10px;
+  flex: 1 1 auto;
+  margin: 0;
+  appearance: none;
+  accent-color: #fff;
+  background: transparent;
+}
+
+.messages-chat-video-time {
+  flex: 0 0 auto;
+  color: rgb(255 255 255 / 70%);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.messages-chat-video-failed {
+  color: #ffb4ba;
+  font-size: 11px;
+}
+
+.messages-chat-video-footer {
+  display: flex;
+  justify-content: flex-end;
+  color: rgb(255 255 255 / 62%);
+  font-size: 10px;
+}

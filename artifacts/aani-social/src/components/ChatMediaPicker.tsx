@@ -5,6 +5,8 @@ import { toast } from 'sonner';
 
 import ChatPhotoEditor from '@/components/ChatPhotoEditor';
 import { CHAT_MEDIA_MESSAGE_PREFIX } from '@/components/ChatImageMessage';
+import { chatVideoMessageContent } from '@/lib/chatVideo';
+import { prepareChatVideo } from '@/lib/chatVideoCompression';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { uploadMedia } from '@/lib/storyUpload';
 import { readLocalUserPreferences } from '@/lib/userPreferences';
@@ -51,6 +53,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
   const [editingPhotoId, setEditingPhotoId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
   const objectUrlsRef = useRef(new Set<string>());
 
   const selectedPhotos = useMemo(() => photos.filter(photo => selectedIds.includes(photo.id)), [photos, selectedIds]);
@@ -255,6 +258,63 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
     }
   };
 
+  /**
+   * فيديو الاستوديو: يُضغط محلياً (H.264/AAC ≤720p ≤30fps fastStart) قبل الرفع،
+   * ويُرفض بوضوح إن فشل الضغط أو تجاوز 60 ثانية/25MB — لا يُرفع الأصل بصمت.
+   */
+  const sendStudioVideo = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || sending) return;
+    const recipient = activeRecipientId || recipientIdRef.current;
+    if (!recipient || !supabaseConfigured) {
+      toast.error('تعذر إرسال الفيديو لأن المحادثة أو قاعدة البيانات غير جاهزة.');
+      return;
+    }
+
+    setSending(true);
+    try {
+      const prepared = await prepareChatVideo(file);
+      if (!prepared.ok) {
+        toast.error(prepared.message);
+        return;
+      }
+      const base = `${currentUserId}/messages/${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const videoUrl = await uploadMedia({ file: prepared.file, path: `base.mp4`.replace('base', base), preset: 'video' });
+      let posterUrl: string | null = null;
+      if (prepared.poster) {
+        try {
+          posterUrl = await uploadMedia({ file: prepared.poster, path: `${base}-poster.jpg`, preset: 'chatImage' });
+        } catch (error) {
+          console.warn('[messages] تعذر رفع صورة غلاف الفيديو:', error);
+        }
+      }
+      const content = chatVideoMessageContent({
+        url: videoUrl,
+        durationMs: prepared.durationMs,
+        posterUrl,
+        caption: '',
+        viewOnce: false,
+        width: prepared.metrics.width,
+        height: prepared.metrics.height,
+      });
+      if (content.length > 4000) throw new Error('بيانات الفيديو كبيرة جداً. اختر مقطعاً أقصر.');
+      const { error } = await supabase.from('messages').insert({
+        sender_id: currentUserId,
+        recipient_id: recipient,
+        content,
+      });
+      if (error) throw error;
+      closePicker();
+      toast.success('تم إرسال الفيديو');
+    } catch (error) {
+      console.error('[messages] تعذر إرسال الفيديو:', error);
+      toast.error(error instanceof Error ? error.message : 'تعذر إرسال الفيديو. تحقق من الاتصال وحاول مرة أخرى.');
+    } finally {
+      setSending(false);
+    }
+  };
+
   if (!open) return null;
 
   return createPortal(
@@ -264,6 +324,9 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
           <header className="chat-media-picker-header" dir="ltr">
             <button type="button" className={`chat-media-picker-hd${hd ? ' is-active' : ''}`} aria-pressed={hd} onClick={() => setHd(value => !value)}>
               HD
+            </button>
+            <button type="button" className="chat-media-picker-hd" onClick={() => videoInputRef.current?.click()} disabled={sending}>
+              فيديو
             </button>
             <div className="chat-media-picker-tabs" role="tablist" aria-label="نوع الوسائط">
               <button type="button" role="tab" aria-selected={activeTab === 'photos'} className={activeTab === 'photos' ? 'is-active' : ''} onClick={() => setActiveTab('photos')}>الصور</button>
@@ -310,6 +373,7 @@ export default function ChatMediaPicker({ currentUserId, recipientId, onSendStar
           )}
 
           <input ref={imageInputRef} type="file" accept="image/*" multiple className="chat-media-picker-input" onChange={addFiles} />
+          <input ref={videoInputRef} type="file" accept="video/*" className="chat-media-picker-input" onChange={event => void sendStudioVideo(event)} />
 
           {selectedPhotos.length > 0 && (
             <div className="chat-media-picker-selection" dir="rtl">

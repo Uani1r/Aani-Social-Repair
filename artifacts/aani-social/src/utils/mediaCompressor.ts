@@ -89,6 +89,10 @@ export type MediaCompressionMetric = {
   outcome: 'ok' | 'skipped-passthrough' | 'failed';
   failureReason?: string;
   finalVideoCodec?: string;
+  /** هل كان في الأصل مسار صوتي (قبل الضغط)؟ */
+  hasAudioBefore?: boolean;
+  /** هل بقي مسار صوتي في الناتج (بعد الضغط)؟ */
+  hasAudioAfter?: boolean;
   savingPct: number;
 };
 
@@ -840,6 +844,42 @@ async function loadMediabunny(): Promise<MediabunnyModule | null> {
   return mediabunnyModule;
 }
 
+export interface VideoSourceMetadata {
+  durationSeconds: number;
+  width: number;
+  height: number;
+  hasAudio: boolean;
+  videoCodec: string;
+  audioCodec: string;
+}
+
+/**
+ * يقرأ مدة الفيديو وأبعاده ووجود مسار صوتي عبر mediabunny **بلا ترميز**.
+ * يُستخدم لفحص حدود الإرسال (60 ثانية) وللقياسات قبل أي رفع. null إن تعذّر.
+ */
+export async function probeVideoMetadata(file: Blob): Promise<VideoSourceMetadata | null> {
+  const mb = await loadMediabunny();
+  if (!mb) return null;
+  try {
+    const input = new mb.Input({ source: new mb.BlobSource(file), formats: mb.ALL_FORMATS });
+    const durationSeconds = await input.computeDuration().catch(() => 0);
+    const videoTrack = await input.getPrimaryVideoTrack().catch(() => null);
+    const audioTrack = await input.getPrimaryAudioTrack().catch(() => null);
+    const width = videoTrack ? await videoTrack.getDisplayWidth().catch(() => 0) : 0;
+    const height = videoTrack ? await videoTrack.getDisplayHeight().catch(() => 0) : 0;
+    return {
+      durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : 0,
+      width: width > 0 ? width : 0,
+      height: height > 0 ? height : 0,
+      hasAudio: Boolean(audioTrack),
+      videoCodec: typeof videoTrack?.codec === 'string' ? videoTrack.codec : '',
+      audioCodec: typeof audioTrack?.codec === 'string' ? audioTrack.codec : '',
+    };
+  } catch {
+    return null;
+  }
+}
+
 let aacEncoderReady = false;
 
 /** بعض المتصفحات (Safari القديم) تفتقر لتشفير AAC في WebCodecs — نضيف مُرمِّز libavcodec. */
@@ -957,6 +997,12 @@ export async function compressVideo(
     }
     const buffer = output.target.buffer;
     if (!buffer) throw new Error('تعذر إنتاج ملف الفيديو المضغوط.');
+    // التحقق من الصوت بعد الترميز: نجاح إنتاج MP4 ليس دليلاً على بقاء الصوت،
+    // ولا يُرفع فيديو صامت إذا كان الأصل يحمل مساراً صوتياً.
+    if (sourceHasAudio
+      && !findMp4CodecMarkers([new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 262_144))]).hasAacAudio) {
+      throw new Error('تعذر الحفاظ على المسار الصوتي في الفيديو المضغوط — لن يُرفع فيديو صامت.');
+    }
     return new File([buffer], `${baseName}-720p.mp4`, { type: 'video/mp4', lastModified: Date.now() });
   };
 
@@ -974,6 +1020,10 @@ export async function compressVideo(
   const videoCodec = typeof videoTrack?.codec === 'string' ? videoTrack.codec : '';
   const audioTrack = await probeInput.getPrimaryAudioTrack().catch(() => null);
   const audioCodec = typeof audioTrack?.codec === 'string' ? audioTrack.codec : '';
+  // تشفير AAC في WebCodecs غير مدعوم افتراضياً في Safari وChrome: بلا مُرمِّز
+  // AAC يُفقد المسار الصوتي أثناء التحويل، فيصل الفيديو بلا صوت (العطل الأساسي).
+  const sourceHasAudio = Boolean(audioTrack);
+  if (sourceHasAudio) await ensureAacEncoder(mb);
   const videoCodecOk = /avc|h264|h\.264/i.test(videoCodec);
   const audioCodecOk = !audioTrack || /aac|mp4a/i.test(audioCodec);
   const alreadyCompact = sourceWidth > 0 && sourceHeight > 0
@@ -994,7 +1044,7 @@ export async function compressVideo(
   function recordVideoMetric(
     outcome: 'ok' | 'skipped-passthrough' | 'failed',
     finalBytes: number,
-    extra: { failureReason?: string; finalVideoCodec?: string } = {},
+    extra: { failureReason?: string; finalVideoCodec?: string; hasAudioAfter?: boolean } = {},
   ): void {
     recordCompressionMetric({
       kind: 'video',
@@ -1005,6 +1055,8 @@ export async function compressVideo(
       outcome,
       failureReason: extra.failureReason,
       finalVideoCodec: extra.finalVideoCodec ?? verifiedCodec,
+      hasAudioBefore: sourceHasAudio,
+      hasAudioAfter: extra.hasAudioAfter ?? sourceHasAudio,
     });
   }
 

@@ -8,6 +8,8 @@ import Avatar from '@/components/Avatar';
 import { openCallPicker, startCallNow, type CallLogEventDetail, type CallLogOutcome, type CallMode } from '@/components/CallManager';
 import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
+import ChatVideoMessage from '@/components/ChatVideoMessage';
+import { parseChatVideoMessage } from '@/lib/chatVideo';
 import MessageAttachmentSheet, { CHAT_DOCUMENT_MESSAGE_PREFIX, CHAT_LOCATION_MESSAGE_PREFIX, parseChatDocumentMessage, parseChatLocationMessage } from '@/components/MessageAttachmentSheet';
 import ChatStickerMessage, { CHAT_STICKER_MESSAGE_PREFIX, parseChatStickerMessage, type ChatStickerPayload } from '@/components/ChatStickerMessage';
 import ChatStickerPanel from '@/components/ChatStickerPanel';
@@ -4708,6 +4710,7 @@ export default function MessagesPage({
                   const mediaMessage = parseChatMediaMessage(content);
                   const stickerMessage = parseChatStickerMessage(content);
                   const voiceMessage = parseVoiceMessage(content);
+                  const chatVideoMessage = parseChatVideoMessage(content);
                   const callLogMessage = parseCallLogMessage(content);
                   const documentMessage = parseChatDocumentMessage(content);
                   const locationMessage = parseChatLocationMessage(content);
@@ -4775,6 +4778,16 @@ export default function MessagesPage({
                                 />
                               </div>
                             </>
+                          ) : chatVideoMessage ? (
+                            <div className={`messages-bubble messages-voice-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
+                              {replyPreview}
+                              <ChatVideoMessage
+                                messageId={message.id}
+                                payload={chatVideoMessage}
+                                isMine={isMine}
+                                createdAt={message.created_at}
+                              />
+                            </div>
                           ) : voiceMessage ? (
                             <div className={`messages-bubble messages-voice-bubble${isMine ? ' is-mine' : ' is-theirs'}`}>
                               {replyPreview}
