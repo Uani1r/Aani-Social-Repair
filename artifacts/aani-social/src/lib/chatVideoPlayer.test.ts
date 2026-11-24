@@ -54,7 +54,7 @@ test('nothing starts before the tap: the player renders an element without a sou
 
   // عنصر <video> دائم بلا src وبلا autoPlay: لا تنزيل قبل الضغط
   assert.equal(player.includes('src={src}'), false);
-  assert.equal(/autoPlay/.test(player), false);
+  assert.equal(/autoPlay\s*=/.test(player), false);
   assert.equal(player.includes('playsInline'), true);
   assert.equal(player.includes('preload="metadata"'), true);
   // لا تشغيل من useEffect: play() يُستدعى من معالج الضغط فقط

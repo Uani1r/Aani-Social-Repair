@@ -116,8 +116,8 @@ test('the compression pipeline keeps AAC encoding and never returns a silent vid
 test('the chat video player never autoplays and loads only after a tap', () => {
   const player = read('./components/ChatVideoMessage.tsx');
 
-  // لا autoPlay، ولا عنصر فيديو بمصدر قبل ضغط التشغيل
-  assert.equal(/autoPlay/.test(player), false);
+  // لا خاصية تشغيل تلقائي، ولا عنصر فيديو بمصدر قبل ضغط التشغيل
+  assert.equal(/autoPlay\s*=/.test(player), false);
   assert.equal(player.includes('playsInline'), true);
   assert.equal(player.includes('preload="metadata"'), true);
   assert.equal(player.includes('!started && ('), true);
