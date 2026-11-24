@@ -48,9 +48,39 @@
 |---|---|---|
 | `20261124230000_story_reports_reconcile.sql` | جدول `story_reports` + فهرسه + RLS + سياسة الإدراج | `create table if not exists` + `drop policy if exists` |
 | `20261124230100_story_archive_rpc_reconcile.sql` | `aani_get_my_story_archive(integer, integer)` | `create or replace` + منح `authenticated` فقط |
-| `20261124230200_unblock_user_rpc_reconcile.sql` | `aani_unblock_user(uuid)` | `create or replace` + `security definer` + حذف صف المستخدم نفسه + يحتمل `blocked_user_id` أو `blocked_id` القديم (يُختار العمود بعد فحص `information_schema.columns`) |
+| `20261124230200_unblock_user_rpc_reconcile.sql` | `aani_unblock_user(uuid)` | `create or replace` + `security definer` + يطابق `blocked_user_id` **أو** `blocked_id` (أو كليهما) بحسب الأعمدة الموجودة + يرفض الصفوف المتناقضة ويتحقق من عدم بقاء صف |
 | `20261124230300_mark_all_notifications_as_read_reconcile.sql` | `mark_all_notifications_as_read()` | `create or replace` + `security invoker` |
 | `20261124230400_random_trending_sounds_reconcile.sql` | `random_trending_sounds(integer)` | `create or replace` + `security invoker` (RLS على `sounds`) + volatile بلا `stable` (لأن `random()`) |
+
+## إلغاء الحظر حين يوجد العمودان معاً
+
+قاعدة الإنتاج تحتوي `blocked_user_id` و`blocked_id` في `public.user_blocks`، لكن وجود الأول
+لا يعني أنه مملوء: الصفوف المكتوبة قبل `20270204000000` تحمل `blocked_user_id = NULL` وقيمة
+`blocked_id` وحدها. الحذف على `blocked_user_id` وحده يطابق صفراً، فتبقى العلاقة القديمة قائمة
+بلا إمكانية إلغائها: `aani_is_user_blocked` (يقرأ `blocked_user_id`) يراها غير موجودة، بينما
+نسخة `aani_can_view_story` المنشورة تقرأ `blocked_id` وتواصل حجب القصص — وإعادة المحاولة لا
+تُصلح شيئاً.
+
+لذلك `aani_unblock_user`:
+
+- يبني شرط الحذف من الأعمدة الموجودة فعلاً (`information_schema.columns`): عند وجودهما
+  `(blocked_user_id = $2 or blocked_id = $2)`، وعند وجود واحد فقط العمود نفسه.
+- يحصر الحذف في `blocker_id = المستدعي` دائماً.
+- يتوقف بـ`23514` إن وُجد صف متناقض (أحد العمودين للمستهدف والآخر لقيمة غير فارغة مختلفة)
+  بدل حذف علاقة مستخدم آخر.
+- يعيد العدّ بعد الحذف ويرفع `42501` إن بقي صف — بدل إبلاغ الواجهة بنجاح كاذب (RLS، أو
+  الصلاحيات، أو صف أُعيد إنشاؤه).
+
+الصلاحيات المحلية: `grant select, insert, delete on public.user_blocks to authenticated`
+(`20270204000000`:222)، والسياسة الوحيدة للقراءة (`aani_user_blocks_select_own`)، والدالة
+`security definer` بمالك `postgres` فلا تمر بالـRLS — وفحص البقايا أعلاه هو الضمانة.
+
+## تعريف `random_trending_sounds` موحَّد في الملفات الثلاثة
+
+أُزيل `stable` من `20261124230400_random_trending_sounds_reconcile.sql`، ومن
+`supabase/schema.sql`، ومن `20270112000000_random_trending_sounds.sql`؛ الوظيفة volatile
+لأن `order by random()` يجب أن يُقيَّم في كل استدعاء. بقيت `security invoker` و
+`set search_path = public, pg_temp` والمنح كما هي في الملفات الثلاثة.
 
 ## ما لم يُنفَّذ بعد (وبصراحة)
 
