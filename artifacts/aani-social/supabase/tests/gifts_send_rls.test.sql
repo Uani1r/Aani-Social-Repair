@@ -196,4 +196,64 @@ begin
   raise notice 'PASS: blocked viewer sees 0';
 end $$;
 
+-- ---------------------------------------------------------------------
+-- 6) إعادة المحاولة بنفس المفتاح بعد حظر المستلم → duplicate بلا خصم إضافي،
+--    مع بقاء منع الإرسال الجديد للمحظور.
+-- ---------------------------------------------------------------------
+do $$
+declare v_bal integer; v_count integer; v_result jsonb; v_dup boolean; v_code text;
+begin
+  update public.user_wallets set balance = 100 where user_id = '11111111-1111-1111-1111-111111111111';
+  delete from public.gift_transactions where idempotency_key = 'retry-after-block-1';
+  perform set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-111111111111"}', true);
+
+  -- إرسال أول ناجح.
+  v_result := public.aani_send_gift(
+    '11111111-1111-1111-1111-111111111111',
+    '22222222-2222-2222-2222-222222222222',
+    '55555555-5555-5555-5555-555555555555',
+    'retry-after-block-1'
+  );
+  if (v_result->>'ok')::boolean is not true then raise exception 'FAIL: initial send not ok: %', v_result; end if;
+
+  -- المستلم يحظر المرسل.
+  insert into public.user_blocks (blocker_id, blocked_user_id)
+  values ('22222222-2222-2222-2222-222222222222', '11111111-1111-1111-1111-111111111111')
+  on conflict do nothing;
+
+  -- إعادة المحاولة بنفس المفتاح → duplicate (لا تُحجب)، وبلا خصم إضافي.
+  v_result := public.aani_send_gift(
+    '11111111-1111-1111-1111-111111111111',
+    '22222222-2222-2222-2222-222222222222',
+    '55555555-5555-5555-5555-555555555555',
+    'retry-after-block-1'
+  );
+  v_dup := (v_result->>'duplicate')::boolean;
+  select balance into v_bal from public.user_wallets where user_id = '11111111-1111-1111-1111-111111111111';
+  select count(*) into v_count from public.gift_transactions
+    where sender_id = '11111111-1111-1111-1111-111111111111' and idempotency_key = 'retry-after-block-1';
+  if v_dup is not true then raise exception 'FAIL: retry after block not duplicate: %', v_result; end if;
+  if v_bal <> 90 then raise exception 'FAIL: retry after block debited again (balance=%)', v_bal; end if;
+  if v_count <> 1 then raise exception 'FAIL: retry after block created extra tx (%)', v_count; end if;
+  raise notice 'PASS: retry same key after block -> duplicate, balance=%, count=%', v_bal, v_count;
+
+  -- إرسال جديد (مفتاح مختلف) إلى نفس المستلم المحظور → 42501.
+  begin
+    perform public.aani_send_gift(
+      '11111111-1111-1111-1111-111111111111',
+      '22222222-2222-2222-2222-222222222222',
+      '55555555-5555-5555-5555-555555555555',
+      'new-after-block-1'
+    );
+    raise exception 'FAIL: new send to blocked did not raise';
+  exception when sqlstate '42501' then v_code := '42501';
+  end;
+  if v_code is distinct from '42501' then raise exception 'FAIL: new blocked code %', v_code; end if;
+  raise notice 'PASS: new send to blocked still prevented (42501)';
+
+  delete from public.user_blocks
+  where blocker_id = '22222222-2222-2222-2222-222222222222'
+    and blocked_user_id = '11111111-1111-1111-1111-111111111111';
+end $$;
+
 rollback;

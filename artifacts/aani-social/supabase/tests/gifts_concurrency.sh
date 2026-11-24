@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
 # =====================================================================
 # اختبار تزامن حقيقي: جلستان متزامنتان بنفس idempotency key.
-# يتحقق من خصم واحد ومعاملة واحدة فقط.
+#
+# آلية الحاجز (barrier): جدول weights_test_barrier — كل جلسة تُدرج صفها
+# (committed) ثم تنتظر حتى يصبح عدد الصفوف = 2، فتبدأ الجلستان الإرسال في
+# اللحظة نفسها تقريباً وتتداخلان فعلياً داخل الدالة (قفل advisory لكل
+# sender+key يضمن التسلسل: واحدة تنشئ المعاملة والأخرى تنتظر ثم تعيد duplicate).
+#
+# يتحقق (ويفشل عند أي إخلال):
+#   * واحدة فقط duplicate=false، والأخرى duplicate=true.
+#   * الرصيد = 90 (خصم واحد).
+#   * عدد المعاملات = 1.
 #
 # الاستخدام:
 #   supabase/tests/gifts_concurrency.sh <database_url>
-# أو:
-#   PGHOST=... PGPORT=... PGUSER=... PGDATABASE=... \
-#     supabase/tests/gifts_concurrency.sh
-# (إن لم يُمرَّر وسيط، يُستخدم اتصال البيئة الافتراضي.)
+# أو عبر متغيرات PG* (PGDATABASE=...).
 # =====================================================================
 set -euo pipefail
 
@@ -41,28 +47,50 @@ on conflict (id) do nothing;
 insert into public.user_wallets (user_id, balance) values ('$SENDER', 100)
   on conflict (user_id) do update set balance = 100;
 delete from public.gift_transactions where idempotency_key = '$KEY';
+create table if not exists public.gifts_test_barrier (id text primary key);
+delete from public.gifts_test_barrier;
 SQL
 
-echo "== two concurrent sends (same key) =="
-send_once() {
-  "${PSQL[@]}" -c "set request.jwt.claims = '{\"sub\":\"$SENDER\"}'; select public.aani_send_gift('$SENDER','$RECIPIENT','$GIFT','$KEY');" \
-    >"$OUT_DIR/conc_$1.out" 2>&1
+wait_for_barrier() {
+  local i n
+  for i in $(seq 1 250); do
+    n="$("${PSQL[@]}" -tAc "select count(*) from public.gifts_test_barrier;")"
+    if [ "$n" = "2" ]; then return 0; fi
+    sleep 0.02
+  done
+  echo "FAIL: barrier timeout (count=$n)"; return 1
 }
-send_once a &
-PID_A=$!
-send_once b &
-PID_B=$!
-wait "$PID_A"
-wait "$PID_B"
+
+session() {
+  local id="$1"
+  "${PSQL[@]}" -c "insert into public.gifts_test_barrier (id) values ('$id') on conflict do nothing;" >/dev/null
+  wait_for_barrier || return 1
+  "${PSQL[@]}" -c "set request.jwt.claims = '{\"sub\":\"$SENDER\"}'; select public.aani_send_gift('$SENDER','$RECIPIENT','$GIFT','$KEY');" \
+    >"$OUT_DIR/conc_$id.out" 2>&1
+}
+
+echo "== two concurrent sends (barrier-synchronized, same key) =="
+session a & PID_A=$!
+session b & PID_B=$!
+RC=0
+wait "$PID_A" || RC=1
+wait "$PID_B" || RC=1
+if [ "$RC" != "0" ]; then echo "FAIL: a session errored"; cat "$OUT_DIR"/conc_*.out; exit 1; fi
 
 echo "---- session A ----"; cat "$OUT_DIR/conc_a.out"
 echo "---- session B ----"; cat "$OUT_DIR/conc_b.out"
 
 echo "== verify =="
-BAL=$("${PSQL[@]}" -tAc "select balance from public.user_wallets where user_id = '$SENDER';")
-CNT=$("${PSQL[@]}" -tAc "select count(*) from public.gift_transactions where sender_id = '$SENDER' and idempotency_key = '$KEY';")
-echo "balance=$BAL count=$CNT"
+BAL="$("${PSQL[@]}" -tAc "select balance from public.user_wallets where user_id = '$SENDER';")"
+CNT="$("${PSQL[@]}" -tAc "select count(*) from public.gift_transactions where sender_id = '$SENDER' and idempotency_key = '$KEY';")"
+DUP_FALSE=$(grep -c '"duplicate": false' "$OUT_DIR"/conc_a.out "$OUT_DIR"/conc_b.out | awk -F: '{s+=$2} END{print s+0}')
+DUP_TRUE=$(grep -c '"duplicate": true' "$OUT_DIR"/conc_a.out "$OUT_DIR"/conc_b.out | awk -F: '{s+=$2} END{print s+0}')
+echo "balance=$BAL count=$CNT duplicate_false=$DUP_FALSE duplicate_true=$DUP_TRUE"
 
-if [ "$BAL" != "90" ]; then echo "FAIL: expected balance 90, got $BAL"; exit 1; fi
-if [ "$CNT" != "1" ]; then echo "FAIL: expected 1 transaction, got $CNT"; exit 1; fi
-echo "PASS: concurrent same-key send debited once and created one transaction"
+FAIL=0
+[ "$BAL" = "90" ] || { echo "FAIL: expected balance 90, got $BAL"; FAIL=1; }
+[ "$CNT" = "1" ]  || { echo "FAIL: expected 1 transaction, got $CNT"; FAIL=1; }
+[ "$DUP_FALSE" = "1" ] || { echo "FAIL: expected exactly one non-duplicate, got $DUP_FALSE"; FAIL=1; }
+[ "$DUP_TRUE" = "1" ]  || { echo "FAIL: expected exactly one duplicate, got $DUP_TRUE"; FAIL=1; }
+if [ "$FAIL" != "0" ]; then exit 1; fi
+echo "PASS: concurrent same-key send -> one transaction, one duplicate, balance 90"
