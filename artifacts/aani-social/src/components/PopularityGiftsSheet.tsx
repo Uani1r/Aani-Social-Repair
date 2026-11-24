@@ -84,6 +84,7 @@ export default function PopularityGiftsSheet({
   const [selectedGift, setSelectedGift] = useState<Gift | null>(null);
   const [sending, setSending] = useState(false);
   const [recipientLabel, setRecipientLabel] = useState(recipientName || '');
+  const [sendKey, setSendKey] = useState<string | null>(null);
 
   const {
     dragOffset,
@@ -179,15 +180,19 @@ export default function PopularityGiftsSheet({
 
   const handleSend = async () => {
     if (!selectedGift || sending || selectedGift.price > balance) return;
+    try {
+      const key = sendKey ?? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (currentUserId + "-" + userId + "-" + selectedGift.id + "-" + Date.now()));
+    if (!sendKey) setSendKey(key);
     setSending(true);
     try {
-      const result: SendGiftResult = await sendGift(currentUserId, userId, selectedGift.id);
+      const result: SendGiftResult = await sendGift(currentUserId, userId, selectedGift.id, key);
       if (!result.ok) {
         toast.error(result.error || 'فشل إرسال الهدية.');
         return;
       }
       setSelectedGift(null);
       setStep('summary');
+      setSendKey(null);
       if (typeof result.balance === 'number') setBalance(result.balance);
       await refresh();
       if (typeof result.popularity_points === 'number') {
