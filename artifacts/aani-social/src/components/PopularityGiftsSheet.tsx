@@ -134,6 +134,7 @@ export default function PopularityGiftsSheet({
     if (!open) {
       setStep('summary');
       setSelectedGift(null);
+      setSendKey(null);
       return;
     }
     setLoading(true);
@@ -175,37 +176,37 @@ export default function PopularityGiftsSheet({
 
   const toggleGift = (gift: Gift) => {
     if (gift.price > balance) return;
+    setSendKey(null);
     setSelectedGift(prev => (prev?.id === gift.id ? null : gift));
   };
 
   const handleSend = async () => {
     if (!selectedGift || sending || selectedGift.price > balance) return;
-    try {
-      const key = sendKey ?? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (currentUserId + "-" + userId + "-" + selectedGift.id + "-" + Date.now()));
+    const key = sendKey ?? ((typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : (currentUserId + "-" + userId + "-" + selectedGift.id + "-" + Date.now()));
     if (!sendKey) setSendKey(key);
     setSending(true);
     try {
       const result: SendGiftResult = await sendGift(currentUserId, userId, selectedGift.id, key);
       if (!result.ok) {
-        toast.error(result.error || 'فشل إرسال الهدية.');
+        toast.error(result.error || "فشل إرسال الهدية.");
         return;
       }
       setSelectedGift(null);
-      setStep('summary');
+      setStep("summary");
       setSendKey(null);
-      if (typeof result.balance === 'number') setBalance(result.balance);
+      if (typeof result.balance === "number") setBalance(result.balance);
       await refresh();
-      if (typeof result.popularity_points === 'number') {
+      if (typeof result.popularity_points === "number") {
         const nextPopularity = popularity + result.popularity_points;
         setPopularity(nextPopularity);
         onPopularityChange?.(nextPopularity);
       }
       toast.success(result.duplicate
-        ? 'تم استلام الطلب (مكرر، لم يُخصم رصيد إضافي).'
-        : 'تم إرسال الهدية بنجاح.');
+        ? "تم استلام الطلب (مكرر، لم يُخصم رصيد إضافي)."
+        : "تم إرسال الهدية بنجاح.");
     } catch (error) {
-      console.error('[popularity sheet] تعذر الإرسال:', error);
-      toast.error(error instanceof Error ? error.message : 'فشل إرسال الهدية.');
+      console.error("[popularity sheet] تعذر الإرسال:", error);
+      toast.error(error instanceof Error ? error.message : "فشل إرسال الهدية.");
     } finally {
       setSending(false);
     }
