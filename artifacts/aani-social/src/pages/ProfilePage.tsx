@@ -4,7 +4,9 @@ import { Ban, Briefcase, Cake, Camera, Check, ChevronLeft, ChevronRight, Copy, E
 import { Link, useLocation } from 'wouter';
 import { toast } from 'sonner';
 import FollowButton from '@/components/FollowButton';
+import PopularityGiftsSheet from '@/components/PopularityGiftsSheet';
 import { setFollowState } from '@/lib/followState';
+import { fetchPopularity, formatPopularity } from '@/lib/gifts';
 
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 
@@ -227,6 +229,9 @@ export default function ProfilePage({
   const [privacySaving, setPrivacySaving] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [storyHiddenFromTarget, setStoryHiddenFromTarget] = useState(false);
+  // إجمالي الشعبية يُجلب عبر استعلام خفيف من دالة RPC آمنة في الخادم (مجموع نقاط الهدايا المستلمة).
+  const [popularity, setPopularity] = useState<number | null>(null);
+  const [showPopularitySheet, setShowPopularitySheet] = useState(false);
   // قصص صاحب هذا الملف النشطة: تُستخدم لحلقة الصورة في الرأس فقط.
   const [profileStoryIds, setProfileStoryIds] = useState<string[]>([]);
   const [profileActionBusy, setProfileActionBusy] = useState(false);
@@ -540,6 +545,24 @@ export default function ProfilePage({
         setProfileStoryIds([]);
       });
 
+    return () => { active = false; };
+  }, [activeUserId]);
+
+  // استعلام خفيف لإجمالي شعبية صاحب الملف الشخصي (مجموع نقاط الشعبية من الهدايا المستلمة في قاعدة البيانات).
+  useEffect(() => {
+    let active = true;
+    if (!supabaseConfigured || !activeUserId) {
+      setPopularity(null);
+      return () => { active = false; };
+    }
+    void (async () => {
+      try {
+        const value = await fetchPopularity(activeUserId);
+        if (active) setPopularity(value);
+      } catch {
+        if (active) setPopularity(null);
+      }
+    })();
     return () => { active = false; };
   }, [activeUserId]);
 
@@ -1646,7 +1669,35 @@ export default function ProfilePage({
 
       <div className="profile-header-container">
         <div className="notch-safe-area" />
-        <div className="relative z-30 flex items-center justify-end bg-black/40 px-4 py-2 backdrop-blur-md">
+        <div className="relative z-30 flex items-center justify-between bg-black/40 px-4 py-2 backdrop-blur-md">
+          {popularity !== null && supabaseConfigured && (
+            <button
+              type="button"
+              aria-label="الشعبية والهدايا"
+              onClick={() => setShowPopularitySheet(true)}
+              className="w-fit inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/45 backdrop-blur-md border border-white/15 shadow-sm hover:bg-black/60 transition"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                className="w-4 h-4 shrink-0 text-white"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <path d="M6 2H9V8.2L12 10.1L6 6.2V2Z" fill="#FFFFFF" fillOpacity="0.65" />
+                <path d="M18 2H15V8.2L12 10.1L18 6.2V2Z" fill="#FFFFFF" fillOpacity="0.65" />
+                <path d="M9.6 2H14.4V8.5L12 10.1L9.6 8.5V2Z" fill="#FFFFFF" />
+                <path
+                  fillRule="evenodd"
+                  d="M12 11.2A5.3 5.3 0 1 0 12 21.8A5.3 5.3 0 1 0 12 11.2ZM12.00 13.30L12.76 15.43L15.02 15.50L13.23 16.88L13.87 19.05L12.00 17.78L10.13 19.05L10.77 16.88L8.98 15.50L11.24 15.43Z"
+                  fill="#FFFFFF"
+                />
+              </svg>
+              <span className="text-xs font-semibold text-white tabular-nums">
+                {formatPopularity(popularity)}
+              </span>
+            </button>
+          )}
           <button
             type="button"
             aria-label={isEditingProfile ? 'حفظ تعديلات الملف الشخصي' : 'المزيد من خيارات الملف الشخصي'}
@@ -2104,6 +2155,15 @@ export default function ProfilePage({
         </div>,
         document.body,
       )}
+
+      <PopularityGiftsSheet
+        open={showPopularitySheet}
+        userId={activeUserId}
+        recipientName={displayName(person)}
+        currentUserId={currentUserId}
+        onClose={() => setShowPopularitySheet(false)}
+        onPopularityChange={value => setPopularity(value)}
+      />
 
       <div ref={usernameWrapperRef} className="sticky-username-wrapper" id="usernameWrapper">
         {username && <div className="username-text absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none" data-username={username}>{username}</div>}
