@@ -9,7 +9,7 @@ import { openCallPicker, startCallNow, type CallLogEventDetail, type CallLogOutc
 import ChatImageMessage, { CHAT_MEDIA_MESSAGE_PREFIX, hasViewedOnce, openedChatMediaContent, parseChatMediaMessage } from '@/components/ChatImageMessage';
 import ChatMediaPicker, { type PendingChatMediaMessage } from '@/components/ChatMediaPicker';
 import ChatVideoMessage from '@/components/ChatVideoMessage';
-import { parseChatVideoMessage } from '@/lib/chatVideo';
+import { chatVideoPreviewText, chatVideoReplyPreviewText, parseChatVideoMessage } from '@/lib/chatVideo';
 import MessageAttachmentSheet, { CHAT_DOCUMENT_MESSAGE_PREFIX, CHAT_LOCATION_MESSAGE_PREFIX, parseChatDocumentMessage, parseChatLocationMessage } from '@/components/MessageAttachmentSheet';
 import ChatStickerMessage, { CHAT_STICKER_MESSAGE_PREFIX, parseChatStickerMessage, type ChatStickerPayload } from '@/components/ChatStickerMessage';
 import ChatStickerPanel from '@/components/ChatStickerPanel';
@@ -987,10 +987,13 @@ function messagePreview(message: MessageRow | null, currentUserId: string): stri
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
   const voiceMessage = parseVoiceMessage(content);
+  const chatVideoMessage = parseChatVideoMessage(content);
   const callLog = parseCallLogMessage(content);
   const documentMessage = parseChatDocumentMessage(content);
   const locationMessage = parseChatLocationMessage(content);
   let preview = content;
+  // رسالة الفيديو أولاً: لا يظهر الوسم التقني ولا JSON في المعاينة.
+  if (chatVideoMessage) return chatVideoPreviewText(message.sender_id === currentUserId);
   if (stickerMessage) preview = 'ملصق';
   else if (voiceMessage) preview = 'رسالة صوتية';
   else if (callLog) preview = callLog.outcome === 'completed'
@@ -1017,10 +1020,13 @@ function replyMessagePreview(message: MessageRow): string {
   const mediaMessage = parseChatMediaMessage(content);
   const stickerMessage = parseChatStickerMessage(content);
   const voiceMessage = parseVoiceMessage(content);
+  const chatVideoMessage = parseChatVideoMessage(content);
   const callLog = parseCallLogMessage(content);
   const documentMessage = parseChatDocumentMessage(content);
   const locationMessage = parseChatLocationMessage(content);
   let preview = content;
+  // رد على رسالة فيديو: نص مفهوم بدل الوسم التقني أو JSON.
+  if (chatVideoMessage) return chatVideoReplyPreviewText();
   if (stickerMessage) preview = 'ملصق';
   else if (voiceMessage) preview = 'رسالة صوتية';
   else if (callLog) preview = callLog.outcome === 'completed'

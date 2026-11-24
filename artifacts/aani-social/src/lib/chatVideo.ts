@@ -166,3 +166,18 @@ export function describeChatVideoMetrics(metrics: ChatVideoMetrics): string {
     + `${metrics.width}×${metrics.height}@${fps}، `
     + `الصوت ${metrics.hasAudioBefore ? 'موجود' : 'غائب'}→${metrics.hasAudioAfter ? 'موجود' : 'غائب'}`;
 }
+
+
+/**
+ * نص معاينة رسالة فيديو في قائمة المحادثات — لا يُعرض الوسم التقني ولا JSON.
+ * للمرسل: «أنت: أرسلت فيديو»؛ للمستلم: «أرسل فيديو».
+ * (تُستخدم في messagePreview وreplyMessagePreview داخل MessagesPage.)
+ */
+export function chatVideoPreviewText(isMine: boolean): string {
+  return isMine ? 'أنت: أرسلت فيديو' : 'أرسل فيديو';
+}
+
+/** نص معاينة الرد على رسالة فيديو (تُعرض للطرفين داخل الرد). */
+export function chatVideoReplyPreviewText(): string {
+  return 'فيديو';
+}
