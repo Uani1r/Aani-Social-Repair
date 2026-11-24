@@ -131,11 +131,6 @@ begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_sender_id then raise exception 'forbidden' using errcode='42501'; end if;
   if p_sender_id = p_recipient_id then raise exception 'self' using errcode='22023'; end if;
-  -- منع إرسال هدية إلى مستخدم محظور (إن وجدت دالة الحظر في القاعدة).
-  if to_regprocedure('public.aani_is_user_blocked(uuid,uuid)') is not null
-     and public.aani_is_user_blocked(p_sender_id, p_recipient_id) then
-    raise exception 'blocked' using errcode='42501';
-  end if;
   if p_idempotency_key is null or length(trim(p_idempotency_key)) = 0 then
     raise exception 'idempotency key required' using errcode='22023';
   end if;
