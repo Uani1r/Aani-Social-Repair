@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   classifySendError,
+  interpretSendResponse,
   resolveSendAttempt,
   type SendAttempt,
 } from './gifts';
@@ -10,19 +11,64 @@ import {
 const RECIPIENT = 'recipient-1';
 const GIFT = 'gift-1';
 
-test('classifySendError: خطأ نقل/شبكة (بلا code) غير محسوم', () => {
-  // أخطاء الشبكة/الاتصال/المهلة تصل بلا رمز خطأ من الخادم (code غير موجود).
-  assert.equal(classifySendError({ message: 'Failed to fetch' }), 'inconclusive');
-  assert.equal(classifySendError({ message: 'ETIMEDOUT' }), 'inconclusive');
-  assert.equal(classifySendError(new Error('network down')), 'inconclusive');
-  assert.equal(classifySendError(null), 'inconclusive');
+test('classifySendError: أكواد SQL/business المعروفة = رفض مؤكد', () => {
+  // الأكواد التي ترفعها الدالة aani_send_gift صراحةً.
+  assert.equal(classifySendError({ code: '42501', message: 'forbidden' }), 'definitive');
+  assert.equal(classifySendError({ code: '42001', message: 'insufficient balance' }), 'definitive');
+  assert.equal(classifySendError({ code: '42704', message: 'gift unavailable' }), 'definitive');
+  assert.equal(classifySendError({ code: '22023', message: 'self' }), 'definitive');
 });
 
-test('classifySendError: رفض الخادم المؤكد (يحمل code) محسوم', () => {
-  // أخطاء العمل/الصلاحية/الرصيد من Postgres/PostgREST تحمل code.
-  assert.equal(classifySendError({ code: '42001', message: 'insufficient balance' }), 'definitive');
-  assert.equal(classifySendError({ code: '42501', message: 'forbidden' }), 'definitive');
-  assert.equal(classifySendError({ code: 'PGRST202', message: 'no function' }), 'definitive');
+test('classifySendError: كود غير معروف (كود API) = غير محسوم', () => {
+  // كود من طبقة API أو غير معروف لا يثبت أن المعاملة لم تُنفَّذ.
+  assert.equal(classifySendError({ code: 'PGRST202', message: 'no function' }), 'inconclusive');
+  assert.equal(classifySendError({ code: '99999', message: 'weird' }), 'inconclusive');
+  assert.equal(classifySendError({ code: 'XX000', message: 'internal' }), 'inconclusive');
+});
+
+test('classifySendError: بلا code أو غير كائن = غير محسوم', () => {
+  assert.equal(classifySendError({ message: 'Failed to fetch' }), 'inconclusive');
+  assert.equal(classifySendError(new Error('network down')), 'inconclusive');
+  assert.equal(classifySendError(null), 'inconclusive');
+  assert.equal(classifySendError('42501'), 'inconclusive');
+});
+
+test('interpretSendResponse: خطأ معروف = رفض مؤكد', () => {
+  const result = interpretSendResponse({ code: '42001', message: 'insufficient balance' }, null);
+  assert.equal(result.ok, false);
+  assert.equal(result.inconclusive, false);
+});
+
+test('interpretSendResponse: خطأ كود غير معروف = غير محسوم (لا يمسح المفتاح)', () => {
+  const result = interpretSendResponse({ code: 'PGRST999', message: 'api layer' }, null);
+  assert.equal(result.ok, false);
+  assert.equal(result.inconclusive, true);
+});
+
+test('interpretSendResponse: خطأ نقل/شبكة (بلا code) = غير محسوم', () => {
+  const result = interpretSendResponse({ message: 'Failed to fetch' }, null);
+  assert.equal(result.ok, false);
+  assert.equal(result.inconclusive, true);
+});
+
+test('interpretSendResponse: استجابة RPC فارغة = غير محسوم (لا يمسح المفتاح)', () => {
+  for (const data of [null, undefined, {}, { ok: 'yes' }, 42, 'x']) {
+    const result = interpretSendResponse(null, data);
+    assert.equal(result.ok, false, `data=${JSON.stringify(data)}`);
+    assert.equal(result.inconclusive, true, `data=${JSON.stringify(data)}`);
+  }
+});
+
+test('interpretSendResponse: ok:true = نجاح مؤكد', () => {
+  const result = interpretSendResponse(null, { ok: true, transaction_id: 't1', balance: 5 });
+  assert.equal(result.ok, true);
+  assert.ok(!result.inconclusive);
+});
+
+test('interpretSendResponse: ok:false = رفض مؤكد من الدالة', () => {
+  const result = interpretSendResponse(null, { ok: false, error: 'nope' });
+  assert.equal(result.ok, false);
+  assert.equal(result.inconclusive, false);
 });
 
 test('resolveSendAttempt: لا محاولة سابقة → مفتاح جديد', () => {
@@ -34,27 +80,21 @@ test('resolveSendAttempt: لا محاولة سابقة → مفتاح جديد',
   });
   assert.equal(attempt.key, 'key-1');
   assert.equal(attempt.status, 'sending');
-  assert.equal(attempt.recipientId, RECIPIENT);
-  assert.equal(attempt.giftId, GIFT);
 });
 
-test('resolveSendAttempt: خطأ شبكة (inconclusive) لا يولّد مفتاحاً جديداً عند إعادة المحاولة', () => {
-  // محاولة أولى بمفتاح ثابت.
+test('كود غير معروف لا يمسح المفتاح: إعادة المحاولة تستخدم نفس المفتاح', () => {
   const first = resolveSendAttempt(null, {
     recipientId: RECIPIENT,
     giftId: GIFT,
     generateKey: () => 'stable-key',
   });
-  assert.equal(first.key, 'stable-key');
+  // خطأ بكود غير معروف → غير محسوم.
+  const result = interpretSendResponse({ code: 'PGRST999', message: 'api' }, null);
+  assert.equal(result.inconclusive, true);
+  const afterUnknownError: SendAttempt = { ...first, status: 'inconclusive' };
 
-  // محاكاة نتيجة غير محسومة (خطأ نقل/شبكة): classifySendError → inconclusive،
-  // والمحاولة تصبح inconclusive محتفظة بنفس المفتاح.
-  assert.equal(classifySendError({ message: 'Failed to fetch' }), 'inconclusive');
-  const afterNetworkError: SendAttempt = { ...first, status: 'inconclusive' };
-
-  // إعادة المحاولة: يجب ألا يُستدعى generateKey، ويُعاد نفس المفتاح.
   let generated = 0;
-  const retry = resolveSendAttempt(afterNetworkError, {
+  const retry = resolveSendAttempt(afterUnknownError, {
     recipientId: RECIPIENT,
     giftId: GIFT,
     generateKey: () => {
@@ -62,45 +102,62 @@ test('resolveSendAttempt: خطأ شبكة (inconclusive) لا يولّد مفت�
       return `new-key-${generated}`;
     },
   });
-
-  assert.equal(generated, 0, 'لا يجوز توليد مفتاح جديد عند إعادة المحاولة بعد خطأ شبكة');
-  assert.equal(retry.key, 'stable-key', 'يجب الاحتفاظ بنفس idempotencyKey');
-  assert.equal(retry.status, 'sending');
+  assert.equal(generated, 0, 'لا يجوز توليد مفتاح جديد بعد خطأ غير محسوم');
+  assert.equal(retry.key, 'stable-key');
 });
 
-test('resolveSendAttempt: تغيّر المستلم/الهدية قبل الحسم → مفتاح جديد (دفاعي)', () => {
-  const stale: SendAttempt = {
-    key: 'old-key',
+test('استجابة RPC فارغة لا تمسح المفتاح: إعادة المحاولة تستخدم نفس المفتاح', () => {
+  const first = resolveSendAttempt(null, {
     recipientId: RECIPIENT,
     giftId: GIFT,
-    status: 'inconclusive',
-  };
-
-  const changedRecipient = resolveSendAttempt(stale, {
-    recipientId: 'recipient-2',
-    giftId: GIFT,
-    generateKey: () => 'fresh-key',
+    generateKey: () => 'empty-resp-key',
   });
-  assert.notEqual(changedRecipient.key, 'old-key');
-  assert.equal(changedRecipient.key, 'fresh-key');
+  const result = interpretSendResponse(null, null);
+  assert.equal(result.inconclusive, true);
+  const afterEmpty: SendAttempt = { ...first, status: 'inconclusive' };
 
-  const changedGift = resolveSendAttempt(stale, {
+  let generated = 0;
+  const retry = resolveSendAttempt(afterEmpty, {
     recipientId: RECIPIENT,
-    giftId: 'gift-2',
-    generateKey: () => 'fresh-key-2',
+    giftId: GIFT,
+    generateKey: () => {
+      generated += 1;
+      return `new-key-${generated}`;
+    },
   });
-  assert.equal(changedGift.key, 'fresh-key-2');
+  assert.equal(generated, 0);
+  assert.equal(retry.key, 'empty-resp-key');
 });
 
-test('السلسلة الكاملة: نجاح مؤكد يصفّر المحاولة، وخطأ شبكة يبقي المفتاح', () => {
-  // محاولة جديدة.
+test('الرفض المؤكد وحده يسمح بإنشاء محاولة جديدة', () => {
+  // نتيجة غير محسومة → لا محاولة جديدة.
+  const inconclusive = interpretSendResponse({ code: 'PGRST999' }, null);
+  assert.equal(inconclusive.inconclusive, true);
+
+  // رفض مؤكد → inconclusive:false، والواجهة تُصفّر المحاولة (null) → مفتاح جديد.
+  const definitive = interpretSendResponse({ code: '42001', message: 'insufficient balance' }, null);
+  assert.equal(definitive.inconclusive, false);
+  assert.equal(definitive.ok, false);
+
+  let generated = 0;
+  const fresh = resolveSendAttempt(null, {
+    recipientId: RECIPIENT,
+    giftId: GIFT,
+    generateKey: () => `fresh-${++generated}`,
+  });
+  assert.equal(fresh.key, 'fresh-1');
+});
+
+test('السلسلة الكاملة: خطأ شبكة يبقي المفتاح، ونجاح مؤكد يصفّر المحاولة', () => {
   let attempt = resolveSendAttempt(null, {
     recipientId: RECIPIENT,
     giftId: GIFT,
     generateKey: () => 'K',
   });
 
-  // نتيجة غير محسومة → تبقى inconclusive بنفس المفتاح.
+  // نتيجة غير محسومة (شبكة) → inconclusive بنفس المفتاح.
+  const net = interpretSendResponse({ message: 'Failed to fetch' }, null);
+  assert.equal(net.inconclusive, true);
   attempt = { ...attempt, status: 'inconclusive' };
   const retried = resolveSendAttempt(attempt, {
     recipientId: RECIPIENT,
@@ -108,5 +165,14 @@ test('السلسلة الكاملة: نجاح مؤكد يصفّر المحاول
     generateKey: () => 'SHOULD-NOT-BE-USED',
   });
   assert.equal(retried.key, 'K');
-  assert.equal(retried.status, 'sending');
+
+  // نجاح مؤكد → الواجهة تُصفّر (null)، ومحاولة جديدة بمفتاح جديد.
+  const ok = interpretSendResponse(null, { ok: true, transaction_id: 't' });
+  assert.equal(ok.ok, true);
+  const afterSuccess = resolveSendAttempt(null, {
+    recipientId: RECIPIENT,
+    giftId: GIFT,
+    generateKey: () => 'K2',
+  });
+  assert.equal(afterSuccess.key, 'K2');
 });

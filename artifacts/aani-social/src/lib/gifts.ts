@@ -69,17 +69,71 @@ export type SendAttempt = {
 export type SendErrorKind = 'inconclusive' | 'definitive';
 
 /**
+ * قائمة محددة بأكواد SQL/business التي تثبت أن المعاملة لم تُنفَّذ (رفض مؤكد):
+ *   - 42501  insufficient_privilege  (غير مسجّل / ممنوع / نيابة عن مستخدم آخر)
+ *   - 42001  insufficient_privilege  (الرصيد غير كافٍ — كما تستخدمه الدالة)
+ *   - 42704  undefined_object       (الهدية غير متاحة)
+ *   - 22023  invalid_parameter_value(إرسال لنفسك / مفتاح idempotency مفقود)
+ * هذه هي الأكواد التي ترفعها الدالة aani_send_gift صراحةً، وكلها تعني أن
+ * العملية لم تُنفَّذ. أي كود آخر (مجهول أو من طبقة API مثل PGRST*) لا يثبت
+ * أن المعاملة لم تُنفَّذ، فيُعامَل كغير محسوم.
+ */
+const DEFINITIVE_SEND_ERROR_CODES = new Set<string>([
+  '42501',
+  '42001',
+  '42704',
+  '22023',
+]);
+
+/**
  * تصنيف خطأ الإرسال:
- * - 'definitive'  → رفض مؤكد من الخادم (خطأ عمل/صلاحية/رصيد) يحمل رمز خطأ
- *   (code) من PostgREST/Postgres، فالطلب محسوم كفشل.
- * - 'inconclusive'→ خطأ نقل/اتصال/مهلة زمنية/انقطاع شبكة (بلا رمز خطأ من
- *   الخادم)، فالنتيجة غير محسومة ويجب الاحتفاظ بنفس المفتاح وإعادة المحاولة.
+ * - 'definitive'  → رفض مؤكد من الخادم بكود معروف ضمن القائمة أعلاه، فالطلب
+ *   محسوم كفشل ويمكن تحرير المحاولة.
+ * - 'inconclusive'→ خطأ نقل/اتصال/مهلة/انقطاع، أو كود غير معروف، أو خطأ من
+ *   طبقة API لا يثبت أن المعاملة لم تُنفَّذ؛ فيجب الاحتفاظ بنفس المفتاح
+ *   وإعادة المحاولة.
  */
 export function classifySendError(error: unknown): SendErrorKind {
   if (!error || typeof error !== 'object') return 'inconclusive';
   const code = (error as { code?: unknown }).code;
-  const hasServerCode = typeof code === 'string' && code.trim().length > 0;
-  return hasServerCode ? 'definitive' : 'inconclusive';
+  if (typeof code !== 'string') return 'inconclusive';
+  return DEFINITIVE_SEND_ERROR_CODES.has(code.trim()) ? 'definitive' : 'inconclusive';
+}
+
+/**
+ * تفسير استجابة RPC بشكل نقي (قابل للاختبار):
+ * - خطأ معروف (code ضمن القائمة) → رفض مؤكد (inconclusive:false).
+ * - خطأ غير معروف/نقل/شبكة → inconclusive:true.
+ * - استجابة فارغة أو غير صالحة أو بلا `ok` boolean → inconclusive:true
+ *   (لا نجاح ولا رفض مؤكد، فلا يجوز مسح المحاولة).
+ * - `ok:true` → نجاح مؤكد.  `ok:false` → رفض مؤكد من الدالة.
+ */
+export function interpretSendResponse(error: unknown, data: unknown): SendGiftResult {
+  if (error) {
+    const message =
+      (error as { message?: unknown }).message;
+    const text = typeof message === 'string' && message.length > 0
+      ? message
+      : undefined;
+    if (classifySendError(error) === 'definitive') {
+      return { ok: false, inconclusive: false, error: text || 'فشل إرسال الهدية.' };
+    }
+    return {
+      ok: false,
+      inconclusive: true,
+      error: text || 'تعذّر تأكيد الإرسال. أعد المحاولة.',
+    };
+  }
+
+  if (!data || typeof data !== 'object' || typeof (data as { ok?: unknown }).ok !== 'boolean') {
+    // استجابة فارغة/غير صالحة: لا نجاح ولا رفض مؤكد → غير محسوم.
+    return { ok: false, inconclusive: true, error: 'استجابة غير صالحة من الخادم. أعد المحاولة.' };
+  }
+
+  const result = data as SendGiftResult;
+  if (result.ok) return result;
+  // ok === false: رفض مؤكد صادر عن الدالة نفسها.
+  return { ...result, ok: false, inconclusive: false };
 }
 
 /**
@@ -255,18 +309,9 @@ export async function sendGift(
       p_gift_id: giftId,
       p_idempotency_key: key,
     });
-    if (error) {
-      // رفض مؤكد من الخادم (يحمل code) مقابل خطأ نقل/شبكة (بلا code).
-      if (classifySendError(error) === 'inconclusive') {
-        return {
-          ok: false,
-          inconclusive: true,
-          error: error.message || 'تعذّر الاتصال بالخادم. أعد المحاولة.',
-        };
-      }
-      return { ok: false, inconclusive: false, error: error.message || 'فشل إرسال الهدية.' };
-    }
-    return (data ?? { ok: false }) as SendGiftResult;
+    // interpretSendResponse يميّز الرفض المؤكد (كود معروف) عن الخطأ غير المحسوم
+    // (نقل/شبكة/كود مجهول/استجابة فارغة أو غير صالحة).
+    return interpretSendResponse(error, data);
   } catch (error) {
     // خطأ نقل/اتصال/مهلة زمنية/انقطاع شبكة (الطلب رُفض قبل وصوله للخادم غالباً):
     // النتيجة غير محسومة، نحتفظ بنفس المفتاح لإعادة المحاولة دون خصم مزدوج.
