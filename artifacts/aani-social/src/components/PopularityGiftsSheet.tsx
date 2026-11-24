@@ -143,6 +143,16 @@ export default function PopularityGiftsSheet({
     return () => window.clearTimeout(timer);
   }, [showLog]);
 
+  // عند إغلاق النافذة الرئيسية، أغلق نافذة السجل تلقائياً ومنع بقائها يتيمة أو
+  // محافظة على ظهورها بعد مغادرة الملف الشخصي. تحرك الإغلاق التدريجي يُحفظ
+  // لكلا الزجاجتين عبر حالات exiting/exitingLog المنفصلة.
+  useEffect(() => {
+    if (!open) {
+      setShowLog(false);
+      setSelectedGift(null);
+    }
+  }, [open]);
+
   const refresh = useCallback(async () => {
     if (!open || !supabaseConfigured) return;
     let active = true;
@@ -355,12 +365,12 @@ export default function PopularityGiftsSheet({
     >
       {/* طبقة خلفية معتمة عند فتح النافذة */}
       <div
-        className="absolute inset-0 bg-black/[60]"
+        className="absolute inset-0 bg-black/60"
         onClick={onClose}
       />
 
       <section
-        className="popularity-sheet-panel fixed left-0 right-0 bottom-0 z-[2010] h-[68dvh] max-h-[68dvh] rounded-t-24 bg-[#121214] overflow-hidden flex flex-col shadow-2xl"
+        className="popularity-sheet-panel fixed left-0 right-0 bottom-0 z-[2010] h-[68dvh] max-h-[68dvh] rounded-t-[24px] bg-[#121214] overflow-hidden flex flex-col shadow-2xl"
         style={panelEnterStyle}
         onClick={stop}
         onPointerDown={stop}
@@ -629,12 +639,12 @@ export default function PopularityGiftsSheet({
       style={logBackdropStyle}
     >
       <div
-        className="absolute inset-0 bg-black/[60]"
+        className="absolute inset-0 bg-black/60"
         onClick={closeLog}
       />
 
       <section
-        className="popularity-sheet-panel fixed left-0 right-0 bottom-0 z-[2070] h-[68dvh] max-h-[68dvh] rounded-t-24 bg-[#121214] overflow-hidden flex flex-col shadow-2xl"
+        className="popularity-sheet-panel fixed left-0 right-0 bottom-0 z-[2070] h-[68dvh] max-h-[68dvh] rounded-t-[24px] bg-[#121214] overflow-hidden flex flex-col shadow-2xl"
         style={logPanelEnterStyle}
         onClick={stop}
         onPointerDown={stop}
