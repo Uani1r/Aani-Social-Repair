@@ -55,9 +55,16 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
     setError(null);
     try {
       const archivedStories: StoryRow[] = [];
-      let offset = 0;
+      const seenStoryIds = new Set<string>();
       const pageSize = 100;
-      while (true) {
+      // حد أمان أعلى: 50 صفحة × 100 = 5000 قصة. يمنع حلقة بلا نهاية إن تجاهل
+      // الخادم p_offset أو أعاد الصفحة نفسها، بدل تعليق الشاشة إلى الأبد.
+      const maxPages = 50;
+      let offset = 0;
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        if (pageIndex >= maxPages) {
+          throw new Error('توقف تحميل الأرشيف عند الحد الأقصى للصفحات؛ قد تكون بعض القصص القديمة غير ظاهرة.');
+        }
         const { data, error: archiveError } = await supabase.rpc('aani_get_my_story_archive', {
           p_limit: pageSize,
           p_offset: offset,
@@ -66,10 +73,21 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
         if (archiveError) throw archiveError;
 
         const page = (data ?? []) as unknown[];
-        archivedStories.push(...page
-          .map(normalizeStoryRow)
-          .filter((story): story is StoryRow => story !== null && story.user_id === userId));
+        let newStories = 0;
+        for (const raw of page) {
+          const story = normalizeStoryRow(raw);
+          // قصص مستخدم آخر لا تدخل أرشيف صاحب الحساب، والتكرار لا يُضاف مرتين.
+          if (!story || story.user_id !== userId || seenStoryIds.has(story.id)) continue;
+          seenStoryIds.add(story.id);
+          archivedStories.push(story);
+          newStories += 1;
+        }
         if (page.length < pageSize) break;
+        // صفحة كاملة بلا قصة جديدة = الخادم لا يحترم p_offset: نوقف بخطأ واضح
+        // بدل عرض أرشيف ناقص كأنه كامل.
+        if (newStories === 0) {
+          throw new Error('أعاد الخادم صفحة بلا قصص جديدة؛ تحقق من دعم p_offset في aani_get_my_story_archive.');
+        }
         offset += page.length;
       }
 
@@ -83,8 +101,16 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
     } catch (fetchError) {
       if (requestId !== requestIdRef.current) return;
       console.error('[profile archive] تعذر تحميل أرشيف القصص:', fetchError);
+      const code = (fetchError as { code?: string } | null)?.code;
+      // فشل الجلب ليس أرشيفاً فارغاً: القصص تُفرَّغ لكن الخطأ يظهر مع زر إعادة المحاولة.
       setStories([]);
-      setError(fetchError instanceof Error ? fetchError.message : 'تعذر تحميل أرشيف القصص.');
+      setError(code === 'PGRST202' || code === '42883'
+        ? 'دالة أرشيف القصص غير موجودة في قاعدة البيانات. طبّق ترحيل aani_get_my_story_archive ثم أعد المحاولة.'
+        : code === 'PGRST301' || code === '401'
+          ? 'انتهت الجلسة قبل تحميل الأرشيف. سجّل الدخول ثم أعد المحاولة.'
+          : fetchError instanceof Error && fetchError.message
+            ? fetchError.message
+            : 'تعذر تحميل أرشيف القصص.');
     } finally {
       if (requestId === requestIdRef.current) setLoading(false);
     }

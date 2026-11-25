@@ -48,6 +48,9 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [transform, setTransform] = useState<CropTransform>({ scale: MIN_SCALE, x: 0, y: 0 });
   const [saving, setSaving] = useState(false);
+  // فشل فك ترميز الصورة (HEIC غير مدعوم في بعض إصدارات Safari، أو ملف تالف):
+  // يُعرض السبب ولا يُسمح بالحفظ بلا صورة مقروءة.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => () => URL.revokeObjectURL(previewUrl), [previewUrl]);
 
@@ -78,7 +81,11 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
   const beginGesture = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!imageSize.width || !imageSize.height) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Safari قد يرفض الالتقاط إن كان المؤشر انتهى للتو؛ السحب يستمر بدونه.
+    }
     pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     const pointerIds = [...pointersRef.current.keys()];
     if (pointerIds.length === 1) {
@@ -149,8 +156,12 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
 
   const endGesture = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointersRef.current.delete(event.pointerId);
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+    try {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    } catch {
+      // الالتقاط قد يكون انتهى تلقائياً؛ لا شيء يتوقف على ذلك.
     }
     const remaining = [...pointersRef.current.entries()];
     if (remaining.length === 0) {
@@ -170,7 +181,7 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
 
   const saveCrop = async () => {
     const image = imageRef.current;
-    if (saving || !image || !imageSize.width || !imageSize.height) return;
+    if (saving || loadError || !image || !imageSize.width || !imageSize.height) return;
     setSaving(true);
     try {
       const canvas = document.createElement('canvas');
@@ -214,7 +225,14 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
           src={previewUrl}
           alt=""
           draggable={false}
-          onLoad={event => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+          onLoad={event => {
+            setLoadError(null);
+            setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight });
+          }}
+          onError={() => {
+            setImageSize({ width: 0, height: 0 });
+            setLoadError('تعذر فتح الصورة على هذا الجهاز. اختر صورة JPEG أو PNG — صيغة HEIC قد لا تُفكَّك في هذا المتصفح.');
+          }}
           className="pointer-events-none absolute left-1/2 top-1/2 max-w-none select-none will-change-transform"
           style={imageStyle}
         />
@@ -234,9 +252,12 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
 
       <div className="pointer-events-none relative z-10 mt-auto flex flex-col items-center gap-4 px-5" style={{ paddingBottom: 'calc(1.25rem + env(safe-area-inset-bottom))' }}>
         <p className="rounded-full bg-black/45 px-3 py-1.5 text-center text-xs text-white/80 backdrop-blur-md">اسحب بإصبعك للتحريك، واستخدم إصبعين للتكبير والتصغير</p>
+        {loadError && (
+          <p role="alert" className="max-w-sm rounded-2xl border border-red-500/40 bg-red-950/60 px-4 py-3 text-center text-xs leading-5 text-red-200">{loadError}</p>
+        )}
         <div className="pointer-events-auto flex w-full max-w-sm gap-3">
           <button type="button" onClick={onCancel} disabled={saving} className="min-h-12 flex-1 rounded-full border border-white/25 bg-black/50 text-sm font-bold text-white backdrop-blur-md disabled:opacity-50">إلغاء</button>
-          <button type="button" onClick={() => void saveCrop()} disabled={saving || !imageSize.width} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[#1D9BF0] text-sm font-black text-white transition hover:bg-[#1686d4] disabled:opacity-50">
+          <button type="button" onClick={() => void saveCrop()} disabled={saving || !imageSize.width || Boolean(loadError)} className="flex min-h-12 flex-1 items-center justify-center gap-2 rounded-full bg-[#1D9BF0] text-sm font-black text-white transition hover:bg-[#1686d4] disabled:opacity-50">
             <Check size={18} />{saving ? 'جارٍ تجهيز الصورة...' : 'تم'}
           </button>
         </div>

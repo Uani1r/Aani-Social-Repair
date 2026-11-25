@@ -185,12 +185,15 @@ async function signImageKitUrl(raw: string): Promise<string | null> {
         headers: { authorization: `Bearer ${accessToken}` },
       });
       if (!response.ok) {
+        // تشخيص بلا أسرار: المسار القادم من الرابط المخزّن وحالة HTTP فقط.
+        console.warn('[media] تعذر توقيع رابط ImageKit', { status: response.status, path });
         signFailures.set(key, Date.now());
         return null;
       }
 
       const payload = await response.json().catch(() => null) as { url?: unknown; expire?: unknown } | null;
       if (typeof payload?.url !== 'string' || !payload.url) {
+        console.warn('[media] استجابة توقيع ImageKit بلا رابط', { status: response.status, path });
         signFailures.set(key, Date.now());
         return null;
       }
@@ -199,7 +202,8 @@ async function signImageKitUrl(raw: string): Promise<string | null> {
       signFailures.delete(key);
       urlCache.set(key, { url: payload.url, expiresAt });
       return payload.url;
-    } catch {
+    } catch (error) {
+      console.warn('[media] فشل طلب توقيع ImageKit', { path, error: error instanceof Error ? error.message : 'unknown' });
       signFailures.set(key, Date.now());
       return null;
     } finally {
