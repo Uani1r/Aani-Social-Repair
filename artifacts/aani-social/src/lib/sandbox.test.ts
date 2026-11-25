@@ -28,14 +28,26 @@ test('computeSandboxBalance: الأرصدة الدائنة والمدنية من
   );
 });
 
-test('generateIdempotencyKey: مدفوع ببادئة وفريد لكل استدعاء', () => {
-  const k1 = generateIdempotencyKey('topup');
-  const k2 = generateIdempotencyKey('topup');
-  assert.ok(k1.startsWith('topup:'));
-  assert.ok(k2.startsWith('topup:'));
-  assert.notEqual(k1, k2);
-  assert.ok(generateIdempotencyKey('gift').startsWith('gift:'));
-  assert.ok(generateIdempotencyKey('grant').startsWith('grant:'));
+test('generateIdempotencyKey: مفاتيح مختلفة لنفس البادئة، وكل مفتاح يبدأ بالبادئة', () => {
+  const keys = new Set<string>();
+  for (let i = 0; i < 50; i += 1) {
+    keys.add(generateIdempotencyKey('topup'));
+  }
+  assert.equal(keys.size, 50, 'يجب أن يكون كل مفتاح فريدًا');
+  for (const k of keys) {
+    assert.ok(k.startsWith('topup:'), `المفتاح ${k} يجب أن يبدأ بالبادئة topup:`);
+  }
+});
+
+test('computeSandboxBalance: عزل مستخدمين — رصيد مستخدم لا يتأثر بإدخالات مستخدم آخر', () => {
+  const userA = [
+    { type: 'credit' as const, amount: 1000 },
+    { type: 'debit' as const, amount: 200 },
+  ];
+  const userB = [{ type: 'credit' as const, amount: 500 }];
+  assert.equal(computeSandboxBalance(userA), 800);
+  assert.equal(computeSandboxBalance(userB), 500);
+  assert.notEqual(computeSandboxBalance(userA), computeSandboxBalance(userB));
 });
 
 test('SandboxGiftTransaction: الشعبية دائمًا 0 وعلامة is_sandbox صريحة', () => {
@@ -87,4 +99,15 @@ test('عزل Sandbox: يستخدم دوال RPC خاصة به مُسبوقة ب�
   for (const token of required) {
     assert.ok(SOURCE.includes(token), `يجب أن يستخدم نظام Sandbox الدالة: ${token}`);
   }
+});
+
+test('تجديد الاشتراك يقبل مفتاح idempotency (لا يُولَّد مفتاح عشوائي جديد عند كل إعادة محاولة)', () => {
+  assert.ok(
+    SOURCE.includes("supabase.rpc('aani_sandbox_renew_subscription'"),
+    'يجب أن تستدعي مكتبة sandbox دالة تجديد الاشتراك عبر RPC',
+  );
+  assert.ok(
+    SOURCE.includes('p_idempotency_key: key'),
+    'يجب أن يمرر تجديد الاشتراك مفتاح idempotency ثابتًا (لا يُولَّد جديدًا عند كل محاولة)',
+  );
 });

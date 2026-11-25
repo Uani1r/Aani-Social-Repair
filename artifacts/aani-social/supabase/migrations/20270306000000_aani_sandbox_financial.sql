@@ -23,9 +23,28 @@
 -- المخطط المعزول لجميع جداول Sandbox.
 create schema if not exists sandbox;
 
--- ------------------------------------------------------------------
+-- تمكين مستخدمي التطبيق من الوصول إلى مخطط sandbox عبر PostgREST API.
+-- (قد يحتاج responsible Supabase project أيضًا إلى إظهار المخطط في إعدادات API.)
+grant usage on schema sandbox to authenticated;
+
+-- =====================================================================
+-- دالة التحقق من هوية المؤسس (تُعرف قبل أي سياسة أو دالة تستدعيها)
+-- =====================================================================
+create or replace function public.aani_sandbox_is_founder()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from sandbox.founders f where f.user_id = auth.uid());
+$$;
+revoke all on function public.aani_sandbox_is_founder() from public, anon;
+grant execute on function public.aani_sandbox_is_founder() to authenticated;
+
+-- =====================================================================
 -- 1. حزم العملات للشحن التجريبي (كتالوج عرض فقط؛ الأسعار وهمية، لا دفع حقيقي)
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.top_up_packages (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -49,10 +68,10 @@ select * from (values
 ) as v(name, coins, price_usd, is_active)
 where not exists (select 1 from sandbox.top_up_packages p where p.name = v.name);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 2. السجل المالي المستقل (مصدر حقيقة الرصيد التجريبي)
 --    الرصيد = مجموع الأرصدة الدائنة - مجموع المدن لكل مستخدم
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.ledger (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles (id) on delete cascade,
@@ -74,10 +93,10 @@ grant select on sandbox.ledger to authenticated;
 create index if not exists sandbox_ledger_user_idx on sandbox.ledger (user_id, created_at desc);
 create index if not exists sandbox_ledger_idempotency_idx on sandbox.ledger (idempotency_key);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 3. سجل الهدايا التجريبي (منفصل تمامًا عن public.gift_transactions)
 --    popularity_points دائمًا 0 ⇒ لا نقاط شعبية حقيقية.
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.gift_transactions (
   id uuid primary key default gen_random_uuid(),
   gift_id uuid not null references public.gifts (id) on delete cascade,
@@ -101,9 +120,9 @@ create index if not exists sandbox_gift_recipient_idx on sandbox.gift_transactio
 create index if not exists sandbox_gift_sender_idx on sandbox.gift_transactions (sender_id, created_at desc);
 create index if not exists sandbox_gift_idempotency_idx on sandbox.gift_transactions (idempotency_key);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 4. سجل الشحن التجريبي (محاكاة ناجح / فاشل)
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.top_ups (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles (id) on delete cascade,
@@ -125,16 +144,17 @@ revoke all on sandbox.top_ups from public, anon, authenticated;
 grant select on sandbox.top_ups to authenticated;
 create index if not exists sandbox_top_ups_user_idx on sandbox.top_ups (user_id, created_at desc);
 
--- ------------------------------------------------------------------
--- 5. سجل الاستردادات التجريبية
--- ------------------------------------------------------------------
+-- =====================================================================
+-- 5. سجل الاستردادات التجريبية (قيد فريد يمنع استرداد نفس الشحن مرتين)
+-- =====================================================================
 create table if not exists sandbox.refunds (
   id uuid primary key default gen_random_uuid(),
   top_up_id uuid not null references sandbox.top_ups (id) on delete cascade,
   user_id uuid not null references public.profiles (id),
   amount integer not null check (amount > 0),
   reason text not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint sandbox_refunds_one_per_topup unique (top_up_id)
 );
 alter table sandbox.refunds enable row level security;
 drop policy if exists sandbox_refunds_select_own on sandbox.refunds;
@@ -143,10 +163,11 @@ create policy sandbox_refunds_select_own on sandbox.refunds
   using (auth.uid() = user_id or public.aani_sandbox_is_founder());
 revoke all on sandbox.refunds from public, anon, authenticated;
 grant select on sandbox.refunds to authenticated;
+create index if not exists sandbox_refunds_top_up_idx on sandbox.refunds (top_up_id);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 6. حزم الاشتراك التجريبي
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.subscription_packages (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -169,9 +190,9 @@ select * from (values
 ) as v(name, coins_price, duration_days, is_active)
 where not exists (select 1 from sandbox.subscription_packages p where p.name = v.name);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 7. اشتراكات المستخدمين التجريبية
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.subscriptions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles (id) on delete cascade,
@@ -193,9 +214,9 @@ revoke all on sandbox.subscriptions from public, anon, authenticated;
 grant select on sandbox.subscriptions to authenticated;
 create index if not exists sandbox_subscriptions_user_idx on sandbox.subscriptions (user_id, status);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 8. حزم الترويج التجريبي (منشورات / ريلز)
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.promotion_packages (
   id uuid primary key default gen_random_uuid(),
   name text not null,
@@ -220,15 +241,17 @@ select * from (values
 ) as v(name, target_type, coins_price, duration_days, is_active)
 where not exists (select 1 from sandbox.promotion_packages p where p.name = v.name);
 
--- ------------------------------------------------------------------
--- 9. حملات الترويج التجريبية (target_id مرجع إنتاجي بدون قيد FK لتجنب الإقران)
--- ------------------------------------------------------------------
+-- =====================================================================
+-- 9. حملات الترويج التجريبية (مع idempotency key لمنع التكرار)
+--    target_id مرجع إنتاجي بدون قيد FK لتجنب الإقران القوي مع الإنتاج.
+-- =====================================================================
 create table if not exists sandbox.promotions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles (id) on delete cascade,
   package_id uuid not null references sandbox.promotion_packages (id),
   target_type text not null check (target_type in ('post','reel')),
   target_id uuid not null,
+  idempotency_key text not null unique,
   status text not null default 'active' check (status in ('active','ended','failed')),
   started_at timestamptz not null default now(),
   ends_at timestamptz,
@@ -244,12 +267,13 @@ create policy sandbox_promotions_select_own on sandbox.promotions
 revoke all on sandbox.promotions from public, anon, authenticated;
 grant select on sandbox.promotions to authenticated;
 create index if not exists sandbox_promotions_user_idx on sandbox.promotions (user_id, created_at desc);
+create index if not exists sandbox_promotions_idempotency_idx on sandbox.promotions (idempotency_key);
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 10. مؤسسو Sandbox (قائمة سماح من جانب الخادم فقط)
 --     تُضاف الصفوف عبر SQL 측서-side فقط؛ لا يرسل المتصفح أي ادعاء بمنصب المؤسس.
 --     الجدول فارغ افتراضيًا: يضيف مسؤول القاعدة معرفات المؤسسين reales عبر SQL.
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.founders (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null unique references public.profiles (id) on delete cascade,
@@ -263,9 +287,9 @@ create policy sandbox_founders_select_own on sandbox.founders
 revoke all on sandbox.founders from public, anon, authenticated;
 grant select on sandbox.founders to authenticated;
 
--- ------------------------------------------------------------------
+-- =====================================================================
 -- 11. سجل إجراءات المسؤول (تدقيق): الفاعل، الوقت، السبب، النتيجة
--- ------------------------------------------------------------------
+-- =====================================================================
 create table if not exists sandbox.admin_actions (
   id uuid primary key default gen_random_uuid(),
   actor_user_id uuid not null references public.profiles (id),
@@ -290,37 +314,33 @@ create index if not exists sandbox_admin_actions_actor_idx on sandbox.admin_acti
 -- جميعها تتحقق من الجلسة (auth.uid) وصلاحيات الخادم، لا تثق في مدخلات المتصفح للأرصدة.
 -- =====================================================================
 
--- التحقق من هوية المؤسس من جلسة موثقة وصلاحية خادم.
-create or replace function public.aani_sandbox_is_founder()
-returns boolean
-language sql
-stable
-security definer
-set search_path = ''
-as $$
-  select exists (select 1 from sandbox.founders f where f.user_id = auth.uid());
-$$;
-revoke all on function public.aani_sandbox_is_founder() from public, anon;
-grant execute on function public.aani_sandbox_is_founder() to authenticated;
-
 -- الرصيد التجريبي لمستخدم (يُحسب من السجل، لا محفظة مكررة).
+-- لا يمكن لأي مستخدم قراءة رصيد مستخدم آخر؛ الاستثناء المؤسس المصرح له.
 create or replace function public.aani_sandbox_balance(p_user_id uuid)
 returns integer
-language sql
+language plpgsql
 stable
 security definer
 set search_path = ''
 as $$
-  select coalesce((
-    select sum(case when type = 'credit' then amount else -amount end)::integer
-    from sandbox.ledger
-    where user_id = p_user_id
-  ), 0);
+declare
+  v_balance integer;
+begin
+  if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
+  if auth.uid() <> p_user_id and not public.aani_sandbox_is_founder() then
+    raise exception 'forbidden: cannot read another user sandbox balance' using errcode='42501';
+  end if;
+  select coalesce(sum(case when type = 'credit' then amount else -amount end), 0)::integer
+  into v_balance
+  from sandbox.ledger
+  where user_id = p_user_id;
+  return v_balance;
+end;
 $$;
 revoke all on function public.aani_sandbox_balance(uuid) from public, anon;
 grant execute on function public.aani_sandbox_balance(uuid) to authenticated;
 
--- منح عملات تجريبية (مؤسس فقط) مع قيد idempotency وقفل استشاري للمعاملة.
+-- منح عملات تجريبية (مؤسس فقط) مع قفل على مستوى المستخدم + idempotency + قفل استشاري للمعاملة.
 create or replace function public.aani_sandbox_grant_coins(
   p_user_id uuid,
   p_amount integer,
@@ -344,6 +364,8 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
+  -- قفل على مستوى المستخدم لمنع عمليات منافسة على نفس المستخدم.
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:grant:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
@@ -365,7 +387,9 @@ $$;
 revoke all on function public.aani_sandbox_grant_coins(uuid,integer,text,text) from public, anon;
 grant execute on function public.aani_sandbox_grant_coins(uuid,integer,text,text) to authenticated;
 
--- خصم عملات تجريبية (المالك أو المؤسس) مع قيد idempotency وقفل استشاري.
+-- خصم عملات تجريبية (المالك أو المؤسس) مع قفل على مستوى المستخدم + idempotency + قفل استشاري.
+-- القفل على مستوى المستخدم يضمن أن عمليتي خصم مختلفتين لنفس المستخدم تتسلسلان،
+-- فلا تتجاوزا الرصيد المتاح معًا.
 create or replace function public.aani_sandbox_deduct_coins(
   p_user_id uuid,
   p_amount integer,
@@ -390,6 +414,8 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
+  -- قفل على مستوى المستخدم يمنع عمليتي خصم مختلفتين من تجاوز الرصيد.
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:deduct:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
@@ -451,6 +477,7 @@ begin
   if not found then raise exception 'gift unavailable' using errcode='42704'; end if;
 
   -- الخصم من الرصيد التجريبي قبل تسجيل المعاملة (ضمان الاتساق عند إعادة المحاولة).
+  -- deduct_coins تضيف قفلًا على مستوى المستخدم.
   perform public.aani_sandbox_deduct_coins(p_sender_id, v_price, p_idempotency_key || ':gift', 'sandbox gift send');
 
   select public.aani_sandbox_balance(p_sender_id) into v_balance;
@@ -490,6 +517,7 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:topup:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
@@ -525,7 +553,8 @@ $$;
 revoke all on function public.aani_sandbox_top_up(uuid,uuid,text,boolean) from public, anon;
 grant execute on function public.aani_sandbox_top_up(uuid,uuid,text,boolean) to authenticated;
 
--- استرداد تجريبي (مؤسس فقط): يسحب العملات من رصيد المستخدم ويغلق عملية الشحن.
+-- استرداد تجريبي (مؤسس فقط): ذري، مقاوم للتكرار والتزامن.
+-- يقفل صف الشحن (FOR UPDATE)، يتحقق من حالته قبل الخصم، ويمنع استرداد الشحن مرتين.
 create or replace function public.aani_sandbox_refund_top_up(
   p_top_up_id uuid,
   p_reason text
@@ -545,11 +574,18 @@ begin
     raise exception 'founder required' using errcode='42501';
   end if;
 
+  -- قفل صف الشحن للتزامن ومنع استرداد مزدوج Concurrent.
   select user_id, amount, status into v_user_id, v_amount, v_status
-  from sandbox.top_ups where id = p_top_up_id;
+  from sandbox.top_ups where id = p_top_up_id
+  for update;
 
   if not found then raise exception 'top-up not found' using errcode='42704'; end if;
   if v_status <> 'completed' then raise exception 'only completed top-ups can be refunded' using errcode='42001'; end if;
+  if exists (select 1 from sandbox.refunds where top_up_id = p_top_up_id) then
+    raise exception 'top-up already refunded' using errcode='42001';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || v_user_id::text));
 
   insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
   values (v_user_id, 'debit', v_amount, 'sandbox refund: ' || p_reason, gen_random_uuid()::text, p_top_up_id);
@@ -569,6 +605,7 @@ revoke all on function public.aani_sandbox_refund_top_up(uuid,text) from public,
 grant execute on function public.aani_sandbox_refund_top_up(uuid,text) to authenticated;
 
 -- تفعيل اشتراك تجريبي (خصم عملات تجريبية، مزايا Sandbox فقط).
+-- يدعم idempotency ولا يولد مفتاحًا عشوائيًا جديدًا عند كل إعادة محاولة.
 create or replace function public.aani_sandbox_activate_subscription(
   p_user_id uuid,
   p_package_id uuid,
@@ -593,6 +630,7 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:sub:' || p_user_id::text || ':' || p_idempotency_key));
 
   select coins_price, duration_days into v_coins, v_days
@@ -654,8 +692,10 @@ revoke all on function public.aani_sandbox_cancel_subscription(uuid) from public
 grant execute on function public.aani_sandbox_cancel_subscription(uuid) to authenticated;
 
 -- تجديد اشتراك تجريبي (خصم عملات وتاريخ انتهاء جديد).
+-- يقبل p_idempotency_key لمنع توليد مفتاح عشوائي جديد عند كل إعادة محاولة.
 create or replace function public.aani_sandbox_renew_subscription(
-  p_subscription_id uuid
+  p_subscription_id uuid,
+  p_idempotency_key text
 )
 returns jsonb
 language plpgsql
@@ -678,6 +718,13 @@ begin
     raise exception 'forbidden' using errcode='42501';
   end if;
 
+  if p_idempotency_key is null or length(trim(p_idempotency_key)) = 0 then
+    raise exception 'idempotency key required' using errcode='22023';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || v_user_id::text));
+  perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || v_user_id::text || ':' || p_idempotency_key));
+
   select coins_price, duration_days into v_coins, v_days
   from sandbox.subscription_packages where id = v_package_id and is_active = true;
   if not found then raise exception 'package unavailable' using errcode='42704'; end if;
@@ -686,7 +733,7 @@ begin
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
 
   insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (v_user_id, 'debit', v_coins, 'sandbox subscription renew', gen_random_uuid()::text, p_subscription_id);
+  values (v_user_id, 'debit', v_coins, 'sandbox subscription renew', p_idempotency_key, p_subscription_id);
 
   update sandbox.subscriptions
   set status = 'active', renewed_at = now(),
@@ -701,10 +748,14 @@ begin
   return jsonb_build_object('ok',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
 end;
 $$;
-revoke all on function public.aani_sandbox_renew_subscription(uuid) from public, anon;
-grant execute on function public.aani_sandbox_renew_subscription(uuid) to authenticated;
+revoke all on function public.aani_sandbox_renew_subscription(uuid,text) from public, anon;
+grant execute on function public.aani_sandbox_renew_subscription(uuid,text) to authenticated;
 
 -- إنشاء حملة ترويج تجريبية (خصم عملات تجريبية).
+-- يتحقق من:
+--   * تطابق نوع الحملة مع نوع الباقة (post/post، reel/reel).
+--   * ملكية المستخدم للهدف (المنشور في public.posts).
+--   * وجود الهدف وصلاحيته.
 create or replace function public.aani_sandbox_create_promotion(
   p_user_id uuid,
   p_package_id uuid,
@@ -722,6 +773,8 @@ declare
   v_coins integer;
   v_days integer;
   v_balance integer;
+  v_package_target_type text;
+  v_target_owner uuid;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_user_id then raise exception 'forbidden' using errcode='42501'; end if;
@@ -729,15 +782,32 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:promo:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.promotions where idempotency_key = p_idempotency_key) then
     return jsonb_build_object('ok',true,'duplicate',true,'status','active');
   end if;
 
-  select coins_price, duration_days into v_coins, v_days
+  select target_type, coins_price, duration_days
+  into v_package_target_type, v_coins, v_days
   from sandbox.promotion_packages where id = p_package_id and is_active = true;
   if not found then raise exception 'package unavailable' using errcode='42704'; end if;
+
+  -- تطابق نوع الحملة مع نوع الباقة.
+  if p_target_type <> v_package_target_type then
+    raise exception 'promotion target type does not match package target type' using errcode='42001';
+  end if;
+
+  -- وجود الهدف وملكية المستخدم له (المنشور في public.posts).
+  -- الريل غير موجود كجدول منفصل في المخطط الحالي، لذا لا يُطبق عليه FK صلب.
+  if p_target_type = 'post' then
+    select user_id into v_target_owner from public.posts where id = p_target_id;
+    if not found then raise exception 'target post not found' using errcode='42704'; end if;
+    if v_target_owner <> p_user_id then
+      raise exception 'not the owner of the target post' using errcode='42501';
+    end if;
+  end if;
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
@@ -745,8 +815,8 @@ begin
   insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
   values (p_user_id, 'debit', v_coins, 'sandbox promotion create', p_idempotency_key, null);
 
-  insert into sandbox.promotions (user_id, package_id, target_type, target_id, status, started_at, ends_at, coins_deducted)
-  values (p_user_id, p_package_id, p_target_type, p_target_id, 'active', now(), now() + (v_days || ' days')::interval, v_coins);
+  insert into sandbox.promotions (user_id, package_id, target_type, target_id, status, started_at, ends_at, coins_deducted, idempotency_key)
+  values (p_user_id, p_package_id, p_target_type, p_target_id, 'active', now(), now() + (v_days || ' days')::interval, v_coins, p_idempotency_key);
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;
 

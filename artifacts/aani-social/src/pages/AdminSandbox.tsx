@@ -59,14 +59,31 @@ export default function AdminSandbox() {
   const [subPackages, setSubPackages] = useState<any[]>([]);
   const [promoPackages, setPromoPackages] = useState<any[]>([]);
 
+  // حقائق الإجراءات التي تتطلب معرف مستخدم/هدف صحيح
+  const [subUserId, setSubUserId] = useState('');
+  const [promoUserId, setPromoUserId] = useState('');
+  const [promoTargetId, setPromoTargetId] = useState('');
+
+  // نموذج منح العملات
+  const [grantUserId, setGrantUserId] = useState('');
+  const [grantAmount, setGrantAmount] = useState(100);
+  const [grantReason, setGrantReason] = useState('منح تجريبي عبر لوحة الإدارة');
+
   const mounted = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const ok = await isSandboxFounder();
-        if (!cancelled) setFounder(ok);
+        const { data: ok, error } = await isSandboxFounder();
+        if (!cancelled) {
+          if (error) {
+            toast.error(`تعذر التحقق من صلاحية المؤسس: ${(error as Error).message}`);
+            setFounder(false);
+          } else {
+            setFounder(Boolean(ok));
+          }
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -86,13 +103,23 @@ export default function AdminSandbox() {
       fetchSandboxPromotions({ userId: '', all: true }),
       fetchSandboxAdminActions({ page: 0, pageSize: 200, all: true }),
     ]);
+    const show = (label: string, res: { error: Error | null }) => {
+      if (res.error) toast.error(`${label}: ${(res.error as Error).message}`);
+    };
+    show('السجل المالي', l);
+    show('عمليات الشحن', t);
+    show('الاستردادات', r);
+    show('الاشتراكات', s);
+    show('الحملات الترويجية', p);
+    show('إجراءات المسؤول', a);
+
     if (mounted.current) {
-      setLedger(l.items);
-      setTopUps(t.items);
-      setRefunds(r);
-      setSubs(s);
-      setPromos(p);
-      setAdminActions(a.items);
+      setLedger(l.data ?? []);
+      setTopUps(t.data ?? []);
+      setRefunds(r.data ?? []);
+      setSubs(s.data ?? []);
+      setPromos(p.data ?? []);
+      setAdminActions(a.data ?? []);
     }
   }, []);
 
@@ -105,9 +132,18 @@ export default function AdminSandbox() {
   useEffect(() => {
     if (founder === true) {
       void Promise.all([
-        fetchSandboxTopUpPackages().then(setTopUpPackages),
-        fetchSandboxSubscriptionPackages().then(setSubPackages),
-        fetchSandboxPromotionPackages().then(setPromoPackages),
+        fetchSandboxTopUpPackages().then((res) => {
+          if (res.error) toast.error(`حزم الشحن: ${(res.error as Error).message}`);
+          else setTopUpPackages(res.data ?? []);
+        }),
+        fetchSandboxSubscriptionPackages().then((res) => {
+          if (res.error) toast.error(`حزم الاشتراك: ${(res.error as Error).message}`);
+          else setSubPackages(res.data ?? []);
+        }),
+        fetchSandboxPromotionPackages().then((res) => {
+          if (res.error) toast.error(`حزم الترويج: ${(res.error as Error).message}`);
+          else setPromoPackages(res.data ?? []);
+        }),
       ]);
       void refresh();
     }
@@ -144,16 +180,8 @@ export default function AdminSandbox() {
     );
   }
 
-  const [grantUserId, setGrantUserId] = useState('');
-  const [grantAmount, setGrantAmount] = useState(100);
-  const [grantReason, setGrantReason] = useState('منح تجريبي عبر لوحة الإدارة');
-
   const handleGrant = async () => {
-    const res = await grantSandboxCoins({
-      userId: grantUserId,
-      amount: grantAmount,
-      reason: grantReason,
-    });
+    const res = await grantSandboxCoins({ userId: grantUserId, amount: grantAmount, reason: grantReason });
     if (res.ok) {
       toast.success(`تم منح ${res.amount} عملة تجريبية`);
       setGrantUserId('');
@@ -161,7 +189,7 @@ export default function AdminSandbox() {
       setGrantReason('منح تجريبي عبر لوحة الإدارة');
       void refresh();
     } else {
-      toast.error(res.error || 'فشل المنح');
+      toast.error(res.error ? (res.error as Error).message : 'فشل المنح');
     }
   };
 
@@ -171,17 +199,21 @@ export default function AdminSandbox() {
       toast.success('تم الاسترداد التجريبي');
       void refresh();
     } else {
-      toast.error(res.error || 'فشل الاسترداد');
+      toast.error(res.error ? (res.error as Error).message : 'فشل الاسترداد');
     }
   };
 
-  const handleActivateSub = async (userId: string, packageId: string) => {
-    const res = await activateSandboxSubscription({ userId, packageId });
+  const handleActivateSub = async (packageId: string): Promise<void> => {
+    if (!subUserId) {
+      toast.error('معرف المستخدم مطلوب لتفعيل الاشتراك');
+      return;
+    }
+    const res = await activateSandboxSubscription({ userId: subUserId, packageId });
     if (res.ok) {
       toast.success('تم تفعيل الاشتراك التجريبي');
       void refresh();
     } else {
-      toast.error(res.error || 'فشل التفعيل');
+      toast.error(res.error ? (res.error as Error).message : 'فشل التفعيل');
     }
   };
 
@@ -191,7 +223,7 @@ export default function AdminSandbox() {
       toast.success('تم إلغاء الاشتراك التجريبي');
       void refresh();
     } else {
-      toast.error(res.error || 'فشل الإلغاء');
+      toast.error(res.error ? (res.error as Error).message : 'فشل الإلغاء');
     }
   };
 
@@ -201,17 +233,25 @@ export default function AdminSandbox() {
       toast.success('تم تجديد الاشتراك التجريبي');
       void refresh();
     } else {
-      toast.error(res.error || 'فشل التجديد');
+      toast.error(res.error ? (res.error as Error).message : 'فشل التجديد');
     }
   };
 
-  const handleCreatePromo = async (userId: string, packageId: string, targetType: 'post' | 'reel', targetId: string) => {
-    const res = await createSandboxPromotion({ userId, packageId, targetType, targetId });
+  const handleCreatePromo = async (packageId: string, targetType: 'post' | 'reel'): Promise<void> => {
+    if (!promoUserId) {
+      toast.error('معرف المستخدم مطلوب لإنشاء الحملة');
+      return;
+    }
+    if (!promoTargetId) {
+      toast.error('معرف الهدف (المنشور/الريل) مطلوب لإنشاء الحملة');
+      return;
+    }
+    const res = await createSandboxPromotion({ userId: promoUserId, packageId, targetType, targetId: promoTargetId });
     if (res.ok) {
       toast.success('تم إنشاء الحملة الترويجية التجريبية');
       void refresh();
     } else {
-      toast.error(res.error || 'فشل إنشاء الحملة');
+      toast.error(res.error ? (res.error as Error).message : 'فشل إنشاء الحملة');
     }
   };
 
@@ -221,7 +261,7 @@ export default function AdminSandbox() {
       toast.success(`انتهت الحملة: ${res.status}`);
       void refresh();
     } else {
-      toast.error(res.error || 'فشل إنهاء الحملة');
+      toast.error(res.error ? (res.error as Error).message : 'فشل إنهاء الحملة');
     }
   };
 
@@ -259,15 +299,27 @@ export default function AdminSandbox() {
               <div className="grid sm:grid-cols-4 gap-3 items-end">
                 <div className="flex flex-col gap-1">
                   <Label>معرف المستخدم</Label>
-                  <Input value={grantUserId} onChange={(e) => setGrantUserId(e.target.value)} placeholder="user-uuid" />
+                  <Input
+                    value={grantUserId}
+                    onChange={(e) => setGrantUserId(e.target.value)}
+                    placeholder="user-uuid"
+                  />
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label>المبلغ</Label>
-                  <Input value={String(grantAmount)} onChange={(e) => setGrantAmount(Number(e.target.value) || 0)} type="number" placeholder="100" />
+                  <Input
+                    value={String(grantAmount)}
+                    onChange={(e) => setGrantAmount(Number(e.target.value) || 0)}
+                    type="number"
+                    placeholder="100"
+                  />
                 </div>
                 <div className="flex flex-col gap-1">
                   <Label>السبب</Label>
-                  <Input value={grantReason} onChange={(e) => setGrantReason(e.target.value)} />
+                  <Input
+                    value={grantReason}
+                    onChange={(e) => setGrantReason(e.target.value)}
+                  />
                 </div>
                 <div className="flex flex-col gap-1">
                   <Button onClick={handleGrant}>منح</Button>
@@ -334,7 +386,15 @@ export default function AdminSandbox() {
             </TabsContent>
 
             <TabsContent value="subs" className="space-y-3 mt-3">
-              <div className="grid sm:grid-cols-3 gap-3">
+              <div className="grid sm:grid-cols-4 gap-3 items-end">
+                <div className="flex flex-col gap-1">
+                  <Label>معرف المستخدم للتفعيل</Label>
+                  <Input
+                    value={subUserId}
+                    onChange={(e) => setSubUserId(e.target.value)}
+                    placeholder="user-uuid"
+                  />
+                </div>
                 {subPackages.map((pkg) => (
                   <Card key={pkg.id} className="p-3">
                     <CardContent className="space-y-2">
@@ -345,11 +405,9 @@ export default function AdminSandbox() {
                             {pkg.coins_price} عملة × {pkg.duration_days} يوم
                           </div>
                         </div>
-                        <div className="flex gap-1">
-                          <Button size="sm" onClick={() => handleActivateSub('', pkg.id)}>
-                            تفعيل (مستخدم)
-                          </Button>
-                        </div>
+                        <Button size="sm" onClick={() => handleActivateSub(pkg.id)}>
+                          تفعيل
+                        </Button>
                       </div>
                     </CardContent>
                   </Card>
@@ -397,7 +455,23 @@ export default function AdminSandbox() {
             </TabsContent>
 
             <TabsContent value="promos" className="space-y-3 mt-3">
-              <div className="grid sm:grid-cols-3 gap-3">
+              <div className="grid sm:grid-cols-4 gap-3 items-end">
+                <div className="flex flex-col gap-1">
+                  <Label>معرف المستخدم</Label>
+                  <Input
+                    value={promoUserId}
+                    onChange={(e) => setPromoUserId(e.target.value)}
+                    placeholder="user-uuid"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label>معرف الهدف (منشور/ريل)</Label>
+                  <Input
+                    value={promoTargetId}
+                    onChange={(e) => setPromoTargetId(e.target.value)}
+                    placeholder="target-uuid"
+                  />
+                </div>
                 {promoPackages.map((pkg) => (
                   <Card key={pkg.id} className="p-3">
                     <CardContent className="space-y-2">
@@ -410,9 +484,9 @@ export default function AdminSandbox() {
                         </div>
                         <Button
                           size="sm"
-                          onClick={() => handleCreatePromo('', pkg.id, pkg.target_type as 'post' | 'reel', '')}
+                          onClick={() => handleCreatePromo(pkg.id, pkg.target_type as 'post' | 'reel')}
                         >
-                          إنشاء حملة (مستخدم)
+                          إنشاء حملة
                         </Button>
                       </div>
                     </CardContent>

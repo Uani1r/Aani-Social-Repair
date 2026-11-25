@@ -115,10 +115,21 @@ export type SandboxGiftTransaction = {
   is_sandbox: boolean;
 };
 
-export type SandboxRpcResult = {
+/* ------------------------------------------------------------------ */
+/* نتيجة عملية reading/writing صريحة: لا تُخفي الأخطاء بصمت.         */
+/* ------------------------------------------------------------------ */
+
+export type SandboxReadResult<T> = {
+  data: T | null;
+  error: Error | null;
+};
+
+export type SandboxListResult<T> = SandboxReadResult<T[]> & { hasMore: boolean };
+
+export type SandboxMutationResult = {
   ok: boolean;
   duplicate?: boolean;
-  error?: string;
+  error: Error | null;
   [key: string]: unknown;
 };
 
@@ -126,15 +137,19 @@ export type SandboxRpcResult = {
 /* helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-async function rpc<T = unknown>(name: string, params: Record<string, unknown>): Promise<{ data: T | null; error: unknown }> {
+async function rpc<T = unknown>(
+  name: string,
+  params: Record<string, unknown>
+): Promise<{ data: T | null; error: Error | null }> {
   if (!supabaseConfigured) {
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   try {
     const { data, error } = await supabase.rpc(name, params);
-    return { data: data as T | null, error };
+    if (error) return { data: null, error };
+    return { data: data as T | null, error: null };
   } catch (error) {
-    return { data: null, error };
+    return { data: null, error: error as Error };
   }
 }
 
@@ -156,71 +171,63 @@ export function computeSandboxBalance(entries: Array<{ type: 'credit' | 'debit';
 /* ------------------------------------------------------------------ */
 
 /** هل الجلسة الحالية تخص مؤسس Sandbox؟ التحقق من جهة الخادم فقط. */
-export async function isSandboxFounder(): Promise<boolean> {
-  const { data, error } = await rpc<boolean>('aani_sandbox_is_founder', {});
-  if (error) return false;
-  return Boolean(data);
+export async function isSandboxFounder(): Promise<SandboxReadResult<boolean>> {
+  return rpc<boolean>('aani_sandbox_is_founder', {});
 }
 
 /** الرصيد التجريبي لمستخدم (يُحسب من السجل، لا محفظة مكررة). */
-export async function fetchSandboxBalance(userId: string): Promise<number> {
-  if (!supabaseConfigured || !userId) return 0;
-  const { data, error } = await rpc<number>('aani_sandbox_balance', { p_user_id: userId });
-  if (error) {
-    console.warn('[sandbox] تعذر جلب الرصيد التجريبي:', error);
-    return 0;
+export async function fetchSandboxBalance(userId: string): Promise<SandboxReadResult<number>> {
+  if (!supabaseConfigured || !userId) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح أو معرف المستخدم ناقص') };
   }
-  return typeof data === 'number' ? data : 0;
+  return rpc<number>('aani_sandbox_balance', { p_user_id: userId });
 }
 
 /* ------------------------------------------------------------------ */
-/* كتالوجات العرض                                                    */
+/* كتالوجات العرض (تُقرأ عبر PostgREST من مخطط sandbox)               */
+/* ملاحظة: يتطلب كشف مخطط sandbox عبر PostgREST صلاحية USAGE على
+  المخطط للمستخدمين المصادقين (تُمنح في الترحيل SQL عبر
+  grant usage on schema sandbox to authenticated). */
 /* ------------------------------------------------------------------ */
 
-/** حزم الشحن التجريبي المتاحة. */
-export async function fetchSandboxTopUpPackages(): Promise<SandboxTopUpPackage[]> {
-  if (!supabaseConfigured) return [];
+export async function fetchSandboxTopUpPackages(): Promise<SandboxReadResult<SandboxTopUpPackage[]>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
   const { data, error } = await supabase
     .from('sandbox.top_up_packages')
     .select('id, name, coins, price_usd, is_active, created_at')
     .eq('is_active', true)
     .order('coins', { ascending: true });
-  if (error) {
-    console.warn('[sandbox] تعذر جلب حزم الشحن:', error);
-    return [];
-  }
-  return (data ?? []) as SandboxTopUpPackage[];
+  if (error) return { data: null, error };
+  return { data: (data ?? []) as SandboxTopUpPackage[], error: null };
 }
 
-/** حزم الاشتراك التجريبي المتاحة. */
-export async function fetchSandboxSubscriptionPackages(): Promise<SandboxSubscriptionPackage[]> {
-  if (!supabaseConfigured) return [];
+export async function fetchSandboxSubscriptionPackages(): Promise<SandboxReadResult<SandboxSubscriptionPackage[]>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
   const { data, error } = await supabase
     .from('sandbox.subscription_packages')
     .select('id, name, coins_price, duration_days, is_active, created_at')
     .eq('is_active', true)
     .order('duration_days', { ascending: true });
-  if (error) {
-    console.warn('[sandbox] تعذر جلب حزم الاشتراك:', error);
-    return [];
-  }
-  return (data ?? []) as SandboxSubscriptionPackage[];
+  if (error) return { data: null, error };
+  return { data: (data ?? []) as SandboxSubscriptionPackage[], error: null };
 }
 
-/** حزم الترويج التجريبي المتاحة. */
-export async function fetchSandboxPromotionPackages(): Promise<SandboxPromotionPackage[]> {
-  if (!supabaseConfigured) return [];
+export async function fetchSandboxPromotionPackages(): Promise<SandboxReadResult<SandboxPromotionPackage[]>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
   const { data, error } = await supabase
     .from('sandbox.promotion_packages')
     .select('id, name, target_type, coins_price, duration_days, is_active, created_at')
     .eq('is_active', true)
     .order('target_type', { ascending: true })
     .order('coins_price', { ascending: true });
-  if (error) {
-    console.warn('[sandbox] تعذر جلب حزم الترويج:', error);
-    return [];
-  }
-  return (data ?? []) as SandboxPromotionPackage[];
+  if (error) return { data: null, error };
+  return { data: (data ?? []) as SandboxPromotionPackage[], error: null };
 }
 
 /* ------------------------------------------------------------------ */
@@ -233,9 +240,9 @@ export async function sendSandboxGift(params: {
   recipientId: string;
   giftId: string;
   idempotencyKey?: string;
-}): Promise<{ ok: boolean; duplicate?: boolean; transactionId?: string; pricePaid?: number; balance?: number; error?: string }> {
+}): Promise<SandboxMutationResult & { transactionId?: string; pricePaid?: number; balance?: number }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const key = params.idempotencyKey ?? generateIdempotencyKey('sandbox-gift');
   const { data, error } = await supabase.rpc('aani_sandbox_send_gift', {
@@ -245,15 +252,24 @@ export async function sendSandboxGift(params: {
     p_idempotency_key: key,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل إرسال الهدية التجريبية.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; duplicate?: boolean; transaction_id?: string; price_paid?: number; balance?: number; popularity_points?: number; sandbox?: boolean };
+  const result = data as {
+    ok: boolean;
+    duplicate?: boolean;
+    transaction_id?: string;
+    price_paid?: number;
+    balance?: number;
+    popularity_points?: number;
+    sandbox?: boolean;
+  } | null;
   return {
-    ok: result.ok ?? false,
-    duplicate: result.duplicate,
-    transactionId: result.transaction_id,
-    pricePaid: result.price_paid,
-    balance: result.balance,
+    ok: result?.ok ?? false,
+    duplicate: result?.duplicate,
+    transactionId: result?.transaction_id,
+    pricePaid: result?.price_paid,
+    balance: result?.balance,
+    error: null,
   };
 }
 
@@ -262,8 +278,10 @@ export async function fetchSandboxGifts(params: {
   userId: string;
   page: number;
   pageSize?: number;
-}): Promise<{ items: SandboxGiftTransaction[]; hasMore: boolean }> {
-  if (!supabaseConfigured || !params.userId) return { items: [], hasMore: false };
+}): Promise<SandboxListResult<SandboxGiftTransaction>> {
+  if (!supabaseConfigured || !params.userId) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح أو معرف المستخدم ناقص'), hasMore: false };
+  }
   const pageSize = params.pageSize ?? 20;
   const from = params.page * pageSize;
   const { data, error } = await supabase
@@ -272,27 +290,26 @@ export async function fetchSandboxGifts(params: {
     .or(`sender_id.eq.${params.userId},recipient_id.eq.${params.userId}`)
     .order('created_at', { ascending: false })
     .range(from, from + pageSize);
-  if (error) {
-    console.warn('[sandbox] تعذر جلب الهدايا التجريبية:', error);
-    return { items: [], hasMore: false };
-  }
+  if (error) return { data: null, error, hasMore: false };
   const rows = (data ?? []) as SandboxGiftTransaction[];
   const hasMore = rows.length > pageSize;
-  return { items: hasMore ? rows.slice(0, -1) : rows, hasMore };
+  return { data: hasMore ? rows.slice(0, -1) : rows, error: null, hasMore };
 }
 
 /* ------------------------------------------------------------------ */
 /* السجل المالي والتشغيل                                              */
 /* ------------------------------------------------------------------ */
 
-/** إدخالات السجل المالي. pass `all: true` (مسؤول فقط عبر RLS) للعرض من دون تصفية المستخدم. */
+/** إدخالات السجل المالي لمستخدم. pass `all: true` (مسؤول فقط عبر RLS) للعرض من دون تصفية المستخدم. */
 export async function fetchSandboxLedger(params: {
   userId: string;
   page: number;
   pageSize?: number;
   all?: boolean;
-}): Promise<{ items: SandboxLedgerEntry[]; hasMore: boolean }> {
-  if (!supabaseConfigured) return { items: [], hasMore: false };
+}): Promise<SandboxListResult<SandboxLedgerEntry>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح'), hasMore: false };
+  }
   const pageSize = params.pageSize ?? 50;
   const from = params.page * pageSize;
   let q = supabase
@@ -302,13 +319,10 @@ export async function fetchSandboxLedger(params: {
     .range(from, from + pageSize);
   if (!params.all) q = q.eq('user_id', params.userId);
   const { data, error } = await q;
-  if (error) {
-    console.warn('[sandbox] تعذر جلب السجل المالي:', error);
-    return { items: [], hasMore: false };
-  }
+  if (error) return { data: null, error, hasMore: false };
   const rows = (data ?? []) as SandboxLedgerEntry[];
   const hasMore = rows.length > pageSize;
-  return { items: hasMore ? rows.slice(0, -1) : rows, hasMore };
+  return { data: hasMore ? rows.slice(0, -1) : rows, error: null, hasMore };
 }
 
 /** عمليات الشحن التجريبي للمستخدم. pass `all: true` للمسؤول عبر RLS. */
@@ -317,8 +331,10 @@ export async function fetchSandboxTopUps(params: {
   page: number;
   pageSize?: number;
   all?: boolean;
-}): Promise<{ items: SandboxTopUp[]; hasMore: boolean }> {
-  if (!supabaseConfigured) return { items: [], hasMore: false };
+}): Promise<SandboxListResult<SandboxTopUp>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح'), hasMore: false };
+  }
   const pageSize = params.pageSize ?? 50;
   const from = params.page * pageSize;
   let q = supabase
@@ -328,13 +344,10 @@ export async function fetchSandboxTopUps(params: {
     .range(from, from + pageSize);
   if (!params.all) q = q.eq('user_id', params.userId);
   const { data, error } = await q;
-  if (error) {
-    console.warn('[sandbox] تعذر جلب عمليات الشحن التجريبية:', error);
-    return { items: [], hasMore: false };
-  }
+  if (error) return { data: null, error, hasMore: false };
   const rows = (data ?? []) as SandboxTopUp[];
   const hasMore = rows.length > pageSize;
-  return { items: hasMore ? rows.slice(0, -1) : rows, hasMore };
+  return { data: hasMore ? rows.slice(0, -1) : rows, error: null, hasMore };
 }
 
 /** شحن تجريبي (محاكاة ناجح/فاشل): يُضاف الرصيد فقط عند النجاح. */
@@ -343,9 +356,9 @@ export async function topUpSandbox(params: {
   packageId: string;
   simulateSuccess?: boolean;
   idempotencyKey?: string;
-}): Promise<{ ok: boolean; duplicate?: boolean; status?: string; amount?: number; balance?: number; error?: string; simulated?: boolean }> {
+}): Promise<SandboxMutationResult & { status?: string; amount?: number; balance?: number; simulated?: boolean }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const key = params.idempotencyKey ?? generateIdempotencyKey('sandbox-topup');
   const { data, error } = await supabase.rpc('aani_sandbox_top_up', {
@@ -355,29 +368,50 @@ export async function topUpSandbox(params: {
     p_simulate_success: params.simulateSuccess ?? true,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل الشحن التجريبي.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; duplicate?: boolean; status?: string; amount?: number; balance?: number; simulated?: boolean };
-  return { ok: result.ok ?? false, duplicate: result.duplicate, status: result.status, amount: result.amount, balance: result.balance, simulated: result.simulated };
+  const result = data as {
+    ok: boolean;
+    duplicate?: boolean;
+    status?: string;
+    amount?: number;
+    balance?: number;
+    simulated?: boolean;
+  } | null;
+  return {
+    ok: result?.ok ?? false,
+    duplicate: result?.duplicate,
+    status: result?.status,
+    amount: result?.amount,
+    balance: result?.balance,
+    simulated: result?.simulated,
+    error: null,
+  };
 }
 
 /** استرداد تجريبي (مؤسس فقط). */
 export async function refundSandboxTopUp(params: {
   topUpId: string;
   reason: string;
-}): Promise<{ ok: boolean; status?: string; amount?: number; userId?: string; error?: string }> {
+}): Promise<SandboxMutationResult & { status?: string; amount?: number; userId?: string }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const { data, error } = await supabase.rpc('aani_sandbox_refund_top_up', {
     p_top_up_id: params.topUpId,
     p_reason: params.reason,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل الاسترداد التجريبي.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; status?: string; amount?: number; user_id?: string };
-  return { ok: result.ok ?? false, status: result.status, amount: result.amount, userId: result.user_id };
+  const result = data as { ok: boolean; status?: string; amount?: number; user_id?: string } | null;
+  return {
+    ok: result?.ok ?? false,
+    status: result?.status,
+    amount: result?.amount,
+    userId: result?.user_id,
+    error: null,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -388,19 +422,18 @@ export async function refundSandboxTopUp(params: {
 export async function fetchSandboxSubscriptions(params: {
   userId: string;
   all?: boolean;
-}): Promise<SandboxSubscription[]> {
-  if (!supabaseConfigured) return [];
+}): Promise<SandboxReadResult<SandboxSubscription[]>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
   let q = supabase
     .from('sandbox.subscriptions')
     .select('id, user_id, package_id, status, started_at, ended_at, renewed_at, cancelled_at, auto_renew, coins_charged')
     .order('started_at', { ascending: false });
   if (!params.all) q = q.eq('user_id', params.userId);
   const { data, error } = await q;
-  if (error) {
-    console.warn('[sandbox] تعذر جلب الاشتراكات التجريبية:', error);
-    return [];
-  }
-  return (data ?? []) as SandboxSubscription[];
+  if (error) return { data: null, error };
+  return { data: (data ?? []) as SandboxSubscription[], error: null };
 }
 
 /** تفعيل اشتراك تجريبي (خصم عملات تجريبية). */
@@ -408,9 +441,9 @@ export async function activateSandboxSubscription(params: {
   userId: string;
   packageId: string;
   idempotencyKey?: string;
-}): Promise<{ ok: boolean; coinsCharged?: number; balance?: number; error?: string }> {
+}): Promise<SandboxMutationResult & { coinsCharged?: number; balance?: number }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const key = params.idempotencyKey ?? generateIdempotencyKey('sandbox-sub');
   const { data, error } = await supabase.rpc('aani_sandbox_activate_subscription', {
@@ -419,43 +452,56 @@ export async function activateSandboxSubscription(params: {
     p_idempotency_key: key,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل تفعيل الاشتراك التجريبي.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; coins_charged?: number; balance?: number };
-  return { ok: result.ok ?? false, coinsCharged: result.coins_charged, balance: result.balance };
+  const result = data as { ok: boolean; coins_charged?: number; balance?: number } | null;
+  return {
+    ok: result?.ok ?? false,
+    coinsCharged: result?.coins_charged,
+    balance: result?.balance,
+    error: null,
+  };
 }
 
 /** إلغاء اشتراك تجريبي. */
 export async function cancelSandboxSubscription(params: {
   subscriptionId: string;
-}): Promise<{ ok: boolean; error?: string }> {
+}): Promise<SandboxMutationResult> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const { data, error } = await supabase.rpc('aani_sandbox_cancel_subscription', {
     p_subscription_id: params.subscriptionId,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل إلغاء الاشتراك التجريبي.' };
+    return { ok: false, error };
   }
-  return { ok: Boolean((data as { ok?: boolean }).ok) };
+  return { ok: Boolean((data as { ok?: boolean } | null)?.ok), error: null };
 }
 
 /** تجديد اشتراك تجريبي. */
 export async function renewSandboxSubscription(params: {
   subscriptionId: string;
-}): Promise<{ ok: boolean; coinsCharged?: number; balance?: number; error?: string }> {
+  idempotencyKey?: string;
+}): Promise<SandboxMutationResult & { coinsCharged?: number; balance?: number }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
+  const key = params.idempotencyKey ?? generateIdempotencyKey('sandbox-renew');
   const { data, error } = await supabase.rpc('aani_sandbox_renew_subscription', {
     p_subscription_id: params.subscriptionId,
+    p_idempotency_key: key,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل تجديد الاشتراك التجريبي.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; coins_charged?: number; balance?: number };
-  return { ok: result.ok ?? false, coinsCharged: result.coins_charged, balance: result.balance };
+  const result = data as { ok: boolean; coins_charged?: number; balance?: number } | null;
+  return {
+    ok: result?.ok ?? false,
+    coinsCharged: result?.coins_charged,
+    balance: result?.balance,
+    error: null,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -466,19 +512,18 @@ export async function renewSandboxSubscription(params: {
 export async function fetchSandboxPromotions(params: {
   userId: string;
   all?: boolean;
-}): Promise<SandboxPromotion[]> {
-  if (!supabaseConfigured) return [];
+}): Promise<SandboxReadResult<SandboxPromotion[]>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
   let q = supabase
     .from('sandbox.promotions')
     .select('id, user_id, package_id, target_type, target_id, status, started_at, ends_at, coins_deducted, failure_reason, created_at')
     .order('created_at', { ascending: false });
   if (!params.all) q = q.eq('user_id', params.userId);
   const { data, error } = await q;
-  if (error) {
-    console.warn('[sandbox] تعذر جلب حملات الترويج التجريبية:', error);
-    return [];
-  }
-  return (data ?? []) as SandboxPromotion[];
+  if (error) return { data: null, error };
+  return { data: (data ?? []) as SandboxPromotion[], error: null };
 }
 
 /** إنشاء حملة ترويج تجريبية (خصم عملات تجريبية). */
@@ -488,9 +533,9 @@ export async function createSandboxPromotion(params: {
   targetType: 'post' | 'reel';
   targetId: string;
   idempotencyKey?: string;
-}): Promise<{ ok: boolean; coinsDeducted?: number; balance?: number; error?: string }> {
+}): Promise<SandboxMutationResult & { coinsDeducted?: number; balance?: number }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const key = params.idempotencyKey ?? generateIdempotencyKey('sandbox-promo');
   const { data, error } = await supabase.rpc('aani_sandbox_create_promotion', {
@@ -501,10 +546,15 @@ export async function createSandboxPromotion(params: {
     p_idempotency_key: key,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل إنشاء الحملة التجريبية.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; coins_deducted?: number; balance?: number };
-  return { ok: result.ok ?? false, coinsDeducted: result.coins_deducted, balance: result.balance };
+  const result = data as { ok: boolean; coins_deducted?: number; balance?: number } | null;
+  return {
+    ok: result?.ok ?? false,
+    coinsDeducted: result?.coins_deducted,
+    balance: result?.balance,
+    error: null,
+  };
 }
 
 /** إنهاء / فشل حملة ترويج تجريبية. */
@@ -512,9 +562,9 @@ export async function endSandboxPromotion(params: {
   promotionId: string;
   success?: boolean;
   failureReason?: string;
-}): Promise<{ ok: boolean; status?: string; error?: string }> {
+}): Promise<SandboxMutationResult & { status?: string }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const { data, error } = await supabase.rpc('aani_sandbox_end_promotion', {
     p_promotion_id: params.promotionId,
@@ -522,10 +572,10 @@ export async function endSandboxPromotion(params: {
     p_failure_reason: params.failureReason ?? null,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل إنهاء الحملة التجريبية.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; status?: string };
-  return { ok: result.ok ?? false, status: result.status };
+  const result = data as { ok: boolean; status?: string } | null;
+  return { ok: result?.ok ?? false, status: result?.status, error: null };
 }
 
 /* ------------------------------------------------------------------ */
@@ -538,9 +588,9 @@ export async function grantSandboxCoins(params: {
   amount: number;
   reason: string;
   idempotencyKey?: string;
-}): Promise<{ ok: boolean; duplicate?: boolean; amount?: number; balance?: number; error?: string }> {
+}): Promise<SandboxMutationResult & { amount?: number; balance?: number }> {
   if (!supabaseConfigured) {
-    return { ok: false, error: 'اتصال قاعدة البيانات غير متاح.' };
+    return { ok: false, error: new Error('اتصال قاعدة البيانات غير متاح.') };
   }
   const key = params.idempotencyKey ?? generateIdempotencyKey('sandbox-grant');
   const { data, error } = await supabase.rpc('aani_sandbox_grant_coins', {
@@ -550,10 +600,16 @@ export async function grantSandboxCoins(params: {
     p_reason: params.reason,
   });
   if (error) {
-    return { ok: false, error: (error as { message?: string }).message ?? 'فشل منح العملات التجريبية.' };
+    return { ok: false, error };
   }
-  const result = data as { ok: boolean; duplicate?: boolean; amount?: number; balance?: number };
-  return { ok: result.ok ?? false, duplicate: result.duplicate, amount: result.amount, balance: result.balance };
+  const result = data as { ok: boolean; duplicate?: boolean; amount?: number; balance?: number } | null;
+  return {
+    ok: result?.ok ?? false,
+    duplicate: result?.duplicate,
+    amount: result?.amount,
+    balance: result?.balance,
+    error: null,
+  };
 }
 
 /** سجل إجراءات المسؤول (تدقيق). pass `all: true` للمسؤول عبر RLS. */
@@ -562,8 +618,10 @@ export async function fetchSandboxAdminActions(params: {
   pageSize?: number;
   actorId?: string;
   all?: boolean;
-}): Promise<{ items: SandboxAdminAction[]; hasMore: boolean }> {
-  if (!supabaseConfigured) return { items: [], hasMore: false };
+}): Promise<SandboxListResult<SandboxAdminAction>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح'), hasMore: false };
+  }
   const pageSize = params.pageSize ?? 50;
   const from = params.page * pageSize;
   let q = supabase
@@ -572,32 +630,30 @@ export async function fetchSandboxAdminActions(params: {
     .order('created_at', { ascending: false })
     .range(from, from + pageSize);
   if (params.actorId) q = q.eq('actor_user_id', params.actorId);
-  if (!params.all && !params.actorId) return { items: [], hasMore: false };
-  const { data, error } = await q;
-  if (error) {
-    console.warn('[sandbox] تعذر جلب إجراءات المسؤول:', error);
-    return { items: [], hasMore: false };
+  if (!params.all && !params.actorId) {
+    return { data: [], error: null, hasMore: false };
   }
+  const { data, error } = await q;
+  if (error) return { data: null, error, hasMore: false };
   const rows = (data ?? []) as SandboxAdminAction[];
   const hasMore = rows.length > pageSize;
-  return { items: hasMore ? rows.slice(0, -1) : rows, hasMore };
+  return { data: hasMore ? rows.slice(0, -1) : rows, error: null, hasMore };
 }
 
 /** استردادات المستخدم (للعرض). pass `all: true` للمسؤول عبر RLS. */
 export async function fetchSandboxRefunds(params: {
   userId: string;
   all?: boolean;
-}): Promise<SandboxRefund[]> {
-  if (!supabaseConfigured) return [];
+}): Promise<SandboxReadResult<SandboxRefund[]>> {
+  if (!supabaseConfigured) {
+    return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
   let q = supabase
     .from('sandbox.refunds')
     .select('id, top_up_id, user_id, amount, reason, created_at')
     .order('created_at', { ascending: false });
   if (!params.all) q = q.eq('user_id', params.userId);
   const { data, error } = await q;
-  if (error) {
-    console.warn('[sandbox] تعذر جلب الاستردادات التجريبية:', error);
-    return [];
-  }
-  return (data ?? []) as SandboxRefund[];
+  if (error) return { data: null, error };
+  return { data: (data ?? []) as SandboxRefund[], error: null };
 }
