@@ -87,6 +87,9 @@ export default function PopularityGiftsSheet({
   const [attempt, setAttempt] = useState<SendAttempt | null>(null);
   const sending = attempt?.status === 'sending';
 
+  // عملية شحن الرصيد معطلة إلى حين تكامل مزود دفع فعّال من جهة الخادم.
+  // لا يُسمح بإدخال مبلغ أو مرجع دفع أو مزود من واجهة المستخدم؛ لا يُضاف أي رصيد.
+
   const {
     dragOffset,
     dragging,
@@ -241,12 +244,17 @@ export default function PopularityGiftsSheet({
   };
 
   const onRecharge = () => {
-    // وظيفة الشحن غير مفعّلة فعلياً في الخادم: رسالة واضحة دون مساس بالرصيد.
-    toast.info('خدمة الشحن غير متاحة حالياً.');
+    // عملية الشحن معطلة إلى حين تكامل مزود دفع فعّال من جهة الخادم.
+    // لا يُضف أي رصيد، ولا يُستدعى أي مسار شحن من واجهة المستخدم.
+    toast.info('خدمة شحن الرصيد غير متاحة حالياً.');
   };
 
   const onEarnFree = () => {
-    // وظيفة مشاهدة الإعلان/الربح المجاني غير مفعّلة فعلياً: رسالة واضحة دون مساس بالرصيد.
+    // لا يوجد مزود إعلانات مكافأة متكامل في المشروع: لا تُمنح عملات وهمية
+    // ولا يُ Claim أن مشاهدة إعلان تعمل. قبل تفعيل هذه الميزة، يجب:
+    //   1. اختيار مزود إعلانات مكافأة (مثلاً AdMob rewarded ads).
+    //   2. إضافة مسار خادم آمن يتحقق من اكتمال مشاهدة الإعلان ويمنع التكرار/التزوير.
+    //   3. إضافة دالة RPC تمنح العملات فقط بعد التحقق من جهة الخادم.
     toast.info('خدمة الربح المجاني غير متاحة حالياً.');
   };
 
@@ -469,22 +477,21 @@ export default function PopularityGiftsSheet({
             {/* زر الشحن على اليمين (بداية الصف في اتجاه RTL) */}
             <button
               type="button"
-              disabled={sending}
+              disabled
               onClick={onRecharge}
-              style={{ background: 'linear-gradient(135deg, #F59E0B, #D97706)' }}
-              className="flex flex-col items-center gap-1 justify-center rounded-lg px-3 py-2 text-white font-semibold shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              title="خدمة الشحن غير متاحة حتى اكتمال تكامل مزود دفع حقيقي"
+              style={{ background: 'linear-gradient(135deg, #52525b, #3f3f46)' }}
+              className="flex flex-col items-center gap-1 justify-center rounded-lg px-3 py-2 text-white/60 font-semibold shadow-sm opacity-50 cursor-not-allowed"
             >
               <div className="flex items-center gap-1.5">
-                <span className="w-5 h-5 rounded bg-white flex items-center justify-center">
-                  <Plus size={10} className="text-[#F59E0B]" />
+                <span className="w-5 h-5 rounded bg-white/20 flex items-center justify-center">
+                  <Plus size={10} className="text-white/60" />
                 </span>
                 <span className="text-sm leading-none">شحن</span>
               </div>
-              {balance > 0 && (
-                <span className="text-[11px] leading-none text-[#FDE6A2]">
-                  رصيدك: {balance} عملة
-                </span>
-              )}
+              <span className="text-[10px] leading-none text-white/50">
+                خدمة الشحن غير متاحة
+              </span>
             </button>
 
             {/* زر الربح المجاني على اليسار */}
