@@ -329,6 +329,8 @@ export default function ProfilePage({
   const [avatarCropFile, setAvatarCropFile] = useState<File | null>(null);
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
+  // تجهيز صورة (فك HEIC/تحويل) جارٍ: يمنع الحفظ وإغلاق شاشة التعديل حتى ينتهي.
+  const [avatarProcessing, setAvatarProcessing] = useState(false);
   const [coverPosition, setCoverPosition] = useState<CoverPosition>({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
   const [nameDraft, setNameDraft] = useState(person?.full_name || person?.display_name || '');
   const [usernameDraft, setUsernameDraft] = useState(person?.username || '');
@@ -346,6 +348,16 @@ export default function ProfilePage({
   const coverImageRef = useRef<HTMLImageElement>(null);
   const coverPanGestureRef = useRef<CoverPanGesture | null>(null);
   const temporaryPreviewUrlsRef = useRef(new Set<string>());
+  // رقم آخر اختيار صورة: نتيجة أي اختيار أقدم تُهمل ولا تفتح قصاصة ولا تستبدل المعاينة.
+  const avatarPickRequestRef = useRef(0);
+
+  // إغلاق شاشة التعديل يُبطل أي تجهيز صورة جارٍ، فلا تُفتح قصاصة بعد الإغلاق.
+  useEffect(() => {
+    if (isEditingProfile) return;
+    avatarPickRequestRef.current += 1;
+    setAvatarProcessing(false);
+    setAvatarCropFile(null);
+  }, [isEditingProfile]);
   const [, setLocation] = useLocation();
 
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
@@ -1062,6 +1074,14 @@ export default function ProfilePage({
 
   const cancelProfileEditing = () => {
     if (!person) return;
+    // لا إغلاق أثناء تجهيز الصورة: قد تُفتح القصاصة بعد اختفاء شاشة التعديل.
+    if (avatarProcessing) {
+      toast.error('انتظر انتهاء تجهيز الصورة قبل إغلاق التعديل.');
+      return;
+    }
+    // إلغاء صريح: أي تجهيز جارٍ يُهمل، وأي قصاصة مفتوحة تُغلق.
+    avatarPickRequestRef.current += 1;
+    setAvatarProcessing(false);
     setNameDraft(person.full_name || person.display_name || '');
     setUsernameDraft(person.username || '');
     setBioDraft(person.bio || '');
@@ -1282,14 +1302,22 @@ export default function ProfilePage({
     }
 
     // معاينة فورية داخل دائرة الصورة، والقصاصة الدائرية تُفتح فوقها مباشرة.
+    // رقم هذا الاختيار: اختيار أحدث يلغيه فلا يُفتح له قصاصة ولا يستبدل المعاينة.
+    const pickId = avatarPickRequestRef.current + 1;
+    avatarPickRequestRef.current = pickId;
     setImagePreview('avatar', URL.createObjectURL(file));
+    setAvatarProcessing(true);
     try {
       // HEIC/HEIF تُحوَّل إلى JPEG قبل القص حتى يعمل تصدير canvas على iPhone.
       const prepared = await normalizePickedImage(file);
+      if (avatarPickRequestRef.current !== pickId) return;
       setAvatarCropFile(prepared);
     } catch (error) {
+      if (avatarPickRequestRef.current !== pickId) return;
       restoreAvatarPreviewAfterCancel();
       toast.error(error instanceof Error ? error.message : 'تعذر تجهيز الصورة. جرّب صورة أخرى.');
+    } finally {
+      if (avatarPickRequestRef.current === pickId) setAvatarProcessing(false);
     }
   };
 
@@ -1334,6 +1362,10 @@ export default function ProfilePage({
   const saveProfileEdits = async () => {
     if (!own || !person || !isEditingProfile || profileSaving) return;
     // لا حفظ قبل اعتماد القصاصة: الصورة المختارة لا تُرفع إلا بعد «تم» في القص.
+    if (avatarProcessing) {
+      toast.error('انتظر انتهاء تجهيز الصورة قبل الحفظ.');
+      return;
+    }
     if (avatarCropFile) {
       toast.error('اعتمد قصاصة الصورة الشخصية أو ألغِها قبل الحفظ.');
       return;
@@ -1620,9 +1652,9 @@ export default function ProfilePage({
             }}
           >
             <header className="profile-edit-header">
-              <button type="button" className="profile-edit-cancel" onClick={cancelProfileEditing} disabled={profileSaving}>إلغاء</button>
+              <button type="button" className="profile-edit-cancel" onClick={cancelProfileEditing} disabled={profileSaving || avatarProcessing}>إلغاء</button>
               <h2 id="profile-edit-title">تعديل الملف الشخصي</h2>
-              <button type="submit" className="profile-edit-save" disabled={profileSaving}>{profileSaving ? 'جارٍ الحفظ…' : 'حفظ'}</button>
+              <button type="submit" className="profile-edit-save" disabled={profileSaving || avatarProcessing}>{profileSaving ? 'جارٍ الحفظ…' : avatarProcessing ? 'جارٍ تجهيز الصورة…' : 'حفظ'}</button>
             </header>
             <div className="profile-edit-scroll">
               <div
