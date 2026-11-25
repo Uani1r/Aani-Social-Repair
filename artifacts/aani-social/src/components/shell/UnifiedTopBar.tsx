@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type TouchEvent as ReactTouchEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type TouchEvent as ReactTouchEvent } from 'react';
 import { Link } from 'wouter';
 import { Bell, Plus, Settings } from 'lucide-react';
 
@@ -8,7 +8,12 @@ type UnifiedTopBarProps = {
   /** إظهار زر «الأشخاص القريبون» — الشاشة الرئيسية فقط */
   showNearbyButton: boolean;
   onOpenNearby: () => void;
-  stories?: ReactNode;
+  /**
+   * هل يُعرض شريط القصص داخل هذا الشريط؟ الشريط يُحجز هنا كموضع عرض فقط:
+   * StoriesBar يبقى مُركَّباً دائماً في مستضيفه داخل Shell ويُرسل شريطه هنا
+   * عبر بوابة، فلا تتوقف دورة حياة عارض القصص على ظهور هذا الشريط.
+   */
+  showStories?: boolean;
   showSettingsButton: boolean;
   onOpenSettings: () => void;
   onOpenNotifications: () => void;
@@ -47,7 +52,7 @@ export default function UnifiedTopBar({
   unreadCount,
   showNearbyButton,
   onOpenNearby,
-  stories,
+  showStories,
   showSettingsButton,
   onOpenSettings,
   onOpenNotifications,
@@ -71,7 +76,7 @@ export default function UnifiedTopBar({
   };
 
   const handleRefreshTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
-    if (!stories || hidden || refreshBusyRef.current || event.touches.length !== 1) return;
+    if (!showStories || hidden || refreshBusyRef.current || event.touches.length !== 1) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('button, a, input, textarea, select, [role="dialog"], [contenteditable="true"], .unified-story-item')) return;
 
@@ -155,7 +160,7 @@ export default function UnifiedTopBar({
         onTouchEndCapture={handleRefreshTouchEnd}
         onTouchCancelCapture={handleRefreshTouchCancel}
       >
-        {stories && (
+        {showStories && (
           <div
             className={`refresh-zone${refreshPhase === 'idle' ? '' : ` ${refreshPhase}`}`}
             role={refreshPhase === 'loading' ? 'status' : undefined}
@@ -253,9 +258,11 @@ export default function UnifiedTopBar({
             </button>
           </div>
         </header>
-        {stories}
+        {/* موضع شريط القصص: StoriesBar يُرسل شريطه هنا عبر بوابة، فيبقى هو
+            نفسه مُركَّباً في كل الصفحات مع عارضه بدل أن يختفي مع هذا الشريط. */}
+        {showStories && <div id="unified-stories-slot" className="unified-stories-slot" />}
       </div>
-      <div className={`unified-top-bar-spacer${stories ? ' has-stories' : ''}`} aria-hidden="true" />
+      <div className={`unified-top-bar-spacer${showStories ? ' has-stories' : ''}`} aria-hidden="true" />
     </>
   );
 }

@@ -2471,6 +2471,14 @@ body.aani-immersive .unified-top-bar {
   height: calc(189px + env(safe-area-inset-top));
 }
 
+/* مستضيف شريط القصص وعارضها: يبقى مُركَّباً في كل الصفحات (الرئيسية، الملف
+   الشخصي، الرسائل...) فلا تتوقف دورة حياة عارض الستوري على ظهور الشريط العلوي.
+   display: contents يمنع إنشاء صندوق إضافي فلا يتغيّر تخطيط الصفحة أو الشريط. */
+.story-viewer-host,
+.unified-stories-slot {
+  display: contents;
+}
+
 
 
 .refresh-zone {
