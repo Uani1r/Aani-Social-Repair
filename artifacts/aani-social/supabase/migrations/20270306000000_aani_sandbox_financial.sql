@@ -825,6 +825,14 @@ begin
     if v_target_owner <> p_user_id then
       raise exception 'not the owner of the target post' using errcode='42501';
     end if;
+  elsif p_target_type = 'reel' then
+    select user_id into v_target_owner from public.posts where id = p_target_id and type = 'reel';
+    if not found then raise exception 'target reel not found' using errcode='42704'; end if;
+    if v_target_owner <> p_user_id then
+      raise exception 'not the owner of the target reel' using errcode='42501';
+    end if;
+  else
+    raise exception 'invalid target type' using errcode='22023';
   end if;
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;

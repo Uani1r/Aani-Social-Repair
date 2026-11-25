@@ -18,6 +18,7 @@ import {
   cancelSandboxSubscription,
   renewSandboxSubscription,
   createSandboxPromotion,
+  generateIdempotencyKey,
   endSandboxPromotion,
   type SandboxLedgerEntry,
   type SandboxTopUp,
@@ -70,6 +71,10 @@ export default function AdminSandbox() {
   const [grantReason, setGrantReason] = useState('منح تجريبي عبر لوحة الإدارة');
 
   const mounted = useRef(true);
+  const grantKeyRef = useRef<string | null>(null);
+  const subKeyRef = useRef<string | null>(null);
+  const renewKeyRef = useRef<Record<string,string>>({});
+  const promoKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -181,9 +186,11 @@ export default function AdminSandbox() {
   }
 
   const handleGrant = async () => {
-    const res = await grantSandboxCoins({ userId: grantUserId, amount: grantAmount, reason: grantReason });
+    if (!grantKeyRef.current) grantKeyRef.current = generateIdempotencyKey('sandbox-grant');
+    const res = await grantSandboxCoins({ userId: grantUserId, amount: grantAmount, reason: grantReason, idempotencyKey: grantKeyRef.current });
     if (res.ok) {
       toast.success(`تم منح ${res.amount} عملة تجريبية`);
+      grantKeyRef.current = null;
       setGrantUserId('');
       setGrantAmount(100);
       setGrantReason('منح تجريبي عبر لوحة الإدارة');
@@ -208,8 +215,10 @@ export default function AdminSandbox() {
       toast.error('معرف المستخدم مطلوب لتفعيل الاشتراك');
       return;
     }
-    const res = await activateSandboxSubscription({ userId: subUserId, packageId });
+    if (!subKeyRef.current) subKeyRef.current = generateIdempotencyKey('sandbox-sub');
+    const res = await activateSandboxSubscription({ userId: subUserId, packageId, idempotencyKey: subKeyRef.current });
     if (res.ok) {
+      subKeyRef.current = null;
       toast.success('تم تفعيل الاشتراك التجريبي');
       void refresh();
     } else {
@@ -228,8 +237,10 @@ export default function AdminSandbox() {
   };
 
   const handleRenewSub = async (subscriptionId: string) => {
-    const res = await renewSandboxSubscription({ subscriptionId });
+    if (!renewKeyRef.current[subscriptionId]) renewKeyRef.current[subscriptionId] = generateIdempotencyKey('sandbox-renew');
+    const res = await renewSandboxSubscription({ subscriptionId, idempotencyKey: renewKeyRef.current[subscriptionId] });
     if (res.ok) {
+      delete renewKeyRef.current[subscriptionId];
       toast.success('تم تجديد الاشتراك التجريبي');
       void refresh();
     } else {
@@ -246,8 +257,10 @@ export default function AdminSandbox() {
       toast.error('معرف الهدف (المنشور/الريل) مطلوب لإنشاء الحملة');
       return;
     }
-    const res = await createSandboxPromotion({ userId: promoUserId, packageId, targetType, targetId: promoTargetId });
+    if (!promoKeyRef.current) promoKeyRef.current = generateIdempotencyKey('sandbox-promo');
+    const res = await createSandboxPromotion({ userId: promoUserId, packageId, targetType, targetId: promoTargetId, idempotencyKey: promoKeyRef.current });
     if (res.ok) {
+      promoKeyRef.current = null;
       toast.success('تم إنشاء الحملة الترويجية التجريبية');
       void refresh();
     } else {
