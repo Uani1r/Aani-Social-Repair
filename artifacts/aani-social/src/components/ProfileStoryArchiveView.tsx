@@ -24,6 +24,8 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
   const [stories, setStories] = useState<StoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // تنبيه غير مُفشل: يُعرض مع الأرشيف حين يتجاوز عدد القصص سقف العرض.
+  const [notice, setNotice] = useState<string | null>(null);
   const [selectedStory, setSelectedStory] = useState<StoryRow | null>(null);
   const [progress, setProgress] = useState(0);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
@@ -53,18 +55,16 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
 
     setLoading(true);
     setError(null);
+    setNotice(null);
     try {
       const archivedStories: StoryRow[] = [];
       const seenStoryIds = new Set<string>();
       const pageSize = 100;
-      // حد أمان أعلى: 50 صفحة × 100 = 5000 قصة. يمنع حلقة بلا نهاية إن تجاهل
-      // الخادم p_offset أو أعاد الصفحة نفسها، بدل تعليق الشاشة إلى الأبد.
-      const maxPages = 50;
+      // سقف العرض: 5000 قصة (50 صفحة × 100). لا تُطلب صفحة 51 كاملة أبداً.
+      const maxStories = 5000;
       let offset = 0;
-      for (let pageIndex = 0; ; pageIndex += 1) {
-        if (pageIndex >= maxPages) {
-          throw new Error('توقف تحميل الأرشيف عند الحد الأقصى للصفحات؛ قد تكون بعض القصص القديمة غير ظاهرة.');
-        }
+
+      while (true) {
         const { data, error: archiveError } = await supabase.rpc('aani_get_my_story_archive', {
           p_limit: pageSize,
           p_offset: offset,
@@ -82,13 +82,39 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
           archivedStories.push(story);
           newStories += 1;
         }
+
         if (page.length < pageSize) break;
         // صفحة كاملة بلا قصة جديدة = الخادم لا يحترم p_offset: نوقف بخطأ واضح
         // بدل عرض أرشيف ناقص كأنه كامل.
         if (newStories === 0) {
           throw new Error('أعاد الخادم صفحة بلا قصص جديدة؛ تحقق من دعم p_offset في aani_get_my_story_archive.');
         }
+
         offset += page.length;
+
+        if (archivedStories.length < maxStories) continue;
+
+        // بلغنا السقف بصفحة كاملة (5000 بالضبط أو أكثر): نتحقق من الصفحة التالية
+        // بصف واحد فقط بدل طلب صفحة كاملة إضافية. صفحة فارغة = لا شيء بعد السقف،
+        // فلا يظهر خطأ حد أقصى زائفاً عند 5000 قصة بالضبط.
+        const { data: nextPageData, error: nextPageError } = await supabase.rpc('aani_get_my_story_archive', {
+          p_limit: 1,
+          p_offset: offset,
+        });
+        if (requestId !== requestIdRef.current) return;
+        if (nextPageError) {
+          // فشل التحقق لا يُفشل العرض: 5000 قصة معروضة بالفعل؛ يُسجَّل الخطأ فقط.
+          console.warn('[profile archive] تعذر التحقق من الصفحة التالية بعد السقف:', nextPageError);
+          break;
+        }
+        const nextPage = (nextPageData ?? []) as unknown[];
+        const hasMore = nextPage.some(raw => {
+          const story = normalizeStoryRow(raw);
+          return story !== null && story.user_id === userId && !seenStoryIds.has(story.id);
+        });
+        // السقف محفوظ: تُعرض أول 5000، والبقية تُعلَن بالتنبيه لا بخطأ ولا بحذف.
+        if (hasMore) setNotice('يعرض الأرشيف أول 5000 قصة منتهية؛ هناك قصص أقدم لم تُعرض.');
+        break;
       }
 
       const { data: author, error: authorError } = archivedStories.length
@@ -273,6 +299,9 @@ export default function ProfileStoryArchiveView({ userId, onHighlightAdded }: Pr
 
   return (
     <div dir="rtl">
+      {notice && !error && (
+        <p role="status" className="mb-3 rounded-xl border border-amber-700/50 bg-amber-950/25 px-3 py-2 text-[11px] leading-5 text-amber-200">{notice}</p>
+      )}
       {error ? (
         <div role="alert" className="rounded-xl border border-red-900/60 bg-red-950/20 p-4 text-sm text-red-300">
           <p>{error}</p>
