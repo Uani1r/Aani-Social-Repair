@@ -213,7 +213,7 @@ export default function HighlightCoverCropper({ file, onCancel, onSave, title = 
   return (
     <div className="fixed inset-0 z-[2140] flex h-[100dvh] w-screen flex-col overflow-hidden bg-black/80 text-white backdrop-blur-md" dir="rtl" role="dialog" aria-modal="true" aria-label={title}>
       <div
-        className="absolute inset-0 touch-none"
+        className="absolute inset-0 touch-none select-none [-webkit-touch-callout:none]"
         onPointerDown={beginGesture}
         onPointerMove={moveGesture}
         onPointerUp={endGesture}

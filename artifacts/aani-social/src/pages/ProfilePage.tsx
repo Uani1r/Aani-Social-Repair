@@ -47,6 +47,173 @@ type CoverPanGesture = {
   overflowY: number;
 };
 
+// امتدادات الصور المقبولة من iPhone: HEIC/HEIF تصل من الكاميرا/مكتبة الصور،
+// وبعض الاختيارات من «الملفات» تصل بنوع MIME فارغ أو application/octet-stream
+// مع امتداد صورة صحيح فقط.
+const PICKED_IMAGE_EXTENSION = /\.(jpe?g|png|webp|heic|heif|gif|avif)$/i;
+const IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
+const HEIC_MIME = /^image\/(heic|heif|heics|heifs)$/i;
+const GENERIC_BINARY_MIME = /^(application\/(octet-stream|x-octet-stream)|binary\/octet-stream)$/i;
+const JPEG_FILE = /\.jpe?g$/i;
+/** مهلة تجهيز الصورة: لا تُترك الواجهة معلقة بلا نهاية. */
+const PICKED_IMAGE_TIMEOUT_MS = 8_000;
+const PICKED_IMAGE_MAX_SIDE = 1_600;
+
+function hasPickedImageExtension(name: string | undefined): boolean {
+  return PICKED_IMAGE_EXTENSION.test(name || '');
+}
+
+/**
+ * هل الاختيار صورة؟ صورة صريحة (image/*)، أو نوع ثنائي عام/فارغ مع امتداد صورة
+ * معروف. امتدادٌ وحده لا يكفي لنوع غير ثنائي، فلا تُمرَّر ملفات غير صور إلى القص.
+ */
+function isPickedImage(file: File): boolean {
+  const type = (file.type || '').toLowerCase().trim();
+  if (IMAGE_MIME.test(type)) return true;
+  const genericType = !type || GENERIC_BINARY_MIME.test(type);
+  return genericType && hasPickedImageExtension(file.name);
+}
+
+/** اتجاه EXIF لملف JPEG (1 عند غياب EXIF أو تعذّر قراءته) — قراءة فقط، بلا تعديل. */
+async function readJpegExifOrientation(file: File): Promise<number> {
+  const type = (file.type || '').toLowerCase();
+  if (!JPEG_FILE.test(file.name || '') && !/^image\/jpe?g$/.test(type)) return 1;
+  try {
+    const buffer = await file.slice(0, 128 * 1024).arrayBuffer();
+    const view = new DataView(buffer);
+    if (view.byteLength < 4 || view.getUint16(0, false) !== 0xffd8) return 1;
+    let offset = 2;
+    while (offset + 4 <= view.byteLength) {
+      const marker = view.getUint16(offset, false);
+      if ((marker & 0xff00) !== 0xff00) return 1;
+      const length = view.getUint16(offset + 2, false);
+      if (length < 2 || offset + 2 + length > view.byteLength) return 1;
+      const isExif = marker === 0xffe1
+        && length >= 8
+        && view.getUint32(offset + 4, false) === 0x45786966; // "Exif"
+      if (isExif) {
+        const tiff = offset + 10;
+        if (tiff + 8 > view.byteLength) return 1;
+        const littleEndian = view.getUint16(tiff, false) === 0x4949;
+        const ifdStart = tiff + view.getUint32(tiff + 4, littleEndian);
+        if (ifdStart + 2 > view.byteLength) return 1;
+        const count = view.getUint16(ifdStart, littleEndian);
+        for (let index = 0; index < count; index += 1) {
+          const entry = ifdStart + 2 + index * 12;
+          if (entry + 12 > view.byteLength) return 1;
+          if (view.getUint16(entry, littleEndian) !== 0x0112) continue;
+          const value = view.getUint16(entry + 8, littleEndian);
+          return value >= 1 && value <= 8 ? value : 1;
+        }
+        return 1;
+      }
+      offset += 2 + length;
+    }
+  } catch {
+    // ترويسة غير قابلة للقراءة: لا تصحيح، والصورة تبقى كما هي.
+  }
+  return 1;
+}
+
+type DecodedPickedImage = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+  close?: () => void;
+};
+
+/**
+ * فك ترميز الصورة مع اتجاه EXIF: createImageBitmap({ imageOrientation: 'from-image' })
+ * أولاً (بكسلات مستقيمة)، ومسار <img> احتياطي عندما لا يُدعم الخيار أو الصيغة.
+ */
+async function decodePickedImage(file: File): Promise<DecodedPickedImage> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const options = { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions;
+      const bitmap = await createImageBitmap(file, options);
+      if (bitmap.width > 0 && bitmap.height > 0) {
+        return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+      }
+      bitmap.close();
+    } catch {
+      // خيار غير مدعوم أو صيغة غير قابلة للفك هنا: يُجرَّب مسار <img>.
+    }
+  }
+  const objectUrl = URL.createObjectURL(file);
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('تعذر فتح الصورة على هذا الجهاز. اختر صورة JPEG أو PNG.'));
+    };
+    element.src = objectUrl;
+  });
+  return {
+    source: image,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    close: () => URL.revokeObjectURL(objectUrl),
+  };
+}
+
+/**
+ * يجهّز الصورة قبل القص: HEIC/HEIF والثنائي العام وJPEG ذو اتجاه EXIF غير طبيعي
+ * تُحوَّل إلى JPEG مستقيم بلا EXIF، فتتطابق المعاينة مع المصدَّر ولا تتكرر إعادة
+ * الترميز لصورة مستقيمة أصلاً (EXIF = 1 تُمرَّر كما هي).
+ */
+async function normalizePickedImage(file: File): Promise<File> {
+  const type = (file.type || '').toLowerCase();
+  const orientation = await readJpegExifOrientation(file);
+  const needsConversion = HEIC_MIME.test(type)
+    || !type
+    || GENERIC_BINARY_MIME.test(type)
+    || orientation !== 1;
+  if (!needsConversion) return file;
+
+  let timedOut = false;
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => {
+      timedOut = true;
+      reject(new Error('استغرق تجهيز الصورة وقتاً طويلاً. جرّب صورة JPEG أو PNG أصغر.'));
+    }, PICKED_IMAGE_TIMEOUT_MS);
+  });
+
+  // فك ترميز يصل بعد انتهاء المهلة يُغلق موارده بنفسه بدل تسريبها.
+  const decodePromise = decodePickedImage(file);
+  void decodePromise
+    .then(result => { if (timedOut) result.close?.(); })
+    .catch(() => undefined);
+
+  try {
+    const decoded = await Promise.race([decodePromise, timeout]);
+    try {
+      const longest = Math.max(decoded.width, decoded.height) || 1;
+      const scale = Math.min(1, PICKED_IMAGE_MAX_SIDE / longest);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(decoded.width * scale));
+      canvas.height = Math.max(1, Math.round(decoded.height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('تعذر تجهيز الصورة.');
+      context.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          value => value ? resolve(value) : reject(new Error('تعذر تجهيز الصورة.')),
+          'image/jpeg',
+          0.92,
+        );
+      });
+      const baseName = (file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
+      return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+    } finally {
+      decoded.close?.();
+    }
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
+  }
+}
+
 function VerifiedBadge() {
   return (
     <svg className="h-5 w-5 shrink-0 text-[#1D9BF0]" viewBox="0 0 24 24" aria-label="حساب موثّق" role="img">
@@ -274,6 +441,8 @@ export default function ProfilePage({
   const [avatarCropFile, setAvatarCropFile] = useState<File | null>(null);
   const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
   const [pendingCoverFile, setPendingCoverFile] = useState<File | null>(null);
+  // تجهيز صورة (فك HEIC/تحويل) جارٍ: يمنع الحفظ وإغلاق شاشة التعديل حتى ينتهي.
+  const [avatarProcessing, setAvatarProcessing] = useState(false);
   const [coverPosition, setCoverPosition] = useState<CoverPosition>({ x: person?.cover_position_x ?? 50, y: person?.cover_position_y ?? 50 });
   const [nameDraft, setNameDraft] = useState(person?.full_name || person?.display_name || '');
   const [usernameDraft, setUsernameDraft] = useState(person?.username || '');
@@ -291,6 +460,18 @@ export default function ProfilePage({
   const coverImageRef = useRef<HTMLImageElement>(null);
   const coverPanGestureRef = useRef<CoverPanGesture | null>(null);
   const temporaryPreviewUrlsRef = useRef(new Set<string>());
+  // رقم آخر اختيار صورة: نتيجة أي اختيار أقدم تُهمل ولا تفتح قصاصة ولا تستبدل المعاينة.
+  const avatarPickRequestRef = useRef(0);
+  // قفل حفظ متزامن: مرجع لا حالة، فلا يمرّ نقران في الدورة نفسها.
+  const saveInFlightRef = useRef(false);
+
+  // إغلاق شاشة التعديل يُبطل أي تجهيز صورة جارٍ، فلا تُفتح قصاصة بعد الإغلاق.
+  useEffect(() => {
+    if (isEditingProfile) return;
+    avatarPickRequestRef.current += 1;
+    setAvatarProcessing(false);
+    setAvatarCropFile(null);
+  }, [isEditingProfile]);
   const [, setLocation] = useLocation();
 
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
@@ -1007,6 +1188,10 @@ export default function ProfilePage({
 
   const cancelProfileEditing = () => {
     if (!person) return;
+    // الإلغاء متاح دائماً — حتى أثناء تجهيز الصورة: يزيد رقم الطلب فيُبطل أي
+    // نتيجة متأخرة، ويُنزل حالة التجهيز، فلا تُفتح قصاصة بعد إغلاق الشاشة.
+    avatarPickRequestRef.current += 1;
+    setAvatarProcessing(false);
     setNameDraft(person.full_name || person.display_name || '');
     setUsernameDraft(person.username || '');
     setBioDraft(person.bio || '');
@@ -1202,26 +1387,48 @@ export default function ProfilePage({
     else setCoverPreview(url);
   };
 
-  const handleProfileImageSelection = (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
+  // إلغاء القص يعيد المعاينة السابقة: ملف الأفاتار المعتمد إن وُجد، وإلا الصورة المحفوظة.
+  // لا يُعاد استخدام blob قديم لأنه أُبطل عند تبديل المعاينة.
+  const restoreAvatarPreviewAfterCancel = () => {
+    setAvatarCropFile(null);
+    setImagePreview('avatar', pendingAvatarFile ? URL.createObjectURL(pendingAvatarFile) : (person?.avatar_url || null));
+  };
+
+  const handleProfileImageSelection = async (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
     input.value = '';
     if (!file || !own || !isEditingProfile || profileSaving) return;
-    if (!file.type.startsWith('image/')) {
-      toast.error('اختر ملف صورة صالحاً.');
+    if (!isPickedImage(file)) {
+      toast.error('اختر صورة بصيغة JPEG أو PNG أو HEIC.');
       return;
     }
 
-    if (kind === 'avatar') {
-      // عرض معاينة فورية قبل الاقتصاص
-      setImagePreview('avatar', URL.createObjectURL(file));
-      setAvatarCropFile(file);
+    if (kind === 'cover') {
+      setPendingCoverFile(file);
+      setImagePreview('cover', URL.createObjectURL(file));
+      setCoverPosition({ x: 50, y: 50 });
       return;
     }
 
-    setPendingCoverFile(file);
-    setImagePreview('cover', URL.createObjectURL(file));
-    setCoverPosition({ x: 50, y: 50 });
+    // معاينة فورية داخل دائرة الصورة، والقصاصة الدائرية تُفتح فوقها مباشرة.
+    // رقم هذا الاختيار: اختيار أحدث يلغيه فلا يُفتح له قصاصة ولا يستبدل المعاينة.
+    const pickId = avatarPickRequestRef.current + 1;
+    avatarPickRequestRef.current = pickId;
+    setImagePreview('avatar', URL.createObjectURL(file));
+    setAvatarProcessing(true);
+    try {
+      // HEIC/HEIF تُحوَّل إلى JPEG قبل القص حتى يعمل تصدير canvas على iPhone.
+      const prepared = await normalizePickedImage(file);
+      if (avatarPickRequestRef.current !== pickId) return;
+      setAvatarCropFile(prepared);
+    } catch (error) {
+      if (avatarPickRequestRef.current !== pickId) return;
+      restoreAvatarPreviewAfterCancel();
+      toast.error(error instanceof Error ? error.message : 'تعذر تجهيز الصورة. جرّب صورة أخرى.');
+    } finally {
+      if (avatarPickRequestRef.current === pickId) setAvatarProcessing(false);
+    }
   };
 
   const handleCoverPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1263,7 +1470,18 @@ export default function ProfilePage({
   };
 
   const saveProfileEdits = async () => {
+    // مرجع القفل يُفحص قبل أي await وقبل أي عمل غير متزامن.
+    if (saveInFlightRef.current) return;
     if (!own || !person || !isEditingProfile || profileSaving) return;
+    // لا حفظ قبل اعتماد القصاصة: الصورة المختارة لا تُرفع إلا بعد «تم» في القص.
+    if (avatarProcessing) {
+      toast.error('انتظر انتهاء تجهيز الصورة قبل الحفظ.');
+      return;
+    }
+    if (avatarCropFile) {
+      toast.error('اعتمد قصاصة الصورة الشخصية أو ألغِها قبل الحفظ.');
+      return;
+    }
     if (!supabaseConfigured) {
       toast.error('اتصال قاعدة البيانات غير متاح.');
       return;
@@ -1284,6 +1502,8 @@ export default function ProfilePage({
       return;
     }
 
+    // القفل المرجعي يُضبط قبل أول await؛ النقر الثاني في الدورة نفسها يراه ويخرج.
+    saveInFlightRef.current = true;
     setProfileSaving(true);
     const uploadedPaths: string[] = [];
     const normalizedCity = cityDraft.trim() || null;
@@ -1308,23 +1528,20 @@ export default function ProfilePage({
       const uploadPendingImage = async (kind: ProfileImageKind, file: File): Promise<string> => {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
         const path = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
-        // ضغط من جهة العميل: الأفاتار 400×400 < 80KB، الغلاف بعرض أقصى 1200px < 200KB
-        // uploadMedia يرفع إلى ImageKit ويعيد الرابط الحقيقي — نستخدمه مباشرة بدل getPublicUrl
-        // لتجنب تكوين رابط Supabase وهمي إن فشل التسجيل.
-        const imageKitUrl = await uploadMedia({
-          file,
-          path,
-          preset: kind === 'avatar' ? 'avatar' : 'cover',
-        });
-        // التحقق من صحة الرابط المرفوع
-        if (
-          typeof imageKitUrl !== 'string' ||
-          !imageKitUrl.startsWith('https://')
-        ) {
-          throw new Error('لم يتم الحصول على رابط صالح للصورة المرفوعة.');
+        // ضغط من جهة العميل: الأفاتار 320×320 < 80KB (إعداد avatar في mediaCompressor)،
+        // والغلاف بعرض أقصى 1200px < 200KB.
+        // uploadMedia يعيد رابط ImageKit الحقيقي للملف المرفوع — يُحفظ كما هو، ولا
+        // يُشتق بديل عبر getPublicUrl: سجل الروابط في supabase.ts ذاكرة جلسة
+        // واحدة، وقد يعيد رابط Supabase غير موجود لملف رُفع إلى ImageKit.
+        const uploadedUrl = await uploadMedia({ file, path, preset: kind === 'avatar' ? 'avatar' : 'cover' });
+        // لا يُحفظ إلا رابط https حقيقي عاد من خدمة الرفع.
+        if (typeof uploadedUrl !== 'string' || !uploadedUrl.startsWith('https://')) {
+          throw new Error(`لم يُرجِع رفع ${kind === 'avatar' ? 'الصورة الشخصية' : 'الغلاف'} رابطاً صالحاً للملف.`);
         }
         uploadedPaths.push(path);
-        return imageKitUrl;
+        if (kind === 'avatar') patch.avatar_url = uploadedUrl;
+        else patch.cover_url = uploadedUrl;
+        return uploadedUrl;
       };
 
       // رفع الصور وتجميع روابط ImageKit
@@ -1417,8 +1634,13 @@ export default function ProfilePage({
         toast.info('تم حفظ بقية التعديلات، لكن موضع الغلاف لم يُحفظ لعدم توفر أعمدته في قاعدة البيانات.');
       }
     } catch (error) {
-      // الملفات رُفعت إلى ImageKit مباشرة — لا تنظيف في Supabase Storage.
-      // أي ملفات يتيمة في ImageKit تُنظف لاحقاً من جهة الخادم.
+      // فشل الرفع/التحديث: تُعرض الصورة المحفوظة فعلاً في person، وتبقى الملفات
+      // المعلقة لإعادة المحاولة، فلا تظهر الصورة المقترحة كأنها محفوظة.
+      setImagePreview('avatar', person.avatar_url || null);
+      setImagePreview('cover', person.cover_url || null);
+      // لا حذف عبر supabase.storage: الملفات مرفوعة إلى ImageKit لا إلى bucket،
+      // ولا معرّف تخزين لها هنا. كل رفع مسجَّل في Upload Ledger، وكنس اليتامى
+      // على الخادم يحذف ما لا مرجع له بعد فترة السماح.
       console.error('[profile] تعذر حفظ تعديلات الملف الشخصي:', error);
       const saveError = error as { code?: string; message?: string };
       // تجنب رسالة خطأ مكررة إن كان الفشل في الرفع (تم إظهاره أعلاه)
@@ -1436,6 +1658,7 @@ export default function ProfilePage({
       }
       // لا نغلق نافذة التحرير ولا نمسح الصورة المختارة عند الفشل
     } finally {
+      saveInFlightRef.current = false;
       setProfileSaving(false);
     }
   };
@@ -1592,7 +1815,7 @@ export default function ProfilePage({
             <header className="profile-edit-header">
               <button type="button" className="profile-edit-cancel" onClick={cancelProfileEditing} disabled={profileSaving}>إلغاء</button>
               <h2 id="profile-edit-title">تعديل الملف الشخصي</h2>
-              <button type="submit" className="profile-edit-save" disabled={profileSaving}>{profileSaving ? 'جارٍ الحفظ…' : 'حفظ'}</button>
+              <button type="submit" className="profile-edit-save" disabled={profileSaving || avatarProcessing}>{profileSaving ? 'جارٍ الحفظ…' : avatarProcessing ? 'جارٍ تجهيز الصورة…' : 'حفظ'}</button>
             </header>
             <div className="profile-edit-scroll">
               <div
@@ -2673,18 +2896,21 @@ export default function ProfilePage({
             .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0) || a.created_at.localeCompare(b.created_at));
         })}
       />
-      {avatarCropFile && (
+      {avatarCropFile && typeof document !== 'undefined' && createPortal(
         <HighlightCoverCropper
           file={avatarCropFile}
           title="اقتصاص الصورة الشخصية"
           outputSuffix="-avatar"
-          onCancel={() => setAvatarCropFile(null)}
+          onCancel={() => {
+            restoreAvatarPreviewAfterCancel();
+          }}
           onSave={file => {
             setPendingAvatarFile(file);
             setImagePreview('avatar', URL.createObjectURL(file));
             setAvatarCropFile(null);
           }}
-        />
+        />,
+        document.body,
       )}
       {selectedHighlightCollection && (
         <ProfileHighlightViewer
