@@ -1321,6 +1321,74 @@
   font-size: 10px;
 }
 
+/* معاينة إعادة الترتيب الحية: نفس شبكة Profile ودوائره مع سحب وإفلات مباشر. */
+.profile-reorder-preview {
+  padding: 14px 12px 16px;
+}
+
+.profile-reorder-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 14px 0 8px;
+}
+
+.profile-reorder-section-head h3 {
+  margin: 0;
+}
+
+.profile-reorder-section-head small {
+  color: #8b949e;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.profile-reorder-manage {
+  min-height: 30px;
+  border: 1px solid #333;
+  border-radius: 999px;
+  background: #171717;
+  color: #d4d4d4;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+.profile-reorder-stories {
+  margin-top: 10px;
+  border: 1px solid #252525;
+  border-radius: 16px;
+  padding: 10px 12px;
+  background: #101010;
+}
+
+.profile-reorder-grid {
+  margin-top: 4px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* حالات السحب على أي عنصر في المعاينة (منشور/مجموعة/قصة) بلا تغيير التخطيط. */
+.profile-reorder-preview [data-profile-reorder-kind] {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.profile-reorder-preview [data-profile-reorder-kind].is-dragging {
+  opacity: .55;
+  transform: scale(.94);
+  transition: transform 120ms ease, opacity 120ms ease;
+  box-shadow: 0 0 0 2px #1d9bf0 inset;
+}
+
+.profile-reorder-preview [data-profile-reorder-kind].is-drop-target {
+  box-shadow: 0 0 0 3px #60a5fa inset;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .profile-reorder-toggle,
   .profile-reorder-item {

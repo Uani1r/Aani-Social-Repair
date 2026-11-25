@@ -21,6 +21,7 @@ import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from
 import SavedPostsView from '@/components/SavedPostsView';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
+import { ProfileHighlightStoryStrip, ProfileHighlightsRow, ProfileMediaGrid, type ReorderBinding } from '@/components/profile/ProfileContentPreview';
 import { usePosts } from '@/hooks/usePosts';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
@@ -394,7 +395,8 @@ function formatProfileBirthDate(value?: string | null): string {
   return new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
 }
 
-type ProfileReorderKind = 'highlights' | 'posts';
+// أنواع إعادة الترتيب: المنشورات، مجموعات أبرز القصص، والقصص داخل مجموعة.
+type ProfileReorderKind = 'highlights' | 'posts' | 'stories';
 
 type ProfileReorderGesture = {
   kind: ProfileReorderKind;
@@ -462,6 +464,11 @@ export default function ProfilePage({
   const [showProfileReorder, setShowProfileReorder] = useState(false);
   const [profilePostOrder, setProfilePostOrder] = useState<string[]>([]);
   const [profileReorderSaving, setProfileReorderSaving] = useState(false);
+  // المجموعة المفتوحة داخل شاشة الترتيب لعرض قصصها الداخلية وترتيبها.
+  const [reorderStoriesCollectionId, setReorderStoriesCollectionId] = useState<string | null>(null);
+  const reorderStoriesCollection = reorderStoriesCollectionId
+    ? profileHighlights.find(collection => collection.id === reorderStoriesCollectionId) ?? null
+    : null;
   const [draggingReorderKey, setDraggingReorderKey] = useState<string | null>(null);
   const [dragOverReorderKey, setDragOverReorderKey] = useState<string | null>(null);
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
@@ -1850,6 +1857,52 @@ export default function ProfilePage({
     }
   };
 
+  // ترتيب قصص مجموعة محلياً: نفس قائمة position القادمة من Profile (لا فرز آخر).
+  const applyHighlightStoryOrder = (collectionId: string, orderedIds: string[]) => {
+    setProfileHighlights(current => current.map(collection => {
+      if (collection.id !== collectionId) return collection;
+      const storyById = new Map(collection.stories.map(story => [story.id, story]));
+      return {
+        ...collection,
+        stories: orderedIds.flatMap(id => storyById.has(id) ? [storyById.get(id)!] : []),
+      };
+    }));
+  };
+
+  // حفظ ترتيب القصص داخل مجموعة عبر RPC مستقلة (transaction واحدة في القاعدة)
+  // مع إعادة الترتيب السابق عند الفشل — مستقل عن حفظ بيانات الملف الشخصي.
+  const saveProfileHighlightStoryOrder = async (collectionId: string, nextIds: string[], previousIds: string[]) => {
+    const restorePreviousOrder = () => applyHighlightStoryOrder(collectionId, previousIds);
+    if (!supabaseConfigured) {
+      restorePreviousOrder();
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    setProfileReorderSaving(true);
+    try {
+      const { error } = await supabase.rpc('aani_reorder_profile_highlight_stories', {
+        p_collection_id: collectionId,
+        p_ids: nextIds,
+      });
+      if (error) {
+        restorePreviousOrder();
+        console.error('[profile] تعذر حفظ ترتيب قصص المجموعة:', error);
+        toast.error(error.code === 'PGRST202' || error.code === '42883'
+          ? 'طبّق ترحيل إعادة ترتيب قصص أبرز القصص في Supabase أولاً.'
+          : 'تعذر حفظ ترتيب القصص. حاول مرة أخرى.');
+      } else {
+        toast.success('تم حفظ ترتيب القصص.');
+      }
+    } catch (error) {
+      restorePreviousOrder();
+      console.error('[profile] تعذر حفظ ترتيب قصص المجموعة:', error);
+      toast.error('تعذر حفظ ترتيب القصص. تحقق من الاتصال ثم حاول مرة أخرى.');
+    } finally {
+      setProfileReorderSaving(false);
+    }
+  };
+
   const beginProfileReorder = (event: ReactPointerEvent<HTMLElement>, kind: ProfileReorderKind, id: string) => {
     if (!own || !showProfileReorder || profileReorderSaving) return;
     const previousGesture = profileReorderGestureRef.current;
@@ -1913,6 +1966,19 @@ export default function ProfilePage({
       return;
     }
 
+    if (gesture.kind === 'stories') {
+      const collection = reorderStoriesCollectionId
+        ? profileHighlights.find(item => item.id === reorderStoriesCollectionId) ?? null
+        : null;
+      if (!collection) return;
+      const previousIds = collection.stories.map(story => story.id);
+      const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
+      if (nextIds === previousIds) return;
+      applyHighlightStoryOrder(collection.id, nextIds);
+      void saveProfileHighlightStoryOrder(collection.id, nextIds, previousIds);
+      return;
+    }
+
     const previousIds = orderedEditablePosts.map(post => post.id);
     const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
     if (nextIds === previousIds) return;
@@ -1927,6 +1993,48 @@ export default function ProfilePage({
     profileReorderGestureRef.current = null;
     setDraggingReorderKey(null);
     setDragOverReorderKey(null);
+  };
+
+  // ربط المعاينة الحية بالسحب: نفس المفروز ونفس المعالجات للأنواع الثلاثة.
+  const profileReorderBinding = (kind: ProfileReorderKind): ReorderBinding => ({
+    kind,
+    draggingKey: draggingReorderKey,
+    dropTargetKey: dragOverReorderKey,
+    disabled: profileReorderSaving,
+    begin: beginProfileReorder,
+    move: moveProfileReorderPointer,
+    end: endProfileReorderPointer,
+    cancel: cancelProfileReorderPointer,
+  });
+
+  // فتح منشور الشبكة في عارضه الحالي — نفس سلوك شبكة Profile تماماً.
+  const openProfileGridPost = (post: Post) => {
+    if (profileContentTab === 'videos') {
+      setReelsPlayerSource('videos');
+      setReelsPlayerPostId(post.id);
+    } else if (profileContentTab === 'reposts') {
+      if (isProfileReel(post)) {
+        setReelsPlayerSource('reposts');
+        setReelsPlayerPostId(post.id);
+      } else {
+        setFeedViewerSource('reposts');
+        setFeedViewerPostId(post.id);
+      }
+    } else if (profileContentTab === 'tagged') {
+      if (isProfileReel(post)) {
+        setReelsPlayerSource('tagged');
+        setReelsPlayerPostId(post.id);
+      } else {
+        setFeedViewerSource('tagged');
+        setFeedViewerPostId(post.id);
+      }
+    } else if (isProfileReel(post)) {
+      setReelsPlayerSource('grid');
+      setReelsPlayerPostId(post.id);
+    } else {
+      setFeedViewerSource('grid');
+      setFeedViewerPostId(post.id);
+    }
   };
 
   if (!person) {
@@ -2045,63 +2153,47 @@ export default function ProfilePage({
                 </button>
               </div>
               {showProfileReorder && (
-                <section className="profile-reorder-panel" aria-label="إعادة ترتيب القصص والمنشورات">
-                  <p className="profile-reorder-hint">اضغط مطولاً على عنصر ثم اسحبه إلى موضعه الجديد.</p>
-                  <h3>أبرز القصص</h3>
-                  <div className="profile-reorder-list" role="list">
-                    {profileHighlights.length ? profileHighlights.map(collection => {
-                      const cover = collection.stories[0];
-                      const key = `highlights:${collection.id}`;
-                      return (
-                        <button
-                          key={collection.id}
-                          type="button"
-                          className={`profile-reorder-item${draggingReorderKey === key ? ' is-dragging' : ''}${dragOverReorderKey === key ? ' is-drop-target' : ''}`}
-                          data-profile-reorder-kind="highlights"
-                          data-profile-reorder-id={collection.id}
-                          onPointerDown={event => beginProfileReorder(event, 'highlights', collection.id)}
-                          onPointerMove={moveProfileReorderPointer}
-                          onPointerUp={endProfileReorderPointer}
-                          onPointerCancel={cancelProfileReorderPointer}
-                          disabled={profileReorderSaving}
-                          aria-label={`اضغط مطولاً لإعادة ترتيب أبرز القصص: ${collection.title}`}
-                        >
-                          <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
-                          <span className="profile-reorder-thumb">
-                            {collection.cover_url ? <SignedImage src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <span aria-hidden="true"><Play size={18} /></span> : cover?.media_url ? <SignedImage src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
-                          </span>
-                          <span className="profile-reorder-copy"><strong>{collection.title}</strong><small>{collection.stories.length} قصص</small></span>
-                        </button>
-                      );
-                    }) : <EmptyState className="py-6" />}
+                <section className="profile-reorder-panel profile-reorder-preview" aria-label="إعادة ترتيب القصص والمنشورات">
+                  <p className="profile-reorder-hint">اضغط مطولاً على أي عنصر ثم اسحبه إلى موضعه الجديد — الترتيب يُحفظ فوراً ويظهر في ملفك الشخصي.</p>
+
+                  <div className="profile-reorder-section-head">
+                    <h3>أبرز القصص</h3>
+                    <button type="button" className="profile-reorder-manage" onClick={() => setShowHighlightsManager(true)}>إدارة المجموعات</button>
                   </div>
-                  <h3>المنشورات</h3>
-                  <div className="profile-reorder-list" role="list">
-                    {orderedEditablePosts.length ? orderedEditablePosts.map(post => {
-                      const key = `posts:${post.id}`;
-                      return (
-                        <button
-                          key={post.id}
-                          type="button"
-                          className={`profile-reorder-item${draggingReorderKey === key ? ' is-dragging' : ''}${dragOverReorderKey === key ? ' is-drop-target' : ''}`}
-                          data-profile-reorder-kind="posts"
-                          data-profile-reorder-id={post.id}
-                          onPointerDown={event => beginProfileReorder(event, 'posts', post.id)}
-                          onPointerMove={moveProfileReorderPointer}
-                          onPointerUp={endProfileReorderPointer}
-                          onPointerCancel={cancelProfileReorderPointer}
-                          disabled={profileReorderSaving}
-                          aria-label={`اضغط مطولاً لإعادة ترتيب المنشور: ${post.content || 'منشور وسائط'}`}
-                        >
-                          <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
-                          <span className="profile-reorder-thumb">
-                            {post.type === 'reel' ? getPostCoverUrl(post) ? <SignedImage src={getPostCoverUrl(post)} alt="" /> : <span aria-hidden="true"><Play size={18} /></span> : post.media_url ? <SignedImage src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
-                          </span>
-                          <span className="profile-reorder-copy"><strong>{post.content || 'منشور وسائط'}</strong><small>{new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(post.created_at))}</small></span>
-                        </button>
-                      );
-                    }) : <EmptyState className="py-6" />}
+                  {profileHighlights.length ? (
+                    <ProfileHighlightsRow
+                      collections={profileHighlights}
+                      onSelect={collection => setReorderStoriesCollectionId(collection.id)}
+                      reorder={profileReorderBinding('highlights')}
+                    />
+                  ) : <EmptyState className="py-6" />}
+
+                  {reorderStoriesCollection && (
+                    <div className="profile-reorder-stories" aria-label={`قصص ${reorderStoriesCollection.title}`}>
+                      <div className="profile-reorder-section-head">
+                        <h3>{reorderStoriesCollection.title} — القصص</h3>
+                        <button type="button" className="profile-reorder-manage" onClick={() => setReorderStoriesCollectionId(null)}>إغلاق</button>
+                      </div>
+                      <p className="profile-reorder-hint">اسحب القصص لإعادة ترتيبها داخل المجموعة.</p>
+                      <ProfileHighlightStoryStrip
+                        collection={reorderStoriesCollection}
+                        reorder={profileReorderBinding('stories')}
+                      />
+                    </div>
+                  )}
+
+                  <div className="profile-reorder-section-head">
+                    <h3>المنشورات</h3>
+                    <small>3 أعمدة — نفس شبكة ملفك الشخصي</small>
                   </div>
+                  {orderedEditablePosts.length ? (
+                    <ProfileMediaGrid
+                      posts={orderedEditablePosts}
+                      reorder={profileReorderBinding('posts')}
+                      className="profile-reorder-grid"
+                    />
+                  ) : <EmptyState className="py-6" />}
+
                   {profileReorderSaving && <p className="profile-reorder-saving" role="status">جارٍ حفظ الترتيب…</p>}
                 </section>
               )}
@@ -2788,39 +2880,12 @@ export default function ProfilePage({
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold text-[#F7F9F9]">أبرز القصص</h2>
           </div>
-          <div className="no-scrollbar flex items-center gap-4 overflow-x-auto pb-2">
-            {own && (
-              <button id="openModalBtn" type="button" onClick={() => setShowHighlightsManager(true)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label="إضافة إلى أبرز القصص">
-                <span className="flex h-[68px] w-[68px] items-center justify-center rounded-full border border-dashed border-[#71767B] bg-[#111] text-[#1D9BF0] transition hover:border-[#1D9BF0] hover:bg-[#1D9BF0]/10">
-                  <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                    <path d="M12 5v14M5 12h14" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-                  </svg>
-                </span>
-                <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">إضافة</span>
-              </button>
-            )}
-            {profileHighlights.map(collection => {
-              const cover = collection.stories[0];
-              return (
-                <button key={collection.id} type="button" onClick={() => setSelectedHighlightCollection(collection)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label={`عرض مجموعة ${collection.title}`}>
-                  <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
-                    <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                      {collection.cover_url ? (
-                        <SignedImage src={collection.cover_url} className="h-full w-full object-cover" alt="" />
-                      ) : cover?.media_url && cover.media_type === 'video' ? (
-                        <span className="grid h-full w-full place-items-center text-neutral-400" aria-hidden="true"><Play size={18} /></span>
-                      ) : cover?.media_url ? (
-                        <SignedImage src={cover.media_url} className="h-full w-full object-cover" alt="" />
-                      ) : (
-                        <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{cover?.caption || collection.title}</span>
-                      )}
-                    </span>
-                  </span>
-                  <span className="max-w-[88px] truncate text-[11px] text-[#BBBBBB]">{collection.title}</span>
-                </button>
-              );
-            })}
-          </div>
+          <ProfileHighlightsRow
+            collections={profileHighlights}
+            onSelect={setSelectedHighlightCollection}
+            onAdd={own ? () => setShowHighlightsManager(true) : undefined}
+            addButtonId="openModalBtn"
+          />
         </div>
       )}
 
@@ -2889,104 +2954,11 @@ export default function ProfilePage({
           return <EmptyState className="min-h-64" />;
         }
         return (
-          <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black content-fade-in">
-            {mediaPosts.map(post => {
-              const isReel = post.type === 'reel' || getPostDestination(post) === 'reels';
-              const mediaUrls = post.media_urls?.length ? post.media_urls : post.media_url ? [post.media_url] : [];
-              const cover = mediaUrls[0] || '';
-              // الغلاف المختار عند النشر: صورة خفيفة تُعرض بدل عنصر الفيديو
-              const postCoverUrl = getPostCoverUrl(post);
-              const isMultiImage = mediaUrls.length > 1;
-              return (
-                <button
-                  key={post.id}
-                  type="button"
-                  onClick={() => {
-                    if (profileContentTab === 'videos') {
-                      // من تبويب الفيديوهات: كل الفيديوهات تفتح مشغل
-                      // الريلز الكامل متسلسلاً بين فيديوهات هذا التبويب.
-                      setReelsPlayerSource('videos');
-                      setReelsPlayerPostId(post.id);
-                    } else if (profileContentTab === 'reposts') {
-                      // من تبويب الريبوست: ريلز → مشغل الريلز محصوراً
-                      // بريلوزات الريبوست، وغيرها → التغذية بين ريبوستاته.
-                      if (isProfileReel(post)) {
-                        setReelsPlayerSource('reposts');
-                        setReelsPlayerPostId(post.id);
-                      } else {
-                        setFeedViewerSource('reposts');
-                        setFeedViewerPostId(post.id);
-                      }
-                    } else if (profileContentTab === 'tagged') {
-                      // من تبويب الإشارات: ريلز → مشغل الريلز بين المشار
-                      // فيها، وغيرها (صور/نصوص/فيديو تغذية) → التغذية الكاملة.
-                      if (isProfileReel(post)) {
-                        setReelsPlayerSource('tagged');
-                        setReelsPlayerPostId(post.id);
-                      } else {
-                        setFeedViewerSource('tagged');
-                        setFeedViewerPostId(post.id);
-                      }
-                    } else if (isProfileReel(post)) {
-                      setReelsPlayerSource('grid');
-                      setReelsPlayerPostId(post.id);
-                    } else {
-                      setFeedViewerSource('grid');
-                      setFeedViewerPostId(post.id);
-                    }
-                  }}
-                  aria-label={profileContentTab !== 'posts' || isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
-                  className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
-                >
-                  {isReel ? (
-                    postCoverUrl ? (
-                      <SignedImage
-                        src={thumbnailUrl(postCoverUrl)}
-                        alt={post.content.slice(0, 80)}
-                        loading="lazy"
-                        decoding="async"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : cover ? (
-                      <span className="grid h-full w-full place-items-center text-neutral-400"><Play size={28} aria-hidden="true" /></span>
-                    ) : (
-                      <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>
-                    )
-                  ) : cover ? (
-                    <SignedImage
-                      src={thumbnailUrl(cover)}
-                      alt={post.content.slice(0, 80)}
-                      loading="lazy"
-                      decoding="async"
-                      className="h-full w-full object-cover"
-                    />
-                  ) : post.type === 'text' ? (
-                    <span className="flex h-full w-full items-center justify-center overflow-hidden p-2 text-center text-[11px] leading-5 text-neutral-200">
-                      {post.content?.slice(0, 90) || 'منشور'}
-                    </span>
-                  ) : (
-                    <span className="grid h-full w-full place-items-center text-neutral-600"><Camera size={24} aria-hidden="true" /></span>
-                  )}
-                  {isReel && (
-                    <span aria-hidden="true" className="absolute right-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="4" width="20" height="16" rx="4" /><path d="M10 9.2v5.6a.8.8 0 0 0 1.22.68l4.4-2.8a.8.8 0 0 0 0-1.36l-4.4-2.8A.8.8 0 0 0 10 9.2Z" fill="black" /></svg>
-                    </span>
-                  )}
-                  {profileContentTab === 'reposts' && (
-                    <span aria-hidden="true" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    </span>
-                  )}
-                  {post.type === 'text' && (
-                    <span aria-hidden="true" className="absolute right-2 top-2 z-[2] rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">نص</span>
-                  )}
-                  {isMultiImage && (
-                    <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <ProfileMediaGrid
+            posts={mediaPosts}
+            variant={profileContentTab}
+            onOpenPost={openProfileGridPost}
+          />
         );
       })()}
       {!isPrivateLocked && feedViewerPostId && (feedViewerSource === 'reposts'
