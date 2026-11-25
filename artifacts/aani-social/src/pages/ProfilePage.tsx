@@ -22,7 +22,7 @@ import SavedPostsView from '@/components/SavedPostsView';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
-import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { useSeenStoryIds } from '@/lib/seenStories';
 import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
@@ -1283,7 +1283,6 @@ export default function ProfilePage({
     }
 
     setProfileSaving(true);
-    const uploadedPaths: string[] = [];
     const normalizedCity = cityDraft.trim() || null;
     const patch: Partial<Profile> = {
       full_name: name,
@@ -1306,25 +1305,40 @@ export default function ProfilePage({
       const uploadPendingImage = async (kind: ProfileImageKind, file: File) => {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
         const path = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
-        // ضغط من جهة العميل: الأفاتار 400×400 < 80KB، الغلاف بعرض أقصى 1200px < 200KB
-        await uploadMedia({ file, path, preset: kind === 'avatar' ? 'avatar' : 'cover' });
-        uploadedPaths.push(path);
-        const publicUrl = supabase.storage.from(storageBucket).getPublicUrl(path).data.publicUrl;
-        if (kind === 'avatar') patch.avatar_url = publicUrl;
-        else patch.cover_url = publicUrl;
+        // ضغط من جهة العميل: الأفاتار 400×400 < 80KB، الغلاف بعرض أقصى 1200px < 200KB.
+        // uploadMedia يعيد رابط ImageKit الحقيقي للملف المرفوع — يُحفظ كما هو، ولا
+        // يُشتق بديل عبر getPublicUrl: سجل الروابط في supabase.ts ذاكرة جلسة
+        // واحدة، وقد يعيد رابط Supabase غير موجود لملف رُفع إلى ImageKit.
+        const uploadedUrl = await uploadMedia({ file, path, preset: kind === 'avatar' ? 'avatar' : 'cover' });
+        if (!uploadedUrl) throw new Error(`لم يُرجِع رفع ${kind === 'avatar' ? 'الصورة الشخصية' : 'الغلاف'} رابطاً للملف.`);
+        if (kind === 'avatar') patch.avatar_url = uploadedUrl;
+        else patch.cover_url = uploadedUrl;
       };
 
       if (pendingAvatarFile) await uploadPendingImage('avatar', pendingAvatarFile);
       if (pendingCoverFile) await uploadPendingImage('cover', pendingCoverFile);
 
+      // التحديث يطلب الصف المعدَّل نفسه: بلا select قد ينجح بلا أي صف معدَّل
+      // (جلسة خاطئة أو سياسة تحديث غير مطابقة) فتُعلَن نجاحاً وهمياً.
+      const writeProfile = async (candidate: Partial<Profile>) => supabase
+        .from('profiles')
+        .update(candidate)
+        .eq('id', activeUserId)
+        .select('id, avatar_url, cover_url')
+        .maybeSingle();
+
+      type SavedProfileRow = { id?: string; avatar_url?: string | null; cover_url?: string | null };
       let savedPatch = patch;
-      let { error } = await supabase.from('profiles').update(savedPatch).eq('id', activeUserId);
+      const firstAttempt = await writeProfile(savedPatch);
+      let savedRow = (firstAttempt.data ?? null) as SavedProfileRow | null;
+      let error = firstAttempt.error;
       let coverPositionSaved = true;
       if (error && (error.code === 'PGRST204' || error.code === '42703') && /cover_position_[xy]/i.test(error.message)) {
         const fallbackPatch = { ...patch };
         delete fallbackPatch.cover_position_x;
         delete fallbackPatch.cover_position_y;
-        const retry = await supabase.from('profiles').update(fallbackPatch).eq('id', activeUserId);
+        const retry = await writeProfile(fallbackPatch);
+        savedRow = (retry.data ?? null) as SavedProfileRow | null;
         error = retry.error;
         if (!error) {
           savedPatch = fallbackPatch;
@@ -1332,6 +1346,16 @@ export default function ProfilePage({
         }
       }
       if (error) throw error;
+      // لا يُعلن النجاح إلا بصف واحد عاد من profiles فعلاً.
+      if (!savedRow || savedRow.id !== activeUserId) {
+        throw new Error('لم يُحدَّث أي صف في ملفك الشخصي. تحقق من الجلسة وسياسة تحديث الملف ثم حاول مجدداً.');
+      }
+      if (savedPatch.avatar_url && savedRow.avatar_url !== savedPatch.avatar_url) {
+        throw new Error('لم يُحفظ رابط الصورة الشخصية في profiles.avatar_url كما رُفع.');
+      }
+      if (savedPatch.cover_url && savedRow.cover_url !== savedPatch.cover_url) {
+        throw new Error('لم يُحفظ رابط الغلاف في profiles.cover_url كما رُفع.');
+      }
 
       const updatedProfile = { ...person, ...savedPatch };
       setPerson(updatedProfile);
@@ -1344,23 +1368,24 @@ export default function ProfilePage({
       setShowProfileReorder(false);
       setIsEditingProfile(false);
       setShowProfileMenu(false);
-      uploadedPaths.length = 0;
       if (coverPositionSaved) {
         toast.success('تم حفظ تعديلات الملف الشخصي.');
       } else {
         toast.info('تم حفظ بقية التعديلات، لكن موضع الغلاف لم يُحفظ لعدم توفر أعمدته في قاعدة البيانات.');
       }
     } catch (error) {
-      if (uploadedPaths.length) {
-        const { error: cleanupError } = await supabase.storage.from(storageBucket).remove(uploadedPaths);
-        if (cleanupError) console.warn('[profile] تعذر حذف الصور غير المحفوظة:', cleanupError);
-      }
+      // لا حذف عبر supabase.storage: الملفات مرفوعة إلى ImageKit لا إلى bucket،
+      // ولا معرّف تخزين لها هنا. كل رفع مسجَّل في Upload Ledger، وكنس اليتامى
+      // على الخادم يحذف ما لا مرجع له بعد فترة السماح.
       console.error('[profile] تعذر حفظ تعديلات الملف الشخصي:', error);
       const saveError = error as { code?: string; message?: string };
       if (saveError.code === '23505') {
         toast.error('اسم المستخدم مستخدم بالفعل.');
       } else if ((saveError.code === 'PGRST204' || saveError.code === '42703') && /city|job|birth_date|show_city|show_job|show_birth_date/i.test(saveError.message || '')) {
-        toast.error('تعذر حفظ بيانات الملف الجديدة. طبّق ترحيل بيانات الملف الشخصي في Supabase ثم حاول مجدداً.');
+        toast.error('تعذر حفظ بيانات الملف الشخصية الجديدة. طبّق ترحيل بيانات الملف الشخصي في Supabase ثم حاول مجدداً.');
+      } else if (!saveError.code && saveError.message) {
+        // رسالة الرفع/الحفظ الخاصة بنا تُعرض كما هي بدل رسالة عامة.
+        toast.error(saveError.message);
       } else {
         toast.error('تعذر حفظ تعديلات الملف الشخصي. حاول مرة أخرى.');
       }
