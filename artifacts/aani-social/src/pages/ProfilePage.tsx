@@ -48,57 +48,169 @@ type CoverPanGesture = {
 };
 
 // امتدادات الصور المقبولة من iPhone: HEIC/HEIF تصل من الكاميرا/مكتبة الصور،
-// وبعض الاختيارات من تطبيق «الملفات» تصل بنوع MIME فارغ وامتداد صحيح فقط.
+// وبعض الاختيارات من «الملفات» تصل بنوع MIME فارغ أو application/octet-stream
+// مع امتداد صورة صحيح فقط.
 const PICKED_IMAGE_EXTENSION = /\.(jpe?g|png|webp|heic|heif|gif|avif)$/i;
+const IMAGE_MIME = /^image\/[a-z0-9.+-]+$/i;
 const HEIC_MIME = /^image\/(heic|heif|heics|heifs)$/i;
+const GENERIC_BINARY_MIME = /^(application\/(octet-stream|x-octet-stream)|binary\/octet-stream)$/i;
+const JPEG_FILE = /\.jpe?g$/i;
+/** مهلة تجهيز الصورة: لا تُترك الواجهة معلقة بلا نهاية. */
+const PICKED_IMAGE_TIMEOUT_MS = 8_000;
+const PICKED_IMAGE_MAX_SIDE = 1_600;
 
-/** هل الاختيار صورة؟ يقبل HEIC/HEIF والنوع الفارغ مع امتداد صورة. */
-function isPickedImage(file: File): boolean {
-  const type = (file.type || '').toLowerCase();
-  if (type.startsWith('image/')) return true;
-  return !type && PICKED_IMAGE_EXTENSION.test(file.name || '');
+function hasPickedImageExtension(name: string | undefined): boolean {
+  return PICKED_IMAGE_EXTENSION.test(name || '');
 }
 
 /**
- * يحوّل HEIC/HEIF (وصوراً بلا نوع MIME لكن بامتداد معروف) إلى JPEG قبل القص،
- * فلا يمنع نوع غير معتاد الاختيار، ولا يفشل تصدير canvas لاحقاً.
- * JPEG/PNG/WebP/GIF تُترك كما هي.
+ * هل الاختيار صورة؟ صورة صريحة (image/*)، أو نوع ثنائي عام/فارغ مع امتداد صورة
+ * معروف. امتدادٌ وحده لا يكفي لنوع غير ثنائي، فلا تُمرَّر ملفات غير صور إلى القص.
+ */
+function isPickedImage(file: File): boolean {
+  const type = (file.type || '').toLowerCase().trim();
+  if (IMAGE_MIME.test(type)) return true;
+  const genericType = !type || GENERIC_BINARY_MIME.test(type);
+  return genericType && hasPickedImageExtension(file.name);
+}
+
+/** اتجاه EXIF لملف JPEG (1 عند غياب EXIF أو تعذّر قراءته) — قراءة فقط، بلا تعديل. */
+async function readJpegExifOrientation(file: File): Promise<number> {
+  const type = (file.type || '').toLowerCase();
+  if (!JPEG_FILE.test(file.name || '') && !/^image\/jpe?g$/.test(type)) return 1;
+  try {
+    const buffer = await file.slice(0, 128 * 1024).arrayBuffer();
+    const view = new DataView(buffer);
+    if (view.byteLength < 4 || view.getUint16(0, false) !== 0xffd8) return 1;
+    let offset = 2;
+    while (offset + 4 <= view.byteLength) {
+      const marker = view.getUint16(offset, false);
+      if ((marker & 0xff00) !== 0xff00) return 1;
+      const length = view.getUint16(offset + 2, false);
+      if (length < 2 || offset + 2 + length > view.byteLength) return 1;
+      const isExif = marker === 0xffe1
+        && length >= 8
+        && view.getUint32(offset + 4, false) === 0x45786966; // "Exif"
+      if (isExif) {
+        const tiff = offset + 10;
+        if (tiff + 8 > view.byteLength) return 1;
+        const littleEndian = view.getUint16(tiff, false) === 0x4949;
+        const ifdStart = tiff + view.getUint32(tiff + 4, littleEndian);
+        if (ifdStart + 2 > view.byteLength) return 1;
+        const count = view.getUint16(ifdStart, littleEndian);
+        for (let index = 0; index < count; index += 1) {
+          const entry = ifdStart + 2 + index * 12;
+          if (entry + 12 > view.byteLength) return 1;
+          if (view.getUint16(entry, littleEndian) !== 0x0112) continue;
+          const value = view.getUint16(entry + 8, littleEndian);
+          return value >= 1 && value <= 8 ? value : 1;
+        }
+        return 1;
+      }
+      offset += 2 + length;
+    }
+  } catch {
+    // ترويسة غير قابلة للقراءة: لا تصحيح، والصورة تبقى كما هي.
+  }
+  return 1;
+}
+
+type DecodedPickedImage = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+  close?: () => void;
+};
+
+/**
+ * فك ترميز الصورة مع اتجاه EXIF: createImageBitmap({ imageOrientation: 'from-image' })
+ * أولاً (بكسلات مستقيمة)، ومسار <img> احتياطي عندما لا يُدعم الخيار أو الصيغة.
+ */
+async function decodePickedImage(file: File): Promise<DecodedPickedImage> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const options = { imageOrientation: 'from-image' } as unknown as ImageBitmapOptions;
+      const bitmap = await createImageBitmap(file, options);
+      if (bitmap.width > 0 && bitmap.height > 0) {
+        return { source: bitmap, width: bitmap.width, height: bitmap.height, close: () => bitmap.close() };
+      }
+      bitmap.close();
+    } catch {
+      // خيار غير مدعوم أو صيغة غير قابلة للفك هنا: يُجرَّب مسار <img>.
+    }
+  }
+  const objectUrl = URL.createObjectURL(file);
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const element = new Image();
+    element.onload = () => resolve(element);
+    element.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('تعذر فتح الصورة على هذا الجهاز. اختر صورة JPEG أو PNG.'));
+    };
+    element.src = objectUrl;
+  });
+  return {
+    source: image,
+    width: image.naturalWidth,
+    height: image.naturalHeight,
+    close: () => URL.revokeObjectURL(objectUrl),
+  };
+}
+
+/**
+ * يجهّز الصورة قبل القص: HEIC/HEIF والثنائي العام وJPEG ذو اتجاه EXIF غير طبيعي
+ * تُحوَّل إلى JPEG مستقيم بلا EXIF، فتتطابق المعاينة مع المصدَّر ولا تتكرر إعادة
+ * الترميز لصورة مستقيمة أصلاً (EXIF = 1 تُمرَّر كما هي).
  */
 async function normalizePickedImage(file: File): Promise<File> {
   const type = (file.type || '').toLowerCase();
-  const extension = (file.name || '').toLowerCase();
+  const orientation = await readJpegExifOrientation(file);
   const needsConversion = HEIC_MIME.test(type)
-    || (!type && /\.(heic|heif)$/i.test(extension));
+    || !type
+    || GENERIC_BINARY_MIME.test(type)
+    || orientation !== 1;
   if (!needsConversion) return file;
 
-  const objectUrl = URL.createObjectURL(file);
+  let timedOut = false;
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => {
+      timedOut = true;
+      reject(new Error('استغرق تجهيز الصورة وقتاً طويلاً. جرّب صورة JPEG أو PNG أصغر.'));
+    }, PICKED_IMAGE_TIMEOUT_MS);
+  });
+
+  // فك ترميز يصل بعد انتهاء المهلة يُغلق موارده بنفسه بدل تسريبها.
+  const decodePromise = decodePickedImage(file);
+  void decodePromise
+    .then(result => { if (timedOut) result.close?.(); })
+    .catch(() => undefined);
+
   try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const element = new Image();
-      element.onload = () => resolve(element);
-      element.onerror = () => reject(new Error('تعذر فتح الصورة على هذا الجهاز. اختر صورة JPEG أو PNG.'));
-      element.src = objectUrl;
-    });
-    const maxSide = 1600;
-    const longest = Math.max(image.naturalWidth, image.naturalHeight) || 1;
-    const scale = Math.min(1, maxSide / longest);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('تعذر تجهيز الصورة.');
-    context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        value => value ? resolve(value) : reject(new Error('تعذر تجهيز الصورة.')),
-        'image/jpeg',
-        0.92,
-      );
-    });
-    const baseName = (file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
-    return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+    const decoded = await Promise.race([decodePromise, timeout]);
+    try {
+      const longest = Math.max(decoded.width, decoded.height) || 1;
+      const scale = Math.min(1, PICKED_IMAGE_MAX_SIDE / longest);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(decoded.width * scale));
+      canvas.height = Math.max(1, Math.round(decoded.height * scale));
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('تعذر تجهيز الصورة.');
+      context.drawImage(decoded.source, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          value => value ? resolve(value) : reject(new Error('تعذر تجهيز الصورة.')),
+          'image/jpeg',
+          0.92,
+        );
+      });
+      const baseName = (file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
+      return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+    } finally {
+      decoded.close?.();
+    }
   } finally {
-    URL.revokeObjectURL(objectUrl);
+    if (timer !== undefined) window.clearTimeout(timer);
   }
 }
 
@@ -350,6 +462,8 @@ export default function ProfilePage({
   const temporaryPreviewUrlsRef = useRef(new Set<string>());
   // رقم آخر اختيار صورة: نتيجة أي اختيار أقدم تُهمل ولا تفتح قصاصة ولا تستبدل المعاينة.
   const avatarPickRequestRef = useRef(0);
+  // قفل حفظ متزامن: مرجع لا حالة، فلا يمرّ نقران في الدورة نفسها.
+  const saveInFlightRef = useRef(false);
 
   // إغلاق شاشة التعديل يُبطل أي تجهيز صورة جارٍ، فلا تُفتح قصاصة بعد الإغلاق.
   useEffect(() => {
@@ -1074,12 +1188,8 @@ export default function ProfilePage({
 
   const cancelProfileEditing = () => {
     if (!person) return;
-    // لا إغلاق أثناء تجهيز الصورة: قد تُفتح القصاصة بعد اختفاء شاشة التعديل.
-    if (avatarProcessing) {
-      toast.error('انتظر انتهاء تجهيز الصورة قبل إغلاق التعديل.');
-      return;
-    }
-    // إلغاء صريح: أي تجهيز جارٍ يُهمل، وأي قصاصة مفتوحة تُغلق.
+    // الإلغاء متاح دائماً — حتى أثناء تجهيز الصورة: يزيد رقم الطلب فيُبطل أي
+    // نتيجة متأخرة، ويُنزل حالة التجهيز، فلا تُفتح قصاصة بعد إغلاق الشاشة.
     avatarPickRequestRef.current += 1;
     setAvatarProcessing(false);
     setNameDraft(person.full_name || person.display_name || '');
@@ -1360,6 +1470,8 @@ export default function ProfilePage({
   };
 
   const saveProfileEdits = async () => {
+    // مرجع القفل يُفحص قبل أي await وقبل أي عمل غير متزامن.
+    if (saveInFlightRef.current) return;
     if (!own || !person || !isEditingProfile || profileSaving) return;
     // لا حفظ قبل اعتماد القصاصة: الصورة المختارة لا تُرفع إلا بعد «تم» في القص.
     if (avatarProcessing) {
@@ -1390,6 +1502,8 @@ export default function ProfilePage({
       return;
     }
 
+    // القفل المرجعي يُضبط قبل أول await؛ النقر الثاني في الدورة نفسها يراه ويخرج.
+    saveInFlightRef.current = true;
     setProfileSaving(true);
     const normalizedCity = cityDraft.trim() || null;
     const patch: Partial<Profile> = {
@@ -1413,7 +1527,8 @@ export default function ProfilePage({
       const uploadPendingImage = async (kind: ProfileImageKind, file: File) => {
         const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '-').slice(-80) || 'profile-image';
         const path = `${currentUserId}/profile/${kind}-${Date.now()}-${safeName}`;
-        // ضغط من جهة العميل: الأفاتار 400×400 < 80KB، الغلاف بعرض أقصى 1200px < 200KB.
+        // ضغط من جهة العميل: الأفاتار 320×320 < 80KB (إعداد avatar في mediaCompressor)،
+        // والغلاف بعرض أقصى 1200px < 200KB.
         // uploadMedia يعيد رابط ImageKit الحقيقي للملف المرفوع — يُحفظ كما هو، ولا
         // يُشتق بديل عبر getPublicUrl: سجل الروابط في supabase.ts ذاكرة جلسة
         // واحدة، وقد يعيد رابط Supabase غير موجود لملف رُفع إلى ImageKit.
@@ -1482,7 +1597,11 @@ export default function ProfilePage({
         toast.info('تم حفظ بقية التعديلات، لكن موضع الغلاف لم يُحفظ لعدم توفر أعمدته في قاعدة البيانات.');
       }
     } catch (error) {
-      // لا حذف عبر supabase.storage: الملفات مرفوعة إلى ImageKit لا إلى bucket،
+      // فشل الرفع/التحديث: تُعرض الصورة المحفوظة فعلاً في person، وتبقى الملفات
+      // المعلقة لإعادة المحاولة، فلا تظهر الصورة المقترحة كأنها محفوظة.
+      setImagePreview('avatar', person.avatar_url || null);
+      setImagePreview('cover', person.cover_url || null);
+      // لا حذف عبر supabase.storage: الملفات مرفوعة إلى ImageKit لا إلى bucket,
       // ولا معرّف تخزين لها هنا. كل رفع مسجَّل في Upload Ledger، وكنس اليتامى
       // على الخادم يحذف ما لا مرجع له بعد فترة السماح.
       console.error('[profile] تعذر حفظ تعديلات الملف الشخصي:', error);
@@ -1498,6 +1617,7 @@ export default function ProfilePage({
         toast.error('تعذر حفظ تعديلات الملف الشخصي. حاول مرة أخرى.');
       }
     } finally {
+      saveInFlightRef.current = false;
       setProfileSaving(false);
     }
   };
@@ -1652,7 +1772,7 @@ export default function ProfilePage({
             }}
           >
             <header className="profile-edit-header">
-              <button type="button" className="profile-edit-cancel" onClick={cancelProfileEditing} disabled={profileSaving || avatarProcessing}>إلغاء</button>
+              <button type="button" className="profile-edit-cancel" onClick={cancelProfileEditing} disabled={profileSaving}>إلغاء</button>
               <h2 id="profile-edit-title">تعديل الملف الشخصي</h2>
               <button type="submit" className="profile-edit-save" disabled={profileSaving || avatarProcessing}>{profileSaving ? 'جارٍ الحفظ…' : avatarProcessing ? 'جارٍ تجهيز الصورة…' : 'حفظ'}</button>
             </header>
