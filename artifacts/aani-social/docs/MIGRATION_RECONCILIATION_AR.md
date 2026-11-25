@@ -46,11 +46,15 @@
 
 | الملف | يعيد | الضمانة |
 |---|---|---|
-| `20261124230000_story_reports_reconcile.sql` | جدول `story_reports` + فهرسه + RLS + سياسة الإدراج | `create table if not exists` + `drop policy if exists` |
-| `20261124230100_story_archive_rpc_reconcile.sql` | `aani_get_my_story_archive(integer, integer)` | `create or replace` + منح `authenticated` فقط |
-| `20261124230200_unblock_user_rpc_reconcile.sql` | `aani_unblock_user(uuid)` | `create or replace` + `security definer` + يطابق `blocked_user_id` **أو** `blocked_id` (أو كليهما) بحسب الأعمدة الموجودة + يرفض الصفوف المتناقضة ويتحقق من عدم بقاء صف |
-| `20261124230300_mark_all_notifications_as_read_reconcile.sql` | `mark_all_notifications_as_read()` | `create or replace` + `security invoker` |
-| `20261124230400_random_trending_sounds_reconcile.sql` | `random_trending_sounds(integer)` | `create or replace` + `security invoker` (RLS على `sounds`) + volatile بلا `stable` (لأن `random()`) |
+| `20261125110618_story_reports_reconcile.sql` | جدول `story_reports` + فهرسه + RLS + سياسة الإدراج | `create table if not exists` + `drop policy if exists` |
+| `20261125110621_story_archive_rpc_reconcile.sql` | `aani_get_my_story_archive(integer, integer)` | `create or replace` + منح `authenticated` فقط |
+| `20261125110624_unblock_user_rpc_reconcile.sql` | `aani_unblock_user(uuid)` | `create or replace` + `security definer` + يطابق `blocked_user_id` **أو** `blocked_id` (أو كليهما) بحسب الأعمدة الموجودة + يرفض الصفوف المتناقضة ويتحقق من عدم بقاء صف |
+| `20261125110626_mark_all_notifications_as_read_reconcile.sql` | `mark_all_notifications_as_read()` | `create or replace` + `security invoker` |
+| `20261125110628_random_trending_sounds_reconcile.sql` | `random_trending_sounds(integer)` | `create or replace` + `security invoker` (RLS على `sounds`) + volatile بلا `stable` (لأن `random()`) |
+
+أُعيدت تسمية الخمسة إلى أرقام نسخها المسجّلة في Supabase (`20261125110618`–`20261125110628`)
+دون تغيير أي سطر SQL، فصارت تُطبَّق بعد `20261125000000_post_interaction_privacy.sql`
+بدل قبله، ولا تصطدم بأي ملف محلي.
 
 ## إلغاء الحظر حين يوجد العمودان معاً
 
@@ -77,7 +81,7 @@
 
 ## تعريف `random_trending_sounds` موحَّد في الملفات الثلاثة
 
-أُزيل `stable` من `20261124230400_random_trending_sounds_reconcile.sql`، ومن
+أُزيل `stable` من `20261125110628_random_trending_sounds_reconcile.sql`، ومن
 `supabase/schema.sql`، ومن `20270112000000_random_trending_sounds.sql`؛ الوظيفة volatile
 لأن `order by random()` يجب أن يُقيَّم في كل استدعاء. بقيت `security invoker` و
 `set search_path = public, pg_temp` والمنح كما هي في الملفات الثلاثة.
