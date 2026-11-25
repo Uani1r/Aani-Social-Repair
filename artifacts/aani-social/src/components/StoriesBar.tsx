@@ -1792,16 +1792,48 @@ export default function StoriesBar({
     // القصص النصية بلا وسيط تبدأ فوراً كما كانت.
     if (currentStory.media_url && mediaReadyStoryId !== storyId) return;
     if (currentStory.media_type === 'video' && currentStory.media_url) {
-      if (!Number.isFinite(currentVideoDuration) || currentVideoDuration === null || currentVideoDuration <= 0) return;
       const video = storyVideoRef.current;
-      if (!video || video.readyState < 1) return;
-      const remainingMs = Math.max(0, (currentVideoDuration - video.currentTime) * 1000);
-      const videoEndFallback = window.setTimeout(() => {
-        if (currentStoryRef.current?.id === storyId && storyVideoRef.current?.ended) {
+      const videoDuration = currentVideoDuration;
+      // التوقيت الطبيعي مشروط بفيديو قابل للتشغيل فعلاً: عنصر موجود، ومدة
+      // صالحة من بياناته الوصفية، وreadyState كافٍ. ما دون ذلك لا يُعتبر
+      // فيديو يعمل — وإلا بقي المؤقت منتظراً إلى الأبد.
+      const canTimeVideo = Boolean(video)
+        && (video?.readyState ?? 0) >= 1
+        && typeof videoDuration === 'number'
+        && Number.isFinite(videoDuration)
+        && videoDuration > 0;
+      if (video && canTimeVideo && typeof videoDuration === 'number') {
+        const remainingMs = Math.max(0, (videoDuration - video.currentTime) * 1000);
+        const videoEndFallback = window.setTimeout(() => {
+          if (currentStoryRef.current?.id !== storyId) return;
+          if (storyVideoRef.current?.ended) autoAdvanceStoryRef.current(storyId);
+        }, remainingMs);
+        // شبكة أمان أخيرة: فيديو بدأ ثم توقف عن التقدم (رفض تشغيل/تجمد) لا
+        // يُبقي العارض مفتوحاً — انتقال بعد المدة المتبقية + 3 ثوانٍ، مرة واحدة
+        // فقط: autoAdvanceStoryRef يمنع التكرار، وفحص القصة يمنع انتقال قصة قديمة.
+        const videoStallFallback = window.setTimeout(() => {
+          if (currentStoryRef.current?.id !== storyId) return;
           autoAdvanceStoryRef.current(storyId);
-        }
-      }, remainingMs);
-      return () => window.clearTimeout(videoEndFallback);
+        }, remainingMs + 3000);
+        return () => {
+          window.clearTimeout(videoEndFallback);
+          window.clearTimeout(videoStallFallback);
+        };
+      }
+
+      // فيديو فشل تحميله أو لم تصل بياناته الوصفية: لا يُعطى توقيت الفيديو
+      // الطبيعي ولا يُعدّ مشغّلاً، بل مهلة احتياطية قصيرة ثم الانتقال — فلا
+      // يبقى العارض معلّقاً على شاشة بلا تقدم، ويُسجَّل السبب بدل إخفائه.
+      console.warn('[stories] فيديو القصة غير قابل للتشغيل، مسار احتياطي قصير:', storyId, {
+        hasElement: Boolean(video),
+        readyState: video?.readyState ?? null,
+        duration: videoDuration ?? null,
+      });
+      const failedVideoFallback = window.setTimeout(() => {
+        if (currentStoryRef.current?.id !== storyId) return;
+        autoAdvanceStoryRef.current(storyId);
+      }, 4000);
+      return () => window.clearTimeout(failedVideoFallback);
     }
 
     const durationMs = storyDisplayDuration * 1000;
