@@ -322,3 +322,80 @@ export async function sendGift(
     };
   }
 }
+
+/** نتيجة عملية شحن المحفظة عبر الدالة aani_wallet_top_up. */
+export type TopUpResult = {
+  ok: boolean;
+  duplicate?: boolean;
+  transaction_id?: string;
+  amount?: number;
+  balance?: number;
+  payment_reference?: string;
+  payment_provider?: string;
+  error?: string;
+  /**
+   * نتيجة غير محسومة (نقل/شبكة/مهلة): لا تُعتبر رفضاً نهائياً ولا نجاحاً مؤكداً،
+   * وتُحتفظ بمرجع الدفع لإعادة المحاولة بدون إضافة رصيد مكررة.
+   */
+  inconclusive?: boolean;
+};
+
+/** شحن رصيد المحفظة بعد التحقق من نجاح الدفع من جهة الخادم.
+ *
+ * ملاحظة التكامل (مطلوبة قبل النشر على الإنتاج):
+ *   يجب على caller التأكد من نجاح الدفع مع مزود الدفع المحدد (paymentProvider)
+ *   باستخدام مرجع الدفع (paymentReference) قبل استدعاء هذه الدالة. هذه الدالة
+ *   هي المدخل الآمن للخادم لإضافة الرصيد فقط؛ فهي لا تتصل بمزود دفع ولا تنشئ
+ *   عملية دفع وهمية. إذا لم يكن مزود دفع متكاملاً، لا يُستدعى هذه الدالة ولا
+ *   يُضاف رصيد وهمي.
+ */
+export async function topUpWallet(
+  userId: string,
+  amount: number,
+  paymentReference: string,
+  paymentProvider: string
+): Promise<TopUpResult> {
+  if (!supabaseConfigured) {
+    return {
+      ok: false,
+      inconclusive: true,
+      error: 'اتصال قاعدة البيانات غير متاح.',
+    };
+  }
+  try {
+    const { data, error } = await supabase.rpc('aani_wallet_top_up', {
+      p_amount: amount,
+      p_payment_reference: paymentReference,
+      p_payment_provider: paymentProvider,
+    });
+    if (error) {
+      const message =
+        (error as { message?: unknown }).message;
+      const text = typeof message === 'string' && message.length > 0
+        ? message
+        : undefined;
+      if (classifySendError(error) === 'definitive') {
+        return { ok: false, inconclusive: false, error: text || 'فشل شحن الرصيد.' };
+      }
+      return {
+        ok: false,
+        inconclusive: true,
+        error: text || 'تعذّر تأكيد الشحن. أعد المحاولة.',
+      };
+    }
+    if (!data || typeof data !== 'object' || typeof (data as { ok?: unknown }).ok !== 'boolean') {
+      return {
+        ok: false,
+        inconclusive: true,
+        error: 'استجابة غير صالحة من الخادم. أعد المحاولة.',
+      };
+    }
+    return data as TopUpResult;
+  } catch (error) {
+    return {
+      ok: false,
+      inconclusive: true,
+      error: error instanceof Error ? error.message : 'تعذّر الاتصال بالخادم. أعد المحاولة.',
+    };
+  }
+}
