@@ -1825,3 +1825,21 @@ begin
 end $$;
 
 alter table public.gift_transactions replica identity full;
+
+-- =====================================================================
+-- نظام Sandbox المالي التجريبي (معزول تمامًا عن الإنتاج)
+-- راجع الترحيل: supabase/migrations/20270306000000_aani_sandbox_financial.sql
+-- =====================================================================
+create schema if not exists sandbox;
+
+-- (ملخص المخطط المعزول — النص الكامل والناظم في ملف الترحيل أعلاه)
+-- جداول sandbox: top_up_packages، ledger (مصدر الرصيد)، gift_transactions (شعبية=0)،
+-- top_ups (محاكاة ناجح/فاشل)، refunds، subscription_packages، subscriptions،
+-- promotion_packages، promotions، founders (قائمة سماح خادم)، admin_actions (تدقيق).
+-- دوال RPC عامة: aani_sandbox_is_founder، aani_sandbox_balance، aani_sandbox_grant_coins،
+-- aani_sandbox_deduct_coins، aani_sandbox_send_gift، aani_sandbox_top_up،
+-- aani_sandbox_refund_top_up، aani_sandbox_activate_subscription、
+-- aani_sandbox_cancel_subscription، aani_sandbox_renew_subscription،
+-- aani_sandbox_create_promotion، aani_sandbox_end_promotion.
+-- لا تمس هذه الكائنات public.user_wallets ولا public.gift_transactions ولا
+-- public.aani_user_popularity، وتحسب الرصيد من سجل sandbox.ledger المستقل.
