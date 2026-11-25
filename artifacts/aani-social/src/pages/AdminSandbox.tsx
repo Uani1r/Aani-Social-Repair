@@ -83,6 +83,9 @@ export default function AdminSandbox() {
   const [subInFlight, setSubInFlight] = useState(false);
   const [promoInFlight, setPromoInFlight] = useState(false);
   const [renewInFlight, setRenewInFlight] = useState<Record<string,boolean>>({});
+  const [refundInFlight, setRefundInFlight] = useState<Record<string,boolean>>({});
+  const [cancelInFlight, setCancelInFlight] = useState<Record<string,boolean>>({});
+  const [endInFlight, setEndInFlight] = useState<Record<string,boolean>>({});
   const grantLockRef = useRef(false);
   const subLockRef = useRef(false);
   const promoLockRef = useRef(false);
@@ -231,12 +234,20 @@ export default function AdminSandbox() {
   };
 
   const handleRefund = async (topUpId: string, reason: string) => {
-    const res = await refundSandboxTopUp({ topUpId, reason });
-    if (res.ok) {
-      toast.success('تم الاسترداد التجريبي');
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل الاسترداد');
+    if (refundLockRef.current[topUpId]) return;
+    refundLockRef.current[topUpId] = true;
+    setRefundInFlight(prev => ({ ...prev, [topUpId]: true }));
+    try {
+      const res = await refundSandboxTopUp({ topUpId, reason });
+      if (res.ok) {
+        toast.success('تم الاسترداد التجريبي');
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل الاسترداد');
+      }
+    } finally {
+      refundLockRef.current[topUpId] = false;
+      setRefundInFlight(prev => ({ ...prev, [topUpId]: false }));
     }
   };
 
@@ -245,7 +256,9 @@ export default function AdminSandbox() {
       toast.error('معرف المستخدم مطلوب لتفعيل الاشتراك');
       return;
     }
-    if (subInFlight) return;
+    if (subLockRef.current) return;
+    if (subInFlight) { subLockRef.current = false; return; }
+    subLockRef.current = true;
     const fp = `${subUserId}|${packageId}`;
     if (subFpRef.current !== fp) {
       subFpRef.current = fp;
@@ -264,22 +277,33 @@ export default function AdminSandbox() {
         toast.error(res.error ? (res.error as Error).message : 'فشل التفعيل');
       }
     } finally {
+      subLockRef.current = false;
       setSubInFlight(false);
     }
   };
 
   const handleCancelSub = async (subscriptionId: string) => {
-    const res = await cancelSandboxSubscription({ subscriptionId });
-    if (res.ok) {
-      toast.success('تم إلغاء الاشتراك التجريبي');
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل الإلغاء');
+    if (cancelLockRef.current[subscriptionId]) return;
+    cancelLockRef.current[subscriptionId] = true;
+    setCancelInFlight(prev => ({ ...prev, [subscriptionId]: true }));
+    try {
+      const res = await cancelSandboxSubscription({ subscriptionId });
+      if (res.ok) {
+        toast.success('تم إلغاء الاشتراك التجريبي');
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل الإلغاء');
+      }
+    } finally {
+      cancelLockRef.current[subscriptionId] = false;
+      setCancelInFlight(prev => ({ ...prev, [subscriptionId]: false }));
     }
   };
 
   const handleRenewSub = async (subscriptionId: string) => {
-    if (renewInFlight[subscriptionId]) return;
+    if (renewLockRef.current[subscriptionId]) return;
+    if (renewInFlight[subscriptionId]) { renewLockRef.current[subscriptionId] = false; return; }
+    renewLockRef.current[subscriptionId] = true;
     if (!renewKeyRef.current[subscriptionId]) renewKeyRef.current[subscriptionId] = generateIdempotencyKey('sandbox-renew');
     setRenewInFlight(prev => ({ ...prev, [subscriptionId]: true }));
     try {
@@ -293,6 +317,7 @@ export default function AdminSandbox() {
         toast.error(res.error ? (res.error as Error).message : 'فشل التجديد');
       }
     } finally {
+      renewLockRef.current[subscriptionId] = false;
       setRenewInFlight(prev => ({ ...prev, [subscriptionId]: false }));
     }
   };
@@ -306,7 +331,9 @@ export default function AdminSandbox() {
       toast.error('معرف الهدف (المنشور/الريل) مطلوب لإنشاء الحملة');
       return;
     }
-    if (promoInFlight) return;
+    if (promoLockRef.current) return;
+    if (promoInFlight) { promoLockRef.current = false; return; }
+    promoLockRef.current = true;
     const fp = `${promoUserId}|${promoTargetId}|${packageId}|${targetType}`;
     if (promoFpRef.current !== fp) {
       promoFpRef.current = fp;
@@ -325,17 +352,26 @@ export default function AdminSandbox() {
         toast.error(res.error ? (res.error as Error).message : 'فشل إنشاء الحملة');
       }
     } finally {
+      promoLockRef.current = false;
       setPromoInFlight(false);
     }
   };
 
   const handleEndPromo = async (promotionId: string, success: boolean, reason?: string) => {
-    const res = await endSandboxPromotion({ promotionId, success, failureReason: reason });
-    if (res.ok) {
-      toast.success(`انتهت الحملة: ${res.status}`);
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل إنهاء الحملة');
+    if (endLockRef.current[promotionId]) return;
+    endLockRef.current[promotionId] = true;
+    setEndInFlight(prev => ({ ...prev, [promotionId]: true }));
+    try {
+      const res = await endSandboxPromotion({ promotionId, success, failureReason: reason });
+      if (res.ok) {
+        toast.success(`انتهت الحملة: ${res.status}`);
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل إنهاء الحملة');
+      }
+    } finally {
+      endLockRef.current[promotionId] = false;
+      setEndInFlight(prev => ({ ...prev, [promotionId]: false }));
     }
   };
 
@@ -434,6 +470,7 @@ export default function AdminSandbox() {
                     size="sm"
                     variant="outline"
                     onClick={() => handleRefund(t.id, 'استرداد تجريبي من لوحة الإدارة')}
+                    disabled={refundInFlight[t.id]}
                   >
                     استرداد
                   </Button>
@@ -479,7 +516,7 @@ export default function AdminSandbox() {
                             {pkg.coins_price} عملة × {pkg.duration_days} يوم
                           </div>
                         </div>
-                        <Button size="sm" onClick={() => handleActivateSub(pkg.id)}>
+                        <Button size="sm" onClick={() => handleActivateSub(pkg.id)} disabled={subInFlight}>
                           تفعيل
                         </Button>
                       </div>
@@ -511,10 +548,10 @@ export default function AdminSandbox() {
                       <TableCell className="text-xs">
                         {s.status === 'active' ? (
                           <>
-                            <Button size="sm" onClick={() => handleCancelSub(s.id)}>
+                            <Button size="sm" onClick={() => handleCancelSub(s.id)} disabled={cancelInFlight[s.id]}>
                               إلغاء
                             </Button>{' '}
-                            <Button size="sm" onClick={() => handleRenewSub(s.id)}>
+                            <Button size="sm" onClick={() => handleRenewSub(s.id)} disabled={renewInFlight[s.id]}>
                               تجديد
                             </Button>
                           </>
@@ -559,6 +596,7 @@ export default function AdminSandbox() {
                         <Button
                           size="sm"
                           onClick={() => handleCreatePromo(pkg.id, pkg.target_type as 'post' | 'reel')}
+                          disabled={promoInFlight}
                         >
                           إنشاء حملة
                         </Button>
@@ -591,10 +629,10 @@ export default function AdminSandbox() {
                       <TableCell className="text-xs">
                         {p.status === 'active' ? (
                           <>
-                            <Button size="sm" onClick={() => handleEndPromo(p.id, true)}>
+                            <Button size="sm" onClick={() => handleEndPromo(p.id, true)} disabled={endInFlight[p.id]}>
                               إنهاء
                             </Button>{' '}
-                            <Button size="sm" variant="destructive" onClick={() => handleEndPromo(p.id, false, 'فشل تجريبي')}>
+                            <Button size="sm" variant="destructive" onClick={() => handleEndPromo(p.id, false, 'فشل تجريبي')} disabled={endInFlight[p.id]}>
                               فشل
                             </Button>
                           </>
