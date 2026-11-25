@@ -230,6 +230,9 @@ export default function StoriesBar({
   const [videoDurationForStory, setVideoDurationForStory] = useState<{ storyId: string; durationSeconds: number } | null>(null);
   // القصة الجاهزة للعرض: لا يبدأ مؤقتها وشريط تقدمها قبل ظهور وسيطها فعلياً.
   const [mediaReadyStoryId, setMediaReadyStoryId] = useState<string | null>(null);
+  // موضع عرض شريط القصص داخل الشريط العلوي (بوابة): لا يظهر الشريط خارج
+  // الرئيسية، بينما يبقى StoriesBar نفسه مُركَّباً دائماً مع عارضه.
+  const [stripHost, setStripHost] = useState<HTMLElement | null>(null);
   const [currentTimeSec, setCurrentTimeSec] = useState(0);
   const [replyText, setReplyText] = useState('');
   const [replyFocused, setReplyFocused] = useState(false);
@@ -249,6 +252,17 @@ export default function StoriesBar({
   const [viewerReportDetails, setViewerReportDetails] = useState('');
   const [viewerReportBusy, setViewerReportBusy] = useState(false);
   const [viewerRowMenuOpen, setViewerRowMenuOpen] = useState(false);
+
+  // الشريط العلوي يُنشئ موضع شريط القصص على الرئيسية فقط؛ تُتبع إضافته وإزالته
+  // (تنقّل بين الصفحات) فينتقل الشريط بين الموضع والمستضيف الدائم بلا إعادة
+  // تركيب لـ StoriesBar وبلا فقدان حالته أو مؤقتاته.
+  useEffect(() => {
+    const locate = () => setStripHost(document.getElementById('unified-stories-slot'));
+    locate();
+    const observer = new MutationObserver(locate);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
   const storyViewsWasPausedRef = useRef(false);
   const storyVideoRef = useRef<HTMLVideoElement | null>(null);
   const currentStoryRef = useRef<StoryRow | null>(null);
@@ -1756,6 +1770,20 @@ export default function StoriesBar({
     setMediaReadyStoryId(storyId);
   }, []);
 
+  // شبكة أمان ضد الشاشة المتجمدة: قصة بوسيط لم يصرّح بالجاهزية (فشل توقيع رابط
+  // خاص، أو خطأ تحميل صامت) لا تترك العارض مفتوحاً بلا مؤقت — يبدأ مؤقتها بعد
+  // مهلة قصيرة، ويُسجَّل السبب في السجل بدل إخفائه.
+  useEffect(() => {
+    if (!currentStory?.media_url || mediaReadyStoryId === currentStory.id) return undefined;
+    const storyId = currentStory.id;
+    const watchdog = window.setTimeout(() => {
+      if (currentStoryRef.current?.id !== storyId) return;
+      console.warn('[stories] لم يصبح وسيط القصة جاهزاً خلال المهلة، يبدأ المؤقت:', storyId);
+      setMediaReadyStoryId(storyId);
+    }, 8000);
+    return () => window.clearTimeout(watchdog);
+  }, [currentStory?.id, currentStory?.media_url, mediaReadyStoryId]);
+
   useEffect(() => {
     if (!currentStory || isPaused || storyViewsOpen) return;
 
@@ -1764,16 +1792,48 @@ export default function StoriesBar({
     // القصص النصية بلا وسيط تبدأ فوراً كما كانت.
     if (currentStory.media_url && mediaReadyStoryId !== storyId) return;
     if (currentStory.media_type === 'video' && currentStory.media_url) {
-      if (!Number.isFinite(currentVideoDuration) || currentVideoDuration === null || currentVideoDuration <= 0) return;
       const video = storyVideoRef.current;
-      if (!video || video.readyState < 1) return;
-      const remainingMs = Math.max(0, (currentVideoDuration - video.currentTime) * 1000);
-      const videoEndFallback = window.setTimeout(() => {
-        if (currentStoryRef.current?.id === storyId && storyVideoRef.current?.ended) {
+      const videoDuration = currentVideoDuration;
+      // التوقيت الطبيعي مشروط بفيديو قابل للتشغيل فعلاً: عنصر موجود، ومدة
+      // صالحة من بياناته الوصفية، وreadyState كافٍ. ما دون ذلك لا يُعتبر
+      // فيديو يعمل — وإلا بقي المؤقت منتظراً إلى الأبد.
+      const canTimeVideo = Boolean(video)
+        && (video?.readyState ?? 0) >= 1
+        && typeof videoDuration === 'number'
+        && Number.isFinite(videoDuration)
+        && videoDuration > 0;
+      if (video && canTimeVideo && typeof videoDuration === 'number') {
+        const remainingMs = Math.max(0, (videoDuration - video.currentTime) * 1000);
+        const videoEndFallback = window.setTimeout(() => {
+          if (currentStoryRef.current?.id !== storyId) return;
+          if (storyVideoRef.current?.ended) autoAdvanceStoryRef.current(storyId);
+        }, remainingMs);
+        // شبكة أمان أخيرة: فيديو بدأ ثم توقف عن التقدم (رفض تشغيل/تجمد) لا
+        // يُبقي العارض مفتوحاً — انتقال بعد المدة المتبقية + 3 ثوانٍ، مرة واحدة
+        // فقط: autoAdvanceStoryRef يمنع التكرار، وفحص القصة يمنع انتقال قصة قديمة.
+        const videoStallFallback = window.setTimeout(() => {
+          if (currentStoryRef.current?.id !== storyId) return;
           autoAdvanceStoryRef.current(storyId);
-        }
-      }, remainingMs);
-      return () => window.clearTimeout(videoEndFallback);
+        }, remainingMs + 3000);
+        return () => {
+          window.clearTimeout(videoEndFallback);
+          window.clearTimeout(videoStallFallback);
+        };
+      }
+
+      // فيديو فشل تحميله أو لم تصل بياناته الوصفية: لا يُعطى توقيت الفيديو
+      // الطبيعي ولا يُعدّ مشغّلاً، بل مهلة احتياطية قصيرة ثم الانتقال — فلا
+      // يبقى العارض معلّقاً على شاشة بلا تقدم، ويُسجَّل السبب بدل إخفائه.
+      console.warn('[stories] فيديو القصة غير قابل للتشغيل، مسار احتياطي قصير:', storyId, {
+        hasElement: Boolean(video),
+        readyState: video?.readyState ?? null,
+        duration: videoDuration ?? null,
+      });
+      const failedVideoFallback = window.setTimeout(() => {
+        if (currentStoryRef.current?.id !== storyId) return;
+        autoAdvanceStoryRef.current(storyId);
+      }, 4000);
+      return () => window.clearTimeout(failedVideoFallback);
     }
 
     const durationMs = storyDisplayDuration * 1000;
@@ -2180,7 +2240,8 @@ export default function StoriesBar({
           handleStoryFilesSelected(files);
         }}
       />
-      <StoriesStrip
+      {stripHost && createPortal(
+        <StoriesStrip
         userId={userId}
         currentProfile={currentProfile}
         groupedStories={groupedStories}
@@ -2208,7 +2269,9 @@ export default function StoriesBar({
           setProgress(0);
           setCurrentTimeSec(0);
         }}
-      />
+        />,
+        stripHost,
+      )}
 
       {createPortal(
         <>
