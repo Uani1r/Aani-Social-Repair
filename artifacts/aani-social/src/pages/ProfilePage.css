@@ -862,7 +862,7 @@
 
 .profile-edit-cover {
   position: relative;
-  height: clamp(220px, 34dvh, 340px);
+  height: 135px;
   overflow: hidden;
   background: #252525;
   touch-action: none;
