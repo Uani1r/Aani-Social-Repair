@@ -72,9 +72,17 @@ export default function AdminSandbox() {
 
   const mounted = useRef(true);
   const grantKeyRef = useRef<string | null>(null);
+  const grantFpRef = useRef<string | null>(null);
   const subKeyRef = useRef<string | null>(null);
+  const subFpRef = useRef<string | null>(null);
   const renewKeyRef = useRef<Record<string,string>>({});
+  const renewFpRef = useRef<Record<string,string>>({});
   const promoKeyRef = useRef<string | null>(null);
+  const promoFpRef = useRef<string | null>(null);
+  const [grantInFlight, setGrantInFlight] = useState(false);
+  const [subInFlight, setSubInFlight] = useState(false);
+  const [promoInFlight, setPromoInFlight] = useState(false);
+  const [renewInFlight, setRenewInFlight] = useState<Record<string,boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -186,17 +194,29 @@ export default function AdminSandbox() {
   }
 
   const handleGrant = async () => {
+    if (grantInFlight) return;
+    const fp = `${grantUserId}|${grantAmount}|${grantReason}`;
+    if (grantFpRef.current !== fp) {
+      grantFpRef.current = fp;
+      grantKeyRef.current = generateIdempotencyKey('sandbox-grant');
+    }
     if (!grantKeyRef.current) grantKeyRef.current = generateIdempotencyKey('sandbox-grant');
-    const res = await grantSandboxCoins({ userId: grantUserId, amount: grantAmount, reason: grantReason, idempotencyKey: grantKeyRef.current });
-    if (res.ok) {
-      toast.success(`تم منح ${res.amount} عملة تجريبية`);
-      grantKeyRef.current = null;
-      setGrantUserId('');
-      setGrantAmount(100);
-      setGrantReason('منح تجريبي عبر لوحة الإدارة');
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل المنح');
+    setGrantInFlight(true);
+    try {
+      const res = await grantSandboxCoins({ userId: grantUserId, amount: grantAmount, reason: grantReason, idempotencyKey: grantKeyRef.current });
+      if (res.ok) {
+        toast.success(`تم منح ${res.amount} عملة تجريبية`);
+        grantKeyRef.current = null;
+        grantFpRef.current = null;
+        setGrantUserId('');
+        setGrantAmount(100);
+        setGrantReason('منح تجريبي عبر لوحة الإدارة');
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل المنح');
+      }
+    } finally {
+      setGrantInFlight(false);
     }
   };
 
@@ -215,14 +235,26 @@ export default function AdminSandbox() {
       toast.error('معرف المستخدم مطلوب لتفعيل الاشتراك');
       return;
     }
+    if (subInFlight) return;
+    const fp = `${subUserId}|${packageId}`;
+    if (subFpRef.current !== fp) {
+      subFpRef.current = fp;
+      subKeyRef.current = generateIdempotencyKey('sandbox-sub');
+    }
     if (!subKeyRef.current) subKeyRef.current = generateIdempotencyKey('sandbox-sub');
-    const res = await activateSandboxSubscription({ userId: subUserId, packageId, idempotencyKey: subKeyRef.current });
-    if (res.ok) {
-      subKeyRef.current = null;
-      toast.success('تم تفعيل الاشتراك التجريبي');
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل التفعيل');
+    setSubInFlight(true);
+    try {
+      const res = await activateSandboxSubscription({ userId: subUserId, packageId, idempotencyKey: subKeyRef.current });
+      if (res.ok) {
+        subKeyRef.current = null;
+        subFpRef.current = null;
+        toast.success('تم تفعيل الاشتراك التجريبي');
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل التفعيل');
+      }
+    } finally {
+      setSubInFlight(false);
     }
   };
 
@@ -237,14 +269,21 @@ export default function AdminSandbox() {
   };
 
   const handleRenewSub = async (subscriptionId: string) => {
+    if (renewInFlight[subscriptionId]) return;
     if (!renewKeyRef.current[subscriptionId]) renewKeyRef.current[subscriptionId] = generateIdempotencyKey('sandbox-renew');
-    const res = await renewSandboxSubscription({ subscriptionId, idempotencyKey: renewKeyRef.current[subscriptionId] });
-    if (res.ok) {
-      delete renewKeyRef.current[subscriptionId];
-      toast.success('تم تجديد الاشتراك التجريبي');
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل التجديد');
+    setRenewInFlight(prev => ({ ...prev, [subscriptionId]: true }));
+    try {
+      const res = await renewSandboxSubscription({ subscriptionId, idempotencyKey: renewKeyRef.current[subscriptionId] });
+      if (res.ok) {
+        delete renewKeyRef.current[subscriptionId];
+        delete renewFpRef.current[subscriptionId];
+        toast.success('تم تجديد الاشتراك التجريبي');
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل التجديد');
+      }
+    } finally {
+      setRenewInFlight(prev => ({ ...prev, [subscriptionId]: false }));
     }
   };
 
@@ -257,14 +296,26 @@ export default function AdminSandbox() {
       toast.error('معرف الهدف (المنشور/الريل) مطلوب لإنشاء الحملة');
       return;
     }
+    if (promoInFlight) return;
+    const fp = `${promoUserId}|${promoTargetId}|${packageId}|${targetType}`;
+    if (promoFpRef.current !== fp) {
+      promoFpRef.current = fp;
+      promoKeyRef.current = generateIdempotencyKey('sandbox-promo');
+    }
     if (!promoKeyRef.current) promoKeyRef.current = generateIdempotencyKey('sandbox-promo');
-    const res = await createSandboxPromotion({ userId: promoUserId, packageId, targetType, targetId: promoTargetId, idempotencyKey: promoKeyRef.current });
-    if (res.ok) {
-      promoKeyRef.current = null;
-      toast.success('تم إنشاء الحملة الترويجية التجريبية');
-      void refresh();
-    } else {
-      toast.error(res.error ? (res.error as Error).message : 'فشل إنشاء الحملة');
+    setPromoInFlight(true);
+    try {
+      const res = await createSandboxPromotion({ userId: promoUserId, packageId, targetType, targetId: promoTargetId, idempotencyKey: promoKeyRef.current });
+      if (res.ok) {
+        promoKeyRef.current = null;
+        promoFpRef.current = null;
+        toast.success('تم إنشاء الحملة الترويجية التجريبية');
+        void refresh();
+      } else {
+        toast.error(res.error ? (res.error as Error).message : 'فشل إنشاء الحملة');
+      }
+    } finally {
+      setPromoInFlight(false);
     }
   };
 
