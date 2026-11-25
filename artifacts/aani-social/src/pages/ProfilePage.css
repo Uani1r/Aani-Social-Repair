@@ -907,14 +907,33 @@
   border-radius: 9999px;
 }
 
-/* حلقة قصص الملف الشخصي: نفس دلالة شريط القصص (ساطعة → باهتة)،
-   بظل خارجي فقط كي لا يتغيّر حجم الصورة أو موضعها. */
-.profile-story-ring.is-unseen {
-  box-shadow: 0 0 0 2px #fff;
+/* حلقة قصص الملف الشخصي: نفس دلالة شريط القصص (ساطعة → باهتة).
+   الحلقة تُرسم الآن على حافة الصورة نفسها (داخل الإطار الأسود الخارجي) بعرض
+   2px، بدل ظل خارجي عنها كان يترك الإطار الأسود ظاهراً كفراغ بين الحلقة
+   والصورة. الصورة لا تُمسّ ولا تُغطّى: الحلقة تبدأ من حافتها إلى الخارج فقط،
+   ويبقى من الإطار الأسود 2px ظاهراً خارج الحلقة.
+   بلا حلقة عندما لا توجد قصص: الحالتان فقط تُظهران الحلقة. */
+.profile-story-ring.is-unseen::before,
+.profile-story-ring.is-seen::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  z-index: 1;
+  border: 2px solid #fff;
+  border-radius: 9999px;
+  pointer-events: none;
 }
 
-.profile-story-ring.is-seen {
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45);
+.profile-story-ring.is-seen::before {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+/* الصورة فقط: منع قائمة «حفظ الصورة» الافتراضية عند الضغط المطوّل في iOS،
+   دون تعطيل أي تفاعل آخر على الصورة أو على الصفحة. */
+.profile-story-ring img {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .profile-story-ring[role='button'] {
@@ -1411,3 +1430,107 @@
   opacity: .55;
 }
 
+/* معاينة صورة الملف الشخصي (ضغط مطوّل): طبقة مستقلة على document.body —
+   خلفية داكنة مموّهة، صورة دائرية كبيرة في أعلى الشاشة، وإغلاق بالنقر خارجها
+   أو Escape. لا تنقّل ولا فتح ستوري: مجرد عرض للصورة. */
+.profile-avatar-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  /* أعلى الشاشة لا المنتصف: مسافة علوية محسوبة تتجاوز شريط حالة iPhone. */
+  align-items: flex-start;
+  justify-content: center;
+  padding: calc(env(safe-area-inset-top, 0px) + 24px) 16px max(24px, env(safe-area-inset-bottom, 0px));
+  background: rgb(0 0 0 / 70%);
+  backdrop-filter: blur(28px) saturate(120%);
+  -webkit-backdrop-filter: blur(28px) saturate(120%);
+  animation: profile-avatar-lightbox-fade-in 180ms ease-out both;
+}
+
+.profile-avatar-lightbox.is-closing {
+  animation: profile-avatar-lightbox-fade-out 140ms ease-in both;
+}
+
+/* الصورة نفسها كخلفية مكبّرة ومموّهة: عمق بصري بلا صور إضافية. */
+.profile-avatar-lightbox-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: .35;
+  pointer-events: none;
+}
+
+.profile-avatar-lightbox-backdrop > img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(40px) saturate(120%);
+  transform: scale(1.2);
+}
+
+/* مربّع بقدر ما تسمح به الشاشة، دائري دائماً (aspect-ratio 1/1) بلا تشويه. */
+.profile-avatar-lightbox-frame {
+  position: relative;
+  margin: 0;
+  width: min(78vw, 56vh, 420px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  animation: profile-avatar-lightbox-scale-in 200ms ease-out both;
+}
+
+.profile-avatar-lightbox-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #18181b;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 55%);
+}
+
+.profile-avatar-lightbox-close {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  inset-inline-end: 12px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.profile-avatar-lightbox-close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+@keyframes profile-avatar-lightbox-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes profile-avatar-lightbox-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes profile-avatar-lightbox-scale-in {
+  from { opacity: 0; transform: scale(.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-avatar-lightbox,
+  .profile-avatar-lightbox.is-closing,
+  .profile-avatar-lightbox-frame {
+    animation-duration: 1ms;
+  }
+}
