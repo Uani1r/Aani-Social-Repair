@@ -404,7 +404,9 @@ export default function ReelSlide({ post, currentUserId, onOpenComments, onRefre
   const reportPost = async () => {
     const reason = window.prompt('ما سبب الإبلاغ عن هذا الريل؟');
     if (!reason?.trim() || !supabaseConfigured) return;
-    const { error } = await supabase.from('post_reports').insert({
+    // الجدول في قاعدة البيانات هو public.reports (لا يوجد post_reports)،
+    // وأعمدته post_id / reporter_id / reason مطابقة لما يُرسل هنا.
+    const { error } = await supabase.from('reports').insert({
       post_id: post.id,
       reporter_id: currentUserId,
       reason: reason.trim(),
