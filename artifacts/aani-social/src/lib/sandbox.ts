@@ -195,7 +195,7 @@ export async function fetchSandboxTopUpPackages(): Promise<SandboxReadResult<San
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   const { data, error } = await supabase
-    .from('sandbox.top_up_packages')
+    .schema('sandbox').from('top_up_packages')
     .select('id, name, coins, price_usd, is_active, created_at')
     .eq('is_active', true)
     .order('coins', { ascending: true });
@@ -208,7 +208,7 @@ export async function fetchSandboxSubscriptionPackages(): Promise<SandboxReadRes
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   const { data, error } = await supabase
-    .from('sandbox.subscription_packages')
+    .schema('sandbox').from('subscription_packages')
     .select('id, name, coins_price, duration_days, is_active, created_at')
     .eq('is_active', true)
     .order('duration_days', { ascending: true });
@@ -221,7 +221,7 @@ export async function fetchSandboxPromotionPackages(): Promise<SandboxReadResult
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   const { data, error } = await supabase
-    .from('sandbox.promotion_packages')
+    .schema('sandbox').from('promotion_packages')
     .select('id, name, target_type, coins_price, duration_days, is_active, created_at')
     .eq('is_active', true)
     .order('target_type', { ascending: true })
@@ -285,7 +285,7 @@ export async function fetchSandboxGifts(params: {
   const pageSize = params.pageSize ?? 20;
   const from = params.page * pageSize;
   const { data, error } = await supabase
-    .from('sandbox.gift_transactions')
+    .schema('sandbox').from('gift_transactions')
     .select('id, gift_id, sender_id, recipient_id, price_paid, popularity_points, created_at, idempotency_key, is_sandbox')
     .or(`sender_id.eq.${params.userId},recipient_id.eq.${params.userId}`)
     .order('created_at', { ascending: false })
@@ -313,7 +313,7 @@ export async function fetchSandboxLedger(params: {
   const pageSize = params.pageSize ?? 50;
   const from = params.page * pageSize;
   let q = supabase
-    .from('sandbox.ledger')
+    .schema('sandbox').from('ledger')
     .select('id, user_id, type, amount, reference, idempotency_key, related_id, created_at')
     .order('created_at', { ascending: false })
     .range(from, from + pageSize);
@@ -338,7 +338,7 @@ export async function fetchSandboxTopUps(params: {
   const pageSize = params.pageSize ?? 50;
   const from = params.page * pageSize;
   let q = supabase
-    .from('sandbox.top_ups')
+    .schema('sandbox').from('top_ups')
     .select('id, user_id, package_id, amount, status, idempotency_key, simulated, failure_reason, created_at, completed_at')
     .order('created_at', { ascending: false })
     .range(from, from + pageSize);
@@ -427,7 +427,7 @@ export async function fetchSandboxSubscriptions(params: {
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   let q = supabase
-    .from('sandbox.subscriptions')
+    .schema('sandbox').from('subscriptions')
     .select('id, user_id, package_id, status, started_at, ended_at, renewed_at, cancelled_at, auto_renew, coins_charged')
     .order('started_at', { ascending: false });
   if (!params.all) q = q.eq('user_id', params.userId);
@@ -517,7 +517,7 @@ export async function fetchSandboxPromotions(params: {
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   let q = supabase
-    .from('sandbox.promotions')
+    .schema('sandbox').from('promotions')
     .select('id, user_id, package_id, target_type, target_id, status, started_at, ends_at, coins_deducted, failure_reason, created_at')
     .order('created_at', { ascending: false });
   if (!params.all) q = q.eq('user_id', params.userId);
@@ -625,7 +625,7 @@ export async function fetchSandboxAdminActions(params: {
   const pageSize = params.pageSize ?? 50;
   const from = params.page * pageSize;
   let q = supabase
-    .from('sandbox.admin_actions')
+    .schema('sandbox').from('admin_actions')
     .select('id, actor_user_id, action, target_type, target_id, reason, result, created_at')
     .order('created_at', { ascending: false })
     .range(from, from + pageSize);
@@ -649,7 +649,7 @@ export async function fetchSandboxRefunds(params: {
     return { data: null, error: new Error('اتصال قاعدة البيانات غير متاح') };
   }
   let q = supabase
-    .from('sandbox.refunds')
+    .schema('sandbox').from('refunds')
     .select('id, top_up_id, user_id, amount, reason, created_at')
     .order('created_at', { ascending: false });
   if (!params.all) q = q.eq('user_id', params.userId);

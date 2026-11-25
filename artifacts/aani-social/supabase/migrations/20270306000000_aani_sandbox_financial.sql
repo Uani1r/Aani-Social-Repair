@@ -633,6 +633,15 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:sub:' || p_user_id::text || ':' || p_idempotency_key));
 
+  if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and reference = 'sandbox subscription activate') then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
+    select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
+    select public.aani_sandbox_balance(p_user_id) into v_balance;
+    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
+  end if;
+
   select coins_price, duration_days into v_coins, v_days
   from sandbox.subscription_packages where id = p_package_id and is_active = true;
   if not found then raise exception 'package unavailable' using errcode='42704'; end if;
@@ -724,6 +733,15 @@ begin
 
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || v_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || v_user_id::text || ':' || p_idempotency_key));
+
+  if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = v_user_id and reference = 'sandbox subscription renew' and related_id = p_subscription_id) then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
+    select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
+    select public.aani_sandbox_balance(v_user_id) into v_balance;
+    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
+  end if;
 
   select coins_price, duration_days into v_coins, v_days
   from sandbox.subscription_packages where id = v_package_id and is_active = true;
