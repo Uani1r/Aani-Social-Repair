@@ -2001,7 +2001,7 @@ export default function ProfilePage({
     draggingKey: draggingReorderKey,
     dropTargetKey: dragOverReorderKey,
     disabled: profileReorderSaving,
-    begin: beginProfileReorder,
+    begin: (event, reorderKind, id) => beginProfileReorder(event, reorderKind as ProfileReorderKind, id),
     move: moveProfileReorderPointer,
     end: endProfileReorderPointer,
     cancel: cancelProfileReorderPointer,
