@@ -83,6 +83,13 @@ export default function AdminSandbox() {
   const [subInFlight, setSubInFlight] = useState(false);
   const [promoInFlight, setPromoInFlight] = useState(false);
   const [renewInFlight, setRenewInFlight] = useState<Record<string,boolean>>({});
+  const grantLockRef = useRef(false);
+  const subLockRef = useRef(false);
+  const promoLockRef = useRef(false);
+  const renewLockRef = useRef<Record<string,boolean>>({});
+  const refundLockRef = useRef<Record<string,boolean>>({});
+  const cancelLockRef = useRef<Record<string,boolean>>({});
+  const endLockRef = useRef<Record<string,boolean>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -194,7 +201,9 @@ export default function AdminSandbox() {
   }
 
   const handleGrant = async () => {
-    if (grantInFlight) return;
+    if (grantLockRef.current) return;
+    grantLockRef.current = true;
+    if (grantInFlight) { grantLockRef.current = false; return; }
     const fp = `${grantUserId}|${grantAmount}|${grantReason}`;
     if (grantFpRef.current !== fp) {
       grantFpRef.current = fp;
@@ -216,6 +225,7 @@ export default function AdminSandbox() {
         toast.error(res.error ? (res.error as Error).message : 'فشل المنح');
       }
     } finally {
+      grantLockRef.current = false;
       setGrantInFlight(false);
     }
   };
@@ -386,7 +396,7 @@ export default function AdminSandbox() {
                   />
                 </div>
                 <div className="flex flex-col gap-1">
-                  <Button onClick={handleGrant}>منح</Button>
+                  <Button onClick={handleGrant} disabled={grantInFlight}>منح</Button>
                 </div>
               </div>
             </TabsContent>
