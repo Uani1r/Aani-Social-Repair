@@ -621,6 +621,8 @@ declare
   v_coins integer;
   v_days integer;
   v_balance integer;
+  v_sub_id uuid;
+  v_status text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_user_id and not public.aani_sandbox_is_founder() then
@@ -634,12 +636,19 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:sub:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
-    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and reference = 'sandbox subscription activate') then
+    select related_id, amount into v_sub_id, v_coins
+    from sandbox.ledger where idempotency_key = p_idempotency_key;
+    if v_sub_id is null or not exists (
+      select 1 from sandbox.subscriptions s
+      where s.id = v_sub_id and s.user_id = p_user_id and s.package_id = p_package_id
+    ) or not exists (
+      select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and reference = 'sandbox subscription activate'
+    ) then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
-    select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
+    select status into v_status from sandbox.subscriptions where id = v_sub_id;
     select public.aani_sandbox_balance(p_user_id) into v_balance;
-    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
+    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status',v_status,'subscription_id',v_sub_id);
   end if;
 
   select coins_price, duration_days into v_coins, v_days
@@ -649,11 +658,12 @@ begin
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
 
-  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (p_user_id, 'debit', v_coins, 'sandbox subscription activate', p_idempotency_key, null);
-
   insert into sandbox.subscriptions (user_id, package_id, status, started_at, ended_at, auto_renew, coins_charged)
-  values (p_user_id, p_package_id, 'active', now(), now() + (v_days || ' days')::interval, true, v_coins);
+  values (p_user_id, p_package_id, 'active', now(), now() + (v_days || ' days')::interval, true, v_coins)
+  returning id into v_sub_id;
+
+  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+  values (p_user_id, 'debit', v_coins, 'sandbox subscription activate', p_idempotency_key, v_sub_id);
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;
 
@@ -718,6 +728,7 @@ declare
   v_coins integer;
   v_days integer;
   v_balance integer;
+  v_status text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
@@ -739,8 +750,9 @@ begin
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
+    select status into v_status from sandbox.subscriptions where id = p_subscription_id;
     select public.aani_sandbox_balance(v_user_id) into v_balance;
-    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
+    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status',v_status,'subscription_id',p_subscription_id);
   end if;
 
   select coins_price, duration_days into v_coins, v_days
