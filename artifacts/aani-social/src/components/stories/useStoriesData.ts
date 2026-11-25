@@ -15,6 +15,8 @@ interface UseStoriesDataOptions {
   userId: string;
   pendingProfileStoryOwnerId: string | null;
   pendingStoryId: string | null;
+  /** قصص محمّلة مسبقاً لكل حساب: تُفتح منها قصص الملف الشخصي فوراً بلا شبكة. */
+  groupedStories: StoriesByUser;
   onProfileStoryHandled: () => void;
   setGroupedStories: Dispatch<SetStateAction<StoriesByUser>>;
   setArchiveStories: Dispatch<SetStateAction<StoryRow[]>>;
@@ -33,10 +35,27 @@ const STORY_COLUMNS = 'id,user_id,media_url,media_type,thumbnail_url,caption,is_
 // فشل بسبب أعمدة/تضمين غير مطبق (ترحيل مفقود) — اجلب بلا تضمين الصوت
 const FALLBACK_SELECT_ERROR = /PGRST200|relation|sounds|column|does not exist/i;
 
+// قصص محمّلة مسبقاً لحساب: النشطة فقط، بنفس ترتيب العارض تماماً (الأقدم أولاً
+// ثم المعرّف عند تساوي الوقت) كي يطابق فهرس القصة ما يُعرض بعد الترتيب.
+function activeCachedStories(stories: StoryRow[]): StoryRow[] {
+  const now = Date.now();
+  return stories
+    .filter(story => !story.expires_at || Date.parse(story.expires_at) > now)
+    .sort((first, second) => {
+      const firstTime = Date.parse(first.created_at);
+      const secondTime = Date.parse(second.created_at);
+      if (Number.isFinite(firstTime) && Number.isFinite(secondTime) && firstTime !== secondTime) {
+        return firstTime - secondTime;
+      }
+      return first.id.localeCompare(second.id);
+    });
+}
+
 export function useStoriesData({
   userId,
   pendingProfileStoryOwnerId,
   pendingStoryId,
+  groupedStories,
   onProfileStoryHandled,
   setGroupedStories,
   setArchiveStories,
@@ -49,6 +68,10 @@ export function useStoriesData({
   setCurrentTimeSec,
 }: UseStoriesDataOptions) {
   const archiveRequestRef = useRef(0);
+  // أحدث قصص محمّلة لكل حساب: تُقرأ لحظة وصول طلب فتح دون إضافتها إلى تبعيات
+  // التأثير، فلا يُعاد تشغيله ولا يُعاد فتح العارض عند كل تحديث للشريط.
+  const groupedStoriesRef = useRef(groupedStories);
+  groupedStoriesRef.current = groupedStories;
 
   const fetchStories = useCallback(async () => {
     if (!supabaseConfigured || !userId) return;
@@ -177,6 +200,29 @@ export function useStoriesData({
 
   useEffect(() => {
     if (!pendingProfileStoryOwnerId) return;
+
+    // فتح فوري من الذاكرة: قصص هذا الحساب محمّلة مسبقاً مع مؤلفيها (مسجّلة في
+    // groupedStories)، فتُفتح الآن بلا أي طلب شبكة ولا انتظار — بنفس الترتيب
+    // (الأقدم إلى الأحدث) ونفس اختيار pendingStoryId.
+    const cachedStories = activeCachedStories(groupedStoriesRef.current[pendingProfileStoryOwnerId] ?? []);
+    const cachedIndex = pendingStoryId
+      ? cachedStories.findIndex(story => story.id === pendingStoryId)
+      : (cachedStories.length ? 0 : -1);
+    if (cachedIndex >= 0) {
+      setProfileStoryOwnerId(pendingProfileStoryOwnerId);
+      setProfilePreviewStories(cachedStories);
+      setActiveUserGroup(pendingProfileStoryOwnerId);
+      setActiveStoryIndex(cachedIndex);
+      setProgress(0);
+      setCurrentTimeSec(0);
+      onProfileStoryHandled();
+      return;
+    }
+
+    // لا بيانات محمّلة (أو القصة المطلوبة ليست فيها): مسار Supabase الحالي.
+    // المؤلف المحمّل مسبقاً — إن وُجد — يمنع طلب profiles إضافياً.
+    const cachedAuthor = cachedStories.find(story => story.author)?.author ?? null;
+
     if (!supabaseConfigured) {
       toast.error('تعذر تحميل قصص هذا الحساب');
       onProfileStoryHandled();
@@ -223,14 +269,18 @@ export function useStoriesData({
           return;
         }
 
-        const { data: author, error: authorError } = await supabase
-          .from('profiles')
-          .select('id, username, full_name, display_name, avatar_url, gender')
-          .eq('id', pendingProfileStoryOwnerId)
-          .maybeSingle();
-        if (!active) return;
-        if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة:', authorError);
-        const storyAuthor = normalizeStoryAuthor(author);
+        // بيانات المؤلف موجودة مسبقاً؟ لا طلب إضافي لها في هذه الحالة.
+        let storyAuthor: StoryAuthor | null = cachedAuthor;
+        if (!storyAuthor) {
+          const { data: author, error: authorError } = await supabase
+            .from('profiles')
+            .select('id, username, full_name, display_name, avatar_url, gender')
+            .eq('id', pendingProfileStoryOwnerId)
+            .maybeSingle();
+          if (!active) return;
+          if (authorError) console.warn('[stories] تعذر تحميل ملف صاحب القصة:', authorError);
+          storyAuthor = normalizeStoryAuthor(author);
+        }
         const storiesWithAuthor = storyRows.map(story => ({ ...story, author: storyAuthor }));
 
         setProfileStoryOwnerId(pendingProfileStoryOwnerId);
