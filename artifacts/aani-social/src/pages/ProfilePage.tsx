@@ -592,6 +592,9 @@ export default function ProfilePage({
   const ownProfilePosts = safeProfilePosts.filter(post => post.user_id === activeUserId && !post.reposter_id);
   const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
   const displayProfilePosts = orderOwnedPostsInProfileSlots(safeProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
+  // معاينة شبكة التعديل: نفس قائمة شبكة Profile الفعلية (بلا المنشورات النصية).
+  // إعادات نشر الآخرين تظهر في مواقعها بلا سحب، والمنشورات المملوكة وحدها تُسحب.
+  const reorderPreviewPosts = displayProfilePosts.filter(post => post.type !== 'text');
   // تبويب الفيديوهات: كل ما نشره المستخدم كريل أو فيديو في التغذية
   // (type = 'reel' أياً كانت الوجهة)، بترتيب زمني من الأحدث للأقدم.
   const profileVideoPosts = displayProfilePosts
@@ -1979,7 +1982,10 @@ export default function ProfilePage({
       return;
     }
 
+    // إعادات نشر الآخرين تظهر في مواقعها بلا سحب: لا يُرسل إلا معرفات
+    // المنشورات المملوكة، والقائمة المرسلة تبقى كاملة لعقد RPC الحالية.
     const previousIds = orderedEditablePosts.map(post => post.id);
+    if (!previousIds.includes(gesture.id) || !previousIds.includes(targetId)) return;
     const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
     if (nextIds === previousIds) return;
     setProfilePostOrder(nextIds);
@@ -2186,10 +2192,11 @@ export default function ProfilePage({
                     <h3>المنشورات</h3>
                     <small>3 أعمدة — نفس شبكة ملفك الشخصي</small>
                   </div>
-                  {orderedEditablePosts.length ? (
+                  {reorderPreviewPosts.length ? (
                     <ProfileMediaGrid
-                      posts={orderedEditablePosts}
+                      posts={reorderPreviewPosts}
                       reorder={profileReorderBinding('posts')}
+                      canReorder={post => post.user_id === activeUserId && !post.reposter_id}
                       className="profile-reorder-grid"
                     />
                   ) : <EmptyState className="py-6" />}

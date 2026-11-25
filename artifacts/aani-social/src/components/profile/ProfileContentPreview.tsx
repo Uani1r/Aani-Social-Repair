@@ -69,12 +69,15 @@ export function ProfileMediaGrid({
   variant = 'posts',
   onOpenPost,
   reorder,
+  canReorder,
   className = 'mt-4',
 }: {
   posts: Post[];
   variant?: ProfileContentVariant;
   onOpenPost?: (post: Post) => void;
   reorder?: ReorderBinding;
+  /** عناصر الشبكة القابلة للسحب فقط (المنشورات المملوكة) — الباقي يظهر بلا سحب. */
+  canReorder?: (post: Post) => boolean;
   className?: string;
 }) {
   return (
@@ -86,25 +89,26 @@ export function ProfileMediaGrid({
         // الغلاف المختار عند النشر: صورة خفيفة تُعرض بدل عنصر الفيديو
         const postCoverUrl = getPostCoverUrl(post);
         const isMultiImage = mediaUrls.length > 1;
-        const drag = reorderProps(reorder, post.id);
+        const draggable = Boolean(reorder) && (!canReorder || canReorder(post));
+        const drag = draggable ? reorderProps(reorder, post.id) : undefined;
         return (
           <button
             key={post.id}
             type="button"
             onClick={() => { if (!reorder) onOpenPost?.(post); }}
-            aria-label={reorder
+            aria-label={draggable
               ? `اسحب لإعادة ترتيب المنشور: ${post.content || 'منشور وسائط'}`
               : variant !== 'posts' || isReel
                 ? 'فتح الريل في عارض الملف الشخصي'
                 : 'فتح المنشور في عارض الملف الشخصي'}
-            data-profile-reorder-kind={drag['data-profile-reorder-kind']}
-            data-profile-reorder-id={drag['data-profile-reorder-id']}
-            onPointerDown={drag.onPointerDown}
-            onPointerMove={drag.onPointerMove}
-            onPointerUp={drag.onPointerUp}
-            onPointerCancel={drag.onPointerCancel}
-            disabled={drag.disabled}
-            className={`relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]${drag.classes ?? ''}`}
+            data-profile-reorder-kind={drag?.['data-profile-reorder-kind']}
+            data-profile-reorder-id={drag?.['data-profile-reorder-id']}
+            onPointerDown={drag?.onPointerDown}
+            onPointerMove={drag?.onPointerMove}
+            onPointerUp={drag?.onPointerUp}
+            onPointerCancel={drag?.onPointerCancel}
+            disabled={drag?.disabled}
+            className={`relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]${drag?.classes ?? ''}`}
           >
             {isReel ? (
               postCoverUrl ? (
@@ -163,6 +167,7 @@ export function ProfileHighlightsRow({
   collections,
   onSelect,
   onAdd,
+  addButtonId,
   reorder,
   ariaLabel = 'أبرز القصص',
 }: {
