@@ -47,6 +47,61 @@ type CoverPanGesture = {
   overflowY: number;
 };
 
+// امتدادات الصور المقبولة من iPhone: HEIC/HEIF تصل من الكاميرا/مكتبة الصور،
+// وبعض الاختيارات من تطبيق «الملفات» تصل بنوع MIME فارغ وامتداد صحيح فقط.
+const PICKED_IMAGE_EXTENSION = /\.(jpe?g|png|webp|heic|heif|gif|avif)$/i;
+const HEIC_MIME = /^image\/(heic|heif|heics|heifs)$/i;
+
+/** هل الاختيار صورة؟ يقبل HEIC/HEIF والنوع الفارغ مع امتداد صورة. */
+function isPickedImage(file: File): boolean {
+  const type = (file.type || '').toLowerCase();
+  if (type.startsWith('image/')) return true;
+  return !type && PICKED_IMAGE_EXTENSION.test(file.name || '');
+}
+
+/**
+ * يحوّل HEIC/HEIF (وصوراً بلا نوع MIME لكن بامتداد معروف) إلى JPEG قبل القص،
+ * فلا يمنع نوع غير معتاد الاختيار، ولا يفشل تصدير canvas لاحقاً.
+ * JPEG/PNG/WebP/GIF تُترك كما هي.
+ */
+async function normalizePickedImage(file: File): Promise<File> {
+  const type = (file.type || '').toLowerCase();
+  const extension = (file.name || '').toLowerCase();
+  const needsConversion = HEIC_MIME.test(type)
+    || (!type && /\.(heic|heif)$/i.test(extension));
+  if (!needsConversion) return file;
+
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error('تعذر فتح الصورة على هذا الجهاز. اختر صورة JPEG أو PNG.'));
+      element.src = objectUrl;
+    });
+    const maxSide = 1600;
+    const longest = Math.max(image.naturalWidth, image.naturalHeight) || 1;
+    const scale = Math.min(1, maxSide / longest);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('تعذر تجهيز الصورة.');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        value => value ? resolve(value) : reject(new Error('تعذر تجهيز الصورة.')),
+        'image/jpeg',
+        0.92,
+      );
+    });
+    const baseName = (file.name || 'avatar').replace(/\.[^.]+$/, '') || 'avatar';
+    return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 function VerifiedBadge() {
   return (
     <svg className="h-5 w-5 shrink-0 text-[#1D9BF0]" viewBox="0 0 24 24" aria-label="حساب موثّق" role="img">
@@ -1202,24 +1257,40 @@ export default function ProfilePage({
     else setCoverPreview(url);
   };
 
-  const handleProfileImageSelection = (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
+  // إلغاء القص يعيد المعاينة السابقة: ملف الأفاتار المعتمد إن وُجد، وإلا الصورة المحفوظة.
+  // لا يُعاد استخدام blob قديم لأنه أُبطل عند تبديل المعاينة.
+  const restoreAvatarPreviewAfterCancel = () => {
+    setAvatarCropFile(null);
+    setImagePreview('avatar', pendingAvatarFile ? URL.createObjectURL(pendingAvatarFile) : (person?.avatar_url || null));
+  };
+
+  const handleProfileImageSelection = async (kind: ProfileImageKind, event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
     input.value = '';
     if (!file || !own || !isEditingProfile || profileSaving) return;
-    if (!file.type.startsWith('image/')) {
-      toast.error('اختر ملف صورة صالحاً.');
+    if (!isPickedImage(file)) {
+      toast.error('اختر صورة بصيغة JPEG أو PNG أو HEIC.');
       return;
     }
 
-    if (kind === 'avatar') {
-      setAvatarCropFile(file);
+    if (kind === 'cover') {
+      setPendingCoverFile(file);
+      setImagePreview('cover', URL.createObjectURL(file));
+      setCoverPosition({ x: 50, y: 50 });
       return;
     }
 
-    setPendingCoverFile(file);
-    setImagePreview('cover', URL.createObjectURL(file));
-    setCoverPosition({ x: 50, y: 50 });
+    // معاينة فورية داخل دائرة الصورة، والقصاصة الدائرية تُفتح فوقها مباشرة.
+    setImagePreview('avatar', URL.createObjectURL(file));
+    try {
+      // HEIC/HEIF تُحوَّل إلى JPEG قبل القص حتى يعمل تصدير canvas على iPhone.
+      const prepared = await normalizePickedImage(file);
+      setAvatarCropFile(prepared);
+    } catch (error) {
+      restoreAvatarPreviewAfterCancel();
+      toast.error(error instanceof Error ? error.message : 'تعذر تجهيز الصورة. جرّب صورة أخرى.');
+    }
   };
 
   const handleCoverPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -1262,6 +1333,11 @@ export default function ProfilePage({
 
   const saveProfileEdits = async () => {
     if (!own || !person || !isEditingProfile || profileSaving) return;
+    // لا حفظ قبل اعتماد القصاصة: الصورة المختارة لا تُرفع إلا بعد «تم» في القص.
+    if (avatarCropFile) {
+      toast.error('اعتمد قصاصة الصورة الشخصية أو ألغِها قبل الحفظ.');
+      return;
+    }
     if (!supabaseConfigured) {
       toast.error('اتصال قاعدة البيانات غير متاح.');
       return;
@@ -2627,18 +2703,21 @@ export default function ProfilePage({
             .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0) || a.created_at.localeCompare(b.created_at));
         })}
       />
-      {avatarCropFile && (
+      {avatarCropFile && typeof document !== 'undefined' && createPortal(
         <HighlightCoverCropper
           file={avatarCropFile}
           title="اقتصاص الصورة الشخصية"
           outputSuffix="-avatar"
-          onCancel={() => setAvatarCropFile(null)}
+          onCancel={() => {
+            restoreAvatarPreviewAfterCancel();
+          }}
           onSave={file => {
             setPendingAvatarFile(file);
             setImagePreview('avatar', URL.createObjectURL(file));
             setAvatarCropFile(null);
           }}
-        />
+        />,
+        document.body,
       )}
       {selectedHighlightCollection && (
         <ProfileHighlightViewer
