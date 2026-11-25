@@ -50,7 +50,14 @@ create policy aani_wallet_top_ups_select_own on public.wallet_top_ups
 
 -- لا سياسة تحديث/حذف للمستخدمين على هذا الجدول (السجل دائم وغير قابل للتعديل).
 
--- لا تُمنح صلاحية الإدراج directa للمستخدمين.
+-- صلاحيات الجدول: SELECT للمستخدم على سجلاته فقط؛ REVOKE صريح لـ INSERT/UPDATE/DELETE.
+revoke insert, update, delete on public.wallet_top_ups from public;
+revoke insert, update, delete on public.wallet_top_ups from anon;
+revoke insert, update, delete on public.wallet_top_ups from authenticated;
+-- ضمان عدم وجود صلاحية INSERT/UPDATE/DELETE حتى لو منحت سابقاً.
+revoke all on public.wallet_top_ups from public;
+revoke all on public.wallet_top_ups from anon;
+revoke all on public.wallet_top_ups from authenticated;
 grant select on public.wallet_top_ups to authenticated;
 
 -- =====================================================================
