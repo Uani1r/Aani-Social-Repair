@@ -1060,6 +1060,9 @@ export default function StoriesBar({
     userId,
     pendingProfileStoryOwnerId,
     pendingStoryId,
+    // القصص المحمّلة تُمرَّر ليُفتح عارض صورة الملف الشخصي فوراً من الذاكرة
+    // بدل انتظار طلبَي Supabase (القصص ثم صاحب الحساب).
+    groupedStories,
     onProfileStoryHandled,
     setGroupedStories,
     setArchiveStories,
