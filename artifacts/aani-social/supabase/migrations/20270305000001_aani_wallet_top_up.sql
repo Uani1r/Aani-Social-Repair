@@ -24,7 +24,7 @@ create table if not exists public.wallet_top_ups (
   amount integer not null check (amount > 0),
   payment_reference text not null unique,
   payment_provider text not null,
-  status text not null default 'completed' check (status in ('completed', 'failed', 'refunded')),
+  status text not null default 'pending' check (status in ('pending', 'completed', 'failed', 'refunded')),
   created_at timestamptz not null default now(),
   verified_at timestamptz
 );
