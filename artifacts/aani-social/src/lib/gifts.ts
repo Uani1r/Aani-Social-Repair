@@ -342,12 +342,16 @@ export type TopUpResult = {
 
 /** شحن رصيد المحفظة بعد التحقق من نجاح الدفع من جهة الخادم.
  *
- * ملاحظة التكامل (مطلوبة قبل النشر على الإنتاج):
- *   يجب على caller التأكد من نجاح الدفع مع مزود الدفع المحدد (paymentProvider)
- *   باستخدام مرجع الدفع (paymentReference) قبل استدعاء هذه الدالة. هذه الدالة
- *   هي المدخل الآمن للخادم لإضافة الرصيد فقط؛ فهي لا تتصل بمزود دفع ولا تنشئ
- *   عملية دفع وهمية. إذا لم يكن مزود دفع متكاملاً، لا يُستدعى هذه الدالة ولا
- *   يُضاف رصيد وهمي.
+ * ملاحظة الأمان (مهم):
+ *   هذه الدالة معطلة إلى حين تكامل مزود دفع فعّال من جهة الخادم.
+ *   لا تستدعي أي مسار RPC لإضافة الرصيد، ولا تُضيف أي عملات بناءً على مدخلات
+ *   يرسلها العميل (مبلغ، مرجع دفع، مزود دفع). يُعتبر مرجع الدفع وحده غير
+ *   كافٍ كدليل على نجاح الدفع؛ يلزم التحقق الفعلي من مزود الدفع المعتمد.
+ *
+ * قبل النشر على الإنتاج يجب:
+ *   1. اختيار مزود دفع فعّال (مثلاً Stripe / Razorpay / PayPal).
+ *   2. إضافة مسار خادم موثوق يتحقق من نجاح الدفع مع المزود باستخدام مرجع الدفع.
+ *   3. تفعيل هذه الدالة لمنح الرصيد فقط بعد التحقق الخادمي.
  */
 export async function topUpWallet(
   userId: string,
@@ -355,47 +359,11 @@ export async function topUpWallet(
   paymentReference: string,
   paymentProvider: string
 ): Promise<TopUpResult> {
-  if (!supabaseConfigured) {
-    return {
-      ok: false,
-      inconclusive: true,
-      error: 'اتصال قاعدة البيانات غير متاح.',
-    };
-  }
-  try {
-    const { data, error } = await supabase.rpc('aani_wallet_top_up', {
-      p_amount: amount,
-      p_payment_reference: paymentReference,
-      p_payment_provider: paymentProvider,
-    });
-    if (error) {
-      const message =
-        (error as { message?: unknown }).message;
-      const text = typeof message === 'string' && message.length > 0
-        ? message
-        : undefined;
-      if (classifySendError(error) === 'definitive') {
-        return { ok: false, inconclusive: false, error: text || 'فشل شحن الرصيد.' };
-      }
-      return {
-        ok: false,
-        inconclusive: true,
-        error: text || 'تعذّر تأكيد الشحن. أعد المحاولة.',
-      };
-    }
-    if (!data || typeof data !== 'object' || typeof (data as { ok?: unknown }).ok !== 'boolean') {
-      return {
-        ok: false,
-        inconclusive: true,
-        error: 'استجابة غير صالحة من الخادم. أعد المحاولة.',
-      };
-    }
-    return data as TopUpResult;
-  } catch (error) {
-    return {
-      ok: false,
-      inconclusive: true,
-      error: error instanceof Error ? error.message : 'تعذّر الاتصال بالخادم. أعد المحاولة.',
-    };
-  }
+  // الشحن معطل إلى حين تكامل مزود دفع فعّال من جهة الخادم.
+  // لا يُستدعى أي RPC لإضافة الرصيد، ولا يُضاف أي رصيد وهمي.
+  return {
+    ok: false,
+    inconclusive: false,
+    error: 'خدمة شحن الرصيد غير متاحة حالياً. يرجى الانتظار حتى اكتمال تكامل مزود الدفع.',
+  };
 }

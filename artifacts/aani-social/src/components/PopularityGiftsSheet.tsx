@@ -22,12 +22,10 @@ import {
   fetchReceivedGifts,
   resolveSendAttempt,
   sendGift,
-  topUpWallet,
   type Gift,
   type ReceivedGift,
   type SendAttempt,
   type SendGiftResult,
-  type TopUpResult,
 } from '@/lib/gifts';
 import { toast } from 'sonner';
 
@@ -89,12 +87,8 @@ export default function PopularityGiftsSheet({
   const [attempt, setAttempt] = useState<SendAttempt | null>(null);
   const sending = attempt?.status === 'sending';
 
-  // حالات تدفق شحن الرصيد (يُفتح عند الضغط على زر «شحن»).
-  const [showRecharge, setShowRecharge] = useState(false);
-  const [rechargeAmount, setRechargeAmount] = useState('');
-  const [rechargeProvider, setRechargeProvider] = useState('');
-  const [rechargeReference, setRechargeReference] = useState('');
-  const [recharging, setRecharging] = useState(false);
+  // عملية شحن الرصيد معطلة إلى حين تكامل مزود دفع فعّال من جهة الخادم.
+  // لا يُسمح بإدخال مبلغ أو مرجع دفع أو مزود من واجهة المستخدم؛ لا يُضاف أي رصيد.
 
   const {
     dragOffset,
@@ -249,66 +243,10 @@ export default function PopularityGiftsSheet({
     setSelectedGift(prev => (prev?.id === gift.id ? null : gift));
   };
 
-  const closeRecharge = () => {
-    setShowRecharge(false);
-    setRechargeAmount('');
-    setRechargeProvider('');
-    setRechargeReference('');
-    setRecharging(false);
-  };
-
-  const handleRecharge = async () => {
-    const amount = Number(rechargeAmount);
-    if (!amount || amount <= 0) {
-      toast.error('برجاء إدخال مبلغ صحيح للشحن.');
-      return;
-    }
-    if (!rechargeProvider.trim()) {
-      toast.error('برجاء اختيار مزود الدفع.');
-      return;
-    }
-    if (!rechargeReference.trim()) {
-      toast.error('برجاء إدخال مرجع الدفع من مزود الدفع.');
-      return;
-    }
-
-    // ملاحظة التكامل (مطلوبة قبل النشر على الإنتاج):
-    //   يجب التأكد من نجاح الدفع مع مزود الدفع (rechargeProvider) باستخدام
-    //   مرجع الدفع (rechargeReference) من جهة الخادم قبل استدعاء topUpWallet.
-    //   هذه الواجهة لا تتصل بأي مزود دفع ولا تنشئ عملية دفع وهمية.
-    setRecharging(true);
-    try {
-      const result: TopUpResult = await topUpWallet(
-        currentUserId,
-        amount,
-        rechargeReference.trim(),
-        rechargeProvider.trim()
-      );
-      if (!result.ok) {
-        if (result.inconclusive) {
-          toast.error(result.error || 'تعذّر تأكيد الشحن. استخدم نفس مرجع الدفع لإعادة المحاولة.');
-          return;
-        }
-        toast.error(result.error || 'فشل شحن الرصيد.');
-        return;
-      }
-      // نجاح مؤكد من الخادم: تحديث الرصيد من المصدر الحقيقي وإغلاق النموذج.
-      if (typeof result.balance === 'number') setBalance(result.balance);
-      await refresh();
-      toast.success('تم شحن الرصيد بنجاح.');
-      closeRecharge();
-    } catch (error) {
-      console.error('[popularity sheet] تعذر الشحن:', error);
-      toast.error(error instanceof Error ? error.message : 'تعذّر الشحن. أعد المحاولة.');
-    } finally {
-      setRecharging(false);
-    }
-  };
-
   const onRecharge = () => {
-    // وظيفة الشحن تتطلب مزود دفع حقيقي ومرجع دفع مُтверّد من جهة الخادم.
-    // إن لم يكن مزود دفع متكاملاً، يُظهر النموذج المطلوب ولا يضيف رصيداً وهمياً.
-    setShowRecharge(true);
+    // عملية الشحن معطلة إلى حين تكامل مزود دفع فعّال من جهة الخادم.
+    // لا يُضف أي رصيد، ولا يُستدعى أي مسار شحن من واجهة المستخدم.
+    toast.info('خدمة شحن الرصيد غير متاحة حالياً.');
   };
 
   const onEarnFree = () => {
@@ -568,91 +506,6 @@ export default function PopularityGiftsSheet({
               <span className={`font-bold ${GREEN_COLOR}`}>اكسب مجاناً</span>
             </button>
           </div>
-
-          {/* ===== نموذج شحن الرصيد (يظهر عند الضغط على «شحن») ===== */}
-          {showRecharge && (
-            <div className="rounded-xl border border-[#3A3A3E] bg-[#101012] p-3 space-y-2">
-              <h4 className="text-xs font-semibold text-zinc-400 text-right">
-                شحن رصيد العملات
-              </h4>
-              <p className="text-xs text-zinc-500 text-right">
-                يُضاف الرصيد فقط بعد تأكيد نجاح الدفع من جهة الخادم.
-              </p>
-              <div className="space-y-2">
-                <div className="flex flex-col sm:flex-row sm:items-end gap-2">
-                  <label className="text-xs text-zinc-400 text-right sm:text-right">
-                    المبلغ (عملة)
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    step="1"
-                    value={rechargeAmount}
-                    onChange={(e) => setRechargeAmount(e.target.value)}
-                    disabled={recharging}
-                    className="rounded border border-[#3A3A3E] bg-[#0B0C0E] px-2 py-1.5 text-xs text-white w-full sm:w-32"
-                    placeholder="مثلاً 100"
-                  />
-                </div>
-                <div className="flex flex-col sm:flex-row sm:items-end gap-2">
-                  <label className="text-xs text-zinc-400 text-right sm:text-right">
-                    مزود الدفع
-                  </label>
-                  <input
-                    type="text"
-                    value={rechargeProvider}
-                    onChange={(e) => setRechargeProvider(e.target.value)}
-                    disabled={recharging}
-                    className="rounded border border-[#3A3A3E] bg-[#0B0C0E] px-2 py-1.5 text-xs text-white w-full sm:w-32"
-                    placeholder="مثلاً Stripe"
-                  />
-                </div>
-                <div className="flex flex-col sm:flex-row sm:items-end gap-2">
-                  <label className="text-xs text-zinc-400 text-right sm:text-right">
-                    مرجع الدفع (من المزود)
-                  </label>
-                  <input
-                    type="text"
-                    value={rechargeReference}
-                    onChange={(e) => setRechargeReference(e.target.value)}
-                    disabled={recharging}
-                    className="rounded border border-[#3A3A3E] bg-[#0B0C0E] px-2 py-1.5 text-xs text-white w-full"
-                    placeholder="معرف عملية الدفع من المزود"
-                  />
-                </div>
-                <p className="text-[11px] text-zinc-500 text-right">
-                  لا يُضاف أي رصيد قبل تأكيد نجاح الدفع من جهة الخادم.
-                  إن لم يكن مزود دفع متكاملاً، لا يُشحن رصيد وهمي.
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={recharging}
-                  onClick={closeRecharge}
-                  className="flex-1 rounded-lg border border-[#3A3A3E] bg-[#1A1A1E] px-3 py-2 text-xs font-semibold text-zinc-300 transition disabled:opacity-50"
-                >
-                  إلغاء
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    recharging ||
-                    !Number(rechargeAmount) ||
-                    !rechargeProvider.trim() ||
-                    !rechargeReference.trim()
-                  }
-                  onClick={handleRecharge}
-                  className={cn(
-                    'flex-1 rounded-lg px-3 py-2 text-xs font-semibold text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed',
-                    'bg-gradient-to-br from-[#F59E0B] to-[#D97706]'
-                  )}
-                >
-                  {recharging ? 'جارٍ الشحن…' : 'تأكيد الشحن'}
-                </button>
-              </div>
-            </div>
-          )}
 
           {/* ===== شبكة الهدايا ===== */}
           <p className="text-xs text-zinc-500 text-right">
