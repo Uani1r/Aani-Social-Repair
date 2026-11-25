@@ -27,6 +27,24 @@ type StoryMediaStageProps = Pick<
   | 'onMediaReady'
 >;
 
+// تشغيل فيديو القصة: iOS Safari قد يرفض play() بلا إيماءة (NotAllowedError)،
+// فتُعاد المحاولة مرة واحدة بصوت مكتوم (المسار المعتمد في Safari)، ويُسجَّل سبب
+// الرفض في السجل بدل إخفائه بصمت — كي يمكن تشخيص تجمّد الفيديو.
+function playStoryVideo(video: HTMLVideoElement) {
+  video.play().catch((error: unknown) => {
+    const wasMuted = video.muted;
+    video.muted = true;
+    video.play()
+      .then(() => {
+        if (!wasMuted) video.muted = false;
+      })
+      .catch((retryError: unknown) => {
+        video.muted = wasMuted;
+        console.warn('[story video] تعذر تشغيل الفيديو:', retryError ?? error);
+      });
+  });
+}
+
 export default function StoryMediaStage({
   currentStory,
   currentStoryFilter,
@@ -76,7 +94,7 @@ export default function StoryMediaStage({
       video.pause();
       return;
     }
-    if (video.readyState >= 1) void video.play().catch(() => {});
+    if (video.readyState >= 1) playStoryVideo(video);
   }, [currentStory.id, isPaused, storyVideoRef]);
 
   // إيقاف الصوت وإطلاق موارده عند مغادرة عارض القصص:
@@ -108,7 +126,7 @@ export default function StoryMediaStage({
             onLoadedMetadata={event => {
               const video = event.currentTarget;
               onVideoMetadata(currentStory.id, video.duration);
-              if (!isPaused) void video.play().catch(() => {});
+              if (!isPaused) playStoryVideo(video);
             }}
             onTimeUpdate={event => {
               const video = event.currentTarget;
@@ -118,6 +136,13 @@ export default function StoryMediaStage({
             onLoadedData={() => onMediaReady?.(currentStory.id)}
             onPlaying={() => onMediaReady?.(currentStory.id)}
             onEnded={() => onVideoEnded(currentStory.id)}
+            // فشل تحميل/فك ترميز الفيديو: لا تبقى الشاشة بلا مؤقت ولا يُخفى الخطأ
+            // — يُسجَّل برمزه، ويُعلن الوسيط جاهزاً كي يتقدّم العارض بدل التجمد.
+            onError={event => {
+              const mediaError = event.currentTarget.error;
+              console.warn('[story video] تعذر تحميل فيديو القصة:', currentStory.id, mediaError?.code, mediaError?.message);
+              onMediaReady?.(currentStory.id);
+            }}
           />
         ) : (
           <img
@@ -127,6 +152,12 @@ export default function StoryMediaStage({
             style={{ filter: currentStoryFilter.css, transform: mediaTransformCss, transformOrigin: 'center' }}
             // المؤقت يبدأ بعد تحميل الصورة وظهورها فعلياً.
             onLoad={() => onMediaReady?.(currentStory.id)}
+            // فشل تحميل الصورة (رابط خاص انتهى توقيعه مثلاً): يُسجَّل الخطأ ولا
+            // تبقى الشاشة متجمدة بلا مؤقت — يُعلن الوسيط جاهزاً كي يتقدم العارض.
+            onError={() => {
+              console.warn('[story image] تعذر تحميل صورة القصة:', currentStory.id);
+              onMediaReady?.(currentStory.id);
+            }}
           />
         )
       ) : (

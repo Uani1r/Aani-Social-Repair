@@ -2704,7 +2704,7 @@ export default function Shell({
           unreadCount={unreadCount}
           showNearbyButton={path === '/' || path === '/feed'}
           onOpenNearby={() => setShowNearbyUsers(true)}
-          stories={isFeedPath ? headerStories : undefined}
+          showStories={isFeedPath}
           showSettingsButton={path === '/profile'}
           onOpenSettings={() => setShowSettingsModal(true)}
           onOpenNotifications={() => setShowNotifsModal(true)}
@@ -2877,6 +2877,16 @@ export default function Shell({
           />
         )}
       </div>
+
+      {/* مستضيف دائم لشريط القصص وعارضها: يبقى مُركَّباً في كل الصفحات (الرئيسية،
+          الملف الشخصي، الرسائل...) فلا يبقى طلب فتح ستوري معلّقاً حتى العودة
+          للرئيسية. شريط القصص نفسه يُعرض داخل الشريط العلوي عبر بوابة، والعارض
+          طبقة مستقلة فوق الصفحة الحالية بلا أي تغيير في المسار. */}
+      {headerStories && (
+        <div className="story-viewer-host">
+          {headerStories}
+        </div>
+      )}
     </div>
   );
 }
