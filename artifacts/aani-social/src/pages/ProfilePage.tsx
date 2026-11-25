@@ -22,6 +22,8 @@ import SavedPostsView from '@/components/SavedPostsView';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
 import { usePosts } from '@/hooks/usePosts';
+import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
+import { useOverlayBack } from '@/hooks/useOverlayBack';
 import { supabase, supabaseConfigured, storageBucket } from '@/lib/supabase';
 import { useSeenStoryIds } from '@/lib/seenStories';
 import { uploadMedia } from '@/lib/storyUpload';
@@ -220,6 +222,83 @@ function VerifiedBadge() {
       <path fill="currentColor" d="M12 1.6 15.1 3l3.3-.3 1.1 3.1 2.7 1.8-.9 3.2.9 3.2-2.7 1.8-1.1 3.1-3.3-.3-3.1 1.4-3.1-1.4-3.3.3-1.1-3.1-2.7-1.8.9-3.2-.9-3.2 2.7-1.8 1.1-3.1 3.3.3L12 1.6Z" />
       <path d="m7.3 12.2 3 3 6.5-6.5" fill="none" stroke="white" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
     </svg>
+  );
+}
+
+// ضغط مطوّل على صورة الملف الشخصي: مدة الضغط، وعتبة الحركة (بكسل) التي تُلغيه.
+const AVATAR_LONG_PRESS_MS = 480;
+const AVATAR_PRESS_MOVE_TOLERANCE = 10;
+
+/**
+ * معاينة صورة الملف الشخصي (ضغط مطوّل): طبقة مستقلة على document.body —
+ * خلفية داكنة مموّهة من الصورة نفسها، وصورة دائرية كبيرة (1/1 و object-cover)
+ * بلا تشويه. لا تفتح الستوري ولا تغيّر المسار: الإغلاق (خارج الصورة أو Escape
+ * أو زر X) يعيد المستخدم إلى الملف الشخصي نفسه، والتمرير خلفها مقفل بالـhook
+ * المشترك ويُعاد إلى حالته السابقة عند الإغلاق.
+ */
+function ProfileAvatarLightbox({ src, alt, onClose }: { src: string; alt: string; onClose: () => void }) {
+  useModalBodyScrollLock();
+  const [closing, setClosing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  // إغلاق واحد فقط: أثناء الاختفاء لا يُعاد تشغيل المؤقت ولا يُستدعى الإغلاق مرتين.
+  const requestCloseRef = useRef<() => void>(() => {});
+  requestCloseRef.current = () => {
+    if (closeTimerRef.current !== null) return;
+    setClosing(true);
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null;
+      onCloseRef.current();
+    }, 140);
+  };
+
+  // زر الرجوع في الهاتف يغلق المعاينة بدل مغادرة صفحة الملف الشخصي.
+  useOverlayBack(true, () => requestCloseRef.current());
+
+  // Escape يغلق المعاينة؛ المستمع يُزال مع المكوّن.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      requestCloseRef.current();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // مغادرة المكوّن تُلغي أي مؤقت إغلاق معلّق.
+  useEffect(() => () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  return (
+    <div
+      className={`profile-avatar-lightbox${closing ? ' is-closing' : ''}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`صورة ${alt}`}
+      onClick={event => { if (event.target === event.currentTarget) requestCloseRef.current(); }}
+    >
+      <div className="profile-avatar-lightbox-backdrop" aria-hidden="true">
+        <img src={src} alt="" draggable={false} />
+      </div>
+      <figure className="profile-avatar-lightbox-frame">
+        <img className="profile-avatar-lightbox-image" src={src} alt={`صورة ${alt}`} draggable={false} />
+      </figure>
+      <button
+        type="button"
+        className="profile-avatar-lightbox-close"
+        aria-label="إغلاق معاينة الصورة"
+        onClick={() => requestCloseRef.current()}
+      >
+        <X size={22} aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
@@ -464,6 +543,12 @@ export default function ProfilePage({
   const avatarPickRequestRef = useRef(0);
   // قفل حفظ متزامن: مرجع لا حالة، فلا يمرّ نقران في الدورة نفسها.
   const saveInFlightRef = useRef(false);
+  // معاينة صورة الملف الشخصي (ضغط مطوّل): رابط الصورة المعروض، أو null.
+  const [avatarLightboxSrc, setAvatarLightboxSrc] = useState<string | null>(null);
+  // ضغط مطوّل: مؤقت واحد، نقطة بداية اللمس، وعلم منع النقرة التالية (فلا يُفتح الستوري).
+  const avatarLongPressTimerRef = useRef<number | null>(null);
+  const avatarPressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const avatarLongPressHandledRef = useRef(false);
 
   // إغلاق شاشة التعديل يُبطل أي تجهيز صورة جارٍ، فلا تُفتح قصاصة بعد الإغلاق.
   useEffect(() => {
@@ -472,6 +557,25 @@ export default function ProfilePage({
     setAvatarProcessing(false);
     setAvatarCropFile(null);
   }, [isEditingProfile]);
+
+  // فتح شاشة التعديل يلغي أي ضغط مطوّل جارٍ ويغلق المعاينة، فلا تتعارض مع زر الكاميرا.
+  useEffect(() => {
+    if (!isEditingProfile) return;
+    if (avatarLongPressTimerRef.current !== null) {
+      window.clearTimeout(avatarLongPressTimerRef.current);
+      avatarLongPressTimerRef.current = null;
+    }
+    avatarPressOriginRef.current = null;
+    setAvatarLightboxSrc(null);
+  }, [isEditingProfile]);
+
+  // مغادرة الصفحة تُلغي مؤقت الضغط المطوّل، فلا يبقى مؤقت معلّق.
+  useEffect(() => () => {
+    if (avatarLongPressTimerRef.current !== null) {
+      window.clearTimeout(avatarLongPressTimerRef.current);
+      avatarLongPressTimerRef.current = null;
+    }
+  }, []);
   const [, setLocation] = useLocation();
 
   const fromSearch = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('from') === 'search';
@@ -758,6 +862,52 @@ export default function ProfilePage({
     window.dispatchEvent(new CustomEvent('aani:open-profile-stories', {
       detail: { ownerId: activeUserId },
     }));
+  };
+
+  const clearAvatarLongPressTimer = () => {
+    if (avatarLongPressTimerRef.current !== null) {
+      window.clearTimeout(avatarLongPressTimerRef.current);
+      avatarLongPressTimerRef.current = null;
+    }
+    avatarPressOriginRef.current = null;
+  };
+
+  // بدء الضغط: مؤقت ≈480ms يُفتح به معاينة الصورة فقط؛ يُلغى بالحركة أو الرفع
+  // أو إلغاء اللمس أو فتح شاشة التعديل. منع تكرار الأحداث: مؤقت واحد فقط.
+  const handleAvatarPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (isEditingProfile) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (!resolvedAvatarPreview) return;
+    clearAvatarLongPressTimer();
+    avatarLongPressHandledRef.current = false;
+    avatarPressOriginRef.current = { x: event.clientX, y: event.clientY };
+    avatarLongPressTimerRef.current = window.setTimeout(() => {
+      avatarLongPressTimerRef.current = null;
+      avatarLongPressHandledRef.current = true;
+      setAvatarLightboxSrc(resolvedAvatarPreview);
+    }, AVATAR_LONG_PRESS_MS);
+  };
+
+  const handleAvatarPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const origin = avatarPressOriginRef.current;
+    if (!origin || avatarLongPressTimerRef.current === null) return;
+    const movedFar = Math.abs(event.clientX - origin.x) > AVATAR_PRESS_MOVE_TOLERANCE
+      || Math.abs(event.clientY - origin.y) > AVATAR_PRESS_MOVE_TOLERANCE;
+    if (movedFar) clearAvatarLongPressTimer();
+  };
+
+  // رفع الإصبع أو إلغاء اللمس يُلغي المؤقت دائماً؛ منع النقرة التالية يتم في onClick.
+  const handleAvatarPointerEnd = () => {
+    clearAvatarLongPressTimer();
+  };
+
+  const handleAvatarClick = () => {
+    // ضغط مطوّل نُفِّذ: رفع الإصبع لا يفتح الستوري.
+    if (avatarLongPressHandledRef.current) {
+      avatarLongPressHandledRef.current = false;
+      return;
+    }
+    openProfileStories();
   };
 
   useEffect(() => {
@@ -2459,6 +2609,15 @@ export default function ProfilePage({
         onPopularityChange={value => setPopularity(value)}
       />
 
+      {avatarLightboxSrc && typeof document !== 'undefined' && createPortal(
+        <ProfileAvatarLightbox
+          src={avatarLightboxSrc}
+          alt={displayName(person)}
+          onClose={() => setAvatarLightboxSrc(null)}
+        />,
+        document.body,
+      )}
+
       <div ref={usernameWrapperRef} className="sticky-username-wrapper" id="usernameWrapper">
         {username && <div className="username-text absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 z-20 pointer-events-none" data-username={username}>{username}</div>}
       </div>
@@ -2503,7 +2662,12 @@ export default function ProfilePage({
             role={profileStoryIds.length ? 'button' : undefined}
             tabIndex={profileStoryIds.length ? 0 : undefined}
             aria-label={profileStoryIds.length ? `عرض قصص ${displayName(person)}` : undefined}
-            onClick={openProfileStories}
+            onClick={handleAvatarClick}
+            onPointerDown={handleAvatarPointerDown}
+            onPointerMove={handleAvatarPointerMove}
+            onPointerUp={handleAvatarPointerEnd}
+            onPointerCancel={handleAvatarPointerEnd}
+            onPointerLeave={handleAvatarPointerEnd}
             onKeyDown={event => {
               if (!profileStoryIds.length) return;
               if (event.key === 'Enter' || event.key === ' ') {
@@ -2514,7 +2678,13 @@ export default function ProfilePage({
           >
             <span className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full border-4 border-black">
               {resolvedAvatarPreview ? (
-                <img src={resolvedAvatarPreview} className="h-full w-full rounded-full object-cover" alt="" />
+                <img
+                  src={resolvedAvatarPreview}
+                  className="h-full w-full rounded-full object-cover"
+                  alt=""
+                  draggable={false}
+                  onContextMenu={event => event.preventDefault()}
+                />
               ) : (
                 <span className="flex h-full w-full items-center justify-center rounded-full bg-neutral-800">
                   <svg className="h-8 w-8 text-neutral-400" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
