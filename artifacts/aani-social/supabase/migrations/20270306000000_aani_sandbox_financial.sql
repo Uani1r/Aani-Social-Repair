@@ -369,7 +369,7 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:grant:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
-    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and amount = p_amount and reference = p_reason) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and type = 'credit' and amount = p_amount and reference = p_reason) then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     select public.aani_sandbox_balance(p_user_id) into v_balance;
@@ -422,7 +422,7 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:deduct:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
-    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and amount = p_amount and reference = p_reason) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and type = 'debit' and amount = p_amount and reference = p_reason) then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     select public.aani_sandbox_balance(p_user_id) into v_balance;
@@ -475,6 +475,9 @@ begin
   where sender_id = p_sender_id and idempotency_key = p_idempotency_key
   limit 1;
   if found then
+    if v_existing.recipient_id <> p_recipient_id or v_existing.gift_id <> p_gift_id then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
     return jsonb_build_object('ok',true,'duplicate',true,'transaction_id',v_existing.id,
       'price_paid',v_existing.price_paid,'popularity_points',v_existing.popularity_points,'sandbox',true);
   end if;
@@ -528,6 +531,10 @@ begin
 
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
     if not exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key and user_id = p_user_id and package_id = p_package_id) then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
+    if (p_simulate_success and (select status from sandbox.top_ups where idempotency_key = p_idempotency_key) <> 'completed')
+       or (not p_simulate_success and (select status from sandbox.top_ups where idempotency_key = p_idempotency_key) <> 'failed') then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     return jsonb_build_object('ok',true,'duplicate',true,'status',
