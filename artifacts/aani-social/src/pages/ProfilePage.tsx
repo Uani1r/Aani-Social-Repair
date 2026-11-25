@@ -2499,7 +2499,7 @@ export default function ProfilePage({
       <div className="relative z-20 flex items-end justify-between px-4 pb-2">
         <div className="relative flex items-end gap-3">
           <div
-            className={`relative -mt-11 h-[82px] w-[82px] shrink-0 profile-story-ring ${profileStoryState ?? ''}`}
+            className={`relative -mt-11 h-[92px] w-[92px] shrink-0 profile-story-ring ${profileStoryState ?? ''}`}
             role={profileStoryIds.length ? 'button' : undefined}
             tabIndex={profileStoryIds.length ? 0 : undefined}
             aria-label={profileStoryIds.length ? `عرض قصص ${displayName(person)}` : undefined}
