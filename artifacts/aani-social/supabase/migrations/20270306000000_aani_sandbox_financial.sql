@@ -369,6 +369,9 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:grant:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and amount = p_amount and reference = p_reason) then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
     select public.aani_sandbox_balance(p_user_id) into v_balance;
     return jsonb_build_object('ok',true,'duplicate',true,'amount',p_amount,'balance',v_balance);
   end if;
@@ -419,6 +422,9 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:deduct:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and amount = p_amount and reference = p_reason) then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
     select public.aani_sandbox_balance(p_user_id) into v_balance;
     return jsonb_build_object('ok',true,'duplicate',true,'amount',p_amount,'balance',v_balance);
   end if;
@@ -521,6 +527,9 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:topup:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    if not exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key and user_id = p_user_id and package_id = p_package_id) then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
     return jsonb_build_object('ok',true,'duplicate',true,'status',
       (select status from sandbox.top_ups where idempotency_key = p_idempotency_key));
   end if;
@@ -816,7 +825,10 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:promo:' || p_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.promotions where idempotency_key = p_idempotency_key) then
-    return jsonb_build_object('ok',true,'duplicate',true,'status','active');
+    if not exists (select 1 from sandbox.promotions where idempotency_key = p_idempotency_key and user_id = p_user_id and package_id = p_package_id and target_type = p_target_type and target_id = p_target_id) then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end if;
+    return jsonb_build_object('ok',true,'duplicate',true,'status',(select status from sandbox.promotions where idempotency_key = p_idempotency_key));
   end if;
 
   select target_type, coins_price, duration_days
