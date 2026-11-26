@@ -62,7 +62,7 @@
 
 ## 5) الاختبارات
 
-- SQL/RLS/التزامن: `supabase/tests/*` عبر `sandbox-financial.yml` (28 اختبار +
+- SQL/RLS/التزامن: `supabase/tests/*` عبر `sandbox-financial.yml` (30 اختبار +
   اختبار التزامن مع إثبات انتظار القفل).
 - وحدة (TypeScript): `src/lib/sandbox.test.ts` (الإجماليات، تبديل الهوية،
   تخطيط التبويبات، العزل المالي).
