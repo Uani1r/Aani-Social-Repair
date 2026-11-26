@@ -38,11 +38,3 @@
   width: 100px;
   height: 120px;
 }
-
-/* زر إجراء العنصر (المربع أو الدائرة) يملأ الصندوق الثابت أعلاه، فيبقى مركز
-   العنصر ونقطة الإسقاط فوق الزر نفسه في Chromium وWebKit. */
-[data-testid='harness-ready'] .profile-reorder-circle-action {
-  display: block;
-  width: 100px;
-  height: 120px;
-}

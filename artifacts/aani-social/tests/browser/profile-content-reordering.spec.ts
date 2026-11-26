@@ -1,9 +1,8 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 
 // Real pointer drag & drop: press, hold past the 450ms long press, move onto the
-// target, release. The components use pointer events and elementFromPoint, so
-// the drag has to be a genuine pointer sequence instead of synthetic events.
-// `from` is the drag handle: the item itself never captures the pointer.
+// target, release. The drag starts on the item itself — its image, video or
+// circle — never on a handle, because the reorder UI has no controls at all.
 async function longPressDrag(page: Page, from: Locator, to: Locator) {
   const source = await from.boundingBox();
   const target = await to.boundingBox();
@@ -16,22 +15,39 @@ async function longPressDrag(page: Page, from: Locator, to: Locator) {
   await page.mouse.up();
 }
 
-// The title of each highlight circle: the last direct span of its own item, so
-// every collection yields exactly one title instead of the page's last span.
+// Long press without moving, then release on the same item: the browser sends a
+// click afterwards, which the preview must consume instead of opening the item.
+async function longPressInPlace(page: Page, item: Locator) {
+  const box = await item.boundingBox();
+  if (!box) throw new Error('press target must be visible');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(520);
+  await page.mouse.up();
+}
+
+// The aria-live announcement and the post the preview opened through a click.
+const announcement = (page: Page) => page.locator('[data-testid="reorder-announcement"]');
+const openedPost = (page: Page) => page.locator('[data-testid="opened-post"]');
+const log = (page: Page) => page.evaluate(() => window.__profileReorderLog ?? []);
+
 const highlightTitles = (page: Page) => page.locator('section[aria-label="highlights"] [data-profile-reorder-kind="highlights"] > span:last-of-type');
 const gridIds = (page: Page) => page.locator('section[aria-label="media grid"] [data-profile-reorder-id]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-profile-reorder-id')));
 const storyIds = (page: Page) => page.locator('section[aria-label="collection stories"] [data-profile-reorder-id]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-profile-reorder-id')));
-const log = (page: Page) => page.evaluate(() => window.__profileReorderLog ?? []);
-
-// Every reorderable item carries its own drag handle; the item itself does not.
-const handleOf = (item: Locator) => item.locator('.profile-reorder-drag-handle');
 const posts = (page: Page) => page.locator('section[aria-label="media grid"] [data-profile-reorder-kind="posts"]');
 const circles = (page: Page) => page.locator('section[aria-label="highlights"] [data-profile-reorder-kind="highlights"]');
 const stories = (page: Page) => page.locator('section[aria-label="collection stories"] [data-profile-reorder-kind="stories"]');
-const openFirstCollection = (page: Page) => page.locator('[data-profile-reorder-id="c-one"] .profile-reorder-circle-action').click();
-const announcement = (page: Page) => page.locator('[data-testid="reorder-announcement"]');
-const movePrevious = { name: 'نقل العنصر إلى الموضع السابق' };
-const moveNext = { name: 'نقل العنصر إلى الموضع التالي' };
+const repost = (page: Page) => page.locator('section[aria-label="media grid"] > div > button').last();
+const openCollection = (page: Page) => page.locator('[data-profile-reorder-id="c-one"]').click();
+
+// Dispatches a cancelable event of type touchmove and reports whether the page
+// cancelled it. The listener only needs the event type and its cancelability,
+// which is what stops Safari from scrolling during an active drag.
+const touchMovePrevented = (page: Page) => page.evaluate(() => {
+  const event = new Event('touchmove', { bubbles: true, cancelable: true });
+  document.dispatchEvent(event);
+  return event.defaultPrevented;
+});
 
 test.beforeEach(async ({ page }) => {
   const consoleErrors: string[] = [];
@@ -63,8 +79,8 @@ test('renders the same fixed order for highlights and the media grid', async ({ 
   expect(await highlightTitles(page).allTextContents()).toEqual(['الثانية', 'الأولى']);
   expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
 
-  const repost = page.locator('[data-testid="excluded"]');
-  expect(await repost.getAttribute('data-text')).toBe('p-text');
+  const excluded = page.locator('[data-testid="excluded"]');
+  expect(await excluded.getAttribute('data-text')).toBe('p-text');
   await expect(page.locator('[data-profile-reorder-id="p-text"]')).toHaveCount(0);
 
   const grid = page.locator('section[aria-label="media grid"] > div').first();
@@ -72,138 +88,134 @@ test('renders the same fixed order for highlights and the media grid', async ({ 
   await expect(page.locator('[data-profile-reorder-id="p-one"]')).toBeVisible();
 });
 
-// The handle is the only drag surface: items keep touch-action: auto so the
-// rows and the grid still scroll with a finger, and only handle blocks it.
-test('shows a drag handle on reorderable items only and keeps items scrollable', async ({ page }) => {
-  await expect(page.locator('section[aria-label="highlights"] .profile-reorder-drag-handle')).toHaveCount(2);
-  await expect(page.locator('section[aria-label="media grid"] .profile-reorder-drag-handle')).toHaveCount(3);
+// The reorder UI carries no controls: no handle, no previous/next buttons, and
+// the items keep their normal touch-action so the page still scrolls by finger.
+test('shows no drag handle and no previous/next buttons on the media', async ({ page }) => {
+  await expect(page.locator('.profile-reorder-drag-handle')).toHaveCount(0);
+  await expect(page.locator('[data-profile-reorder-handle]')).toHaveCount(0);
+  await expect(page.locator('.profile-reorder-move-group')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'نقل العنصر إلى الموضع السابق' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'نقل العنصر إلى الموضع التالي' })).toHaveCount(0);
 
-  // The repost tile is not reorderable: a plain tile button, no handle.
-  const repost = page.locator('section[aria-label="media grid"] > div > button');
-  await expect(repost).toHaveCount(1);
-  await expect(repost.locator('.profile-reorder-drag-handle')).toHaveCount(0);
-  await expect(page.locator('[data-profile-reorder-id="p-repost"]')).toHaveCount(0);
+  // No icon-only control inside a tile: each grid tile has exactly the tile's
+  // own text nodes, and the circles only their artwork and title.
+  await expect(page.locator('section[aria-label="media grid"] button button')).toHaveCount(0);
+  await expect(page.locator('section[aria-label="highlights"] button button')).toHaveCount(0);
 
-  const itemTouchAction = await page.locator('[data-profile-reorder-id="p-one"]').evaluate(node => getComputedStyle(node).touchAction);
-  expect(itemTouchAction).toBe('auto');
-  const handleTouchAction = await page.locator('[data-profile-reorder-id="p-one"] .profile-reorder-drag-handle').evaluate(node => getComputedStyle(node).touchAction);
-  expect(handleTouchAction).toBe('none');
-
-  // The stories strip only exists inside an opened collection, and every story
-  // in it has its own handle too.
-  await expect(page.locator('section[aria-label="collection stories"]')).toHaveCount(0);
-  await openFirstCollection(page);
-  await expect(stories(page)).toHaveCount(3);
-  await expect(page.locator('section[aria-label="collection stories"] .profile-reorder-drag-handle')).toHaveCount(3);
+  for (const id of ['p-one', 'c-one']) {
+    const touchAction = await page.locator(`[data-profile-reorder-id="${id}"]`).evaluate(node => getComputedStyle(node).touchAction);
+    expect(touchAction).toBe('auto');
+  }
 });
 
-// Same pointer sequence as a drag, but pressed on the tile instead of its
-// handle: nothing moves, and the click never becomes a reorder.
-test('does not reorder when the gesture starts outside the handle', async ({ page }) => {
+test('reorders a post by long-pressing its image', async ({ page }) => {
   await longPressDrag(page, posts(page).nth(2), posts(page).nth(0));
-  expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
-  expect(await log(page)).toEqual([]);
 
-  await longPressDrag(page, circles(page).nth(0), circles(page).nth(1));
-  expect(await highlightTitles(page).allTextContents()).toEqual(['الثانية', 'الأولى']);
-  expect(await log(page)).toEqual([]);
+  expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
+  expect((await log(page)).at(-1)).toEqual({
+    kind: 'posts',
+    nextIds: ['p-three', 'p-one', 'p-two'],
+    previousIds: ['p-one', 'p-two', 'p-three'],
+  });
 });
 
-test('reorders a highlight collection and records the new id order', async ({ page }) => {
-  await longPressDrag(page, handleOf(circles(page).nth(0)), circles(page).nth(1));
+test('reorders a highlight circle by long-pressing the circle itself', async ({ page }) => {
+  await longPressDrag(page, circles(page).nth(0), circles(page).nth(1));
 
   expect(await highlightTitles(page).allTextContents()).toEqual(['الأولى', 'الثانية']);
-  const entries = await log(page);
-  expect(entries.at(-1)).toEqual({ kind: 'highlights', nextIds: ['c-one', 'c-two'], previousIds: ['c-two', 'c-one'] });
+  expect((await log(page)).at(-1)).toEqual({ kind: 'highlights', nextIds: ['c-one', 'c-two'], previousIds: ['c-two', 'c-one'] });
 });
 
-test('opens a collection and reorders its stories', async ({ page }) => {
-  await openFirstCollection(page);
+test('reorders a story circle inside its collection', async ({ page }) => {
+  await openCollection(page);
   await expect(stories(page)).toHaveCount(3);
 
-  await longPressDrag(page, handleOf(stories(page).nth(2)), stories(page).nth(0));
+  await longPressDrag(page, stories(page).nth(2), stories(page).nth(0));
 
   expect(await storyIds(page)).toEqual(['s-one-3', 's-one-1', 's-one-2']);
-  const entries = await log(page);
-  expect(entries.at(-1)?.kind).toBe('stories');
-  expect(entries.at(-1)?.nextIds).toEqual(['s-one-3', 's-one-1', 's-one-2']);
+  expect((await log(page)).at(-1)?.kind).toBe('stories');
+  expect((await log(page)).at(-1)?.nextIds).toEqual(['s-one-3', 's-one-1', 's-one-2']);
 });
 
-test('reorders owned posts and leaves the repost untouched', async ({ page }) => {
-  await longPressDrag(page, handleOf(posts(page).nth(2)), posts(page).nth(0));
+test('opens a post on a short click and never opens it after a drag', async ({ page }) => {
+  await posts(page).nth(1).click();
+  await expect(openedPost(page)).toHaveText('p-two');
 
+  // A real drag must not open the moved tile.
+  await longPressDrag(page, posts(page).nth(2), posts(page).nth(0));
+  await expect(openedPost(page)).toHaveText('p-two');
   expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
-  const entries = await log(page);
-  expect(entries.at(-1)).toEqual({ kind: 'posts', nextIds: ['p-three', 'p-one', 'p-two'], previousIds: ['p-one', 'p-two', 'p-three'] });
 
-  // The repost tile has no handle and no reorder attributes, so dragging it
-  // onto the grid changes nothing.
-  const repost = page.locator('section[aria-label="media grid"] > div > button');
-  await longPressDrag(page, repost, posts(page).nth(0));
-  expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
+  // Long press without moving, released on the same tile: the click the browser
+  // sends afterwards is consumed, so the tile stays closed.
+  await longPressInPlace(page, posts(page).nth(1));
+  await expect(openedPost(page)).toHaveText('p-two');
 });
 
-test('moves posts, highlight collections and stories with the previous and next buttons', async ({ page }) => {
-  await posts(page).nth(0).getByRole('button', moveNext).click();
-  expect(await gridIds(page)).toEqual(['p-two', 'p-one', 'p-three']);
-  expect((await log(page)).at(-1)).toEqual({ kind: 'posts', nextIds: ['p-two', 'p-one', 'p-three'], previousIds: ['p-one', 'p-two', 'p-three'] });
-  await expect(announcement(page)).toContainText('الموضع 2 من 3');
+test('opens a collection and a story on a short click', async ({ page }) => {
+  await expect(page.locator('section[aria-label="collection stories"]')).toHaveCount(0);
+  await openCollection(page);
+  await expect(stories(page)).toHaveCount(3);
 
-  // The first item cannot go back, the last cannot go forward, and neither
-  // adds a save attempt.
-  await posts(page).nth(0).getByRole('button', movePrevious).click();
-  expect(await gridIds(page)).toEqual(['p-two', 'p-one', 'p-three']);
-  await posts(page).nth(2).getByRole('button', moveNext).click();
-  expect(await gridIds(page)).toEqual(['p-two', 'p-one', 'p-three']);
-  expect((await log(page)).length).toBe(1);
+  await stories(page).nth(1).click();
+  await expect(openedPost(page)).toHaveText('s-one-1');
+});
 
-  await circles(page).nth(0).getByRole('button', moveNext).click();
-  expect(await highlightTitles(page).allTextContents()).toEqual(['الأولى', 'الثانية']);
-  await expect(announcement(page)).toContainText('الموضع 2 من 2');
+test('does not reorder when the pointer moves before the long press completes', async ({ page }) => {
+  const box = await posts(page).nth(0).boundingBox();
+  if (!box) throw new Error('press target must be visible');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  // Moving past the 10px threshold before 450ms cancels the gesture.
+  await page.mouse.move(box.x + box.width / 2 + 40, box.y + box.height / 2 + 40, { steps: 4 });
+  await page.waitForTimeout(600);
+  await page.mouse.up();
 
-  await openFirstCollection(page);
-  await stories(page).nth(0).getByRole('button', moveNext).click();
-  expect(await storyIds(page)).toEqual(['s-one-2', 's-one-1', 's-one-3']);
-  expect((await log(page)).at(-1)).toEqual({
-    kind: 'stories',
-    nextIds: ['s-one-2', 's-one-1', 's-one-3'],
-    previousIds: ['s-one-1', 's-one-2', 's-one-3'],
-  });
+  expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
+  expect(await log(page)).toEqual([]);
+});
+
+// The page is scrollable by touch until the long press completes, and only an
+// active drag cancels the browser's scroll (ProfilePage's non-passive listener).
+test('blocks page scrolling only while a drag is active', async ({ page }) => {
+  expect(await touchMovePrevented(page)).toBe(false);
+
+  const box = await posts(page).nth(0).boundingBox();
+  if (!box) throw new Error('press target must be visible');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(520);
+  expect(await touchMovePrevented(page)).toBe(true);
+  await page.mouse.up();
+
+  expect(await touchMovePrevented(page)).toBe(false);
+  // Releasing on the same tile neither reorders nor opens it.
+  expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
+  await expect(openedPost(page)).toHaveText('');
+});
+
+test('leaves the repost untouched', async ({ page }) => {
+  await longPressDrag(page, repost(page), posts(page).nth(0));
+
+  expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
+  expect(await log(page)).toEqual([]);
+  await expect(page.locator('[data-profile-reorder-id="p-repost"]')).toHaveCount(0);
 });
 
 test('restores the previous order when the save fails', async ({ page }) => {
   await page.evaluate(() => { window.__profileReorderFailNext = true; });
-  await longPressDrag(page, handleOf(posts(page).nth(0)), posts(page).nth(1));
+  await longPressDrag(page, posts(page).nth(0), posts(page).nth(1));
 
   expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
-  const entries = await log(page);
-  expect(entries.at(-1)?.nextIds).toEqual(['p-one', 'p-two', 'p-three']);
-});
-
-test('restores the order when a previous/next save fails', async ({ page }) => {
-  await page.evaluate(() => { window.__profileReorderFailNext = true; });
-  await posts(page).nth(0).getByRole('button', moveNext).click();
-
-  expect(await gridIds(page)).toEqual(['p-one', 'p-two', 'p-three']);
-  const entries = await log(page);
-  expect(entries.at(-1)).toEqual({ kind: 'posts', nextIds: ['p-one', 'p-two', 'p-three'], previousIds: ['p-two', 'p-one', 'p-three'] });
+  expect((await log(page)).at(-1)?.nextIds).toEqual(['p-one', 'p-two', 'p-three']);
   await expect(announcement(page)).toContainText('فشل حفظ الترتيب');
 });
 
 test('keeps the saved order after a reload', async ({ page }) => {
-  await longPressDrag(page, handleOf(posts(page).nth(2)), posts(page).nth(0));
+  await longPressDrag(page, posts(page).nth(2), posts(page).nth(0));
   expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
 
   await page.reload();
   await expect(page.locator('section[aria-label="media grid"]')).toBeVisible();
   expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
-});
-
-test('keeps the order set with the buttons after a reload', async ({ page }) => {
-  await posts(page).nth(2).getByRole('button', movePrevious).click();
-  expect(await gridIds(page)).toEqual(['p-one', 'p-three', 'p-two']);
-
-  await page.reload();
-  await expect(page.locator('section[aria-label="media grid"]')).toBeVisible();
-  expect(await gridIds(page)).toEqual(['p-one', 'p-three', 'p-two']);
 });
