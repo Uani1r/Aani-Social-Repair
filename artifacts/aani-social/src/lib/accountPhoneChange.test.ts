@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  PENDING_PHONE_CHANGE_MAX_AGE_MS,
+  beginPendingPhoneChange,
   clearPendingPhoneChange,
   decidePhoneChangeRequest,
-  pendingPhoneChangeRemainingMs,
+  planPhoneChangeStart,
+  promotePendingPhoneChange,
   readPendingPhoneChange,
-  savePendingPhoneChange,
   type PendingPhoneChange,
 } from './accountPhoneChange';
 
@@ -17,9 +17,12 @@ const NEW_PHONE = '+9647701234567';
 const OTHER_PHONE = '+9647709876543';
 const CURRENT_PHONE = '+9647700000000';
 const NOW = Date.UTC(2026, 0, 1, 12, 0, 0);
+const FIVE_YEARS_MS = 5 * 365 * 24 * 60 * 60 * 1000;
+
+type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 /** تخزين في الذاكرة يشترك فيه "تحميلان" للصفحة، لمحاكاة إعادة التحميل. */
-function memoryStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
+function memoryStorage(): StorageLike {
   const rows = new Map<string, string>();
   return {
     getItem: key => rows.get(key) ?? null,
@@ -28,137 +31,225 @@ function memoryStorage(): Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> {
   };
 }
 
-function pendingOf(phone: string, requestedAt: number): PendingPhoneChange {
-  return { phone, requestedAt };
+/** تخزين يرفض كل كتابة — لاختبار فشل الحفظ. */
+function unwritableStorage(): StorageLike {
+  const rows = new Map<string, string>();
+  return {
+    getItem: key => rows.get(key) ?? null,
+    setItem: () => { throw new Error('quota exceeded'); },
+    removeItem: (key) => { rows.delete(key); },
+  };
+}
+
+function pendingOf(phone: string, requestedAt: number, state: 'pending' | 'requesting' = 'pending'): PendingPhoneChange {
+  return { phone, requestedAt, state };
 }
 
 test('no pending request allows a new number', () => {
-  const decision = decidePhoneChangeRequest({
-    pending: null,
-    nextPhone: NEW_PHONE,
-    currentPhone: CURRENT_PHONE,
-    now: NOW,
-  });
-  assert.deepEqual(decision, { allowed: true, reason: 'new' });
+  assert.deepEqual(
+    decidePhoneChangeRequest({ pending: null, nextPhone: NEW_PHONE, currentPhone: CURRENT_PHONE }),
+    { allowed: true, reason: 'new' },
+  );
 });
 
 test('the current number is rejected even with no pending request', () => {
-  const decision = decidePhoneChangeRequest({
-    pending: null,
-    nextPhone: CURRENT_PHONE,
-    currentPhone: CURRENT_PHONE,
-    now: NOW,
-  });
-  assert.deepEqual(decision, { allowed: false, reason: 'unchanged' });
+  assert.deepEqual(
+    decidePhoneChangeRequest({ pending: null, nextPhone: CURRENT_PHONE, currentPhone: CURRENT_PHONE }),
+    { allowed: false, reason: 'unchanged' },
+  );
 });
 
 test('a pending request for the same number is a resend, not a new request', () => {
-  const decision = decidePhoneChangeRequest({
-    pending: pendingOf(NEW_PHONE, NOW - 60_000),
-    nextPhone: NEW_PHONE,
-    currentPhone: CURRENT_PHONE,
-    now: NOW,
-  });
-  assert.deepEqual(decision, { allowed: true, reason: 'resend' });
+  assert.deepEqual(
+    decidePhoneChangeRequest({
+      pending: pendingOf(NEW_PHONE, NOW),
+      nextPhone: NEW_PHONE,
+      currentPhone: CURRENT_PHONE,
+    }),
+    { allowed: true, reason: 'resend' },
+  );
 });
 
-test('a second number is blocked while the pending request may still be valid', () => {
-  const pending = pendingOf(NEW_PHONE, NOW - 60_000);
+test('a second number stays blocked with no time limit, even five years later', () => {
   const decision = decidePhoneChangeRequest({
-    pending,
+    pending: pendingOf(NEW_PHONE, NOW - FIVE_YEARS_MS),
     nextPhone: OTHER_PHONE,
     currentPhone: CURRENT_PHONE,
-    now: NOW,
-  });
-  assert.equal(decision.allowed, false);
-  if (decision.allowed) return;
-  assert.equal(decision.reason, 'pending-other');
-  if (decision.reason !== 'pending-other') return;
-  assert.deepEqual(decision.pending, pending);
-  assert.ok(decision.remainingMs > 0);
-  assert.ok(decision.remainingMs <= PENDING_PHONE_CHANGE_MAX_AGE_MS);
-});
-
-test('a second number is blocked just before the documented expiry', () => {
-  const decision = decidePhoneChangeRequest({
-    pending: pendingOf(NEW_PHONE, NOW - PENDING_PHONE_CHANGE_MAX_AGE_MS + 1_000),
-    nextPhone: OTHER_PHONE,
-    currentPhone: CURRENT_PHONE,
-    now: NOW,
   });
   assert.equal(decision.allowed, false);
   if (decision.allowed) return;
   assert.equal(decision.reason, 'pending-other');
 });
 
-test('after the documented expiry the local block is lifted and labelled as such', () => {
-  const decision = decidePhoneChangeRequest({
-    pending: pendingOf(NEW_PHONE, NOW - PENDING_PHONE_CHANGE_MAX_AGE_MS - 1_000),
-    nextPhone: OTHER_PHONE,
-    currentPhone: CURRENT_PHONE,
-    now: NOW,
-  });
-  assert.deepEqual(decision, { allowed: true, reason: 'previous-may-have-expired' });
+test('an unresolved (requesting) record also blocks a second number and still resends to itself', () => {
+  const record = pendingOf(NEW_PHONE, NOW, 'requesting');
+  assert.equal(
+    decidePhoneChangeRequest({ pending: record, nextPhone: OTHER_PHONE, currentPhone: CURRENT_PHONE }).allowed,
+    false,
+  );
+  assert.deepEqual(
+    decidePhoneChangeRequest({ pending: record, nextPhone: NEW_PHONE, currentPhone: CURRENT_PHONE }),
+    { allowed: true, reason: 'resend' },
+  );
 });
 
-test('an expired pending record still resends to its own number', () => {
-  const decision = decidePhoneChangeRequest({
-    pending: pendingOf(NEW_PHONE, NOW - PENDING_PHONE_CHANGE_MAX_AGE_MS - 1_000),
-    nextPhone: NEW_PHONE,
-    currentPhone: CURRENT_PHONE,
-    now: NOW,
-  });
-  assert.deepEqual(decision, { allowed: true, reason: 'resend' });
-});
-
-test('a pending request survives a reload of the app', () => {
+test('planning a second number is refused without touching the stored record', () => {
   const storage = memoryStorage();
-  const record = pendingOf(NEW_PHONE, NOW);
-  assert.equal(savePendingPhoneChange(USER_ID, record, storage), true);
+  beginPendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage);
+
+  const plan = planPhoneChangeStart({
+    userId: USER_ID,
+    pending: readPendingPhoneChange(USER_ID, storage),
+    nextPhone: OTHER_PHONE,
+    currentPhone: CURRENT_PHONE,
+    now: NOW + 1_000,
+    storage,
+  });
+  assert.equal(plan.canStart, false);
+  if (plan.canStart) return;
+  assert.equal(plan.reason, 'pending-other');
+  assert.deepEqual(readPendingPhoneChange(USER_ID, storage), pendingOf(NEW_PHONE, NOW, 'requesting'));
+});
+
+test('the write-ahead record is saved before any request and survives a reload', () => {
+  const storage = memoryStorage();
+  const plan = planPhoneChangeStart({
+    userId: USER_ID,
+    pending: null,
+    nextPhone: NEW_PHONE,
+    currentPhone: CURRENT_PHONE,
+    now: NOW,
+    storage,
+  });
+  assert.equal(plan.canStart, true);
+  if (!plan.canStart) return;
+  assert.deepEqual(plan.record, pendingOf(NEW_PHONE, NOW, 'requesting'));
 
   // "تحميل جديد" يقرأ من نفس التخزين، لا من React state.
-  const reloaded = readPendingPhoneChange(USER_ID, storage);
-  assert.deepEqual(reloaded, record);
+  assert.deepEqual(readPendingPhoneChange(USER_ID, storage), pendingOf(NEW_PHONE, NOW, 'requesting'));
 
-  // وعلى أساسه يُمنع رقم ثانٍ بعد إعادة التحميل.
-  assert.ok(reloaded);
-  const decision = decidePhoneChangeRequest({
-    pending: reloaded,
-    nextPhone: OTHER_PHONE,
+  // وبعده يُمنع رقم ثانٍ.
+  assert.equal(
+    decidePhoneChangeRequest({
+      pending: readPendingPhoneChange(USER_ID, storage),
+      nextPhone: OTHER_PHONE,
+      currentPhone: CURRENT_PHONE,
+    }).allowed,
+    false,
+  );
+});
+
+test('promoting after a successful request keeps the record pending across a reload', () => {
+  const storage = memoryStorage();
+  beginPendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage);
+  assert.equal(promotePendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage), true);
+  assert.deepEqual(readPendingPhoneChange(USER_ID, storage), pendingOf(NEW_PHONE, NOW, 'pending'));
+});
+
+test('no request is allowed when the storage is unavailable', () => {
+  const plan = planPhoneChangeStart({
+    userId: USER_ID,
+    pending: null,
+    nextPhone: NEW_PHONE,
     currentPhone: CURRENT_PHONE,
-    now: NOW + 60_000,
+    now: NOW,
+    storage: null,
   });
-  assert.equal(decision.allowed, false);
-  if (decision.allowed) return;
-  assert.equal(decision.reason, 'pending-other');
+  assert.deepEqual(plan, { canStart: false, reason: 'storage' });
+  assert.equal(readPendingPhoneChange(USER_ID, null), null);
+});
+
+test('no request is allowed when writing the record fails', () => {
+  const storage = unwritableStorage();
+  const plan = planPhoneChangeStart({
+    userId: USER_ID,
+    pending: null,
+    nextPhone: NEW_PHONE,
+    currentPhone: CURRENT_PHONE,
+    now: NOW,
+    storage,
+  });
+  assert.deepEqual(plan, { canStart: false, reason: 'storage' });
+  assert.equal(beginPendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage), false);
+  assert.equal(readPendingPhoneChange(USER_ID, storage), null);
+});
+
+test('a failed promotion keeps the unresolved record and keeps blocking', () => {
+  const readable = memoryStorage();
+  beginPendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), readable);
+  // الكتابة الثانية تفشل: السجل السابق (requesting) يبقى.
+  const failing = {
+    getItem: readable.getItem,
+    setItem: () => { throw new Error('quota exceeded'); },
+    removeItem: readable.removeItem,
+  };
+  assert.equal(promotePendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), failing), false);
+  assert.deepEqual(readPendingPhoneChange(USER_ID, readable), pendingOf(NEW_PHONE, NOW, 'requesting'));
+  assert.equal(
+    decidePhoneChangeRequest({
+      pending: readPendingPhoneChange(USER_ID, readable),
+      nextPhone: OTHER_PHONE,
+      currentPhone: CURRENT_PHONE,
+    }).allowed,
+    false,
+  );
+});
+
+test('only a confirmation or documented handling clears the record; a notice does not', () => {
+  const storage = memoryStorage();
+  beginPendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage);
+  promotePendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage);
+
+  // "إغلاق التنبيه" لا يمسّ التخزين: لا يوجد أي مسار زمني يمسحه.
+  assert.deepEqual(readPendingPhoneChange(USER_ID, storage), pendingOf(NEW_PHONE, NOW, 'pending'));
+
+  // المسح بعد تأكيد Supabase فقط.
+  clearPendingPhoneChange(USER_ID, storage);
+  assert.equal(readPendingPhoneChange(USER_ID, storage), null);
+});
+
+test('a failed request keeps the unresolved record instead of clearing it', () => {
+  const storage = memoryStorage();
+  const plan = planPhoneChangeStart({
+    userId: USER_ID,
+    pending: null,
+    nextPhone: NEW_PHONE,
+    currentPhone: CURRENT_PHONE,
+    now: NOW,
+    storage,
+  });
+  assert.equal(plan.canStart, true);
+  if (!plan.canStart) return;
+
+  // فشل الطلب لا يُثبت أن الخادم لم يُنشئ سجل phone_change: السجل يبقى
+  // غير محسوم ويمنع أي رقم آخر.
+  assert.deepEqual(readPendingPhoneChange(USER_ID, storage), pendingOf(NEW_PHONE, NOW, 'requesting'));
+  assert.equal(
+    decidePhoneChangeRequest({
+      pending: readPendingPhoneChange(USER_ID, storage),
+      nextPhone: OTHER_PHONE,
+      currentPhone: CURRENT_PHONE,
+    }).allowed,
+    false,
+  );
 });
 
 test('the pending record is per user and is not shared', () => {
   const storage = memoryStorage();
-  savePendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage);
+  planPhoneChangeStart({
+    userId: USER_ID,
+    pending: null,
+    nextPhone: NEW_PHONE,
+    currentPhone: CURRENT_PHONE,
+    now: NOW,
+    storage,
+  });
   assert.equal(readPendingPhoneChange(OTHER_USER_ID, storage), null);
   clearPendingPhoneChange(USER_ID, storage);
   assert.equal(readPendingPhoneChange(USER_ID, storage), null);
 });
 
-test('dismissing the notice does not remove the block: only a confirmation clears it', () => {
-  const storage = memoryStorage();
-  savePendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), storage);
-
-  // "إغلاق التنبيه" لا يمسّ التخزين، فيبقى المنع.
-  const stillPending = readPendingPhoneChange(USER_ID, storage);
-  assert.deepEqual(stillPending, pendingOf(NEW_PHONE, NOW));
-
-  // المسح لا يحدث إلا بعد تأكيد Supabase (clearPendingPhoneChange).
-  clearPendingPhoneChange(USER_ID, storage);
-  assert.equal(readPendingPhoneChange(USER_ID, storage), null);
-  assert.deepEqual(
-    decidePhoneChangeRequest({ pending: null, nextPhone: OTHER_PHONE, currentPhone: CURRENT_PHONE, now: NOW }),
-    { allowed: true, reason: 'new' },
-  );
-});
-
-test('corrupt or invalid stored values are ignored instead of blocking or crashing', () => {
+test('corrupt or invalid stored values are ignored, and an unknown state stays unresolved', () => {
   const storage = memoryStorage();
   storage.setItem(`aani:phone-change:${USER_ID}`, '{not json');
   assert.equal(readPendingPhoneChange(USER_ID, storage), null);
@@ -168,19 +259,13 @@ test('corrupt or invalid stored values are ignored instead of blocking or crashi
 
   storage.setItem(`aani:phone-change:${USER_ID}`, JSON.stringify({ phone: NEW_PHONE, requestedAt: 'now' }));
   assert.equal(readPendingPhoneChange(USER_ID, storage), null);
+
+  storage.setItem(`aani:phone-change:${USER_ID}`, JSON.stringify({ phone: NEW_PHONE, requestedAt: NOW }));
+  assert.deepEqual(readPendingPhoneChange(USER_ID, storage), pendingOf(NEW_PHONE, NOW, 'requesting'));
 });
 
-test('a missing or unavailable storage never throws', () => {
-  assert.equal(readPendingPhoneChange(USER_ID, null), null);
-  assert.equal(savePendingPhoneChange(USER_ID, pendingOf(NEW_PHONE, NOW), null), false);
-  assert.equal(clearPendingPhoneChange(USER_ID, null), false);
-});
-
-test('the remaining time shrinks with the clock and never goes negative', () => {
-  const pending = pendingOf(NEW_PHONE, NOW);
-  assert.equal(
-    pendingPhoneChangeRemainingMs(pending, NOW + 60_000),
-    PENDING_PHONE_CHANGE_MAX_AGE_MS - 60_000,
-  );
-  assert.equal(pendingPhoneChangeRemainingMs(pending, NOW + PENDING_PHONE_CHANGE_MAX_AGE_MS * 2), 0);
+test('a write with an invalid phone number is refused', () => {
+  const storage = memoryStorage();
+  assert.equal(beginPendingPhoneChange(USER_ID, pendingOf('07701234567', NOW), storage), false);
+  assert.equal(readPendingPhoneChange(USER_ID, storage), null);
 });
