@@ -1,14 +1,20 @@
 -- =====================================================================
 -- اختبار عزل نظام Sandbox المالي - اختبارات SQL قابلة للتنفيذ
 --
--- التشغيل:
+-- التشغيل (جلسة واحدة فقط — لا تعتمد على جلسة منفصلة):
 --   1. تطبيق الترحيل على قاعدة الاختبار (ليست الإنتاج):
 --      supabase db push --linked
---   2. تشغيل ملف الاختبار عبر SQL query (ليست db push --file):
---      supabase db query --file artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
+--   2. تشغيل ملف الاختبار في نفس الجلسة عبر psql (لا db push --file):
+--      psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+--        -f artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
+--
+-- ملاحظة: لا تستخدم --single-transaction. كل عبارة DO هنا تُنفّذ كمعاملة
+-- مستقلة (autocommit)، لذا تعود إعدادات set_config(..., is_local=true) إلى
+-- وضعها بعد كل عبارة، ويبقى ضبط نطاق المعاملة لكل اختبار معزولاً صحيحاً.
 --
 -- ملاحظة: supabase db push يُطبّق الترحيلات المسجلة في مجلد الميريجشنز.
--- supabase db query --file ينفّذ ملف SQL ضد القاعدة المرتبطة.
+-- المتغيرات myapp.* أدناه مضبوطة عبر SET داخل هذا الملف نفسه، فتكون متاحة
+-- لجميع عبارات DO في نفس جلسة التنفيذ. لا حاجة لضبطها في جلسة أخرى.
 -- لا يُطبّق أي ترحيل على قاعدة الإنتاج.
 -- =====================================================================
 --
@@ -21,11 +27,13 @@
 --   SET myapp.test_package_id = '<uuid من sandbox.top_up_packages>';
 --   SET myapp.test_sub_package_id = '<uuid من sandbox.subscription_packages>';
 --   SET myapp.test_promo_package_id = '<uuid من sandbox.promotion_packages>';
---   SET myapp.test_post_id = '<uuid من public.posts owned by userA>';
+--   SET myapp.test_post_id = '<uuid من public.posts يملكه userA>';
+--   SET myapp.test_post_id_other = '<uuid من public.posts يملكه مستخدم آخر غير userA>';
 --
 -- ملاحظة: جميع الاختبارات تُنفّذ بدور authenticated لتفعيل سياسات RLS.
 -- (دور postgres يتجاوز RLS ولا يُمَكّن من اختبار العزل بشكل صحيح.)
--- هوية JWT الافتراضية: userA. تُOverride per-test عند الحاجة لمستخدم آخر أو مؤسس.
+-- هوية JWT الافتراضية: userA (نطاق الجلسة). تُزاح per-test داخل كل عبارة DO
+-- بنطاق المعاملة (is_local=true) عند الحاجة لمستخدم آخر أو مؤسس.
 -- =====================================================================
 
 -- ضبط متغيرات افتراضية للمثال (يجب استبدالها بـ UUID حقيقية من قاعدة الاختبار)
@@ -37,12 +45,14 @@ SET myapp.test_package_id = '00000000-0000-0000-0000-000000000020';
 SET myapp.test_sub_package_id = '00000000-0000-0000-0000-000000000030';
 SET myapp.test_promo_package_id = '00000000-0000-0000-0000-000000000040';
 SET myapp.test_post_id = '00000000-0000-0000-0000-000000000050';
+SET myapp.test_post_id_other = '00000000-0000-0000-0000-000000000051';
 
 -- دور المصادقة لتفعيل RLS (postgres يتجاوز RLS)
 SET ROLE authenticated;
 
--- هوية JWT افتراضية: userA (تُOverride داخل كل اختبار يحتاج مستخدماً آخر)
-SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+-- هوية JWT افتراضية: userA (نطاق الجلسة؛ is_local=false). تُOverride داخل كل
+-- اختبار يحتاج مستخدماً آخر بنطاق المعاملة (is_local=true) عبر set_config.
+SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', false);
 
 -- ------------------------------------------------------------------
 -- 0. التأكد من وجود مؤسس في sandbox.founders
@@ -477,10 +487,11 @@ DO $$
 DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_promo_package_id uuid := current_setting('myapp.test_promo_package_id')::uuid;
+    v_post_id_other uuid := current_setting('myapp.test_post_id_other')::uuid;
 BEGIN
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    -- استخدام معرف منشور افتراضي لا يملكه userA
-    PERFORM public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', '00000000-0000-0000-0000-000000000000', 'promo-test-2');
+    -- استخدام معرف منشور حقيقي موجود لا يملكه userA (يُفترض أنه مملوك لمستخدم آخر)
+    PERFORM public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', v_post_id_other, 'promo-test-2');
     RAISE EXCEPTION 'Test 13 failed: expected 42501 for promoting post not owned by userA';
 EXCEPTION WHEN OTHERS THEN
     IF SQLSTATE <> '42501' THEN
@@ -584,9 +595,18 @@ DO $$
 DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
+    v_result jsonb;
 BEGIN
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    -- إعادة استخدام نفس المفتاح مع p_simulate_success=true → يُتوقع استثناء 40901
+    -- أولاً: إنشاء شحن فاشل بالمفتاح (simulate=false) ليثبت المفتاح بحالة failed
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-then-success', false)
+    INTO v_result;
+    IF (v_result->>'ok')::boolean IS NOT FALSE OR (v_result->>'status') <> 'failed' THEN
+        RAISE EXCEPTION 'Test 17 failed: expected failed top-up on first call, got %', v_result;
+    END IF;
+
+    -- ثانياً: إعادة استخدام نفس المفتاح مع p_simulate_success=true → يُتوقع استثناء 40901
+    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-then-success', true);
     RAISE EXCEPTION 'Test 17 failed: expected 40901 for reusing failed key with success=true';
 EXCEPTION WHEN OTHERS THEN
@@ -611,11 +631,13 @@ BEGIN
         RAISE EXCEPTION 'Test 18 failed: expected ok=true for initial top-up, got %', v_result;
     END IF;
 
-    -- تعطيل الباقة (يُنفّذ من جهة المسؤول)
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    -- تعطيل الباقة (إجراء إداري): يتطلب دوراً مالكاً للجدول لأن authenticated
+    -- لا يملك إلا SELECT على sandbox.top_up_packages. نرفع الدور مؤقتاً ثم نعيده.
+    EXECUTE 'RESET ROLE';
     UPDATE sandbox.top_up_packages
     SET is_active = false
     WHERE id = v_package_id;
+    EXECUTE 'SET ROLE authenticated';
 
     -- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع completed وduplicate=true
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
@@ -626,10 +648,11 @@ BEGIN
     END IF;
 
     -- إعادة تفعيل الباقة لبقية الاختبارات
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    EXECUTE 'RESET ROLE';
     UPDATE sandbox.top_up_packages
     SET is_active = true
     WHERE id = v_package_id;
+    EXECUTE 'SET ROLE authenticated';
 END $$;
 
 -- ------------------------------------------------------------------
@@ -640,11 +663,12 @@ DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
 BEGIN
-    -- تعطيل الباقة مؤقتًا
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    -- تعطيل الباقة مؤقتاً (إجراء إداري: رفع الدور ثم إعادته)
+    EXECUTE 'RESET ROLE';
     UPDATE sandbox.top_up_packages
     SET is_active = false
     WHERE id = v_package_id;
+    EXECUTE 'SET ROLE authenticated';
 
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-new-on-deactivated-1', true);
@@ -655,10 +679,11 @@ EXCEPTION WHEN OTHERS THEN
     END IF;
 
     -- إعادة تفعيل الباقة
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    EXECUTE 'RESET ROLE';
     UPDATE sandbox.top_up_packages
     SET is_active = true
     WHERE id = v_package_id;
+    EXECUTE 'SET ROLE authenticated';
 END $$;
 
 -- ------------------------------------------------------------------
@@ -744,7 +769,7 @@ DECLARE
 BEGIN
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
 
-    -- تفعيل اشتراك جديد للاختبار
+    -- تفعيل اشتراك جديد للاختبار (مفتاح التفعيل)
     SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-renew-replay-test')
     INTO v_result;
 
@@ -752,11 +777,11 @@ BEGIN
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
     WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
-    LIMIT 1;
+    ORDER BY started_at DESC LIMIT 1;
 
-    -- التجديد الأول بالمفتاح الجديد
+    -- التجديد الأول بمفتاح renew مستقل (حتى لا يتعارض مع مفتاح التفعيل)
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-test')
+    SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-renew')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT FALSE OR (v_result->>'status') <> 'active' THEN
         RAISE EXCEPTION 'Test 22 failed: expected ok=true, duplicate=false, status=active, got %', v_result;
@@ -772,24 +797,24 @@ BEGIN
 
     -- إعادة طلب التجديد بالمفتاح نفسه رغم الإلغاء → duplicate=true, status=completed
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-test')
+    SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-renew')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE OR (v_result->>'duplicate')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
         RAISE EXCEPTION 'Test 22 failed: expected ok=true, duplicate=true, status=completed after cancellation, got %', v_result;
     END IF;
 
-    -- التحقق من عدم وجود قيد ledger مكرر
+    -- التحقق من عدم وجود قيد ledger مكرر لمفتاح التجديد
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.ledger
-    WHERE idempotency_key = 'sub-renew-replay-test';
+    WHERE idempotency_key = 'sub-renew-replay-renew';
     IF v_count <> 1 THEN
-        RAISE EXCEPTION 'Test 22 failed: expected 1 ledger entry for renew-replay-test, got %', v_count;
+        RAISE EXCEPTION 'Test 22 failed: expected 1 ledger entry for renew-replay, got %', v_count;
     END IF;
 END $$;
 
 -- ------------------------------------------------------------------
--- 23. استخدام مفتاح idempotency نفسه بالتزامن من مستخدمين مختلفين (تتابعي)
+-- 23. استخدام مفتاح idempotency نفسه من مستخدمين مختلفين (تتابعي)
 -- ------------------------------------------------------------------
 -- ملاحظة: يتم التنفيذ تتابعياً في جلسة واحدة بمحاكاة السباق.
 -- للاختبار المتزامن الحقيقي، يُنْفَّذ التجديد من جلستين مستقلتين في وقت واحد.
@@ -803,6 +828,12 @@ DECLARE
     v_result_a jsonb;
     v_result_b jsonb;
 BEGIN
+    -- منح userB رصيداً تجريبياً أولاً (المؤسس فقط) حتى يستطيع تفعيل اشتراك.
+    -- بدونه سيُرفض التفعيل بـ 42001 (رصيد غير كافٍ) ويفشل الاختبار.
+    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    SELECT public.aani_sandbox_grant_coins(v_user_b, 1000, 'grant-userb-test23', 'test23 userB funding')
+    INTO v_result_b;
+
     -- إنشاء اشتراكين لمستخدمين مختلفين
     SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-shared-test-a')
