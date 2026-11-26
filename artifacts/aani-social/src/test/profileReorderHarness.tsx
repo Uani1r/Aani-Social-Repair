@@ -26,13 +26,16 @@ type LogEntry = { kind: Kind; nextIds: string[]; previousIds: string[] };
 const OWNER_ID = 'a0000000-0000-4000-8000-00000000000a';
 const OTHER_ID = 'b0000000-0000-4000-8000-00000000000b';
 
+const MEDIA_PIXEL = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
 function post(id: string, userId: string, overrides: Partial<Post> = {}): Post {
   return {
     id,
     user_id: userId,
     content: '',
-    post_metadata: {},
-    media_url: `https://example.test/${id}.jpg`,
+    // getPostCoverUrl reads post_metadata with .find, so it has to be an array.
+    post_metadata: [],
+    media_url: MEDIA_PIXEL,
     media_urls: [],
     type: 'photo',
     display_order: 0,
