@@ -537,6 +537,9 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:topup:' || p_user_id::text || ':' || p_idempotency_key));
 
+  select coins into v_coins from sandbox.top_up_packages where id = p_package_id and is_active = true;
+  if not found then raise exception 'package unavailable' using errcode='42704'; end if;
+
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
     if not exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key and user_id = p_user_id and package_id = p_package_id) then
       raise exception 'idempotency key conflict' using errcode='40901';
@@ -545,12 +548,20 @@ begin
        or (not p_simulate_success and (select status from sandbox.top_ups where idempotency_key = p_idempotency_key) <> 'failed') then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
+    -- عند وجود سجل شحن سابق، لا تُرجع duplicate=true قبل التحقق من القيد المقابل في sandbox.ledger.
+    if p_simulate_success then
+      select user_id, type, amount, reference into v_ledger_user_id, v_ledger_type, v_ledger_amount, v_ledger_reference
+      from sandbox.ledger where idempotency_key = p_idempotency_key || ':credit';
+      if not found then
+        raise exception 'ledger credit entry not found for completed top-up' using errcode='40901';
+      end if;
+      if v_ledger_user_id <> p_user_id or v_ledger_type <> 'credit' or v_ledger_amount <> v_coins or v_ledger_reference <> 'sandbox top-up' then
+        raise exception 'idempotency key conflict: ledger entry does not match top-up' using errcode='40901';
+      end if;
+    end if;
     return jsonb_build_object('ok',true,'duplicate',true,'status',
       (select status from sandbox.top_ups where idempotency_key = p_idempotency_key));
   end if;
-
-  select coins into v_coins from sandbox.top_up_packages where id = p_package_id and is_active = true;
-  if not found then raise exception 'package unavailable' using errcode='42704'; end if;
 
   if p_simulate_success then
     -- التحقق من إدخال السجل الموجود لنفس مفتاح idempotency قبل إكمال الشحن.
