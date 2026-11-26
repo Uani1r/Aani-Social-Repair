@@ -2,7 +2,14 @@ import { useState, type CSSProperties, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { normalizePhoneToE164 } from '@/lib/accountAuth';
+import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
 import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
+
+/** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
+const invokePhoneLogin = createPhoneFunctionInvoker({
+  invoke: (name, options) => supabase.functions.invoke(name, options),
+});
 
 type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
 
@@ -106,17 +113,33 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         }
       } else {
         const loginIdentifier = email.trim();
-        const normalizedPhone = loginIdentifier.replace(/[\s()-]/g, '');
+        // الرقم المحلي العراقي (07XX…) والدولي (+…) يُطبّعان إلى E.164 قبل
+        // أي نداء: الرقم المحلي لا يذهب إلى Supabase كما هو.
+        const phoneIdentifier = normalizePhoneToE164(loginIdentifier);
         if (loginIdentifier.includes('@')) {
           const { error: authError } = await supabase.auth.signInWithPassword({ email: loginIdentifier.toLowerCase(), password });
           if (authError) throw authError;
-        } else if (/^\+[1-9]\d{7,14}$/.test(normalizedPhone)) {
-          const { error: authError } = await supabase.auth.signInWithPassword({ phone: normalizedPhone, password });
-          if (authError) throw authError;
+        } else if (phoneIdentifier) {
+          // الدخول برقم الهاتف وكلمة مرور الحساب عبر الدالة المحمية
+          // `login-with-phone`: لا OTP ولا SMS، والتحقق من كلمة المرور عند
+          // Supabase Auth نفسه. الرسالة عامة عند أي فشل.
+          const result = await loginWithPhone(phoneIdentifier, password, invokePhoneLogin);
+          if (!result.ok) throw new Error(result.message);
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: result.accessToken,
+            refresh_token: result.refreshToken,
+          });
+          if (sessionError) throw sessionError;
+          // لا انتقال قبل التحقق من هوية المستخدم بعد تثبيت الجلسة.
+          const { data: userData, error: userError } = await supabase.auth.getUser();
+          if (userError || !userData.user) {
+            await supabase.auth.signOut({ scope: 'local' });
+            throw new Error('تعذر التحقق من الجلسة بعد الدخول. أعد المحاولة.');
+          }
         } else {
           const usernameIdentifier = loginIdentifier.replace(/^@/, '').toLowerCase();
           if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
-            throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف دوليًا يبدأ بـ +.');
+            throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف (07XX XXX XXXX أو +964…).');
           }
           const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
             body: { username: usernameIdentifier, password },
@@ -272,7 +295,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                 required
                 autoComplete={signUp ? 'email' : 'username'}
                 dir="ltr"
-                placeholder={signUp ? 'أدخل بريدك الإلكتروني' : 'name@example.com أو username أو +9665XXXXXXXX'}
+                placeholder={signUp ? 'أدخل بريدك الإلكتروني' : 'name@example.com أو username أو 07XX XXX XXXX'}
                 value={email}
                 onChange={event => setEmail(event.target.value)}
                 style={styles.input}

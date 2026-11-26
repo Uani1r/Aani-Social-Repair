@@ -90,10 +90,10 @@ jobs:
       - name: Unit tests @workspace/aani-social (chat video player)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoPlayer.test.ts
 
-      # طلبات تغيير الهاتف المعلّقة: التخزين المحلي بعد إعادة التحميل، منع
-      # الرقم الثاني، إغلاق التنبيه دون إلغاء، والقيم التالفة.
-      - name: Unit tests @workspace/aani-social (account phone change)
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountPhoneChange.test.ts
+      # رقم الدخول بالهاتف: التطبيع بلا SMS، رفض رقم مستخدم في حساب آخر،
+      # ذرية التغيير، رسائل الدخول العامة، ومنع قراءة الجدول أو كشف البريد.
+      - name: Unit tests @workspace/aani-social (account phone alias)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountPhoneAlias.test.ts
 
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
@@ -599,3 +599,67 @@ jobs:
       - name: Run the profile content reordering browser tests
         working-directory: artifacts/aani-social
         run: pnpm exec playwright test
+
+
+  # Applies the account phone alias migration to a throwaway PostgreSQL with a
+  # reduced auth schema (auth.users without columns, Supabase roles) and
+  # asserts what the database itself guarantees: the table shape, RLS enabled
+  # with no policy, anon/authenticated holding no table or function privilege,
+  # the E.164 check, one alias per account, phone uniqueness across accounts,
+  # an atomic replace that keeps the previous number, per-user delete, cascade
+  # on user deletion, and no password/OTP/session columns. It does not exercise
+  # two real concurrent connections (the guarantee is the UNIQUE constraint and
+  # the single-statement upsert), the Edge Functions, or Supabase Auth.
+  account-phone-alias-sql:
+    name: Account phone alias SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_phone_alias_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_phone_alias_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary alias schema and auth users
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/account_phone_alias_schema.sql
+
+      - name: Apply the alias migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307000000_account_phone_aliases.sql
+
+      - name: Assert the alias table, RLS, privileges and constraints
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_phone_alias.test.sql
+
+      # Re-applying must be idempotent: the constraints, the trigger and the
+      # REVOKE/GRANT pairs are not duplicated, and every assertion still holds.
+      - name: Re-apply the alias migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307000000_account_phone_aliases.sql
+
+      - name: Re-run the alias assertions after a second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_phone_alias.test.sql

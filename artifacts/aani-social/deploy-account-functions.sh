@@ -12,3 +12,5 @@ fi
 cd "$SCRIPT_DIR"
 supabase functions deploy delete-account --project-ref "$PROJECT_REF"
 supabase functions deploy login-with-username --project-ref "$PROJECT_REF"
+supabase functions deploy account-phone-alias --project-ref "$PROJECT_REF"
+supabase functions deploy login-with-phone --project-ref "$PROJECT_REF"
