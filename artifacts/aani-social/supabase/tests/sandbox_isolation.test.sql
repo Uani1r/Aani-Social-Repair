@@ -273,6 +273,23 @@ SELECT public.aani_sandbox_cancel_subscription('<subscription-id>');
 -- يُرفض الطلب الثاني بالخطأ 40901 (idempotency key conflict) دون خصم أو قيد مكرر.
 -- يُتوقع أن يكون هناك قيد ledger واحد فقط للمفتاح 'shared-renew-key'.
 
+-- ------------------------------------------------------------------
+-- 24. استخدام مفتاح idempotency نفسه بالتزامن من دالتين ماليتين مختلفتين
+-- ------------------------------------------------------------------
+-- بعد التوحيد على قفل sandbox:ledger:idem:<key>، أي مفتاح مستخدم في أكثر من دالة
+-- مالية (top_up، activate_subscription، renew_subscription، grant_coins، deduct_coins، create_promotion)
+-- يُserialized على قفل استشاري واحد، مما يمنع تعارض UNIQUE على sandbox.ledger.idempotency_key.
+--
+-- سيناريو متزامن (جلستان على نفس المفتاح ولكن دوال مختلفة):
+--   الجلسة A (top_up): SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'cross-func-key', true);
+--   الجلسة B (activate_subscription): SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'cross-func-key');
+--
+-- الجلسة الأولى التي تحصل على القفل الموحد تنجح في الإدراج في sandbox.ledger بالمفتاح 'cross-func-key'.
+-- الجلسة الثانية، بعد انتظار القفل وإعادة الفحص، تجد قيد ledger سابق بالمفتاح نفسه.
+-- بما أن الحقول (user_id, type, reference, related_id) لا تطابق العملية الأولى (نوع عملية مختلف، مرجع مختلف، معرّف مرتبط مختلف)،
+-- يُرفض الطلب الثاني بالخطأ 40901 (idempotency key conflict) دون خصم أو قيد ledger مكرر.
+-- يُتوقع أن يكون هناك قيد ledger واحد فقط للمفتاح 'cross-func-key'.
+
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة
 -- Supabase مباشرة. لا يُدّعى نجاحه دون تنفيذ فعلي على قاعدة حية.

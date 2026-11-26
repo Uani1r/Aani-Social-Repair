@@ -368,8 +368,10 @@ begin
   end if;
 
   -- قفل على مستوى المستخدم لمنع عمليات منافسة على نفس المستخدم.
+  -- قفل idempotency موحد عالمي على المفتاح فقط (مستقل عن الدالة والمستدعي) لتسلسل استخدام المفتاح نفسه
+  -- عبر جميع دوال الإدراج في sandbox.ledger ومنع تعارض UNIQUE بين الدوال المختلفة.
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
-  perform pg_advisory_xact_lock(hashtext('sandbox:grant:' || p_user_id::text || ':' || p_idempotency_key));
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
     if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and type = 'credit' and amount = p_amount and reference = p_reason) then
@@ -379,15 +381,23 @@ begin
     return jsonb_build_object('ok',true,'duplicate',true,'amount',p_amount,'balance',v_balance);
   end if;
 
-  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (p_user_id, 'credit', p_amount, p_reason, p_idempotency_key, null);
+  -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
+  <<grant_ledger_insert>>
+  begin
+    insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+    values (p_user_id, 'credit', p_amount, p_reason, p_idempotency_key, null);
 
-  select public.aani_sandbox_balance(p_user_id) into v_balance;
+    select public.aani_sandbox_balance(p_user_id) into v_balance;
 
-  insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
-  values (auth.uid(), 'grant_coins', 'user', p_user_id, p_reason, 'ok');
+    insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
+    values (auth.uid(), 'grant_coins', 'user', p_user_id, p_reason, 'ok');
 
-  return jsonb_build_object('ok',true,'duplicate',false,'amount',p_amount,'balance',v_balance);
+    return jsonb_build_object('ok',true,'duplicate',false,'amount',p_amount,'balance',v_balance);
+  exception when unique_violation then
+    raise exception 'idempotency key conflict' using errcode='40901';
+  end;
+
+  return jsonb_build_object('ok',true,'duplicate',true,'amount',p_amount,'balance',v_balance);
 end;
 $$;
 revoke all on function public.aani_sandbox_grant_coins(uuid,integer,text,text) from public, anon;
@@ -421,8 +431,10 @@ begin
   end if;
 
   -- قفل على مستوى المستخدم يمنع عمليتي خصم مختلفتين من تجاوز الرصيد.
+  -- قفل idempotency موحد عالمي على المفتاح فقط (مستقل عن الدالة والمستدعي) لتسلسل استخدام المفتاح نفسه
+  -- عبر جميع دوال الإدراج في sandbox.ledger ومنع تعارض UNIQUE بين الدوال المختلفة.
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
-  perform pg_advisory_xact_lock(hashtext('sandbox:deduct:' || p_user_id::text || ':' || p_idempotency_key));
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
     if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = p_user_id and type = 'debit' and amount = p_amount and reference = p_reason) then
@@ -435,12 +447,18 @@ begin
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < p_amount then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
 
-  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (p_user_id, 'debit', p_amount, p_reason, p_idempotency_key, null);
+  -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
+  <<deduct_ledger_insert>>
+  begin
+    insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+    values (p_user_id, 'debit', p_amount, p_reason, p_idempotency_key, null);
 
-  select public.aani_sandbox_balance(p_user_id) into v_balance;
+    select public.aani_sandbox_balance(p_user_id) into v_balance;
 
-  return jsonb_build_object('ok',true,'duplicate',false,'amount',p_amount,'balance',v_balance);
+    return jsonb_build_object('ok',true,'duplicate',false,'amount',p_amount,'balance',v_balance);
+  exception when unique_violation then
+    raise exception 'idempotency key conflict' using errcode='40901';
+  end;
 end;
 $$;
 revoke all on function public.aani_sandbox_deduct_coins(uuid,integer,text,text) from public, anon;
@@ -544,7 +562,7 @@ begin
   end if;
 
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
-  perform pg_advisory_xact_lock(hashtext('sandbox:topup:' || p_user_id::text || ':' || p_idempotency_key));
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
   -- التحقق من وجود سجل شحن سابق بنفس مفتاح idempotency أولاً.
   -- إذا وجد، تُعاد نتيجة العملية الأصلية دون اشتراط أن تكون الباقة ما زالت فعّالة.
@@ -628,17 +646,22 @@ begin
         'balance',v_balance,'simulated',true);
     end if;
 
-    -- إضافة العملات فقط عند النجاح (سجل ledger مستقر عبر idempotency).
-    insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-    values (p_user_id, 'credit', v_coins, 'sandbox top-up', p_idempotency_key || ':credit', null);
+    -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
+    <<topup_ledger_insert>>
+    begin
+      insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+      values (p_user_id, 'credit', v_coins, 'sandbox top-up', p_idempotency_key || ':credit', null);
 
-    insert into sandbox.top_ups (user_id, package_id, amount, status, idempotency_key, simulated, created_at, completed_at)
-    values (p_user_id, p_package_id, v_coins, 'completed', p_idempotency_key, true, now(), now());
+      insert into sandbox.top_ups (user_id, package_id, amount, status, idempotency_key, simulated, created_at, completed_at)
+      values (p_user_id, p_package_id, v_coins, 'completed', p_idempotency_key, true, now(), now());
 
-    select public.aani_sandbox_balance(p_user_id) into v_balance;
+      select public.aani_sandbox_balance(p_user_id) into v_balance;
 
-    return jsonb_build_object('ok',true,'duplicate',false,'status','completed','amount',v_coins,
-      'balance',v_balance,'simulated',true);
+      return jsonb_build_object('ok',true,'duplicate',false,'status','completed','amount',v_coins,
+        'balance',v_balance,'simulated',true);
+    exception when unique_violation then
+      raise exception 'idempotency key conflict' using errcode='40901';
+    end;
   else
     insert into sandbox.top_ups (user_id, package_id, amount, status, idempotency_key, simulated, failure_reason, created_at)
     values (p_user_id, p_package_id, v_coins, 'failed', p_idempotency_key, true, 'محاكاة فشل الشحن', now());
@@ -731,7 +754,7 @@ begin
   end if;
 
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
-  perform pg_advisory_xact_lock(hashtext('sandbox:sub:' || p_user_id::text || ':' || p_idempotency_key));
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
     select related_id, amount into v_sub_id, v_coins
@@ -760,15 +783,21 @@ begin
   values (p_user_id, p_package_id, 'active', now(), now() + (v_days || ' days')::interval, true, v_coins)
   returning id into v_sub_id;
 
-  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (p_user_id, 'debit', v_coins, 'sandbox subscription activate', p_idempotency_key, v_sub_id);
+  -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
+  <<activate_ledger_insert>>
+  begin
+    insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+    values (p_user_id, 'debit', v_coins, 'sandbox subscription activate', p_idempotency_key, v_sub_id);
 
-  select public.aani_sandbox_balance(p_user_id) into v_balance;
+    select public.aani_sandbox_balance(p_user_id) into v_balance;
 
-  insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
-  values (auth.uid(), 'activate_subscription', 'subscription', null, 'sandbox activate', 'ok');
+    insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
+    values (auth.uid(), 'activate_subscription', 'subscription', null, 'sandbox activate', 'ok');
 
-  return jsonb_build_object('ok',true,'duplicate',false,'coins_charged',v_coins,'balance',v_balance,'status','active');
+    return jsonb_build_object('ok',true,'duplicate',false,'coins_charged',v_coins,'balance',v_balance,'status','active');
+  exception when unique_violation then
+    raise exception 'idempotency key conflict' using errcode='40901';
+  end;
 end;
 $$;
 revoke all on function public.aani_sandbox_activate_subscription(uuid,uuid,text) from public, anon;
@@ -864,8 +893,8 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
-  -- قفل مستشار عالمي على مفتاح idempotency (مستقل عن المستخدم) لتسلسل جميع الطلبات التي تحمل المفتاح نفسه.
-  perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || p_idempotency_key));
+  -- قفل مستشار عالمي على مفتاح idempotency (مستقل عن المستخدم والدالة) لتسلسل جميع الطلبات التي تحمل المفتاح نفسه.
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
   -- فحص سجل ledger السابق مع مطابقة جميع الحقول الأساسية قبل فحص الحالة،
   -- بحيث إعادة طلب تجديد ناجح تُعيد نتيجتها الأصلية حتى لو أصبح الاشتراك cancelled أو expired.
@@ -890,20 +919,26 @@ begin
   select public.aani_sandbox_balance(v_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
 
-  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (v_user_id, 'debit', v_coins, 'sandbox subscription renew', p_idempotency_key, p_subscription_id);
+  -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
+  <<renew_ledger_insert>>
+  begin
+    insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+    values (v_user_id, 'debit', v_coins, 'sandbox subscription renew', p_idempotency_key, p_subscription_id);
 
-  update sandbox.subscriptions
-  set status = 'active', renewed_at = now(),
-      ended_at = now() + (v_days || ' days')::interval
-  where id = p_subscription_id;
+    update sandbox.subscriptions
+    set status = 'active', renewed_at = now(),
+        ended_at = now() + (v_days || ' days')::interval
+    where id = p_subscription_id;
 
-  select public.aani_sandbox_balance(v_user_id) into v_balance;
+    select public.aani_sandbox_balance(v_user_id) into v_balance;
 
-  insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
-  values (auth.uid(), 'renew_subscription', 'subscription', p_subscription_id, 'sandbox renew', 'ok');
+    insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
+    values (auth.uid(), 'renew_subscription', 'subscription', p_subscription_id, 'sandbox renew', 'ok');
 
-  return jsonb_build_object('ok',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
+    return jsonb_build_object('ok',true,'coins_charged',v_coins,'balance',v_balance,'status','active');
+  exception when unique_violation then
+    raise exception 'idempotency key conflict' using errcode='40901';
+  end;
 end;
 $$;
 revoke all on function public.aani_sandbox_renew_subscription(uuid,text) from public, anon;
@@ -941,7 +976,7 @@ begin
   end if;
 
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
-  perform pg_advisory_xact_lock(hashtext('sandbox:promo:' || p_user_id::text || ':' || p_idempotency_key));
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
   if exists (select 1 from sandbox.promotions where idempotency_key = p_idempotency_key) then
     if not exists (select 1 from sandbox.promotions where idempotency_key = p_idempotency_key and user_id = p_user_id and package_id = p_package_id and target_type = p_target_type and target_id = p_target_id) then
@@ -981,18 +1016,24 @@ begin
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
 
-  insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-  values (p_user_id, 'debit', v_coins, 'sandbox promotion create', p_idempotency_key, null);
+  -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
+  <<promo_ledger_insert>>
+  begin
+    insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
+    values (p_user_id, 'debit', v_coins, 'sandbox promotion create', p_idempotency_key, null);
 
-  insert into sandbox.promotions (user_id, package_id, target_type, target_id, status, started_at, ends_at, coins_deducted, idempotency_key)
-  values (p_user_id, p_package_id, p_target_type, p_target_id, 'active', now(), now() + (v_days || ' days')::interval, v_coins, p_idempotency_key);
+    insert into sandbox.promotions (user_id, package_id, target_type, target_id, status, started_at, ends_at, coins_deducted, idempotency_key)
+    values (p_user_id, p_package_id, p_target_type, p_target_id, 'active', now(), now() + (v_days || ' days')::interval, v_coins, p_idempotency_key);
 
-  select public.aani_sandbox_balance(p_user_id) into v_balance;
+    select public.aani_sandbox_balance(p_user_id) into v_balance;
 
-  insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
-  values (auth.uid(), 'create_promotion', 'promotion', null, 'sandbox create promotion', 'ok');
+    insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
+    values (auth.uid(), 'create_promotion', 'promotion', null, 'sandbox create promotion', 'ok');
 
-  return jsonb_build_object('ok',true,'duplicate',false,'coins_deducted',v_coins,'balance',v_balance,'status','active');
+    return jsonb_build_object('ok',true,'duplicate',false,'coins_deducted',v_coins,'balance',v_balance,'status','active');
+  exception when unique_violation then
+    raise exception 'idempotency key conflict' using errcode='40901';
+  end;
 end;
 $$;
 revoke all on function public.aani_sandbox_create_promotion(uuid,uuid,text,uuid,text) from public, anon;
