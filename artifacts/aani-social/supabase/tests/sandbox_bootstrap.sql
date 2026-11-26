@@ -1,11 +1,13 @@
 -- =====================================================================
 -- بيئة اختبار Sandbox المالي (Postgres محلي بالكامل — لا Supabase سحابي).
 --
--- هذا ليس ترحيلاً ولا يُطبَّق على الإنتاج. يُنشئ الأدوار ومخطط auth ومخطط
--- storage الأدنى اللازمين لتطبيق schema.sql والترحيل المالي، مع توفير متطلبات
--- Supabase Auth وRLS فعلياً (auth.uid() / auth.role() وسياسات RLS حقيقية).
+-- هذا ليس ترحيلاً ولا يُطبَّق على الإنتاج. يُنشئ الأدوار ومخططات auth/storage/
+-- extensions/realtime الأدنى اللازمة لتطبيق المخطط الأساسي (fresh_schema) ثم
+-- جميع الترحيلات بالترتيب الزمني، مع توفير متطلبات Supabase Auth وRLS فعلياً
+-- (auth.uid() / auth.role() وسياسات RLS حقيقية).
 --
--- يُطبَّق أولاً، ثم schema.sql، ثم الترحيل 20270306000000_aani_sandbox_financial.sql،
+-- يُطبَّق أولاً، ثم fresh_schema_cloudflare_r2.sql (المخطط الأساسي)، ثم جميع
+-- الترحيلات في migrations/ بالترتيب (الترحيل المالي 20270306000000 هو الأخير)،
 -- ثم بيانات الاختبار، ثم الاختبارات.
 -- =====================================================================
 
@@ -57,7 +59,7 @@ as $$
   select nullif(current_setting('request.jwt.claims', true)::jsonb ->> 'role', '')
 $$;
 
--- 3) مخطط storage الأدنى (حتى تُنشأ سياسات storage.objects في schema.sql).
+-- 3) مخطط storage الأدنى (حتى تُنشأ سياسات storage.objects في المخطط الأساسي).
 create schema if not exists storage;
 
 create table if not exists storage.buckets (
@@ -88,7 +90,51 @@ begin
 end;
 $$;
 
--- 4) صلاحيات الاستخدام للأدوار (مثل Supabase).
+-- 4) مخطط extensions + pg_trgm (يستخدمه ترحيل فهارس البحث 20270228000000).
+--    الترحيل ينشئ الامتداد نفسه داخل هذا المخطط؛ نوفر المخطط فقط.
+create schema if not exists extensions;
+
+-- 5) مخطط realtime الأدنى (سياسات Broadcast في 20270302000000 تشير إلى
+--    realtime.messages و realtime.topic()، ودالة realtime.send اختيارية).
+create schema if not exists realtime;
+
+create table if not exists realtime.messages (
+  id bigserial primary key,
+  topic text,
+  extension text,
+  payload jsonb,
+  created_at timestamptz not null default now()
+);
+
+-- realtime.topic(): يقرأ الموضوع من ترويسات الطلب (مثل Supabase). اختبارياً
+-- يعيد NULL (بلا جلسة WebSocket) فتصبح سياسات Broadcast غير مطابقة بأمان.
+create or replace function realtime.topic()
+returns text
+language sql
+stable
+as $$
+  select nullif(current_setting('request.headers', true)::jsonb ->> 'topic', '')
+$$;
+
+-- realtime.send(): دالة إرسال Broadcast. نجعلها no-op حتى لا تُنشأ trigger
+-- الحذف التي تستدعيها (الترحيل يتخطاها إن كانت غير موجودة؛ ووجودها آمن).
+create or replace function realtime.send(
+  p_payload jsonb,
+  p_event text,
+  p_topic text,
+  p_private boolean default false
+)
+returns void
+language plpgsql
+as $$
+begin
+  null;
+end;
+$$;
+
+-- 6) صلاحيات الاستخدام للأدوار (مثل Supabase).
 grant usage on schema auth to anon, authenticated, service_role;
 grant usage on schema storage to anon, authenticated, service_role;
+grant usage on schema extensions to anon, authenticated, service_role;
+grant usage on schema realtime to anon, authenticated, service_role;
 grant usage on schema public to anon, authenticated, service_role;

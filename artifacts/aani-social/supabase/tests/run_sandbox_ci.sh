@@ -4,9 +4,9 @@
 # للتحقق. يُطبَّق على قاعدة اختبار مؤقتة فقط — لا Supabase سحابي ولا إنتاج.
 #
 # الترتيب:
-#   1. bootstrap (أدوار + auth + storage)
-#   2. schema.sql (المخطط الأساسي)
-#   3. الترحيل المالي 20270306000000_aani_sandbox_financial.sql
+#   1. bootstrap (أدوار + auth + storage + extensions + realtime)
+#   2. fresh_schema_cloudflare_r2.sql (المخطط الأساسي للمشروع)
+#   3. جميع الترحيلات في migrations/ بالترتيب الزمني (المالي 20270306000000 أخيراً)
 #   4. بيانات الاختبار sandbox_seed.sql
 #   5. الاختبارات الـ28 (sandbox_isolation.test.sql) عبر اتصال إداري + SET ROLE
 #   6. اختبار التزامن الحقيقي (جلستان) sandbox_concurrency.sh
@@ -34,11 +34,20 @@ run_step() {
 # 1) bootstrap
 run_step "bootstrap" "${PSQL[@]}" -q -f "$SCRIPT_DIR/sandbox_bootstrap.sql" 2>&1 | tee "$LOG_DIR/01_bootstrap.log"
 
-# 2) schema.sql (المخطط الأساسي)
-run_step "schema" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../schema.sql" 2>&1 | tee "$LOG_DIR/02_schema.log"
+# 2) المخطط الأساسي (fresh_schema — مكتوب لمشروع جديد فارغ)
+run_step "fresh_schema" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../fresh_schema_cloudflare_r2.sql" 2>&1 | tee "$LOG_DIR/02_fresh_schema.log"
 
-# 3) الترحيل المالي
-run_step "migration" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20270306000000_aani_sandbox_financial.sql" 2>&1 | tee "$LOG_DIR/03_migration.log"
+# 3) جميع الترحيلات بالترتيب الزمني (المالي 20270306000000 هو الأخير).
+MIG_LOG="$LOG_DIR/03_migrations.log"
+: > "$MIG_LOG"
+MIG_DIR="$SCRIPT_DIR/../migrations"
+MIG_COUNT=0
+for mig in $(ls "$MIG_DIR"/*.sql | sort); do
+  MIG_COUNT=$((MIG_COUNT + 1))
+  echo "===== MIGRATION: $(basename "$mig") =====" | tee -a "$MIG_LOG"
+  "${PSQL[@]}" -q -f "$mig" 2>&1 | tee -a "$MIG_LOG"
+done
+echo "===== OK: migrations ($MIG_COUNT files) =====" | tee -a "$MIG_LOG"
 
 # 4) بيانات الاختبار
 run_step "seed" "${PSQL[@]}" -q -f "$SCRIPT_DIR/sandbox_seed.sql" 2>&1 | tee "$LOG_DIR/04_seed.log"
