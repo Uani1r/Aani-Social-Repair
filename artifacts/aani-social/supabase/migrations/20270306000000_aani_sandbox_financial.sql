@@ -387,6 +387,11 @@ begin
     raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
   end if;
 
+  -- كشف استخدام المفتاح نفسه من عملية send_gift سابقة (تكتب إلى sandbox.gift_transactions).
+  if exists (select 1 from sandbox.gift_transactions where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by gift send' using errcode='40901';
+  end if;
+
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<grant_ledger_insert>>
   begin
@@ -458,6 +463,11 @@ begin
     raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
   end if;
 
+  -- كشف استخدام المفتاح نفسه من عملية send_gift سابقة (تكتب إلى sandbox.gift_transactions).
+  if exists (select 1 from sandbox.gift_transactions where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by gift send' using errcode='40901';
+  end if;
+
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<deduct_ledger_insert>>
   begin
@@ -476,6 +486,9 @@ revoke all on function public.aani_sandbox_deduct_coins(uuid,integer,text,text) 
 grant execute on function public.aani_sandbox_deduct_coins(uuid,integer,text,text) to authenticated;
 
 -- إرسال هدية تجريبية: خصم من رصيد Sandbox فقط، لا نقاط شعبية، سجل منفصل.
+-- يطبق التفرد العالمي على المفتاح الأصلي المقدم من المتصل (K)، ويتحقق من
+-- التعارض مع sandbox.top_ups وsandbox.ledger قبل تنفيذ الخصم.
+-- ترتيب الأقفال: قفل المستخدم → قفل idempotency الموحد (K) → deduct_coins (قفل المستخدم再次، قفل idempotency للمفتاح المشتق K:gift).
 create or replace function public.aani_sandbox_send_gift(
   p_sender_id uuid,
   p_recipient_id uuid,
@@ -501,8 +514,22 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
-  perform pg_advisory_xact_lock(hashtext('sandbox:gift:' || p_sender_id::text || ':' || p_idempotency_key));
+  -- قفل المستخدم ثم قفل idempotency الموحد على المفتاح الأصلي K (مستقل عن الدالة).
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_sender_id::text));
+  perform pg_advisory_xact_lock(hashtext('sandbox:ledger:idem:' || p_idempotency_key));
 
+  -- كشف استخدام المفتاح الأصلي K من عملية top_up سابقة (تكتب إلى sandbox.top_ups).
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
+
+  -- كشف استخدام المفتاح الأصلي K من عملية مالية سابقة كتبت إلى sandbox.ledger
+  -- (activate_subscription، grant_coins، deduct_coins، create_promotion، renew_subscription).
+  if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by another financial operation' using errcode='40901';
+  end if;
+
+  -- فحص إعادة طلب الهدية نفسها (مفتاح K، نفس المرسل والمتلقي والهدية).
   select * into v_existing from sandbox.gift_transactions
   where sender_id = p_sender_id and idempotency_key = p_idempotency_key
   limit 1;
@@ -518,7 +545,7 @@ begin
   if not found then raise exception 'gift unavailable' using errcode='42704'; end if;
 
   -- الخصم من الرصيد التجريبي قبل تسجيل المعاملة (ضمان الاتساق عند إعادة المحاولة).
-  -- deduct_coins تضيف قفلًا على مستوى المستخدم.
+  -- deduct_coins تأخذ قفل المستخدم再次 (معاد الدخول داخل نفس الجلسة) وقفل idempotency للمفتاح المشتق K:gift.
   perform public.aani_sandbox_deduct_coins(p_sender_id, v_price, p_idempotency_key || ':gift', 'sandbox gift send');
 
   select public.aani_sandbox_balance(p_sender_id) into v_balance;
@@ -631,6 +658,19 @@ begin
   select coins into v_coins from sandbox.top_up_packages where id = p_package_id and is_active = true;
   if not found then raise exception 'package unavailable' using errcode='42704'; end if;
 
+  -- كشف استخدام المفتاح نفسه من عملية مالية سابقة كتبت المفتاح الأصلي إلى ledger
+  -- (activate_subscription، grant_coins، deduct_coins، create_promotion، renew_subscription).
+  -- هذا يضمن تعارض المفتاح الأصلي عبر الدوال، حتى وإن كان top_up يكتب :credit إلى ledger.
+  -- ينطبق على إنشاء عملية شحن جديدة سواء نجحت المحاكاة أم فشلت، دون impedir replay المشروع.
+  if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by another financial operation' using errcode='40901';
+  end if;
+
+  -- كشف استخدام المفتاح نفسه من عملية send_gift سابقة (تكتب إلى sandbox.gift_transactions).
+  if exists (select 1 from sandbox.gift_transactions where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by gift send' using errcode='40901';
+  end if;
+
   if p_simulate_success then
     -- التحقق من إدخال السجل الموجود لنفس مفتاح idempotency قبل إكمال الشحن.
     select user_id, type, amount, reference into v_ledger_user_id, v_ledger_type, v_ledger_amount, v_ledger_reference
@@ -655,13 +695,6 @@ begin
       select public.aani_sandbox_balance(p_user_id) into v_balance;
       return jsonb_build_object('ok',true,'duplicate',true,'status','completed','amount',v_coins,
         'balance',v_balance,'simulated',true);
-    end if;
-
-    -- كشف استخدام المفتاح نفسه من عملية مالية سابقة كتبت المفتاح الأصلي إلى ledger
-    -- (activate_subscription، grant_coins، deduct_coins، create_promotion، renew_subscription).
-    -- هذا يضمن تعارض المفتاح الأصلي عبر الدوال، حتى وإن كان top_up يكتب :credit إلى ledger.
-    if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
-      raise exception 'idempotency key conflict: key already used by another financial operation' using errcode='40901';
     end if;
 
     -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
@@ -796,6 +829,16 @@ begin
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
+
+  -- كشف استخدام المفتاح نفسه من عملية top_up سابقة.
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
+
+  -- كشف استخدام المفتاح نفسه من عملية send_gift سابقة.
+  if exists (select 1 from sandbox.gift_transactions where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by gift send' using errcode='40901';
+  end if;
 
   insert into sandbox.subscriptions (user_id, package_id, status, started_at, ended_at, auto_renew, coins_charged)
   values (p_user_id, p_package_id, 'active', now(), now() + (v_days || ' days')::interval, true, v_coins)
@@ -947,6 +990,11 @@ begin
     raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
   end if;
 
+  -- كشف استخدام المفتاح نفسه من عملية send_gift سابقة (تكتب إلى sandbox.gift_transactions).
+  if exists (select 1 from sandbox.gift_transactions where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by gift send' using errcode='40901';
+  end if;
+
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<renew_ledger_insert>>
   begin
@@ -1047,6 +1095,11 @@ begin
   -- كشف استخدام المفتاح نفسه من عملية top_up سابقة (top_up يسجل المفتاح الأصلي في sandbox.top_ups).
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
     raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
+
+  -- كشف استخدام المفتاح نفسه من عملية send_gift سابقة (تكتب إلى sandbox.gift_transactions).
+  if exists (select 1 from sandbox.gift_transactions where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by gift send' using errcode='40901';
   end if;
 
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.

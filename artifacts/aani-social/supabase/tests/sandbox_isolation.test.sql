@@ -319,6 +319,47 @@ SELECT public.aani_sandbox_cancel_subscription('<subscription-id>');
 --   (top_up تفحص ledger بالمفتاح الأصلي، grant_coins تفحص top_ups) وتجد القيد السابق
 --   → تُرفض بـ 40901 دون خصم مزدوج.
 
+-- ------------------------------------------------------------------
+-- 26. grant_coins بالمفتاح K ثم top_up بالمفتاح K مع p_simulate_success=false
+-- ------------------------------------------------------------------
+-- سيناريو متسلسل (غير متزامن):
+--   الجلسة A (grant_coins): SELECT public.aani_sandbox_grant_coins(:'userA', 100, 'grant-then-topup-fail-key', 'test grant');
+--     → يكتب sandbox.ledger بالمفتاح 'grant-then-topup-fail-key' (type='credit')
+--   الجلسة B (top_up simulate=false): SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'grant-then-topup-fail-key', false);
+--     → يجب أن تُرفض بـ 40901 لأن المفتاح الأصلي K مستخدم بالفعل في sandbox.ledger بواسطة grant_coins
+--     → لا يُنشأ سجل top_up إضافي، لا يُخصم رصيد
+--
+-- يُتوقع أن تفحص top_up sandbox.ledger WHERE idempotency_key = 'grant-then-topup-fail-key'
+-- وتجد القيد السابق من grant_coins → ترفض بـ 40901 قبل إنشاء أي سجل top_up.
+
+-- ------------------------------------------------------------------
+-- 27. top_up بالمفتاح K ثم send_gift بالمفتاح نفسه
+-- ------------------------------------------------------------------
+-- سيناريو متسلسل:
+--   الجلسة A (top_up): SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-then-gift-key', true);
+--     → يكتب sandbox.top_ups بالمفتاح 'topup-then-gift-key'
+--     → يكتب sandbox.ledger بالمفتاح 'topup-then-gift-key:credit'
+--   الجلسة B (send_gift): SELECT public.aani_sandbox_send_gift(:'userA', :'userB', :'giftId', 'topup-then-gift-key');
+--     → يجب أن تُرفض بـ 40901 لأن المفتاح الأصلي K مستخدم بالفعل في sandbox.top_ups بواسطة top_up
+--     → لا يُخصم رصيد إضافي، لا يُنشأ سجل gift_transactions إضافي
+--
+-- يُتوقع أن تفحص send_gift sandbox.top_ups WHERE idempotency_key = 'topup-then-gift-key'
+-- وتجد القيد السابق من top_up → ترفض بـ 40901.
+
+-- ------------------------------------------------------------------
+-- 28. send_gift بالمفتاح K ثم grant_coins بالمفتاح نفسه
+-- ------------------------------------------------------------------
+-- سيناريو متسلسل:
+--   الجلسة A (send_gift): SELECT public.aani_sandbox_send_gift(:'userA', :'userB', :'giftId', 'gift-then-grant-key');
+--     → يكتب sandbox.gift_transactions بالمفتاح 'gift-then-grant-key'
+--     → يستدعي deduct_coins(marker 'gift-then-grant-key:gift') الذي يكتب sandbox.ledger بالمفتاح 'gift-then-grant-key:gift'
+--   الجلسة B (grant_coins): SELECT public.aani_sandbox_grant_coins(:'userA', 50, 'gift-then-grant-key', 'test grant');
+--     → يجب أن تُرفض بـ 40901 لأن المفتاح الأصلي K مستخدم بالفعل في sandbox.gift_transactions بواسطة send_gift
+--     → لا يُكتب قيد ledger إضافي، لا يُضاف رصيد
+--
+-- يُتوقع أن تفحص grant_coins sandbox.gift_transactions WHERE idempotency_key = 'gift-then-grant-key'
+-- وتجد القيد السابق من send_gift → ترفض بـ 40901.
+
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة
 -- Supabase مباشرة. لا يُدّعى نجاحه دون تنفيذ فعلي على قاعدة حية.
