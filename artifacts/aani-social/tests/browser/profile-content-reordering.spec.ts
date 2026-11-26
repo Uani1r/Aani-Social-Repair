@@ -15,7 +15,9 @@ async function longPressDrag(page: Page, from: Locator, to: Locator) {
   await page.mouse.up();
 }
 
-const highlightTitles = (page: Page) => page.locator('section[aria-label="highlights"] button:not([aria-label^="إضافة"])').locator('span').last();
+// The title of each highlight circle: the last direct span of its own button, so
+// every collection yields exactly one title instead of the page's last span.
+const highlightTitles = (page: Page) => page.locator('section[aria-label="highlights"] [data-profile-reorder-kind="highlights"] > span:last-of-type');
 const gridIds = (page: Page) => page.locator('section[aria-label="media grid"] [data-profile-reorder-id]').evaluateAll(nodes => nodes.map(node => node.getAttribute('data-profile-reorder-id')));
 const log = (page: Page) => page.evaluate(() => window.__profileReorderLog ?? []);
 
@@ -68,7 +70,8 @@ test('reorders a highlight collection and records the new id order', async ({ pa
 });
 
 test('opens a collection and reorders its stories', async ({ page }) => {
-  await page.locator('button[aria-label="عرض مجموعة الأولى"]').click();
+  // The aria-label changes with the reorder mode, so open it by its stable id.
+  await page.locator('[data-profile-reorder-id="c-one"]').click();
   const stories = page.locator('section[aria-label="collection stories"] [data-profile-reorder-kind="stories"]');
   await expect(stories).toHaveCount(3);
 
@@ -89,9 +92,9 @@ test('reorders owned posts and leaves the repost untouched', async ({ page }) =>
   const entries = await log(page);
   expect(entries.at(-1)).toEqual({ kind: 'posts', nextIds: ['p-three', 'p-one', 'p-two'], previousIds: ['p-one', 'p-two', 'p-three'] });
 
-  // The repost tile has no reorder attributes, so it can never be dragged.
+  // The repost tile is the last grid button and has no reorder attributes.
   await expect(page.locator('[data-profile-reorder-id="p-repost"]')).toHaveCount(0);
-  const repost = page.locator('section[aria-label="media grid"] button', { hasText: '' }).last();
+  const repost = page.locator('section[aria-label="media grid"] > div > button').last();
   await longPressDrag(page, repost, posts.nth(0));
   expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
 });
