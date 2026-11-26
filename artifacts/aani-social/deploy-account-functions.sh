@@ -16,9 +16,6 @@ set -euo pipefail
 readonly PROJECT_REF="auqqqwfjxrxizlmeweka"
 readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-# الوجهات التي توقف النشر فوراً: قيمة قديمة خاطئة، أو أي مشروع آخر.
-readonly FORBIDDEN_PROJECT_REFS=("whvhxgfdumxzunzsjkll")
-
 fail() {
   echo "أُوقف النشر: $1" >&2
   exit 1
@@ -27,12 +24,6 @@ fail() {
 if [[ -z "${PROJECT_REF}" || "${PROJECT_REF}" != "auqqqwfjxrxizlmeweka" ]]; then
   fail "Project Ref غير مطابق للمشروع الصحيح."
 fi
-
-for forbidden in "${FORBIDDEN_PROJECT_REFS[@]}"; do
-  if [[ "${PROJECT_REF}" == "${forbidden}" ]]; then
-    fail "Project Ref محظور (${forbidden})."
-  fi
-done
 
 if [[ -n "${SUPABASE_PROJECT_REF:-}" && "${SUPABASE_PROJECT_REF}" != "${PROJECT_REF}" ]]; then
   fail "SUPABASE_PROJECT_REF لا يطابق المشروع الصحيح."
