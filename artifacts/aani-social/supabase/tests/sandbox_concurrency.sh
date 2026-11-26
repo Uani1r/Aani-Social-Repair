@@ -6,11 +6,17 @@
 # من عمليتين مختلفتين على نفس المستخدم:
 #   - الجلسة A: grant_coins(userA, ...) كـ founder
 #   - الجلسة B: top_up(userA, ...)    كـ userA
-# الأقفال الاستشارية (pg_advisory_xact_lock على المفتاح) تُسلسل العمليتين،
-# فينجح أحدهما فقط ويُرفض الآخر بـ SQLSTATE 40901.
+#
+# الإثبات:
+#   1) حاجز تزامن حقيقي (rendezvous): كل جلسة تسجّل وصولها في جدول حاجز
+#      وتنتظر حتى تصل الجلسة الثانية (n>=2) قبل نداء الدالة المالية. هذا يضمن
+#      أن الجلستين كانتا حيتين ومتزامنتين فعلاً عند لحظة التسابق — لا تتابعاً.
+#   2) الأقفال الاستشارية (pg_advisory_xact_lock على المفتاح) تُسلسل العمليتين،
+#      فينجح أحدهما فقط ويُرفض الآخر بـ SQLSTATE 40901 (نتحقق منه صراحةً).
+#   3) فائز واحد فقط عبر جدولي ledger/top_ups، ولا قيد مالي مكرر.
 #
 # المتطلبات: psql، ومتغير DATABASE_URL باتصال إداري (مالك الجداول).
-# لا يُطبَّق على الإنتاج — قاعدة اختبار مؤقتة فقط.
+# لا يُطبَّق على الإنتاج — قاعدة اختبار محلية مؤقتة فقط.
 # =====================================================================
 set -euo pipefail
 
@@ -20,29 +26,65 @@ USER_A='00000000-0000-0000-0000-0000000000a1'
 FOUNDER='00000000-0000-0000-0000-0000000000a4'
 PACKAGE='00000000-0000-0000-0000-0000000000c1'
 RACE_KEY='race-concurrent-key'
+BARRIER_TABLE='public._sandbox_race_barrier'
 
 OUT_DIR="$(mktemp -d)"
 trap 'rm -rf "$OUT_DIR"' EXIT
 
-echo "== [concurrency] cleaning any prior race rows =="
+echo "== [concurrency] cleaning any prior race rows and barrier =="
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c \
   "delete from sandbox.ledger where idempotency_key in ('$RACE_KEY','$RACE_KEY:credit');
-   delete from sandbox.top_ups where idempotency_key = '$RACE_KEY';"
+   delete from sandbox.top_ups where idempotency_key = '$RACE_KEY';
+   drop table if exists $BARRIER_TABLE;
+   create table $BARRIER_TABLE (k text primary key, n integer not null default 0);"
 
-# الجلسة A: founder يمنح عملات بالمفتاح المشترك.
-SESSION_A_SQL="SET ROLE authenticated;
+# كل خطوة = معاملة مستقلة (psql -c واحدة = معاملة واحدة) لتجنّب قفل الصف عبر
+# الجلسات. الحاجز: سجّل الوصول ثم انتظر وصول الثانية (n>=2) قبل النداء المالي.
+barrier_arrive() {
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c \
+    "insert into $BARRIER_TABLE(k,n) values ('race',1)
+       on conflict (k) do update set n = $BARRIER_TABLE.n + 1;"
+}
+barrier_wait() {
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c \
+    "do \$\$
+     declare v integer; i integer := 0;
+     begin
+       loop
+         select n into v from $BARRIER_TABLE where k = 'race';
+         exit when v >= 2;
+         perform pg_sleep(0.02);
+         i := i + 1;
+         if i > 250 then
+           raise exception 'barrier timeout: second session never arrived (n=%)', v;
+         end if;
+       end loop;
+     end \$\$;"
+}
+
+# الجلسة A: founder يمنح عملات بالمفتاح المشترك (VERBOSITY sqlstate لإظهار 40901).
+SESSION_A_SQL="\\set VERBOSITY sqlstate
+SET ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{\"sub\":\"$FOUNDER\"}', true);
 SELECT public.aani_sandbox_grant_coins('$USER_A', 100, '$RACE_KEY', 'race grant');"
 
 # الجلسة B: userA يشحن بالمفتاح نفسه.
-SESSION_B_SQL="SET ROLE authenticated;
+SESSION_B_SQL="\\set VERBOSITY sqlstate
+SET ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{\"sub\":\"$USER_A\"}', true);
 SELECT public.aani_sandbox_top_up('$USER_A', '$PACKAGE', '$RACE_KEY', true);"
 
-echo "== [concurrency] launching two concurrent sessions =="
-psql "$DATABASE_URL" -v ON_ERROR_STOP=0 -c "$SESSION_A_SQL" >"$OUT_DIR/a.out" 2>&1 &
+run_session() {
+  local sql="$1" out="$2"
+  barrier_arrive
+  barrier_wait
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=0 -c "$sql" >"$out" 2>&1
+}
+
+echo "== [concurrency] launching two concurrent sessions (rendezvous barrier) =="
+run_session "$SESSION_A_SQL" "$OUT_DIR/a.out" &
 PID_A=$!
-psql "$DATABASE_URL" -v ON_ERROR_STOP=0 -c "$SESSION_B_SQL" >"$OUT_DIR/b.out" 2>&1 &
+run_session "$SESSION_B_SQL" "$OUT_DIR/b.out" &
 PID_B=$!
 
 RC_A=0; RC_B=0
@@ -52,10 +94,10 @@ wait "$PID_B" || RC_B=$?
 echo "----- session A output -----"; cat "$OUT_DIR/a.out"
 echo "----- session B output -----"; cat "$OUT_DIR/b.out"
 
-# التصنيف: نجاح (يحتوي ok:true) أو تعارض 40901.
+# التصنيف: نجاح (يحتوي ok:true) أو تعارض صريح بـ SQLSTATE 40901.
 classify() {
   local f="$1"
-  if grep -q 'SQLSTATE: 40901' "$f" || grep -qi 'idempotency key conflict' "$f"; then
+  if grep -qE '(^|[^0-9])40901([^0-9]|$)' "$f"; then
     echo "conflict"
   elif grep -q '"ok": true' "$f" || grep -q '"ok":true' "$f"; then
     echo "success"
@@ -71,11 +113,11 @@ echo "== [concurrency] A=$CA B=$CB =="
 
 FAIL=0
 if [ "$CA" = "success" ] && [ "$CB" = "conflict" ]; then
-  echo "PASS: grant won, top_up rejected with 40901"
+  echo "PASS: grant won, top_up rejected with SQLSTATE 40901"
 elif [ "$CB" = "success" ] && [ "$CA" = "conflict" ]; then
-  echo "PASS: top_up won, grant rejected with 40901"
+  echo "PASS: top_up won, grant rejected with SQLSTATE 40901"
 else
-  echo "FAIL: expected exactly one success and one 40901 conflict (A=$CA B=$CB)"
+  echo "FAIL: expected exactly one success and one SQLSTATE 40901 conflict (A=$CA B=$CB)"
   FAIL=1
 fi
 
@@ -98,6 +140,9 @@ if [ "$CREDIT_COUNT" -gt 1 ]; then
   echo "FAIL: expected at most 1 credit row, got $CREDIT_COUNT"
   FAIL=1
 fi
+
+# تنظيف جدول الحاجز (تنظيف فقط؛ لا يؤثر على نتيجة الاختبار).
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -c "drop table if exists $BARRIER_TABLE;"
 
 if [ "$FAIL" -ne 0 ]; then
   exit 1

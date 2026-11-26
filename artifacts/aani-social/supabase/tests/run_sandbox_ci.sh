@@ -29,12 +29,6 @@ mkdir -p "$LOG_DIR"
 
 PSQL=(psql "$DATABASE_URL" -v ON_ERROR_STOP=1)
 
-# الترحيل المالي يعرّف دوال SQL تشير إلى جداول sandbox.* قبل إنشائها (مثل
-# aani_sandbox_is_founder -> sandbox.founders). Postgres يتحقق من أجسام دوال SQL
-# عند الإنشاء ويفشل إن كان الجدول غير موجود بعد. نوقف هذا التحقق لهذه الجلسة
-# (كما هو سلوك Supabase الافتراضي) دون تعديل أي ملف ترحيل.
-export PGOPTIONS="-c check_function_bodies=off"
-
 run_step() {
   local name="$1"; shift
   echo "===== STEP: $name ====="

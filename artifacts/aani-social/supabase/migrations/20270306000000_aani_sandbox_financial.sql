@@ -28,6 +28,26 @@ create schema if not exists sandbox;
 grant usage on schema sandbox to authenticated;
 
 -- =====================================================================
+-- جدول مؤسسي Sandbox (قائمة سماح من جانب الخادم فقط)
+--     يُنشأ قبل دالة aani_sandbox_is_founder() لأنها تشير إليه، حتى يعمل
+--     التحقق من أجسام الدوال (check_function_bodies) بالإعداد الافتراضي.
+--     تُضاف الصفوف عبر SQL server-side فقط؛ لا يرسل المتصفح أي ادعاء بمنصب المؤسس.
+--     الجدول فارغ افتراضيًا: يضيف مسؤول القاعدة معرفات المؤسسين عبر SQL.
+-- =====================================================================
+create table if not exists sandbox.founders (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null unique references public.profiles (id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+alter table sandbox.founders enable row level security;
+drop policy if exists sandbox_founders_select_own on sandbox.founders;
+create policy sandbox_founders_select_own on sandbox.founders
+  for select to authenticated
+  using (auth.uid() = user_id);
+revoke all on sandbox.founders from public, anon, authenticated;
+grant select on sandbox.founders to authenticated;
+
+-- =====================================================================
 -- دالة التحقق من هوية المؤسس (تُعرف قبل أي سياسة أو دالة تستدعيها)
 -- =====================================================================
 create or replace function public.aani_sandbox_is_founder()
@@ -271,24 +291,6 @@ revoke all on sandbox.promotions from public, anon, authenticated;
 grant select on sandbox.promotions to authenticated;
 create index if not exists sandbox_promotions_user_idx on sandbox.promotions (user_id, created_at desc);
 create index if not exists sandbox_promotions_idempotency_idx on sandbox.promotions (idempotency_key);
-
--- =====================================================================
--- 10. مؤسسو Sandbox (قائمة سماح من جانب الخادم فقط)
---     تُضاف الصفوف عبر SQL 측서-side فقط؛ لا يرسل المتصفح أي ادعاء بمنصب المؤسس.
---     الجدول فارغ افتراضيًا: يضيف مسؤول القاعدة معرفات المؤسسين reales عبر SQL.
--- =====================================================================
-create table if not exists sandbox.founders (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null unique references public.profiles (id) on delete cascade,
-  created_at timestamptz not null default now()
-);
-alter table sandbox.founders enable row level security;
-drop policy if exists sandbox_founders_select_own on sandbox.founders;
-create policy sandbox_founders_select_own on sandbox.founders
-  for select to authenticated
-  using (auth.uid() = user_id);
-revoke all on sandbox.founders from public, anon, authenticated;
-grant select on sandbox.founders to authenticated;
 
 -- =====================================================================
 -- 11. سجل إجراءات المسؤول (تدقيق): الفاعل، الوقت، السبب، النتيجة

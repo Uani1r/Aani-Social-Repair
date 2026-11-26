@@ -1,72 +1,596 @@
 name: CI
 
+# Runs typecheck and build for the two runnable artifacts on every pull request
+# into main, and on every push to main itself.
 on:
   push:
-    branches: [feat/aani-sandbox-financial]
+    branches: [main]
   pull_request:
     branches: [main]
 
+# One run per ref: a new push to the same branch cancels the previous run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
-  verify:
+  typecheck-and-build:
+    name: Typecheck and build
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup pnpm
+      # pnpm must be installed before setup-node, so that the pnpm store cache
+      # it configures can be resolved.
+      - name: Set up pnpm 10.33.3
         uses: pnpm/action-setup@v4
         with:
-          version: latest
+          version: 10.33.3
 
-      - name: Setup Node.js
+      - name: Set up Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm run typecheck
+      # api-server references the composite libs (lib/db, lib/api-zod) through
+      # project references, so their declarations must exist before its own
+      # typecheck — otherwise tsc reports "output file has not been built".
+      - name: Build workspace libraries
+        run: pnpm run typecheck:libs
 
-      - name: Build
-        run: pnpm run build
+      - name: Typecheck @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run typecheck
 
-      - name: Validate SQL syntax
+      - name: Build @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run build
+
+      # Run focused unit tests; the wider test:unit script includes unrelated
+      # mediaCompressor failures already present on main. messagesInbox covers
+      # summary mapping and stale inbox requests; messagesThread covers pagination
+      # and merge guards; realtimeChannelHealth covers channel status recovery;
+      # realtimeChannelLifecycle covers the Shell unread-channel lifecycle;
+      # messagesDeliveryReceipts covers the Shell delivery acknowledgements;
+      # messagesRealtimeEvents covers the Shell-to-MessagesPage relay, duplicate
+      # event suppression, and background expiry cleanup.
+      - name: Unit tests @workspace/aani-social (voice messages)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/messagesVoice.test.ts ./src/lib/messagesVoicePlayback.test.ts ./src/lib/messagesVoiceServer.test.ts ./src/lib/messagesVoiceDeletion.test.ts
+
+      - name: Unit tests @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/netlifyApiProxy.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts
+
+      # Server-side voice pipeline: FFmpeg argument building, ffprobe parsing and
+      # output verification, the pre-transcode guards, and the auth/rate/concurrency
+      # gate that runs before the request body is read. No ffmpeg binary is needed.
+      - name: Unit tests @workspace/api-server (voice)
+        run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/voiceProcessing.test.ts ./src/lib/voiceGate.test.ts ./src/lib/voiceUploadFinalize.test.ts
+
+      - name: Typecheck @workspace/api-server
+        run: pnpm --filter @workspace/api-server run typecheck
+
+      - name: Build @workspace/api-server
+        run: pnpm --filter @workspace/api-server run build
+
+      # سلوك فيديو المحادثة: الحمولة والحدود، ضغط/رفع الاستوديو، وتشغيل أول ضغطة.
+      - name: Unit tests @workspace/aani-social (chat video payload)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideo.test.ts
+
+      - name: Unit tests @workspace/aani-social (chat video send)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoSend.test.ts
+
+      - name: Unit tests @workspace/aani-social (chat video player)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoPlayer.test.ts
+
+  # Applies the messages reply-compat migration to a throwaway PostgreSQL and
+  # runs the reply compatibility SQL test against it. The harness builds only
+  # the part of the schema the migration and the test touch, so this proves the
+  # migration's logic (backfill, sync trigger, validation trigger on both
+  # paths, single reply index) but not the production schema as a whole.
+  messages-sql:
+    name: Messages SQL and reply compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The runner image usually ships psql; install it when it does not.
+      - name: Ensure psql
         run: |
-          # Validate SQL syntax using pg_format if available.
-          # psql --dry-run is not used: it requires a live database connection,
-          # and CI must not connect to production Supabase.
-          if command -v pg_format >/dev/null 2>&1; then
-            pg_format --check artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
-            pg_format --check artifacts/aani-social/supabase/migrations/20270306000000_aani_sandbox_financial.sql
-          else
-            echo "pg_format not available; SQL syntax validation skipped"
-            echo "SQL validation requires a live PostgreSQL/Supabase test instance"
-            echo "Not connecting to production Supabase"
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
           fi
 
-      - name: Run SQL tests (isolated Supabase/PostgreSQL)
-        run: |
-          # SQL tests are NOT executed in CI.
-          # They require a live Supabase test instance with auth.uid() and RLS support.
-          # They must not run against production Supabase.
-          # Status: NOT EXECUTED — do not count as passed.
-          echo "SQL tests: NOT EXECUTED in CI"
-          echo "Status: not executed (requires isolated Supabase test instance)"
-          echo "To run manually:"
-          echo "  1. supabase start"
-          echo "  2. supabase db push --linked"
-          echo "  3. SET myapp.* variables"
-          echo "  4. supabase db query --file artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql"
-        shell: bash
+      - name: Build the minimal messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_legacy_schema.sql
 
-      - name: Upload test artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
+      # Simulate a partial restore in the throwaway PostgreSQL: both trigger
+      # functions and all three related triggers are absent before migration.
+      - name: Remove reply validation and synchronization triggers and functions
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_trigger_bootstrap.sql
+
+      - name: Apply the migration from the triggerless state
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      # Seed direct grants to both roles so the next migration run must revoke them.
+      - name: Seed validator EXECUTE grants for ACL regression test
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_execute_acl_scenario.sql
+
+      # Re-applying proves the restored functions/triggers and indexes are idempotent,
+      # and removes the direct validator grants seeded above.
+      - name: Re-apply the migration (idempotency and ACL revocation)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the resulting messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_compat_schema.sql
+
+      - name: Run the reply compatibility tests
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reply_compat.test.sql
+
+      # Index equivalence scenario. The setup drops the reply indexes in this
+      # throwaway database only (never in a Supabase database) and creates two
+      # non-equivalent ones: a partial index with a narrower predicate (does not
+      # cover every required row) and a two-key-column index. The migration must
+      # still create the correct index, and a second run must not duplicate it.
+      - name: Prepare the non-equivalent reply index scenario
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_index_scenarios.sql
+
+      - name: Apply the migration with only non-equivalent reply indexes present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the correct reply index was created exactly once
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql
+
+      # Re-applying with the correct index present must not create a duplicate:
+      # the same assertions require exactly one equivalent index and exactly
+      # three indexes whose first key column is reply_to_message_id.
+      - name: Re-apply the migration with the correct index present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the correct reply index was not duplicated
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_exactly_once.sql
+
+      # Full-index scenario: a non-partial index on the same single column
+      # covers every row, so it is equivalent and the migration must not add a
+      # second index.
+      - name: Prepare the full reply index scenario
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reply_index_full_scenario.sql
+
+      - name: Apply the migration with a full covering reply index present
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270228000001_messages_reply_compat_and_thread_indexes.sql
+
+      - name: Assert the full reply index already covered the required rows
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/assert_messages_reply_index_full_covered.sql
+
+  messages-inbox-sql:
+    name: Messages inbox summary SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_inbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_inbox_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary inbox schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_inbox_schema.sql
+
+      - name: Apply the inbox summary migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270301000000_messages_inbox_summary.sql
+
+      - name: Test summary semantics, hiding, delivery and permissions
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_inbox_summary.test.sql
+
+
+  # Verifies the message_reactions RLS/grant/Realtime migration against a
+  # throwaway PostgreSQL: policies, anon denial, authenticated privileges, RLS,
+  # REPLICA IDENTITY FULL, and publication membership, with the migration
+  # applied twice to prove it is idempotent. No Supabase project is contacted.
+  messages-reactions-sql:
+    name: Message reactions security SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_reactions_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_reactions_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary message_reactions schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_reactions_schema.sql
+
+      - name: Apply the message_reactions security migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20261122150000_messages_reactions_realtime_security.sql
+
+      # Re-applying proves the policy drops, grants, replica identity, and the
+      # publication membership are all safe to repeat.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20261122150000_messages_reactions_realtime_security.sql
+
+      - name: Test policies, grants, RLS, replica identity and publication
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_reactions_security.test.sql
+
+
+  # Verifies the Realtime Authorization policies that let only conversation
+  # participants join and publish on the private message-deletion broadcast
+  # channel. Runs against a throwaway PostgreSQL that mimics realtime.messages,
+  # never a Supabase project.
+  messages-delete-broadcast-sql:
+    name: Message delete broadcast auth SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_realtime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_realtime_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary realtime authorization schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/realtime_authorization_schema.sql
+
+      - name: Apply the conversation broadcast authorization migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000000_aani_conversation_broadcast_auth.sql
+
+      # Applies the single-message delete migration right after this one, in the
+      # order the timestamps give in production, to prove the two migrations are
+      # compatible on one database.
+      - name: Apply the single-message delete migration (cross-migration order)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000100_restore_single_message_delete_rpcs.sql
+
+      - name: Test participant-only read and publish authorization
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_delete_broadcast_auth.test.sql
+
+      # The RPC the client calls before joining a conversation's private topic,
+      # so a conversation opened before its first message still authorizes.
+      - name: Apply the conversation membership RPC migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270304000000_aani_ensure_message_conversation_membership.sql
+
+      - name: Test the conversation membership RPC
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_conversation_member_rpc.test.sql
+
+
+  # Restores and verifies the two single-message delete RPCs MessagesPage calls
+  # (aani_hide_message, aani_delete_message_for_everyone) against a throwaway
+  # PostgreSQL, never a Supabase project.
+  messages-single-delete-sql:
+    name: Messages single-message delete RPC SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_single_delete_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_single_delete_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/messages_single_delete_schema.sql
+
+      - name: Apply the single-message delete RPC migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000100_restore_single_message_delete_rpcs.sql
+
+      # Re-applying proves CREATE OR REPLACE and the REVOKE/GRANT pair are safe
+      # to repeat.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270302000100_restore_single_message_delete_rpcs.sql
+
+      - name: Test hide and delete-for-everyone semantics and grants
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_single_delete_rpcs.test.sql
+
+
+
+  # Verifies the database trigger that broadcasts message_deleted from
+  # public.messages: ids only, on the private conversation topic, for both
+  # directions, without touching other conversations, and without ever letting a
+  # broadcast failure abort the delete. Runs against a throwaway PostgreSQL with a
+  # stub realtime.send, never a Supabase project.
+  messages-delete-trigger-sql:
+    name: Message delete broadcast trigger SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_delete_trigger_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_delete_trigger_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary realtime and messages schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/realtime_authorization_schema.sql
+
+      - name: Stub realtime.send with the production signature
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/realtime_send_stub.sql
+
+      - name: Apply the message delete broadcast trigger migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270303000000_message_delete_realtime_broadcast.sql
+
+      # Re-applying proves the trigger function and trigger creation are safe to repeat.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270303000000_message_delete_realtime_broadcast.sql
+
+      - name: Test the trigger payload, scope and failure isolation
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_delete_broadcast_trigger.test.sql
+
+
+  # Verifies aani_reorder_profile_highlight_stories on a throwaway PostgreSQL:
+  # ownership, duplicates, completeness, cross-collection and cross-owner guards,
+  # sequential positions from 0, no change on failure, the ACL (authenticated
+  # only), and a second idempotent migration run. Then it simulates Supabase's
+  # default EXECUTE grant to anon, applies the ACL correction migration twice,
+  # and proves authenticated keeps EXECUTE while anon and PUBLIC lose it.
+  # Never touches Supabase.
+  profile-highlight-story-sql:
+    name: Profile highlight story reordering SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_highlight_reorder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_highlight_reorder_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the minimal highlight schema and seed two owners
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/profile_highlight_reorder_schema.sql
+
+      - name: Apply the highlight story reordering migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270217000000_profile_highlight_story_reordering.sql
+
+      # The function must be re-creatable: a second run proves the migration is
+      # idempotent and does not duplicate the function or its grants.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270217000000_profile_highlight_story_reordering.sql
+
+      - name: Run the highlight story reordering tests
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/profile_highlight_story_reordering.test.sql
+
+      # Supabase grants EXECUTE on new public functions to anon through ALTER
+      # DEFAULT PRIVILEGES, so the function created by the reordering migration
+      # keeps a grant that its own revoke never removed. The harness asserts the
+      # grant is really there before the correction runs.
+      - name: Simulate Supabase's default EXECUTE grant to anon
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/profile_highlight_reorder_acl_grants.sql
+
+      - name: Apply the EXECUTE ACL correction migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270306000000_profile_highlight_story_reorder_execute_acl.sql
+
+      # Re-applying proves the REVOKE/GRANT pair is safe to repeat on a new or an
+      # already corrected project.
+      - name: Re-apply the ACL correction migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270306000000_profile_highlight_story_reorder_execute_acl.sql
+
+      - name: Test the reordering RPC EXECUTE privileges
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/profile_highlight_story_reorder_acl.test.sql
+
+
+  # Browser tests for the shared profile content preview. Playwright is
+  # installed here only (never added to the committed dependencies), and the
+  # page is served by vite.test.config.ts, which stubs src/lib/supabase: no
+  # Supabase project, account or production data is involved.
+  profile-reorder-browser:
+    name: Profile content reordering browser tests
+    # Pinned to Ubuntu 24.04: the newest runner image no longer carries the
+    # system libraries Playwright 1.49 installs (libicu74, libvpx9, ...).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm 10.33.3
+        uses: pnpm/action-setup@v4
         with:
-          name: ci-logs
-          path: |
-            artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
-          retention-days: 7
+          version: 10.33.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright (CI only, not a committed dependency)
+        working-directory: artifacts/aani-social
+        run: pnpm add -D @playwright/test@1.55.0
+
+      - name: Install Chromium and WebKit
+        working-directory: artifacts/aani-social
+        run: pnpm exec playwright install --with-deps chromium webkit
+
+      - name: Run the profile content reordering browser tests
+        working-directory: artifacts/aani-social
+        run: pnpm exec playwright test
