@@ -244,6 +244,25 @@ SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg
 --
 -- يُتوقع ألا يكون هناك سجل admin_actions مكرر لنفس الاشتراك والعملية.
 
+-- ------------------------------------------------------------------
+-- 22. إعادة طلب تجديد ناجح بعد إلغاء الاشتراك لاحقاً
+-- ------------------------------------------------------------------
+-- تفعيل اشتراك بمفتاح جديد.
+SELECT public.aani_sandbox_renew_subscription('<subscription-id>', 'sub-renew-replay-1');
+-- يُتوقع أن تكون النتيجة: ok=true, duplicate=false, status=active.
+-- تسجيل الرصيد بعد التجديد.
+SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_after_renew;
+-- إلغاء الاشتراك لاحقاً (مؤسس فقط أو مالك الاشتراك):
+SELECT public.aani_sandbox_cancel_subscription('<subscription-id>');
+-- يُتوقع أن يصبح Status = 'cancelled'.
+-- إعادة طلب التجديد بالمفتاح نفسه رغم إلغاء الاشتراك → يُتوقع ok=true, duplicate=true, status=completed.
+-- SELECT public.aani_sandbox_renew_subscription('<subscription-id>', 'sub-renew-replay-1');
+-- يُتوقع ألا يُخصم رصيد إضافي ولا يُنشأ قيد ledger مكرر:
+-- SELECT count(*) AS duplicate_renew_ledger
+-- FROM sandbox.ledger
+-- WHERE idempotency_key = 'sub-renew-replay-1'; -- يُتوقع 1
+-- يُتوقع ألا يكون هناك سجل admin_actions مكرر لنفس الاشتراك والعملية.
+
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة
 -- Supabase مباشرة. لا يُدّعى نجاحه دون تنفيذ فعلي على قاعدة حية.

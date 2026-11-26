@@ -820,6 +820,8 @@ grant execute on function public.aani_sandbox_cancel_subscription(uuid) to authe
 -- تجديد اشتراك تجريبي (خصم عملات وتاريخ انتهاء جديد).
 -- يقبل p_idempotency_key لمنع توليد مفتاح عشوائي جديد عند كل إعادة محاولة.
 -- يستخدم SELECT ... FOR UPDATE على صف الاشتراك لمنع تعارض التجديد والإلغاء المتزامنين.
+-- فحص سجل ledger السابق يسبق فحص الحالة، بحيث إعادة طلب تجديد ناجح تُعيد نتيجتها الأصلية
+-- حتى لو أصبح الاشتراك cancelled أو expired بعد التنفيذ الأول.
 -- ترتيب الأقفال: قفل مستشار على المستخدم → قفل صف الاشتراك (FOR UPDATE) → قفل مستشار على مفتاح idempotency.
 create or replace function public.aani_sandbox_renew_subscription(
   p_subscription_id uuid,
@@ -853,11 +855,6 @@ begin
     raise exception 'forbidden' using errcode='42501';
   end if;
 
-  -- لا يُسمح بالتجديد إلا للاشتراك النشط فقط.
-  if v_status <> 'active' then
-    return jsonb_build_object('ok',true,'status','already_' || v_status,'subscription_id',p_subscription_id);
-  end if;
-
   if p_idempotency_key is null or length(trim(p_idempotency_key)) = 0 then
     raise exception 'idempotency key required' using errcode='22023';
   end if;
@@ -865,13 +862,20 @@ begin
   -- قفل مستشار على مفتاح idempotency لمنع تجديدات متزامنة بالمفتاح نفسه.
   perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || v_user_id::text || ':' || p_idempotency_key));
 
+  -- فحص سجل ledger السابق قبل فحص الحالة.
+  -- إذا كان المفتاح مستخدماً في عملية تجديد مطابقة، تُعاد النتيجة الأصلية حتى لو أصبح الاشتراك cancelled أو expired.
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
     if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = v_user_id and reference = 'sandbox subscription renew' and related_id = p_subscription_id) then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
     select public.aani_sandbox_balance(v_user_id) into v_balance;
-    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status',v_status,'subscription_id',p_subscription_id);
+    return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status','completed','subscription_id',p_subscription_id);
+  end if;
+
+  -- لا يُسمح بالتجديد إلا للاشتراك النشط فقط (عند عدم وجود عملية سابقة بالمفتاح).
+  if v_status <> 'active' then
+    return jsonb_build_object('ok',true,'status','already_' || v_status,'subscription_id',p_subscription_id);
   end if;
 
   select coins_price, duration_days into v_coins, v_days
