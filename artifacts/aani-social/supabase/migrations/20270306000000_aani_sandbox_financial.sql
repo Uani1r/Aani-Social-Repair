@@ -541,17 +541,17 @@ begin
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:topup:' || p_user_id::text || ':' || p_idempotency_key));
 
-  select coins into v_coins from sandbox.top_up_packages where id = p_package_id and is_active = true;
-  if not found then raise exception 'package unavailable' using errcode='42704'; end if;
-
+  -- التحقق من وجود سجل شحن سابق بنفس مفتاح idempotency أولاً.
+  -- إذا وجد، تُعاد نتيجة العملية الأصلية دون اشتراط أن تكون الباقة ما زالت فعّالة.
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
     -- جلب سجل الشحن السابق للمقارنة الكاملة لجميع حقائق idempotency.
     select user_id, package_id, amount, status, simulated into v_topup_user_id, v_topup_package_id, v_topup_amount, v_topup_status, v_topup_simulated
     from sandbox.top_ups where idempotency_key = p_idempotency_key;
     if not found then raise exception 'top-up not found' using errcode='42704'; end if;
 
-    -- التحقق من تطابق المستخدم والباقة والمبلغ مع الطلب الحالي.
-    if v_topup_user_id <> p_user_id or v_topup_package_id <> p_package_id or v_topup_amount <> v_coins then
+    -- التحقق من تطابق المستخدم والباقة مع الطلب الحالي.
+    -- لا يُطلب من الباقة أن تكون فعّالة عند إعادة طلب عملية موجودة.
+    if v_topup_user_id <> p_user_id or v_topup_package_id <> p_package_id then
       raise exception 'idempotency key conflict: top-up record does not match request' using errcode='40901';
     end if;
     -- simulated تعني أن العملية تجريبية، ولا تعبّر عن نجاح المحاكاة.
@@ -571,7 +571,7 @@ begin
       if not found then
         raise exception 'ledger credit entry not found for completed top-up' using errcode='40901';
       end if;
-      if v_ledger_user_id <> p_user_id or v_ledger_type <> 'credit' or v_ledger_amount <> v_coins or v_ledger_reference <> 'sandbox top-up' then
+      if v_ledger_user_id <> p_user_id or v_ledger_type <> 'credit' or v_ledger_amount <> v_topup_amount or v_ledger_reference <> 'sandbox top-up' then
         raise exception 'idempotency key conflict: ledger entry does not match top-up' using errcode='40901';
       end if;
     end if;
@@ -582,15 +582,20 @@ begin
       end if;
     end if;
     -- إرجاع نتيجة العملية الأصلية دون تكرار أثرها المالي.
+    -- لا تُضاف عملات ولا تُنشأ قيود Ledger مكررة.
     if p_simulate_success then
       select public.aani_sandbox_balance(p_user_id) into v_balance;
-      return jsonb_build_object('ok',true,'duplicate',true,'status','completed','amount',v_coins,
+      return jsonb_build_object('ok',true,'duplicate',true,'status','completed','amount',v_topup_amount,
         'balance',v_balance,'simulated',true);
     else
-      return jsonb_build_object('ok',false,'duplicate',true,'status','failed','amount',v_coins,
+      return jsonb_build_object('ok',false,'duplicate',true,'status','failed','amount',v_topup_amount,
         'balance',null,'simulated',true,'error','شحن تجريبي فاشل (محاكاة)');
     end if;
   end if;
+
+  -- التحقق من وجود الباقة وفعاليتها إلزامياً فقط عند إنشاء عملية شحن جديدة.
+  select coins into v_coins from sandbox.top_up_packages where id = p_package_id and is_active = true;
+  if not found then raise exception 'package unavailable' using errcode='42704'; end if;
 
   if p_simulate_success then
     -- التحقق من إدخال السجل الموجود لنفس مفتاح idempotency قبل إكمال الشحن.

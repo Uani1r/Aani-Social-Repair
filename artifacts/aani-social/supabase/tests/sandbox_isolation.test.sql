@@ -166,7 +166,7 @@ WHERE idempotency_key = 'promo-test-1'; -- يُتوقع 1
 -- ------------------------------------------------------------------
 -- 16. إعادة الشحن الفاشل بالمفتاح نفسه: تكرار النتيجة دون إضافة عملات
 -- ------------------------------------------------------------------
--- 실행 الشحن الفاشل أولاً بمفتاح جديد.
+-- تنفيذ الشحن الفاشل أولاً بمفتاح جديد.
 SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-retry-1', false);
 -- تسجيل الرصيد بعد الفشل (يجب ألا يتغير).
 SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_after_failed_topup;
@@ -191,6 +191,34 @@ SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_after_retry_fail
 SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-then-success', false);
 -- إعادة استخدام نفس المفتاح مع p_simulate_success=true → يُتوقع استثناء 40901.
 -- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-then-success', true); -- يُتوقع خطأ 40901
+
+-- ------------------------------------------------------------------
+-- 18. إعادة الطلب بمفتاح موجود بعد تعطيل الباقة: تُعاد النتيجة الأصلية
+-- ------------------------------------------------------------------
+-- شحن ناجح بمفتاح جديد، ثم تعطيل الباقة.
+SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg-1', true);
+SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_before_deactivation;
+-- تعطيل الباقة (يُنفّذ من جهة المسؤول عبر SQL مباشر):
+-- update sandbox.top_up_packages set is_active = false where id = :'packageId';
+-- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع completed وduplicate=true.
+-- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg-1', true);
+-- يُتوقع أن الرصيد لم يتغير (لا إضافة عملات مكررة):
+-- SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_after_deactivated_replay;
+
+-- شحن فاشل بمفتاح جديد، ثم تعطيل الباقة.
+SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg-2', false);
+-- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع failed وduplicate=true.
+-- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg-2', false);
+-- يُتوقع أن الرصيد لم يتغير ولا يوجد قيد credit مكرر:
+-- SELECT count(*) AS credit_ledger_for_deactivated_failed
+-- FROM sandbox.ledger
+-- WHERE idempotency_key = 'topup-deactivated-pkg-2:credit'; -- يُتوقع 0
+
+-- ------------------------------------------------------------------
+-- 19. محاولة شحن جديد بباقة معطّلة: تُرفض
+-- ------------------------------------------------------------------
+-- شحن جديد بمفتاح جديد وباقة معطّلة → يُتوقع استثناء 'package unavailable' (42704).
+-- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-new-on-deactivated-1', true); -- يُتوقع خطأ 42704
 
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة
