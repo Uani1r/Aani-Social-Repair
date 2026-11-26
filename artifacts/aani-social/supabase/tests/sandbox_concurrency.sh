@@ -62,15 +62,13 @@ barrier_wait() {
      end \$\$;"
 }
 
-# الجلسة A: founder يمنح عملات بالمفتاح المشترك (VERBOSITY sqlstate لإظهار 40901).
-SESSION_A_SQL="\\set VERBOSITY sqlstate
-SET ROLE authenticated;
+# الجلسة A: founder يمنح عملات بالمفتاح المشترك.
+SESSION_A_SQL="SET ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{\"sub\":\"$FOUNDER\"}', true);
 SELECT public.aani_sandbox_grant_coins('$USER_A', 100, '$RACE_KEY', 'race grant');"
 
 # الجلسة B: userA يشحن بالمفتاح نفسه.
-SESSION_B_SQL="\\set VERBOSITY sqlstate
-SET ROLE authenticated;
+SESSION_B_SQL="SET ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{\"sub\":\"$USER_A\"}', true);
 SELECT public.aani_sandbox_top_up('$USER_A', '$PACKAGE', '$RACE_KEY', true);"
 
@@ -78,7 +76,8 @@ run_session() {
   local sql="$1" out="$2"
   barrier_arrive
   barrier_wait
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=0 -c "$sql" >"$out" 2>&1
+  # VERBOSITY=sqlstate يجعل psql يطبع SQLSTATE (مثل 40901) صراحةً عند الخطأ.
+  psql "$DATABASE_URL" -v VERBOSITY=sqlstate -v ON_ERROR_STOP=0 -c "$sql" >"$out" 2>&1
 }
 
 echo "== [concurrency] launching two concurrent sessions (rendezvous barrier) =="
