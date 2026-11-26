@@ -200,6 +200,31 @@ test('an unreadable record blocks a new number and is not overwritten', () => {
   assert.equal(storage.getItem(key), corrupt);
 });
 
+test('an empty stored value is unreadable: it blocks a new number and is not overwritten', () => {
+  const storage = memoryStorage();
+  const key = `aani:phone-change:${USER_ID}`;
+  // القيمة الفارغة سجل موجود لا يمكن التحقق منه، وليست "لا سجل".
+  storage.setItem(key, '');
+
+  assert.deepEqual(
+    readPendingPhoneChange(USER_ID, storage),
+    { status: 'unreadable', reason: 'invalid-record' },
+  );
+
+  const plan = planPhoneChangeStart({
+    userId: USER_ID,
+    record: readPendingPhoneChange(USER_ID, storage),
+    nextPhone: NEW_PHONE,
+    currentPhone: CURRENT_PHONE,
+    now: NOW,
+    storage,
+  });
+  assert.deepEqual(plan, { canStart: false, reason: 'unreadable', read: 'invalid-record' });
+
+  // لم يبدأ رقم جديد، ولم يُكتب سجل جديد مكان القيمة الفارغة.
+  assert.equal(storage.getItem(key), '');
+});
+
 test('unreadable storage refuses a new number without writing', () => {
   const plan = planPhoneChangeStart({
     userId: USER_ID,

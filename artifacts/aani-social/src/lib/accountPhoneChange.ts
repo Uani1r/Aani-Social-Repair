@@ -91,9 +91,9 @@ function writeRecord(userId: string, pending: PendingPhoneChange, storage?: Stor
 
 /**
  * يقرأ السجل المحفوظ بلا استنتاج: يتعذر الوصول إلى التخزين أو قراءته →
- * `unreadable`، وقيمة لا تُفهم (JSON تالف، رقم غير صالح، وقت غير صالح، حالة
- * غير معروفة) → `unreadable`، ولا سجل → `absent`. لا يُعيد أي سجل لا يمكن
- * التحقق منه كأنه غائب، ولا يُصحح قيمه.
+ * `unreadable`، وقيمة لا تُفهم (قيمة فارغة، JSON تالف، رقم غير صالح، وقت غير
+ * صالح، حالة غير معروفة) → `unreadable`، ولا سجل (`getItem` يُعيد null) →
+ * `absent`. لا يُعيد أي سجل لا يمكن التحقق منه كأنه غائب، ولا يُصحح قيمه.
  */
 export function readPendingPhoneChange(
   userId: string,
@@ -107,7 +107,10 @@ export function readPendingPhoneChange(
   } catch {
     return { status: 'unreadable', reason: 'storage-unavailable' };
   }
-  if (raw === null || raw === '') return { status: 'absent' };
+  // null فقط تعني عدم وجود سجل. القيمة الفارغة سجل موجود لا يمكن التحقق منه،
+  // ولا تُعامَل كأن لا طلب — فلا يبدأ طلب جديد ولا يُكتب فوقها.
+  if (raw === null) return { status: 'absent' };
+  if (raw.trim() === '') return { status: 'unreadable', reason: 'invalid-record' };
   let parsed: unknown = null;
   try {
     parsed = JSON.parse(raw) as unknown;
