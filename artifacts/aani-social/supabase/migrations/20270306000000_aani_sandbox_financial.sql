@@ -526,7 +526,11 @@ declare
   v_ledger_type text;
   v_ledger_amount integer;
   v_ledger_reference text;
+  v_topup_user_id uuid;
+  v_topup_package_id uuid;
+  v_topup_amount integer;
   v_topup_status text;
+  v_topup_simulated boolean;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_user_id then raise exception 'forbidden' using errcode='42501'; end if;
@@ -541,14 +545,25 @@ begin
   if not found then raise exception 'package unavailable' using errcode='42704'; end if;
 
   if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
-    if not exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key and user_id = p_user_id and package_id = p_package_id) then
-      raise exception 'idempotency key conflict' using errcode='40901';
+    -- جلب سجل الشحن السابق للمقارنة الكاملة لجميع حقائق idempotency.
+    select user_id, package_id, amount, status, simulated into v_topup_user_id, v_topup_package_id, v_topup_amount, v_topup_status, v_topup_simulated
+    from sandbox.top_ups where idempotency_key = p_idempotency_key;
+    if not found then raise exception 'top-up not found' using errcode='42704'; end if;
+
+    -- التحقق من تطابق المستخدم والباقة والمبلغ مع الطلب الحالي.
+    if v_topup_user_id <> p_user_id or v_topup_package_id <> p_package_id or v_topup_amount <> v_coins then
+      raise exception 'idempotency key conflict: top-up record does not match request' using errcode='40901';
     end if;
-    if (p_simulate_success and (select status from sandbox.top_ups where idempotency_key = p_idempotency_key) <> 'completed')
-       or (not p_simulate_success and (select status from sandbox.top_ups where idempotency_key = p_idempotency_key) <> 'failed') then
-      raise exception 'idempotency key conflict' using errcode='40901';
+    -- التحقق من تطابق علامة المحاكاة.
+    if v_topup_simulated <> p_simulate_success then
+      raise exception 'idempotency key conflict: simulation flag mismatch' using errcode='40901';
     end if;
-    -- عند وجود سجل شحن سابق، لا تُرجع duplicate=true قبل التحقق من القيد المقابل في sandbox.ledger.
+    -- التحقق من الحالة الصحيحة: completed عند النجاح وfailed عند الفشل.
+    if (p_simulate_success and v_topup_status <> 'completed')
+       or (not p_simulate_success and v_topup_status <> 'failed') then
+      raise exception 'idempotency key conflict: status mismatch' using errcode='40901';
+    end if;
+    -- عند النجاح، التحقق من القيد المقابل في sandbox.ledger بالكامل: المستخدم والنوع والمبلغ والمرجع ومفتاح :credit.
     if p_simulate_success then
       select user_id, type, amount, reference into v_ledger_user_id, v_ledger_type, v_ledger_amount, v_ledger_reference
       from sandbox.ledger where idempotency_key = p_idempotency_key || ':credit';
