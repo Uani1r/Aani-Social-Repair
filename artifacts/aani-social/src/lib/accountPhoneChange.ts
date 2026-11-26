@@ -160,7 +160,8 @@ export function decidePhoneChangeRequest({
 
 export type PhoneChangeStartPlan =
   | { canStart: true; record: PendingPhoneChange }
-  | { canStart: false; reason: 'unchanged' | 'storage' }
+  | { canStart: false; reason: 'unchanged' }
+  | { canStart: false; reason: 'storage' }
   | { canStart: false; reason: 'pending-other'; pending: PendingPhoneChange };
 
 /**
