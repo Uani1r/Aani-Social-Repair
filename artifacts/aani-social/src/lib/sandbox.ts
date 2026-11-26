@@ -166,6 +166,66 @@ export function computeSandboxBalance(entries: Array<{ type: 'credit' | 'debit';
   return entries.reduce((sum, e) => (e.type === 'credit' ? sum + e.amount : sum - e.amount), 0);
 }
 
+/**
+ * إجماليات السجل المالي (ائتمان/مدينة/صافي) من مجموعة إدخالات.
+ * دالة نقية تُختبر مباشرة، ولا تغيّر مصدر الرصيد (السجل المستقل).
+ */
+export function computeSandboxTotals(entries: Array<{ type: 'credit' | 'debit'; amount: number }>): {
+  credit: number;
+  debit: number;
+  net: number;
+} {
+  let credit = 0;
+  let debit = 0;
+  for (const e of entries) {
+    if (e.type === 'credit') credit += e.amount;
+    else if (e.type === 'debit') debit += e.amount;
+  }
+  return { credit, debit, net: credit - debit };
+}
+
+/**
+ * ملخّص الإجماليات مع علامة اكتمال صريحة.
+ * عند `complete=false` (البيانات مقتصرة على حد أقصى للتحميل) لا تُعرض الإجماليات
+ * كإجمالي كامل — بل كحد أدنى/جزئي — حتى لا يُفهم الرقم على أنه الإجمالي الكلي.
+ */
+export function summarizeSandboxTotals(
+  entries: Array<{ type: 'credit' | 'debit'; amount: number }>,
+  complete: boolean,
+): { credit: number; debit: number; net: number; complete: boolean; partial: boolean } {
+  const t = computeSandboxTotals(entries);
+  return { ...t, complete, partial: !complete };
+}
+
+/** أقصى عدد صفحات لتحميل السجل كاملاً للإجماليات (200 × 100 = 20000 سجل). */
+export const SANDBOX_TOTALS_MAX_PAGES = 100;
+
+/**
+ * حمّل السجل المالي كاملاً (تصفح صفحات) لحساب إجماليات موثوقة، بدل الاعتماد على
+ * أول 200 سجل فقط. يعيد `complete=false` إذا بلغ حدّ الصفحات (بيانات جزئية).
+ * لا يغيّر الحسابات أو مصدر الرصيد؛ يجمع الصفحات فقط.
+ */
+export async function fetchAllSandboxLedgerForTotals(params?: {
+  pageSize?: number;
+  maxPages?: number;
+}): Promise<{ entries: SandboxLedgerEntry[]; complete: boolean; error: Error | null }> {
+  if (!supabaseConfigured) {
+    return { entries: [], complete: false, error: new Error('اتصال قاعدة البيانات غير متاح') };
+  }
+  const pageSize = params?.pageSize ?? 200;
+  const maxPages = params?.maxPages ?? SANDBOX_TOTALS_MAX_PAGES;
+  const all: SandboxLedgerEntry[] = [];
+  for (let page = 0; page < maxPages; page += 1) {
+    const res = await fetchSandboxLedger({ userId: '', page, pageSize, all: true });
+    if (res.error) return { entries: all, complete: false, error: res.error };
+    const rows = res.data ?? [];
+    all.push(...rows);
+    if (!res.hasMore) return { entries: all, complete: true, error: null };
+  }
+  // بلغنا حدّ الصفحات قبل نفاد البيانات ⇒ الإجماليات جزئية.
+  return { entries: all, complete: false, error: null };
+}
+
 /* ------------------------------------------------------------------ */
 /* المؤسس / التحقق من الخادم                                          */
 /* ------------------------------------------------------------------ */

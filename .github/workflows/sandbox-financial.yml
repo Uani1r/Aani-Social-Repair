@@ -65,3 +65,42 @@ jobs:
           name: sandbox-financial-logs
           path: sandbox-logs
           retention-days: 7
+
+  # Typecheck + Build + unit tests (TypeScript) for the Sandbox changes.
+  # Stands alone (does not modify the original ci.yml); runs the focused
+  # sandbox unit tests plus aani-social typecheck and build.
+  typecheck-build-unit:
+    name: Typecheck, build and unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm 10.33.3
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.3
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Composite libs must be built before aani-social typecheck (project refs).
+      - name: Build workspace libraries
+        run: pnpm run typecheck:libs
+
+      - name: Typecheck @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run typecheck
+
+      - name: Build @workspace/aani-social
+        run: pnpm --filter @workspace/aani-social run build
+
+      - name: Unit tests @workspace/aani-social (sandbox)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/sandbox.test.ts

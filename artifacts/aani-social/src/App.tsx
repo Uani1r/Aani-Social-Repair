@@ -170,7 +170,7 @@ function App() {
                   />
                 )}
               </Route>
-              <Route path="/admin/sandbox"><AdminSandbox /></Route>
+              <Route path="/admin/sandbox"><AdminSandbox key={user.id} /></Route>
               <Route path="/profile">
                 {() => (
                   <ProfilePage

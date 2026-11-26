@@ -20,6 +20,8 @@ import {
   createSandboxPromotion,
   generateIdempotencyKey,
   endSandboxPromotion,
+  summarizeSandboxTotals,
+  fetchAllSandboxLedgerForTotals,
   type SandboxLedgerEntry,
   type SandboxTopUp,
   type SandboxAdminAction,
@@ -59,6 +61,10 @@ export default function AdminSandbox() {
   const [topUpPackages, setTopUpPackages] = useState<any[]>([]);
   const [subPackages, setSubPackages] = useState<any[]>([]);
   const [promoPackages, setPromoPackages] = useState<any[]>([]);
+
+  // إجماليات مالية موثوقة (من تحميل كامل الصفحات، لا أول 200 سجل فقط).
+  const [totals, setTotals] = useState({ credit: 0, debit: 0, net: 0, complete: false, partial: false });
+  const [totalsLoading, setTotalsLoading] = useState(false);
 
   // حقائق الإجراءات التي تتطلب معرف مستخدم/هدف صحيح
   const [subUserId, setSubUserId] = useState('');
@@ -143,6 +149,18 @@ export default function AdminSandbox() {
       setSubs(s.data ?? []);
       setPromos(p.data ?? []);
       setAdminActions(a.data ?? []);
+    }
+
+    // إجماليات موثوقة: حمّل السجل كاملاً (تصفح صفحات) بدل أول 200 سجل.
+    // عند بلوغ الحدّ تُعلَّم الإجماليات كجزئية ولا تُعرض كإجمالي كامل.
+    if (mounted.current) setTotalsLoading(true);
+    const full = await fetchAllSandboxLedgerForTotals();
+    if (full.error) {
+      show('الإجماليات المالية', { error: full.error });
+    }
+    if (mounted.current) {
+      setTotals(summarizeSandboxTotals(full.entries, full.complete));
+      setTotalsLoading(false);
     }
   }, []);
 
@@ -393,8 +411,8 @@ export default function AdminSandbox() {
     return <Badge variant={variants[status] ?? 'default'}>{status}</Badge>;
   };
 
-  const totalsCredit = ledger.filter((e) => e.type === 'credit').reduce((s, e) => s + e.amount, 0);
-  const totalsDebit = ledger.filter((e) => e.type === 'debit').reduce((s, e) => s + e.amount, 0);
+  const totalsCredit = totals.credit;
+  const totalsDebit = totals.debit;
 
   return (
     <div className="space-y-4">
@@ -407,12 +425,12 @@ export default function AdminSandbox() {
         </CardHeader>
         <CardContent className="space-y-2">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="w-full grid w-full grid-cols-1 sm:grid-cols-4 gap-1">
-              <TabsTrigger value="grants" className="text-sm">منح عملات تجريبية</TabsTrigger>
-              <TabsTrigger value="topups" className="text-sm">مراجعة الشحن والاسترداد</TabsTrigger>
-              <TabsTrigger value="subs" className="text-sm">الاشتراكات</TabsTrigger>
-              <TabsTrigger value="promos" className="text-sm">الترويج</TabsTrigger>
-              <TabsTrigger value="logs" className="text-sm">السجلات والتدقيق</TabsTrigger>
+            <TabsList className="w-full grid h-auto grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-1">
+              <TabsTrigger value="grants" className="text-sm whitespace-nowrap">منح عملات تجريبية</TabsTrigger>
+              <TabsTrigger value="topups" className="text-sm whitespace-nowrap">مراجعة الشحن والاسترداد</TabsTrigger>
+              <TabsTrigger value="subs" className="text-sm whitespace-nowrap">الاشتراكات</TabsTrigger>
+              <TabsTrigger value="promos" className="text-sm whitespace-nowrap">الترويج</TabsTrigger>
+              <TabsTrigger value="logs" className="text-sm whitespace-nowrap">السجلات والتدقيق</TabsTrigger>
             </TabsList>
 
             <TabsContent value="grants" className="space-y-3 mt-3">
@@ -743,23 +761,44 @@ export default function AdminSandbox() {
                 </CardContent>
               </Card>
               <Separator className="my-3" />
+              {totals.partial ? (
+                <Alert variant="destructive" className="mb-3">
+                  <AlertDescription>
+                    الإجماليات المالية جزئية: التحميل بلغ حدّ الصفحات الأقصى، لذا
+                    الأرقام أدناه تمثّل حدّاً أدنى لا إجمالياً كاملاً. ارفع الحدّ أو
+                    صفِّ البيانات قبل الاعتماد عليها.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
               <div className="grid sm:grid-cols-3 gap-4">
                 <Card className="p-4">
                   <CardContent className="flex flex-col items-center text-center">
-                    <div className="text-xs text-muted-foreground">إجمالي الأرصدة المضافة</div>
-                    <div className="font-mono text-lg font-bold">{totalsCredit}</div>
+                    <div className="text-xs text-muted-foreground">
+                      إجمالي الأرصدة المضافة{totals.partial ? ' (حد أدنى)' : ''}
+                    </div>
+                    <div className="font-mono text-lg font-bold">
+                      {totalsLoading ? '…' : totals.partial ? `≥ ${totalsCredit}` : totalsCredit}
+                    </div>
                   </CardContent>
                 </Card>
                 <Card className="p-4">
                   <CardContent className="flex flex-col items-center text-center">
-                    <div className="text-xs text-muted-foreground">إجمالي الأرصدة المسحوبة</div>
-                    <div className="font-mono text-lg font-bold">{totalsDebit}</div>
+                    <div className="text-xs text-muted-foreground">
+                      إجمالي الأرصدة المسحوبة{totals.partial ? ' (حد أدنى)' : ''}
+                    </div>
+                    <div className="font-mono text-lg font-bold">
+                      {totalsLoading ? '…' : totals.partial ? `≥ ${totalsDebit}` : totalsDebit}
+                    </div>
                   </CardContent>
                 </Card>
                 <Card className="p-4">
                   <CardContent className="flex flex-col items-center text-center">
-                    <div className="text-xs text-muted-foreground">صافي الرصيد المسجَّل</div>
-                    <div className="font-mono text-lg font-bold">{totalsCredit - totalsDebit}</div>
+                    <div className="text-xs text-muted-foreground">
+                      صافي الرصيد المسجَّل{totals.partial ? ' (جزئي)' : ''}
+                    </div>
+                    <div className="font-mono text-lg font-bold">
+                      {totalsLoading ? '…' : totals.partial ? '—' : totals.net}
+                    </div>
                   </CardContent>
                 </Card>
               </div>
