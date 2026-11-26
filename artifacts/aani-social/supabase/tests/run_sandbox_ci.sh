@@ -5,11 +5,16 @@
 #
 # الترتيب:
 #   1. bootstrap (أدوار + auth + storage + extensions + realtime)
-#   2. fresh_schema_cloudflare_r2.sql (المخطط الأساسي للمشروع)
-#   3. جميع الترحيلات في migrations/ بالترتيب الزمني (المالي 20270306000000 أخيراً)
-#   4. بيانات الاختبار sandbox_seed.sql
-#   5. الاختبارات الـ28 (sandbox_isolation.test.sql) عبر اتصال إداري + SET ROLE
-#   6. اختبار التزامن الحقيقي (جلستان) sandbox_concurrency.sh
+#   2. fresh_schema_cloudflare_r2.sql (المخطط الأساسي — الحالة النهائية)
+#   3. ترحيل الهدايا 20261124181406 (gifts/wallets — يعتمد عليه المالي)
+#   4. الترحيل المالي 20270306000000_aani_sandbox_financial.sql
+#   5. بيانات الاختبار sandbox_seed.sql
+#   6. الاختبارات الـ28 (sandbox_isolation.test.sql) عبر اتصال إداري + SET ROLE
+#   7. اختبار التزامن الحقيقي (جلستان) sandbox_concurrency.sh
+#
+# ملاحظة: لا نطبّق جميع الترحيلات التاريخية لأن fresh_schema يمثّل الحالة النهائية
+# المكافئة لها؛ تطبيقها فوقه يتعارض (تغيير نوع دالة موجودة). نطبّق فقط ما يلزم
+# للترحيل المالي: المخطط الأساسي + ترحيل الهدايا + الترحيل المالي.
 #
 # أي فشل في أي خطوة => خروج غير صفري (لا || true ولا إخفاء أخطاء).
 # المتطلبات: psql، DATABASE_URL (اتصال إداري مالك للجداول).
@@ -34,28 +39,22 @@ run_step() {
 # 1) bootstrap
 run_step "bootstrap" "${PSQL[@]}" -q -f "$SCRIPT_DIR/sandbox_bootstrap.sql" 2>&1 | tee "$LOG_DIR/01_bootstrap.log"
 
-# 2) المخطط الأساسي (fresh_schema — مكتوب لمشروع جديد فارغ)
+# 2) المخطط الأساسي (fresh_schema — الحالة النهائية لمشروع جديد فارغ)
 run_step "fresh_schema" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../fresh_schema_cloudflare_r2.sql" 2>&1 | tee "$LOG_DIR/02_fresh_schema.log"
 
-# 3) جميع الترحيلات بالترتيب الزمني (المالي 20270306000000 هو الأخير).
-MIG_LOG="$LOG_DIR/03_migrations.log"
-: > "$MIG_LOG"
-MIG_DIR="$SCRIPT_DIR/../migrations"
-MIG_COUNT=0
-for mig in $(ls "$MIG_DIR"/*.sql | sort); do
-  MIG_COUNT=$((MIG_COUNT + 1))
-  echo "===== MIGRATION: $(basename "$mig") =====" | tee -a "$MIG_LOG"
-  "${PSQL[@]}" -q -f "$mig" 2>&1 | tee -a "$MIG_LOG"
-done
-echo "===== OK: migrations ($MIG_COUNT files) =====" | tee -a "$MIG_LOG"
+# 3) ترحيل الهدايا (gifts/wallets/gift_transactions) — الترحيل المالي يعتمد عليه.
+run_step "gifts_migration" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20261124181406_aani_gifts_popularity_final.sql" 2>&1 | tee "$LOG_DIR/03_gifts_migration.log"
 
-# 4) بيانات الاختبار
-run_step "seed" "${PSQL[@]}" -q -f "$SCRIPT_DIR/sandbox_seed.sql" 2>&1 | tee "$LOG_DIR/04_seed.log"
+# 4) الترحيل المالي 20270306000000 (الأخير — يضيف مخطط sandbox).
+run_step "financial_migration" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20270306000000_aani_sandbox_financial.sql" 2>&1 | tee "$LOG_DIR/04_financial_migration.log"
+
+# 5) بيانات الاختبار
+run_step "seed" "${PSQL[@]}" -q -f "$SCRIPT_DIR/sandbox_seed.sql" 2>&1 | tee "$LOG_DIR/05_seed.log"
 
 # 5) الاختبارات الـ28 — بدون ON_ERROR_STOP لجمع كل النتائج، ثم نحكم على الفشل.
 #    كل عبارة DO مستقلة؛ الاستثناء يُفشل تلك العبارة فقط وتتابع البقية.
 echo "===== STEP: isolation_tests ====="
-TEST_LOG="$LOG_DIR/05_isolation_tests.log"
+TEST_LOG="$LOG_DIR/06_isolation_tests.log"
 set +e
 psql "$DATABASE_URL" -v ON_ERROR_STOP=0 -f "$SCRIPT_DIR/sandbox_isolation.test.sql" 2>&1 | tee "$TEST_LOG"
 PSQL_RC=${PIPESTATUS[0]}
@@ -81,7 +80,7 @@ echo "total=$TOTAL_TESTS passed=$PASSED failed=$FAILED skipped=$SKIPPED"
 # 6) اختبار التزامن الحقيقي
 echo "===== STEP: concurrency ====="
 set +e
-bash "$SCRIPT_DIR/sandbox_concurrency.sh" 2>&1 | tee "$LOG_DIR/06_concurrency.log"
+bash "$SCRIPT_DIR/sandbox_concurrency.sh" 2>&1 | tee "$LOG_DIR/07_concurrency.log"
 CONC_RC=${PIPESTATUS[0]}
 set -e
 
