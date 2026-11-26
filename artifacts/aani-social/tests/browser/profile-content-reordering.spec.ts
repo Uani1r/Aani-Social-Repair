@@ -158,7 +158,7 @@ test('opens a collection and a story on a short click', async ({ page }) => {
   await expect(stories(page)).toHaveCount(3);
 
   await stories(page).nth(1).click();
-  await expect(openedPost(page)).toHaveText('s-one-1');
+  await expect(openedPost(page)).toHaveText('s-one-2');
 });
 
 test('does not reorder when the pointer moves before the long press completes', async ({ page }) => {
