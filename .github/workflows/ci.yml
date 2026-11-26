@@ -539,7 +539,9 @@ jobs:
   # Supabase project, account or production data is involved.
   profile-reorder-browser:
     name: Profile content reordering browser tests
-    runs-on: ubuntu-latest
+    # Pinned to Ubuntu 24.04: the newest runner image no longer carries the
+    # system libraries Playwright 1.49 installs (libicu74, libvpx9, ...).
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
