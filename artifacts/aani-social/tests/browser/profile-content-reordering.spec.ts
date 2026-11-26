@@ -20,6 +20,12 @@ const gridIds = (page: Page) => page.locator('section[aria-label="media grid"] [
 const log = (page: Page) => page.evaluate(() => window.__profileReorderLog ?? []);
 
 test.beforeEach(async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on('console', message => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('pageerror', error => consoleErrors.push(`${error.name}: ${error.message}`));
+
   await page.addInitScript(() => {
     if (!sessionStorage.getItem('profile-reorder-init')) {
       localStorage.clear();
@@ -27,7 +33,15 @@ test.beforeEach(async ({ page }) => {
     }
   });
   await page.goto('/profile-reorder-test.html');
-  await expect(page.getByRole('heading')).toHaveCount(0);
+
+  // The harness renders either its content or the mount error it captured.
+  await page.waitForSelector('[data-testid="harness-ready"], [data-testid="harness-error"]', { timeout: 15_000 });
+  const errorPanel = page.locator('[data-testid="harness-error"]');
+  if (await errorPanel.count()) {
+    const text = await errorPanel.innerText();
+    const consoleText = consoleErrors.length ? `\nconsole errors:\n${consoleErrors.join('\n')}` : '';
+    throw new Error(`${text}${consoleText}`);
+  }
 });
 
 test('renders the same fixed order for highlights and the media grid', async ({ page }) => {

@@ -219,7 +219,7 @@ function Harness() {
   });
 
   return (
-    <div dir="rtl" style={{ width: 420 }}>
+    <div dir="rtl" style={{ width: 420 }} data-testid="harness-ready">
       <section aria-label="highlights">
         <ProfileHighlightsRow
           collections={highlighted}
@@ -250,4 +250,29 @@ function Harness() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<Harness />);
+const root = document.getElementById('root')!;
+
+function showHarnessError(message: string) {
+  root.innerHTML = '';
+  const panel = document.createElement('pre');
+  panel.setAttribute('data-testid', 'harness-error');
+  panel.style.whiteSpace = 'pre-wrap';
+  panel.style.color = '#ff6b6b';
+  panel.textContent = `harness failed to mount:\n${message}`;
+  root.appendChild(panel);
+}
+
+window.addEventListener('error', event => {
+  showHarnessError(`${event.message} (${event.filename}:${event.lineno})`);
+});
+window.addEventListener('unhandledrejection', event => {
+  const reason = event.reason instanceof Error ? `${event.reason.stack ?? event.reason.message}` : String(event.reason);
+  showHarnessError(`unhandled rejection: ${reason}`);
+});
+
+try {
+  createRoot(root).render(<Harness />);
+} catch (error) {
+  showHarnessError(error instanceof Error ? `${error.stack ?? error.message}` : String(error));
+}
+
