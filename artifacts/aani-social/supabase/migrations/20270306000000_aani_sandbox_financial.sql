@@ -822,7 +822,7 @@ grant execute on function public.aani_sandbox_cancel_subscription(uuid) to authe
 -- يستخدم SELECT ... FOR UPDATE على صف الاشتراك لمنع تعارض التجديد والإلغاء المتزامنين.
 -- فحص سجل ledger السابق يسبق فحص الحالة، بحيث إعادة طلب تجديد ناجح تُعيد نتيجتها الأصلية
 -- حتى لو أصبح الاشتراك cancelled أو expired بعد التنفيذ الأول.
--- ترتيب الأقفال: قفل مستشار على مالك الاشتراك (v_user_id) → قفل صف الاشتراك (FOR UPDATE) → قفل مستشار على مفتاح idempotency.
+-- ترتيب الأقفال: قفل مستشار على مالك الاشتراك (v_user_id) → قفل صف الاشتراك (FOR UPDATE) → قفل مستشار عالمي على مفتاح idempotency (مستقل عن المستخدم).
 create or replace function public.aani_sandbox_renew_subscription(
   p_subscription_id uuid,
   p_idempotency_key text
@@ -864,8 +864,8 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
-  -- قفل مستشار على مفتاح idempotency لمنع تجديدات متزامنة بالمفتاح نفسه.
-  perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || v_user_id::text || ':' || p_idempotency_key));
+  -- قفل مستشار عالمي على مفتاح idempotency (مستقل عن المستخدم) لتسلسل جميع الطلبات التي تحمل المفتاح نفسه.
+  perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || p_idempotency_key));
 
   -- فحص سجل ledger السابق مع مطابقة جميع الحقول الأساسية قبل فحص الحالة،
   -- بحيث إعادة طلب تجديد ناجح تُعيد نتيجتها الأصلية حتى لو أصبح الاشتراك cancelled أو expired.
