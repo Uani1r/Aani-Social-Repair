@@ -12,6 +12,15 @@
 -- مستقلة (autocommit)، لذا تعود إعدادات set_config(..., is_local=true) إلى
 -- وضعها بعد كل عبارة، ويبقى ضبط نطاق المعاملة لكل اختبار معزولاً صحيحاً.
 --
+-- متطلب الاتصال (مهم للاختبارين 18 و19): يجب أن يكون الاتصال الأصلي (الدور
+-- الذي يفتتح الجلسة) مالكاً لجداول sandbox أو يملك صلاحية إدارتها (UPDATE)،
+-- لأن هذين الاختبارين ينفّذان RESET ROLE لأداء تحديث الكتالوج
+-- (sandbox.top_up_packages) ثم يعيدان SET ROLE authenticated. لا يُفترض أن
+-- RESET ROLE يعني تلقائياً أن الاتصال مالك للجداول؛ إن لم يكن الاتصال مالكاً
+-- أو إدارياً لجدول top_up_packages، فتخطَّ الاختبارين 18 و19 أو شغّلهما باتصال
+-- إداري. الاتصال الافتراضي عبر DATABASE_URL في بيئة Supabase المحلية (postgres)
+-- مالك للجداول عادةً، لكن تحقق من ذلك قبل التشغيل.
+--
 -- ملاحظة: supabase db push يُطبّق الترحيلات المسجلة في مجلد الميريجشنز.
 -- المتغيرات myapp.* أدناه مضبوطة عبر SET داخل هذا الملف نفسه، فتكون متاحة
 -- لجميع عبارات DO في نفس جلسة التنفيذ. لا حاجة لضبطها في جلسة أخرى.
@@ -22,6 +31,7 @@
 -- استبدل القيم أدناه بـ UUID حقيقية من قاعدة الاختبار قبل التشغيل:
 --   SET myapp.test_user_a = '00000000-0000-0000-0000-000000000001';
 --   SET myapp.test_user_b = '00000000-0000-0000-0000-000000000002';
+--   SET myapp.test_user_c = '<uuid ملف تعريف ثالث لا علاقة له بـ userA>';
 --   SET myapp.test_founder = '00000000-0000-0000-0000-000000000003';
 --   SET myapp.test_gift_id = '<uuid من public.gifts>';
 --   SET myapp.test_package_id = '<uuid من sandbox.top_up_packages>';
@@ -39,6 +49,7 @@
 -- ضبط متغيرات افتراضية للمثال (يجب استبدالها بـ UUID حقيقية من قاعدة الاختبار)
 SET myapp.test_user_a = '00000000-0000-0000-0000-000000000001';
 SET myapp.test_user_b = '00000000-0000-0000-0000-000000000002';
+SET myapp.test_user_c = '00000000-0000-0000-0000-000000000004';
 SET myapp.test_founder = '00000000-0000-0000-0000-000000000003';
 SET myapp.test_gift_id = '00000000-0000-0000-0000-000000000010';
 SET myapp.test_package_id = '00000000-0000-0000-0000-000000000020';
@@ -245,26 +256,55 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------
--- 7. RLS: المستخدم A لا يرى معاملات المستخدم B في Sandbox
+-- 7. RLS: المستخدم A لا يرى معاملة لا علاقة له بها بين userB وuserC
 -- ------------------------------------------------------------------
+-- ملاحظة: لا تُستخدم معاملة userA↔userB هنا، لأن RLS يسمح للطرفين برؤيتها.
+-- ننشئ معاملة بين userB وuserC (مستخدم ثالث لا علاقة له بـ userA) ونتحقق أن
+-- userA لا يراها، وأنها موجودة فعلاً (عبر المؤسس) لتجنّب النجاح الزائف.
 DO $$
 DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
-    v_own_count integer;
-    v_sees_b_count integer;
+    v_user_c uuid := current_setting('myapp.test_user_c')::uuid;
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
+    v_gift_id uuid := current_setting('myapp.test_gift_id')::uuid;
+    v_grant jsonb;
+    v_send jsonb;
+    v_exists_as_founder integer;
+    v_sees_bc_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    SELECT count(*) INTO v_own_count
-    FROM sandbox.gift_transactions
-    WHERE sender_id = v_user_a OR recipient_id = v_user_a;
+    -- المؤسس يمنح userB رصيداً تجريبياً حتى يستطيع إرسال هدية
+    SELECT set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    SELECT public.aani_sandbox_grant_coins(v_user_b, 1000, 'grant-test7-userb', 'test7 userB funding')
+    INTO v_grant;
+    IF (v_grant->>'ok')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'Test 7 setup failed: could not fund userB, got %', v_grant;
+    END IF;
 
-    SELECT count(*) INTO v_sees_b_count
-    FROM sandbox.gift_transactions
-    WHERE sender_id = v_user_b OR recipient_id = v_user_b;
+    -- userB يرسل هدية إلى userC (معاملة لا تخص userA)
+    SELECT set_config('request.jwt.claims', '{"sub": "' || v_user_b || '"}', true);
+    SELECT public.aani_sandbox_send_gift(v_user_b, v_user_c, v_gift_id, 'send-test7-b-c')
+    INTO v_send;
+    IF (v_send->>'ok')::boolean IS NOT TRUE THEN
+        RAISE EXCEPTION 'Test 7 setup failed: userB->userC gift not created, got %', v_send;
+    END IF;
 
-    IF v_sees_b_count <> 0 THEN
-        RAISE EXCEPTION 'Test 7 failed: userA should not see userB transactions, got %', v_sees_b_count;
+    -- التأكد (كالمؤسس) أن المعاملة موجودة فعلاً قبل اختبار العزل
+    SELECT set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    SELECT count(*) INTO v_exists_as_founder
+    FROM sandbox.gift_transactions
+    WHERE idempotency_key = 'send-test7-b-c';
+    IF v_exists_as_founder <> 1 THEN
+        RAISE EXCEPTION 'Test 7 setup failed: expected 1 userB->userC transaction, got %', v_exists_as_founder;
+    END IF;
+
+    -- userA (ليس طرفاً في المعاملة) يجب ألا يراها
+    SELECT set_config('request.jwt.claims', '{"sub": "' || v_user_a || '"}', true);
+    SELECT count(*) INTO v_sees_bc_count
+    FROM sandbox.gift_transactions
+    WHERE idempotency_key = 'send-test7-b-c';
+    IF v_sees_bc_count <> 0 THEN
+        RAISE EXCEPTION 'Test 7 failed: userA should not see userB->userC transaction, got %', v_sees_bc_count;
     END IF;
 END $$;
 
@@ -631,23 +671,35 @@ BEGIN
         RAISE EXCEPTION 'Test 18 failed: expected ok=true for initial top-up, got %', v_result;
     END IF;
 
-    -- تعطيل الباقة (إجراء إداري): يتطلب دوراً مالكاً للجدول لأن authenticated
-    -- لا يملك إلا SELECT على sandbox.top_up_packages. نرفع الدور مؤقتاً ثم نعيده.
-    EXECUTE 'RESET ROLE';
-    UPDATE sandbox.top_up_packages
-    SET is_active = false
-    WHERE id = v_package_id;
-    EXECUTE 'SET ROLE authenticated';
+    -- تعطيل الباقة (إجراء إداري): يتطلب اتصالاً مالكاً/إدارياً لجدول
+    -- sandbox.top_up_packages لأن authenticated لا يملك إلا SELECT. نرفع الدور
+    -- مؤقتاً ثم نعيده. تكرار التعطيل/الاختبار داخل كتلة داخلية يضمن إعادة
+    -- التفعيل عند أي فشل (القفل/الاستثناء) عبر معالج الاستثناء أدناه.
+    BEGIN
+        EXECUTE 'RESET ROLE';
+        UPDATE sandbox.top_up_packages
+        SET is_active = false
+        WHERE id = v_package_id;
+        EXECUTE 'SET ROLE authenticated';
 
-    -- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع completed وduplicate=true
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-deactivated-pkg-1', true)
-    INTO v_result;
-    IF (v_result->>'duplicate')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
-        RAISE EXCEPTION 'Test 18 failed: expected duplicate=true, status=completed after deactivation, got %', v_result;
-    END IF;
+        -- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع completed وduplicate=true
+        SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+        SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-deactivated-pkg-1', true)
+        INTO v_result;
+        IF (v_result->>'duplicate')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
+            RAISE EXCEPTION 'Test 18 failed: expected duplicate=true, status=completed after deactivation, got %', v_result;
+        END IF;
+    EXCEPTION WHEN OTHERS THEN
+        -- ضمان إعادة تفعيل الباقة قبل إعادة نشر الاستثناء حتى لا تبقى معطلة.
+        EXECUTE 'RESET ROLE';
+        UPDATE sandbox.top_up_packages
+        SET is_active = true
+        WHERE id = v_package_id;
+        EXECUTE 'SET ROLE authenticated';
+        RAISE;
+    END;
 
-    -- إعادة تفعيل الباقة لبقية الاختبارات
+    -- إعادة تفعيل الباقة لبقية الاختبارات (مسار النجاح)
     EXECUTE 'RESET ROLE';
     UPDATE sandbox.top_up_packages
     SET is_active = true
@@ -663,27 +715,30 @@ DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
 BEGIN
-    -- تعطيل الباقة مؤقتاً (إجراء إداري: رفع الدور ثم إعادته)
-    EXECUTE 'RESET ROLE';
-    UPDATE sandbox.top_up_packages
-    SET is_active = false
-    WHERE id = v_package_id;
-    EXECUTE 'SET ROLE authenticated';
+    -- تعطيل الباقة مؤقتاً (إجراء إداري: رفع الدور ثم إعادته). يُنفّذ داخل
+    -- كتلة داخلية لضمان إعادة التفعيل عند أي فشل.
+    BEGIN
+        EXECUTE 'RESET ROLE';
+        UPDATE sandbox.top_up_packages
+        SET is_active = false
+        WHERE id = v_package_id;
+        EXECUTE 'SET ROLE authenticated';
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
-    PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-new-on-deactivated-1', true);
-    RAISE EXCEPTION 'Test 19 failed: expected 42704 for top-up on deactivated package';
-EXCEPTION WHEN OTHERS THEN
-    IF SQLSTATE <> '42704' THEN
-        RAISE EXCEPTION 'Test 19 failed: expected SQLSTATE 42704, got %', SQLSTATE;
-    END IF;
+        SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+        PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-new-on-deactivated-1', true);
+        RAISE EXCEPTION 'Test 19 failed: expected 42704 for top-up on deactivated package';
+    EXCEPTION WHEN OTHERS THEN
+        -- إعادة تفعيل الباقة أولاً (مهما كان الاستثناء) حتى لا تبقى معطلة.
+        EXECUTE 'RESET ROLE';
+        UPDATE sandbox.top_up_packages
+        SET is_active = true
+        WHERE id = v_package_id;
+        EXECUTE 'SET ROLE authenticated';
 
-    -- إعادة تفعيل الباقة
-    EXECUTE 'RESET ROLE';
-    UPDATE sandbox.top_up_packages
-    SET is_active = true
-    WHERE id = v_package_id;
-    EXECUTE 'SET ROLE authenticated';
+        IF SQLSTATE <> '42704' THEN
+            RAISE EXCEPTION 'Test 19 failed: expected SQLSTATE 42704, got %', SQLSTATE;
+        END IF;
+    END;
 END $$;
 
 -- ------------------------------------------------------------------
