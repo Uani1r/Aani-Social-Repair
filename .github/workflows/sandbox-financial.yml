@@ -1,0 +1,67 @@
+name: Sandbox Financial Tests
+
+# اختبارات Sandbox المالي محلياً بالكامل داخل GitHub Actions المجاني.
+# لا Supabase سحابي، لا --linked، لا مفاتيح/أسرار إنتاج.
+
+on:
+  push:
+    branches: [feat/aani-sandbox-financial]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  sandbox-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sandbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # اتصال إداري محلي (مالك الجداول) — لا علاقة له بأي مشروع سحابي.
+      DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1:5432/sandbox_test"
+      LOG_DIR: "${{ github.workspace }}/sandbox-logs"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Show environment (no secrets)
+        run: |
+          echo "branch: ${GITHUB_REF_NAME}"
+          echo "commit: ${GITHUB_SHA}"
+          psql --version
+
+      - name: Run sandbox financial tests
+        run: |
+          chmod +x artifacts/aani-social/supabase/tests/run_sandbox_ci.sh
+          chmod +x artifacts/aani-social/supabase/tests/sandbox_concurrency.sh
+          bash artifacts/aani-social/supabase/tests/run_sandbox_ci.sh
+
+      - name: Upload test logs and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-financial-logs
+          path: sandbox-logs
+          retention-days: 7

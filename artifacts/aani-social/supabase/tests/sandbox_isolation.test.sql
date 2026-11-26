@@ -28,17 +28,17 @@
 -- =====================================================================
 --
 -- المتغيرات المطلوبة (تُضبط عبر SET في نفس جلسة تنفيذ الملف):
--- استبدل القيم أدناه بـ UUID حقيقية من قاعدة الاختبار قبل التشغيل:
---   SET myapp.test_user_a = '00000000-0000-0000-0000-000000000001';
---   SET myapp.test_user_b = '00000000-0000-0000-0000-000000000002';
---   SET myapp.test_user_c = '<uuid ملف تعريف ثالث لا علاقة له بـ userA>';
---   SET myapp.test_founder = '00000000-0000-0000-0000-000000000003';
---   SET myapp.test_gift_id = '<uuid من public.gifts>';
---   SET myapp.test_package_id = '<uuid من sandbox.top_up_packages>';
---   SET myapp.test_sub_package_id = '<uuid من sandbox.subscription_packages>';
---   SET myapp.test_promo_package_id = '<uuid من sandbox.promotion_packages>';
---   SET myapp.test_post_id = '<uuid من public.posts يملكه userA>';
---   SET myapp.test_post_id_other = '<uuid من public.posts يملكه مستخدم آخر غير userA>';
+-- القيم أدناه هي UUID ثابتة مطابقة لـ sandbox_seed.sql (تعمل مباشرة في CI):
+--   SET myapp.test_user_a = '00000000-0000-0000-0000-0000000000a1';
+--   SET myapp.test_user_b = '00000000-0000-0000-0000-0000000000a2';
+--   SET myapp.test_user_c = '00000000-0000-0000-0000-0000000000a3';
+--   SET myapp.test_founder = '00000000-0000-0000-0000-0000000000a4';
+--   SET myapp.test_gift_id = '00000000-0000-0000-0000-0000000000b1';
+--   SET myapp.test_package_id = '00000000-0000-0000-0000-0000000000c1';
+--   SET myapp.test_sub_package_id = '00000000-0000-0000-0000-0000000000d1';
+--   SET myapp.test_promo_package_id = '00000000-0000-0000-0000-0000000000e1';
+--   SET myapp.test_post_id = '00000000-0000-0000-0000-0000000000f1';
+--   SET myapp.test_post_id_other = '00000000-0000-0000-0000-0000000000f2';
 --
 -- ملاحظة: جميع الاختبارات تُنفّذ بدور authenticated لتفعيل سياسات RLS.
 -- (دور postgres يتجاوز RLS ولا يُمَكّن من اختبار العزل بشكل صحيح.)
@@ -46,17 +46,18 @@
 -- بنطاق المعاملة (is_local=true) عند الحاجة لمستخدم آخر أو مؤسس.
 -- =====================================================================
 
--- ضبط متغيرات افتراضية للمثال (يجب استبدالها بـ UUID حقيقية من قاعدة الاختبار)
-SET myapp.test_user_a = '00000000-0000-0000-0000-000000000001';
-SET myapp.test_user_b = '00000000-0000-0000-0000-000000000002';
-SET myapp.test_user_c = '00000000-0000-0000-0000-000000000004';
-SET myapp.test_founder = '00000000-0000-0000-0000-000000000003';
-SET myapp.test_gift_id = '00000000-0000-0000-0000-000000000010';
-SET myapp.test_package_id = '00000000-0000-0000-0000-000000000020';
-SET myapp.test_sub_package_id = '00000000-0000-0000-0000-000000000030';
-SET myapp.test_promo_package_id = '00000000-0000-0000-0000-000000000040';
-SET myapp.test_post_id = '00000000-0000-0000-0000-000000000050';
-SET myapp.test_post_id_other = '00000000-0000-0000-0000-000000000051';
+-- ضبط متغيرات افتراضية مطابقة لبيانات sandbox_seed.sql (UUID حقيقية ثابتة).
+-- في CI تُطبَّق هذه القيم مباشرة؛ محلياً يمكنك استبدالها بأي UUID من قاعدة اختبارك.
+SET myapp.test_user_a = '00000000-0000-0000-0000-0000000000a1';
+SET myapp.test_user_b = '00000000-0000-0000-0000-0000000000a2';
+SET myapp.test_user_c = '00000000-0000-0000-0000-0000000000a3';
+SET myapp.test_founder = '00000000-0000-0000-0000-0000000000a4';
+SET myapp.test_gift_id = '00000000-0000-0000-0000-0000000000b1';
+SET myapp.test_package_id = '00000000-0000-0000-0000-0000000000c1';
+SET myapp.test_sub_package_id = '00000000-0000-0000-0000-0000000000d1';
+SET myapp.test_promo_package_id = '00000000-0000-0000-0000-0000000000e1';
+SET myapp.test_post_id = '00000000-0000-0000-0000-0000000000f1';
+SET myapp.test_post_id_other = '00000000-0000-0000-0000-0000000000f2';
 
 -- دور المصادقة لتفعيل RLS (postgres يتجاوز RLS)
 SET ROLE authenticated;
