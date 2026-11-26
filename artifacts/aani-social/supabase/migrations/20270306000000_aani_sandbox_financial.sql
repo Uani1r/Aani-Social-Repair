@@ -57,6 +57,7 @@ alter table sandbox.top_up_packages enable row level security;
 drop policy if exists sandbox_top_up_packages_select on sandbox.top_up_packages;
 create policy sandbox_top_up_packages_select on sandbox.top_up_packages
   for select to authenticated using (true);
+revoke all on sandbox.top_up_packages from public, anon, authenticated;
 grant select on sandbox.top_up_packages to authenticated;
 
 insert into sandbox.top_up_packages (name, coins, price_usd, is_active)
@@ -180,6 +181,7 @@ alter table sandbox.subscription_packages enable row level security;
 drop policy if exists sandbox_subscription_packages_select on sandbox.subscription_packages;
 create policy sandbox_subscription_packages_select on sandbox.subscription_packages
   for select to authenticated using (true);
+revoke all on sandbox.subscription_packages from public, anon, authenticated;
 grant select on sandbox.subscription_packages to authenticated;
 
 insert into sandbox.subscription_packages (name, coins_price, duration_days, is_active)
@@ -230,6 +232,7 @@ alter table sandbox.promotion_packages enable row level security;
 drop policy if exists sandbox_promotion_packages_select on sandbox.promotion_packages;
 create policy sandbox_promotion_packages_select on sandbox.promotion_packages
   for select to authenticated using (true);
+revoke all on sandbox.promotion_packages from public, anon, authenticated;
 grant select on sandbox.promotion_packages to authenticated;
 
 insert into sandbox.promotion_packages (name, target_type, coins_price, duration_days, is_active)
@@ -519,6 +522,10 @@ as $$
 declare
   v_coins integer;
   v_balance integer;
+  v_ledger_user_id uuid;
+  v_ledger_type text;
+  v_ledger_amount integer;
+  v_ledger_reference text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_user_id then raise exception 'forbidden' using errcode='42501'; end if;
@@ -545,10 +552,23 @@ begin
   if not found then raise exception 'package unavailable' using errcode='42704'; end if;
 
   if p_simulate_success then
+    -- التحقق من إدخال السجل الموجود لنفس مفتاح idempotency قبل إكمال الشحن.
+    -- إذا كان الإدخال موجوداً ولكن لا يطابق المستخدم والنوع والمبلغ والمرجع، يرفع خطأ تعارض.
+    select user_id, type, amount, reference into v_ledger_user_id, v_ledger_type, v_ledger_amount, v_ledger_reference
+    from sandbox.ledger where idempotency_key = p_idempotency_key || ':credit';
+    if found then
+      if v_ledger_user_id <> p_user_id or v_ledger_type <> 'credit' or v_ledger_amount <> v_coins or v_ledger_reference <> 'sandbox top-up' then
+        raise exception 'idempotency key conflict: ledger entry does not match top-up' using errcode='40901';
+      end if;
+      -- الإدخال موجود ومطابق → الشحن مكرر، الرصيد أُضيف مسبقاً، لا نعيد الإضافة.
+      select public.aani_sandbox_balance(p_user_id) into v_balance;
+      return jsonb_build_object('ok',true,'duplicate',true,'status','completed','amount',v_coins,
+        'balance',v_balance,'simulated',true);
+    end if;
+
     -- إضافة العملات فقط عند النجاح (سجل ledger مستقر عبر idempotency).
     insert into sandbox.ledger (user_id, type, amount, reference, idempotency_key, related_id)
-    values (p_user_id, 'credit', v_coins, 'sandbox top-up', p_idempotency_key || ':credit', null)
-    on conflict (idempotency_key) do nothing;
+    values (p_user_id, 'credit', v_coins, 'sandbox top-up', p_idempotency_key || ':credit', null);
 
     insert into sandbox.top_ups (user_id, package_id, amount, status, idempotency_key, simulated, created_at, completed_at)
     values (p_user_id, p_package_id, v_coins, 'completed', p_idempotency_key, true, now(), now());
@@ -704,13 +724,19 @@ set search_path = ''
 as $$
 declare
   v_user_id uuid;
+  v_status text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
-  select user_id into v_user_id from sandbox.subscriptions where id = p_subscription_id;
+  select user_id, status into v_user_id, v_status from sandbox.subscriptions where id = p_subscription_id;
   if not found then raise exception 'subscription not found' using errcode='42704'; end if;
   if auth.uid() <> v_user_id and not public.aani_sandbox_is_founder() then
     raise exception 'forbidden' using errcode='42501';
+  end if;
+
+  -- منع الانتقالات المتعارضة: لا يُلغى اشتراك مُلغى من قبل، ولا يُسجل تدقيق مكرر.
+  if v_status = 'cancelled' then
+    return jsonb_build_object('ok',true,'status','already_cancelled','subscription_id',p_subscription_id);
   end if;
 
   update sandbox.subscriptions
@@ -720,7 +746,7 @@ begin
   insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
   values (auth.uid(), 'cancel_subscription', 'subscription', p_subscription_id, 'sandbox cancel', 'ok');
 
-  return jsonb_build_object('ok',true,'status','cancelled');
+  return jsonb_build_object('ok',true,'status','cancelled','subscription_id',p_subscription_id);
 end;
 $$;
 revoke all on function public.aani_sandbox_cancel_subscription(uuid) from public, anon;
@@ -901,10 +927,11 @@ as $$
 declare
   v_user_id uuid;
   v_status text;
+  v_current_status text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
-  select user_id into v_user_id from sandbox.promotions where id = p_promotion_id;
+  select user_id, status into v_user_id, v_current_status from sandbox.promotions where id = p_promotion_id;
   if not found then raise exception 'promotion not found' using errcode='42704'; end if;
   if auth.uid() <> v_user_id and not public.aani_sandbox_is_founder() then
     raise exception 'forbidden' using errcode='42501';
@@ -916,6 +943,11 @@ begin
     v_status := 'failed';
   end if;
 
+  -- منع الانتقالات المتعارضة: لا يُنهي/يُفشل حملة مُنهاة أو فاشلة من قبل، ولا يُسجل تدقيق مكرر.
+  if v_current_status <> 'active' then
+    return jsonb_build_object('ok',true,'status','already_' || v_current_status,'promotion_id',p_promotion_id);
+  end if;
+
   update sandbox.promotions
   set status = v_status, ends_at = now(),
       failure_reason = case when p_success then null else p_failure_reason end
@@ -924,7 +956,7 @@ begin
   insert into sandbox.admin_actions (actor_user_id, action, target_type, target_id, reason, result)
   values (auth.uid(), 'end_promotion', 'promotion', p_promotion_id, 'sandbox end promotion', 'ok');
 
-  return jsonb_build_object('ok',true,'status',v_status);
+  return jsonb_build_object('ok',true,'status',v_status,'promotion_id',p_promotion_id);
 end;
 $$;
 revoke all on function public.aani_sandbox_end_promotion(uuid,boolean,text) from public, anon;

@@ -206,7 +206,6 @@ export default function AdminSandbox() {
   const handleGrant = async () => {
     if (grantLockRef.current) return;
     grantLockRef.current = true;
-    if (grantInFlight) { grantLockRef.current = false; return; }
     const fp = `${grantUserId}|${grantAmount}|${grantReason}`;
     if (grantFpRef.current !== fp) {
       grantFpRef.current = fp;
@@ -227,6 +226,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل المنح');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء المنح: ${(error as Error).message}`);
     } finally {
       grantLockRef.current = false;
       setGrantInFlight(false);
@@ -245,6 +246,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل الاسترداد');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء الاسترداد: ${(error as Error).message}`);
     } finally {
       refundLockRef.current[topUpId] = false;
       setRefundInFlight(prev => ({ ...prev, [topUpId]: false }));
@@ -257,7 +260,6 @@ export default function AdminSandbox() {
       return;
     }
     if (subLockRef.current) return;
-    if (subInFlight) { subLockRef.current = false; return; }
     subLockRef.current = true;
     const fp = `${subUserId}|${packageId}`;
     if (subFpRef.current !== fp) {
@@ -276,6 +278,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل التفعيل');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء التفعيل: ${(error as Error).message}`);
     } finally {
       subLockRef.current = false;
       setSubInFlight(false);
@@ -294,6 +298,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل الإلغاء');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء الإلغاء: ${(error as Error).message}`);
     } finally {
       cancelLockRef.current[subscriptionId] = false;
       setCancelInFlight(prev => ({ ...prev, [subscriptionId]: false }));
@@ -302,7 +308,6 @@ export default function AdminSandbox() {
 
   const handleRenewSub = async (subscriptionId: string) => {
     if (renewLockRef.current[subscriptionId]) return;
-    if (renewInFlight[subscriptionId]) { renewLockRef.current[subscriptionId] = false; return; }
     renewLockRef.current[subscriptionId] = true;
     if (!renewKeyRef.current[subscriptionId]) renewKeyRef.current[subscriptionId] = generateIdempotencyKey('sandbox-renew');
     setRenewInFlight(prev => ({ ...prev, [subscriptionId]: true }));
@@ -316,6 +321,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل التجديد');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء التجديد: ${(error as Error).message}`);
     } finally {
       renewLockRef.current[subscriptionId] = false;
       setRenewInFlight(prev => ({ ...prev, [subscriptionId]: false }));
@@ -332,7 +339,6 @@ export default function AdminSandbox() {
       return;
     }
     if (promoLockRef.current) return;
-    if (promoInFlight) { promoLockRef.current = false; return; }
     promoLockRef.current = true;
     const fp = `${promoUserId}|${promoTargetId}|${packageId}|${targetType}`;
     if (promoFpRef.current !== fp) {
@@ -351,6 +357,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل إنشاء الحملة');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء إنشاء الحملة: ${(error as Error).message}`);
     } finally {
       promoLockRef.current = false;
       setPromoInFlight(false);
@@ -369,6 +377,8 @@ export default function AdminSandbox() {
       } else {
         toast.error(res.error ? (res.error as Error).message : 'فشل إنهاء الحملة');
       }
+    } catch (error) {
+      toast.error(`خطأ غير متوقع أثناء إنهاء الحملة: ${(error as Error).message}`);
     } finally {
       endLockRef.current[promotionId] = false;
       setEndInFlight(prev => ({ ...prev, [promotionId]: false }));
