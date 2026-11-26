@@ -40,6 +40,14 @@ import {
   providerBadgeLabel,
   readAccountAuthIdentity,
 } from '@/lib/accountAuth';
+import {
+  clearPendingPhoneChange,
+  decidePhoneChangeRequest,
+  pendingPhoneChangeRemainingMs,
+  readPendingPhoneChange,
+  savePendingPhoneChange,
+  type PendingPhoneChange,
+} from '@/lib/accountPhoneChange';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
@@ -541,11 +549,18 @@ export default function ProfilePage({
   // تأكيد Supabase لرقم الهاتف فقط (phone_confirmed_at) — لا يُعرض الرقم
   // مؤكداً قبل نجاح التحقق.
   const [authPhoneVerified, setAuthPhoneVerified] = useState(false);
-  // تغيير الهاتف على مرحلتين: طلب رمز SMS ثم تأكيده. لا تُرسَل قيم OTP إلى
-  // أي جدول ولا تُطبع في السجلات.
-  const [phoneChangeStep, setPhoneChangeStep] = useState<'request' | 'verify'>('request');
-  const [phoneChangeTarget, setPhoneChangeTarget] = useState('');
+  // طلب تغيير الهاتف المعلّق محفوظ في localStorage (لا React state وحدها):
+  // يبقى بعد تحديث الصفحة أو إعادة فتح التطبيق، ويستمر منع رقم جديد ما دام
+  // قد يكون قائماً لدى Supabase. لا يُحفظ أي رمز OTP.
+  const [pendingPhoneChange, setPendingPhoneChange] = useState<PendingPhoneChange | null>(null);
   const [phoneOtpCode, setPhoneOtpCode] = useState('');
+  // مشتقّة من السجل المحفوظ: لا حالة ثانية قد تتعارض معه.
+  const phoneChangeStep: 'request' | 'verify' = pendingPhoneChange ? 'verify' : 'request';
+  const phoneChangeTarget = pendingPhoneChange?.phone ?? '';
+  const phoneChangeRemainingMinutes = pendingPhoneChange
+    ? Math.ceil(pendingPhoneChangeRemainingMs(pendingPhoneChange) / 60000)
+    : 0;
+  const phoneChangeLocallyExpired = Boolean(pendingPhoneChange) && phoneChangeRemainingMinutes <= 0;
   // كلمة المرور الحالية والجديدة وتأكيدها — تُمرَّر إلى Supabase مباشرة فقط.
   const [currentPasswordDraft, setCurrentPasswordDraft] = useState('');
   const [passwordConfirmDraft, setPasswordConfirmDraft] = useState('');
@@ -1052,11 +1067,15 @@ export default function ProfilePage({
       setAuthPhoneVerified(identity.phoneConfirmed);
       setAuthProvider(identity.primaryProvider);
       setHasPassword(identity.hasPassword);
-      if (settingsScreen === 'account' && phoneChangeStep === 'request') setPhoneDraft(identity.phone || '');
+      // طلب تغيير الهاتف المعلّق يُقرأ من التخزين المحلي لا من React state،
+      // فيبقى بعد تحديث الصفحة أو إعادة فتح التطبيق.
+      const pending = readPendingPhoneChange(currentUserId);
+      setPendingPhoneChange(pending);
+      if (settingsScreen === 'account' && !pending) setPhoneDraft(identity.phone || '');
     };
     void loadAuthSettings();
     return () => { active = false; };
-  }, [showSettingsOverlay, settingsScreen]);
+  }, [showSettingsOverlay, settingsScreen, currentUserId]);
 
   useEffect(() => {
     if (!showSettingsOverlay || (settingsScreen !== 'blocked' && settingsScreen !== 'muted')) return;
@@ -1504,7 +1523,7 @@ export default function ProfilePage({
 
   const openPhoneChangeDialog = () => {
     if (accountSettingsBusy) return;
-    setPhoneDraft(phoneChangeStep === 'verify' ? phoneChangeTarget : authPhone);
+    setPhoneDraft(pendingPhoneChange ? pendingPhoneChange.phone : authPhone);
     setPhoneOtpCode('');
     setShowPhoneModal(true);
   };
@@ -1513,7 +1532,7 @@ export default function ProfilePage({
     if (accountSettingsBusy) return;
     setShowPhoneModal(false);
     setPhoneOtpCode('');
-    if (phoneChangeStep === 'request') setPhoneDraft(authPhone);
+    if (!pendingPhoneChange) setPhoneDraft(authPhone);
   };
 
   /**
@@ -1522,10 +1541,13 @@ export default function ProfilePage({
    * يُعتمد ولا يُعرض مؤكداً قبل verifyOtp.
    *
    * تحذير Supabase: طلبات phone_change القديمة/المتزامنة قد تربط رقماً غير
-   * مقصود. لذلك:
+   * مقصود، والعميل لا يملك واجهة لإلغاء طلب معلّق أو الاستعلام عن حالته.
+   * لذلك:
    * - طلب واحد فقط في المرة (phoneChangeInFlightRef + accountSettingsBusy).
-   * - إعادة الإرسال للرقم المعلّق نفسه فقط، ولا يُستبدل برقم آخر قبل إلغاء
-   *   الطلب صراحةً.
+   * - لا يبدأ رقم جديد ما دام طلب سابق قد يكون قائماً: يُمنع حتى تأكيد
+   *   الرمز بنجاح، أو حتى مرور مهلة انتهاء صلاحية OTP الموثّقة أعلاه.
+   * - إعادة الإرسال للرقم المعلّق نفسه فقط، عبر resend() الموثّقة التي لا
+   *   تنشئ طلباً جديداً.
    * - التحقق يستخدم الرقم المعلّق نفسه الذي أُرسل إليه الرمز.
    */
   const requestPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
@@ -1536,12 +1558,21 @@ export default function ProfilePage({
       toast.error(`أدخل رقم هاتف صالحاً — الرمز الافتراضي ${DEFAULT_PHONE_COUNTRY_CODE} أو صيغة دولية تبدأ بـ +.`);
       return;
     }
-    if (nextPhone === authPhone) {
-      toast.error('هذا هو رقم الهاتف الحالي على الحساب.');
-      return;
-    }
-    if (phoneChangeStep === 'verify' && nextPhone !== phoneChangeTarget) {
-      toast.error('يوجد طلب تحقق معلّق لرقم آخر. ألغِ الطلب أولاً ثم اطلب الرقم الجديد.');
+
+    const decision = decidePhoneChangeRequest({
+      pending: pendingPhoneChange,
+      nextPhone,
+      currentPhone: authPhone,
+    });
+    if (!decision.allowed) {
+      if (decision.reason === 'unchanged') {
+        toast.error('هذا هو رقم الهاتف الحالي على الحساب.');
+        return;
+      }
+      const remainingMinutes = Math.max(1, Math.ceil(decision.remainingMs / 60000));
+      // لا ادعاء بإلغاء أو انتهاء: الطلب قد يكون قائماً لدى Supabase،
+      // ولا يمكن للعميل إثبات زواله.
+      toast.error(`قد يكون طلب تغيير سابق ما زال معلّقاً لدى Supabase إلى ${formatPhoneForDisplay(decision.pending.phone)}. لا يمكن بدء رقم جديد قبل إثبات زواله: أكّد الرمز أو أعد إرساله إلى الرقم نفسه. الرفع المحلي للحجب بعد نحو ${remainingMinutes} دقيقة لا يثبت الإلغاء.`);
       return;
     }
 
@@ -1550,10 +1581,16 @@ export default function ProfilePage({
     try {
       const { error } = await supabase.auth.updateUser({ phone: nextPhone });
       if (error) throw error;
-      setPhoneChangeTarget(nextPhone);
-      setPhoneChangeStep('verify');
+      const record: PendingPhoneChange = { phone: nextPhone, requestedAt: Date.now() };
+      // يُحفظ بعد نجاح الطلب فقط، ويُستخدم لمنع رقم ثانٍ بعد إعادة التحميل.
+      savePendingPhoneChange(currentUserId, record);
+      setPendingPhoneChange(record);
       setPhoneOtpCode('');
-      toast.success('أرسلنا رمز تحقق SMS إلى الرقم الجديد. أدخل الرمز لتأكيده.');
+      if (decision.reason === 'previous-may-have-expired') {
+        toast.success('أرسلنا رمز تحقق إلى الرقم الجديد. الطلب السابق تجاوز مهلة انتهاء صلاحية OTP الموثّقة؛ هذا رفع حجب محلي فقط، ولم يُلغِ Supabase الطلب.');
+      } else {
+        toast.success('أرسلنا رمز تحقق SMS إلى الرقم الجديد. أدخل الرمز لتأكيده.');
+      }
     } catch (error) {
       toast.error(accountAuthErrorMessage(error, 'تعذر إرسال رمز التحقق. حاول مرة أخرى.'));
     } finally {
@@ -1562,17 +1599,23 @@ export default function ProfilePage({
     }
   };
 
-  /** إعادة إرسال الرمز للرقم المعلّق نفسه فقط — لا رقم آخر. */
+  /**
+   * إعادة إرسال موثّقة لرمز الطلب القائم عبر resend({ type: 'phone_change' })
+   * — لا تنشئ طلب تغيير جديد ولا تستبدل الرقم المعلّق.
+   */
   const resendPhoneChangeCode = async () => {
-    if (phoneChangeInFlightRef.current || accountSettingsBusy || !phoneChangeTarget) return;
+    if (phoneChangeInFlightRef.current || accountSettingsBusy || !pendingPhoneChange) return;
     phoneChangeInFlightRef.current = true;
     setAccountSettingsBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ phone: phoneChangeTarget });
+      const { error } = await supabase.auth.resend({
+        type: 'phone_change',
+        phone: pendingPhoneChange.phone,
+      });
       if (error) throw error;
-      toast.success('أعدنا إرسال رمز التحقق إلى الرقم نفسه.');
+      toast.success('أعدنا إرسال رمز الطلب القائم إلى الرقم نفسه.');
     } catch (error) {
-      toast.error(accountAuthErrorMessage(error, 'تعذر إعادة إرسال الرمز. حاول بعد قليل.'));
+      toast.error(accountAuthErrorMessage(error, 'تعذر إعادة إرسال الرمز للطلب القائم. إن كانت مهلته انتهت فلا يمكن إثبات ذلك من العميل.'));
     } finally {
       phoneChangeInFlightRef.current = false;
       setAccountSettingsBusy(false);
@@ -1583,7 +1626,7 @@ export default function ProfilePage({
     event.preventDefault();
     if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
     const token = phoneOtpCode.replace(/\D/g, '');
-    if (!phoneChangeTarget || token.length < 6) {
+    if (!pendingPhoneChange || token.length < 6) {
       toast.error('أدخل رمز التحقق المكوّن من ستة أرقام.');
       return;
     }
@@ -1591,37 +1634,60 @@ export default function ProfilePage({
     phoneChangeInFlightRef.current = true;
     setAccountSettingsBusy(true);
     try {
-      const { data, error } = await supabase.auth.verifyOtp({ phone: phoneChangeTarget, token, type: 'phone_change' });
+      const { data, error } = await supabase.auth.verifyOtp({ phone: pendingPhoneChange.phone, token, type: 'phone_change' });
       if (error) throw error;
+      // نفس الهوية فقط: لا تُقبل نتيجة جلسة أخرى.
+      if (!data.user || data.user.id !== currentUserId) {
+        throw new Error('تعذر تأكيد هوية الحساب الحالي. أعد المحاولة.');
+      }
       const identity = await refreshAccountAuthIdentity();
       // لا يُعرض الرقم مؤكداً إلا إذا أعاد Supabase الرقم الجديد نفسه مؤكداً.
-      if (!data.user || !identity || identity.phone !== phoneChangeTarget || !identity.phoneConfirmed) {
-        throw new Error('لم يؤكد Supabase الرقم الجديد بعد. أعد المحاولة أو اطلب رمزاً جديداً.');
+      if (!identity || identity.phone !== pendingPhoneChange.phone || !identity.phoneConfirmed) {
+        throw new Error('لم يؤكد Supabase الرقم الجديد بعد. أعد المحاولة أو أعد إرسال الرمز نفسه.');
       }
-      setPhoneChangeStep('request');
-      setPhoneChangeTarget('');
+      // بعد إثبات Supabase فقط: يُمسح السجل المحلي ويرتفع منع الرقم الجديد.
+      clearPendingPhoneChange(currentUserId);
+      setPendingPhoneChange(null);
       setPhoneOtpCode('');
       setPhoneDraft(identity.phone);
       setShowPhoneModal(false);
       toast.success('تم تأكيد رقم الهاتف الجديد. جلستك على هذا الجهاز ما زالت قائمة.');
     } catch (error) {
-      const message = accountAuthErrorMessage(error, 'تعذر تأكيد الرمز. أعد المحاولة أو اطلب رمزاً جديداً.');
-      // انتهاء الصلاحية أو الرمز الخاطئ: يُمسح الرمز ويُطلب رمز جديد للرقم نفسه.
+      const message = accountAuthErrorMessage(error, 'تعذر تأكيد الرمز. أعد المحاولة أو أعد إرسال الرمز نفسه.');
+      // لا يُعتبر الخطأ أو مسح الرمز إلغاءً للطلب: السجل المعلّق يبقى، ويُمسح
+      // الرمز المكتوب فقط.
       if (/انتهت صلاحية|غير صحيح/.test(message)) setPhoneOtpCode('');
-      toast.error(message);
+      toast.error(`${message} الطلب المعلّق لم يُلغَ من Supabase.`);
     } finally {
       phoneChangeInFlightRef.current = false;
       setAccountSettingsBusy(false);
     }
   };
 
-  const cancelPhoneChangeRequest = () => {
+  /**
+   * إغلاق التنبيه المحلي فقط. Supabase لا يوفّر في العميل واجهة لإلغاء طلب
+   * phone_change، ولذلك يبقى السجل المعلّق ويبقى منع الرقم الجديد قائماً.
+   */
+  const dismissPendingPhoneChangeNotice = () => {
     if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
-    setPhoneChangeStep('request');
-    setPhoneChangeTarget('');
+    setShowPhoneModal(false);
+    setPhoneOtpCode('');
+    toast.info('أُغلق التنبيه على هذا الجهاز فقط. طلب تغيير الهاتف لم يُلغَ في Supabase، ويبقى ظهور الرقم الجديد معلّقاً حتى تأكيد الرمز أو انتهاء المهلة الموثّقة.');
+  };
+
+  /**
+   * بعد مرور أقصى مهلة موثّقة لصلاحية OTP فقط (24 ساعة، وقابلة للتقليل في
+   * إعداد المشروع): يُسمح ببدء رقم جديد، مع توضيح أن هذا رفع حجب محلي ولا
+   * يثبت أن Supabase ألغى الطلب.
+   */
+  const startNewPhoneChangeAfterExpiry = () => {
+    if (accountSettingsBusy || !pendingPhoneChange) return;
+    if (pendingPhoneChangeRemainingMs(pendingPhoneChange) > 0) return;
+    clearPendingPhoneChange(currentUserId);
+    setPendingPhoneChange(null);
     setPhoneOtpCode('');
     setPhoneDraft(authPhone);
-    toast.success('أُلغي طلب التحقق هنا. الرقم الحالي لم يتغيّر.');
+    toast.info('سُمح بطلب رقم جديد بعد مرور أقصى مهلة موثّقة للطلب السابق. هذا إجراء محلي؛ Supabase لا يوفّر تأكيداً بالإلغاء.');
   };
 
   /** إعادة تحقق آمنة لحساب Google/Apple: رابط إلى بريد الحساب نفسه. */
@@ -1681,8 +1747,17 @@ export default function ProfilePage({
 
     setAccountSettingsBusy(true);
     try {
-      const { error: verifyError } = await supabase.auth.signInWithPassword(credentials);
+      const { data: signInData, error: verifyError } = await supabase.auth.signInWithPassword(credentials);
       if (verifyError) throw verifyError;
+      // نفس هوية المستخدم فقط: لا تُغيَّر كلمة مرور حساب آخر إن تغيّرت الجلسة.
+      if (!signInData.user || signInData.user.id !== currentUserId) {
+        throw new Error('تعذر التحقق من هوية الحساب نفسه. لم تُغيَّر كلمة المرور.');
+      }
+      const { data: currentUserData, error: currentUserError } = await supabase.auth.getUser();
+      if (currentUserError) throw currentUserError;
+      if (currentUserData.user?.id !== currentUserId) {
+        throw new Error('تعذر تأكيد الجلسة الحالية. لم تُغيَّر كلمة المرور.');
+      }
       const { error: updateError } = await supabase.auth.updateUser({ password: passwordDraft });
       if (updateError) throw updateError;
       setCurrentPasswordDraft('');
@@ -2844,6 +2919,13 @@ export default function ProfilePage({
                     <span className="profile-settings-copy">
                       <span className="profile-settings-label">رقم الهاتف</span>
                       <span className="profile-settings-description" dir="ltr">{authPhone ? formatPhoneForDisplay(authPhone) : 'غير مضاف'}</span>
+                      {pendingPhoneChange && (
+                        <span className="profile-settings-description" dir="auto">
+                          {phoneChangeLocallyExpired
+                            ? `طلب سابق إلى ${formatPhoneForDisplay(pendingPhoneChange.phone)} تجاوز المهلة المحلية — قد يكون ما زال في Supabase`
+                            : `طلب معلّق إلى ${formatPhoneForDisplay(pendingPhoneChange.phone)} — نحو ${phoneChangeRemainingMinutes} دقيقة متبقية`}
+                        </span>
+                      )}
                     </span>
                     {authPhone && authPhoneVerified && <span className="profile-settings-provider-badge">مؤكد</span>}
                     <ChevronLeft size={18} aria-hidden="true" />
@@ -3031,6 +3113,7 @@ export default function ProfilePage({
                 {phoneChangeStep === 'request' ? (
                   <form onSubmit={requestPhoneChange}>
                     <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية أو المحلية — الرمز الافتراضي {DEFAULT_PHONE_COUNTRY_CODE} للعراق. سيصل رمز تحقق SMS إلى الرقم الجديد، ولا يُعتمد الرقم قبل إدخال الرمز.</p>
+                    <p className="profile-settings-note">لا يمكن بدء رقم جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase — لا يوفّر Supabase إلغاءً له من التطبيق.</p>
                     <div className="profile-settings-field">
                       <label htmlFor="settings-phone">رقم الهاتف</label>
                       <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder={`${DEFAULT_PHONE_COUNTRY_CODE} 7XX XXX XXXX`} maxLength={24} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
@@ -3047,10 +3130,17 @@ export default function ProfilePage({
                       <label htmlFor="settings-phone-code">رمز التحقق</label>
                       <input id="settings-phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} required value={phoneOtpCode} onChange={event => setPhoneOtpCode(event.target.value.replace(/\D/g, ''))} />
                     </div>
-                    <p className="profile-settings-note">إن انتهت صلاحية الرمز فأعد إرساله إلى الرقم نفسه. إلغاء الطلب هنا لا يغيّر رقمك الحالي، وأي طلب غير مؤكد ينتهي تلقائياً في Supabase.</p>
+                    <p className="profile-settings-note" dir="auto">
+                      {phoneChangeLocallyExpired
+                        ? 'تجاوز هذا الطلب أقصى مهلة موثّقة لصلاحية OTP (24 ساعة). هذا لا يثبت أن Supabase ألغاه، ولا يمكن تأكيده من التطبيق؛ يمكنك بدء رقم جديد بعد هذا الحد الموثّق.'
+                        : `قد يبقى الطلب صالحاً نحو ${phoneChangeRemainingMinutes} دقيقة أخرى وفق المهلة الموثّقة. إغلاق النافذة أو مسح الرمز لا يلغي الطلب في Supabase.`}
+                    </p>
                     <div className="profile-settings-dialog-actions">
-                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={cancelPhoneChangeRequest}>إلغاء الطلب</button>
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={dismissPendingPhoneChangeNotice}>إغلاق (يبقى الطلب)</button>
                       <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => void resendPhoneChangeCode()}>إعادة إرسال الرمز</button>
+                      {phoneChangeLocallyExpired && (
+                        <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={startNewPhoneChangeAfterExpiry}>طلب رقم جديد بعد المهلة الموثّقة</button>
+                      )}
                       <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || phoneOtpCode.length < 6}>{accountSettingsBusy ? 'جارٍ التحقق...' : 'تأكيد الرقم'}</button>
                     </div>
                   </form>
