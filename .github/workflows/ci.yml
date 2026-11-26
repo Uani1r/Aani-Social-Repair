@@ -4,7 +4,7 @@ on:
   push:
     branches: [feat/aani-sandbox-financial]
   pull_request:
-    branches: [feat/aani-sandbox-financial]
+    branches: [main]
 
 jobs:
   verify:
@@ -35,24 +35,31 @@ jobs:
 
       - name: Validate SQL syntax
         run: |
-          # Validate that the migration SQL file is syntactically parseable
-          # using psql --dry-run if available, otherwise check with pg_format
-          if command -v psql >/dev/null 2>&1; then
-            psql --dry-run -f artifacts/aani-social/supabase/migrations/20270306000000_aani_sandbox_financial.sql || true
-          fi
+          # Validate SQL syntax using pg_format if available.
+          # psql --dry-run is not used: it requires a live database connection,
+          # and CI must not connect to production Supabase.
           if command -v pg_format >/dev/null 2>&1; then
             pg_format --check artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
+            pg_format --check artifacts/aani-social/supabase/migrations/20270306000000_aani_sandbox_financial.sql
+          else
+            echo "pg_format not available; SQL syntax validation skipped"
+            echo "SQL validation requires a live PostgreSQL/Supabase test instance"
+            echo "Not connecting to production Supabase"
           fi
 
-      - name: Run SQL tests (isolated PostgreSQL)
+      - name: Run SQL tests (isolated Supabase/PostgreSQL)
         run: |
-          # SQL tests require a live Supabase test instance with auth.uid() support.
-          # They cannot run against plain PostgreSQL without Supabase extensions.
-          # To run locally:
-          #   1. Start a Supabase test instance (supabase start)
-          #   2. Apply migration: supabase db push --linked
-          #   3. Run tests: psql -f artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
-          echo "SQL tests require a live Supabase test instance. See sandbox_isolation.test.sql for manual execution instructions."
+          # SQL tests are NOT executed in CI.
+          # They require a live Supabase test instance with auth.uid() and RLS support.
+          # They must not run against production Supabase.
+          # Status: NOT EXECUTED — do not count as passed.
+          echo "SQL tests: NOT EXECUTED in CI"
+          echo "Status: not executed (requires isolated Supabase test instance)"
+          echo "To run manually:"
+          echo "  1. supabase start"
+          echo "  2. supabase db push --linked"
+          echo "  3. SET myapp.* variables"
+          echo "  4. supabase db query --file artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql"
         shell: bash
 
       - name: Upload test artifacts

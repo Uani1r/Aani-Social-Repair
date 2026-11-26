@@ -3,31 +3,30 @@
 --
 -- التشغيل:
 --   1. تطبيق الترحيل على قاعدة الاختبار (ليست الإنتاج):
---      supabase db push --linked  (يُطبّق جميع الترحيلات المسجلة بما في ذلك
---      supabase/migrations/20270306000000_aani_sandbox_financial.sql)
+--      supabase db push --linked
 --   2. تشغيل ملف الاختبار عبر SQL query (ليست db push --file):
 --      supabase db query --file artifacts/aani-social/supabase/tests/sandbox_isolation.test.sql
 --
 -- ملاحظة: supabase db push يُطبّق الترحيلات المسجلة في مجلد الميريجشنز.
--- supabase db query --file ينفّذ ملف SQL عشوائياً ضد القاعدة المرتبطة.
+-- supabase db query --file ينفّذ ملف SQL ضد القاعدة المرتبطة.
 -- لا يُطبّق أي ترحيل على قاعدة الإنتاج.
 --
--- كل اختبار يستخدم كتلة DO مع تحذير (RAISE EXCEPTION) عند عدم تطابق النتيجة المتوقعة.
+-- المتغيرات المطلوبة قبل التشغيل (ضبطها عبر SET في جلسة الاختبار):
+--   SET myapp.test_user_a = '00000000-0000-0000-0000-000000000001';
+--   SET myapp.test_user_b = '00000000-0000-0000-0000-000000000002';
+--   SET myapp.test_founder = '00000000-0000-0000-0000-000000000003';
+--   SET myapp.test_gift_id = '<uuid من public.gifts>';
+--   SET myapp.test_package_id = '<uuid من sandbox.top_up_packages>';
+--   SET myapp.test_sub_package_id = '<uuid من sandbox.subscription_packages>';
+--   SET myapp.test_promo_package_id = '<uuid من sandbox.promotion_packages>';
+--   SET myapp.test_post_id = '<uuid من public.posts owned by userA>';
+-- =====================================================================
 --
--- المتغيرات المطلوبة قبل التشغيل (في psql أو SQL Editor):
---   \set userA '00000000-0000-0000-0000-000000000001'
---   \set userB '00000000-0000-0000-0000-000000000002'
---   \set founderUser '00000000-0000-0000-0000-000000000003'
---   \set giftId '<uuid من public.gifts>'
---   \set packageId '<uuid من sandbox.top_up_packages>'
---   \set subPackageId '<uuid من sandbox.subscription_packages>'
---   \set promoPackageId '<uuid من sandbox.promotion_packages>'
---   \set postId '<uuid من public.posts owned by userA>'
+-- ملاحظة: جميع الاختبارات تُنفّذ بدور authenticated لتفعيل سياسات RLS.
+-- (دور postgres يتجاوز RLS ولا يُمَكّن من اختبار العزل بشكل صحيح.)
 -- =====================================================================
 
--- ضبط سياق المصادقة لمستخدم معين داخل الجلسة الحالية
--- auth.uid() في Supabase يقرأ من request.jwt.claims.sub
--- SET LOCAL request.jwt.claims = '{"sub": "<uuid>"}';
+SET ROLE authenticated;
 
 -- ------------------------------------------------------------------
 -- 0. التأكد من وجود مؤسس في sandbox.founders
@@ -35,11 +34,12 @@
 DO $$
 DECLARE
     v_exists boolean;
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
 BEGIN
-    SELECT EXISTS (SELECT 1 FROM sandbox.founders WHERE user_id = :'founderUser')
+    SELECT EXISTS (SELECT 1 FROM sandbox.founders WHERE user_id = v_founder)
     INTO v_exists;
     IF NOT v_exists THEN
-        RAISE EXCEPTION 'Test 0 failed: founder % not found in sandbox.founders. Add via SQL server-side first.', :'founderUser';
+        RAISE EXCEPTION 'Test 0 failed: founder % not found in sandbox.founders. Add via SQL server-side first.', v_founder;
     END IF;
 END $$;
 
@@ -48,10 +48,10 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_balance_before integer;
 BEGIN
-    SELECT public.aani_sandbox_balance(:'userA') INTO v_balance_before;
-    -- الرصيد يجب أن يكون عددًا صحيحًا (قد يكون 0 أو أي قيمة)
+    SELECT public.aani_sandbox_balance(v_user_a) INTO v_balance_before;
     IF v_balance_before IS NULL THEN
         RAISE EXCEPTION 'Test 1 failed: balance is NULL for userA';
     END IF;
@@ -60,9 +60,10 @@ END $$;
 -- منح عملات تجريبية للمستخدم A (المؤسس فقط)
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT public.aani_sandbox_grant_coins(:'userA', 1000, 'grant-test-1', 'اختبار عزل الرصيد'::text)
+    SELECT public.aani_sandbox_grant_coins(v_user_a, 1000, 'grant-test-1', 'اختبار عزل الرصيد'::text)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test grant-1 failed: expected ok=true, got %', v_result;
@@ -72,9 +73,10 @@ END $$;
 -- التحقق من الرصيد بعد المنح
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_balance_after integer;
 BEGIN
-    SELECT public.aani_sandbox_balance(:'userA') INTO v_balance_after;
+    SELECT public.aani_sandbox_balance(v_user_a) INTO v_balance_after;
     IF v_balance_after <> 1000 THEN
         RAISE EXCEPTION 'Test 1 failed: expected balance 1000 after grant, got %', v_balance_after;
     END IF;
@@ -83,14 +85,15 @@ END $$;
 -- ------------------------------------------------------------------
 -- 2. عدم قدرة المستخدم على قراءة رصيد مستخدم آخر (باستثناء المؤسس)
 -- ------------------------------------------------------------------
--- تشغيل كجلسة userA (ضبط سياق المصادقة)
+-- اختبار كجلسة userA مع JWT claim للمستخدم A
 DO $$
+DECLARE
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    PERFORM public.aani_sandbox_balance(:'userB');
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    PERFORM public.aani_sandbox_balance(v_user_b);
     RAISE EXCEPTION 'Test 2 failed: userA should not be able to read userB balance (expected 42501)';
 EXCEPTION WHEN OTHERS THEN
-    -- يتوقع استثناء 42501 (forbidden)
     IF SQLSTATE <> '42501' THEN
         RAISE EXCEPTION 'Test 2 failed: expected SQLSTATE 42501, got %', SQLSTATE;
     END IF;
@@ -98,9 +101,11 @@ END $$;
 
 -- المؤسس يستطيع قراءة رصيد أي مستخدم
 DO $$
+DECLARE
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'founderUser' || '"}';
-    PERFORM public.aani_sandbox_balance(:'userB');
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_founder'));
+    PERFORM public.aani_sandbox_balance(v_user_b);
 EXCEPTION WHEN OTHERS THEN
     RAISE EXCEPTION 'Test 2 founder failed: founder should be able to read any user balance, got %', SQLERRM;
 END $$;
@@ -109,9 +114,11 @@ END $$;
 -- 3. عدم قدرة غير المؤسس على المنح (42501)
 -- ------------------------------------------------------------------
 DO $$
+DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    PERFORM public.aani_sandbox_grant_coins(:'userA', 100, 'unauth-grant', 'محاولة غير مصرّح'::text);
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    PERFORM public.aani_sandbox_grant_coins(v_user_a, 100, 'unauth-grant', 'محاولة غير مصرّح'::text);
     RAISE EXCEPTION 'Test 3 failed: userA should not be able to grant coins (expected 42501)';
 EXCEPTION WHEN OTHERS THEN
     IF SQLSTATE <> '42501' THEN
@@ -124,10 +131,13 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
+    v_gift_id uuid := current_setting('myapp.test_gift_id')::uuid;
     v_result jsonb;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_send_gift(:'userA', :'userB', :'giftId', 'send-test-1')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'send-test-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 4 failed: expected ok=true, got %', v_result;
@@ -165,10 +175,10 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
     v_popularity integer;
 BEGIN
-    SELECT public.aani_user_popularity(:'userB') INTO v_popularity;
-    -- نتحقق فقط أن الدالة تُرجع قيمة (لا نข Assert على القيمة المحددة لأن الإنتاج قد يختلف)
+    SELECT public.aani_user_popularity(v_user_b) INTO v_popularity;
     IF v_popularity IS NULL THEN
         RAISE EXCEPTION 'Test 5 failed: popularity is NULL for userB';
     END IF;
@@ -179,11 +189,14 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
+    v_gift_id uuid := current_setting('myapp.test_gift_id')::uuid;
     v_result jsonb;
     v_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_send_gift(:'userA', :'userB', :'giftId', 'send-test-1')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'send-test-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 6 failed: expected duplicate=true on replay, got %', v_result;
@@ -202,17 +215,19 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
     v_own_count integer;
     v_sees_b_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     SELECT count(*) INTO v_own_count
     FROM sandbox.gift_transactions
-    WHERE sender_id = :'userA' OR recipient_id = :'userA';
+    WHERE sender_id = v_user_a OR recipient_id = v_user_a;
 
     SELECT count(*) INTO v_sees_b_count
     FROM sandbox.gift_transactions
-    WHERE sender_id = :'userB' OR recipient_id = :'userB';
+    WHERE sender_id = v_user_b OR recipient_id = v_user_b;
 
     IF v_sees_b_count <> 0 THEN
         RAISE EXCEPTION 'Test 7 failed: userA should not see userB transactions, got %', v_sees_b_count;
@@ -222,9 +237,10 @@ END $$;
 -- المؤسس يرى جميع المعاملات
 DO $$
 DECLARE
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
     v_founder_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'founderUser' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_founder'));
     SELECT count(*) INTO v_founder_count
     FROM sandbox.gift_transactions;
     IF v_founder_count < 1 THEN
@@ -237,16 +253,18 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result jsonb;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-test-1', true)
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-test-1', true)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
         RAISE EXCEPTION 'Test 8 failed: expected successful top-up, got %', v_result;
     END IF;
 
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-test-2', false)
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-test-2', false)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT FALSE OR (v_result->>'status') <> 'failed' THEN
         RAISE EXCEPTION 'Test 8 failed: expected failed top-up, got %', v_result;
@@ -258,11 +276,13 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result jsonb;
     v_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-test-1', true)
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-test-1', true)
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 9 failed: expected duplicate=true on replay, got %', v_result;
@@ -281,8 +301,10 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
     v_topup_id uuid;
     v_result jsonb;
+    v_duplicate_rejected boolean := false;
 BEGIN
     -- الحصول على معرف الشحن الناجح
     SELECT id INTO v_topup_id
@@ -294,7 +316,7 @@ BEGIN
     END IF;
 
     -- الاسترداد الأول (مؤسس فقط)
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'founderUser' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_founder'));
     SELECT public.aani_sandbox_refund_top_up(v_topup_id, 'اختبار الاسترداد'::text)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE OR (v_result->>'status') <> 'refunded' THEN
@@ -305,11 +327,13 @@ BEGIN
     BEGIN
         SELECT public.aani_sandbox_refund_top_up(v_topup_id, 'محاولة مكررة'::text)
         INTO v_result;
-        RAISE EXCEPTION 'Test 10 failed: expected exception on duplicate refund, got %', v_result;
     EXCEPTION WHEN OTHERS THEN
-        -- يتوقع استثناء
-        NULL;
+        v_duplicate_rejected := true;
     END;
+
+    IF NOT v_duplicate_rejected THEN
+        RAISE EXCEPTION 'Test 10 failed: expected exception on duplicate refund, got %', v_result;
+    END IF;
 END $$;
 
 -- ------------------------------------------------------------------
@@ -317,18 +341,20 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_result jsonb;
     v_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'sub-test-1')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-test-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 11 failed: expected ok=true, got %', v_result;
     END IF;
 
     -- إعادة التفعيل بنفس المفتاح → duplicate=true، لا خصم مكرر
-    SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'sub-test-1')
+    SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-test-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 11 failed: expected duplicate=true on replay, got %', v_result;
@@ -336,7 +362,7 @@ BEGIN
 
     SELECT count(*) INTO v_count
     FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND package_id = :'subPackageId';
+    WHERE user_id = v_user_a AND package_id = v_sub_package_id;
     IF v_count <> 1 THEN
         RAISE EXCEPTION 'Test 11 failed: expected 1 subscription, got %', v_count;
     END IF;
@@ -347,20 +373,22 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_sub_id uuid;
     v_result jsonb;
 BEGIN
     -- الحصول على معرف الاشتراك النشط
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND package_id = :'subPackageId' AND status = 'active'
+    WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
     LIMIT 1;
 
     IF v_sub_id IS NULL THEN
         RAISE EXCEPTION 'Test 12 failed: no active subscription found for userA';
     END IF;
 
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -371,15 +399,17 @@ END $$;
 -- إعادة التجديد بنفس المفتاح → duplicate=true (إعادة طلب بعد التنفيذ الأول)
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_sub_id uuid;
     v_result jsonb;
 BEGIN
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND package_id = :'subPackageId' AND status = 'active'
+    WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
     LIMIT 1;
 
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
@@ -392,10 +422,13 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_promo_package_id uuid := current_setting('myapp.test_promo_package_id')::uuid;
+    v_post_id uuid := current_setting('myapp.test_post_id')::uuid;
     v_result jsonb;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_create_promotion(:'userA', :'promoPackageId', 'post', :'postId', 'promo-test-1')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', v_post_id, 'promo-test-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 13 failed: expected ok=true, got %', v_result;
@@ -404,10 +437,13 @@ END $$;
 
 -- ترويج بمنشور لا يملكه userA → يُتوقع استثناء 42501
 DO $$
+DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_promo_package_id uuid := current_setting('myapp.test_promo_package_id')::uuid;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     -- استخدام معرف منشور افتراضي لا يملكه userA
-    PERFORM public.aani_sandbox_create_promotion(:'userA', :'promoPackageId', 'post', '00000000-0000-0000-0000-000000000000', 'promo-test-2');
+    PERFORM public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', '00000000-0000-0000-0000-000000000000', 'promo-test-2');
     RAISE EXCEPTION 'Test 13 failed: expected 42501 for promoting post not owned by userA';
 EXCEPTION WHEN OTHERS THEN
     IF SQLSTATE <> '42501' THEN
@@ -420,11 +456,14 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_promo_package_id uuid := current_setting('myapp.test_promo_package_id')::uuid;
+    v_post_id uuid := current_setting('myapp.test_post_id')::uuid;
     v_result jsonb;
     v_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_create_promotion(:'userA', :'promoPackageId', 'post', :'postId', 'promo-test-1')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', v_post_id, 'promo-test-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 14 failed: expected duplicate=true on replay, got %', v_result;
@@ -458,22 +497,24 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result1 jsonb;
     v_result2 jsonb;
     v_count integer;
     v_credit_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
 
     -- تنفيذ الشحن الفاشل أولاً بمفتاح جديد
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-retry-1', false)
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-retry-1', false)
     INTO v_result1;
     IF (v_result1->>'ok')::boolean IS NOT FALSE OR (v_result1->>'status') <> 'failed' THEN
         RAISE EXCEPTION 'Test 16 failed: expected failed top-up, got %', v_result1;
     END IF;
 
     -- إعادة الطلب بالمفتاح والباقة والمستخدم نفسهما
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-retry-1', false)
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-retry-1', false)
     INTO v_result2;
     IF (v_result2->>'ok')::boolean IS NOT FALSE OR (v_result2->>'duplicate')::boolean IS NOT TRUE OR (v_result2->>'status') <> 'failed' THEN
         RAISE EXCEPTION 'Test 16 failed: expected ok=false, duplicate=true, status=failed, got %', v_result2;
@@ -498,10 +539,13 @@ END $$;
 -- 17. إعادة استخدام مفتاح شحن فاشل مع طلب ناجح: تعارض 40901
 -- ------------------------------------------------------------------
 DO $$
+DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     -- إعادة استخدام نفس المفتاح مع p_simulate_success=true → يُتوقع استثناء 40901
-    PERFORM public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-then-success', true);
+    PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-then-success', true);
     RAISE EXCEPTION 'Test 17 failed: expected 40901 for reusing failed key with success=true';
 EXCEPTION WHEN OTHERS THEN
     IF SQLSTATE <> '40901' THEN
@@ -514,10 +558,12 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result jsonb;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg-1', true)
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-deactivated-pkg-1', true)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 18 failed: expected ok=true for initial top-up, got %', v_result;
@@ -526,10 +572,10 @@ BEGIN
     -- تعطيل الباقة (يُنفّذ من جهة المسؤول)
     UPDATE sandbox.top_up_packages
     SET is_active = false
-    WHERE id = :'packageId';
+    WHERE id = v_package_id;
 
     -- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع completed وduplicate=true
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg-1', true)
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-deactivated-pkg-1', true)
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
         RAISE EXCEPTION 'Test 18 failed: expected duplicate=true, status=completed after deactivation, got %', v_result;
@@ -538,21 +584,24 @@ BEGIN
     -- إعادة تفعيل الباقة لبقية الاختبارات
     UPDATE sandbox.top_up_packages
     SET is_active = true
-    WHERE id = :'packageId';
+    WHERE id = v_package_id;
 END $$;
 
 -- ------------------------------------------------------------------
 -- 19. محاولة شحن جديد بباقة معطّلة: تُرفض
 -- ------------------------------------------------------------------
 DO $$
+DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
 BEGIN
     -- تعطيل الباقة مؤقتًا
     UPDATE sandbox.top_up_packages
     SET is_active = false
-    WHERE id = :'packageId';
+    WHERE id = v_package_id;
 
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    PERFORM public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-new-on-deactivated-1', true);
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-new-on-deactivated-1', true);
     RAISE EXCEPTION 'Test 19 failed: expected 42704 for top-up on deactivated package';
 EXCEPTION WHEN OTHERS THEN
     IF SQLSTATE <> '42704' THEN
@@ -562,16 +611,19 @@ EXCEPTION WHEN OTHERS THEN
     -- إعادة تفعيل الباقة
     UPDATE sandbox.top_up_packages
     SET is_active = true
-    WHERE id = :'packageId';
+    WHERE id = v_package_id;
 END $$;
 
 -- ------------------------------------------------------------------
 -- 20. رفض قيمة محاكاة غير محددة (p_simulate_success IS NULL): تعارض 22023
 -- ------------------------------------------------------------------
 DO $$
+DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    PERFORM public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-null-simulate-1', NULL);
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-null-simulate-1', NULL);
     RAISE EXCEPTION 'Test 20 failed: expected 22023 for NULL simulate_success';
 EXCEPTION WHEN OTHERS THEN
     IF SQLSTATE <> '22023' THEN
@@ -580,56 +632,40 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- ------------------------------------------------------------------
--- 21. تعارض التجديد والإلغاء المتزامنين على اشتراك واحد
+-- 21. تسلسل القفل بين التجديد والإلغاء (تتابعي، جلسة واحدة)
 -- ------------------------------------------------------------------
--- تفعيل اشتراك أولاً ليصبح حالته active
+-- ملاحظة: هذا اختبار تتابعي في جلسة واحدة، ليس اختبار تزامن حقيقي.
+-- للاختبار المتزامن الحقيقي، يُنفّذ التجديد والإلغاء في جلستين منفصلتين
+-- في وقت واحد على قاعدة اختبار حيّة.
 DO $$
 DECLARE
-    v_sub_id uuid;
-    v_result jsonb;
-BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT id INTO v_sub_id
-    FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND package_id = :'subPackageId' AND status = 'active'
-    LIMIT 1;
-
-    IF v_sub_id IS NULL THEN
-        -- إنشاء اشتراك جديد للاختبار
-        SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'sub-concurrent-test')
-        INTO v_result;
-    END IF;
-END $$;
-
--- سيناريو متزامن محاكى: نحجز قفل الصف ونختبر أن التجديد والإلغاء لا يتعارضان بشكل غير آمن
--- يتم تشغيل التجديد والإلغاء متتالياً في نفس الجلسة للتحقق من سلوك القفل
-DO $$
-DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_sub_id uuid;
     v_renew_result jsonb;
     v_cancel_result jsonb;
     v_status_after text;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
 
     -- الحصول على معرف الاشتراك النشط
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND package_id = :'subPackageId' AND status = 'active'
+    WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
     LIMIT 1;
 
     IF v_sub_id IS NULL THEN
         RAISE EXCEPTION 'Test 21 failed: no active subscription found';
     END IF;
 
-    -- الجلسة A: التجديد يحصل على القفل أولاً وينجز
+    -- التجديد يحصل على القفل أولاً وينجز
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-concurrent-renew')
     INTO v_renew_result;
     IF (v_renew_result->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 21 failed: renew should succeed when it gets the lock first, got %', v_renew_result;
     END IF;
 
-    -- الجلسة B: الإلغاء يُنفذ بعد انتهاء التجديد
+    -- الإلغاء يُنفذ بعد انتهاء التجديد (تتابعي، ليس متزامناً)
     SELECT public.aani_sandbox_cancel_subscription(v_sub_id)
     INTO v_cancel_result;
     IF (v_cancel_result->>'ok')::boolean IS NOT TRUE THEN
@@ -650,19 +686,21 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_sub_id uuid;
     v_result jsonb;
     v_count integer;
 BEGIN
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
 
     -- تفعيل اشتراك جديد للاختبار
-    SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'sub-renew-replay-test')
+    SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-renew-replay-test')
     INTO v_result;
 
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND package_id = :'subPackageId' AND status = 'active'
+    WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
     LIMIT 1;
 
     -- التجديد الأول بالمفتاح الجديد
@@ -696,32 +734,37 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------
--- 23. استخدام مفتاح idempotency نفسه بالتزامن من مستخدمين مختلفين
+-- 23. استخدام مفتاح idempotency نفسه بالتزامن من مستخدمين مختلفين (تتابعي)
 -- ------------------------------------------------------------------
+-- ملاحظة: يتم التنفيذ تتابعياً في جلسة واحدة بمحاكاة السباق.
+-- للاختبار المتزامن الحقيقي، يُنْفَّذ التجديد من جلستين مستقلتين في وقت واحد.
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_sub_a uuid;
     v_sub_b uuid;
     v_result_a jsonb;
     v_result_b jsonb;
 BEGIN
     -- إنشاء اشتراكين لمستخدمين مختلفين
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'sub-shared-test-a')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-shared-test-a')
     INTO v_result_a;
 
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userB' || '"}';
-    SELECT public.aani_sandbox_activate_subscription(:'userB', :'subPackageId', 'sub-shared-test-b')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_b'));
+    SELECT public.aani_sandbox_activate_subscription(v_user_b, v_sub_package_id, 'sub-shared-test-b')
     INTO v_result_b;
 
     SELECT id INTO v_sub_a
     FROM sandbox.subscriptions
-    WHERE user_id = :'userA' AND idempotency_key IS NOT NULL AND status = 'active'
+    WHERE user_id = v_user_a AND status = 'active'
     ORDER BY started_at DESC LIMIT 1;
 
     SELECT id INTO v_sub_b
     FROM sandbox.subscriptions
-    WHERE user_id = :'userB' AND status = 'active'
+    WHERE user_id = v_user_b AND status = 'active'
     ORDER BY started_at DESC LIMIT 1;
 
     IF v_sub_a IS NULL OR v_sub_b IS NULL THEN
@@ -729,12 +772,12 @@ BEGIN
     END IF;
 
     -- الجلسة A (مستخدم A): التجديد بالمفتاح المشترك
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     SELECT public.aani_sandbox_renew_subscription(v_sub_a, 'shared-renew-key')
     INTO v_result_a;
 
     -- الجلسة B (مستخدم B): التجديد بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userB' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_b'));
     BEGIN
         SELECT public.aani_sandbox_renew_subscription(v_sub_b, 'shared-renew-key')
         INTO v_result_b;
@@ -747,25 +790,28 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------
--- 24. استخدام مفتاح idempotency نفسه بالتزامن من top_up و activate_subscription
+-- 24. استخدام مفتاح idempotency نفسه من top_up و activate_subscription (تتابعي)
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
+    v_sub_package_id uuid := current_setting('myapp.test_sub_package_id')::uuid;
     v_result_topup jsonb;
     v_result_activate jsonb;
 BEGIN
     -- الجلسة A: top_up بالمفتاح المشترك
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'cross-topup-activate-key', true)
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'cross-topup-activate-key', true)
     INTO v_result_topup;
     IF (v_result_topup->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 24 failed: top_up should succeed first, got %', v_result_topup;
     END IF;
 
     -- الجلسة B: activate_subscription بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     BEGIN
-        SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'cross-topup-activate-key')
+        SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'cross-topup-activate-key')
         INTO v_result_activate;
         RAISE EXCEPTION 'Test 24 failed: expected 40901 for cross-function key conflict';
     EXCEPTION WHEN OTHERS THEN
@@ -776,25 +822,28 @@ BEGIN
 END $$;
 
 -- ------------------------------------------------------------------
--- 25. استخدام مفتاح idempotency نفسه بالتزامن من top_up و grant_coins
+-- 25. استخدام مفتاح idempotency نفسه من top_up و grant_coins (تتابعي)
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result_topup jsonb;
     v_result_grant jsonb;
 BEGIN
     -- الجلسة A: top_up بالمفتاح المشترك
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'cross-topup-grant-key', true)
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'cross-topup-grant-key', true)
     INTO v_result_topup;
     IF (v_result_topup->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 25 failed: top_up should succeed first, got %', v_result_topup;
     END IF;
 
     -- الجلسة B: grant_coins بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'founderUser' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_founder'));
     BEGIN
-        SELECT public.aani_sandbox_grant_coins(:'userA', 100, 'cross-topup-grant-key', 'test grant')
+        SELECT public.aani_sandbox_grant_coins(v_user_a, 100, 'cross-topup-grant-key', 'test grant')
         INTO v_result_grant;
         RAISE EXCEPTION 'Test 25 failed: expected 40901 for cross-function key conflict';
     EXCEPTION WHEN OTHERS THEN
@@ -809,21 +858,24 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result_grant jsonb;
     v_result_topup jsonb;
 BEGIN
     -- الجلسة A: grant_coins بالمفتاح K
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'founderUser' || '"}';
-    SELECT public.aani_sandbox_grant_coins(:'userA', 100, 'grant-then-topup-fail-key', 'test grant')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_founder'));
+    SELECT public.aani_sandbox_grant_coins(v_user_a, 100, 'grant-then-topup-fail-key', 'test grant')
     INTO v_result_grant;
     IF (v_result_grant->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 26 failed: grant_coins should succeed, got %', v_result_grant;
     END IF;
 
     -- الجلسة B: top_up بالمفتاح نفسه مع simulate=false → يجب أن يُرفض بـ 40901
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     BEGIN
-        SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'grant-then-topup-fail-key', false)
+        SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'grant-then-topup-fail-key', false)
         INTO v_result_topup;
         RAISE EXCEPTION 'Test 26 failed: expected 40901 when top_up reuses grant_coins key';
     EXCEPTION WHEN OTHERS THEN
@@ -838,21 +890,25 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
+    v_gift_id uuid := current_setting('myapp.test_gift_id')::uuid;
+    v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result_topup jsonb;
     v_result_gift jsonb;
 BEGIN
     -- الجلسة A: top_up بالمفتاح K
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-then-gift-key', true)
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-then-gift-key', true)
     INTO v_result_topup;
     IF (v_result_topup->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 27 failed: top_up should succeed, got %', v_result_topup;
     END IF;
 
     -- الجلسة B: send_gift بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
     BEGIN
-        SELECT public.aani_sandbox_send_gift(:'userA', :'userB', :'giftId', 'topup-then-gift-key')
+        SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'topup-then-gift-key')
         INTO v_result_gift;
         RAISE EXCEPTION 'Test 27 failed: expected 40901 when send_gift reuses top_up key';
     EXCEPTION WHEN OTHERS THEN
@@ -867,21 +923,25 @@ END $$;
 -- ------------------------------------------------------------------
 DO $$
 DECLARE
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
+    v_gift_id uuid := current_setting('myapp.test_gift_id')::uuid;
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
     v_result_gift jsonb;
     v_result_grant jsonb;
 BEGIN
     -- الجلسة A: send_gift بالمفتاح K
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'userA' || '"}';
-    SELECT public.aani_sandbox_send_gift(:'userA', :'userB', :'giftId', 'gift-then-grant-key')
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_user_a'));
+    SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'gift-then-grant-key')
     INTO v_result_gift;
     IF (v_result_gift->>'ok')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 28 failed: send_gift should succeed, got %', v_result_gift;
     END IF;
 
     -- الجلسة B: grant_coins بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SET LOCAL request.jwt.claims = '{"sub": "' || :'founderUser' || '"}';
+    SET LOCAL request.jwt.claims = jsonb_build_object('sub', current_setting('myapp.test_founder'));
     BEGIN
-        SELECT public.aani_sandbox_grant_coins(:'userA', 50, 'gift-then-grant-key', 'test grant')
+        SELECT public.aani_sandbox_grant_coins(v_user_a, 50, 'gift-then-grant-key', 'test grant')
         INTO v_result_grant;
         RAISE EXCEPTION 'Test 28 failed: expected 40901 when grant_coins reuses send_gift key';
     EXCEPTION WHEN OTHERS THEN
@@ -896,5 +956,5 @@ END $$;
 -- =====================================================================
 DO $$
 BEGIN
-    RAISE NOTICE 'All sandbox isolation tests (1-28) passed successfully';
+    RAISE NOTICE 'All sandbox isolation tests (1-28) completed successfully';
 END $$;
