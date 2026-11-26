@@ -15,6 +15,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@/lib/supabase': path.resolve(rootDir, 'src/test/supabaseStub.ts'),
+      '@/components/SignedMedia': path.resolve(rootDir, 'src/test/signedMediaStub.tsx'),
+      '@/lib/mediaPreload': path.resolve(rootDir, 'src/test/mediaPreloadStub.ts'),
       '@': path.resolve(rootDir, 'src'),
     },
   },
