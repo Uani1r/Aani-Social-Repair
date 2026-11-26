@@ -40,8 +40,15 @@ create table if not exists public.profile_highlights (
   media_url text,
   media_type text not null default 'image',
   caption text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint aani_profile_highlights_position_check check (position >= 0)
 );
+
+-- نفس قيد المخطط الفعلي (20261212000000 سطر 35-36): الفهرس الفريد على
+-- (collection_id, position) يُفحص فوراً لكل صف، وهو ما يرفع 23505 إن أُعيد
+-- الترقيم في تحديث واحد. بدون هذا الفهرس لا يقيس هذا الاختبار المخطط الحقيقي.
+create unique index if not exists aani_profile_highlights_collection_position_unique_idx
+  on public.profile_highlights (collection_id, position);
 
 grant usage on schema public to authenticated, anon;
 grant select, insert, update, delete on public.profile_highlight_collections to authenticated;
