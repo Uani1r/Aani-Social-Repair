@@ -7,6 +7,7 @@ import GlobalErrorToast from '@/components/GlobalErrorToast';
 import PublishErrorPanel, { PublishErrorBadge } from '@/components/PublishErrorPanel';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CommentsDrawer from '@/components/CommentsDrawer';
+import PasswordRecoverySheet from '@/components/PasswordRecoverySheet';
 import NotificationsModal from '@/components/NotificationsModal';
 import Shell from '@/components/Shell';
 import StoriesBar from '@/components/StoriesBar';
@@ -29,7 +30,7 @@ import '@/index.css';
 
 function App() {
   useModalBodyScrollLock();
-  const { authLoading, authResolved, user, profile, setProfile, signOut } = useAppSession();
+  const { authLoading, authResolved, user, profile, setProfile, signOut, passwordRecovery, clearPasswordRecovery } = useAppSession();
   const { setTheme, resolvedTheme } = useTheme();
   useInteractionRealtime(user?.id);
 
@@ -207,6 +208,15 @@ function App() {
                   setSelectedPostForComments(null);
                   setSelectedCommentIdForComments(null);
                 }}
+              />
+            )}
+
+            {/* رابط استعادة كلمة المرور من البريد: تعيين الكلمة بلا تسجيل خروج. */}
+            {passwordRecovery && (
+              <PasswordRecoverySheet
+                open
+                onClose={clearPasswordRecovery}
+                onSaved={clearPasswordRecovery}
               />
             )}
           </Shell>

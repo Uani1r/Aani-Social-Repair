@@ -21,6 +21,7 @@ import ProfileSettingsPreferences, { type ProfileSettingsPreferenceScreen } from
 import SavedPostsView from '@/components/SavedPostsView';
 import HighlightCoverCropper from '@/components/HighlightCoverCropper';
 import UserIdentity from '@/components/UserIdentity';
+import { ProfileHighlightStoryStrip, ProfileHighlightsRow, ProfileMediaGrid, type ReorderBinding } from '@/components/profile/ProfileContentPreview';
 import { usePosts } from '@/hooks/usePosts';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { useOverlayBack } from '@/hooks/useOverlayBack';
@@ -30,6 +31,24 @@ import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS, type PublicProfileRow } from '@/lib/profileFields';
+import {
+  accountAuthErrorMessage,
+  DEFAULT_PHONE_COUNTRY_CODE,
+  formatPhoneForDisplay,
+  MIN_PASSWORD_LENGTH,
+  normalizePhoneToE164,
+  providerBadgeLabel,
+  readAccountAuthIdentity,
+} from '@/lib/accountAuth';
+import {
+  clearPendingPhoneChange,
+  planPhoneChangeStart,
+  promotePendingPhoneChange,
+  readPendingPhoneChange,
+  reconcileCompletedPhoneChange,
+  runWithPhoneChangeLock,
+  type PendingPhoneChangeRead,
+} from '@/lib/accountPhoneChange';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
@@ -394,7 +413,22 @@ function formatProfileBirthDate(value?: string | null): string {
   return new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
 }
 
-type ProfileReorderKind = 'highlights' | 'posts';
+// أنواع إعادة الترتيب: المنشورات، مجموعات أبرز القصص، والقصص داخل مجموعة.
+type ProfileReorderKind = 'highlights' | 'posts' | 'stories';
+
+// حجم صفحة ثابت لجلب مجموعات أبرز القصص وقصصها كاملة عبر .range — بلا حد
+// نهائي يُسقط صفوفاً ويجعل قائمة المعاينة جزئية.
+const PAGE_SIZE = 250;
+
+// حماية من استجابة تتجاهل range: خطأ صريح بدل قائمة جزئية أو حلقة لا تنتهي.
+const MAX_PAGES = 400;
+
+// تسمية نوع العنصر في إعلان قارئ الشاشة بعد التحريك.
+const PROFILE_REORDER_LABELS: Record<ProfileReorderKind, string> = {
+  posts: 'المنشور',
+  highlights: 'المجموعة',
+  stories: 'القصة',
+};
 
 type ProfileReorderGesture = {
   kind: ProfileReorderKind;
@@ -462,9 +496,20 @@ export default function ProfilePage({
   const [showProfileReorder, setShowProfileReorder] = useState(false);
   const [profilePostOrder, setProfilePostOrder] = useState<string[]>([]);
   const [profileReorderSaving, setProfileReorderSaving] = useState(false);
+  // نص يُعلن لقارئ الشاشة موضع العنصر بعد التحريك أو السحب (aria-live).
+  const [profileReorderAnnouncement, setProfileReorderAnnouncement] = useState('');
+  // هل حُمّلت كل صفحات أبرز القصص وقصصها بلا فشل؟ لا حفظ بترتيب جزئي قبل ذلك.
+  const [profileHighlightsComplete, setProfileHighlightsComplete] = useState(false);
+  // المجموعة المفتوحة داخل شاشة الترتيب لعرض قصصها الداخلية وترتيبها.
+  const [reorderStoriesCollectionId, setReorderStoriesCollectionId] = useState<string | null>(null);
+  const reorderStoriesCollection = reorderStoriesCollectionId
+    ? profileHighlights.find(collection => collection.id === reorderStoriesCollectionId) ?? null
+    : null;
   const [draggingReorderKey, setDraggingReorderKey] = useState<string | null>(null);
   const [dragOverReorderKey, setDragOverReorderKey] = useState<string | null>(null);
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
+  // نقرة المتصفح التي تأتي بعد كل سحب فعلي: تُستهلك كي لا تفتح العنصر.
+  const profileReorderDragConsumedClickRef = useRef(false);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
   const [feedViewerSource, setFeedViewerSource] = useState<'grid' | 'reposts' | 'tagged'>('grid');
@@ -502,6 +547,40 @@ export default function ProfilePage({
   const [phoneDraft, setPhoneDraft] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
   const [accountSettingsBusy, setAccountSettingsBusy] = useState(false);
+  // تأكيد Supabase لرقم الهاتف فقط (phone_confirmed_at) — لا يُعرض الرقم
+  // مؤكداً قبل نجاح التحقق.
+  const [authPhoneVerified, setAuthPhoneVerified] = useState(false);
+  // سجل طلب تغيير الهاتف محفوظ في localStorage (لا React state وحدها):
+  // يبقى بعد تحديث الصفحة أو إعادة فتح التطبيق، ويستمر منع رقم جديد ما دام
+  // قد يكون قائماً لدى Supabase. لا يُحفظ أي رمز OTP.
+  // القراءة fail-closed: لا سجل، سجل صالح، أو سجل لا يمكن التحقق منه.
+  const [phoneChangeRead, setPhoneChangeRead] = useState<PendingPhoneChangeRead>({ status: 'absent' });
+  const [phoneOtpCode, setPhoneOtpCode] = useState('');
+  // مشتقّة من القراءة المحفوظة: لا حالة ثانية قد تتعارض معها. لا حد زمني هنا:
+  // انتهاء صلاحية OTP لا يرفع الحجب ولا يُثبت إلغاء سجل phone_change.
+  const pendingPhoneChange = phoneChangeRead.status === 'valid' ? phoneChangeRead.pending : null;
+  const phoneChangeUnreadable = phoneChangeRead.status === 'unreadable';
+  // السجل غير القابل للتحقق لا يُعرض كأنه لا سجل: لا إدخال رمز بلا رقم معلّق
+  // معروف، ولا يبدأ طلب جديد حتى يُحل السجل.
+  const phoneChangeStep: 'request' | 'verify' | 'blocked' = phoneChangeUnreadable
+    ? 'blocked'
+    : pendingPhoneChange
+      ? 'verify'
+      : 'request';
+  const phoneChangeTarget = pendingPhoneChange?.phone ?? '';
+  const phoneChangeUnresolved = pendingPhoneChange?.state === 'requesting';
+  // سجل لرقم صار هو الرقم المؤكد في الحساب (تأكيد من جهاز أو جلسة أخرى) لا
+  // يمثل طلباً قائماً: يُمسح عند تحميل الشاشة، ويبقى معروضاً إن فشل مسحه.
+  const pendingPhoneChangeStale =
+    !!pendingPhoneChange && authPhoneVerified && pendingPhoneChange.phone === authPhone;
+  // كلمة المرور الحالية والجديدة وتأكيدها — تُمرَّر إلى Supabase مباشرة فقط.
+  const [currentPasswordDraft, setCurrentPasswordDraft] = useState('');
+  const [passwordConfirmDraft, setPasswordConfirmDraft] = useState('');
+  // أُرسل رابط تحقق إلى البريد لتعيين كلمة مرور لحساب Google/Apple.
+  const [passwordReauthSent, setPasswordReauthSent] = useState(false);
+  // يمنع طلبات تغيير الهاتف المتزامنة (Supabase يحذّر من طلبات phone_change
+  // متزامنة قد تربط رقماً غير مقصود).
+  const phoneChangeInFlightRef = useRef(false);
   const [blockedProfiles, setBlockedProfiles] = useState<Profile[]>([]);
   const [mutedProfiles, setMutedProfiles] = useState<Profile[]>([]);
   const [storyHiddenUserIds, setStoryHiddenUserIds] = useState<Set<string>>(new Set());
@@ -585,6 +664,9 @@ export default function ProfilePage({
   const ownProfilePosts = safeProfilePosts.filter(post => post.user_id === activeUserId && !post.reposter_id);
   const orderedEditablePosts = orderOwnedPostsInProfileSlots(ownProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
   const displayProfilePosts = orderOwnedPostsInProfileSlots(safeProfilePosts, activeUserId, Array.isArray(profilePostOrder) ? profilePostOrder : []);
+  // معاينة شبكة التعديل: نفس قائمة شبكة Profile الفعلية (بلا المنشورات النصية).
+  // إعادات نشر الآخرين تظهر في مواقعها بلا سحب، والمنشورات المملوكة وحدها تُسحب.
+  const reorderPreviewPosts = displayProfilePosts.filter(post => post.type !== 'text');
   // تبويب الفيديوهات: كل ما نشره المستخدم كريل أو فيديو في التغذية
   // (type = 'reel' أياً كانت الوجهة)، بترتيب زمني من الأحدث للأقدم.
   const profileVideoPosts = displayProfilePosts
@@ -762,7 +844,9 @@ export default function ProfilePage({
   const formattedBirthDate = formatProfileBirthDate(profileBirthDate);
   const showPublicBirthDate = Boolean(person?.show_birth_date && formattedBirthDate);
   const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
-  const authProviderLabel = authProvider === 'google' ? 'Google' : authProvider === 'apple' ? 'Apple' : authProvider === 'phone' ? 'الهاتف' : 'البريد الإلكتروني';
+  // شارة المزوّد تظهر لـGoogle/Apple/الهاتف فقط: لا شارة «البريد الإلكتروني»
+  // مكررة بجانب عنوان حقل البريد.
+  const authProviderBadgeLabel = providerBadgeLabel(authProvider);
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
@@ -989,21 +1073,31 @@ export default function ProfilePage({
         return;
       }
       const user = data.user;
-      const providers = Array.isArray(user?.app_metadata?.providers)
-        ? user.app_metadata.providers.filter((provider): provider is string => typeof provider === 'string')
-        : [];
-      const identities = user?.identities || [];
-      const primaryProvider = user?.app_metadata?.provider;
-      const linkedProvider = identities.find(identity => identity.provider === 'google' || identity.provider === 'apple')?.provider;
-      setAuthEmail(user?.email || '');
-      setAuthPhone(user?.phone || '');
-      setAuthProvider(typeof primaryProvider === 'string' ? primaryProvider : linkedProvider || providers[0] || 'email');
-      setHasPassword(providers.includes('email') || identities.some(identity => identity.provider === 'email'));
-      if (settingsScreen === 'account') setPhoneDraft(user?.phone || '');
+      const identity = readAccountAuthIdentity(user);
+      setAuthEmail(identity.email);
+      setAuthPhone(identity.phone);
+      setAuthPhoneVerified(identity.phoneConfirmed);
+      setAuthProvider(identity.primaryProvider);
+      setHasPassword(identity.hasPassword);
+      // طلب تغيير الهاتف المعلّق يُقرأ من التخزين المحلي لا من React state،
+      // فيبقى بعد تحديث الصفحة أو إعادة فتح التطبيق. السجل الذي لا يمكن
+      // التحقق منه لا يُقرأ كأنه لا سجل.
+      const record = readPendingPhoneChange(currentUserId);
+      // سجل لرقم صار هو الرقم المؤكد في الحساب (تأكيد من جهاز أو جلسة أخرى)
+      // لا يمثل طلباً قائماً: يُمسح. ولا يُمسح سجل لا يمكن التحقق منه.
+      const reconciliation = reconcileCompletedPhoneChange({
+        userId: currentUserId,
+        record,
+        currentPhone: identity.phone,
+        currentPhoneConfirmed: identity.phoneConfirmed,
+      });
+      const nextRecord = reconciliation.cleared ? readPendingPhoneChange(currentUserId) : record;
+      setPhoneChangeRead(nextRecord);
+      if (settingsScreen === 'account' && nextRecord.status === 'absent') setPhoneDraft(identity.phone || '');
     };
     void loadAuthSettings();
     return () => { active = false; };
-  }, [showSettingsOverlay, settingsScreen]);
+  }, [showSettingsOverlay, settingsScreen, currentUserId]);
 
   useEffect(() => {
     if (!showSettingsOverlay || (settingsScreen !== 'blocked' && settingsScreen !== 'muted')) return;
@@ -1088,19 +1182,81 @@ export default function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
-      const loadHighlightCollections = async () => {
-        const orderedResult = await supabase.from('profile_highlight_collections')
-          .select('id, user_id, title, cover_url, created_at, display_order')
-          .eq('user_id', activeUserId)
-          .order('display_order', { ascending: true })
-          .order('created_at', { ascending: true })
-          .limit(100);
-        if (!orderedResult.error || !/display_order/i.test(orderedResult.error.message)) return orderedResult;
-        return supabase.from('profile_highlight_collections')
+      type PageResult<T> = { data: T[] | null; error: { message: string } | null };
+
+      // جلب كامل بالصفحات: لا تُعرض صفحة واحدة على أنها القائمة كلها.
+      // ترتيب ثابت (display_order/position ثم created_at ثم id) حتى لا يتكرر
+      // صف أو يُسقط بين صفحتين عند تساوي قيم الترتيب.
+      // صفحة واحدة من مجموعات أبرز القصص. سلسلة select حرفية في كل فرع: نوع
+      // select في supabase-js يُحلَّل وقت الترجمة ولا يقبل اتحاد سلسلتين،
+      // والصفوف تُضيّق بالعمود المحدد صراحةً في الاستعلام نفسه.
+      const fetchCollectionPage = async (offset: number, includeDisplayOrder: boolean) => {
+        const from = offset;
+        const to = offset + PAGE_SIZE - 1;
+        if (includeDisplayOrder) {
+          const { data, error } = await supabase.from('profile_highlight_collections')
+            .select('id, user_id, title, cover_url, created_at, display_order')
+            .eq('user_id', activeUserId)
+            .order('display_order', { ascending: true })
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+          return { data: (data ?? null) as unknown as ProfileHighlightCollectionSummary[] | null, error };
+        }
+        const { data, error } = await supabase.from('profile_highlight_collections')
           .select('id, user_id, title, cover_url, created_at')
           .eq('user_id', activeUserId)
           .order('created_at', { ascending: true })
-          .limit(100);
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (data ?? null) as unknown as ProfileHighlightCollectionSummary[] | null, error };
+      };
+
+      const loadHighlightCollections = async (): Promise<PageResult<ProfileHighlightCollectionSummary>> => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const includeDisplayOrder = attempt === 0;
+          const rows: ProfileHighlightCollectionSummary[] = [];
+          let offset = 0;
+          while (true) {
+            const { data, error } = await fetchCollectionPage(offset, includeDisplayOrder);
+            if (error) {
+              // العمود display_order غير موجود (42703/PGRST204): نفس الاحتياط
+              // السابق، بلا ترتيب صريح عليه، من أول صفحة.
+              if (includeDisplayOrder && /display_order/i.test(error.message || '')) break;
+              return { data: null, error };
+            }
+            const page = data || [];
+            rows.push(...page);
+            if (page.length < PAGE_SIZE) return { data: rows, error: null };
+            if (offset >= PAGE_SIZE * MAX_PAGES) {
+              return { data: null, error: { message: 'عدد المجموعات أكبر من الحد الذي يمكن تحميله.' } };
+            }
+            offset += PAGE_SIZE;
+          }
+        }
+        return { data: null, error: { message: 'تعذر تحميل مجموعات أبرز القصص كاملة.' } };
+      };
+
+      const loadHighlightStories = async (): Promise<PageResult<ProfileHighlight>> => {
+        const rows: ProfileHighlight[] = [];
+        let offset = 0;
+        while (true) {
+          const { data, error } = await supabase.from('profile_highlights')
+            .select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at')
+            .eq('user_id', activeUserId)
+            .order('position', { ascending: true })
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(offset, offset + PAGE_SIZE - 1);
+          if (error) return { data: null, error };
+          const page = (data || []) as ProfileHighlight[];
+          rows.push(...page);
+          if (page.length < PAGE_SIZE) return { data: rows, error: null };
+          if (offset >= PAGE_SIZE * MAX_PAGES) {
+            return { data: null, error: { message: 'عدد قصص أبرز القصص أكبر من الحد الذي يمكن تحميله.' } };
+          }
+          offset += PAGE_SIZE;
+        }
       };
 
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
@@ -1112,7 +1268,7 @@ export default function ProfilePage({
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', activeUserId).eq('following_id', currentUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
         loadHighlightCollections(),
-        supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
+        loadHighlightStories(),
       ]);
 
       if (!active) return;
@@ -1151,6 +1307,13 @@ export default function ProfilePage({
           requestSent: Boolean(checkRequest),
         });
       }
+      // لا قائمة جزئية: إن فشلت أي صفحة تبقى الحالة السابقة كما هي، ويُمنع
+      // حفظ ترتيب مبني على قائمة ناقصة (profileHighlightsComplete = false).
+      if (collectionsError || highlightsError) {
+        setProfileHighlightsComplete(false);
+        return;
+      }
+
       const storiesByCollection = new Map<string, ProfileHighlight[]>();
       ((highlightRows || []) as ProfileHighlight[]).forEach(story => {
         const stories = storiesByCollection.get(story.collection_id) || [];
@@ -1158,9 +1321,12 @@ export default function ProfilePage({
         storiesByCollection.set(story.collection_id, stories);
       });
       const collectionData = (collectionRows || []) as ProfileHighlightCollectionSummary[];
+      // المجموعات الفارغة تبقى مخفية كما هي قاعدة العرض الحالية، حتى مع
+      // الجلب الكامل بالصفحات.
       setProfileHighlights(collectionData
         .map(collection => ({ ...collection, stories: storiesByCollection.get(collection.id) || [] }))
         .filter(collection => collection.stories.length > 0));
+      setProfileHighlightsComplete(true);
     };
     void loadProfileData();
     return () => { active = false; };
@@ -1363,42 +1529,326 @@ export default function ProfilePage({
     setIsEditingProfile(false);
   };
 
-  const savePhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+  // بعد أي تغيير ناجح يُقرأ المستخدم من Supabase مجدداً: الرقم أو التأكيد لا
+  // يُعرضان إلا بما يعيده Supabase نفسه.
+  const refreshAccountAuthIdentity = async () => {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) return null;
+    const identity = readAccountAuthIdentity(data.user);
+    setAuthEmail(identity.email);
+    setAuthPhone(identity.phone);
+    setAuthPhoneVerified(identity.phoneConfirmed);
+    setAuthProvider(identity.primaryProvider);
+    setHasPassword(identity.hasPassword);
+    return identity;
+  };
+
+  const openPhoneChangeDialog = () => {
+    if (accountSettingsBusy) return;
+    setPhoneDraft(pendingPhoneChange ? pendingPhoneChange.phone : phoneChangeUnreadable ? '' : authPhone);
+    setPhoneOtpCode('');
+    setShowPhoneModal(true);
+  };
+
+  const closePhoneChangeDialog = () => {
+    if (accountSettingsBusy) return;
+    setShowPhoneModal(false);
+    setPhoneOtpCode('');
+    if (!pendingPhoneChange) setPhoneDraft(authPhone);
+  };
+
+  /**
+   * طلب تغيير الهاتف: Supabase Auth يرسل رمز SMS إلى الرقم الجديد عبر
+   * updateUser({ phone }) — بلا phone_confirm وبلا خدمة إدارية. الرقم لا
+   * يُعتمد ولا يُعرض مؤكداً قبل verifyOtp.
+   *
+   * تحذير Supabase: طلبات phone_change القديمة/المتزامنة قد تربط رقماً غير
+   * مقصود، والعميل لا يملك واجهة لإلغاء طلب معلّق أو الاستعلام عن حالته.
+   * لذلك:
+   * - طلب واحد فقط في المرة (phoneChangeInFlightRef + accountSettingsBusy).
+   * - **يُحفظ سجل الطلب قبل أي استدعاء** (planPhoneChangeStart): إن تعذّر
+   *   حفظه في التخزين المحلي لا يبدأ الطلب أصلاً، فلا يبقى طلب خادمي بلا
+   *   حالة قابلة للاسترجاع بعد إعادة التحميل.
+   * - لا يبدأ رقم جديد ما دام طلب سابق قد يكون قائماً — بلا أي حد زمني.
+   * - الحالة تُقرأ من التخزين داخل القفل عند كل محاولة (لا React state):
+   *   سجل أحدث من الحالة المعروضة يمنع، وسجل لا يمكن التحقق منه يمنع.
+   * - عملية واحدة في المرة: phoneChangeInFlightRef + accountSettingsBusy
+   *   وقفل بين التبويبات (runWithPhoneChangeLock). إن لم يوفّر المتصفح
+   *   القفل أو كان مشغولاً لا يبدأ الطلب.
+   * - إعادة الإرسال للرقم المعلّق نفسه فقط عبر resend() الموثّقة.
+   */
+  const requestPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const nextPhone = phoneDraft.trim().replace(/[\s()-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(nextPhone)) {
-      toast.error('أدخل رقم الهاتف بالصيغة الدولية، مثل ‎+9665XXXXXXXX.');
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    const nextPhone = normalizePhoneToE164(phoneDraft);
+    if (!nextPhone) {
+      toast.error(`أدخل رقم هاتف صالحاً — الرمز الافتراضي ${DEFAULT_PHONE_COUNTRY_CODE} أو صيغة دولية تبدأ بـ +.`);
       return;
     }
-    if (nextPhone === authPhone || accountSettingsBusy) return;
+
+    phoneChangeInFlightRef.current = true;
     setAccountSettingsBusy(true);
     try {
-      const { data, error } = await supabase.functions.invoke('update-account-phone', { body: { phone: nextPhone } });
-      if (error) throw error;
-      if (data?.phone !== nextPhone) throw new Error('لم يتم إرجاع رقم الهاتف المحدّث من الخادم.');
-      setAuthPhone(nextPhone);
-      setPhoneDraft(nextPhone);
-      setShowPhoneModal(false);
-      toast.success('تم تحديث رقم الهاتف مباشرة.');
+      const outcome = await runWithPhoneChangeLock(currentUserId, async () => {
+        // قراءة جديدة داخل القفل من التخزين لا من React state: قد يبدأ تبويب
+        // آخر طلباً بعد تحميل هذه الشاشة.
+        const record = readPendingPhoneChange(currentUserId);
+        setPhoneChangeRead(record);
+        const plan = planPhoneChangeStart({
+          userId: currentUserId,
+          record,
+          nextPhone,
+          currentPhone: authPhone,
+        });
+        if (!plan.canStart) {
+          if (plan.reason === 'unchanged') {
+            toast.error('هذا هو رقم الهاتف الحالي على الحساب.');
+            return;
+          }
+          if (plan.reason === 'storage') {
+            toast.error('تغيير الهاتف غير متاح على هذا الجهاز حالياً: تعذر حفظ حالة الطلب في التخزين المحلي، ولا يبدأ طلب لا يمكن تتبعه. حاول بعد إعادة فتح التطبيق أو على جهاز آخر.');
+            return;
+          }
+          if (plan.reason === 'unreadable') {
+            toast.error(plan.read === 'storage-unavailable'
+              ? 'تعذر الوصول إلى سجل طلب الهاتف المحفوظ على هذا الجهاز، ولا يبدأ طلب جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase. أعد المحاولة بعد إعادة فتح التطبيق.'
+              : 'سجل طلب الهاتف المحفوظ على هذا الجهاز تالف أو لا يمكن التحقق منه، ولا يبدأ طلب جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase. حلّه يحتاج معالجة موثّقة من جهة Supabase أو الإدارة، ولا يُحل بمحو سجل الحماية المحلي.');
+            return;
+          }
+          if (plan.reason === 'resend') {
+            toast.info(`هناك طلب قائم إلى ${formatPhoneForDisplay(plan.pending.phone)}. أكّد رمزه أو أعد إرساله من نافذة الطلب بدل بدء طلب جديد.`);
+            return;
+          }
+          toast.error(`قد يكون طلب تغيير سابق ما زال معلّقاً لدى Supabase إلى ${formatPhoneForDisplay(plan.pending.phone)}. لا يمكن بدء رقم جديد قبل حلّه: أكّد الرمز أو أعد إرساله إلى الرقم نفسه، وإن تعذّر ذلك فالحل يحتاج معالجة موثّقة من جهة Supabase.`);
+          return;
+        }
+
+        // السجل محفوظ قبل أي استدعاء: لا يبدأ طلب بلا حالة قابلة للاسترجاع.
+        const { error } = await supabase.auth.updateUser({ phone: nextPhone });
+        if (error) {
+          // لا يمكن إثبات أن الخادم لم يُنشئ الطلب: يبقى السجل غير محسوم
+          // ويمنع أي رقم آخر حتى يُحل بتأكيد أو بمعالجة موثّقة.
+          setPhoneChangeRead(readPendingPhoneChange(currentUserId));
+          throw error;
+        }
+        const promoted = promotePendingPhoneChange(currentUserId, plan.record);
+        // الحالة المعروضة تُقرأ بعد الكتابة لا من الخطة: فشل الترقية يُبقي
+        // سجل النية غير محسوم ويمنع أي رقم آخر.
+        setPhoneChangeRead(readPendingPhoneChange(currentUserId));
+        if (!promoted) {
+          toast.error('بدأ طلب التحقق لكن تعذر حفظ حالته على الجهاز. لن يُسمح بطلب رقم آخر حتى يُحل: أكّد الرمز أو أعد إرساله إلى الرقم نفسه.');
+          return;
+        }
+        setPhoneOtpCode('');
+        toast.success('أرسلنا رمز تحقق SMS إلى الرقم الجديد. أدخل الرمز لتأكيده.');
+      });
+
+      if (outcome.status === 'unavailable') {
+        toast.error('تغيير الهاتف غير متاح في هذا المتصفح: لا يوفّر قفلاً بين تبويباته، ولا يبدأ طلب قد يتزامن مع طلب آخر. افتح التطبيق في متصفح يوفّر Web Locks.');
+      } else if (outcome.status === 'busy') {
+        toast.error('هناك طلب تغيير رقم قيد التنفيذ في تبويب آخر من هذا المتصفح. انتظر انتهاءه ثم أعد المحاولة.');
+      }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر تحديث رقم الهاتف.');
+      toast.error(accountAuthErrorMessage(error, 'تعذر إرسال رمز التحقق. حاول مرة أخرى.'));
+    } finally {
+      phoneChangeInFlightRef.current = false;
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  /**
+   * إعادة إرسال موثّقة لرمز الطلب القائم عبر resend({ type: 'phone_change' })
+   * — لا تنشئ طلب تغيير جديد ولا تستبدل الرقم المعلّق. الرقم يُقرأ من
+   * التخزين داخل القفل، لا من الحالة المعروضة.
+   */
+  const resendPhoneChangeCode = async () => {
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    phoneChangeInFlightRef.current = true;
+    setAccountSettingsBusy(true);
+    try {
+      const outcome = await runWithPhoneChangeLock(currentUserId, async () => {
+        const record = readPendingPhoneChange(currentUserId);
+        setPhoneChangeRead(record);
+        if (record.status !== 'valid') {
+          toast.error(record.status === 'unreadable'
+            ? 'تعذر قراءة سجل الطلب المحفوظ على هذا الجهاز، فلا يمكن تحديد الرقم المعلّق لإعادة إرسال رمزه.'
+            : 'لا يوجد طلب تغيير رقم معلّق على هذا الجهاز. ابدأ طلباً جديداً وأدخل رمزه.');
+          return;
+        }
+        const { error } = await supabase.auth.resend({
+          type: 'phone_change',
+          phone: record.pending.phone,
+        });
+        if (error) throw error;
+        toast.success('أعدنا إرسال رمز الطلب القائم إلى الرقم نفسه.');
+      });
+
+      if (outcome.status === 'unavailable') {
+        toast.error('إعادة إرسال الرمز غير متاحة في هذا المتصفح: لا يوفّر قفلاً بين تبويباته. أعد المحاولة في متصفح يوفّر Web Locks.');
+      } else if (outcome.status === 'busy') {
+        toast.error('هناك عملية تغيير رقم قيد التنفيذ في تبويب آخر من هذا المتصفح. انتظر انتهاءها ثم أعد المحاولة.');
+      }
+    } catch (error) {
+      toast.error(accountAuthErrorMessage(error, 'تعذر إعادة إرسال الرمز للطلب القائم. إن رفض Supabase إعادة الإرسال فلا يمكن حل الطلب من التطبيق ويحتاج معالجة موثّقة من جهة Supabase.'));
+    } finally {
+      phoneChangeInFlightRef.current = false;
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const confirmPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    const token = phoneOtpCode.replace(/\D/g, '');
+    if (token.length < 6) {
+      toast.error('أدخل رمز التحقق المكوّن من ستة أرقام.');
+      return;
+    }
+
+    phoneChangeInFlightRef.current = true;
+    setAccountSettingsBusy(true);
+    try {
+      const outcome = await runWithPhoneChangeLock(currentUserId, async () => {
+        // الرقم المعلّق يُقرأ من التخزين داخل القفل: قد يتغيّر من تبويب آخر.
+        const record = readPendingPhoneChange(currentUserId);
+        setPhoneChangeRead(record);
+        if (record.status !== 'valid') {
+          toast.error(record.status === 'unreadable'
+            ? 'تعذر قراءة سجل الطلب المحفوظ على هذا الجهاز، فلا يمكن تحديد الرقم المعلّق لتأكيد رمزه.'
+            : 'لا يوجد طلب تغيير رقم معلّق على هذا الجهاز. ابدأ طلباً جديداً وأدخل رمزه.');
+          return;
+        }
+        const pending = record.pending;
+        const { data, error } = await supabase.auth.verifyOtp({ phone: pending.phone, token, type: 'phone_change' });
+        if (error) throw error;
+        // نفس الهوية فقط: لا تُقبل نتيجة جلسة أخرى.
+        if (!data.user || data.user.id !== currentUserId) {
+          throw new Error('تعذر تأكيد هوية الحساب الحالي. أعد المحاولة.');
+        }
+        const identity = await refreshAccountAuthIdentity();
+        // لا يُعرض الرقم مؤكداً إلا إذا أعاد Supabase الرقم الجديد نفسه مؤكداً.
+        if (!identity || identity.phone !== pending.phone || !identity.phoneConfirmed) {
+          throw new Error('لم يؤكد Supabase الرقم الجديد بعد. أعد المحاولة أو أعد إرسال الرمز نفسه.');
+        }
+        // بعد إثبات Supabase فقط: يُمسح السجل المحلي ويرتفع منع الرقم الجديد.
+        // فشل المسح يُبلَّغ عنه ولا يُعامَل كأنه نجح.
+        const cleared = clearPendingPhoneChange(currentUserId);
+        setPhoneChangeRead(readPendingPhoneChange(currentUserId));
+        setPhoneOtpCode('');
+        setPhoneDraft(identity.phone);
+        setShowPhoneModal(false);
+        toast.success('تم تأكيد رقم الهاتف الجديد. جلستك على هذا الجهاز ما زالت قائمة.');
+        if (!cleared) {
+          toast.error('تعذر مسح سجل الطلب المحلي على هذا الجهاز بعد التأكيد، فيبقى منع بدء رقم جديد قائماً. السجل محفوظ، ويعيد التطبيق محاولة مسحه عند تحميل شاشة الحساب، وأي حلّ آخر يحتاج إجراءً موثّقاً من جهة Supabase أو الإدارة.');
+        }
+      });
+
+      if (outcome.status === 'unavailable') {
+        toast.error('تأكيد الرمز غير متاح في هذا المتصفح: لا يوفّر قفلاً بين تبويباته. أعد المحاولة في متصفح يوفّر Web Locks.');
+      } else if (outcome.status === 'busy') {
+        toast.error('هناك عملية تغيير رقم قيد التنفيذ في تبويب آخر من هذا المتصفح. انتظر انتهاءها ثم أعد المحاولة.');
+      }
+    } catch (error) {
+      const message = accountAuthErrorMessage(error, 'تعذر تأكيد الرمز. أعد المحاولة أو أعد إرسال الرمز نفسه.');
+      // لا يُعتبر الخطأ أو مسح الرمز إلغاءً للطلب: السجل المعلّق يبقى، ويُمسح
+      // الرمز المكتوب فقط.
+      if (/انتهت صلاحية|غير صحيح/.test(message)) setPhoneOtpCode('');
+      toast.error(`${message} الطلب المعلّق لم يُلغَ من Supabase، وإن تعذّر تأكيده أو إعادة إرساله فحلّه يحتاج معالجة موثّقة من جهة Supabase.`);
+    } finally {
+      phoneChangeInFlightRef.current = false;
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  /**
+   * إغلاق التنبيه المحلي فقط. Supabase لا يوفّر في العميل واجهة لإلغاء طلب
+   * phone_change، ولذلك يبقى السجل المعلّق ويبقى منع الرقم الجديد قائماً.
+   * لا مسار زمني يرفع هذا المنع.
+   */
+  const dismissPendingPhoneChangeNotice = () => {
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    setShowPhoneModal(false);
+    setPhoneOtpCode('');
+    toast.info('أُغلق التنبيه على هذا الجهاز فقط. طلب تغيير الهاتف لم يُلغَ في Supabase، ولا يمكن بدء رقم جديد حتى يُحل الطلب بتأكيد الرمز أو بمعالجة موثّقة من جهة Supabase.');
+  };
+
+  /** إعادة تحقق آمنة لحساب Google/Apple: رابط إلى بريد الحساب نفسه. */
+  const sendPasswordResetLink = async () => {
+    if (accountSettingsBusy) return;
+    if (!authEmail) {
+      toast.error('لا يوجد بريد مؤكد لهذا الحساب لإرسال رابط التحقق.');
+      return;
+    }
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+        redirectTo: window.location.origin,
+      });
+      if (error) throw error;
+      setPasswordReauthSent(true);
+      toast.success('أرسلنا رابط تحقق إلى بريد الحساب. افتح الرابط لتعيين كلمة المرور.');
+    } catch (error) {
+      toast.error(accountAuthErrorMessage(error, 'تعذر إرسال رابط التحقق. حاول مرة أخرى.'));
     } finally {
       setAccountSettingsBusy(false);
     }
   };
 
+  /**
+   * تغيير كلمة المرور:
+   * - حساب يملك كلمة مرور: تُتحقق كلمة المرور الحالية عند Supabase عبر
+   *   signInWithPassword (لا تُقارن محلياً ولا تُخزَّن) ثم updateUser.
+   *   لا signOut: الجلسة تبقى قائمة بعد التغيير.
+   * - حساب Google/Apple بلا كلمة مرور: رابط تحقق إلى البريد (أعلاه) ثم
+   *   نافذة التعيين — إعادة تحقق آمنة بلا ربط هوية جديد.
+   */
   const savePasswordChange = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (passwordDraft.length < 6 || accountSettingsBusy) return;
+    if (accountSettingsBusy || !hasPassword) return;
+    if (passwordDraft.length < MIN_PASSWORD_LENGTH) {
+      toast.error(`اختر كلمة مرور من ${MIN_PASSWORD_LENGTH} أحرف على الأقل.`);
+      return;
+    }
+    if (passwordDraft !== passwordConfirmDraft) {
+      toast.error('كلمتا المرور الجديدتان غير متطابقتين.');
+      return;
+    }
+    if (!currentPasswordDraft) {
+      toast.error('أدخل كلمة المرور الحالية للتحقق.');
+      return;
+    }
+    const credentials = authEmail
+      ? { email: authEmail, password: currentPasswordDraft }
+      : authPhone
+        ? { phone: authPhone, password: currentPasswordDraft }
+        : null;
+    if (!credentials) {
+      toast.error('تعذر تحديد طريقة التحقق من الحساب.');
+      return;
+    }
+
     setAccountSettingsBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password: passwordDraft });
-      if (error) throw error;
+      const { data: signInData, error: verifyError } = await supabase.auth.signInWithPassword(credentials);
+      if (verifyError) throw verifyError;
+      // نفس هوية المستخدم فقط: لا تُغيَّر كلمة مرور حساب آخر إن تغيّرت الجلسة.
+      if (!signInData.user || signInData.user.id !== currentUserId) {
+        throw new Error('تعذر التحقق من هوية الحساب نفسه. لم تُغيَّر كلمة المرور.');
+      }
+      const { data: currentUserData, error: currentUserError } = await supabase.auth.getUser();
+      if (currentUserError) throw currentUserError;
+      if (currentUserData.user?.id !== currentUserId) {
+        throw new Error('تعذر تأكيد الجلسة الحالية. لم تُغيَّر كلمة المرور.');
+      }
+      const { error: updateError } = await supabase.auth.updateUser({ password: passwordDraft });
+      if (updateError) throw updateError;
+      setCurrentPasswordDraft('');
       setPasswordDraft('');
-      setHasPassword(true);
-      toast.success('تم تحديث كلمة المرور.');
+      setPasswordConfirmDraft('');
+      await refreshAccountAuthIdentity();
+      toast.success('تم تحديث كلمة المرور. جلستك ما زالت قائمة.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر تحديث كلمة المرور.');
+      toast.error(accountAuthErrorMessage(error, 'تعذر تحديث كلمة المرور. تحقق من كلمة المرور الحالية.'));
     } finally {
       setAccountSettingsBusy(false);
     }
@@ -1850,8 +2300,64 @@ export default function ProfilePage({
     }
   };
 
+  // ترتيب قصص مجموعة محلياً: نفس قائمة position القادمة من Profile (لا فرز آخر).
+  const applyHighlightStoryOrder = (collectionId: string, orderedIds: string[]) => {
+    setProfileHighlights(current => current.map(collection => {
+      if (collection.id !== collectionId) return collection;
+      const storyById = new Map(collection.stories.map(story => [story.id, story]));
+      return {
+        ...collection,
+        stories: orderedIds.flatMap(id => storyById.has(id) ? [storyById.get(id)!] : []),
+      };
+    }));
+  };
+
+  // حفظ ترتيب القصص داخل مجموعة عبر RPC مستقلة (transaction واحدة في القاعدة)
+  // مع إعادة الترتيب السابق عند الفشل — مستقل عن حفظ بيانات الملف الشخصي.
+  const saveProfileHighlightStoryOrder = async (collectionId: string, nextIds: string[], previousIds: string[]) => {
+    const restorePreviousOrder = () => applyHighlightStoryOrder(collectionId, previousIds);
+    if (!supabaseConfigured) {
+      restorePreviousOrder();
+      toast.error('اتصال قاعدة البيانات غير متاح.');
+      return;
+    }
+
+    setProfileReorderSaving(true);
+    try {
+      const { error } = await supabase.rpc('aani_reorder_profile_highlight_stories', {
+        p_collection_id: collectionId,
+        p_ids: nextIds,
+      });
+      if (error) {
+        restorePreviousOrder();
+        console.error('[profile] تعذر حفظ ترتيب قصص المجموعة:', error);
+        toast.error(error.code === 'PGRST202' || error.code === '42883'
+          ? 'طبّق ترحيل إعادة ترتيب قصص أبرز القصص في Supabase أولاً.'
+          : 'تعذر حفظ ترتيب القصص. حاول مرة أخرى.');
+      } else {
+        toast.success('تم حفظ ترتيب القصص.');
+      }
+    } catch (error) {
+      restorePreviousOrder();
+      console.error('[profile] تعذر حفظ ترتيب قصص المجموعة:', error);
+      toast.error('تعذر حفظ ترتيب القصص. تحقق من الاتصال ثم حاول مرة أخرى.');
+    } finally {
+      setProfileReorderSaving(false);
+    }
+  };
+
+  // إعلان موضع العنصر بعد التحريك أو السحب لقارئ الشاشة (aria-live).
+  const announceReorderPosition = (kind: ProfileReorderKind, nextIds: string[], id: string) => {
+    const index = nextIds.indexOf(id);
+    if (index < 0) return;
+    setProfileReorderAnnouncement(`نُقل ${PROFILE_REORDER_LABELS[kind]} إلى الموضع ${index + 1} من ${nextIds.length}.`);
+  };
+
   const beginProfileReorder = (event: ReactPointerEvent<HTMLElement>, kind: ProfileReorderKind, id: string) => {
     if (!own || !showProfileReorder || profileReorderSaving) return;
+    // بلا قائمة كاملة لا سحب: كل قصص المجموعة يجب أن تكون محمّلة قبل ترتيبها.
+    if ((kind === 'highlights' || kind === 'stories') && !profileHighlightsComplete) return;
+    profileReorderDragConsumedClickRef.current = false;
     const previousGesture = profileReorderGestureRef.current;
     if (previousGesture?.timer !== null && previousGesture?.timer !== undefined) window.clearTimeout(previousGesture.timer);
     const gesture: ProfileReorderGesture = {
@@ -1897,6 +2403,8 @@ export default function ProfilePage({
     setDraggingReorderKey(null);
     setDragOverReorderKey(null);
     if (!gesture.active) return;
+    // سحب فعلي: النقرة التالية تُستهلك بدل فتح العنصر.
+    profileReorderDragConsumedClickRef.current = true;
 
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-profile-reorder-kind][data-profile-reorder-id]');
     const targetKind = target?.dataset.profileReorderKind;
@@ -1909,14 +2417,33 @@ export default function ProfilePage({
       if (nextIds === previousIds) return;
       const collectionById = new Map(profileHighlights.map(collection => [collection.id, collection]));
       setProfileHighlights(nextIds.flatMap(id => collectionById.has(id) ? [collectionById.get(id)!] : []));
+      announceReorderPosition('highlights', nextIds, gesture.id);
       void saveProfileContentOrder('highlights', nextIds, previousIds);
       return;
     }
 
+    if (gesture.kind === 'stories') {
+      const collection = reorderStoriesCollectionId
+        ? profileHighlights.find(item => item.id === reorderStoriesCollectionId) ?? null
+        : null;
+      if (!collection) return;
+      const previousIds = collection.stories.map(story => story.id);
+      const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
+      if (nextIds === previousIds) return;
+      applyHighlightStoryOrder(collection.id, nextIds);
+      announceReorderPosition('stories', nextIds, gesture.id);
+      void saveProfileHighlightStoryOrder(collection.id, nextIds, previousIds);
+      return;
+    }
+
+    // إعادات نشر الآخرين تظهر في مواقعها بلا سحب: لا يُرسل إلا معرفات
+    // المنشورات المملوكة، والقائمة المرسلة تبقى كاملة لعقد RPC الحالية.
     const previousIds = orderedEditablePosts.map(post => post.id);
+    if (!previousIds.includes(gesture.id) || !previousIds.includes(targetId)) return;
     const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
     if (nextIds === previousIds) return;
     setProfilePostOrder(nextIds);
+    announceReorderPosition('posts', nextIds, gesture.id);
     void saveProfileContentOrder('posts', nextIds, previousIds);
   };
 
@@ -1924,9 +2451,89 @@ export default function ProfilePage({
     const gesture = profileReorderGestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+    // لمس طويل انتهى بـpointercancel: لا تُفتح الصورة بعد الإلغاء.
+    if (gesture.active) profileReorderDragConsumedClickRef.current = true;
     profileReorderGestureRef.current = null;
     setDraggingReorderKey(null);
     setDragOverReorderKey(null);
+  };
+
+  // النقرة التي يرسلها المتصفح بعد كل سحب فعلي تُستهلك هنا: الفتح يبقى للنقر
+  // القصير وحده، فلا تفتح الصورة أو المجموعة بعد إفلاتها.
+  const consumeProfileReorderClick = () => {
+    if (!profileReorderDragConsumedClickRef.current) return false;
+    profileReorderDragConsumedClickRef.current = false;
+    return true;
+  };
+
+  // Safari يحدّد التمرير عند بداية اللمسة، وتغيير touch-action بعد اكتمال
+  // الضغط المطوّل لا يمنع تمريراً بدأ بالفعل. لذلك مستمع touchmove غير سلبي
+  // على المستند يُلغي التمرير فقط بينما السحب فعّال، ويترك اللمس العادي قبل
+  // 450ms يمرّر الصفحة والصف والشبكة كما هو. وtouchcancel يُلغي السحب وينظّف
+  // المؤقت والحالة مثل pointercancel.
+  useEffect(() => {
+    if (!showProfileReorder) return;
+    const stopPageScrollDuringDrag = (event: TouchEvent) => {
+      if (profileReorderGestureRef.current?.active) event.preventDefault();
+    };
+    const abandonTouchDrag = () => {
+      const gesture = profileReorderGestureRef.current;
+      if (!gesture) return;
+      if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+      if (gesture.active) profileReorderDragConsumedClickRef.current = true;
+      profileReorderGestureRef.current = null;
+      setDraggingReorderKey(null);
+      setDragOverReorderKey(null);
+    };
+    document.addEventListener('touchmove', stopPageScrollDuringDrag, { passive: false });
+    document.addEventListener('touchcancel', abandonTouchDrag);
+    return () => {
+      document.removeEventListener('touchmove', stopPageScrollDuringDrag);
+      document.removeEventListener('touchcancel', abandonTouchDrag);
+    };
+  }, [showProfileReorder]);
+
+  // ربط المعاينة الحية بالسحب: نفس المفروز ونفس المعالجات للأنواع الثلاثة.
+  const profileReorderBinding = (kind: ProfileReorderKind): ReorderBinding => ({
+    kind,
+    draggingKey: draggingReorderKey,
+    dropTargetKey: dragOverReorderKey,
+    disabled: profileReorderSaving,
+    begin: (event, reorderKind, id) => beginProfileReorder(event, reorderKind as ProfileReorderKind, id),
+    move: moveProfileReorderPointer,
+    end: endProfileReorderPointer,
+    cancel: cancelProfileReorderPointer,
+    consumeDragClick: consumeProfileReorderClick,
+  });
+
+  // فتح منشور الشبكة في عارضه الحالي — نفس سلوك شبكة Profile تماماً.
+  const openProfileGridPost = (post: Post) => {
+    if (profileContentTab === 'videos') {
+      setReelsPlayerSource('videos');
+      setReelsPlayerPostId(post.id);
+    } else if (profileContentTab === 'reposts') {
+      if (isProfileReel(post)) {
+        setReelsPlayerSource('reposts');
+        setReelsPlayerPostId(post.id);
+      } else {
+        setFeedViewerSource('reposts');
+        setFeedViewerPostId(post.id);
+      }
+    } else if (profileContentTab === 'tagged') {
+      if (isProfileReel(post)) {
+        setReelsPlayerSource('tagged');
+        setReelsPlayerPostId(post.id);
+      } else {
+        setFeedViewerSource('tagged');
+        setFeedViewerPostId(post.id);
+      }
+    } else if (isProfileReel(post)) {
+      setReelsPlayerSource('grid');
+      setReelsPlayerPostId(post.id);
+    } else {
+      setFeedViewerSource('grid');
+      setFeedViewerPostId(post.id);
+    }
   };
 
   if (!person) {
@@ -2045,63 +2652,48 @@ export default function ProfilePage({
                 </button>
               </div>
               {showProfileReorder && (
-                <section className="profile-reorder-panel" aria-label="إعادة ترتيب القصص والمنشورات">
-                  <p className="profile-reorder-hint">اضغط مطولاً على عنصر ثم اسحبه إلى موضعه الجديد.</p>
-                  <h3>أبرز القصص</h3>
-                  <div className="profile-reorder-list" role="list">
-                    {profileHighlights.length ? profileHighlights.map(collection => {
-                      const cover = collection.stories[0];
-                      const key = `highlights:${collection.id}`;
-                      return (
-                        <button
-                          key={collection.id}
-                          type="button"
-                          className={`profile-reorder-item${draggingReorderKey === key ? ' is-dragging' : ''}${dragOverReorderKey === key ? ' is-drop-target' : ''}`}
-                          data-profile-reorder-kind="highlights"
-                          data-profile-reorder-id={collection.id}
-                          onPointerDown={event => beginProfileReorder(event, 'highlights', collection.id)}
-                          onPointerMove={moveProfileReorderPointer}
-                          onPointerUp={endProfileReorderPointer}
-                          onPointerCancel={cancelProfileReorderPointer}
-                          disabled={profileReorderSaving}
-                          aria-label={`اضغط مطولاً لإعادة ترتيب أبرز القصص: ${collection.title}`}
-                        >
-                          <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
-                          <span className="profile-reorder-thumb">
-                            {collection.cover_url ? <SignedImage src={collection.cover_url} alt="" /> : cover?.media_url && cover.media_type === 'video' ? <span aria-hidden="true"><Play size={18} /></span> : cover?.media_url ? <SignedImage src={cover.media_url} alt="" /> : <span>{cover?.caption || collection.title}</span>}
-                          </span>
-                          <span className="profile-reorder-copy"><strong>{collection.title}</strong><small>{collection.stories.length} قصص</small></span>
-                        </button>
-                      );
-                    }) : <EmptyState className="py-6" />}
+                <section className="profile-reorder-panel profile-reorder-preview" aria-label="إعادة ترتيب القصص والمنشورات">
+                  <p className="profile-reorder-hint">اضغط مطولاً على أي مكان في المنشور أو دائرة القصة، ثم اسحب العنصر إلى موضعه الجديد. يُحفظ الترتيب فوراً ويظهر في ملفك الشخصي.</p>
+                  <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{profileReorderAnnouncement}</div>
+
+                  <div className="profile-reorder-section-head">
+                    <h3>أبرز القصص</h3>
+                    <button type="button" className="profile-reorder-manage" onClick={() => setShowHighlightsManager(true)}>إدارة المجموعات</button>
                   </div>
-                  <h3>المنشورات</h3>
-                  <div className="profile-reorder-list" role="list">
-                    {orderedEditablePosts.length ? orderedEditablePosts.map(post => {
-                      const key = `posts:${post.id}`;
-                      return (
-                        <button
-                          key={post.id}
-                          type="button"
-                          className={`profile-reorder-item${draggingReorderKey === key ? ' is-dragging' : ''}${dragOverReorderKey === key ? ' is-drop-target' : ''}`}
-                          data-profile-reorder-kind="posts"
-                          data-profile-reorder-id={post.id}
-                          onPointerDown={event => beginProfileReorder(event, 'posts', post.id)}
-                          onPointerMove={moveProfileReorderPointer}
-                          onPointerUp={endProfileReorderPointer}
-                          onPointerCancel={cancelProfileReorderPointer}
-                          disabled={profileReorderSaving}
-                          aria-label={`اضغط مطولاً لإعادة ترتيب المنشور: ${post.content || 'منشور وسائط'}`}
-                        >
-                          <span className="profile-reorder-drag-mark" aria-hidden="true">⠿</span>
-                          <span className="profile-reorder-thumb">
-                            {post.type === 'reel' ? getPostCoverUrl(post) ? <SignedImage src={getPostCoverUrl(post)} alt="" /> : <span aria-hidden="true"><Play size={18} /></span> : post.media_url ? <SignedImage src={post.media_url} alt="" /> : <span>{post.content.slice(0, 32) || 'منشور'}</span>}
-                          </span>
-                          <span className="profile-reorder-copy"><strong>{post.content || 'منشور وسائط'}</strong><small>{new Intl.DateTimeFormat('ar', { dateStyle: 'medium' }).format(new Date(post.created_at))}</small></span>
-                        </button>
-                      );
-                    }) : <EmptyState className="py-6" />}
+                  {profileHighlights.length ? (
+                    <ProfileHighlightsRow
+                      collections={profileHighlights}
+                      onSelect={collection => setReorderStoriesCollectionId(collection.id)}
+                      reorder={profileReorderBinding('highlights')}
+                    />
+                  ) : <EmptyState className="py-6" />}
+
+                  {reorderStoriesCollection && (
+                    <div className="profile-reorder-stories" aria-label={`قصص ${reorderStoriesCollection.title}`}>
+                      <div className="profile-reorder-section-head">
+                        <h3>{reorderStoriesCollection.title} — القصص</h3>
+                        <button type="button" className="profile-reorder-manage" onClick={() => setReorderStoriesCollectionId(null)}>إغلاق</button>
+                      </div>
+                      <p className="profile-reorder-hint">اضغط مطولاً على دائرة القصة ثم اسحبها لإعادة ترتيبها داخل المجموعة.</p>
+                      <ProfileHighlightStoryStrip
+                        collection={reorderStoriesCollection}
+                        reorder={profileReorderBinding('stories')}
+                      />
+                    </div>
+                  )}
+
+                  <div className="profile-reorder-section-head">
+                    <h3>المنشورات</h3>
                   </div>
+                  {reorderPreviewPosts.length ? (
+                    <ProfileMediaGrid
+                      posts={reorderPreviewPosts}
+                      reorder={profileReorderBinding('posts')}
+                      canReorder={post => post.user_id === activeUserId && !post.reposter_id}
+                      className="profile-reorder-grid"
+                    />
+                  ) : <EmptyState className="py-6" />}
+
                   {profileReorderSaving && <p className="profile-reorder-saving" role="status">جارٍ حفظ الترتيب…</p>}
                 </section>
               )}
@@ -2399,13 +2991,33 @@ export default function ProfilePage({
                     <span className="profile-settings-copy">
                       <span className="profile-settings-label">البريد الإلكتروني</span>
                       <span className="profile-settings-email-value" dir="ltr">
-                        <span className="profile-settings-description">{authEmail || 'جارٍ التحميل'}</span>
-                        <span className="profile-settings-provider-badge">{authProviderLabel}</span>
+                        <span className="profile-settings-description">{authEmail || 'غير مضاف'}</span>
+                        {authProviderBadgeLabel && <span className="profile-settings-provider-badge">{authProviderBadgeLabel}</span>}
                       </span>
+                      <span className="profile-settings-description">البريد للعرض فقط — لا يمكن تغييره من إعدادات الحساب.</span>
                     </span>
                   </div>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => { setPhoneDraft(authPhone); setShowPhoneModal(true); }}>
-                    <span className="profile-settings-copy"><span className="profile-settings-label">رقم الهاتف</span><span className="profile-settings-description" dir="ltr">{authPhone || 'غير مضاف'}</span></span>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={openPhoneChangeDialog} disabled={accountSettingsBusy}>
+                    <span className="profile-settings-copy">
+                      <span className="profile-settings-label">رقم الهاتف</span>
+                      <span className="profile-settings-description" dir="ltr">{authPhone ? formatPhoneForDisplay(authPhone) : 'غير مضاف'}</span>
+                      {pendingPhoneChange && !pendingPhoneChangeStale && (
+                        <span className="profile-settings-description" dir="auto">
+                          {`طلب ${phoneChangeUnresolved ? 'غير محسوم' : 'معلّق'} إلى ${formatPhoneForDisplay(pendingPhoneChange.phone)} — لا يمكن بدء رقم جديد حتى يُحل`}
+                        </span>
+                      )}
+                      {pendingPhoneChangeStale && (
+                        <span className="profile-settings-description" dir="auto">
+                          سجل طلب محلي إلى رقمك المؤكد — لا يوجد طلب قائم، ويُمسح السجل تلقائياً عند تحميل الشاشة.
+                        </span>
+                      )}
+                      {phoneChangeUnreadable && (
+                        <span className="profile-settings-description" dir="auto">
+                          تعذر قراءة سجل طلب الهاتف المحفوظ على هذا الجهاز — لا يمكن بدء رقم جديد حتى يُحل السجل.
+                        </span>
+                      )}
+                    </span>
+                    {authPhone && authPhoneVerified && <span className="profile-settings-provider-badge">مؤكد</span>}
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('password')}>
@@ -2422,13 +3034,47 @@ export default function ProfilePage({
                   <button type="button" className="profile-settings-danger" onClick={() => { setDeleteAccountConfirmation(''); setShowDeleteAccountConfirmation(true); }}>حذف الحساب نهائياً</button>
                 </>
               ) : settingsScreen === 'password' ? (
-                <form onSubmit={savePasswordChange}>
-                  <p className="profile-settings-note">اختر كلمة مرور لا تقل عن 6 أحرف. سيتم حفظها مباشرة دون إرسال رسالة بريد إلكتروني.</p>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-password">{hasPassword ? 'كلمة المرور الجديدة' : 'كلمة المرور الاحتياطية الجديدة'}</label>
-                    <input id="settings-password" type="password" autoComplete="new-password" minLength={6} required value={passwordDraft} onChange={event => setPasswordDraft(event.target.value)} />
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || passwordDraft.length < 6}>{accountSettingsBusy ? 'جارٍ الحفظ...' : hasPassword ? 'تحديث كلمة المرور' : 'تعيين كلمة المرور'}</button>
-                  </div>
+                <form onSubmit={savePasswordChange} className="space-y-4">
+                  {hasPassword ? (
+                    <>
+                      <p className="profile-settings-note">أدخل كلمة المرور الحالية للتحقق منها عند Supabase، ثم كلمة المرور الجديدة مرتين. لا تُخزَّن كلمات المرور في التطبيق، وجلستك تبقى قائمة.</p>
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-current-password">كلمة المرور الحالية</label>
+                        <input id="settings-current-password" type="password" autoComplete="current-password" required value={currentPasswordDraft} onChange={event => setCurrentPasswordDraft(event.target.value)} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="profile-settings-note">هذا الحساب مسجّل عبر {authProvider === 'apple' ? 'Apple' : 'Google'} ولا يملك كلمة مرور محلية. سنرسل رابط تحقق إلى بريد الحساب ({authEmail || 'غير متاح'}) لتعيين كلمة مرور — بلا ربط هوية جديد وبلا حذف أزرار الدخول.</p>
+                      <button type="button" className="profile-settings-action" onClick={() => void sendPasswordResetLink()} disabled={accountSettingsBusy || !authEmail}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رابط التحقق'}</button>
+                      {passwordReauthSent && <p className="profile-settings-note">افتح الرابط في بريدك، ثم عيّن كلمة المرور من النافذة التي ستظهر بعد التحقق.</p>}
+                    </>
+                  )}
+                  {hasPassword && (
+                    <>
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-password">كلمة المرور الجديدة</label>
+                        <input id="settings-password" type="password" autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} required value={passwordDraft} onChange={event => setPasswordDraft(event.target.value)} />
+                      </div>
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-password-confirm">تأكيد كلمة المرور الجديدة</label>
+                        <input id="settings-password-confirm" type="password" autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} required value={passwordConfirmDraft} onChange={event => setPasswordConfirmDraft(event.target.value)} />
+                      </div>
+                      <button
+                        className="profile-settings-action"
+                        type="submit"
+                        disabled={accountSettingsBusy || !currentPasswordDraft || passwordDraft.length < MIN_PASSWORD_LENGTH || passwordDraft !== passwordConfirmDraft}
+                      >
+                        {accountSettingsBusy ? 'جارٍ الحفظ...' : 'تحديث كلمة المرور'}
+                      </button>
+                      {authEmail && (
+                        <button type="button" className="profile-settings-secondary-action" onClick={() => void sendPasswordResetLink()} disabled={accountSettingsBusy}>
+                          لا تملك كلمة المرور الحالية؟ أرسل رابط تحقق إلى البريد
+                        </button>
+                      )}
+                      {passwordReauthSent && <p className="profile-settings-note">افتح رابط التحقق في بريدك، ثم عيّن كلمة المرور من النافذة التي ستظهر بعد التحقق.</p>}
+                    </>
+                  )}
                 </form>
               ) : settingsScreen === 'security' ? (
                 <>
@@ -2551,20 +3197,55 @@ export default function ProfilePage({
             </div>
           )}
           {showPhoneModal && (
-            <div className="profile-settings-dialog-backdrop" onClick={() => { if (!accountSettingsBusy) setShowPhoneModal(false); }}>
+            <div className="profile-settings-dialog-backdrop" onClick={closePhoneChangeDialog}>
               <section role="dialog" aria-modal="true" aria-labelledby="phone-modal-title" className="profile-settings-dialog" onClick={event => event.stopPropagation()}>
-                <h3 id="phone-modal-title">تحديث رقم الهاتف</h3>
-                <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية. سيتم حفظه مباشرة دون رمز SMS.</p>
-                <form onSubmit={savePhoneChange}>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-phone">رقم الهاتف</label>
-                    <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+9665XXXXXXXX" maxLength={20} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
+                <h3 id="phone-modal-title">{phoneChangeStep === 'request' ? 'تغيير رقم الهاتف' : phoneChangeStep === 'blocked' ? 'سجل طلب الهاتف' : 'تأكيد الرقم الجديد'}</h3>
+                {phoneChangeStep === 'request' ? (
+                  <form onSubmit={requestPhoneChange}>
+                    <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية أو المحلية — الرمز الافتراضي {DEFAULT_PHONE_COUNTRY_CODE} للعراق. سيصل رمز تحقق SMS إلى الرقم الجديد، ولا يُعتمد الرقم قبل إدخال الرمز.</p>
+                    <p className="profile-settings-note">لا يمكن بدء رقم جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase — لا يوفّر Supabase إلغاءً له من التطبيق.</p>
+                    <div className="profile-settings-field">
+                      <label htmlFor="settings-phone">رقم الهاتف</label>
+                      <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder={`${DEFAULT_PHONE_COUNTRY_CODE} 7XX XXX XXXX`} maxLength={24} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
+                    </div>
+                    <div className="profile-settings-dialog-actions">
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={closePhoneChangeDialog}>إلغاء</button>
+                      <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim()}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رمز التحقق'}</button>
+                    </div>
+                  </form>
+                ) : phoneChangeStep === 'verify' ? (
+                  <form onSubmit={confirmPhoneChange}>
+                    <p className="profile-settings-note">أرسلنا رمزاً إلى {formatPhoneForDisplay(phoneChangeTarget)}. أدخل الرمز لاعتماد الرقم — لا يُعرض الرقم مؤكداً قبل تأكيد Supabase.</p>
+                    <div className="profile-settings-field">
+                      <label htmlFor="settings-phone-code">رمز التحقق</label>
+                      <input id="settings-phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} required value={phoneOtpCode} onChange={event => setPhoneOtpCode(event.target.value.replace(/\D/g, ''))} />
+                    </div>
+                    <p className="profile-settings-note" dir="auto">
+                      {phoneChangeUnresolved
+                        ? 'حالة هذا الطلب غير محسومة على الجهاز (بدأ الطلب أو لم تُحفظ نتيجته). لا يمكن بدء رقم جديد حتى يُحل بتأكيد الرمز أو بمعالجة موثّقة من جهة Supabase.'
+                        : 'لا يمكن بدء رقم جديد حتى يُحل هذا الطلب. انتهاء صلاحية رمز SMS لا يُثبت إلغاء سجل phone_change لدى Supabase، ولا يرفع هذا المنع.'}
+                    </p>
+                    <div className="profile-settings-dialog-actions">
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={dismissPendingPhoneChangeNotice}>إغلاق (يبقى الطلب)</button>
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => void resendPhoneChangeCode()}>إعادة إرسال الرمز</button>
+                      <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || phoneOtpCode.length < 6}>{accountSettingsBusy ? 'جارٍ التحقق...' : 'تأكيد الرقم'}</button>
+                    </div>
+                  </form>
+                ) : (
+                  <div>
+                    <p className="profile-settings-note" dir="auto">
+                      {phoneChangeRead.status === 'unreadable' && phoneChangeRead.reason === 'storage-unavailable'
+                        ? 'تعذر الوصول إلى سجل طلب الهاتف المحفوظ على هذا الجهاز (التخزين المحلي غير متاح أو محظور). لا يبدأ التطبيق طلباً جديداً في هذه الحالة لأن طلباً سابقاً قد يكون معلّقاً لدى Supabase.'
+                        : 'سجل طلب الهاتف المحفوظ على هذا الجهاز تالف ولا يمكن التحقق منه. لا يبدأ التطبيق طلباً جديداً في هذه الحالة لأن طلباً سابقاً قد يكون معلّقاً لدى Supabase، ولا يمكن إدخال رمز بلا رقم معلّق معروف.'}
+                    </p>
+                    <p className="profile-settings-note" dir="auto">
+                      حلّ هذا يحتاج معالجة موثّقة من جهة Supabase (أو لوحة تحكم المشروع أو الإدارة). لا يُقترح هنا محو بيانات الموقع أو سجل الحماية المحلي: قد يمحو الحماية بينما يظل طلب phone_change قائماً لدى Supabase، فيسمح بطلب جديد غير آمن.
+                    </p>
+                    <div className="profile-settings-dialog-actions">
+                      <button type="button" className="profile-settings-dialog-cancel" onClick={closePhoneChangeDialog}>إغلاق</button>
+                    </div>
                   </div>
-                  <div className="profile-settings-dialog-actions">
-                    <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => setShowPhoneModal(false)}>إلغاء</button>
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim() || phoneDraft.trim() === authPhone}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'حفظ الرقم'}</button>
-                  </div>
-                </form>
+                )}
               </section>
             </div>
           )}
@@ -2788,39 +3469,12 @@ export default function ProfilePage({
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-bold text-[#F7F9F9]">أبرز القصص</h2>
           </div>
-          <div className="no-scrollbar flex items-center gap-4 overflow-x-auto pb-2">
-            {own && (
-              <button id="openModalBtn" type="button" onClick={() => setShowHighlightsManager(true)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label="إضافة إلى أبرز القصص">
-                <span className="flex h-[68px] w-[68px] items-center justify-center rounded-full border border-dashed border-[#71767B] bg-[#111] text-[#1D9BF0] transition hover:border-[#1D9BF0] hover:bg-[#1D9BF0]/10">
-                  <svg className="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                    <path d="M12 5v14M5 12h14" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-                  </svg>
-                </span>
-                <span className="max-w-[72px] truncate text-[11px] text-[#BBBBBB]">إضافة</span>
-              </button>
-            )}
-            {profileHighlights.map(collection => {
-              const cover = collection.stories[0];
-              return (
-                <button key={collection.id} type="button" onClick={() => setSelectedHighlightCollection(collection)} className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5" aria-label={`عرض مجموعة ${collection.title}`}>
-                  <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
-                    <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-                      {collection.cover_url ? (
-                        <SignedImage src={collection.cover_url} className="h-full w-full object-cover" alt="" />
-                      ) : cover?.media_url && cover.media_type === 'video' ? (
-                        <span className="grid h-full w-full place-items-center text-neutral-400" aria-hidden="true"><Play size={18} /></span>
-                      ) : cover?.media_url ? (
-                        <SignedImage src={cover.media_url} className="h-full w-full object-cover" alt="" />
-                      ) : (
-                        <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{cover?.caption || collection.title}</span>
-                      )}
-                    </span>
-                  </span>
-                  <span className="max-w-[88px] truncate text-[11px] text-[#BBBBBB]">{collection.title}</span>
-                </button>
-              );
-            })}
-          </div>
+          <ProfileHighlightsRow
+            collections={profileHighlights}
+            onSelect={setSelectedHighlightCollection}
+            onAdd={own ? () => setShowHighlightsManager(true) : undefined}
+            addButtonId="openModalBtn"
+          />
         </div>
       )}
 
@@ -2889,104 +3543,11 @@ export default function ProfilePage({
           return <EmptyState className="min-h-64" />;
         }
         return (
-          <div className="mt-4 grid grid-cols-3 gap-[2px] bg-black content-fade-in">
-            {mediaPosts.map(post => {
-              const isReel = post.type === 'reel' || getPostDestination(post) === 'reels';
-              const mediaUrls = post.media_urls?.length ? post.media_urls : post.media_url ? [post.media_url] : [];
-              const cover = mediaUrls[0] || '';
-              // الغلاف المختار عند النشر: صورة خفيفة تُعرض بدل عنصر الفيديو
-              const postCoverUrl = getPostCoverUrl(post);
-              const isMultiImage = mediaUrls.length > 1;
-              return (
-                <button
-                  key={post.id}
-                  type="button"
-                  onClick={() => {
-                    if (profileContentTab === 'videos') {
-                      // من تبويب الفيديوهات: كل الفيديوهات تفتح مشغل
-                      // الريلز الكامل متسلسلاً بين فيديوهات هذا التبويب.
-                      setReelsPlayerSource('videos');
-                      setReelsPlayerPostId(post.id);
-                    } else if (profileContentTab === 'reposts') {
-                      // من تبويب الريبوست: ريلز → مشغل الريلز محصوراً
-                      // بريلوزات الريبوست، وغيرها → التغذية بين ريبوستاته.
-                      if (isProfileReel(post)) {
-                        setReelsPlayerSource('reposts');
-                        setReelsPlayerPostId(post.id);
-                      } else {
-                        setFeedViewerSource('reposts');
-                        setFeedViewerPostId(post.id);
-                      }
-                    } else if (profileContentTab === 'tagged') {
-                      // من تبويب الإشارات: ريلز → مشغل الريلز بين المشار
-                      // فيها، وغيرها (صور/نصوص/فيديو تغذية) → التغذية الكاملة.
-                      if (isProfileReel(post)) {
-                        setReelsPlayerSource('tagged');
-                        setReelsPlayerPostId(post.id);
-                      } else {
-                        setFeedViewerSource('tagged');
-                        setFeedViewerPostId(post.id);
-                      }
-                    } else if (isProfileReel(post)) {
-                      setReelsPlayerSource('grid');
-                      setReelsPlayerPostId(post.id);
-                    } else {
-                      setFeedViewerSource('grid');
-                      setFeedViewerPostId(post.id);
-                    }
-                  }}
-                  aria-label={profileContentTab !== 'posts' || isReel ? 'فتح الريل في عارض الملف الشخصي' : 'فتح المنشور في عارض الملف الشخصي'}
-                  className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
-                >
-                  {isReel ? (
-                    postCoverUrl ? (
-                      <SignedImage
-                        src={thumbnailUrl(postCoverUrl)}
-                        alt={post.content.slice(0, 80)}
-                        loading="lazy"
-                        decoding="async"
-                        className="h-full w-full object-cover"
-                      />
-                    ) : cover ? (
-                      <span className="grid h-full w-full place-items-center text-neutral-400"><Play size={28} aria-hidden="true" /></span>
-                    ) : (
-                      <span className="grid h-full w-full place-items-center text-neutral-600"><Play size={28} aria-hidden="true" /></span>
-                    )
-                  ) : cover ? (
-                    <SignedImage
-                      src={thumbnailUrl(cover)}
-                      alt={post.content.slice(0, 80)}
-                      loading="lazy"
-                      decoding="async"
-                      className="h-full w-full object-cover"
-                    />
-                  ) : post.type === 'text' ? (
-                    <span className="flex h-full w-full items-center justify-center overflow-hidden p-2 text-center text-[11px] leading-5 text-neutral-200">
-                      {post.content?.slice(0, 90) || 'منشور'}
-                    </span>
-                  ) : (
-                    <span className="grid h-full w-full place-items-center text-neutral-600"><Camera size={24} aria-hidden="true" /></span>
-                  )}
-                  {isReel && (
-                    <span aria-hidden="true" className="absolute right-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="4" width="20" height="16" rx="4" /><path d="M10 9.2v5.6a.8.8 0 0 0 1.22.68l4.4-2.8a.8.8 0 0 0 0-1.36l-4.4-2.8A.8.8 0 0 0 10 9.2Z" fill="black" /></svg>
-                    </span>
-                  )}
-                  {profileContentTab === 'reposts' && (
-                    <span aria-hidden="true" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                    </span>
-                  )}
-                  {post.type === 'text' && (
-                    <span aria-hidden="true" className="absolute right-2 top-2 z-[2] rounded-full bg-black/60 px-1.5 py-0.5 text-[10px] font-bold text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">نص</span>
-                  )}
-                  {isMultiImage && (
-                    <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <ProfileMediaGrid
+            posts={mediaPosts}
+            variant={profileContentTab}
+            onOpenPost={openProfileGridPost}
+          />
         );
       })()}
       {!isPrivateLocked && feedViewerPostId && (feedViewerSource === 'reposts'

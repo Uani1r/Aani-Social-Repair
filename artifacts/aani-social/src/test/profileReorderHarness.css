@@ -1,0 +1,40 @@
+/*
+ * Test-only geometry for the profile reordering harness.
+ *
+ * The harness page does not run the app's Tailwind build, so this file gives
+ * every preview tile and circle a fixed box: drag endpoints (the drag handle,
+ * the target item centre) are then deterministic in Chromium and WebKit. The
+ * reordering rules themselves — touch-action, handle placement, drag and drop
+ * states — are the real ones from src/pages/ProfilePage.css, which the harness
+ * also imports.
+ */
+
+[data-testid='harness-ready'] > section {
+  display: block;
+  margin-bottom: 16px;
+}
+
+[data-testid='harness-ready'] [data-profile-reorder-kind] {
+  width: 100px;
+  height: 120px;
+  margin: 0 0 8px;
+}
+
+[data-testid='harness-ready'] section[aria-label='highlights'] > div,
+[data-testid='harness-ready'] section[aria-label='collection stories'] > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+[data-testid='harness-ready'] section[aria-label='media grid'] > div {
+  display: grid;
+  grid-template-columns: repeat(3, 100px);
+  gap: 6px;
+}
+
+[data-testid='harness-ready'] section[aria-label='media grid'] > div > button {
+  width: 100px;
+  height: 120px;
+}
