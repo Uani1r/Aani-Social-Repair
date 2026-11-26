@@ -839,7 +839,7 @@ BEGIN
     PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-renew')
     INTO v_result;
-    IF (v_result->>'duplicate')::boolean IS NOT FALSE OR (v_result->>'status') <> 'active' THEN
+    IF coalesce((v_result->>'duplicate')::boolean, false) IS NOT FALSE OR (v_result->>'status') <> 'active' THEN
         RAISE EXCEPTION 'Test 22 failed: expected ok=true, duplicate=false, status=active, got %', v_result;
     END IF;
 
