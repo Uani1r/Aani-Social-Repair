@@ -218,6 +218,24 @@ test('a rate-limited login is told apart without revealing anything about the nu
   );
 });
 
+test('a captcha token is sent when provided, and its server refusal is shown as-is', async () => {
+  const accepted = fakeInvoker(() => ({ ok: true, data: { access_token: 'a', refresh_token: 'r' } }));
+  await loginWithPhone(NEW_PHONE, PASSWORD, accepted.invoke, 'turnstile-token');
+  assert.deepEqual(Object.keys(accepted.calls[0].body).sort(), ['captchaToken', 'password', 'phone']);
+
+  const noToken = fakeInvoker(() => ({ ok: false, status: 400, message: 'تحقق الأمان مطلوب.' }));
+  assert.deepEqual(
+    await loginWithPhone(NEW_PHONE, PASSWORD, noToken.invoke),
+    { ok: false, message: 'تحقق الأمان مطلوب.' },
+  );
+
+  const gated = fakeInvoker(() => ({ ok: false, status: 503, message: 'حماية CAPTCHA لم تُفعّل بعد.' }));
+  assert.deepEqual(
+    await loginWithPhone(NEW_PHONE, PASSWORD, gated.invoke),
+    { ok: false, message: 'حماية CAPTCHA لم تُفعّل بعد.' },
+  );
+});
+
 test('the invoker turns a function error into the status and the Arabic message', async () => {
   const invoker = createPhoneFunctionInvoker({
     invoke: async () => ({

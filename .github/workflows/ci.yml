@@ -95,6 +95,11 @@ jobs:
       - name: Unit tests @workspace/aani-social (account phone alias)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountPhoneAlias.test.ts
 
+      # مسار الدخول: قاعدة حاسمة واحدة بين البريد والهاتف واسم المستخدم،
+      # وأسماء المستخدمين الرقمية القصيرة والطويلة لا تُقرأ كأرقام هاتف.
+      - name: Unit tests @workspace/aani-social (login identifier)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountAuth.test.ts
+
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
   # the part of the schema the migration and the test touch, so this proves the
@@ -663,3 +668,33 @@ jobs:
 
       - name: Re-run the alias assertions after a second apply
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_phone_alias.test.sql
+
+
+  # Real Deno type check and tests for the two phone Edge Functions. No
+  # Supabase project, no network calls and no deployment are involved: the
+  # functions are type checked with `deno check`, and the shared helpers are
+  # exercised with a fake fetch (phone normalisation, session gate, the
+  # two-token session, failure bodies, log redaction, CAPTCHA verification),
+  # together with source assertions (no console calls in the functions, no
+  # service_role or email in any response, the session check before any RPC).
+  phone-edge-functions:
+    name: Phone Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno 2
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno check (account-phone-alias and login-with-phone)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno check account-phone-alias/index.ts login-with-phone/index.ts
+
+      - name: Deno tests (phone helpers, redaction, CAPTCHA, session gate)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno test --allow-read tests/phone-edge.test.ts

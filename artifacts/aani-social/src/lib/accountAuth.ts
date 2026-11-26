@@ -65,6 +65,75 @@ export function formatPhoneForDisplay(phone: string): string {
   return `${DEFAULT_PHONE_COUNTRY_CODE} ${groups}`.trim();
 }
 
+/** رسالة موحّدة لمعرّف دخول غير مفهوم. */
+export const LOGIN_IDENTIFIER_MESSAGE =
+  'أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف (07XX XXX XXXX أو +964…).';
+
+/** صيغة اسم المستخدم الحالية في التطبيق (3–32 حرفاً: a-z 0-9 _ .). */
+export const USERNAME_PATTERN = /^[a-z0-9_.]{3,32}$/;
+
+/** صيغة رقم الهاتف العراقي المحلي: 07 ثم 9 أرقام. */
+const IRAQI_LOCAL_MOBILE_PATTERN = /^07\d{9}$/;
+
+export type LoginIdentifier =
+  | { kind: 'email'; email: string }
+  | { kind: 'phone'; phone: string }
+  | { kind: 'username'; username: string }
+  | { kind: 'invalid'; message: string };
+
+/**
+ * قاعدة حاسمة واحدة لمسار الدخول، بلا تخمين:
+ * 1. `@name` يفرض مسار اسم المستخدم حتى لو كان الاسم رقمياً بشكل رقم هاتف.
+ * 2. ما يحوي `@` بريد إلكتروني (وإلا فهو غير صالح).
+ * 3. صيغة دولية صريحة (`+…` أو `00…`) → هاتف بعد التطبيع.
+ * 4. صيغة عراقية محلية صريحة (`07XXXXXXXXX`، 11 رقماً) → هاتف.
+ * 5. أي شيء آخر يطابق صيغة اسم المستخدم الحالية → اسم مستخدم، ومنه
+ *    الأسماء الرقمية القصيرة (`123`) والطويلة (`123456789012`) و`7701234567`
+ *    (بلا صفر وطني): لا تُقرأ كرقم هاتف.
+ *
+ * الرقم المحلي بلا صفر وطني (`7701234567`) يبقى اسم مستخدم لأنه يحتمل أن
+ * يكون اسماً رقمياً مسموحاً؛ للدخول به كرقم يُكتب `07701234567` أو `+964…`.
+ */
+export function classifyLoginIdentifier(raw: string): LoginIdentifier {
+  const value = (raw || '').trim();
+  if (!value) return { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE };
+
+  if (value.startsWith('@')) {
+    const forced = value.slice(1).toLowerCase();
+    return USERNAME_PATTERN.test(forced)
+      ? { kind: 'username', username: forced }
+      : { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE };
+  }
+
+  if (value.includes('@')) {
+    const email = value.toLowerCase();
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+      ? { kind: 'email', email }
+      : { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE };
+  }
+
+  const compact = value.replace(/[\s().\-–]/g, '');
+
+  if (/^(?:\+|00)\d{7,15}$/.test(compact)) {
+    const phone = normalizePhoneToE164(compact);
+    return phone
+      ? { kind: 'phone', phone }
+      : { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE };
+  }
+
+  if (IRAQI_LOCAL_MOBILE_PATTERN.test(compact)) {
+    const phone = normalizePhoneToE164(compact);
+    return phone
+      ? { kind: 'phone', phone }
+      : { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE };
+  }
+
+  const username = value.toLowerCase();
+  return USERNAME_PATTERN.test(username)
+    ? { kind: 'username', username }
+    : { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE };
+}
+
 export type AccountAuthIdentity = {
   email: string;
   phone: string;

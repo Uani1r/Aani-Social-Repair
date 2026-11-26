@@ -151,20 +151,32 @@ export type PhoneLoginResult =
  * تسجيل الدخول برقم الهاتف وكلمة المرور: الدالة `login-with-phone` تجد الحساب
  * برقمه وتتحقق من كلمة المرور عند Supabase Auth. لا OTP، ولا رسالة تكشف
  * وجود الرقم.
+ *
+ * `captchaToken` رمز CAPTCHA من الواجهة (Turnstile). الدالة ترفض أي محاولة
+ * بلا رمز صالح، وتبقى الميزة محجوبة حتى تُفعّل حمايتها على الخادم.
  */
 export async function loginWithPhone(
   phone: string,
   password: string,
   invoke: PhoneFunctionInvoker,
+  captchaToken?: string,
 ): Promise<PhoneLoginResult> {
   const normalized = normalizePhoneToE164(phone);
   if (!normalized || !password) return { ok: false, message: PHONE_LOGIN_FAILED_MESSAGE };
 
-  const result = await invoke(PHONE_LOGIN_FUNCTION, { phone: normalized, password });
+  const body: Record<string, unknown> = { phone: normalized, password };
+  if (captchaToken) body.captchaToken = captchaToken;
+
+  const result = await invoke(PHONE_LOGIN_FUNCTION, body);
   if (!result.ok) {
-    return result.status === 429
-      ? { ok: false, message: PHONE_LOGIN_RATE_LIMITED_MESSAGE, rateLimited: true }
-      : { ok: false, message: PHONE_LOGIN_FAILED_MESSAGE };
+    if (result.status === 429) {
+      return { ok: false, message: PHONE_LOGIN_RATE_LIMITED_MESSAGE, rateLimited: true };
+    }
+    // 400/503 رسائل حماية CAPTCHA من الخادم نفسه، لا رسائل بيانات دخول.
+    if (result.status === 400 || result.status === 503) {
+      return { ok: false, message: result.message || PHONE_LOGIN_FAILED_MESSAGE };
+    }
+    return { ok: false, message: PHONE_LOGIN_FAILED_MESSAGE };
   }
 
   const payload = result.data as { access_token?: unknown; refresh_token?: unknown } | null;

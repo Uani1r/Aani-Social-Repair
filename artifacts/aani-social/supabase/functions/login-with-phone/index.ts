@@ -1,33 +1,38 @@
 // تسجيل الدخول برقم الهاتف وكلمة مرور الحساب — بلا SMS وبلا OTP.
 //
 // المسار:
-// 1) تطبيع الرقم إلى E.164.
-// 2) البحث عن الحساب في public.account_phone_aliases برقمه الفريد.
-// 3) قراءة هوية المصادقة الأصلية للحساب (بريده) من Supabase Auth Admin.
-// 4) التحقق من كلمة المرور عبر Supabase Auth نفسه
+// 1) CAPTCHA خادمي (Cloudflare Turnstile) قبل أي محاولة — إن لم يُضبط السر
+//    تبقى الميزة محجوبة (503) ولا تُسمح بأي محاولة.
+// 2) تطبيع الرقم إلى E.164.
+// 3) حدّ محاولات أولي داخل نسخة الدالة بمفتاح (IP المنصة + الرقم نفسه).
+// 4) البحث عن الحساب في public.account_phone_aliases برقمه الفريد.
+// 5) قراءة هوية المصادقة الأصلية للحساب (بريده) من Supabase Auth Admin.
+// 6) التحقق من كلمة المرور عبر Supabase Auth نفسه
 //    (`/auth/v1/token?grant_type=password`).
-// 5) إعادة الجلسة (access_token وrefresh_token فقط) بعد النجاح.
+// 7) إعادة الرمزين فقط (access/refresh) بعد النجاح.
 //
 // الأمان:
-// - رسالة واحدة عامة عند أي فشل: رقم غير مرتبط، أو كلمة مرور خاطئة، أو حساب
-//   بلا هوية بريد — لا يُكشف إن كان الرقم مسجلاً ولا لمن.
-// - لا يُعاد البريد ولا كائن user إلى العميل: الجلسة تُختصر إلى رمزين.
-// - لا تُطبع كلمة المرور ولا الرقم ولا الرموز في السجلات.
+// - رسالة واحدة عامة عند أي فشل (رقم غير مرتبط، كلمة مرور خاطئة، حساب بلا
+//   بريد): لا يُكشف إن كان الرقم مسجلاً ولا لمن.
+// - لا يُعاد البريد ولا كائن user إلى العميل.
+// - لا تُطبع كلمة مرور ولا رقم ولا رموز: كل سجل يمر عبر logFailure.
 // - لا يُقرأ أي user_id من الطلب، ولا يُنشأ JWT من عندنا.
-// - حدّ محاولات داخل نسخة الدالة (best effort) + تأخير ثابت عند الفشل. هذا
-//   ليس بديلاً عن CAPTCHA ولا عن محدّد معدل مشترك: يجب إضافتهما قبل الإطلاق
-//   (انظر الملاحظة أسفل الملف).
+//
+// حماية تسجيل الدخول قبل الإطلاق:
+// - CAPTCHA هنا هي البوابة الفعلية. خريطة المحاولات أدناه داخل نسخة واحدة
+//   وليست حماية كافية: مطلوب محدّد معدل مشترك (Upstash/Redis أو جدول
+//   محاولات في قاعدة البيانات) قبل الإطلاق. عنوان IP يأتي من منصة الاستضافة
+//   (x-forwarded-for) ولا يُعتمد وحده: الحدّ يجمع بينه وبين رقم الهاتف.
 
-const DEFAULT_COUNTRY_CODE = "+964";
-const PHONE_E164_PATTERN = /^\+[1-9][0-9]{7,14}$/;
+import {
+  PHONE_MESSAGES,
+  failureBody,
+  logFailure,
+  normalizePhoneToE164,
+  sessionTokens,
+  verifyTurnstileToken,
+} from "../_shared/phone.ts";
 
-const INVALID_CREDENTIALS = "رقم الهاتف أو كلمة المرور غير صحيحة.";
-const RATE_LIMITED = "تجاوزت عدد المحاولات. انتظر قليلاً ثم أعد المحاولة.";
-const UNAVAILABLE = "تعذر إكمال تسجيل الدخول حالياً. حاول بعد قليل.";
-
-// حدّ محاولات بسيط داخل نسخة الدالة: 10 محاولات فاشلة لكل مفتاح في 10 دقائق.
-// لا يشارك الحالة بين النسخ، ولذلك يبقى محدّد المعدل المشترك وCAPTCHA مطلوبين
-// قبل الإطلاق.
 const FAILURE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_FAILURES = 10;
 const FAILURE_DELAY_MS = 300;
@@ -37,6 +42,7 @@ const failures = new Map<string, { count: number; resetAt: number }>();
 type LoginBody = {
   phone?: unknown;
   password?: unknown;
+  captchaToken?: unknown;
 };
 
 type AuthUser = {
@@ -66,30 +72,10 @@ function serviceHeaders(serviceRoleKey: string): HeadersInit {
   };
 }
 
-function normalizePhoneToE164(raw: string): string | null {
-  const cleaned = raw.trim().replace(/[\s().\-–]/g, "");
-  if (!cleaned || cleaned.length > 24) return null;
-  if (!/^(?:00|\+)?\d+$/.test(cleaned)) return null;
-
-  const countryDigits = DEFAULT_COUNTRY_CODE.slice(1);
-  const international = cleaned.startsWith("+") || cleaned.startsWith("00");
-  let digits = cleaned.replace(/^\+/, "").replace(/^00/, "");
-
-  if (international) {
-    if (digits.startsWith(countryDigits)) {
-      digits = `${countryDigits}${digits.slice(countryDigits.length).replace(/^0+/, "")}`;
-    }
-  } else {
-    digits = `${countryDigits}${digits.replace(/^0+/, "")}`;
-  }
-
-  const e164 = `+${digits}`;
-  return PHONE_E164_PATTERN.test(e164) ? e164 : null;
-}
-
+/** مفتاح IP من ترويسات المنصة فقط، ويُقرأ مع رقم الهاتف لا وحده. */
 function clientKey(request: Request): string {
   const forwarded = request.headers.get("x-forwarded-for") ?? "";
-  const first = forwarded.split(",")[0]?.trim();
+  const first = forwarded.split(",")[0]?.trim() ?? "";
   return first || request.headers.get("x-real-ip") || "unknown";
 }
 
@@ -123,35 +109,46 @@ function delay(ms: number): Promise<void> {
 async function rejectInvalid(origin: string | null, keys: string[]): Promise<Response> {
   recordFailure(keys, Date.now());
   await delay(FAILURE_DELAY_MS);
-  return jsonResponse({ error: INVALID_CREDENTIALS }, 401, origin);
+  return jsonResponse(failureBody(PHONE_MESSAGES.invalidCredentials), 401, origin);
 }
 
 Deno.serve(async (request: Request) => {
   const origin = request.headers.get("origin");
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(origin) });
-  if (request.method !== "POST") return jsonResponse({ error: "Method not allowed." }, 405, origin);
+  if (request.method !== "POST") return jsonResponse(failureBody("Method not allowed."), 405, origin);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")?.replace(/\/+$/, "");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const captchaSecret = Deno.env.get("TURNSTILE_SECRET_KEY")?.trim() ?? "";
   if (!supabaseUrl || !anonKey || !serviceRoleKey) {
-    return jsonResponse({ error: UNAVAILABLE }, 500, origin);
+    return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 500, origin);
   }
 
   let body: LoginBody;
   try {
     body = await request.json() as LoginBody;
   } catch {
-    return jsonResponse({ error: INVALID_CREDENTIALS }, 400, origin);
+    return jsonResponse(failureBody(PHONE_MESSAGES.invalidCredentials), 400, origin);
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return jsonResponse({ error: INVALID_CREDENTIALS }, 400, origin);
+    return jsonResponse(failureBody(PHONE_MESSAGES.invalidCredentials), 400, origin);
+  }
+
+  // الميزة محجوبة حتى تُفعّل حماية CAPTCHA على الخادم.
+  if (!captchaSecret) {
+    return jsonResponse(failureBody(PHONE_MESSAGES.captchaUnavailable), 503, origin);
   }
 
   const ipKey = `ip:${clientKey(request)}`;
-  const now = Date.now();
-  if (isRateLimited([ipKey], now)) {
-    return jsonResponse({ error: RATE_LIMITED }, 429, origin);
+  const captchaToken = typeof body.captchaToken === "string" ? body.captchaToken : "";
+  if (!captchaToken) {
+    return jsonResponse(failureBody(PHONE_MESSAGES.captchaRequired), 400, origin);
+  }
+  const human = await verifyTurnstileToken(captchaToken, captchaSecret, fetch, clientKey(request));
+  if (!human) {
+    recordFailure([ipKey], Date.now());
+    return jsonResponse(failureBody(PHONE_MESSAGES.captchaRequired), 400, origin);
   }
 
   const rawPhone = typeof body.phone === "string" ? body.phone : "";
@@ -164,8 +161,9 @@ Deno.serve(async (request: Request) => {
   if (!phone) return rejectInvalid(origin, [ipKey]);
 
   const phoneKey = `phone:${phone}`;
+  const now = Date.now();
   if (isRateLimited([ipKey, phoneKey], now)) {
-    return jsonResponse({ error: RATE_LIMITED }, 429, origin);
+    return jsonResponse(failureBody(PHONE_MESSAGES.rateLimited), 429, origin);
   }
 
   try {
@@ -176,8 +174,8 @@ Deno.serve(async (request: Request) => {
 
     const aliasResponse = await fetch(aliasUrl, { headers: serviceHeaders(serviceRoleKey) });
     if (!aliasResponse.ok) {
-      console.error("[login-with-phone] Alias lookup failed:", aliasResponse.status);
-      return jsonResponse({ error: UNAVAILABLE }, 500, origin);
+      logFailure("[login-with-phone] Alias lookup failed", aliasResponse.status);
+      return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 500, origin);
     }
     const aliases = await aliasResponse.json() as { user_id?: unknown }[];
     const userId = Array.isArray(aliases) && typeof aliases[0]?.user_id === "string" ? aliases[0].user_id : "";
@@ -187,7 +185,7 @@ Deno.serve(async (request: Request) => {
       headers: serviceHeaders(serviceRoleKey),
     });
     if (!userResponse.ok) {
-      console.error("[login-with-phone] Auth user lookup failed:", userResponse.status);
+      logFailure("[login-with-phone] Auth user lookup failed", userResponse.status);
       return rejectInvalid(origin, [ipKey, phoneKey]);
     }
     const authUser = await userResponse.json() as AuthUser;
@@ -199,31 +197,21 @@ Deno.serve(async (request: Request) => {
       headers: { apikey: anonKey, "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
-    if (!tokenResponse.ok) return rejectInvalid(origin, [ipKey, phoneKey]);
-
-    const session = await tokenResponse.json() as Record<string, unknown>;
-    const accessToken = session.access_token;
-    const refreshToken = session.refresh_token;
-    if (typeof accessToken !== "string" || typeof refreshToken !== "string") {
-      console.error("[login-with-phone] Auth returned an incomplete session.");
-      return jsonResponse({ error: UNAVAILABLE }, 502, origin);
+    if (!tokenResponse.ok) {
+      logFailure("[login-with-phone] Password grant failed", tokenResponse.status);
+      return rejectInvalid(origin, [ipKey, phoneKey]);
     }
 
-    // الجلسة فقط: لا بريد ولا كائن user ولا رقم.
-    return jsonResponse({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      token_type: typeof session.token_type === "string" ? session.token_type : "bearer",
-      expires_in: typeof session.expires_in === "number" ? session.expires_in : null,
-    }, 200, origin);
+    const tokens = sessionTokens(await tokenResponse.json());
+    if (!tokens) {
+      logFailure("[login-with-phone] Auth returned an incomplete session", 502);
+      return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 502, origin);
+    }
+
+    // الرمزان فقط: لا بريد ولا كائن user ولا رقم.
+    return jsonResponse(tokens, 200, origin);
   } catch (error) {
-    console.error("[login-with-phone] Sign-in failed:", error instanceof Error ? error.message : "unknown error");
-    return jsonResponse({ error: UNAVAILABLE }, 500, origin);
+    logFailure("[login-with-phone] Sign-in failed", error);
+    return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 500, origin);
   }
 });
-
-// قبل الإطلاق:
-// - أضف CAPTCHA (hCaptcha/Turnstile) على شاشة الدخول وتحقّقها هنا.
-// - استبدل حدّ المحاولات في الذاكرة بمحدّد مشترك (Upstash/Redis أو جدول
-//   محاولات)، لأن النسخ المتعددة لا تتشارك هذه الخريطة.
-// - راقب حدود Supabase Auth نفسه (كتلة الحساب بعد محاولات فاشلة متكررة).
