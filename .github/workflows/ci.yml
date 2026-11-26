@@ -475,3 +475,59 @@ jobs:
 
       - name: Test the trigger payload, scope and failure isolation
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/messages_delete_broadcast_trigger.test.sql
+
+
+  # Verifies aani_reorder_profile_highlight_stories on a throwaway PostgreSQL:
+  # ownership, duplicates, completeness, cross-collection and cross-owner guards,
+  # sequential positions from 0, no change on failure, the ACL (authenticated
+  # only), and a second idempotent migration run. Never touches Supabase.
+  profile-highlight-story-sql:
+    name: Profile highlight story reordering SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_highlight_reorder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_highlight_reorder_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the minimal highlight schema and seed two owners
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/profile_highlight_reorder_schema.sql
+
+      - name: Apply the highlight story reordering migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270217000000_profile_highlight_story_reordering.sql
+
+      # The function must be re-creatable: a second run proves the migration is
+      # idempotent and does not duplicate the function or its grants.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270217000000_profile_highlight_story_reordering.sql
+
+      - name: Run the highlight story reordering tests
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/profile_highlight_story_reordering.test.sql
