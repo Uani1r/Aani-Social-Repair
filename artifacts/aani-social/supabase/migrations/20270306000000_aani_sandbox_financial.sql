@@ -822,7 +822,7 @@ grant execute on function public.aani_sandbox_cancel_subscription(uuid) to authe
 -- يستخدم SELECT ... FOR UPDATE على صف الاشتراك لمنع تعارض التجديد والإلغاء المتزامنين.
 -- فحص سجل ledger السابق يسبق فحص الحالة، بحيث إعادة طلب تجديد ناجح تُعيد نتيجتها الأصلية
 -- حتى لو أصبح الاشتراك cancelled أو expired بعد التنفيذ الأول.
--- ترتيب الأقفال: قفل مستشار على المستخدم → قفل صف الاشتراك (FOR UPDATE) → قفل مستشار على مفتاح idempotency.
+-- ترتيب الأقفال: قفل مستشار على مالك الاشتراك (v_user_id) → قفل صف الاشتراك (FOR UPDATE) → قفل مستشار على مفتاح idempotency.
 create or replace function public.aani_sandbox_renew_subscription(
   p_subscription_id uuid,
   p_idempotency_key text
@@ -843,10 +843,15 @@ declare
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
-  -- قفل مستشار على المستخدم لتسلسل العمليات على نفس المستخدم ومنع deadlocks.
-  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || auth.uid()::text));
+  -- استعلام أولي لاكتشاف مالك الاشتراك v_user_id قبل أخذ قفل المستخدم الاستشاري.
+  select user_id, package_id, status into v_user_id, v_package_id, v_status
+  from sandbox.subscriptions where id = p_subscription_id;
+  if not found then raise exception 'subscription not found' using errcode='42704'; end if;
 
-  -- قفل صف الاشتراك بـ FOR UPDATE لمنع تعارض التجديد والإلغاء المتزامنين.
+  -- قفل مستشار على مالك الاشتراك (وليس هوية المستدعي auth.uid()) لتسلسل العمليات على نفس المستخدم.
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || v_user_id::text));
+
+  -- قفل صف الاشتراك بـ FOR UPDATE للحصول على الحالة الحالية تحت القفل ومنع تعارض التجديد والإلغاء.
   select user_id, package_id, status into v_user_id, v_package_id, v_status
   from sandbox.subscriptions where id = p_subscription_id
   for update;
@@ -862,10 +867,10 @@ begin
   -- قفل مستشار على مفتاح idempotency لمنع تجديدات متزامنة بالمفتاح نفسه.
   perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || v_user_id::text || ':' || p_idempotency_key));
 
-  -- فحص سجل ledger السابق قبل فحص الحالة.
-  -- إذا كان المفتاح مستخدماً في عملية تجديد مطابقة، تُعاد النتيجة الأصلية حتى لو أصبح الاشتراك cancelled أو expired.
+  -- فحص سجل ledger السابق مع مطابقة جميع الحقول الأساسية قبل فحص الحالة،
+  -- بحيث إعادة طلب تجديد ناجح تُعيد نتيجتها الأصلية حتى لو أصبح الاشتراك cancelled أو expired.
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
-    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = v_user_id and reference = 'sandbox subscription renew' and related_id = p_subscription_id) then
+    if not exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key and user_id = v_user_id and type = 'debit' and reference = 'sandbox subscription renew' and related_id = p_subscription_id) then
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
