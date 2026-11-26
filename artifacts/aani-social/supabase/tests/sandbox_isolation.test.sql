@@ -74,7 +74,7 @@ DECLARE
     v_exists boolean;
     v_founder uuid := current_setting('myapp.test_founder')::uuid;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     SELECT EXISTS (SELECT 1 FROM sandbox.founders WHERE user_id = v_founder)
     INTO v_exists;
     IF NOT v_exists THEN
@@ -90,7 +90,7 @@ DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_balance_before integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_balance(v_user_a) INTO v_balance_before;
     IF v_balance_before IS NULL THEN
         RAISE EXCEPTION 'Test 1 failed: balance is NULL for userA';
@@ -103,7 +103,7 @@ DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     SELECT public.aani_sandbox_grant_coins(v_user_a, 1000, 'grant-test-1', 'اختبار عزل الرصيد'::text)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -117,7 +117,7 @@ DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_balance_after integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_balance(v_user_a) INTO v_balance_after;
     IF v_balance_after <> 1000 THEN
         RAISE EXCEPTION 'Test 1 failed: expected balance 1000 after grant, got %', v_balance_after;
@@ -132,7 +132,7 @@ DO $$
 DECLARE
     v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     PERFORM public.aani_sandbox_balance(v_user_b);
     RAISE EXCEPTION 'Test 2 failed: userA should not be able to read userB balance (expected 42501)';
 EXCEPTION WHEN OTHERS THEN
@@ -146,7 +146,7 @@ DO $$
 DECLARE
     v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     PERFORM public.aani_sandbox_balance(v_user_b);
 EXCEPTION WHEN OTHERS THEN
     RAISE EXCEPTION 'Test 2 founder failed: founder should be able to read any user balance, got %', SQLERRM;
@@ -159,7 +159,7 @@ DO $$
 DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     PERFORM public.aani_sandbox_grant_coins(v_user_a, 100, 'unauth-grant', 'محاولة غير مصرّح'::text);
     RAISE EXCEPTION 'Test 3 failed: userA should not be able to grant coins (expected 42501)';
 EXCEPTION WHEN OTHERS THEN
@@ -178,7 +178,7 @@ DECLARE
     v_gift_id uuid := current_setting('myapp.test_gift_id')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'send-test-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -191,7 +191,7 @@ DO $$
 DECLARE
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.gift_transactions
     WHERE idempotency_key = 'send-test-1';
@@ -205,7 +205,7 @@ DO $$
 DECLARE
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM public.gift_transactions
     WHERE idempotency_key = 'send-test-1';
@@ -222,7 +222,7 @@ DECLARE
     v_user_b uuid := current_setting('myapp.test_user_b')::uuid;
     v_popularity integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_user_popularity(v_user_b) INTO v_popularity;
     IF v_popularity IS NULL THEN
         RAISE EXCEPTION 'Test 5 failed: popularity is NULL for userB';
@@ -240,14 +240,14 @@ DECLARE
     v_result jsonb;
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'send-test-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 6 failed: expected duplicate=true on replay, got %', v_result;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.gift_transactions
     WHERE idempotency_key = 'send-test-1';
@@ -275,7 +275,7 @@ DECLARE
     v_sees_bc_count integer;
 BEGIN
     -- المؤسس يمنح userB رصيداً تجريبياً حتى يستطيع إرسال هدية
-    SELECT set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
     SELECT public.aani_sandbox_grant_coins(v_user_b, 1000, 'grant-test7-userb', 'test7 userB funding')
     INTO v_grant;
     IF (v_grant->>'ok')::boolean IS NOT TRUE THEN
@@ -283,7 +283,7 @@ BEGIN
     END IF;
 
     -- userB يرسل هدية إلى userC (معاملة لا تخص userA)
-    SELECT set_config('request.jwt.claims', '{"sub": "' || v_user_b || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_user_b || '"}', true);
     SELECT public.aani_sandbox_send_gift(v_user_b, v_user_c, v_gift_id, 'send-test7-b-c')
     INTO v_send;
     IF (v_send->>'ok')::boolean IS NOT TRUE THEN
@@ -291,7 +291,7 @@ BEGIN
     END IF;
 
     -- التأكد (كالمؤسس) أن المعاملة موجودة فعلاً قبل اختبار العزل
-    SELECT set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
     SELECT count(*) INTO v_exists_as_founder
     FROM sandbox.gift_transactions
     WHERE idempotency_key = 'send-test7-b-c';
@@ -300,7 +300,7 @@ BEGIN
     END IF;
 
     -- userA (ليس طرفاً في المعاملة) يجب ألا يراها
-    SELECT set_config('request.jwt.claims', '{"sub": "' || v_user_a || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_user_a || '"}', true);
     SELECT count(*) INTO v_sees_bc_count
     FROM sandbox.gift_transactions
     WHERE idempotency_key = 'send-test7-b-c';
@@ -315,7 +315,7 @@ DECLARE
     v_founder uuid := current_setting('myapp.test_founder')::uuid;
     v_founder_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     SELECT count(*) INTO v_founder_count
     FROM sandbox.gift_transactions;
     IF v_founder_count < 1 THEN
@@ -332,14 +332,14 @@ DECLARE
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-test-1', true)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
         RAISE EXCEPTION 'Test 8 failed: expected successful top-up, got %', v_result;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-test-2', false)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT FALSE OR (v_result->>'status') <> 'failed' THEN
@@ -357,14 +357,14 @@ DECLARE
     v_result jsonb;
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-test-1', true)
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 9 failed: expected duplicate=true on replay, got %', v_result;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.top_ups
     WHERE idempotency_key = 'topup-test-1';
@@ -383,7 +383,7 @@ DECLARE
     v_result jsonb;
     v_duplicate_rejected boolean := false;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     -- الحصول على معرف الشحن الناجح
     SELECT id INTO v_topup_id
     FROM sandbox.top_ups
@@ -394,7 +394,7 @@ BEGIN
     END IF;
 
     -- الاسترداد الأول (مؤسس فقط) → يجب أن ينجح بحالة refunded
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     SELECT public.aani_sandbox_refund_top_up(v_topup_id, 'اختبار الاسترداد'::text)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE OR (v_result->>'status') <> 'refunded' THEN
@@ -403,7 +403,7 @@ BEGIN
 
     -- الاسترداد الثاني لنفس الشحن → يجب أن يُرفض بـ SQLSTATE 42001 (top-up already refunded)
     BEGIN
-        SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+        PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
         SELECT public.aani_sandbox_refund_top_up(v_topup_id, 'محاولة مكررة'::text)
         INTO v_result;
         -- إذا وصلنا到这里، لم يُرَفَض الاسترداد الثاني → فشل الاختبار
@@ -430,7 +430,7 @@ DECLARE
     v_result jsonb;
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-test-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -438,14 +438,14 @@ BEGIN
     END IF;
 
     -- إعادة التفعيل بنفس المفتاح → duplicate=true، لا خصم مكرر
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-test-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 11 failed: expected duplicate=true on replay, got %', v_result;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.subscriptions
     WHERE user_id = v_user_a AND package_id = v_sub_package_id;
@@ -465,7 +465,7 @@ DECLARE
     v_result jsonb;
 BEGIN
     -- الحصول على معرف الاشتراك النشط
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
     WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
@@ -475,7 +475,7 @@ BEGIN
         RAISE EXCEPTION 'Test 12 failed: no active subscription found for userA';
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -491,13 +491,13 @@ DECLARE
     v_sub_id uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
     WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
     LIMIT 1;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
@@ -515,7 +515,7 @@ DECLARE
     v_post_id uuid := current_setting('myapp.test_post_id')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', v_post_id, 'promo-test-1')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -530,7 +530,7 @@ DECLARE
     v_promo_package_id uuid := current_setting('myapp.test_promo_package_id')::uuid;
     v_post_id_other uuid := current_setting('myapp.test_post_id_other')::uuid;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     -- استخدام معرف منشور حقيقي موجود لا يملكه userA (يُفترض أنه مملوك لمستخدم آخر)
     PERFORM public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', v_post_id_other, 'promo-test-2');
     RAISE EXCEPTION 'Test 13 failed: expected 42501 for promoting post not owned by userA';
@@ -551,14 +551,14 @@ DECLARE
     v_result jsonb;
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_create_promotion(v_user_a, v_promo_package_id, 'post', v_post_id, 'promo-test-1')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'Test 14 failed: expected duplicate=true on replay, got %', v_result;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.promotions
     WHERE idempotency_key = 'promo-test-1';
@@ -574,7 +574,7 @@ DO $$
 DECLARE
     v_gift_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_gift_count
     FROM public.gift_transactions
     WHERE idempotency_key LIKE 'send-test-%' OR idempotency_key LIKE 'topup-test-%' OR idempotency_key LIKE 'sub-test-%' OR idempotency_key LIKE 'promo-test-%';
@@ -595,7 +595,7 @@ DECLARE
     v_count integer;
     v_credit_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
 
     -- تنفيذ الشحن الفاشل أولاً بمفتاح جديد
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-retry-1', false)
@@ -605,14 +605,14 @@ BEGIN
     END IF;
 
     -- إعادة الطلب بالمفتاح والباقة والمستخدم نفسهما
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-retry-1', false)
     INTO v_result2;
     IF (v_result2->>'ok')::boolean IS NOT FALSE OR (v_result2->>'duplicate')::boolean IS NOT TRUE OR (v_result2->>'status') <> 'failed' THEN
         RAISE EXCEPTION 'Test 16 failed: expected ok=false, duplicate=true, status=failed, got %', v_result2;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.top_ups
     WHERE idempotency_key = 'topup-fail-retry-1';
@@ -620,7 +620,7 @@ BEGIN
         RAISE EXCEPTION 'Test 16 failed: expected 1 top_up record for failed key, got %', v_count;
     END IF;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_credit_count
     FROM sandbox.ledger
     WHERE idempotency_key = 'topup-fail-retry-1:credit';
@@ -638,7 +638,7 @@ DECLARE
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     -- أولاً: إنشاء شحن فاشل بالمفتاح (simulate=false) ليثبت المفتاح بحالة failed
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-then-success', false)
     INTO v_result;
@@ -647,7 +647,7 @@ BEGIN
     END IF;
 
     -- ثانياً: إعادة استخدام نفس المفتاح مع p_simulate_success=true → يُتوقع استثناء 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-fail-then-success', true);
     RAISE EXCEPTION 'Test 17 failed: expected 40901 for reusing failed key with success=true';
 EXCEPTION WHEN OTHERS THEN
@@ -665,7 +665,7 @@ DECLARE
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
     v_result jsonb;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-deactivated-pkg-1', true)
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE THEN
@@ -684,7 +684,7 @@ BEGIN
         EXECUTE 'SET ROLE authenticated';
 
         -- إعادة الطلب بالمفتاح نفسه رغم تعطيل الباقة → يُتوقع completed وduplicate=true
-        SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+        PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
         SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-deactivated-pkg-1', true)
         INTO v_result;
         IF (v_result->>'duplicate')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
@@ -725,7 +725,7 @@ BEGIN
         WHERE id = v_package_id;
         EXECUTE 'SET ROLE authenticated';
 
-        SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+        PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
         PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-new-on-deactivated-1', true);
         RAISE EXCEPTION 'Test 19 failed: expected 42704 for top-up on deactivated package';
     EXCEPTION WHEN OTHERS THEN
@@ -750,7 +750,7 @@ DECLARE
     v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
     v_package_id uuid := current_setting('myapp.test_package_id')::uuid;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     PERFORM public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-null-simulate-1', NULL);
     RAISE EXCEPTION 'Test 20 failed: expected 22023 for NULL simulate_success';
 EXCEPTION WHEN OTHERS THEN
@@ -774,7 +774,7 @@ DECLARE
     v_cancel_result jsonb;
     v_status_after text;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
 
     -- الحصول على معرف الاشتراك النشط
     SELECT id INTO v_sub_id
@@ -787,7 +787,7 @@ BEGIN
     END IF;
 
     -- التجديد يحصل على القفل أولاً وينجز
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-concurrent-renew')
     INTO v_renew_result;
     IF (v_renew_result->>'ok')::boolean IS NOT TRUE THEN
@@ -795,7 +795,7 @@ BEGIN
     END IF;
 
     -- الإلغاء يُنفذ بعد انتهاء التجديد (تتابعي، ليس متزامناً)
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_cancel_subscription(v_sub_id)
     INTO v_cancel_result;
     IF (v_cancel_result->>'ok')::boolean IS NOT TRUE THEN
@@ -803,7 +803,7 @@ BEGIN
     END IF;
 
     -- التحقق من أن الحالة أصبحت cancelled
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT status INTO v_status_after
     FROM sandbox.subscriptions
     WHERE id = v_sub_id;
@@ -823,20 +823,20 @@ DECLARE
     v_result jsonb;
     v_count integer;
 BEGIN
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
 
     -- تفعيل اشتراك جديد للاختبار (مفتاح التفعيل)
     SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-renew-replay-test')
     INTO v_result;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT id INTO v_sub_id
     FROM sandbox.subscriptions
     WHERE user_id = v_user_a AND package_id = v_sub_package_id AND status = 'active'
     ORDER BY started_at DESC LIMIT 1;
 
     -- التجديد الأول بمفتاح renew مستقل (حتى لا يتعارض مع مفتاح التفعيل)
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-renew')
     INTO v_result;
     IF (v_result->>'duplicate')::boolean IS NOT FALSE OR (v_result->>'status') <> 'active' THEN
@@ -844,7 +844,7 @@ BEGIN
     END IF;
 
     -- إلغاء الاشتراك لاحقاً
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_cancel_subscription(v_sub_id)
     INTO v_result;
     IF (v_result->>'status') <> 'cancelled' THEN
@@ -852,7 +852,7 @@ BEGIN
     END IF;
 
     -- إعادة طلب التجديد بالمفتاح نفسه رغم الإلغاء → duplicate=true, status=completed
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_id, 'sub-renew-replay-renew')
     INTO v_result;
     IF (v_result->>'ok')::boolean IS NOT TRUE OR (v_result->>'duplicate')::boolean IS NOT TRUE OR (v_result->>'status') <> 'completed' THEN
@@ -860,7 +860,7 @@ BEGIN
     END IF;
 
     -- التحقق من عدم وجود قيد ledger مكرر لمفتاح التجديد
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT count(*) INTO v_count
     FROM sandbox.ledger
     WHERE idempotency_key = 'sub-renew-replay-renew';
@@ -886,26 +886,26 @@ DECLARE
 BEGIN
     -- منح userB رصيداً تجريبياً أولاً (المؤسس فقط) حتى يستطيع تفعيل اشتراك.
     -- بدونه سيُرفض التفعيل بـ 42001 (رصيد غير كافٍ) ويفشل الاختبار.
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     SELECT public.aani_sandbox_grant_coins(v_user_b, 1000, 'grant-userb-test23', 'test23 userB funding')
     INTO v_result_b;
 
     -- إنشاء اشتراكين لمستخدمين مختلفين
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'sub-shared-test-a')
     INTO v_result_a;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_b') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_b') || '"}', true);
     SELECT public.aani_sandbox_activate_subscription(v_user_b, v_sub_package_id, 'sub-shared-test-b')
     INTO v_result_b;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT id INTO v_sub_a
     FROM sandbox.subscriptions
     WHERE user_id = v_user_a AND status = 'active'
     ORDER BY started_at DESC LIMIT 1;
 
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_b') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_b') || '"}', true);
     SELECT id INTO v_sub_b
     FROM sandbox.subscriptions
     WHERE user_id = v_user_b AND status = 'active'
@@ -916,12 +916,12 @@ BEGIN
     END IF;
 
     -- الجلسة A (مستخدم A): التجديد بالمفتاح المشترك
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_renew_subscription(v_sub_a, 'shared-renew-key')
     INTO v_result_a;
 
     -- الجلسة B (مستخدم B): التجديد بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_b') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_b') || '"}', true);
     BEGIN
         SELECT public.aani_sandbox_renew_subscription(v_sub_b, 'shared-renew-key')
         INTO v_result_b;
@@ -945,7 +945,7 @@ DECLARE
     v_result_activate jsonb;
 BEGIN
     -- الجلسة A: top_up بالمفتاح المشترك
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'cross-topup-activate-key', true)
     INTO v_result_topup;
     IF (v_result_topup->>'ok')::boolean IS NOT TRUE THEN
@@ -953,7 +953,7 @@ BEGIN
     END IF;
 
     -- الجلسة B: activate_subscription بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     BEGIN
         SELECT public.aani_sandbox_activate_subscription(v_user_a, v_sub_package_id, 'cross-topup-activate-key')
         INTO v_result_activate;
@@ -977,7 +977,7 @@ DECLARE
     v_result_grant jsonb;
 BEGIN
     -- الجلسة A: top_up بالمفتاح المشترك
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'cross-topup-grant-key', true)
     INTO v_result_topup;
     IF (v_result_topup->>'ok')::boolean IS NOT TRUE THEN
@@ -985,7 +985,7 @@ BEGIN
     END IF;
 
     -- الجلسة B: grant_coins بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     BEGIN
         SELECT public.aani_sandbox_grant_coins(v_user_a, 100, 'cross-topup-grant-key', 'test grant')
         INTO v_result_grant;
@@ -1009,7 +1009,7 @@ DECLARE
     v_result_topup jsonb;
 BEGIN
     -- الجلسة A: grant_coins بالمفتاح K
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     SELECT public.aani_sandbox_grant_coins(v_user_a, 100, 'grant-then-topup-fail-key', 'test grant')
     INTO v_result_grant;
     IF (v_result_grant->>'ok')::boolean IS NOT TRUE THEN
@@ -1017,7 +1017,7 @@ BEGIN
     END IF;
 
     -- الجلسة B: top_up بالمفتاح نفسه مع simulate=false → يجب أن يُرفض بـ 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     BEGIN
         SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'grant-then-topup-fail-key', false)
         INTO v_result_topup;
@@ -1042,7 +1042,7 @@ DECLARE
     v_result_gift jsonb;
 BEGIN
     -- الجلسة A: top_up بالمفتاح K
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_top_up(v_user_a, v_package_id, 'topup-then-gift-key', true)
     INTO v_result_topup;
     IF (v_result_topup->>'ok')::boolean IS NOT TRUE THEN
@@ -1050,7 +1050,7 @@ BEGIN
     END IF;
 
     -- الجلسة B: send_gift بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     BEGIN
         SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'topup-then-gift-key')
         INTO v_result_gift;
@@ -1075,7 +1075,7 @@ DECLARE
     v_result_grant jsonb;
 BEGIN
     -- الجلسة A: send_gift بالمفتاح K
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_user_a') || '"}', true);
     SELECT public.aani_sandbox_send_gift(v_user_a, v_user_b, v_gift_id, 'gift-then-grant-key')
     INTO v_result_gift;
     IF (v_result_gift->>'ok')::boolean IS NOT TRUE THEN
@@ -1083,7 +1083,7 @@ BEGIN
     END IF;
 
     -- الجلسة B: grant_coins بالمفتاح نفسه → يجب أن يُرفض بـ 40901
-    SELECT set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || current_setting('myapp.test_founder') || '"}', true);
     BEGIN
         SELECT public.aani_sandbox_grant_coins(v_user_a, 50, 'gift-then-grant-key', 'test grant')
         INTO v_result_grant;
