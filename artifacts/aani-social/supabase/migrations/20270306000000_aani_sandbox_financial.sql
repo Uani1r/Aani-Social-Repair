@@ -526,6 +526,7 @@ declare
   v_ledger_type text;
   v_ledger_amount integer;
   v_ledger_reference text;
+  v_topup_status text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
   if auth.uid() <> p_user_id then raise exception 'forbidden' using errcode='42501'; end if;
@@ -553,14 +554,25 @@ begin
 
   if p_simulate_success then
     -- التحقق من إدخال السجل الموجود لنفس مفتاح idempotency قبل إكمال الشحن.
-    -- إذا كان الإدخال موجوداً ولكن لا يطابق المستخدم والنوع والمبلغ والمرجع، يرفع خطأ تعارض.
     select user_id, type, amount, reference into v_ledger_user_id, v_ledger_type, v_ledger_amount, v_ledger_reference
     from sandbox.ledger where idempotency_key = p_idempotency_key || ':credit';
     if found then
       if v_ledger_user_id <> p_user_id or v_ledger_type <> 'credit' or v_ledger_amount <> v_coins or v_ledger_reference <> 'sandbox top-up' then
         raise exception 'idempotency key conflict: ledger entry does not match top-up' using errcode='40901';
       end if;
-      -- الإدخال موجود ومطابق → الشحن مكرر، الرصيد أُضيف مسبقاً، لا نعيد الإضافة.
+      -- التحقق من وجود سجل top_ups المطابق للمستخدم والباقة والمبلغ وحالة الإكمال.
+      -- لا يُرجع duplicate=true على أساس إدخال ledger وحده إذا لم يثبت اكتمال عملية الشحن نفسها.
+      select status into v_topup_status
+      from sandbox.top_ups
+      where idempotency_key = p_idempotency_key
+        and user_id = p_user_id
+        and package_id = p_package_id
+        and amount = v_coins
+        and status = 'completed';
+      if not found then
+        raise exception 'top-up record not confirmed for idempotency key' using errcode='40901';
+      end if;
+      -- الإدخال موجود ومطابق في كلا الجدولين → الشحن مكرر، الرصيد أُضيف مسبقاً، لا نعيد الإضافة.
       select public.aani_sandbox_balance(p_user_id) into v_balance;
       return jsonb_build_object('ok',true,'duplicate',true,'status','completed','amount',v_coins,
         'balance',v_balance,'simulated',true);
@@ -728,15 +740,18 @@ declare
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
-  select user_id, status into v_user_id, v_status from sandbox.subscriptions where id = p_subscription_id;
+  -- قفل صف الاشتراك لمنع عمليات الإلغاء المتزامنة.
+  select user_id, status into v_user_id, v_status
+  from sandbox.subscriptions where id = p_subscription_id
+  for update;
   if not found then raise exception 'subscription not found' using errcode='42704'; end if;
   if auth.uid() <> v_user_id and not public.aani_sandbox_is_founder() then
     raise exception 'forbidden' using errcode='42501';
   end if;
 
-  -- منع الانتقالات المتعارضة: لا يُلغى اشتراك مُلغى من قبل، ولا يُسجل تدقيق مكرر.
-  if v_status = 'cancelled' then
-    return jsonb_build_object('ok',true,'status','already_cancelled','subscription_id',p_subscription_id);
+  -- لا يُسمح إلا بالانتقال من active إلى cancelled فقط.
+  if v_status <> 'active' then
+    return jsonb_build_object('ok',true,'status','already_' || v_status,'subscription_id',p_subscription_id);
   end if;
 
   update sandbox.subscriptions
@@ -926,12 +941,15 @@ set search_path = ''
 as $$
 declare
   v_user_id uuid;
-  v_status text;
   v_current_status text;
+  v_status text;
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
-  select user_id, status into v_user_id, v_current_status from sandbox.promotions where id = p_promotion_id;
+  -- قفل صف الحملة لمنع إنهاء/فشل متزامن للحملة نفسها.
+  select user_id, status into v_user_id, v_current_status
+  from sandbox.promotions where id = p_promotion_id
+  for update;
   if not found then raise exception 'promotion not found' using errcode='42704'; end if;
   if auth.uid() <> v_user_id and not public.aani_sandbox_is_founder() then
     raise exception 'forbidden' using errcode='42501';
@@ -943,7 +961,7 @@ begin
     v_status := 'failed';
   end if;
 
-  -- منع الانتقالات المتعارضة: لا يُنهي/يُفشل حملة مُنهاة أو فاشلة من قبل، ولا يُسجل تدقيق مكرر.
+  -- لا يُسمح إلا بالانتقال من active إلى ended/failed فقط، ويمنع الانتقال المتعارض بين ended وfailed.
   if v_current_status <> 'active' then
     return jsonb_build_object('ok',true,'status','already_' || v_current_status,'promotion_id',p_promotion_id);
   end if;
