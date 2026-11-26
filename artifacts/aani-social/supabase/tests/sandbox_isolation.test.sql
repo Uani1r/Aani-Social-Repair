@@ -163,6 +163,35 @@ WHERE idempotency_key = 'promo-test-1'; -- يُتوقع 1
 -- कोई صف في public.gift_transactions أو public.user_wallets لا يُنشأ من عمليات Sandbox.
 -- (التحقق اليدوي عبر استعلامات count أعلاه)
 
+-- ------------------------------------------------------------------
+-- 16. إعادة الشحن الفاشل بالمفتاح نفسه: تكرار النتيجة دون إضافة عملات
+-- ------------------------------------------------------------------
+-- 실행 الشحن الفاشل أولاً بمفتاح جديد.
+SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-retry-1', false);
+-- تسجيل الرصيد بعد الفشل (يجب ألا يتغير).
+SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_after_failed_topup;
+-- إعادة الطلب بالمفتاح والباقة والمستخدم نفسهما.
+SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-retry-1', false);
+-- يُتوقع أن تكون النتيجة الثانية: ok=false, duplicate=true, status=failed.
+-- يُتوقع أن يكون عدد سجلات top_ups لهذا المفتاح يساوي واحداً:
+SELECT count(*) AS duplicate_failed_top_ups
+FROM sandbox.top_ups
+WHERE idempotency_key = 'topup-fail-retry-1'; -- يُتوقع 1
+-- يُتوقع عدم وجود قيد credit لهذا المفتاح:
+SELECT count(*) AS credit_ledger_for_failed_topup
+FROM sandbox.ledger
+WHERE idempotency_key = 'topup-fail-retry-1:credit'; -- يُتوقع 0
+-- يُتوقع أن الرصيد لم يتغير عن قيمته بعد الفشل الأول:
+SELECT public.aani_sandbox_balance(:'userA') AS sandbox_balance_after_retry_failed;
+
+-- ------------------------------------------------------------------
+-- 17. إعادة استخدام مفتاح شحن فاشل مع طلب ناجح: تعارض 40901
+-- ------------------------------------------------------------------
+-- تسجيل شحن فاشل أولاً بمفتاح معين.
+SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-then-success', false);
+-- إعادة استخدام نفس المفتاح مع p_simulate_success=true → يُتوقع استثناء 40901.
+-- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-fail-then-success', true); -- يُتوقع خطأ 40901
+
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة
 -- Supabase مباشرة. لا يُدّعى نجاحه دون تنفيذ فعلي على قاعدة حية.

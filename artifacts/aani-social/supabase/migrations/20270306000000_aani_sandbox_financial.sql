@@ -554,9 +554,10 @@ begin
     if v_topup_user_id <> p_user_id or v_topup_package_id <> p_package_id or v_topup_amount <> v_coins then
       raise exception 'idempotency key conflict: top-up record does not match request' using errcode='40901';
     end if;
-    -- التحقق من تطابق علامة المحاكاة.
-    if v_topup_simulated <> p_simulate_success then
-      raise exception 'idempotency key conflict: simulation flag mismatch' using errcode='40901';
+    -- simulated تعني أن العملية تجريبية، ولا تعبّر عن نجاح المحاكاة.
+    -- جميع عمليات Sandbox يجب أن تحمل simulated = true.
+    if v_topup_simulated is distinct from true then
+      raise exception 'idempotency key conflict: top-up is not a sandbox operation' using errcode='40901';
     end if;
     -- التحقق من الحالة الصحيحة: completed عند النجاح وfailed عند الفشل.
     if (p_simulate_success and v_topup_status <> 'completed')
@@ -574,8 +575,21 @@ begin
         raise exception 'idempotency key conflict: ledger entry does not match top-up' using errcode='40901';
       end if;
     end if;
-    return jsonb_build_object('ok',true,'duplicate',true,'status',
-      (select status from sandbox.top_ups where idempotency_key = p_idempotency_key));
+    -- عند الفشل، التأكد من عدم وجود قيد credit متعارض للمفتاح نفسه.
+    if not p_simulate_success then
+      if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key || ':credit') then
+        raise exception 'idempotency key conflict: credit ledger entry exists for failed top-up' using errcode='40901';
+      end if;
+    end if;
+    -- إرجاع نتيجة العملية الأصلية دون تكرار أثرها المالي.
+    if p_simulate_success then
+      select public.aani_sandbox_balance(p_user_id) into v_balance;
+      return jsonb_build_object('ok',true,'duplicate',true,'status','completed','amount',v_coins,
+        'balance',v_balance,'simulated',true);
+    else
+      return jsonb_build_object('ok',false,'duplicate',true,'status','failed','amount',v_coins,
+        'balance',null,'simulated',true,'error','شحن تجريبي فاشل (محاكاة)');
+    end if;
   end if;
 
   if p_simulate_success then
