@@ -274,21 +274,50 @@ SELECT public.aani_sandbox_cancel_subscription('<subscription-id>');
 -- يُتوقع أن يكون هناك قيد ledger واحد فقط للمفتاح 'shared-renew-key'.
 
 -- ------------------------------------------------------------------
--- 24. استخدام مفتاح idempotency نفسه بالتزامن من دالتين ماليتين مختلفتين
+-- 24. استخدام مفتاح idempotency نفسه بالتزامن من top_up و activate_subscription
 -- ------------------------------------------------------------------
--- بعد التوحيد على قفل sandbox:ledger:idem:<key>، أي مفتاح مستخدم في أكثر من دالة
--- مالية (top_up، activate_subscription، renew_subscription، grant_coins، deduct_coins، create_promotion)
--- يُserialized على قفل استشاري واحد، مما يمنع تعارض UNIQUE على sandbox.ledger.idempotency_key.
+-- سياسة idempotency المعتمدة: التفرد على المفتاح الأصلي المقدم من المتصل
+-- (caller-provided request key)، ليس على مفتاح ledger المشتق.
+-- top_up يكتب إلى sandbox.ledger بالمفتاح المشتق 'K:credit' وإلى sandbox.top_ups
+-- بالمفتاح الأصلي 'K'. activate_subscription يكتب إلى sandbox.ledger بالمفتاح
+-- الأصلي 'K'. لذلك لا يتعارضان مباشرة على UNIQUE(sandbox.ledger.idempotency_key)،
+-- بل يُكتشف التعارض عبر فحوص متقاطعة على الجداولتين تحت قفل استشاري موحد.
 --
--- سيناريو متزامن (جلستان على نفس المفتاح ولكن دوال مختلفة):
---   الجلسة A (top_up): SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'cross-func-key', true);
---   الجلسة B (activate_subscription): SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'cross-func-key');
+-- القفل الموحد: sandbox:ledger:idem:<key> يُserialized جميع الطلبات التي تحمل
+-- نفس المفتاح الأصلي عبر كل الدوال المالية.
 --
--- الجلسة الأولى التي تحصل على القفل الموحد تنجح في الإدراج في sandbox.ledger بالمفتاح 'cross-func-key'.
--- الجلسة الثانية، بعد انتظار القفل وإعادة الفحص، تجد قيد ledger سابق بالمفتاح نفسه.
--- بما أن الحقول (user_id, type, reference, related_id) لا تطابق العملية الأولى (نوع عملية مختلف، مرجع مختلف، معرّف مرتبط مختلف)،
--- يُرفض الطلب الثاني بالخطأ 40901 (idempotency key conflict) دون خصم أو قيد ledger مكرر.
--- يُتوقع أن يكون هناك قيد ledger واحد فقط للمفتاح 'cross-func-key'.
+-- سيناريو متزامن (جلستان على نفس المفتاح الأصلي ولكن دوال مختلفة):
+--   الجلسة A (top_up): SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'cross-topup-activate-key', true);
+--     → يكتب sandbox.top_ups بالمفتاح 'cross-topup-activate-key'
+--     → يكتب sandbox.ledger بالمفتاح 'cross-topup-activate-key:credit'
+--   الجلسة B (activate_subscription): SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'cross-topup-activate-key');
+--     → يكتب sandbox.ledger بالمفتاح 'cross-topup-activate-key'
+--
+-- مسار السباق (أي جلسة تبدأ أولاً):
+--   1. إذا بدأت top_up أولاً: تُسجل في top_ups بالمفتاح الأصلي. عند تشغيل activate_subscription
+--      بعد القفل، تفحص activate_subscription sandbox.top_ups وتجد المفتاح → تُرفض بـ 40901.
+--   2. إذا بدأت activate_subscription أولاً: تُسجل في ledger بالمفتاح الأصلي. عند تشغيل top_up
+--      بعد القفل، تفحص top_up sandbox.ledger بالمفتاح الأصلي وتجد القيد → تُرفض بـ 40901.
+--
+-- في الحالتين، الجلسة الأولى تنجح والثانية تُرفض بـ 40901 (idempotency key conflict)،
+-- دون خصم مزدوج أو قيد ledger مكرر للمفتاح نفسه.
+
+-- ------------------------------------------------------------------
+-- 25. استخدام مفتاح idempotency نفسه بالتزامن من top_up و grant_coins
+-- ------------------------------------------------------------------
+-- نفس المبدأ كما في القسم 24، ولكن مع دالة grant_coins (مؤسس فقط) التي تكتب
+-- إلى sandbox.ledger بالمفتاح الأصلي دون لاحقة :credit.
+--
+-- سيناريو متزامن:
+--   الجلسة A (top_up): SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'cross-topup-grant-key', true);
+--     → يكتب sandbox.top_ups بالمفتاح 'cross-topup-grant-key'
+--   الجلسة B (grant_coins): SELECT public.aani_sandbox_grant_coins(:'userA', <amount>, 'cross-topup-grant-key', 'test grant');
+--     → يكتب sandbox.ledger بالمفتاح 'cross-topup-grant-key'
+--
+-- عند التسلسُل على قفل sandbox:ledger:idem:'cross-topup-grant-key':
+--   الجلسة الأولى تنجح. الجلسة الثانية، بعد القفل، تفحص الطاولة المقابلة
+--   (top_up تفحص ledger بالمفتاح الأصلي، grant_coins تفحص top_ups) وتجد القيد السابق
+--   → تُرفض بـ 40901 دون خصم مزدوج.
 
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة

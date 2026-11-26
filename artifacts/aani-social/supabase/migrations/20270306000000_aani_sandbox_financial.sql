@@ -381,6 +381,12 @@ begin
     return jsonb_build_object('ok',true,'duplicate',true,'amount',p_amount,'balance',v_balance);
   end if;
 
+  -- كشف استخدام المفتاح نفسه من عملية top_up سابقة (top_up يسجل المفتاح الأصلي في sandbox.top_ups).
+  -- هذا يضمن تعارض المفتاح الأصلي عبر الدوال المختلفة، لا مجرد مفتاح ledger المشتق (:credit).
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
+
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<grant_ledger_insert>>
   begin
@@ -446,6 +452,11 @@ begin
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < p_amount then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
+
+  -- كشف استخدام المفتاح نفسه من عملية top_up سابقة (top_up يسجل المفتاح الأصلي في sandbox.top_ups).
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
 
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<deduct_ledger_insert>>
@@ -646,6 +657,13 @@ begin
         'balance',v_balance,'simulated',true);
     end if;
 
+    -- كشف استخدام المفتاح نفسه من عملية مالية سابقة كتبت المفتاح الأصلي إلى ledger
+    -- (activate_subscription، grant_coins، deduct_coins، create_promotion، renew_subscription).
+    -- هذا يضمن تعارض المفتاح الأصلي عبر الدوال، حتى وإن كان top_up يكتب :credit إلى ledger.
+    if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
+      raise exception 'idempotency key conflict: key already used by another financial operation' using errcode='40901';
+    end if;
+
     -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
     <<topup_ledger_insert>>
     begin
@@ -783,6 +801,11 @@ begin
   values (p_user_id, p_package_id, 'active', now(), now() + (v_days || ' days')::interval, true, v_coins)
   returning id into v_sub_id;
 
+  -- كشف استخدام المفتاح نفسه من عملية top_up سابقة (top_up يسجل المفتاح الأصلي في sandbox.top_ups).
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
+
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<activate_ledger_insert>>
   begin
@@ -919,6 +942,11 @@ begin
   select public.aani_sandbox_balance(v_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
 
+  -- كشف استخدام المفتاح نفسه من عملية top_up سابقة (top_up يسجل المفتاح الأصلي في sandbox.top_ups).
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
+
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<renew_ledger_insert>>
   begin
@@ -1015,6 +1043,11 @@ begin
 
   select public.aani_sandbox_balance(p_user_id) into v_balance;
   if v_balance < v_coins then raise exception 'insufficient sandbox balance' using errcode='42001'; end if;
+
+  -- كشف استخدام المفتاح نفسه من عملية top_up سابقة (top_up يسجل المفتاح الأصلي في sandbox.top_ups).
+  if exists (select 1 from sandbox.top_ups where idempotency_key = p_idempotency_key) then
+    raise exception 'idempotency key conflict: key already used by top-up' using errcode='40901';
+  end if;
 
   -- معالجة تعارض UNIQUE على idempotency_key بشكل ذري وتحويله إلى 40901.
   <<promo_ledger_insert>>
