@@ -85,13 +85,13 @@ Deno.test("a failure body carries a message only, never a session", () => {
 });
 
 Deno.test("logging never prints a number, password, token or email", () => {
+  const secretError = new Error("password=hunter2 phone=+9647701234567 token=eyJhbGciOi email=a@b.co");
   const original = console.error;
   const recorded: string[] = [];
   console.error = (...parts: unknown[]) => {
     recorded.push(parts.map(part => String(part)).join(" "));
   };
   try {
-    const secretError = new Error("password=hunter2 phone=+9647701234567 token=eyJhbGciOi email=a@b.co");
     logFailure("[test] failed", secretError);
     logFailure("[test] status", 401);
   } finally {
