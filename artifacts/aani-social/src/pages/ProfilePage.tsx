@@ -490,6 +490,8 @@ export default function ProfilePage({
   const [draggingReorderKey, setDraggingReorderKey] = useState<string | null>(null);
   const [dragOverReorderKey, setDragOverReorderKey] = useState<string | null>(null);
   const profileReorderGestureRef = useRef<ProfileReorderGesture | null>(null);
+  // نقرة المتصفح التي تأتي بعد كل سحب فعلي: تُستهلك كي لا تفتح العنصر.
+  const profileReorderDragConsumedClickRef = useRef(false);
   const [showHighlightsManager, setShowHighlightsManager] = useState(false);
   const [feedViewerPostId, setFeedViewerPostId] = useState<string | null>(null);
   const [feedViewerSource, setFeedViewerSource] = useState<'grid' | 'reposts' | 'tagged'>('grid');
@@ -2007,6 +2009,7 @@ export default function ProfilePage({
     if (!own || !showProfileReorder || profileReorderSaving) return;
     // بلا قائمة كاملة لا سحب: كل قصص المجموعة يجب أن تكون محمّلة قبل ترتيبها.
     if ((kind === 'highlights' || kind === 'stories') && !profileHighlightsComplete) return;
+    profileReorderDragConsumedClickRef.current = false;
     const previousGesture = profileReorderGestureRef.current;
     if (previousGesture?.timer !== null && previousGesture?.timer !== undefined) window.clearTimeout(previousGesture.timer);
     const gesture: ProfileReorderGesture = {
@@ -2052,6 +2055,8 @@ export default function ProfilePage({
     setDraggingReorderKey(null);
     setDragOverReorderKey(null);
     if (!gesture.active) return;
+    // سحب فعلي: النقرة التالية تُستهلك بدل فتح العنصر.
+    profileReorderDragConsumedClickRef.current = true;
 
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-profile-reorder-kind][data-profile-reorder-id]');
     const targetKind = target?.dataset.profileReorderKind;
@@ -2098,58 +2103,47 @@ export default function ProfilePage({
     const gesture = profileReorderGestureRef.current;
     if (!gesture || gesture.pointerId !== event.pointerId) return;
     if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+    // لمس طويل انتهى بـpointercancel: لا تُفتح الصورة بعد الإلغاء.
+    if (gesture.active) profileReorderDragConsumedClickRef.current = true;
     profileReorderGestureRef.current = null;
     setDraggingReorderKey(null);
     setDragOverReorderKey(null);
   };
 
-  // نقل عنصر خطوة واحدة بلا سحب: مسار لوحة المفاتيح وقارئ الشاشة. نفس التحديث
-  // الفوري ونفس دوال الحفظ الحالية — لا مسار حفظ جديد ولا منطق RPC مكرر.
-  const moveProfileItemBy = (kind: ProfileReorderKind, id: string, direction: -1 | 1) => {
-    if (!own || profileReorderSaving) return;
-
-    if (kind === 'highlights') {
-      if (!profileHighlightsComplete) return;
-      const previousIds = profileHighlights.map(collection => collection.id);
-      const fromIndex = previousIds.indexOf(id);
-      const toIndex = fromIndex + direction;
-      // لا خروج عن أول عنصر أو آخره.
-      if (fromIndex < 0 || toIndex < 0 || toIndex >= previousIds.length) return;
-      const nextIds = moveProfileItem(previousIds, id, previousIds[toIndex]);
-      if (nextIds === previousIds) return;
-      const collectionById = new Map(profileHighlights.map(collection => [collection.id, collection]));
-      setProfileHighlights(nextIds.flatMap(collectionId => collectionById.has(collectionId) ? [collectionById.get(collectionId)!] : []));
-      announceReorderPosition('highlights', nextIds, id);
-      void saveProfileContentOrder('highlights', nextIds, previousIds);
-      return;
-    }
-
-    if (kind === 'stories') {
-      if (!profileHighlightsComplete) return;
-      const collection = reorderStoriesCollection;
-      if (!collection) return;
-      const previousIds = collection.stories.map(story => story.id);
-      const fromIndex = previousIds.indexOf(id);
-      const toIndex = fromIndex + direction;
-      if (fromIndex < 0 || toIndex < 0 || toIndex >= previousIds.length) return;
-      const nextIds = moveProfileItem(previousIds, id, previousIds[toIndex]);
-      if (nextIds === previousIds) return;
-      applyHighlightStoryOrder(collection.id, nextIds);
-      announceReorderPosition('stories', nextIds, id);
-      void saveProfileHighlightStoryOrder(collection.id, nextIds, previousIds);
-      return;
-    }
-
-    const previousIds = orderedEditablePosts.map(post => post.id);
-    const fromIndex = previousIds.indexOf(id);
-    const toIndex = fromIndex + direction;
-    if (fromIndex < 0 || toIndex < 0 || toIndex >= previousIds.length) return;
-    const nextIds = moveProfileItem(previousIds, id, previousIds[toIndex]);
-    if (nextIds === previousIds) return;
-    setProfilePostOrder(nextIds);
-    announceReorderPosition('posts', nextIds, id);
-    void saveProfileContentOrder('posts', nextIds, previousIds);
+  // النقرة التي يرسلها المتصفح بعد كل سحب فعلي تُستهلك هنا: الفتح يبقى للنقر
+  // القصير وحده، فلا تفتح الصورة أو المجموعة بعد إفلاتها.
+  const consumeProfileReorderClick = () => {
+    if (!profileReorderDragConsumedClickRef.current) return false;
+    profileReorderDragConsumedClickRef.current = false;
+    return true;
   };
+
+  // Safari يحدّد التمرير عند بداية اللمسة، وتغيير touch-action بعد اكتمال
+  // الضغط المطوّل لا يمنع تمريراً بدأ بالفعل. لذلك مستمع touchmove غير سلبي
+  // على المستند يُلغي التمرير فقط بينما السحب فعّال، ويترك اللمس العادي قبل
+  // 450ms يمرّر الصفحة والصف والشبكة كما هو. وtouchcancel يُلغي السحب وينظّف
+  // المؤقت والحالة مثل pointercancel.
+  useEffect(() => {
+    if (!showProfileReorder) return;
+    const stopPageScrollDuringDrag = (event: TouchEvent) => {
+      if (profileReorderGestureRef.current?.active) event.preventDefault();
+    };
+    const abandonTouchDrag = () => {
+      const gesture = profileReorderGestureRef.current;
+      if (!gesture) return;
+      if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+      if (gesture.active) profileReorderDragConsumedClickRef.current = true;
+      profileReorderGestureRef.current = null;
+      setDraggingReorderKey(null);
+      setDragOverReorderKey(null);
+    };
+    document.addEventListener('touchmove', stopPageScrollDuringDrag, { passive: false });
+    document.addEventListener('touchcancel', abandonTouchDrag);
+    return () => {
+      document.removeEventListener('touchmove', stopPageScrollDuringDrag);
+      document.removeEventListener('touchcancel', abandonTouchDrag);
+    };
+  }, [showProfileReorder]);
 
   // ربط المعاينة الحية بالسحب: نفس المفروز ونفس المعالجات للأنواع الثلاثة.
   const profileReorderBinding = (kind: ProfileReorderKind): ReorderBinding => ({
@@ -2161,7 +2155,7 @@ export default function ProfilePage({
     move: moveProfileReorderPointer,
     end: endProfileReorderPointer,
     cancel: cancelProfileReorderPointer,
-    moveBy: (id, direction) => moveProfileItemBy(kind, id, direction),
+    consumeDragClick: consumeProfileReorderClick,
   });
 
   // فتح منشور الشبكة في عارضه الحالي — نفس سلوك شبكة Profile تماماً.
@@ -2311,7 +2305,7 @@ export default function ProfilePage({
               </div>
               {showProfileReorder && (
                 <section className="profile-reorder-panel profile-reorder-preview" aria-label="إعادة ترتيب القصص والمنشورات">
-                  <p className="profile-reorder-hint">اضغط مطولاً على مقبض السحب في أي عنصر ثم اسحبه إلى موضعه الجديد — أو استخدم زرّي السابق/التالي. الترتيب يُحفظ فوراً ويظهر في ملفك الشخصي.</p>
+                  <p className="profile-reorder-hint">اضغط مطولاً على أي مكان في المنشور أو دائرة القصة، ثم اسحب العنصر إلى موضعه الجديد. يُحفظ الترتيب فوراً ويظهر في ملفك الشخصي.</p>
                   <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{profileReorderAnnouncement}</div>
 
                   <div className="profile-reorder-section-head">
@@ -2332,7 +2326,7 @@ export default function ProfilePage({
                         <h3>{reorderStoriesCollection.title} — القصص</h3>
                         <button type="button" className="profile-reorder-manage" onClick={() => setReorderStoriesCollectionId(null)}>إغلاق</button>
                       </div>
-                      <p className="profile-reorder-hint">اسحب القصص لإعادة ترتيبها داخل المجموعة.</p>
+                      <p className="profile-reorder-hint">اضغط مطولاً على دائرة القصة ثم اسحبها لإعادة ترتيبها داخل المجموعة.</p>
                       <ProfileHighlightStoryStrip
                         collection={reorderStoriesCollection}
                         reorder={profileReorderBinding('stories')}
@@ -2342,7 +2336,6 @@ export default function ProfilePage({
 
                   <div className="profile-reorder-section-head">
                     <h3>المنشورات</h3>
-                    <small>3 أعمدة — نفس شبكة ملفك الشخصي</small>
                   </div>
                   {reorderPreviewPosts.length ? (
                     <ProfileMediaGrid

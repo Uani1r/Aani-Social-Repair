@@ -1371,114 +1371,32 @@
   overflow: hidden;
 }
 
-/* حالات السحب على أي عنصر في المعاينة (منشور/مجموعة/قصة) بلا تغيير التخطيط.
-   العنصر نفسه يبقى قابلاً للتمرير والفتح: touch-action هنا auto، ومنع تمرير
-   اللمس محصور في مقبض السحب وحده أدناه — هذا هو إصلاح السحب على iPhone Safari. */
+/* وضع إعادة الترتيب: العنصر كله سطح السحب — لا مقبض، ولا زرّي سابق/تالي،
+   ولا أي طبقة تحكم فوق الصورة أو الدائرة. لا touch-action: none هنا:
+   التمرير مسموح قبل اكتمال الضغط المطوّل، ومنع تمرير Safari يحدث من مستمع
+   touchmove غير سلبي أثناء السحب الفعلي (ProfilePage.tsx). */
 .profile-reorder-preview [data-profile-reorder-kind] {
   position: relative;
   touch-action: auto;
   user-select: none;
   -webkit-user-select: none;
-}
-
-/* زر إجراء العنصر داخل وضع الترتيب (فتح المنشور/عرض المجموعة/عرض القصة):
-   يملأ العنصر بلا إطار ولا خلفية، ويترك اللمس للتمرير الطبيعي. */
-.profile-reorder-preview .profile-reorder-tile-action {
-  position: absolute;
-  inset: 0;
-  display: block;
-  width: 100%;
-  height: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  touch-action: auto;
-}
-
-.profile-reorder-preview .profile-reorder-circle-action {
-  display: block;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  touch-action: auto;
-}
-
-/* مقبض السحب: زر مستقل داخل العنصر، وهو السطح الوحيد الذي يمنع تمرير الصفحة. */
-.profile-reorder-drag-handle {
-  position: absolute;
-  bottom: 4px;
-  inset-inline-end: 4px;
-  z-index: 3;
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgb(255 255 255 / 55%);
-  border-radius: 999px;
-  background: rgb(0 0 0 / 70%);
-  color: #fff;
-  touch-action: none;
-  -webkit-user-select: none;
-  user-select: none;
+  -webkit-touch-callout: none;
   cursor: grab;
+  transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
 }
 
-/* الأب أعلاه touch-action: auto، وهذه القاعدة الأكثر تحديداً تُعيد none للمقبض. */
-.profile-reorder-preview [data-profile-reorder-kind] > .profile-reorder-drag-handle,
-.profile-reorder-preview [data-profile-reorder-kind] .profile-reorder-drag-handle {
-  touch-action: none;
-}
-
-.profile-reorder-drag-handle:disabled {
-  cursor: wait;
+/* العنصر الجاري سحبه: حالة بصرية واضحة بلا أي عنصر إضافي فوقه. */
+.profile-reorder-preview [data-profile-reorder-kind].is-dragging {
+  z-index: 2;
   opacity: .6;
-}
-
-.profile-reorder-preview [data-profile-reorder-kind].is-dragging .profile-reorder-drag-handle {
+  transform: scale(.94);
+  box-shadow: 0 0 0 2px #1d9bf0 inset;
   cursor: grabbing;
 }
 
-/* زرّا «السابق/التالي»: مسار لوحة المفاتيح وقارئ الشاشة بجانب مقبض السحب. */
-.profile-reorder-move-group {
-  position: absolute;
-  bottom: 4px;
-  inset-inline-start: 4px;
-  z-index: 3;
-  display: flex;
-  gap: 4px;
-}
-
-.profile-reorder-move-group button {
-  display: grid;
-  width: 24px;
-  height: 24px;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgb(255 255 255 / 55%);
-  border-radius: 999px;
-  background: rgb(0 0 0 / 70%);
-  color: #fff;
-  cursor: pointer;
-  touch-action: manipulation;
-}
-
-.profile-reorder-move-group button:hover {
-  background: rgb(29 155 240 / 85%);
-}
-
-.profile-reorder-preview [data-profile-reorder-kind].is-dragging {
-  opacity: .55;
-  transform: scale(.94);
-  transition: transform 120ms ease, opacity 120ms ease;
-  box-shadow: 0 0 0 2px #1d9bf0 inset;
-}
-
+/* موضع الإفلات المتوقع. */
 .profile-reorder-preview [data-profile-reorder-kind].is-drop-target {
+  transform: scale(1.03);
   box-shadow: 0 0 0 3px #60a5fa inset;
 }
 

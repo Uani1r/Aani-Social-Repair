@@ -1,5 +1,5 @@
-import { Camera, ChevronLeft, ChevronRight, Copy, GripVertical, Play, Plus } from 'lucide-react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import { Camera, Copy, Play, Plus } from 'lucide-react';
+import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 
 import { SignedImage } from '@/components/SignedMedia';
 import type { ProfileHighlightCollection } from '@/components/ProfileHighlightsManager';
@@ -13,13 +13,13 @@ import { getPostCoverUrl, getPostDestination, type Post } from '@/lib/types';
  * نفس الأعمدة الثلاثة، نفس أبعاد المربعات والدوائر، ونفس شارات الفيديو
  * والريلز والنص وتعدد الصور — فلا تنسخ شاشة التعديل تصميماً مخمّناً.
  *
- * وضع السحب اختياري: عند تمرير reorder يظهر لكل عنصر قابل للترتيب مقبض سحب
- * مستقل (زر مستقل داخل العنصر، لا زر داخل زر) وزرّا «السابق/التالي» للوصول.
+ * في وضع إعادة الترتيب (تمرير reorder) لا تُضاف أي أيقونة أو زر فوق الصورة:
+ * العنصر كله — الصورة أو الدائرة وعنوانها — هو سطح السحب. الضغط المطوّل يبدأ
+ * السحب، والنقر القصير يبقى يفتح المنشور أو المجموعة أو القصة كما هو.
  *
- * أحداث المؤشر على المقبض وحده، لا على العنصر: العنصر نفسه يبقى قابلاً
- * للتمرير الأفقي والفتح المعتاد داخل الصف والشبكة. لذلك `touch-action: none`
- * على `.profile-reorder-drag-handle` فقط، والعنصر يبقى `touch-action: auto`
- * (انظر ProfilePage.css) — وهذا هو إصلاح السحب على iPhone Safari.
+ * أحداث المؤشر على العنصر نفسه، ويُمنع تمرير الصفحة على Safari من مستمع
+ * touchmove غير سلبي في ProfilePage أثناء السحب الفعلي فقط (لا touch-action:
+ * none على العناصر)، فتبقى الصفحة قابلة للتمرير قبل اكتمال الضغط المطوّل.
  */
 
 export type ProfileContentVariant = 'posts' | 'videos' | 'reposts' | 'tagged';
@@ -34,82 +34,48 @@ export type ReorderBinding = {
   move: (event: ReactPointerEvent<HTMLElement>) => void;
   end: (event: ReactPointerEvent<HTMLElement>) => void;
   cancel: (event: ReactPointerEvent<HTMLElement>) => void;
-  /** نقل عنصر خطوة واحدة بلا سحب (-1 السابق، 1 التالي) — مسار الوصول. */
-  moveBy: (id: string, direction: -1 | 1) => void;
+  /** يستهلك نقرة تلت سحباً فعلياً حتى لا يفتح العنصر بعد إفلاته. */
+  consumeDragClick: () => boolean;
 };
 
 type ItemAttributes = {
-  'data-profile-reorder-kind'?: string;
-  'data-profile-reorder-id'?: string;
-  classes: string;
-};
-
-type HandleAttributes = {
-  'data-profile-reorder-handle': string;
+  'data-profile-reorder-kind': string;
+  'data-profile-reorder-id': string;
   onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  disabled?: boolean;
+  classes: string;
 };
 
-/** سمات العنصر: هدف الإسقاط و data-* فقط، بلا أحداث مؤشر. */
+/** سمات العنصر القابل للسحب: كل أحداث المؤشر عليه، بلا أي طبقة تحكم فوقه. */
 function itemAttributes(binding: ReorderBinding, id: string): ItemAttributes {
   const key = `${binding.kind}:${id}`;
   return {
     'data-profile-reorder-kind': binding.kind,
     'data-profile-reorder-id': id,
+    onPointerDown: event => binding.begin(event, binding.kind, id),
+    onPointerMove: event => binding.move(event),
+    onPointerUp: event => binding.end(event),
+    onPointerCancel: event => binding.cancel(event),
     classes: `${binding.draggingKey === key ? ' is-dragging' : ''}${binding.dropTargetKey === key ? ' is-drop-target' : ''}`,
   };
 }
 
 /**
- * سمات مقبض السحب وحده: أحداث المؤشر هنا فقط، مع setPointerCapture على
- * المقبض نفسه (event.currentTarget في المستدعي). العنصر لا يلتقط المؤشر.
+ * النقر القصير يفتح العنصر، إلا إذا كان قد أنهى سحباً فعلياً: المتصفح يرسل
+ * نقرة بعد كل إفلات، فتُستهلك هنا بدل أن تفتح ما جرى ترتيبه.
  */
-function dragHandleAttributes(binding: ReorderBinding, id: string): HandleAttributes {
-  return {
-    'data-profile-reorder-handle': 'true',
-    onPointerDown: event => binding.begin(event, binding.kind, id),
-    onPointerMove: binding.move,
-    onPointerUp: binding.end,
-    onPointerCancel: binding.cancel,
-    disabled: binding.disabled,
-  };
-}
-
-function DragHandle({ reorder, id }: { reorder: ReorderBinding; id: string }) {
-  return (
-    <button
-      type="button"
-      className="profile-reorder-drag-handle"
-      aria-label="اسحب لإعادة الترتيب"
-      {...dragHandleAttributes(reorder, id)}
-    >
-      <GripVertical size={15} aria-hidden="true" />
-    </button>
-  );
-}
-
-function MoveButtons({ reorder, id }: { reorder: ReorderBinding; id: string }) {
-  return (
-    <span className="profile-reorder-move-group">
-      <button
-        type="button"
-        aria-label="نقل العنصر إلى الموضع السابق"
-        onClick={() => reorder.moveBy(id, -1)}
-      >
-        <ChevronRight size={15} aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        aria-label="نقل العنصر إلى الموضع التالي"
-        onClick={() => reorder.moveBy(id, 1)}
-      >
-        <ChevronLeft size={15} aria-hidden="true" />
-      </button>
-    </span>
-  );
+function handleItemClick(
+  event: ReactMouseEvent<HTMLButtonElement>,
+  binding: ReorderBinding | undefined,
+  open: () => void,
+) {
+  if (binding?.consumeDragClick()) {
+    event.preventDefault();
+    return;
+  }
+  open();
 }
 
 function isReelPost(post: Post): boolean {
@@ -143,12 +109,25 @@ export function ProfileMediaGrid({
         const postCoverUrl = getPostCoverUrl(post);
         const isMultiImage = mediaUrls.length > 1;
         const draggable = Boolean(reorder) && (!canReorder || canReorder(post));
+        const item = draggable ? itemAttributes(reorder!, post.id) : null;
         const actionLabel = variant !== 'posts' || isReel
           ? 'فتح الريل في عارض الملف الشخصي'
           : 'فتح المنشور في عارض الملف الشخصي';
 
-        const visual = (
-          <>
+        return (
+          <button
+            key={post.id}
+            type="button"
+            onClick={event => handleItemClick(event, draggable ? reorder : undefined, () => onOpenPost?.(post))}
+            aria-label={actionLabel}
+            data-profile-reorder-kind={item?.['data-profile-reorder-kind']}
+            data-profile-reorder-id={item?.['data-profile-reorder-id']}
+            onPointerDown={item?.onPointerDown}
+            onPointerMove={item?.onPointerMove}
+            onPointerUp={item?.onPointerUp}
+            onPointerCancel={item?.onPointerCancel}
+            className={`relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]${item?.classes ?? ''}`}
+          >
             {isReel ? (
               postCoverUrl ? (
                 <SignedImage
@@ -194,43 +173,7 @@ export function ProfileMediaGrid({
             {isMultiImage && (
               <Copy size={16} aria-hidden="true" fill="white" className="absolute left-2 top-2 z-[2] text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
             )}
-          </>
-        );
-
-        // خارج وضع الترتيب (Profile، أو عنصر غير مملوك): زر واحد كما كان.
-        if (!draggable) {
-          return (
-            <button
-              key={post.id}
-              type="button"
-              onClick={() => { if (!reorder) onOpenPost?.(post); }}
-              aria-label={actionLabel}
-              className="relative block aspect-[4/5] overflow-hidden bg-neutral-900 transition-transform duration-150 active:scale-[0.985]"
-            >
-              {visual}
-            </button>
-          );
-        }
-
-        const item = itemAttributes(reorder!, post.id);
-        return (
-          <div
-            key={post.id}
-            data-profile-reorder-kind={item['data-profile-reorder-kind']}
-            data-profile-reorder-id={item['data-profile-reorder-id']}
-            className={`relative block aspect-[4/5] overflow-hidden bg-neutral-900${item.classes}`}
-          >
-            <button
-              type="button"
-              className="profile-reorder-tile-action"
-              onClick={() => onOpenPost?.(post)}
-              aria-label={actionLabel}
-            >
-              {visual}
-            </button>
-            <DragHandle reorder={reorder!} id={post.id} />
-            <MoveButtons reorder={reorder!} id={post.id} />
-          </div>
+          </button>
         );
       })}
     </div>
@@ -271,60 +214,36 @@ export function ProfileHighlightsRow({
       )}
       {collections.map(collection => {
         const cover = collection.stories[0];
-        const circle = (
-          <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
-            <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
-              {collection.cover_url ? (
-                <SignedImage src={collection.cover_url} className="h-full w-full object-cover" alt="" />
-              ) : cover?.media_url && cover.media_type === 'video' ? (
-                <span className="grid h-full w-full place-items-center text-neutral-400" aria-hidden="true"><Play size={18} /></span>
-              ) : cover?.media_url ? (
-                <SignedImage src={cover.media_url} className="h-full w-full object-cover" alt="" />
-              ) : (
-                <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{cover?.caption || collection.title}</span>
-              )}
-            </span>
-          </span>
-        );
-        const title = <span className="max-w-[88px] truncate text-[11px] text-[#BBBBBB]">{collection.title}</span>;
-
-        if (!reorder) {
-          return (
-            <button
-              key={collection.id}
-              type="button"
-              onClick={() => onSelect(collection)}
-              className="flex shrink-0 cursor-pointer flex-col items-center gap-1.5"
-              aria-label={`عرض مجموعة ${collection.title}`}
-            >
-              {circle}
-              {title}
-            </button>
-          );
-        }
-
-        const item = itemAttributes(reorder, collection.id);
+        const item = reorder ? itemAttributes(reorder, collection.id) : null;
         return (
-          <div
+          <button
             key={collection.id}
-            data-profile-reorder-kind={item['data-profile-reorder-kind']}
-            data-profile-reorder-id={item['data-profile-reorder-id']}
-            className={`flex shrink-0 flex-col items-center gap-1.5${item.classes}`}
+            type="button"
+            onClick={event => handleItemClick(event, reorder, () => onSelect(collection))}
+            className={`flex shrink-0 cursor-pointer flex-col items-center gap-1.5${item?.classes ?? ''}`}
+            aria-label={`عرض مجموعة ${collection.title}`}
+            data-profile-reorder-kind={item?.['data-profile-reorder-kind']}
+            data-profile-reorder-id={item?.['data-profile-reorder-id']}
+            onPointerDown={item?.onPointerDown}
+            onPointerMove={item?.onPointerMove}
+            onPointerUp={item?.onPointerUp}
+            onPointerCancel={item?.onPointerCancel}
           >
-            <span className="relative inline-flex">
-              <button
-                type="button"
-                className="profile-reorder-circle-action"
-                onClick={() => onSelect(collection)}
-                aria-label={`عرض مجموعة ${collection.title}`}
-              >
-                {circle}
-              </button>
-              <DragHandle reorder={reorder} id={collection.id} />
-              <MoveButtons reorder={reorder} id={collection.id} />
+            <span className="flex h-[68px] w-[68px] rounded-full border border-[#4B4B50] p-[3px]">
+              <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-neutral-800">
+                {collection.cover_url ? (
+                  <SignedImage src={collection.cover_url} className="h-full w-full object-cover" alt="" />
+                ) : cover?.media_url && cover.media_type === 'video' ? (
+                  <span className="grid h-full w-full place-items-center text-neutral-400" aria-hidden="true"><Play size={18} /></span>
+                ) : cover?.media_url ? (
+                  <SignedImage src={cover.media_url} className="h-full w-full object-cover" alt="" />
+                ) : (
+                  <span className="line-clamp-3 px-1 text-center text-[9px] text-white">{cover?.caption || collection.title}</span>
+                )}
+              </span>
             </span>
-            {title}
-          </div>
+            <span className="max-w-[88px] truncate text-[11px] text-[#BBBBBB]">{collection.title}</span>
+          </button>
         );
       })}
     </div>
@@ -344,60 +263,34 @@ export function ProfileHighlightStoryStrip({
   return (
     <div className="no-scrollbar flex items-center gap-3 overflow-x-auto pb-2">
       {collection.stories.map(story => {
-        const circle = (
-          <span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-full border border-[#4B4B50] bg-neutral-800">
-            {story.media_url && story.media_type === 'video' ? (
-              <span className="grid h-full w-full place-items-center text-neutral-300" aria-hidden="true"><Play size={16} /></span>
-            ) : story.media_url ? (
-              <SignedImage src={story.media_url} className="h-full w-full object-cover" alt="" />
-            ) : (
-              <span className="line-clamp-2 px-1 text-center text-[9px] text-white">{story.caption || collection.title}</span>
-            )}
-          </span>
-        );
-        const dateLabel = (
-          <span className="max-w-[70px] truncate text-[10px] text-[#BBBBBB]">
-            {new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'short' }).format(new Date(story.created_at))}
-          </span>
-        );
-
-        if (!reorder) {
-          return (
-            <button
-              key={story.id}
-              type="button"
-              onClick={() => onOpenStory?.(story.id)}
-              className="relative flex shrink-0 flex-col items-center gap-1"
-              aria-label="عرض القصة"
-            >
-              {circle}
-              {dateLabel}
-            </button>
-          );
-        }
-
-        const item = itemAttributes(reorder, story.id);
+        const item = reorder ? itemAttributes(reorder, story.id) : null;
         return (
-          <div
+          <button
             key={story.id}
-            data-profile-reorder-kind={item['data-profile-reorder-kind']}
-            data-profile-reorder-id={item['data-profile-reorder-id']}
-            className={`relative flex shrink-0 flex-col items-center gap-1${item.classes}`}
+            type="button"
+            onClick={event => handleItemClick(event, reorder, () => onOpenStory?.(story.id))}
+            className={`relative flex shrink-0 flex-col items-center gap-1${item?.classes ?? ''}`}
+            aria-label="عرض القصة"
+            data-profile-reorder-kind={item?.['data-profile-reorder-kind']}
+            data-profile-reorder-id={item?.['data-profile-reorder-id']}
+            onPointerDown={item?.onPointerDown}
+            onPointerMove={item?.onPointerMove}
+            onPointerUp={item?.onPointerUp}
+            onPointerCancel={item?.onPointerCancel}
           >
-            <span className="relative inline-flex">
-              <button
-                type="button"
-                className="profile-reorder-circle-action"
-                onClick={() => onOpenStory?.(story.id)}
-                aria-label="عرض القصة"
-              >
-                {circle}
-              </button>
-              <DragHandle reorder={reorder} id={story.id} />
-              <MoveButtons reorder={reorder} id={story.id} />
+            <span className="flex h-[58px] w-[58px] items-center justify-center overflow-hidden rounded-full border border-[#4B4B50] bg-neutral-800">
+              {story.media_url && story.media_type === 'video' ? (
+                <span className="grid h-full w-full place-items-center text-neutral-300" aria-hidden="true"><Play size={16} /></span>
+              ) : story.media_url ? (
+                <SignedImage src={story.media_url} className="h-full w-full object-cover" alt="" />
+              ) : (
+                <span className="line-clamp-2 px-1 text-center text-[9px] text-white">{story.caption || collection.title}</span>
+              )}
             </span>
-            {dateLabel}
-          </div>
+            <span className="max-w-[70px] truncate text-[10px] text-[#BBBBBB]">
+              {new Intl.DateTimeFormat('ar', { day: 'numeric', month: 'short' }).format(new Date(story.created_at))}
+            </span>
+          </button>
         );
       })}
     </div>

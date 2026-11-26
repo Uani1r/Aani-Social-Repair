@@ -3,14 +3,19 @@
  *
  * It renders the real ProfileHighlightsRow, ProfileHighlightStoryStrip and
  * ProfileMediaGrid from src/components/profile/ProfileContentPreview.tsx with
- * fixed fixtures and the same pointer wiring Edit Profile uses (a drag handle
- * per reorderable item, long press, elementFromPoint drop target, data
- * attributes) plus the same move-by-one buttons and the aria-live announcement
- * Edit Profile renders. It never talks to Supabase: the order is kept in memory
- * (and localStorage to survive a reload), and every reorder attempt — drag or
- * button — is recorded in window.__profileReorderLog for assertions.
+ * fixed fixtures and the same wiring Edit Profile uses: the whole tile — its
+ * image, video or circle and its title — is the long-press drag surface, with no
+ * drag handle, no arrow buttons and no overlays on the media. A short click
+ * still opens the item, and a click that follows a real drag is consumed. It
+ * never talks to Supabase: the order is kept in memory (and localStorage to
+ * survive a reload), and every reorder attempt is recorded in
+ * window.__profileReorderLog for assertions.
+ *
+ * It also mirrors ProfilePage's non-passive touchmove listener, so a test can
+ * prove the page scroll is cancelled only while a drag is active. That is the
+ * Safari mechanism reproduced in the browser engines — not a device test.
  */
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import {
@@ -128,9 +133,11 @@ function Harness() {
   const [postOrder, setPostOrder] = useState<string[]>(() => readStored('test:posts', OWNED_POSTS.map(item => item.id)));
   const [selected, setSelected] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
+  const [openedPost, setOpenedPost] = useState<string | null>(null);
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
+  const dragConsumedClick = useRef(false);
   const gesture = useRef<{ kind: Kind; id: string; x: number; y: number; active: boolean } | null>(null);
 
   const log = (entry: LogEntry) => {
@@ -138,7 +145,7 @@ function Harness() {
   };
 
   // نفس أثر الحفظ في Edit Profile: تحديث فوري + حفظ (localStorage هنا)
-  // واستعادة السابق عند الفشل — مشترك بين السحب وزرّي السابق/التالي.
+  // واستعادة السابق عند الفشل.
   const applyOrder = (kind: Kind, nextIds: string[], collectionId: string | null) => {
     if (kind === 'posts') {
       setPostOrder(nextIds);
@@ -172,6 +179,7 @@ function Harness() {
 
   const begin = (event: ReactPointerEvent<HTMLElement>, kind: Kind, id: string) => {
     if (timer.current !== null) window.clearTimeout(timer.current);
+    dragConsumedClick.current = false;
     gesture.current = { kind, id, x: event.clientX, y: event.clientY, active: false };
     event.currentTarget.setPointerCapture(event.pointerId);
     timer.current = window.setTimeout(() => {
@@ -206,6 +214,8 @@ function Harness() {
     setDragKey(null);
     setOverKey(null);
     if (!current.active) return;
+    // سحب فعلي: النقرة التالية تُستهلك بدل فتح العنصر.
+    dragConsumedClick.current = true;
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-profile-reorder-kind][data-profile-reorder-id]');
     if (target?.dataset.profileReorderKind !== current.kind || !target.dataset.profileReorderId) return;
 
@@ -230,35 +240,39 @@ function Harness() {
     setAnnouncement(`نُقل ${LABELS[current.kind]} إلى الموضع ${nextIds.indexOf(current.id) + 1} من ${nextIds.length}.`);
   };
 
-  // زرّا السابق/التالي: نفس المسار (تحديث فوري ثم حفظ أو استعادة) بلا سحب.
-  const moveByItem = (kind: Kind, id: string, direction: -1 | 1) => {
-    const previousIds = kind === 'posts'
-      ? postOrder
-      : kind === 'highlights'
-        ? highlightOrder
-        : (selected ? storiesOrder[selected] ?? [] : []);
-    const from = previousIds.indexOf(id);
-    const to = from + direction;
-    // لا خروج عن أول عنصر أو آخره.
-    if (from < 0 || to < 0 || to >= previousIds.length) return;
-    const nextIds = move(previousIds, id, previousIds[to]);
-    if (nextIds === previousIds) return;
-
-    const failing = window.__profileReorderFailNext === true;
-    window.__profileReorderFailNext = false;
-    log({ kind, nextIds, previousIds });
-    if (failing) {
-      window.__profileReorderLog = [...(window.__profileReorderLog ?? []), { kind, nextIds: previousIds, previousIds: nextIds }];
-      setAnnouncement(`فشل حفظ الترتيب: بقي ${LABELS[kind]} في الموضع ${from + 1} من ${previousIds.length}.`);
-      return;
-    }
-
-    applyOrder(kind, nextIds, kind === 'stories' ? selected : null);
-    setAnnouncement(`نُقل ${LABELS[kind]} إلى الموضع ${to + 1} من ${nextIds.length}.`);
+  // النقرة التي يرسلها المتصفح بعد سحب فعلي تُستهلك: النقر القصير وحده يفتح.
+  const consumeDragClick = () => {
+    if (!dragConsumedClick.current) return false;
+    dragConsumedClick.current = false;
+    return true;
   };
+
+  // نفس مستمع ProfilePage غير السلبي: يمنع تمرير الصفحة أثناء السحب الفعلي فقط،
+  // وtouchcancel يُلغي السحب وينظّف المؤقت والحالة.
+  useEffect(() => {
+    const stopPageScrollDuringDrag = (event: TouchEvent) => {
+      if (gesture.current?.active) event.preventDefault();
+    };
+    const abandonTouchDrag = () => {
+      if (!gesture.current) return;
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      if (gesture.current.active) dragConsumedClick.current = true;
+      gesture.current = null;
+      setDragKey(null);
+      setOverKey(null);
+    };
+    document.addEventListener('touchmove', stopPageScrollDuringDrag, { passive: false });
+    document.addEventListener('touchcancel', abandonTouchDrag);
+    return () => {
+      document.removeEventListener('touchmove', stopPageScrollDuringDrag);
+      document.removeEventListener('touchcancel', abandonTouchDrag);
+    };
+  }, []);
 
   const cancel = () => {
     if (timer.current !== null) window.clearTimeout(timer.current);
+    // لمس طويل انتهى بـpointercancel: لا تُفتح الصورة بعد الإلغاء.
+    if (gesture.current?.active) dragConsumedClick.current = true;
     gesture.current = null;
     setDragKey(null);
     setOverKey(null);
@@ -268,12 +282,13 @@ function Harness() {
     kind, draggingKey: dragKey, dropTargetKey: overKey, disabled: false,
     begin: (event, _kind, id) => begin(event, kind, id),
     move: movePointer, end, cancel,
-    moveBy: (id, direction) => moveByItem(kind, id, direction),
+    consumeDragClick,
   });
 
   return (
     <div dir="rtl" style={{ width: 420 }} data-testid="harness-ready" className="profile-reorder-panel profile-reorder-preview">
       <div role="status" aria-live="polite" aria-atomic="true" data-testid="reorder-announcement">{announcement}</div>
+      <span data-testid="opened-post">{openedPost ?? ''}</span>
       <section aria-label="highlights">
         <ProfileHighlightsRow
           collections={highlighted}
@@ -286,6 +301,7 @@ function Harness() {
         <section aria-label="collection stories">
           <ProfileHighlightStoryStrip
             collection={{ ...selectedCollection, stories: selectedStories }}
+            onOpenStory={storyId => setOpenedPost(storyId)}
             reorder={binding('stories')}
           />
         </section>
@@ -294,6 +310,7 @@ function Harness() {
       <section aria-label="media grid">
         <ProfileMediaGrid
           posts={[...gridPosts, REPOST_POST]}
+          onOpenPost={post => setOpenedPost(post.id)}
           reorder={binding('posts')}
           canReorder={item => item.user_id === OWNER_ID && !item.reposter_id}
         />
