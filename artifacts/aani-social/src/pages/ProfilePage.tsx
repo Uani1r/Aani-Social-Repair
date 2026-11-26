@@ -31,6 +31,15 @@ import { uploadMedia } from '@/lib/storyUpload';
 import ProfileHighlightsManager, { ProfileHighlightViewer, type ProfileHighlight, type ProfileHighlightCollection, type ProfileHighlightCollectionSummary } from '@/components/ProfileHighlightsManager';
 import { cleanUsername, displayName, getPostCoverUrl, getPostDestination, normalizePostMetadata, type Post, type Profile } from '@/lib/types';
 import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS, type PublicProfileRow } from '@/lib/profileFields';
+import {
+  accountAuthErrorMessage,
+  DEFAULT_PHONE_COUNTRY_CODE,
+  formatPhoneForDisplay,
+  MIN_PASSWORD_LENGTH,
+  normalizePhoneToE164,
+  providerBadgeLabel,
+  readAccountAuthIdentity,
+} from '@/lib/accountAuth';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
@@ -529,6 +538,22 @@ export default function ProfilePage({
   const [phoneDraft, setPhoneDraft] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
   const [accountSettingsBusy, setAccountSettingsBusy] = useState(false);
+  // تأكيد Supabase لرقم الهاتف فقط (phone_confirmed_at) — لا يُعرض الرقم
+  // مؤكداً قبل نجاح التحقق.
+  const [authPhoneVerified, setAuthPhoneVerified] = useState(false);
+  // تغيير الهاتف على مرحلتين: طلب رمز SMS ثم تأكيده. لا تُرسَل قيم OTP إلى
+  // أي جدول ولا تُطبع في السجلات.
+  const [phoneChangeStep, setPhoneChangeStep] = useState<'request' | 'verify'>('request');
+  const [phoneChangeTarget, setPhoneChangeTarget] = useState('');
+  const [phoneOtpCode, setPhoneOtpCode] = useState('');
+  // كلمة المرور الحالية والجديدة وتأكيدها — تُمرَّر إلى Supabase مباشرة فقط.
+  const [currentPasswordDraft, setCurrentPasswordDraft] = useState('');
+  const [passwordConfirmDraft, setPasswordConfirmDraft] = useState('');
+  // أُرسل رابط تحقق إلى البريد لتعيين كلمة مرور لحساب Google/Apple.
+  const [passwordReauthSent, setPasswordReauthSent] = useState(false);
+  // يمنع طلبات تغيير الهاتف المتزامنة (Supabase يحذّر من طلبات phone_change
+  // متزامنة قد تربط رقماً غير مقصود).
+  const phoneChangeInFlightRef = useRef(false);
   const [blockedProfiles, setBlockedProfiles] = useState<Profile[]>([]);
   const [mutedProfiles, setMutedProfiles] = useState<Profile[]>([]);
   const [storyHiddenUserIds, setStoryHiddenUserIds] = useState<Set<string>>(new Set());
@@ -792,7 +817,9 @@ export default function ProfilePage({
   const formattedBirthDate = formatProfileBirthDate(profileBirthDate);
   const showPublicBirthDate = Boolean(person?.show_birth_date && formattedBirthDate);
   const currentFontLabel = fontPreferenceLabel(resolveFontPreference(person?.font_preference, readLocalFontPreference()));
-  const authProviderLabel = authProvider === 'google' ? 'Google' : authProvider === 'apple' ? 'Apple' : authProvider === 'phone' ? 'الهاتف' : 'البريد الإلكتروني';
+  // شارة المزوّد تظهر لـGoogle/Apple/الهاتف فقط: لا شارة «البريد الإلكتروني»
+  // مكررة بجانب عنوان حقل البريد.
+  const authProviderBadgeLabel = providerBadgeLabel(authProvider);
 
   useEffect(() => {
     if (own && profile) setPerson(profile);
@@ -1019,17 +1046,13 @@ export default function ProfilePage({
         return;
       }
       const user = data.user;
-      const providers = Array.isArray(user?.app_metadata?.providers)
-        ? user.app_metadata.providers.filter((provider): provider is string => typeof provider === 'string')
-        : [];
-      const identities = user?.identities || [];
-      const primaryProvider = user?.app_metadata?.provider;
-      const linkedProvider = identities.find(identity => identity.provider === 'google' || identity.provider === 'apple')?.provider;
-      setAuthEmail(user?.email || '');
-      setAuthPhone(user?.phone || '');
-      setAuthProvider(typeof primaryProvider === 'string' ? primaryProvider : linkedProvider || providers[0] || 'email');
-      setHasPassword(providers.includes('email') || identities.some(identity => identity.provider === 'email'));
-      if (settingsScreen === 'account') setPhoneDraft(user?.phone || '');
+      const identity = readAccountAuthIdentity(user);
+      setAuthEmail(identity.email);
+      setAuthPhone(identity.phone);
+      setAuthPhoneVerified(identity.phoneConfirmed);
+      setAuthProvider(identity.primaryProvider);
+      setHasPassword(identity.hasPassword);
+      if (settingsScreen === 'account' && phoneChangeStep === 'request') setPhoneDraft(identity.phone || '');
     };
     void loadAuthSettings();
     return () => { active = false; };
@@ -1465,42 +1488,210 @@ export default function ProfilePage({
     setIsEditingProfile(false);
   };
 
-  const savePhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+  // بعد أي تغيير ناجح يُقرأ المستخدم من Supabase مجدداً: الرقم أو التأكيد لا
+  // يُعرضان إلا بما يعيده Supabase نفسه.
+  const refreshAccountAuthIdentity = async () => {
+    const { data, error } = await supabase.auth.getUser();
+    if (error || !data.user) return null;
+    const identity = readAccountAuthIdentity(data.user);
+    setAuthEmail(identity.email);
+    setAuthPhone(identity.phone);
+    setAuthPhoneVerified(identity.phoneConfirmed);
+    setAuthProvider(identity.primaryProvider);
+    setHasPassword(identity.hasPassword);
+    return identity;
+  };
+
+  const openPhoneChangeDialog = () => {
+    if (accountSettingsBusy) return;
+    setPhoneDraft(phoneChangeStep === 'verify' ? phoneChangeTarget : authPhone);
+    setPhoneOtpCode('');
+    setShowPhoneModal(true);
+  };
+
+  const closePhoneChangeDialog = () => {
+    if (accountSettingsBusy) return;
+    setShowPhoneModal(false);
+    setPhoneOtpCode('');
+    if (phoneChangeStep === 'request') setPhoneDraft(authPhone);
+  };
+
+  /**
+   * طلب تغيير الهاتف: Supabase Auth يرسل رمز SMS إلى الرقم الجديد عبر
+   * updateUser({ phone }) — بلا phone_confirm وبلا خدمة إدارية. الرقم لا
+   * يُعتمد ولا يُعرض مؤكداً قبل verifyOtp.
+   *
+   * تحذير Supabase: طلبات phone_change القديمة/المتزامنة قد تربط رقماً غير
+   * مقصود. لذلك:
+   * - طلب واحد فقط في المرة (phoneChangeInFlightRef + accountSettingsBusy).
+   * - إعادة الإرسال للرقم المعلّق نفسه فقط، ولا يُستبدل برقم آخر قبل إلغاء
+   *   الطلب صراحةً.
+   * - التحقق يستخدم الرقم المعلّق نفسه الذي أُرسل إليه الرمز.
+   */
+  const requestPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const nextPhone = phoneDraft.trim().replace(/[\s()-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(nextPhone)) {
-      toast.error('أدخل رقم الهاتف بالصيغة الدولية، مثل ‎+9665XXXXXXXX.');
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    const nextPhone = normalizePhoneToE164(phoneDraft);
+    if (!nextPhone) {
+      toast.error(`أدخل رقم هاتف صالحاً — الرمز الافتراضي ${DEFAULT_PHONE_COUNTRY_CODE} أو صيغة دولية تبدأ بـ +.`);
       return;
     }
-    if (nextPhone === authPhone || accountSettingsBusy) return;
+    if (nextPhone === authPhone) {
+      toast.error('هذا هو رقم الهاتف الحالي على الحساب.');
+      return;
+    }
+    if (phoneChangeStep === 'verify' && nextPhone !== phoneChangeTarget) {
+      toast.error('يوجد طلب تحقق معلّق لرقم آخر. ألغِ الطلب أولاً ثم اطلب الرقم الجديد.');
+      return;
+    }
+
+    phoneChangeInFlightRef.current = true;
     setAccountSettingsBusy(true);
     try {
-      const { data, error } = await supabase.functions.invoke('update-account-phone', { body: { phone: nextPhone } });
+      const { error } = await supabase.auth.updateUser({ phone: nextPhone });
       if (error) throw error;
-      if (data?.phone !== nextPhone) throw new Error('لم يتم إرجاع رقم الهاتف المحدّث من الخادم.');
-      setAuthPhone(nextPhone);
-      setPhoneDraft(nextPhone);
-      setShowPhoneModal(false);
-      toast.success('تم تحديث رقم الهاتف مباشرة.');
+      setPhoneChangeTarget(nextPhone);
+      setPhoneChangeStep('verify');
+      setPhoneOtpCode('');
+      toast.success('أرسلنا رمز تحقق SMS إلى الرقم الجديد. أدخل الرمز لتأكيده.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر تحديث رقم الهاتف.');
+      toast.error(accountAuthErrorMessage(error, 'تعذر إرسال رمز التحقق. حاول مرة أخرى.'));
+    } finally {
+      phoneChangeInFlightRef.current = false;
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  /** إعادة إرسال الرمز للرقم المعلّق نفسه فقط — لا رقم آخر. */
+  const resendPhoneChangeCode = async () => {
+    if (phoneChangeInFlightRef.current || accountSettingsBusy || !phoneChangeTarget) return;
+    phoneChangeInFlightRef.current = true;
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ phone: phoneChangeTarget });
+      if (error) throw error;
+      toast.success('أعدنا إرسال رمز التحقق إلى الرقم نفسه.');
+    } catch (error) {
+      toast.error(accountAuthErrorMessage(error, 'تعذر إعادة إرسال الرمز. حاول بعد قليل.'));
+    } finally {
+      phoneChangeInFlightRef.current = false;
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const confirmPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    const token = phoneOtpCode.replace(/\D/g, '');
+    if (!phoneChangeTarget || token.length < 6) {
+      toast.error('أدخل رمز التحقق المكوّن من ستة أرقام.');
+      return;
+    }
+
+    phoneChangeInFlightRef.current = true;
+    setAccountSettingsBusy(true);
+    try {
+      const { data, error } = await supabase.auth.verifyOtp({ phone: phoneChangeTarget, token, type: 'phone_change' });
+      if (error) throw error;
+      const identity = await refreshAccountAuthIdentity();
+      // لا يُعرض الرقم مؤكداً إلا إذا أعاد Supabase الرقم الجديد نفسه مؤكداً.
+      if (!data.user || !identity || identity.phone !== phoneChangeTarget || !identity.phoneConfirmed) {
+        throw new Error('لم يؤكد Supabase الرقم الجديد بعد. أعد المحاولة أو اطلب رمزاً جديداً.');
+      }
+      setPhoneChangeStep('request');
+      setPhoneChangeTarget('');
+      setPhoneOtpCode('');
+      setPhoneDraft(identity.phone);
+      setShowPhoneModal(false);
+      toast.success('تم تأكيد رقم الهاتف الجديد. جلستك على هذا الجهاز ما زالت قائمة.');
+    } catch (error) {
+      const message = accountAuthErrorMessage(error, 'تعذر تأكيد الرمز. أعد المحاولة أو اطلب رمزاً جديداً.');
+      // انتهاء الصلاحية أو الرمز الخاطئ: يُمسح الرمز ويُطلب رمز جديد للرقم نفسه.
+      if (/انتهت صلاحية|غير صحيح/.test(message)) setPhoneOtpCode('');
+      toast.error(message);
+    } finally {
+      phoneChangeInFlightRef.current = false;
+      setAccountSettingsBusy(false);
+    }
+  };
+
+  const cancelPhoneChangeRequest = () => {
+    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
+    setPhoneChangeStep('request');
+    setPhoneChangeTarget('');
+    setPhoneOtpCode('');
+    setPhoneDraft(authPhone);
+    toast.success('أُلغي طلب التحقق هنا. الرقم الحالي لم يتغيّر.');
+  };
+
+  /** إعادة تحقق آمنة لحساب Google/Apple: رابط إلى بريد الحساب نفسه. */
+  const sendPasswordResetLink = async () => {
+    if (accountSettingsBusy) return;
+    if (!authEmail) {
+      toast.error('لا يوجد بريد مؤكد لهذا الحساب لإرسال رابط التحقق.');
+      return;
+    }
+    setAccountSettingsBusy(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(authEmail, {
+        redirectTo: window.location.origin,
+      });
+      if (error) throw error;
+      setPasswordReauthSent(true);
+      toast.success('أرسلنا رابط تحقق إلى بريد الحساب. افتح الرابط لتعيين كلمة المرور.');
+    } catch (error) {
+      toast.error(accountAuthErrorMessage(error, 'تعذر إرسال رابط التحقق. حاول مرة أخرى.'));
     } finally {
       setAccountSettingsBusy(false);
     }
   };
 
+  /**
+   * تغيير كلمة المرور:
+   * - حساب يملك كلمة مرور: تُتحقق كلمة المرور الحالية عند Supabase عبر
+   *   signInWithPassword (لا تُقارن محلياً ولا تُخزَّن) ثم updateUser.
+   *   لا signOut: الجلسة تبقى قائمة بعد التغيير.
+   * - حساب Google/Apple بلا كلمة مرور: رابط تحقق إلى البريد (أعلاه) ثم
+   *   نافذة التعيين — إعادة تحقق آمنة بلا ربط هوية جديد.
+   */
   const savePasswordChange = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (passwordDraft.length < 6 || accountSettingsBusy) return;
+    if (accountSettingsBusy || !hasPassword) return;
+    if (passwordDraft.length < MIN_PASSWORD_LENGTH) {
+      toast.error(`اختر كلمة مرور من ${MIN_PASSWORD_LENGTH} أحرف على الأقل.`);
+      return;
+    }
+    if (passwordDraft !== passwordConfirmDraft) {
+      toast.error('كلمتا المرور الجديدتان غير متطابقتين.');
+      return;
+    }
+    if (!currentPasswordDraft) {
+      toast.error('أدخل كلمة المرور الحالية للتحقق.');
+      return;
+    }
+    const credentials = authEmail
+      ? { email: authEmail, password: currentPasswordDraft }
+      : authPhone
+        ? { phone: authPhone, password: currentPasswordDraft }
+        : null;
+    if (!credentials) {
+      toast.error('تعذر تحديد طريقة التحقق من الحساب.');
+      return;
+    }
+
     setAccountSettingsBusy(true);
     try {
-      const { error } = await supabase.auth.updateUser({ password: passwordDraft });
-      if (error) throw error;
+      const { error: verifyError } = await supabase.auth.signInWithPassword(credentials);
+      if (verifyError) throw verifyError;
+      const { error: updateError } = await supabase.auth.updateUser({ password: passwordDraft });
+      if (updateError) throw updateError;
+      setCurrentPasswordDraft('');
       setPasswordDraft('');
-      setHasPassword(true);
-      toast.success('تم تحديث كلمة المرور.');
+      setPasswordConfirmDraft('');
+      await refreshAccountAuthIdentity();
+      toast.success('تم تحديث كلمة المرور. جلستك ما زالت قائمة.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر تحديث كلمة المرور.');
+      toast.error(accountAuthErrorMessage(error, 'تعذر تحديث كلمة المرور. تحقق من كلمة المرور الحالية.'));
     } finally {
       setAccountSettingsBusy(false);
     }
@@ -2643,13 +2834,18 @@ export default function ProfilePage({
                     <span className="profile-settings-copy">
                       <span className="profile-settings-label">البريد الإلكتروني</span>
                       <span className="profile-settings-email-value" dir="ltr">
-                        <span className="profile-settings-description">{authEmail || 'جارٍ التحميل'}</span>
-                        <span className="profile-settings-provider-badge">{authProviderLabel}</span>
+                        <span className="profile-settings-description">{authEmail || 'غير مضاف'}</span>
+                        {authProviderBadgeLabel && <span className="profile-settings-provider-badge">{authProviderBadgeLabel}</span>}
                       </span>
+                      <span className="profile-settings-description">البريد للعرض فقط — لا يمكن تغييره من إعدادات الحساب.</span>
                     </span>
                   </div>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={() => { setPhoneDraft(authPhone); setShowPhoneModal(true); }}>
-                    <span className="profile-settings-copy"><span className="profile-settings-label">رقم الهاتف</span><span className="profile-settings-description" dir="ltr">{authPhone || 'غير مضاف'}</span></span>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={openPhoneChangeDialog} disabled={accountSettingsBusy}>
+                    <span className="profile-settings-copy">
+                      <span className="profile-settings-label">رقم الهاتف</span>
+                      <span className="profile-settings-description" dir="ltr">{authPhone ? formatPhoneForDisplay(authPhone) : 'غير مضاف'}</span>
+                    </span>
+                    {authPhone && authPhoneVerified && <span className="profile-settings-provider-badge">مؤكد</span>}
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('password')}>
@@ -2666,13 +2862,47 @@ export default function ProfilePage({
                   <button type="button" className="profile-settings-danger" onClick={() => { setDeleteAccountConfirmation(''); setShowDeleteAccountConfirmation(true); }}>حذف الحساب نهائياً</button>
                 </>
               ) : settingsScreen === 'password' ? (
-                <form onSubmit={savePasswordChange}>
-                  <p className="profile-settings-note">اختر كلمة مرور لا تقل عن 6 أحرف. سيتم حفظها مباشرة دون إرسال رسالة بريد إلكتروني.</p>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-password">{hasPassword ? 'كلمة المرور الجديدة' : 'كلمة المرور الاحتياطية الجديدة'}</label>
-                    <input id="settings-password" type="password" autoComplete="new-password" minLength={6} required value={passwordDraft} onChange={event => setPasswordDraft(event.target.value)} />
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || passwordDraft.length < 6}>{accountSettingsBusy ? 'جارٍ الحفظ...' : hasPassword ? 'تحديث كلمة المرور' : 'تعيين كلمة المرور'}</button>
-                  </div>
+                <form onSubmit={savePasswordChange} className="space-y-4">
+                  {hasPassword ? (
+                    <>
+                      <p className="profile-settings-note">أدخل كلمة المرور الحالية للتحقق منها عند Supabase، ثم كلمة المرور الجديدة مرتين. لا تُخزَّن كلمات المرور في التطبيق، وجلستك تبقى قائمة.</p>
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-current-password">كلمة المرور الحالية</label>
+                        <input id="settings-current-password" type="password" autoComplete="current-password" required value={currentPasswordDraft} onChange={event => setCurrentPasswordDraft(event.target.value)} />
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="profile-settings-note">هذا الحساب مسجّل عبر {authProvider === 'apple' ? 'Apple' : 'Google'} ولا يملك كلمة مرور محلية. سنرسل رابط تحقق إلى بريد الحساب ({authEmail || 'غير متاح'}) لتعيين كلمة مرور — بلا ربط هوية جديد وبلا حذف أزرار الدخول.</p>
+                      <button type="button" className="profile-settings-action" onClick={() => void sendPasswordResetLink()} disabled={accountSettingsBusy || !authEmail}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رابط التحقق'}</button>
+                      {passwordReauthSent && <p className="profile-settings-note">افتح الرابط في بريدك، ثم عيّن كلمة المرور من النافذة التي ستظهر بعد التحقق.</p>}
+                    </>
+                  )}
+                  {hasPassword && (
+                    <>
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-password">كلمة المرور الجديدة</label>
+                        <input id="settings-password" type="password" autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} required value={passwordDraft} onChange={event => setPasswordDraft(event.target.value)} />
+                      </div>
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-password-confirm">تأكيد كلمة المرور الجديدة</label>
+                        <input id="settings-password-confirm" type="password" autoComplete="new-password" minLength={MIN_PASSWORD_LENGTH} required value={passwordConfirmDraft} onChange={event => setPasswordConfirmDraft(event.target.value)} />
+                      </div>
+                      <button
+                        className="profile-settings-action"
+                        type="submit"
+                        disabled={accountSettingsBusy || !currentPasswordDraft || passwordDraft.length < MIN_PASSWORD_LENGTH || passwordDraft !== passwordConfirmDraft}
+                      >
+                        {accountSettingsBusy ? 'جارٍ الحفظ...' : 'تحديث كلمة المرور'}
+                      </button>
+                      {authEmail && (
+                        <button type="button" className="profile-settings-secondary-action" onClick={() => void sendPasswordResetLink()} disabled={accountSettingsBusy}>
+                          لا تملك كلمة المرور الحالية؟ أرسل رابط تحقق إلى البريد
+                        </button>
+                      )}
+                      {passwordReauthSent && <p className="profile-settings-note">افتح رابط التحقق في بريدك، ثم عيّن كلمة المرور من النافذة التي ستظهر بعد التحقق.</p>}
+                    </>
+                  )}
                 </form>
               ) : settingsScreen === 'security' ? (
                 <>
@@ -2795,20 +3025,36 @@ export default function ProfilePage({
             </div>
           )}
           {showPhoneModal && (
-            <div className="profile-settings-dialog-backdrop" onClick={() => { if (!accountSettingsBusy) setShowPhoneModal(false); }}>
+            <div className="profile-settings-dialog-backdrop" onClick={closePhoneChangeDialog}>
               <section role="dialog" aria-modal="true" aria-labelledby="phone-modal-title" className="profile-settings-dialog" onClick={event => event.stopPropagation()}>
-                <h3 id="phone-modal-title">تحديث رقم الهاتف</h3>
-                <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية. سيتم حفظه مباشرة دون رمز SMS.</p>
-                <form onSubmit={savePhoneChange}>
-                  <div className="profile-settings-field">
-                    <label htmlFor="settings-phone">رقم الهاتف</label>
-                    <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+9665XXXXXXXX" maxLength={20} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
-                  </div>
-                  <div className="profile-settings-dialog-actions">
-                    <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => setShowPhoneModal(false)}>إلغاء</button>
-                    <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim() || phoneDraft.trim() === authPhone}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'حفظ الرقم'}</button>
-                  </div>
-                </form>
+                <h3 id="phone-modal-title">{phoneChangeStep === 'request' ? 'تغيير رقم الهاتف' : 'تأكيد الرقم الجديد'}</h3>
+                {phoneChangeStep === 'request' ? (
+                  <form onSubmit={requestPhoneChange}>
+                    <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية أو المحلية — الرمز الافتراضي {DEFAULT_PHONE_COUNTRY_CODE} للعراق. سيصل رمز تحقق SMS إلى الرقم الجديد، ولا يُعتمد الرقم قبل إدخال الرمز.</p>
+                    <div className="profile-settings-field">
+                      <label htmlFor="settings-phone">رقم الهاتف</label>
+                      <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder={`${DEFAULT_PHONE_COUNTRY_CODE} 7XX XXX XXXX`} maxLength={24} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
+                    </div>
+                    <div className="profile-settings-dialog-actions">
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={closePhoneChangeDialog}>إلغاء</button>
+                      <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim()}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رمز التحقق'}</button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={confirmPhoneChange}>
+                    <p className="profile-settings-note">أرسلنا رمزاً إلى {formatPhoneForDisplay(phoneChangeTarget)}. أدخل الرمز لاعتماد الرقم — لا يُعرض الرقم مؤكداً قبل تأكيد Supabase.</p>
+                    <div className="profile-settings-field">
+                      <label htmlFor="settings-phone-code">رمز التحقق</label>
+                      <input id="settings-phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} required value={phoneOtpCode} onChange={event => setPhoneOtpCode(event.target.value.replace(/\D/g, ''))} />
+                    </div>
+                    <p className="profile-settings-note">إن انتهت صلاحية الرمز فأعد إرساله إلى الرقم نفسه. إلغاء الطلب هنا لا يغيّر رقمك الحالي، وأي طلب غير مؤكد ينتهي تلقائياً في Supabase.</p>
+                    <div className="profile-settings-dialog-actions">
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={cancelPhoneChangeRequest}>إلغاء الطلب</button>
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => void resendPhoneChangeCode()}>إعادة إرسال الرمز</button>
+                      <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || phoneOtpCode.length < 6}>{accountSettingsBusy ? 'جارٍ التحقق...' : 'تأكيد الرقم'}</button>
+                    </div>
+                  </form>
+                )}
               </section>
             </div>
           )}
