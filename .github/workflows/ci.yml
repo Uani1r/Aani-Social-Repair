@@ -564,7 +564,7 @@ jobs:
 
       - name: Install Playwright (CI only, not a committed dependency)
         working-directory: artifacts/aani-social
-        run: pnpm add -D @playwright/test@1.49.1
+        run: pnpm add -D @playwright/test@1.55.0
 
       - name: Install Chromium and WebKit
         working-directory: artifacts/aani-social
