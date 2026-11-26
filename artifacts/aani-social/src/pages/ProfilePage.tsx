@@ -1121,31 +1121,45 @@ export default function ProfilePage({
       // جلب كامل بالصفحات: لا تُعرض صفحة واحدة على أنها القائمة كلها.
       // ترتيب ثابت (display_order/position ثم created_at ثم id) حتى لا يتكرر
       // صف أو يُسقط بين صفحتين عند تساوي قيم الترتيب.
+      // صفحة واحدة من مجموعات أبرز القصص. سلسلة select حرفية في كل فرع: نوع
+      // select في supabase-js يُحلَّل وقت الترجمة ولا يقبل اتحاد سلسلتين،
+      // والصفوف تُضيّق بالعمود المحدد صراحةً في الاستعلام نفسه.
+      const fetchCollectionPage = async (offset: number, includeDisplayOrder: boolean) => {
+        const from = offset;
+        const to = offset + PAGE_SIZE - 1;
+        if (includeDisplayOrder) {
+          const { data, error } = await supabase.from('profile_highlight_collections')
+            .select('id, user_id, title, cover_url, created_at, display_order')
+            .eq('user_id', activeUserId)
+            .order('display_order', { ascending: true })
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(from, to);
+          return { data: (data ?? null) as unknown as ProfileHighlightCollectionSummary[] | null, error };
+        }
+        const { data, error } = await supabase.from('profile_highlight_collections')
+          .select('id, user_id, title, cover_url, created_at')
+          .eq('user_id', activeUserId)
+          .order('created_at', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+        return { data: (data ?? null) as unknown as ProfileHighlightCollectionSummary[] | null, error };
+      };
+
       const loadHighlightCollections = async (): Promise<PageResult<ProfileHighlightCollectionSummary>> => {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           const includeDisplayOrder = attempt === 0;
           const rows: ProfileHighlightCollectionSummary[] = [];
           let offset = 0;
           while (true) {
-            const filtered = supabase.from('profile_highlight_collections')
-              .select(includeDisplayOrder
-                ? 'id, user_id, title, cover_url, created_at, display_order'
-                : 'id, user_id, title, cover_url, created_at')
-              .eq('user_id', activeUserId);
-            const ordered = includeDisplayOrder
-              ? filtered.order('display_order', { ascending: true })
-              : filtered;
-            const { data, error } = await ordered
-              .order('created_at', { ascending: true })
-              .order('id', { ascending: true })
-              .range(offset, offset + PAGE_SIZE - 1);
+            const { data, error } = await fetchCollectionPage(offset, includeDisplayOrder);
             if (error) {
               // العمود display_order غير موجود (42703/PGRST204): نفس الاحتياط
               // السابق، بلا ترتيب صريح عليه، من أول صفحة.
               if (includeDisplayOrder && /display_order/i.test(error.message || '')) break;
               return { data: null, error };
             }
-            const page = (data || []) as ProfileHighlightCollectionSummary[];
+            const page = data || [];
             rows.push(...page);
             if (page.length < PAGE_SIZE) return { data: rows, error: null };
             if (offset >= PAGE_SIZE * MAX_PAGES) {

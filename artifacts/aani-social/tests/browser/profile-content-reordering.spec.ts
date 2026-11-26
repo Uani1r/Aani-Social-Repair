@@ -138,7 +138,7 @@ test('reorders owned posts and leaves the repost untouched', async ({ page }) =>
 
   // The repost tile has no handle and no reorder attributes, so dragging it
   // onto the grid changes nothing.
-  const repost = page.locator('section[aria-label="media grid"] > button');
+  const repost = page.locator('section[aria-label="media grid"] > div > button');
   await longPressDrag(page, repost, posts(page).nth(0));
   expect(await gridIds(page)).toEqual(['p-three', 'p-one', 'p-two']);
 });
