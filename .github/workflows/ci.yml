@@ -90,6 +90,11 @@ jobs:
       - name: Unit tests @workspace/aani-social (chat video player)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoPlayer.test.ts
 
+      # طلبات تغيير الهاتف المعلّقة: التخزين المحلي بعد إعادة التحميل، منع
+      # الرقم الثاني، إغلاق التنبيه دون إلغاء، والقيم التالفة.
+      - name: Unit tests @workspace/aani-social (account phone change)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountPhoneChange.test.ts
+
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
   # the part of the schema the migration and the test touch, so this proves the

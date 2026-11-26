@@ -15,6 +15,10 @@ export default function useAppSession() {
   // لا تُحوّل حالة المصادقة غير المحسومة إلى "مستخدم غير مسجل".
   const [authResolved, setAuthResolved] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
+  // جلسة استعادة كلمة المرور: تصل من رابط التحقق في البريد (PASSWORD_RECOVERY)،
+  // وتُستخدم لتعيين كلمة مرور بعد إثبات ملكية البريد — بلا signOut ولا ربط
+  // هوية جديد. تُطفأ بعد الحفظ أو الإغلاق.
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const user = session?.user;
   // جلسة المصادقة هي مالك ذاكرة عضوية المحادثات: الخروج أو تبديل الحساب يفرّغها
   // ويقطع أي طلب عضوية جارٍ، فلا تتسرّب نتيجة جلسة سابقة إلى الجلسة الجديدة.
@@ -72,6 +76,8 @@ export default function useAppSession() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!mounted) return;
       setAuthResolved(true);
+      // رابط استعادة كلمة المرور: يُفتح نموذج التعيين بلا تسجيل خروج.
+      if (event === 'PASSWORD_RECOVERY') setPasswordRecovery(true);
       // قبل تطبيق الجلسة الجديدة: أي طلب عضوية تابع للجلسة السابقة يُلغى.
       syncMembershipOwner(nextSession?.user?.id ?? null);
       setSession(nextSession);
@@ -177,5 +183,7 @@ export default function useAppSession() {
     setProfile(null);
   };
 
-  return { authLoading, authResolved, user, profile, setProfile, signOut };
+  const clearPasswordRecovery = () => setPasswordRecovery(false);
+
+  return { authLoading, authResolved, user, profile, setProfile, signOut, passwordRecovery, clearPasswordRecovery };
 }
