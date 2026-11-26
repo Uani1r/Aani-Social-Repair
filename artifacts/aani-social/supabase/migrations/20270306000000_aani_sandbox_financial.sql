@@ -538,6 +538,11 @@ begin
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
+  -- رفض قيمة محاكاة غير محددة صراحة.
+  if p_simulate_success is null then
+    raise exception 'simulate success flag is required' using errcode='22023';
+  end if;
+
   perform pg_advisory_xact_lock(hashtext('sandbox:user:' || p_user_id::text));
   perform pg_advisory_xact_lock(hashtext('sandbox:topup:' || p_user_id::text || ':' || p_idempotency_key));
 
@@ -814,6 +819,8 @@ grant execute on function public.aani_sandbox_cancel_subscription(uuid) to authe
 
 -- تجديد اشتراك تجريبي (خصم عملات وتاريخ انتهاء جديد).
 -- يقبل p_idempotency_key لمنع توليد مفتاح عشوائي جديد عند كل إعادة محاولة.
+-- يستخدم SELECT ... FOR UPDATE على صف الاشتراك لمنع تعارض التجديد والإلغاء المتزامنين.
+-- ترتيب الأقفال: قفل مستشار على المستخدم → قفل صف الاشتراك (FOR UPDATE) → قفل مستشار على مفتاح idempotency.
 create or replace function public.aani_sandbox_renew_subscription(
   p_subscription_id uuid,
   p_idempotency_key text
@@ -834,17 +841,28 @@ declare
 begin
   if auth.uid() is null then raise exception 'auth required' using errcode='42501'; end if;
 
-  select user_id, package_id into v_user_id, v_package_id from sandbox.subscriptions where id = p_subscription_id;
+  -- قفل مستشار على المستخدم لتسلسل العمليات على نفس المستخدم ومنع deadlocks.
+  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || auth.uid()::text));
+
+  -- قفل صف الاشتراك بـ FOR UPDATE لمنع تعارض التجديد والإلغاء المتزامنين.
+  select user_id, package_id, status into v_user_id, v_package_id, v_status
+  from sandbox.subscriptions where id = p_subscription_id
+  for update;
   if not found then raise exception 'subscription not found' using errcode='42704'; end if;
   if auth.uid() <> v_user_id and not public.aani_sandbox_is_founder() then
     raise exception 'forbidden' using errcode='42501';
+  end if;
+
+  -- لا يُسمح بالتجديد إلا للاشتراك النشط فقط.
+  if v_status <> 'active' then
+    return jsonb_build_object('ok',true,'status','already_' || v_status,'subscription_id',p_subscription_id);
   end if;
 
   if p_idempotency_key is null or length(trim(p_idempotency_key)) = 0 then
     raise exception 'idempotency key required' using errcode='22023';
   end if;
 
-  perform pg_advisory_xact_lock(hashtext('sandbox:user:' || v_user_id::text));
+  -- قفل مستشار على مفتاح idempotency لمنع تجديدات متزامنة بالمفتاح نفسه.
   perform pg_advisory_xact_lock(hashtext('sandbox:subrenew:' || v_user_id::text || ':' || p_idempotency_key));
 
   if exists (select 1 from sandbox.ledger where idempotency_key = p_idempotency_key) then
@@ -852,7 +870,6 @@ begin
       raise exception 'idempotency key conflict' using errcode='40901';
     end if;
     select amount into v_coins from sandbox.ledger where idempotency_key = p_idempotency_key;
-    select status into v_status from sandbox.subscriptions where id = p_subscription_id;
     select public.aani_sandbox_balance(v_user_id) into v_balance;
     return jsonb_build_object('ok',true,'duplicate',true,'coins_charged',v_coins,'balance',v_balance,'status',v_status,'subscription_id',p_subscription_id);
   end if;

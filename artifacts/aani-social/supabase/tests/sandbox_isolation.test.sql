@@ -220,6 +220,30 @@ SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-deactivated-pkg
 -- شحن جديد بمفتاح جديد وباقة معطّلة → يُتوقع استثناء 'package unavailable' (42704).
 -- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-new-on-deactivated-1', true); -- يُتوقع خطأ 42704
 
+-- ------------------------------------------------------------------
+-- 20. رفض قيمة محاكاة غير محددة (p_simulate_success IS NULL): تعارض 22023
+-- ------------------------------------------------------------------
+-- إرسال p_simulate_success بقيمة NULL → يُتوقع استثناء 'simulate success flag is required' (22023).
+-- SELECT public.aani_sandbox_top_up(:'userA', :'packageId', 'topup-null-simulate-1', NULL); -- يُتوقع خطأ 22023
+
+-- ------------------------------------------------------------------
+-- 21. تعارض التجديد والإلغاء المتزامنين على اشتراك واحد
+-- ------------------------------------------------------------------
+-- تفعيل اشتراك أولاً:
+-- SELECT public.aani_sandbox_activate_subscription(:'userA', :'subPackageId', 'sub-concurrent-1');
+-- يُتوقع أن يكون Status = 'active'.
+--
+-- سيناريو متزامن (يُنفّذ جلستان في الوقت نفسه):
+--   الجلسة A: SELECT public.aani_sandbox_renew_subscription('<subscription-id>', 'sub-concurrent-renew');
+--   الجلسة B: SELECT public.aani_sandbox_cancel_subscription('<subscription-id>');
+--
+-- نتيجة الجلسة الأولى التي تحصل على قفل FOR UPDATE أولاً تُنجز بنجاح.
+-- نتيجة الجلسة الثانية تعود بحالة 'already_cancelled' أو 'already_active' حسب الحالة الحالية،
+-- دون إنشاء سجل تدقيق مكرّر، لأن الدالة تتحقق من الحالة قبل التحديث،
+-- ودالة التجديد تتحقق من أن الحالة active فقط قبل التجديد.
+--
+-- يُتوقع ألا يكون هناك سجل admin_actions مكرر لنفس الاشتراك والعملية.
+
 -- =====================================================================
 -- ملاحظة: هذا الاختبار SQL يُDocumente المتطلبات ويُمكّن تشغيله على قاعدة
 -- Supabase مباشرة. لا يُدّعى نجاحه دون تنفيذ فعلي على قاعدة حية.
