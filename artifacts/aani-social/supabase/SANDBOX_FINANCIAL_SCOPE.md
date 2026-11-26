@@ -48,6 +48,7 @@
 | `renewSandboxSubscription` | `aani_sandbox_renew_subscription` | نعم (لوحة المؤسس) |
 | `createSandboxPromotion` | `aani_sandbox_create_promotion` | نعم (لوحة المؤسس) |
 | `endSandboxPromotion` | `aani_sandbox_end_promotion` | نعم (لوحة المؤسس) |
+| `fetchSandboxTotals` | `aani_sandbox_totals` | نعم (لوحة المؤسس — إجماليات) |
 
 ## 4) الأمان (لا يُعتمد على الواجهة)
 
@@ -55,8 +56,9 @@
   وRLS؛ إخفاء/إظهار عناصر الواجهة ليس ضابط أمان.
 - تبديل الحساب: يُعاد تركيب `AdminSandbox` عبر `key={user.id}` حتى لا تبقى
   بيانات مؤسس سابق معروضة بعد تبديل المستخدم.
-- الإجماليات المالية تُحسب من تحميل كامل صفحات السجل (لا أول 200 سجل)،
-  وتُعلَّم كجزئية إذا بلغ التحميل حدّه الأقصى.
+- الإجماليات المالية تُحسب عبر دالة PostgreSQL تجميعية `aani_sandbox_totals`
+  (استعلام SUM واحد، تحقق مؤسس خادمجي، search_path فارغ، EXECUTE لـ authenticated
+  فقط) — لا تحميل صفحات ولا اعتماد على ترتيب created_at.
 
 ## 5) الاختبارات
 

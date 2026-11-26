@@ -7,7 +7,6 @@ import {
   computeSandboxTotals,
   summarizeSandboxTotals,
   generateIdempotencyKey,
-  SANDBOX_TOTALS_MAX_PAGES,
   type SandboxGiftTransaction,
 } from './sandbox';
 
@@ -145,15 +144,18 @@ test('summarizeSandboxTotals: يعلّم البيانات الجزئية ولا 
   assert.equal(partial.credit, 500);
 });
 
-test('الإجماليات المكتملة تتطلب تصفح صفحات كاملة لا أول 200 سجل', () => {
-  assert.ok(SANDBOX_TOTALS_MAX_PAGES >= 1, 'يجب أن يوجد حدّ صفحات موجب');
+test('الإجماليات عبر دالة تجميع خادمية (لا تحميل صفحات)', () => {
   assert.ok(
-    SOURCE.includes('fetchAllSandboxLedgerForTotals'),
-    'يجب أن توجد آلية تحميل كامل صفحات السجل للإجماليات',
+    SOURCE.includes('fetchSandboxTotals'),
+    'يجب أن توجد دالة جلب الإجماليات عبر RPC',
   );
   assert.ok(
-    SOURCE.includes('hasMore'),
-    'يجب أن يعتمد تحميل الإجماليات على hasMore للتوقف عند نفاد البيانات',
+    SOURCE.includes("rpc<SandboxTotals>('aani_sandbox_totals'"),
+    'يجب أن تستدعي fetchSandboxTotals دالة aani_sandbox_totals التجميعية',
+  );
+  assert.ok(
+    !SOURCE.includes('fetchAllSandboxLedgerForTotals'),
+    'يجب ألا توجد آلية تحميل 20 ألف سجل لغرض الإجماليات',
   );
 });
 

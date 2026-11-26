@@ -65,7 +65,7 @@ set -e
 # أي خطأ SQL لا يطابق نمط "Test N failed" يُحتسب فشلاً إضافياً (لا إخفاء).
 FAIL_COUNT=$(awk 'match($0, /Test [0-9]+ failed/) { s=substr($0,RSTART,RLENGTH); gsub(/[^0-9]/,"",s); seen[s]=1 } END { n=0; for (k in seen) n++; print n }' "$TEST_LOG")
 STRAY_ERRORS=$(awk '/ERROR/ && !/Test [0-9]+ failed/ {c++} END{print c+0}' "$TEST_LOG")
-TOTAL_TESTS=28
+TOTAL_TESTS=30
 if [ "$FAIL_COUNT" -eq 0 ] && [ "$STRAY_ERRORS" -eq 0 ] && [ "$PSQL_RC" -eq 0 ]; then
   PASSED="$TOTAL_TESTS"; FAILED=0
 else

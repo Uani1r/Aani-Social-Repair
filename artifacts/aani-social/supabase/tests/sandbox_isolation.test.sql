@@ -1098,7 +1098,100 @@ END $$;
 -- =====================================================================
 -- جميع الاختبارات اكتملت بنجاح إذا وصل التنفيذ到这里 دون استثناء
 -- =====================================================================
+-- ------------------------------------------------------------------
+-- 29. دالة الإجماليات المالية: المؤسس يحصل على الإجماليات الصحيحة،
+--     والمستخدم العادي يُرفض بـ 42501.
+-- ------------------------------------------------------------------
+DO $$
+DECLARE
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_totals jsonb;
+    v_credit bigint;
+    v_debit bigint;
+BEGIN
+    -- المؤسس: الإجماليات يجب أن تطابق التجميع المباشر على sandbox.ledger.
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    SELECT public.aani_sandbox_totals() INTO v_totals;
+
+    SELECT
+        coalesce(sum(case when type = 'credit' then amount else 0 end), 0)::bigint,
+        coalesce(sum(case when type = 'debit'  then amount else 0 end), 0)::bigint
+    INTO v_credit, v_debit
+    FROM sandbox.ledger;
+
+    IF (v_totals->>'credit')::bigint <> v_credit
+       OR (v_totals->>'debit')::bigint <> v_debit
+       OR (v_totals->>'net')::bigint <> (v_credit - v_debit) THEN
+        RAISE EXCEPTION 'Test 29 failed: founder totals mismatch: got %, expected credit=%, debit=%',
+            v_totals, v_credit, v_debit;
+    END IF;
+
+    -- المستخدم العادي: يجب أن يُرفض بـ 42501 (تحقق مؤسس خادمجي).
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_user_a || '"}', true);
+    BEGIN
+        PERFORM public.aani_sandbox_totals();
+        RAISE EXCEPTION 'Test 29 failed: non-founder should not call aani_sandbox_totals (expected 42501)';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLSTATE <> '42501' THEN
+            RAISE EXCEPTION 'Test 29 failed: expected SQLSTATE 42501 for non-founder totals, got %', SQLSTATE;
+        END IF;
+    END;
+END $$;
+
+-- ------------------------------------------------------------------
+-- 30. صحة التجميع مع سجلات كثيرة متساوية التوقيت وعدم الاعتماد على ترتيب الصفحات.
+-- ------------------------------------------------------------------
+-- نُدرج 500 سجل (250 دائن/250 مدين) بنفس created_at (تعادل توقيت) عبر المالك،
+-- ثم نتحقق أن دالة الإجماليات تطابق التجميع المباشر، وأنها حتمية عبر نداءين
+-- (لا تتأثر بترتيب الصفحات ولا تكرار/تجاوز).
+DO $$
+DECLARE
+    v_founder uuid := current_setting('myapp.test_founder')::uuid;
+    v_user_a uuid := current_setting('myapp.test_user_a')::uuid;
+    v_totals1 jsonb;
+    v_totals2 jsonb;
+    v_credit bigint;
+    v_debit bigint;
+BEGIN
+    -- إدراج جماعي كمالك (RESET ROLE) — لا RLS لجلسة authenticated.
+    EXECUTE 'RESET ROLE';
+    INSERT INTO sandbox.ledger (user_id, type, amount, reference, idempotency_key, created_at)
+    SELECT v_user_a,
+           CASE WHEN g % 2 = 0 THEN 'credit' ELSE 'debit' END,
+           1,
+           'bulk totals test',
+           'bulk-totals-' || g,
+           now()
+    FROM generate_series(1, 500) AS g;
+    EXECUTE 'SET ROLE authenticated';
+
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    SELECT public.aani_sandbox_totals() INTO v_totals1;
+
+    SELECT
+        coalesce(sum(case when type = 'credit' then amount else 0 end), 0)::bigint,
+        coalesce(sum(case when type = 'debit'  then amount else 0 end), 0)::bigint
+    INTO v_credit, v_debit
+    FROM sandbox.ledger;
+
+    IF (v_totals1->>'credit')::bigint <> v_credit OR (v_totals1->>'debit')::bigint <> v_debit THEN
+        RAISE EXCEPTION 'Test 30 failed: bulk totals mismatch: got %, expected credit=%, debit=%',
+            v_totals1, v_credit, v_debit;
+    END IF;
+
+    -- حتمية النتيجة: نداء ثانٍ يعيد نفس الإجماليات (لا اعتماد على ترتيب الصفحات).
+    PERFORM set_config('request.jwt.claims', '{"sub": "' || v_founder || '"}', true);
+    SELECT public.aani_sandbox_totals() INTO v_totals2;
+    IF v_totals1 IS DISTINCT FROM v_totals2 THEN
+        RAISE EXCEPTION 'Test 30 failed: totals are not deterministic across calls (order/page dependence)';
+    END IF;
+END $$;
+
+-- =====================================================================
+-- جميع الاختبارات اكتملت بنجاح إذا وصل التنفيذ هنا دون استثناء
+-- =====================================================================
 DO $$
 BEGIN
-    RAISE NOTICE 'All sandbox isolation tests (1-28) completed successfully';
+    RAISE NOTICE 'All sandbox isolation tests (1-30) completed successfully';
 END $$;

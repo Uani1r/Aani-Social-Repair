@@ -20,8 +20,7 @@ import {
   createSandboxPromotion,
   generateIdempotencyKey,
   endSandboxPromotion,
-  summarizeSandboxTotals,
-  fetchAllSandboxLedgerForTotals,
+  fetchSandboxTotals,
   type SandboxLedgerEntry,
   type SandboxTopUp,
   type SandboxAdminAction,
@@ -62,8 +61,8 @@ export default function AdminSandbox() {
   const [subPackages, setSubPackages] = useState<any[]>([]);
   const [promoPackages, setPromoPackages] = useState<any[]>([]);
 
-  // إجماليات مالية موثوقة (من تحميل كامل الصفحات، لا أول 200 سجل فقط).
-  const [totals, setTotals] = useState({ credit: 0, debit: 0, net: 0, complete: false, partial: false });
+  // إجماليات مالية موثوقة من دالة PostgreSQL التجميعية (استعلام واحد، مؤسس فقط).
+  const [totals, setTotals] = useState({ credit: 0, debit: 0, net: 0 });
   const [totalsLoading, setTotalsLoading] = useState(false);
 
   // حقائق الإجراءات التي تتطلب معرف مستخدم/هدف صحيح
@@ -151,17 +150,19 @@ export default function AdminSandbox() {
       setAdminActions(a.data ?? []);
     }
 
-    // إجماليات موثوقة: حمّل السجل كاملاً (تصفح صفحات) بدل أول 200 سجل.
-    // عند بلوغ الحدّ تُعلَّم الإجماليات كجزئية ولا تُعرض كإجمالي كامل.
+    // إجماليات موثوقة من دالة تجميعية خادمية (استعلام SUM واحد، لا تحميل صفحات).
     if (mounted.current) setTotalsLoading(true);
-    const full = await fetchAllSandboxLedgerForTotals();
-    if (full.error) {
-      show('الإجماليات المالية', { error: full.error });
+    const tot = await fetchSandboxTotals();
+    if (tot.error) {
+      show('الإجماليات المالية', tot);
+    } else if (tot.data && mounted.current) {
+      setTotals({
+        credit: Number(tot.data.credit) || 0,
+        debit: Number(tot.data.debit) || 0,
+        net: Number(tot.data.net) || 0,
+      });
     }
-    if (mounted.current) {
-      setTotals(summarizeSandboxTotals(full.entries, full.complete));
-      setTotalsLoading(false);
-    }
+    if (mounted.current) setTotalsLoading(false);
   }, []);
 
   useEffect(() => {
@@ -410,9 +411,6 @@ export default function AdminSandbox() {
     };
     return <Badge variant={variants[status] ?? 'default'}>{status}</Badge>;
   };
-
-  const totalsCredit = totals.credit;
-  const totalsDebit = totals.debit;
 
   return (
     <div className="space-y-4">
@@ -761,43 +759,28 @@ export default function AdminSandbox() {
                 </CardContent>
               </Card>
               <Separator className="my-3" />
-              {totals.partial ? (
-                <Alert variant="destructive" className="mb-3">
-                  <AlertDescription>
-                    الإجماليات المالية جزئية: التحميل بلغ حدّ الصفحات الأقصى، لذا
-                    الأرقام أدناه تمثّل حدّاً أدنى لا إجمالياً كاملاً. ارفع الحدّ أو
-                    صفِّ البيانات قبل الاعتماد عليها.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
               <div className="grid sm:grid-cols-3 gap-4">
                 <Card className="p-4">
                   <CardContent className="flex flex-col items-center text-center">
-                    <div className="text-xs text-muted-foreground">
-                      إجمالي الأرصدة المضافة{totals.partial ? ' (حد أدنى)' : ''}
-                    </div>
+                    <div className="text-xs text-muted-foreground">إجمالي الأرصدة المضافة</div>
                     <div className="font-mono text-lg font-bold">
-                      {totalsLoading ? '…' : totals.partial ? `≥ ${totalsCredit}` : totalsCredit}
+                      {totalsLoading ? '…' : totals.credit}
                     </div>
                   </CardContent>
                 </Card>
                 <Card className="p-4">
                   <CardContent className="flex flex-col items-center text-center">
-                    <div className="text-xs text-muted-foreground">
-                      إجمالي الأرصدة المسحوبة{totals.partial ? ' (حد أدنى)' : ''}
-                    </div>
+                    <div className="text-xs text-muted-foreground">إجمالي الأرصدة المسحوبة</div>
                     <div className="font-mono text-lg font-bold">
-                      {totalsLoading ? '…' : totals.partial ? `≥ ${totalsDebit}` : totalsDebit}
+                      {totalsLoading ? '…' : totals.debit}
                     </div>
                   </CardContent>
                 </Card>
                 <Card className="p-4">
                   <CardContent className="flex flex-col items-center text-center">
-                    <div className="text-xs text-muted-foreground">
-                      صافي الرصيد المسجَّل{totals.partial ? ' (جزئي)' : ''}
-                    </div>
+                    <div className="text-xs text-muted-foreground">صافي الرصيد المسجَّل</div>
                     <div className="font-mono text-lg font-bold">
-                      {totalsLoading ? '…' : totals.partial ? '—' : totals.net}
+                      {totalsLoading ? '…' : totals.net}
                     </div>
                   </CardContent>
                 </Card>

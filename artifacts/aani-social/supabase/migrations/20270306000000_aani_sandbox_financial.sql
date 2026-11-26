@@ -1181,6 +1181,50 @@ revoke all on function public.aani_sandbox_end_promotion(uuid,boolean,text) from
 grant execute on function public.aani_sandbox_end_promotion(uuid,boolean,text) to authenticated;
 
 -- =====================================================================
+-- إجماليات Sandbox المالية (مؤسس فقط) — استعلام تجميعي واحد.
+--   * يتحقق خادمياً من أن المستدعي مؤسس Sandbox (لا يعتمد على الواجهة).
+--   * security definer + search_path فارغ، مع تأهيل الأسماء بالكامل.
+--   * يُرجع credit/debit/net في صف واحد عبر SUM على sandbox.ledger، فلا
+--     تحميل صفحات ولا تكرار/تجاوز عند الإدراج المتزامن، ولا اعتماد على ترتيب
+--     created_at (النتيجة حتمية بصرف النظر عن تساوي التوقيت).
+--   * لا يمنح صلاحيات إضافية على الجداول ولا يغيّر RLS أو مصدر الرصيد.
+--   * EXECUTE ممنوع على PUBLIC/anon وممنوح فقط لـ authenticated.
+-- =====================================================================
+create or replace function public.aani_sandbox_totals()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = ''
+as $$
+declare
+  v_credit bigint;
+  v_debit bigint;
+begin
+  if auth.uid() is null then
+    raise exception 'auth required' using errcode='42501';
+  end if;
+  if not public.aani_sandbox_is_founder() then
+    raise exception 'founder required' using errcode='42501';
+  end if;
+
+  select
+    coalesce(sum(case when l.type = 'credit' then l.amount else 0 end), 0)::bigint,
+    coalesce(sum(case when l.type = 'debit'  then l.amount else 0 end), 0)::bigint
+  into v_credit, v_debit
+  from sandbox.ledger l;
+
+  return jsonb_build_object(
+    'credit', v_credit,
+    'debit', v_debit,
+    'net', v_credit - v_debit
+  );
+end;
+$$;
+revoke all on function public.aani_sandbox_totals() from public, anon;
+grant execute on function public.aani_sandbox_totals() to authenticated;
+
+-- =====================================================================
 -- ملاحظة النشر: هذا الترحيل SQL يُطبّق على قاعدة Supabase المستهدفة عبر
 -- واجهة إدارة قاعدة البيانات (SQL Editor) أو أداة ترحيل Supabase. لا يُفترض
 -- أن schema.sql يطابق القاعدة الحية تمامًا؛ يُنفّذ هذا الملف كمصدر منفصل.
