@@ -480,7 +480,10 @@ jobs:
   # Verifies aani_reorder_profile_highlight_stories on a throwaway PostgreSQL:
   # ownership, duplicates, completeness, cross-collection and cross-owner guards,
   # sequential positions from 0, no change on failure, the ACL (authenticated
-  # only), and a second idempotent migration run. Never touches Supabase.
+  # only), and a second idempotent migration run. Then it simulates Supabase's
+  # default EXECUTE grant to anon, applies the ACL correction migration twice,
+  # and proves authenticated keeps EXECUTE while anon and PUBLIC lose it.
+  # Never touches Supabase.
   profile-highlight-story-sql:
     name: Profile highlight story reordering SQL
     runs-on: ubuntu-latest
@@ -531,6 +534,24 @@ jobs:
 
       - name: Run the highlight story reordering tests
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/profile_highlight_story_reordering.test.sql
+
+      # Supabase grants EXECUTE on new public functions to anon through ALTER
+      # DEFAULT PRIVILEGES, so the function created by the reordering migration
+      # keeps a grant that its own revoke never removed. The harness asserts the
+      # grant is really there before the correction runs.
+      - name: Simulate Supabase's default EXECUTE grant to anon
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/profile_highlight_reorder_acl_grants.sql
+
+      - name: Apply the EXECUTE ACL correction migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270306000000_profile_highlight_story_reorder_execute_acl.sql
+
+      # Re-applying proves the REVOKE/GRANT pair is safe to repeat on a new or an
+      # already corrected project.
+      - name: Re-apply the ACL correction migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270306000000_profile_highlight_story_reorder_execute_acl.sql
+
+      - name: Test the reordering RPC EXECUTE privileges
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/profile_highlight_story_reorder_acl.test.sql
 
 
   # Browser tests for the shared profile content preview. Playwright is
