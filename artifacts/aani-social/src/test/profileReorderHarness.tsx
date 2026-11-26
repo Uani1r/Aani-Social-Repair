@@ -3,10 +3,12 @@
  *
  * It renders the real ProfileHighlightsRow, ProfileHighlightStoryStrip and
  * ProfileMediaGrid from src/components/profile/ProfileContentPreview.tsx with
- * fixed fixtures and the same pointer wiring Edit Profile uses (long press,
- * elementFromPoint drop target, data attributes). It never talks to Supabase:
- * the order is kept in memory (and localStorage to survive a reload), and every
- * reorder attempt is recorded in window.__profileReorderLog for assertions.
+ * fixed fixtures and the same pointer wiring Edit Profile uses (a drag handle
+ * per reorderable item, long press, elementFromPoint drop target, data
+ * attributes) plus the same move-by-one buttons and the aria-live announcement
+ * Edit Profile renders. It never talks to Supabase: the order is kept in memory
+ * (and localStorage to survive a reload), and every reorder attempt — drag or
+ * button — is recorded in window.__profileReorderLog for assertions.
  */
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -19,9 +21,20 @@ import {
 } from '@/components/profile/ProfileContentPreview';
 import type { ProfileHighlightCollection } from '@/components/ProfileHighlightsManager';
 import type { Post } from '@/lib/types';
+// الأنماط الحقيقية: قواعد إعادة الترتيب تأتي من ProfilePage.css كما في Edit
+// Profile، وهذا الملف يضيف هندسة ثابتة فقط (بدون Tailwind في صفحة الاختبار).
+import '@/pages/ProfilePage.css';
+import './profileReorderHarness.css';
 
 type Kind = 'posts' | 'highlights' | 'stories';
 type LogEntry = { kind: Kind; nextIds: string[]; previousIds: string[] };
+
+// نفس تسميات الإعلان في ProfilePage: تُقرأ في نص aria-live.
+const LABELS: Record<Kind, string> = {
+  posts: 'المنشور',
+  highlights: 'المجموعة',
+  stories: 'القصة',
+};
 
 const OWNER_ID = 'a0000000-0000-4000-8000-00000000000a';
 const OTHER_ID = 'b0000000-0000-4000-8000-00000000000b';
@@ -114,6 +127,7 @@ function Harness() {
   }));
   const [postOrder, setPostOrder] = useState<string[]>(() => readStored('test:posts', OWNED_POSTS.map(item => item.id)));
   const [selected, setSelected] = useState<string | null>(null);
+  const [announcement, setAnnouncement] = useState('');
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [overKey, setOverKey] = useState<string | null>(null);
   const timer = useRef<number | null>(null);
@@ -121,6 +135,22 @@ function Harness() {
 
   const log = (entry: LogEntry) => {
     window.__profileReorderLog = [...(window.__profileReorderLog ?? []), entry];
+  };
+
+  // نفس أثر الحفظ في Edit Profile: تحديث فوري + حفظ (localStorage هنا)
+  // واستعادة السابق عند الفشل — مشترك بين السحب وزرّي السابق/التالي.
+  const applyOrder = (kind: Kind, nextIds: string[], collectionId: string | null) => {
+    if (kind === 'posts') {
+      setPostOrder(nextIds);
+      window.localStorage.setItem('test:posts', JSON.stringify(nextIds));
+    } else if (kind === 'highlights') {
+      setHighlightOrder(nextIds);
+      window.localStorage.setItem('test:highlights', JSON.stringify(nextIds));
+    } else if (collectionId) {
+      const next = { ...storiesOrder, [collectionId]: nextIds };
+      setStoriesOrder(next);
+      window.localStorage.setItem('test:stories', JSON.stringify(next));
+    }
   };
 
   const highlighted = useMemo(() => {
@@ -192,20 +222,39 @@ function Harness() {
     log({ kind: current.kind, nextIds, previousIds });
     if (failing) {
       window.__profileReorderLog = [...(window.__profileReorderLog ?? []), { kind: current.kind, nextIds: previousIds, previousIds: nextIds }];
+      setAnnouncement(`فشل حفظ الترتيب: بقي ${LABELS[current.kind]} في موضعه السابق.`);
       return;
     }
 
-    if (current.kind === 'posts') {
-      setPostOrder(nextIds);
-      window.localStorage.setItem('test:posts', JSON.stringify(nextIds));
-    } else if (current.kind === 'highlights') {
-      setHighlightOrder(nextIds);
-      window.localStorage.setItem('test:highlights', JSON.stringify(nextIds));
-    } else if (selected) {
-      const next = { ...storiesOrder, [selected]: nextIds };
-      setStoriesOrder(next);
-      window.localStorage.setItem('test:stories', JSON.stringify(next));
+    applyOrder(current.kind, nextIds, current.kind === 'stories' ? selected : null);
+    setAnnouncement(`نُقل ${LABELS[current.kind]} إلى الموضع ${nextIds.indexOf(current.id) + 1} من ${nextIds.length}.`);
+  };
+
+  // زرّا السابق/التالي: نفس المسار (تحديث فوري ثم حفظ أو استعادة) بلا سحب.
+  const moveByItem = (kind: Kind, id: string, direction: -1 | 1) => {
+    const previousIds = kind === 'posts'
+      ? postOrder
+      : kind === 'highlights'
+        ? highlightOrder
+        : (selected ? storiesOrder[selected] ?? [] : []);
+    const from = previousIds.indexOf(id);
+    const to = from + direction;
+    // لا خروج عن أول عنصر أو آخره.
+    if (from < 0 || to < 0 || to >= previousIds.length) return;
+    const nextIds = move(previousIds, id, previousIds[to]);
+    if (nextIds === previousIds) return;
+
+    const failing = window.__profileReorderFailNext === true;
+    window.__profileReorderFailNext = false;
+    log({ kind, nextIds, previousIds });
+    if (failing) {
+      window.__profileReorderLog = [...(window.__profileReorderLog ?? []), { kind, nextIds: previousIds, previousIds: nextIds }];
+      setAnnouncement(`فشل حفظ الترتيب: بقي ${LABELS[kind]} في الموضع ${from + 1} من ${previousIds.length}.`);
+      return;
     }
+
+    applyOrder(kind, nextIds, kind === 'stories' ? selected : null);
+    setAnnouncement(`نُقل ${LABELS[kind]} إلى الموضع ${to + 1} من ${nextIds.length}.`);
   };
 
   const cancel = () => {
@@ -219,10 +268,12 @@ function Harness() {
     kind, draggingKey: dragKey, dropTargetKey: overKey, disabled: false,
     begin: (event, _kind, id) => begin(event, kind, id),
     move: movePointer, end, cancel,
+    moveBy: (id, direction) => moveByItem(kind, id, direction),
   });
 
   return (
-    <div dir="rtl" style={{ width: 420 }} data-testid="harness-ready">
+    <div dir="rtl" style={{ width: 420 }} data-testid="harness-ready" className="profile-reorder-panel profile-reorder-preview">
+      <div role="status" aria-live="polite" aria-atomic="true" data-testid="reorder-announcement">{announcement}</div>
       <section aria-label="highlights">
         <ProfileHighlightsRow
           collections={highlighted}

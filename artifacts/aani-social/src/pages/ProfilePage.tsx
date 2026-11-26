@@ -398,6 +398,20 @@ function formatProfileBirthDate(value?: string | null): string {
 // أنواع إعادة الترتيب: المنشورات، مجموعات أبرز القصص، والقصص داخل مجموعة.
 type ProfileReorderKind = 'highlights' | 'posts' | 'stories';
 
+// حجم صفحة ثابت لجلب مجموعات أبرز القصص وقصصها كاملة عبر .range — بلا حد
+// نهائي يُسقط صفوفاً ويجعل قائمة المعاينة جزئية.
+const PAGE_SIZE = 250;
+
+// حماية من استجابة تتجاهل range: خطأ صريح بدل قائمة جزئية أو حلقة لا تنتهي.
+const MAX_PAGES = 400;
+
+// تسمية نوع العنصر في إعلان قارئ الشاشة بعد التحريك.
+const PROFILE_REORDER_LABELS: Record<ProfileReorderKind, string> = {
+  posts: 'المنشور',
+  highlights: 'المجموعة',
+  stories: 'القصة',
+};
+
 type ProfileReorderGesture = {
   kind: ProfileReorderKind;
   id: string;
@@ -464,6 +478,10 @@ export default function ProfilePage({
   const [showProfileReorder, setShowProfileReorder] = useState(false);
   const [profilePostOrder, setProfilePostOrder] = useState<string[]>([]);
   const [profileReorderSaving, setProfileReorderSaving] = useState(false);
+  // نص يُعلن لقارئ الشاشة موضع العنصر بعد التحريك أو السحب (aria-live).
+  const [profileReorderAnnouncement, setProfileReorderAnnouncement] = useState('');
+  // هل حُمّلت كل صفحات أبرز القصص وقصصها بلا فشل؟ لا حفظ بترتيب جزئي قبل ذلك.
+  const [profileHighlightsComplete, setProfileHighlightsComplete] = useState(false);
   // المجموعة المفتوحة داخل شاشة الترتيب لعرض قصصها الداخلية وترتيبها.
   const [reorderStoriesCollectionId, setReorderStoriesCollectionId] = useState<string | null>(null);
   const reorderStoriesCollection = reorderStoriesCollectionId
@@ -1098,19 +1116,67 @@ export default function ProfilePage({
     if (!supabaseConfigured || !activeUserId) return;
     let active = true;
     const loadProfileData = async () => {
-      const loadHighlightCollections = async () => {
-        const orderedResult = await supabase.from('profile_highlight_collections')
-          .select('id, user_id, title, cover_url, created_at, display_order')
-          .eq('user_id', activeUserId)
-          .order('display_order', { ascending: true })
-          .order('created_at', { ascending: true })
-          .limit(100);
-        if (!orderedResult.error || !/display_order/i.test(orderedResult.error.message)) return orderedResult;
-        return supabase.from('profile_highlight_collections')
-          .select('id, user_id, title, cover_url, created_at')
-          .eq('user_id', activeUserId)
-          .order('created_at', { ascending: true })
-          .limit(100);
+      type PageResult<T> = { data: T[] | null; error: { message: string } | null };
+
+      // جلب كامل بالصفحات: لا تُعرض صفحة واحدة على أنها القائمة كلها.
+      // ترتيب ثابت (display_order/position ثم created_at ثم id) حتى لا يتكرر
+      // صف أو يُسقط بين صفحتين عند تساوي قيم الترتيب.
+      const loadHighlightCollections = async (): Promise<PageResult<ProfileHighlightCollectionSummary>> => {
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const includeDisplayOrder = attempt === 0;
+          const rows: ProfileHighlightCollectionSummary[] = [];
+          let offset = 0;
+          while (true) {
+            const filtered = supabase.from('profile_highlight_collections')
+              .select(includeDisplayOrder
+                ? 'id, user_id, title, cover_url, created_at, display_order'
+                : 'id, user_id, title, cover_url, created_at')
+              .eq('user_id', activeUserId);
+            const ordered = includeDisplayOrder
+              ? filtered.order('display_order', { ascending: true })
+              : filtered;
+            const { data, error } = await ordered
+              .order('created_at', { ascending: true })
+              .order('id', { ascending: true })
+              .range(offset, offset + PAGE_SIZE - 1);
+            if (error) {
+              // العمود display_order غير موجود (42703/PGRST204): نفس الاحتياط
+              // السابق، بلا ترتيب صريح عليه، من أول صفحة.
+              if (includeDisplayOrder && /display_order/i.test(error.message || '')) break;
+              return { data: null, error };
+            }
+            const page = (data || []) as ProfileHighlightCollectionSummary[];
+            rows.push(...page);
+            if (page.length < PAGE_SIZE) return { data: rows, error: null };
+            if (offset >= PAGE_SIZE * MAX_PAGES) {
+              return { data: null, error: { message: 'عدد المجموعات أكبر من الحد الذي يمكن تحميله.' } };
+            }
+            offset += PAGE_SIZE;
+          }
+        }
+        return { data: null, error: { message: 'تعذر تحميل مجموعات أبرز القصص كاملة.' } };
+      };
+
+      const loadHighlightStories = async (): Promise<PageResult<ProfileHighlight>> => {
+        const rows: ProfileHighlight[] = [];
+        let offset = 0;
+        while (true) {
+          const { data, error } = await supabase.from('profile_highlights')
+            .select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at')
+            .eq('user_id', activeUserId)
+            .order('position', { ascending: true })
+            .order('created_at', { ascending: true })
+            .order('id', { ascending: true })
+            .range(offset, offset + PAGE_SIZE - 1);
+          if (error) return { data: null, error };
+          const page = (data || []) as ProfileHighlight[];
+          rows.push(...page);
+          if (page.length < PAGE_SIZE) return { data: rows, error: null };
+          if (offset >= PAGE_SIZE * MAX_PAGES) {
+            return { data: null, error: { message: 'عدد قصص أبرز القصص أكبر من الحد الذي يمكن تحميله.' } };
+          }
+          offset += PAGE_SIZE;
+        }
       };
 
       const [{ data: prof }, { count: fCount }, { count: fingCount }, { data: checkFollow }, { data: checkFollowsMe }, { data: checkRequest }, { data: collectionRows, error: collectionsError }, { data: highlightRows, error: highlightsError }] = await Promise.all([
@@ -1122,7 +1188,7 @@ export default function ProfilePage({
         own ? Promise.resolve({ data: null }) : supabase.from('follows').select('*').eq('follower_id', activeUserId).eq('following_id', currentUserId).maybeSingle(),
         own ? Promise.resolve({ data: null }) : supabase.from('follow_requests').select('requester_id').eq('requester_id', currentUserId).eq('recipient_id', activeUserId).maybeSingle(),
         loadHighlightCollections(),
-        supabase.from('profile_highlights').select('id, user_id, collection_id, position, media_url, media_type, caption, source_story_id, is_close_friends, duration_seconds, created_at').eq('user_id', activeUserId).order('position', { ascending: true }).order('created_at', { ascending: true }).limit(500),
+        loadHighlightStories(),
       ]);
 
       if (!active) return;
@@ -1161,6 +1227,13 @@ export default function ProfilePage({
           requestSent: Boolean(checkRequest),
         });
       }
+      // لا قائمة جزئية: إن فشلت أي صفحة تبقى الحالة السابقة كما هي، ويُمنع
+      // حفظ ترتيب مبني على قائمة ناقصة (profileHighlightsComplete = false).
+      if (collectionsError || highlightsError) {
+        setProfileHighlightsComplete(false);
+        return;
+      }
+
       const storiesByCollection = new Map<string, ProfileHighlight[]>();
       ((highlightRows || []) as ProfileHighlight[]).forEach(story => {
         const stories = storiesByCollection.get(story.collection_id) || [];
@@ -1168,9 +1241,12 @@ export default function ProfilePage({
         storiesByCollection.set(story.collection_id, stories);
       });
       const collectionData = (collectionRows || []) as ProfileHighlightCollectionSummary[];
+      // المجموعات الفارغة تبقى مخفية كما هي قاعدة العرض الحالية، حتى مع
+      // الجلب الكامل بالصفحات.
       setProfileHighlights(collectionData
         .map(collection => ({ ...collection, stories: storiesByCollection.get(collection.id) || [] }))
         .filter(collection => collection.stories.length > 0));
+      setProfileHighlightsComplete(true);
     };
     void loadProfileData();
     return () => { active = false; };
@@ -1906,8 +1982,17 @@ export default function ProfilePage({
     }
   };
 
+  // إعلان موضع العنصر بعد التحريك أو السحب لقارئ الشاشة (aria-live).
+  const announceReorderPosition = (kind: ProfileReorderKind, nextIds: string[], id: string) => {
+    const index = nextIds.indexOf(id);
+    if (index < 0) return;
+    setProfileReorderAnnouncement(`نُقل ${PROFILE_REORDER_LABELS[kind]} إلى الموضع ${index + 1} من ${nextIds.length}.`);
+  };
+
   const beginProfileReorder = (event: ReactPointerEvent<HTMLElement>, kind: ProfileReorderKind, id: string) => {
     if (!own || !showProfileReorder || profileReorderSaving) return;
+    // بلا قائمة كاملة لا سحب: كل قصص المجموعة يجب أن تكون محمّلة قبل ترتيبها.
+    if ((kind === 'highlights' || kind === 'stories') && !profileHighlightsComplete) return;
     const previousGesture = profileReorderGestureRef.current;
     if (previousGesture?.timer !== null && previousGesture?.timer !== undefined) window.clearTimeout(previousGesture.timer);
     const gesture: ProfileReorderGesture = {
@@ -1965,6 +2050,7 @@ export default function ProfilePage({
       if (nextIds === previousIds) return;
       const collectionById = new Map(profileHighlights.map(collection => [collection.id, collection]));
       setProfileHighlights(nextIds.flatMap(id => collectionById.has(id) ? [collectionById.get(id)!] : []));
+      announceReorderPosition('highlights', nextIds, gesture.id);
       void saveProfileContentOrder('highlights', nextIds, previousIds);
       return;
     }
@@ -1978,6 +2064,7 @@ export default function ProfilePage({
       const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
       if (nextIds === previousIds) return;
       applyHighlightStoryOrder(collection.id, nextIds);
+      announceReorderPosition('stories', nextIds, gesture.id);
       void saveProfileHighlightStoryOrder(collection.id, nextIds, previousIds);
       return;
     }
@@ -1989,6 +2076,7 @@ export default function ProfilePage({
     const nextIds = moveProfileItem(previousIds, gesture.id, targetId);
     if (nextIds === previousIds) return;
     setProfilePostOrder(nextIds);
+    announceReorderPosition('posts', nextIds, gesture.id);
     void saveProfileContentOrder('posts', nextIds, previousIds);
   };
 
@@ -2001,6 +2089,54 @@ export default function ProfilePage({
     setDragOverReorderKey(null);
   };
 
+  // نقل عنصر خطوة واحدة بلا سحب: مسار لوحة المفاتيح وقارئ الشاشة. نفس التحديث
+  // الفوري ونفس دوال الحفظ الحالية — لا مسار حفظ جديد ولا منطق RPC مكرر.
+  const moveProfileItemBy = (kind: ProfileReorderKind, id: string, direction: -1 | 1) => {
+    if (!own || profileReorderSaving) return;
+
+    if (kind === 'highlights') {
+      if (!profileHighlightsComplete) return;
+      const previousIds = profileHighlights.map(collection => collection.id);
+      const fromIndex = previousIds.indexOf(id);
+      const toIndex = fromIndex + direction;
+      // لا خروج عن أول عنصر أو آخره.
+      if (fromIndex < 0 || toIndex < 0 || toIndex >= previousIds.length) return;
+      const nextIds = moveProfileItem(previousIds, id, previousIds[toIndex]);
+      if (nextIds === previousIds) return;
+      const collectionById = new Map(profileHighlights.map(collection => [collection.id, collection]));
+      setProfileHighlights(nextIds.flatMap(collectionId => collectionById.has(collectionId) ? [collectionById.get(collectionId)!] : []));
+      announceReorderPosition('highlights', nextIds, id);
+      void saveProfileContentOrder('highlights', nextIds, previousIds);
+      return;
+    }
+
+    if (kind === 'stories') {
+      if (!profileHighlightsComplete) return;
+      const collection = reorderStoriesCollection;
+      if (!collection) return;
+      const previousIds = collection.stories.map(story => story.id);
+      const fromIndex = previousIds.indexOf(id);
+      const toIndex = fromIndex + direction;
+      if (fromIndex < 0 || toIndex < 0 || toIndex >= previousIds.length) return;
+      const nextIds = moveProfileItem(previousIds, id, previousIds[toIndex]);
+      if (nextIds === previousIds) return;
+      applyHighlightStoryOrder(collection.id, nextIds);
+      announceReorderPosition('stories', nextIds, id);
+      void saveProfileHighlightStoryOrder(collection.id, nextIds, previousIds);
+      return;
+    }
+
+    const previousIds = orderedEditablePosts.map(post => post.id);
+    const fromIndex = previousIds.indexOf(id);
+    const toIndex = fromIndex + direction;
+    if (fromIndex < 0 || toIndex < 0 || toIndex >= previousIds.length) return;
+    const nextIds = moveProfileItem(previousIds, id, previousIds[toIndex]);
+    if (nextIds === previousIds) return;
+    setProfilePostOrder(nextIds);
+    announceReorderPosition('posts', nextIds, id);
+    void saveProfileContentOrder('posts', nextIds, previousIds);
+  };
+
   // ربط المعاينة الحية بالسحب: نفس المفروز ونفس المعالجات للأنواع الثلاثة.
   const profileReorderBinding = (kind: ProfileReorderKind): ReorderBinding => ({
     kind,
@@ -2011,6 +2147,7 @@ export default function ProfilePage({
     move: moveProfileReorderPointer,
     end: endProfileReorderPointer,
     cancel: cancelProfileReorderPointer,
+    moveBy: (id, direction) => moveProfileItemBy(kind, id, direction),
   });
 
   // فتح منشور الشبكة في عارضه الحالي — نفس سلوك شبكة Profile تماماً.
@@ -2160,7 +2297,8 @@ export default function ProfilePage({
               </div>
               {showProfileReorder && (
                 <section className="profile-reorder-panel profile-reorder-preview" aria-label="إعادة ترتيب القصص والمنشورات">
-                  <p className="profile-reorder-hint">اضغط مطولاً على أي عنصر ثم اسحبه إلى موضعه الجديد — الترتيب يُحفظ فوراً ويظهر في ملفك الشخصي.</p>
+                  <p className="profile-reorder-hint">اضغط مطولاً على مقبض السحب في أي عنصر ثم اسحبه إلى موضعه الجديد — أو استخدم زرّي السابق/التالي. الترتيب يُحفظ فوراً ويظهر في ملفك الشخصي.</p>
+                  <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">{profileReorderAnnouncement}</div>
 
                   <div className="profile-reorder-section-head">
                     <h3>أبرز القصص</h3>
