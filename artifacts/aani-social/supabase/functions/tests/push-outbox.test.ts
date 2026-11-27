@@ -259,7 +259,10 @@ Deno.test("a second worker claims nothing once the first claimed the task", asyn
 Deno.test("a transient failure keeps only that device retryable", async () => {
   let androidOutcome: SendOutcome = { ok: false, status: 503, retryable: true, error: "transient" };
   const fake = createFake({
-    devices: [{ id: "device-web", token: MESSAGE_TOKEN }, { id: "device-android", token: "fcm-token-android" }],
+    devices: [
+      { id: "device-web", token: MESSAGE_TOKEN },
+      { id: "device-android", token: "fcm-token-android", platform: "android" },
+    ],
     send: device => (device.platform === "android" ? androidOutcome : delivered(device)),
   });
   fake.enqueue("outbox-1", "message", { message_id: "message-1", sender_id: "user-a" });
