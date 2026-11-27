@@ -107,6 +107,21 @@ jobs:
       - name: Unit tests @workspace/aani-social (phone login session)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/phoneLoginSession.test.ts
 
+      # إعدادات الحساب: تغيير البريد (قبل التأكيد لا يتغيّر شيء)، فرض MFA
+      # بقرار aal2 وحالات الفشل، جلسات الحساب وإبطال الجلسات الأخرى، وتعطيل
+      # الحساب وحذفه (لا نجاح قبل رد الخادم، ولا حذف لوسائط من العميل).
+      - name: Unit tests @workspace/aani-social (account email change)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountEmailChange.test.ts
+
+      - name: Unit tests @workspace/aani-social (account MFA gate)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountMfa.test.ts
+
+      - name: Unit tests @workspace/aani-social (account sessions)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountSessions.test.ts
+
+      - name: Unit tests @workspace/aani-social (account lifecycle)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountLifecycle.test.ts
+
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
   # the part of the schema the migration and the test touch, so this proves the
