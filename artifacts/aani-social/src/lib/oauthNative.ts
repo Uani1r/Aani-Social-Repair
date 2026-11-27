@@ -3,6 +3,9 @@ import { Browser } from '@capacitor/browser';
 import { supabase } from '@/lib/supabase';
 
 const handledCodes = new Set<string>();
+const pendingCodes = new Set<string>();
+let inFlight = false;
+let listenerHandle: { remove: () => Promise<void> } | null = null;
 type NativeOAuthResult = { ok: boolean; error?: string };
 const resultHandlers = new Set<(result: NativeOAuthResult) => void>();
 
@@ -10,8 +13,6 @@ export function onNativeOAuthResult(handler: (result: NativeOAuthResult) => void
   resultHandlers.add(handler);
   return () => resultHandlers.delete(handler);
 }
-let listenerHandle: { remove: () => Promise<void> } | null = null;
-let inFlight = false;
 
 export function isNativePlatform(): boolean {
   return typeof (window as any)?.Capacitor?.isNativePlatform === 'function'
@@ -43,7 +44,7 @@ export function parseOAuthCallback(url: string): ParsedOAuthCallback {
 }
 
 export async function startNativeGoogleOAuth(): Promise<void> {
-  if (!isNativePlatform() || inFlight) return;
+  if (inFlight) return;
   inFlight = true;
   try {
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -55,28 +56,45 @@ export async function startNativeGoogleOAuth(): Promise<void> {
     });
     if (error) throw error;
     if (data?.url) await Browser.open({ url: data.url });
-    // Keep inFlight true until callback or explicit failure/cancel.
   } catch (e) {
     inFlight = false;
+    const result = { ok: false, error: (e as any)?.message || 'oauth_start_failed' };
+    resultHandlers.forEach((h) => h(result));
     throw e;
   }
 }
 
 export async function handleNativeOAuthUrl(url: string): Promise<{ ok: boolean; error?: string }> {
   const parsed = parseOAuthCallback(url);
-  if (!parsed.ok || !parsed.code) { inFlight = false; const r = { ok: false, error: parsed.error || 'invalid_url' }; resultHandlers.forEach((h) => h(r)); return r; }
-  if (handledCodes.has(parsed.code)) { inFlight = false; const r = { ok: true }; resultHandlers.forEach((h) => h(r)); return r; }
-  handledCodes.add(parsed.code);
+  if (!parsed.ok || !parsed.code) {
+    const result = { ok: false, error: parsed.error || 'invalid_url' };
+    resultHandlers.forEach((h) => h(result));
+    return result;
+  }
+  if (handledCodes.has(parsed.code)) {
+    // already completed; do not notify success again
+    return { ok: true };
+  }
+  if (pendingCodes.has(parsed.code)) {
+    // in progress; ignore duplicate
+    return { ok: false, error: 'in_progress' };
+  }
+  pendingCodes.add(parsed.code);
   try {
-    const { error } = await supabase.auth.exchangeCodeForSession(parsed.code);
-    if (error) throw error;
+    const { data, error } = await supabase.auth.getSession();
+    const { error: exError } = await supabase.auth.exchangeCodeForSession(parsed.code);
+    if (exError) throw exError;
+    const { data: sessionData } = await supabase.auth.getSession();
+    if (!sessionData?.session) throw new Error('session_not_created');
+    pendingCodes.delete(parsed.code);
+    handledCodes.add(parsed.code);
     inFlight = false;
     await Browser.close().catch(() => {});
     const result = { ok: true };
     resultHandlers.forEach((h) => h(result));
     return result;
   } catch (e: any) {
-    handledCodes.delete(parsed.code);
+    pendingCodes.delete(parsed.code);
     inFlight = false;
     const result = { ok: false, error: e?.message || 'exchange_failed' };
     resultHandlers.forEach((h) => h(result));
@@ -96,4 +114,6 @@ export function registerNativeOAuthListener(): void {
 
 export function resetNativeOAuthGuard(): void {
   handledCodes.clear();
+  pendingCodes.clear();
+  inFlight = false;
 }
