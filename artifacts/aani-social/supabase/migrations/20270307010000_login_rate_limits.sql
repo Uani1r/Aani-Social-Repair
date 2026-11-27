@@ -69,6 +69,10 @@ begin
   -- تنظيف النوافذ المنتهية (مفهرس، ورخيص).
   delete from public.login_rate_limits where window_started_at < v_now - (v_window * 2);
 
+  -- إعادة التصفير قبل العبارة: عند عدم إعادة صف (الحد مكتمل) يجب أن يبقى
+  -- v_row فارغاً ليدل على الرفض.
+  v_row := null;
+
   insert into public.login_rate_limits as l (bucket, window_started_at, attempts)
   values (p_bucket, v_now, 1)
   on conflict (bucket) do update
