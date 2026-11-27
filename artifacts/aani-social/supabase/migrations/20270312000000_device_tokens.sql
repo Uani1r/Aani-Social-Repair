@@ -15,7 +15,8 @@
 --     وlast_seen_at في مرحلة الإرسال.
 --
 -- الصلاحيات: RLS مفعّلة، والمستخدم يقرأ ويكتب صفوفه فقط عبر سياسات
--- user_id = auth.uid()، والدوال SECURITY DEFINER محصورة بـauthenticated.
+-- user_id = auth.uid() (قراءة/إضافة/تحديث، بلا حذف)، والدوال SECURITY
+-- DEFINER محصورة بـauthenticated. سجلات الأجهزة لا تُحذف: الإلغاء بـrevoked_at.
 --
 -- لم يُطبَّق هذا الترحيل على أي مشروع Supabase. يُطبَّق يدوياً بعد المراجعة.
 
@@ -72,7 +73,10 @@ for each row execute function public.aani_touch_device_token_updated_at();
 
 alter table public.device_tokens enable row level security;
 revoke all on table public.device_tokens from public, anon;
-grant select, insert, update, delete on table public.device_tokens to authenticated;
+-- المستخدم يقرأ ويُسجّل ويُحدّث صفوفه، ولا يحذفها: إلغاء الجهاز يتم عبر
+-- aani_revoke_device_token التي تضبط revoked_at وتبقي السجل (اختبار: لا حذف).
+grant select, insert, update on table public.device_tokens to authenticated;
+revoke delete on table public.device_tokens from authenticated;
 grant select, insert, update, delete on table public.device_tokens to service_role;
 
 drop policy if exists "Users read own device tokens" on public.device_tokens;
@@ -91,10 +95,9 @@ create policy "Users update own device tokens"
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
 
+-- لا سياسة DELETE للمستخدم: سجلات الأجهزة لا تُحذف، والاحتفاظ بها شرط
+-- لسجل الأجهزة وإلغاء الرمز. تُسقط السياسة إن كانت أُنشئت في نسخة سابقة.
 drop policy if exists "Users revoke own device tokens" on public.device_tokens;
-create policy "Users revoke own device tokens"
-  on public.device_tokens for delete to authenticated
-  using (user_id = (select auth.uid()));
 
 -- تسجيل رمز جهاز أو تدويره: يُلغي رمز التثبيت نفسه عند تغيّره، ثم يُسجّل
 -- الرمز الجديد (أو يحدّث صفّه). لا يمسّ صفوف مستخدم آخر.

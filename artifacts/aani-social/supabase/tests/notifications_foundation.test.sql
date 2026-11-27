@@ -25,6 +25,16 @@ begin
   if not exists (select 1 from pg_catalog.pg_class where oid = 'public.device_tokens'::regclass and relrowsecurity) then
     raise exception 'RLS must be enabled on device_tokens';
   end if;
+  -- لا حذف لسجلات الأجهزة: لا منح DELETE ولا سياسة DELETE.
+  if has_table_privilege('authenticated', 'public.device_tokens', 'delete') then
+    raise exception 'authenticated must not hold DELETE on device_tokens';
+  end if;
+  if exists (
+    select 1 from pg_catalog.pg_policy
+    where polrelid = 'public.device_tokens'::regclass and polcmd = 'd'
+  ) then
+    raise exception 'device_tokens must have no DELETE policy';
+  end if;
   if not exists (select 1 from pg_catalog.pg_class where oid = 'public.notification_outbox'::regclass and relrowsecurity) then
     raise exception 'RLS must be enabled on notification_outbox';
   end if;
@@ -123,6 +133,55 @@ begin
   select count(*) into v_count from public.device_tokens where user_id = auth.uid() and revoked_at is null;
   if v_count <> 1 then
     raise exception 'one active device must remain after sign-out, found %', v_count;
+  end if;
+end
+$$;
+
+-- 1ب) لا حذف مباشر لسجلات الأجهزة، والإلغاء عبر الدالة يحتفظ بالسجل --------
+do $$
+declare
+  v_before integer;
+  v_after integer;
+  v_count integer;
+begin
+  select count(*) into v_before from public.device_tokens where user_id = auth.uid();
+  if v_before = 0 then
+    raise exception 'the owner must have device rows for this test';
+  end if;
+
+  begin
+    delete from public.device_tokens where user_id = auth.uid();
+    raise exception 'authenticated must not delete its own device tokens';
+  exception
+    when insufficient_privilege then null;
+  end;
+
+  select count(*) into v_after from public.device_tokens where user_id = auth.uid();
+  if v_after <> v_before then
+    raise exception 'a direct delete must not affect device rows, % -> %', v_before, v_after;
+  end if;
+
+  -- الإلغاء عبر الدالة: يضبط revoked_at ويبقي السجل.
+  perform public.aani_register_device_token('ios', 'tok-a-keep', 'fcm', 'inst-a-keep', 'iPhone');
+  select count(*) into v_before from public.device_tokens where user_id = auth.uid() and token = 'tok-a-keep';
+  if v_before <> 1 then
+    raise exception 'the token to revoke must be registered once, found %', v_before;
+  end if;
+
+  select public.aani_revoke_device_token('tok-a-keep', null, null) into v_count;
+  if v_count <> 1 then
+    raise exception 'the revoke call must affect the active token, found %', v_count;
+  end if;
+
+  select count(*) into v_after from public.device_tokens
+  where user_id = auth.uid() and token = 'tok-a-keep' and revoked_at is not null;
+  if v_after <> 1 then
+    raise exception 'the revoked device row must be kept with revoked_at, found %', v_after;
+  end if;
+  select count(*) into v_after from public.device_tokens
+  where user_id = auth.uid() and token = 'tok-a-keep' and revoked_at is null;
+  if v_after <> 0 then
+    raise exception 'the revoked device must not stay active, found %', v_after;
   end if;
 end
 $$;
@@ -244,11 +303,12 @@ begin
     raise exception 'another user must not update these device tokens, affected %', v_count;
   end if;
 
-  delete from public.device_tokens where user_id = 'a0000000-0000-0000-0000-00000000000a';
-  get diagnostics v_count = row_count;
-  if v_count <> 0 then
-    raise exception 'another user must not delete these device tokens, affected %', v_count;
-  end if;
+  begin
+    delete from public.device_tokens where user_id = 'a0000000-0000-0000-0000-00000000000a';
+    raise exception 'a user must not delete another user device tokens';
+  exception
+    when insufficient_privilege then null;
+  end;
 
   begin
     insert into public.device_tokens (user_id, platform, provider, token)
