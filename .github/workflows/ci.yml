@@ -107,6 +107,9 @@ jobs:
       - name: Unit tests @workspace/aani-social (phone login session)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/phoneLoginSession.test.ts
 
+      - name: Unit tests @workspace/aani-social (oauth provider)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/oauthProvider.test.ts
+
       # إعدادات الحساب: تغيير البريد (قبل التأكيد لا يتغيّر شيء)، فرض MFA
       # بقرار aal2 وحالات الفشل، جلسات الحساب وإبطال الجلسات الأخرى، وتعطيل
       # الحساب وحذفه (لا نجاح قبل رد الخادم، ولا حذف لوسائط من العميل).
