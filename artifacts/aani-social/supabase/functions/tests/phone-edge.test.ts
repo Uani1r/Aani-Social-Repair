@@ -445,13 +445,17 @@ Deno.test("the functions log only through the shared redactor", async () => {
 Deno.test("no response body carries the service role key or the account email", async () => {
   for (const file of ["account-phone-alias/index.ts", "_shared/phoneLoginFlow.ts"]) {
     const source = await readFunction(file);
-    for (const line of source.split("\n")) {
-      if (line.includes("jsonResponse(")) {
-        assert(!line.includes("serviceRoleKey"), `${file} must not return the service role key`);
-        assert(!line.includes("email"), `${file} must not return the account email`);
-      }
+    // كل جسم رد مكتوب صراحة: لا بريد ولا مفتاح خدمة.
+    const bodies = source.match(/jsonResponse\(\{[^)]*\}\)/g) ?? [];
+    for (const body of bodies) {
+      assert(!body.includes("email"), `${file} must not return the account email`);
+      assert(!body.includes("serviceRoleKey"), `${file} must not return the service role key`);
     }
+    assert(!source.includes("jsonResponse(session,"), `${file} must not echo the raw auth session`);
   }
+  const flow = await readFunction("_shared/phoneLoginFlow.ts");
+  assert(flow.includes("sessionTokens("), "the login flow must strip the session to two tokens");
+  assert(flow.includes("return jsonResponse(tokens, 200, origin);"), "the success body is the stripped tokens");
 });
 
 Deno.test("managing the alias requires a real session before any RPC", async () => {
