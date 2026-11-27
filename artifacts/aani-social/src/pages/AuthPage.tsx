@@ -1,34 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { useLocation } from 'wouter';
+import { useState, useEffect, type CSSProperties, type FormEvent } from 'react';
+import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { classifyLoginIdentifier } from '@/lib/accountAuth';
-import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
-import { completePhoneLogin } from '@/lib/phoneLoginSession';
+import { normalizePhoneToE164 } from '@/lib/accountAuth';
 import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
-
-/** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
-const invokePhoneLogin = createPhoneFunctionInvoker({
-  invoke: (name, options) => supabase.functions.invoke(name, options),
-});
-
-/** ودجت Cloudflare Turnstile: مفتاح عام فقط، ولا سر في الواجهة. */
-const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
-const TURNSTILE_SITE_KEY = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
-const TURNSTILE_ACTION = 'phone_login';
-
-type TurnstileApi = {
-  render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
-  reset: (widgetId?: string | number) => void;
-  remove: (widgetId: string | number) => void;
-};
-
-declare global {
-  interface Window {
-    turnstile?: TurnstileApi;
-  }
-}
-
 
 type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
 
@@ -74,9 +49,38 @@ const resolveCityFromDevice = (): Promise<CityLookupResult> => new Promise(resol
   );
 });
 
-// --- صفحة تسجيل الدخول وإنشاء الحساب ---
+const Spinner = () => <span style={styles.spinner} aria-hidden="true" />;
+
+const GoogleIcon = () => (
+  <svg style={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+  </svg>
+);
+
+const AppleIcon = () => (
+  <svg style={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+    <path d="M18.71 18.86c-.57.48-.93 1.11-.93 1.84 0 .73.36 1.36.93 1.84-.42.07-.83.17-1.23.29-.26.23-.5.48-.72.75-.22.27-.43.55-.62.84-.34.51-.64 1.06-.91 1.64-.27.59-.51 1.2-.72 1.84-.15.44-.27.89-.36 1.36-.09.47-.16.95-.2.1-.43-.03-.85-.08-1.26-.15-.42-.07-.83-.16-1.24-.26-.41-.09-.8-.2-1.18-.32-.43-.15-.84-.33-1.24-.54-.39-.2-.77-.42-1.12-.67-.2-.14-.39-.29-.57-.44-.19-.16-.36-.33-.51-.52-.15-.19-.28-.39-.39-.61-.1-.21-.18-.43-.24-.66-.06-.22-.09-.45-.09-.68 0-.23.03-.45.09-.66.06-.23.14-.44.24-.64.12-.22.25-.42.39-.6.11-.2.23-.4.4-.58.18-.18.37-.35.57-.5.21-.15.4-.29.6-.43.36-.25.74-.47 1.13-.66.42-.2.84-.39 1.25-.56.41-.17.82-.32 1.23-.45.41-.13.83-.24 1.24-.32.42-.09.83-.15 1.25-.19.42-.04.84-.07 1.26-.09.42-.02.84.04 1.25.12.4.08.79.18 1.17.3.39.13.76.28 1.12.45.35.16.68.34.99.53.31.19.6.4.87.63.27.23.51.48.73.75.22.27.41.56.58.86.17.3.32.6.45.9.12.3.21.61.28.92.07.31.12.62.14.94.02.31.02.63.01.94 0 .31-.01.62-.03.93-.02.31-.05.61-.09.9-.04.3-.1.59-.17.87-.08.29-.17.57-.27.84-.1.28-.21.55-.33.81-.12.26-.25.51-.39.75-.14.24-.29.47-.45.69-.16.22-.33.43-.51.63-.18.2-.37.39-.57.57-.2.18-.41.35-.63.5-.22.15-.44.29-.67.42-.23.13-.47.24-.72.33-.25.09-.5.16-.76.22-.26.06-.52.1-.78.13-.26.03-.51.04-.77.04-.26 0-.52-.01-.77-.04-.26-.03-.52-.07-.77-.13-.25-.05-.49-.11-.73-.19-.24-.08-.47-.17-.69-.28-.22-.11-.43-.23-.63-.36-.2-.13-.39-.27-.57-.42-.18-.15-.35-.31-.51-.48-.16-.17-.3-.35-.43-.54-.13-.19-.24-.39-.33-.6-.09-.21-.16-.43-.21-.65-.05-.22-.08-.44-.08-.67 0-.22.03-.43.08-.64.05-.21.12-.41.21-.6.09-.19.19-.37.3-.54.11-.17.23-.33.36-.48.13-.15.27-.29.41-.42.14-.13.28-.25.42-.36.14-.11.28-.21.42-.3.14-.09.27-.17.4-.24.13-.07.25-.13.37-.19.12-.06.23-.11.34-.16.11-.05.21-.09.31-.12.1-.03.2-.05.29-.07.09-.02.17-.03.26-.04.09 0 .18.01.26.01.08 0 .16.01.24.02.08.01.15.02.23.04.08.02.15.05.22.08.07.03.13.07.19.11.06.04.11.08.16.13.05.05.09.1.12.16.03.06.05.12.06.18.01.06.02.11.02.17 0 .06-.01.11-.02.16-.01.05-.02.1-.04.14-.02.04-.04.08-.06.12-.02.04-.04.07-.07.11-.03.04-.04-.07-.07.11-.03.03-.06-.05-.09-.08-.03-.03-.06-.05-.09-.08-.03-.03-.05-.05-.08-.07-.03-.02-.05-.03-.08-.04-.03-.01-.06-.02-.09-.02-.03 0-.05-.01-.08-.01-.03 0-.05.01-.08-.01-.03-.02-.05-.03-.08-.05-.03-.02-.05-.04-.08-.06-.03-.02-.05-.03-.08-.05-.03-.02-.05-.04-.08-.06-.03-.02-.05-.03-.08-.05-.03-.02-.06-.03-.09-.04-.03-.01-.05-.02-.08-.03-.03-.01-.05-.02-.08-.03-.03-.01-.06-.02-.09-.03-.03-.01-.05-.02-.08-.03-.03-.01-.05-.02-.08-.03-.03-.01-.06-.02-.09-.03-.03-.01-.05-.02-.08-.03"/>
+  </svg>
+);
+
+const SupportIcon = () => (
+  <svg style={styles.supportIcon} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    <path d="M17 9h-5a2 2 0 0 0-2 2v3" />
+  </svg>
+);
+
+const ChevronIcon = ({ rotated }: { rotated: boolean }) => (
+  <svg style={{ ...styles.chevronIcon, transform: rotated ? 'rotate(180deg)' : 'rotate(0deg)' }} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
 export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterAuth: () => void }) {
-  const signUp = mode === 'signup';
+  const isSignup = mode === 'signup';
   const [, setLocation] = useLocation();
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
@@ -85,119 +89,35 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  // حالة رسالة أثناء تحديد الموقع الإجباري عند التسجيل
   const [statusNotice, setStatusNotice] = useState('');
-  // الجنس المختار عند إنشاء الحساب — يحدد الأيقونة الشخصية الافتراضية
   const [gender, setGender] = useState<'male' | 'female'>('male');
-  // حالة النموذج الاحتياطي (Accordion)
   const [showFallbackForm, setShowFallbackForm] = useState(false);
-  // قيمة حقل المعرف الموحد في النموذج الاحتياطي
   const [fallbackIdentifier, setFallbackIdentifier] = useState('');
   const [fallbackPassword, setFallbackPassword] = useState('');
   const [fallbackBusy, setFallbackBusy] = useState(false);
   const [fallbackError, setFallbackError] = useState('');
 
-  // ودجت Turnstile لمسار الهاتف فقط: مفتاح عام لا سر، ويُعاد ضبطه بعد كل فشل.
-  const [captchaToken, setCaptchaToken] = useState('');
-  const captchaContainerRef = useRef<HTMLDivElement | null>(null);
-  const captchaWidgetRef = useRef<string | number | null>(null);
-  // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
-  const isPhoneLogin = !signUp && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
-
-  const resetCaptcha = () => {
-    setCaptchaToken('');
-    const api = window.turnstile;
-    if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
-  };
-
-  // حقن keyframes للرسوم المتحركة البسيطة
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
-      @keyframes spin {
-        to { transform: rotate(360deg); }
-      }
-      @keyframes slideDown {
-        from { opacity: 0; transform: translateY(-10px); }
-        to { opacity: 1; transform: translateY(0); }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        *, *::before, *::after {
-          animation-duration: 0.01ms !important;
-          transition-duration: 0.01ms !important;
-        }
-      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
     `;
     document.head.appendChild(style);
-    return () => {
-      document.head.removeChild(style);
-    };
+    return () => { document.head.removeChild(style); };
   }, []);
-
-  /**
-   * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
-   * للبريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح
-   * الرمز فلا يُرسل رمز منتهٍ.
-   */
-  useEffect(() => {
-    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) return undefined;
-    let cancelled = false;
-    const mount = () => {
-      if (cancelled) return;
-      const api = window.turnstile;
-      const container = captchaContainerRef.current;
-      if (!api || !container) return;
-      if (captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
-      setCaptchaToken('');
-      captchaWidgetRef.current = api.render(container, {
-        sitekey: TURNSTILE_SITE_KEY,
-        action: TURNSTILE_ACTION,
-        theme: 'light',
-        language: 'ar',
-        callback: (token: string) => setCaptchaToken(token),
-        'expired-callback': () => setCaptchaToken(''),
-        'error-callback': () => setCaptchaToken(''),
-      });
-    };
-
-    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
-    if (window.turnstile) {
-      mount();
-    } else if (existing) {
-      existing.addEventListener('load', mount);
-    } else {
-      const script = document.createElement('script');
-      script.src = TURNSTILE_SCRIPT;
-      script.async = true;
-      script.defer = true;
-      script.dataset.turnstile = 'true';
-      script.addEventListener('load', mount);
-      document.head.appendChild(script);
-    }
-
-    return () => {
-      cancelled = true;
-      if (existing) existing.removeEventListener('load', mount);
-      const api = window.turnstile;
-      if (api && captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
-      captchaWidgetRef.current = null;
-    };
-  }, [isPhoneLogin]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabaseConfigured) { setError('إعدادات Supabase غير مكتملة في Secrets.'); return; }
     setBusy(true); setError(''); setSuccess('');
     try {
-      if (mode === 'signup') {
-        // التحديد الإجباري التلقائي للموقع: لا يكتمل إنشاء الحساب بدون إذن الموقع ومدينة مستخرجة
+      if (isSignup) {
         setStatusNotice('نحدد موقعك تلقائياً الآن لضبط مدينتك — اسمح بالوصول إلى الموقع عند طلب المتصفح لإكمال التسجيل.');
         const geo = await resolveCityFromDevice();
         setStatusNotice('');
-        if (!geo.ok) {
-          setError(geo.message);
-          return;
-        }
+        if (!geo.ok) { setError(geo.message); return; }
         const city = geo.city;
 
         const { data, error: authError } = await supabase.auth.signUp({
@@ -208,7 +128,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
         if (authError) throw authError;
 
-        // اكتب المدينة مباشرة في الملف أيضاً (احتياط إن لم يكن مشغّل إنشاء الملف محدثاً بعد)
         const signedUpUserId = data.session?.user?.id;
         if (signedUpUserId) {
           const { error: cityError } = await supabase
@@ -254,16 +173,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
   };
 
-  /**
-   * الدخول بالنموذج الاحتياطي — بلا OTP وبلا SMS:
-   * - قاعدة واحدة حاسمة لمسار الدخول: بريد، أو رقم هاتف صريح (دولي أو عراقي
-   *   محلي 07XX…)، أو اسم مستخدم — والأسماء الرقمية لا تُقرأ كأرقام.
-   * - مسار الهاتف يستخدم الدالة المشتركة `loginWithPhone` وحدها: لا
-   *   `signInWithPassword` برقم الهاتف، ولا `auth.users.phone`، ورمز Turnstile
-   *   إلزامي.
-   * - الجلسة تُثبَّت بالرمزين ثم يُتحقق المستخدم بـ`getUser` قبل الانتقال،
-   *   وفشل التحقق يلغي الجلسة المحلية.
-   */
   const handleFallbackLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabaseConfigured || fallbackBusy) return;
@@ -279,36 +188,29 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
 
     try {
-      const parsed = classifyLoginIdentifier(identifier);
-      if (parsed.kind === 'invalid') throw new Error(parsed.message);
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+      const normalizedPhone = normalizePhoneToE164(identifier);
+      const isPhone = normalizedPhone !== null;
 
-      if (parsed.kind === 'phone') {
-        // مسار الهاتف: لا يبدأ الطلب بلا رمز CAPTCHA صالح.
-        if (!TURNSTILE_SITE_KEY) {
-          throw new Error('الدخول بالهاتف يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد أو اسم المستخدم في الوقت الحالي.');
-        }
-        if (!captchaToken) {
-          throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
-        }
-        const outcome = await completePhoneLogin(parsed.phone, pwd, captchaToken, {
-          login: (phone, password, token) => loginWithPhone(phone, password, invokePhoneLogin, token),
-          setSession: tokens => supabase.auth.setSession({
-            access_token: tokens.accessToken,
-            refresh_token: tokens.refreshToken,
-          }),
-          getUser: () => supabase.auth.getUser(),
-          signOutLocal: () => supabase.auth.signOut({ scope: 'local' }),
-        });
-        if (!outcome.ok) throw new Error(outcome.message);
-      } else if (parsed.kind === 'email') {
+      if (isEmail) {
         const { error: authError } = await supabase.auth.signInWithPassword({
-          email: parsed.email,
+          email: identifier.toLowerCase(),
+          password: pwd,
+        });
+        if (authError) throw authError;
+      } else if (isPhone) {
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          phone: normalizedPhone,
           password: pwd,
         });
         if (authError) throw authError;
       } else {
+        const usernameIdentifier = identifier.replace(/^@/, '').toLowerCase();
+        if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
+          throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف عراقيًا (مثلاً: 07701234567 أو +9647701234567).');
+        }
         const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
-          body: { username: parsed.username, password: pwd },
+          body: { username: usernameIdentifier, password: pwd },
         });
         if (functionError) {
           const context = (functionError as { context?: unknown }).context;
@@ -317,7 +219,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             try {
               responseBody = await context.clone().json() as { error?: unknown; message?: unknown };
             } catch {
-              // Keep the SDK error when the function response is not JSON.
             }
             if (context.status === 401) {
               throw new Error(typeof responseBody?.error === 'string' ? responseBody.error : 'بيانات تسجيل الدخول غير صحيحة.');
@@ -342,12 +243,13 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       afterAuth();
       setLocation('/feed');
     } catch (reason: any) {
-      // أي فشل يُبطل رمز CAPTCHA ويُعيد ضبط الودجت.
-      resetCaptcha();
       const message = reason?.message || '';
-      // رسالة عامة عند فشل بيانات الدخول: لا تكشف وجود الرقم أو الحساب.
-      if (/invalid.*(login|credentials|grant)|wrong.*password|incorrect.*password/i.test(message)) {
+      if (/invalid.*(login|credentials)|wrong.*password|incorrect.*password/i.test(message)) {
         setFallbackError('المعرف أو كلمة المرور غير صحيحة.');
+      } else if (/phone_exists|already.*(registered|in use)|duplicate/i.test(message)) {
+        setFallbackError('هذا الرقم مرتبط بحساب آخر. استخدم رقماً مختلفاً.');
+      } else if (/sms|phone provider|not enabled|phone signups?/i.test(message)) {
+        setFallbackError('تسجيل الدخول برقم الهاتف غير متمكّن في إعدادات Supabase.');
       } else {
         setFallbackError(message || 'حدث خطأ في الاتصال. حاول مرة أخرى.');
       }
@@ -356,7 +258,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
   };
 
-  // فتح عميل البريد للتواصل مع الدعم
   const openSupportEmail = () => {
     const subject = encodeURIComponent('تواصل مع دعم آني Aani');
     const body = encodeURIComponent('مرحباً فريق دعم آني،\n\nأود التواصل بخصوص: \n\n---\n\nمعلومات حسابي (إن وجدت):\n- البريد الإلكتروني: \n- اسم المستخدم: \n\nوصف المشكلة/الاستفسار:\n');
@@ -371,7 +272,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             <div style={styles.sunRipples} />
             <div style={styles.sunCore} />
           </div>
-
           <div style={styles.heroTextContent}>
             <span style={styles.badgeText}>مكانك هنا</span>
             <h1 style={styles.mainTitle}>
@@ -388,9 +288,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           {error && <div style={styles.noticeError} role="alert">{error}</div>}
           {success && <div style={styles.noticeSuccess} role="status">{success}</div>}
 
-          {/* القسم الأول: الدخول السريع عبر Google و Apple */}
-          <div style={styles.providerButtonsGrid} role="group" aria-label="تسجيل الدخول السريع">
-
+          <div style={styles.providerButtonsGrid} role="group" aria-label={isSignup ? 'إنشاء حساب سريع' : 'تسجيل الدخول السريع'}>
             <button
               type="button"
               disabled={busy || fallbackBusy || !supabaseConfigured}
@@ -398,22 +296,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
               style={{ ...styles.providerBtn, ...styles.googleBtn, ...(busy || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
               aria-busy={busy || fallbackBusy}
             >
-              {busy ? (
-                <>
-                  <span style={styles.spinner} aria-hidden="true" />
-                  <span>جاري التوجيه...</span>
-                </>
-              ) : (
-                <>
-                  <svg style={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                  </svg>
-                  <span>المتابعة عبر Google</span>
-                </>
-              )}
+              {busy ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><GoogleIcon /><span>{isSignup ? 'المتابعة عبر Google' : 'الدخول باستخدام Google'}</span></>)}
             </button>
             <button
               type="button"
@@ -422,116 +305,113 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
               style={{ ...styles.providerBtn, ...styles.appleBtn, ...(busy || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
               aria-busy={busy || fallbackBusy}
             >
-              {busy ? (
-                <>
-                  <span style={styles.spinner} aria-hidden="true" />
-                  <span>جاري التوجيه...</span>
-                </>
-              ) : (
-                <>
-                  <svg style={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true">
-                    <path fill="currentColor" d="M17.05 20.65c-.98.98-2.22 1.47-3.57 1.47-2.57 0-4.88-1.29-6.21-3.25C5.57 17.43 4.3 15.28 4.3 12.83c0-1.13.27-2.19.78-3.14.37-.68.83-1.3 1.36-1.83l.02-.02c.02-.02.04-.04.07-.05.33-.18.68-.31 1.06-.38.6-.1.85-.36.85-.97 0-.87-.59-1.47-1.41-1.47-.38 0-.73.12-1.03.34-.06.04-.13.07-.2.11-.09.05-.19.11-.28.16-.28.15-.57.27-.87.35-.08.03-.16.07-.25.1-.28.09-.56.17-.85.22-.38.07-.76.11-1.15.11-1.07 0-1.96-.54-2.36-1.34C1.04 3.8.75 2.62.71 2.53.55 2.12.46 1.7.44 1.26.42.89.46.48.57.12.85-.57 1.23-1.37 1.7-2.44.38-3.14 1.58-3.42 2.57-3.17 3.26-2.53 4.27-1.58 5.12-.35 6.22 1.19 7.54 3.1 8.59 5.08 9.47 6.73 10.75 8.06 12.5 8.13 12.66 8.12 12.85 8.04 13.04c-.23.5-.38 1.03-.44 1.58-.03.28.03.58.13.84.2.55.5 1.05.9 1.49.39.43.85.79 1.35 1.07.5.27 1.04.43 1.6.43.6 0 1.15-.18 1.63-.5.28-.18.54-.39.78-.62.07-.06.14-.12.21-.19.45-.44.81-.95 1.05-1.53.21-.5.32-1.03.32-1.58 0-1.2-.43-2.24-1.13-2.99-.39-.42-.85-.78-1.37-1.06-.5-.27-1.03-.43-1.59-.43-.47 0-.93.11-1.35.32-.3.15-.59.33-.86.54-.43.34-.82.72-1.15 1.15-.22.28-.41.58-.57.9-.04.09-.08.18-.11.28-.04.13-.07.26-.1.4-.02.09-.04.18-.05.27 0 .11.02.21.05.3.1.31.27.58.5.8.57.52 1.27.86 2.09.98.44.07.88.11 1.32.11.7 0 1.32-.16 1.84-.47.38-.23.71-.52.99-.84.19-.22.36-.45.5-.7.04-.07.08-.14.11-.21 0-.04-.01-.07-.01-.11 0-.07.01-.14.03-.2.03-.1.06-.2.1-.29.1-.23.22-.44.35-.65.15-.26.31-.5.48-.73.17-.23.35-.45.54-.65.09-.1.19-.2.29-.29.08-.07.16-.13.25-.19.03-.02.07-.03.1-.04.08-.04.16-.07.24-.1.13-.06.26-.1.39-.14.08-.02.17-.03.25-.04.32-.04.65-.04.97-.03.19.01.38.02.56.03.13 0 .26-.01.39-.02.21-.02.42-.05.62-.1.35-.08.67-.2 1-.37.35-.18.68-.4 1-.66.33-.27.62-.57.88-.9.13-.17.25-.34.36-.52.08-.12.16-.24.23-.36.05-.08.11-.15.17-.22.12-.13.24-.26.37-.38.04-.04.08-.08.12-.12.14-.13.29-.25.44-.36.21-.16.43-.31.65-.45.09-.05.18-.1.27-.14.1-.05.2-.09.3-.12.11-.04.22-.07.33-.1.22-.07.43-.13.64-.18.38-.09.76-.16 1.13-.2.21-.03.41-.05.62-.06.34 0 .68.02 1.02.06.11.01.22.02.33.04.11.01.22.03.33.04.22.02.44.03.66.03.1 0 .2-.01.29-.01.22-.01.44-.03.65-.06.18-.02.36-.05.53-.08.3-.05.59-.1.87-.17.37-.1.71-.23 1.04-.38.22-.1.43-.2.64-.3.09-.04.17-.08.26-.12.25-.12.49-.25.72-.38.33-.19.63-.4.92-.6.27-.19.53-.39.78-.58.08-.06.16-.12.24-.18.35-.27.67-.56.96-.87.1-.1.2-.2.3-.3.31-.31.62-.62.92-.93.17-.17.33-.34.5-.5.39-.36.78-.72 1.15-1.07.46-.44.9-.88 1.33-1.31.24-.24.47-.48.7-.71.2-.2.4-.39.6-.58.1-.1.19-.2.29-.29.05-.05.1-.1.15-.15.16-.16.32-.32.47-.48.14-.15.28-.29.41-.43.21-.22.43-.43.64-.64.18-.18.35-.36.52-.54.18-.18.37-.35.55-.52.12-.11.25-.21.37-.31.03-.03.06-.06.09-.09.09-.09.18-.18.27-.27.17-.17.33-.33.5-.5.3-.3.59-.59.88-.88.22-.22.44-.43.65-.64.09-.09.18-.17.27-.25.05-.04.1-.08.14-.12.16-.17.33-.33.49-.5.06-.05.11-.1.17-.14.17-.14.35-.28.52-.41.09-.07.18-.13.27-.19.19-.13.38-.25.57-.37.24-.15.48-.29.72-.42.36-.21.72-.41 1.07-.6.15-.08.3-.15.45-.22.12-.06.25-.11.37-.16.07-.03.13-.06.2-.08.27-.09.54-.17.81-.24.37-.1.74-.19 1.11-.25.21-.04.43-.07.64-.1.16-.02.32-.04.48-.05.06 0 .12-.01.18-.01.16-.01.31-.02.47-.02.15 0 .3-.01.45-.01.19 0 .38-.01.57-.01.09 0 .18 0 .27 0 .23 0 .45 0 .68.01.11 0 .22-.01.33-.01.22-.01.43-.03.65-.04.16-.01.32-.02.48-.04.12-.01.24-.01.36-.01.27-.01.53-.01.8-.01.1 0 .2 0 .3 0 .2 0 .39 0 .59.01.15 0 .29.01.44.01.21 0 .42-.01.63-.01.09 0 .18 0 .26 0 .09 0 .18 0 .27 0 .2 0 .4-.01.59-.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01.14 0 .27.01.41.01.2.01.4.01.59.01.1 0 .2-.01.3-.01.05 0 .1 0 .15 0 .18 0 .35 0 .53.01"/>
-                  </svg>
-                  <span>المتابعة عبر Apple</span>
-                </>
-              )}
+              {busy ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><AppleIcon /><span>{isSignup ? 'المتابعة عبر Apple' : 'الدخول باستخدام Apple'}</span></>)}
             </button>
           </div>
 
-          {/* نموذج إنشاء الحساب بالبريد — بلا تغيير في سلوكه */}
-          {signUp && (
-            <form onSubmit={submit}>
-              <div style={styles.formGroup}>
-                <label style={styles.label} htmlFor="full-name">الاسم الكامل</label>
-                <input
-                  id="full-name"
-                  type="text"
-                  required
-                  maxLength={80}
-                  autoComplete="name"
-                  value={fullName}
-                  onChange={event => setFullName(event.target.value)}
-                  style={styles.input}
-                />
-              </div>
-              <div style={styles.formGroup}>
-                <label style={styles.label} htmlFor="username">اسم المستخدم</label>
-                <input
-                  id="username"
-                  type="text"
-                  required
-                  minLength={3}
-                  maxLength={32}
-                  pattern="[A-Za-z0-9_.]+"
-                  autoComplete="username"
-                  dir="ltr"
-                  placeholder="username"
-                  value={username}
-                  onChange={event => setUsername(event.target.value)}
-                  style={styles.input}
-                />
-              </div>
-              <div style={styles.formGroup}>
-                <span style={styles.label}>الجنس — يحدد صورتك الافتراضية</span>
-                <div style={styles.genderRow}>
-                  <button
-                    type="button"
-                    onClick={() => setGender('male')}
-                    style={{ ...styles.genderCard, borderColor: gender === 'male' ? '#6266C7' : '#d8dfdb' }}
-                  >
-                    <MaleDefaultAvatar className="h-20 w-20" />
-                    <span style={styles.genderLabel}>ذكر</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setGender('female')}
-                    style={{ ...styles.genderCard, borderColor: gender === 'female' ? '#6266C7' : '#d8dfdb' }}
-                  >
-                    <FemaleDefaultAvatar className="h-20 w-20" />
-                    <span style={styles.genderLabel}>أنثى</span>
-                  </button>
+          {isSignup ? (
+            <>
+              <form onSubmit={submit} style={styles.signupForm}>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="full-name">الاسم الكامل</label>
+                  <input
+                    id="full-name"
+                    type="text"
+                    required
+                    maxLength={80}
+                    autoComplete="name"
+                    value={fullName}
+                    onChange={event => setFullName(event.target.value)}
+                    style={styles.input}
+                    disabled={busy}
+                  />
                 </div>
-              </div>
-              <div style={styles.formGroup}>
-                <label style={styles.label} htmlFor="signup-email">البريد الإلكتروني</label>
-                <input
-                  id="signup-email"
-                  type="email"
-                  required
-                  autoComplete="email"
-                  dir="ltr"
-                  placeholder="أدخل بريدك الإلكتروني"
-                  value={email}
-                  onChange={event => setEmail(event.target.value)}
-                  style={styles.input}
-                />
-              </div>
-              <div style={styles.formGroup}>
-                <label style={styles.label} htmlFor="signup-password">كلمة المرور</label>
-                <input
-                  id="signup-password"
-                  type="password"
-                  required
-                  minLength={6}
-                  autoComplete="new-password"
-                  placeholder="أدخل كلمة المرور"
-                  value={password}
-                  onChange={event => setPassword(event.target.value)}
-                  style={styles.input}
-                />
-              </div>
-              <button
-                type="submit"
-                disabled={busy || !supabaseConfigured}
-                style={{ ...styles.btnSubmit, ...(busy || !supabaseConfigured ? styles.btnDisabled : {}) }}
-              >
-                {busy ? 'جاري الإنشاء...' : 'إنشاء حساب'}
-              </button>
-            </form>
-          )}
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="username">اسم المستخدم</label>
+                  <input
+                    id="username"
+                    type="text"
+                    required
+                    minLength={3}
+                    maxLength={32}
+                    pattern="[A-Za-z0-9_.]+"
+                    autoComplete="username"
+                    dir="ltr"
+                    placeholder="username"
+                    value={username}
+                    onChange={event => setUsername(event.target.value)}
+                    style={styles.input}
+                    disabled={busy}
+                  />
+                </div>
+                <div style={styles.formGroup}>
+                  <span style={styles.label}>الجنس — يحدد صورتك الافتراضية</span>
+                  <div style={styles.genderRow}>
+                    <button
+                      type="button"
+                      onClick={() => setGender('male')}
+                      style={{ ...styles.genderCard, borderColor: gender === 'male' ? '#6266C7' : '#d8dfdb' }}
+                      disabled={busy}
+                    >
+                      <MaleDefaultAvatar className="h-20 w-20" />
+                      <span style={styles.genderLabel}>ذكر</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGender('female')}
+                      style={{ ...styles.genderCard, borderColor: gender === 'female' ? '#6266C7' : '#d8dfdb' }}
+                      disabled={busy}
+                    >
+                      <FemaleDefaultAvatar className="h-20 w-20" />
+                      <span style={styles.genderLabel}>أنثى</span>
+                    </button>
+                  </div>
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="email">البريد الإلكتروني</label>
+                  <input
+                    id="email"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    dir="ltr"
+                    placeholder="أدخل بريدك الإلكتروني"
+                    value={email}
+                    onChange={event => setEmail(event.target.value)}
+                    style={styles.input}
+                    disabled={busy}
+                  />
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="password">كلمة المرور</label>
+                  <input
+                    id="password"
+                    type="password"
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    placeholder="أدخل كلمة المرور"
+                    value={password}
+                    onChange={event => setPassword(event.target.value)}
+                    style={styles.input}
+                    disabled={busy}
+                  />
+                </div>
 
-          {/* القسم الثاني: التسجيل الاحتياطي — للدخول فقط */}
-          {!signUp && (
+                <button
+                  type="submit"
+                  disabled={busy || !supabaseConfigured}
+                  style={{ ...styles.btnSubmit, ...(busy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+                >
+                  {busy ? 'جاري إنشاء الحساب...' : 'إنشاء حساب'}
+                </button>
+              </form>
+
+              <div style={styles.switchLink}>
+                لديك حساب؟ <Link href="/login" style={styles.link}>تسجيل الدخول</Link>
+              </div>
+            </>
+          ) : (
             <>
               <button
                 type="button"
@@ -544,12 +424,9 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                 <span style={styles.fallbackTriggerText}>
                   {showFallbackForm ? 'إخفاء التسجيل الاحتياطي' : 'التسجيل الاحتياطي'}
                 </span>
-                <svg style={{ ...styles.chevronIcon, transform: showFallbackForm ? 'rotate(180deg)' : 'rotate(0deg)' }} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="6 9 12 15 18 9" />
-                </svg>
+                <ChevronIcon rotated={showFallbackForm} />
               </button>
 
-              {/* نموذج التسجيل الاحتياطي (Accordion) */}
               <div id="fallback-form" style={showFallbackForm ? styles.fallbackFormVisible : styles.fallbackFormHidden} role="region" aria-label="نموذج التسجيل الاحتياطي">
                 <form onSubmit={handleFallbackLogin} style={styles.fallbackForm}>
                   <div style={styles.formGroup}>
@@ -586,19 +463,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                     />
                   </div>
 
-                  {isPhoneLogin && (
-                    <div style={styles.formGroup}>
-                      <span style={styles.label}>تحقق الأمان</span>
-                      {TURNSTILE_SITE_KEY ? (
-                        <div ref={captchaContainerRef} />
-                      ) : (
-                        <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
-                          الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
-                        </span>
-                      )}
-                    </div>
-                  )}
-
                   {fallbackError && <div style={styles.noticeError} role="alert">{fallbackError}</div>}
 
                   <button
@@ -610,20 +474,20 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                   </button>
                 </form>
               </div>
+
+              <div style={styles.switchLink}>
+                جديد هنا؟ <Link href="/signup" style={styles.link}>إنشاء حساب</Link>
+              </div>
             </>
           )}
 
-          {/* القسم الثالث: التواصل مع الدعم */}
           <button
             type="button"
             style={styles.supportBtn}
             onClick={openSupportEmail}
             disabled={busy || fallbackBusy}
           >
-            <svg style={styles.supportIcon} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              <path d="M17 9h-5a2 2 0 0 0-2 2v3" />
-            </svg>
+            <SupportIcon />
             <span>تواصل مع الدعم</span>
           </button>
         </main>
@@ -717,6 +581,11 @@ const styles: Record<string, CSSProperties> = {
     flexDirection: 'column',
     gap: '16px',
   },
+  signupForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
   formGroup: {
     marginBottom: '18px',
   },
@@ -753,6 +622,27 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: "'Tajawal', sans-serif",
   },
   btnDisabled: { cursor: 'wait', opacity: 0.65 },
+  genderRow: {
+    display: 'flex',
+    gap: '12px',
+  },
+  genderCard: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '16px 8px',
+    border: '2px solid #d8dfdb',
+    borderRadius: '12px',
+    backgroundColor: '#ffffff',
+    cursor: 'pointer',
+  },
+  genderLabel: {
+    fontSize: '14px',
+    fontWeight: 700,
+    color: '#243b35',
+  },
   noticeError: {
     marginBlock: '12px',
     padding: '11px 13px',
@@ -810,17 +700,9 @@ const styles: Record<string, CSSProperties> = {
     transition: 'background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
     minWidth: 0,
   },
-  googleBtn: {
-    borderColor: '#d8dfdb',
-  },
-  appleBtn: {
-    borderColor: '#d8dfdb',
-  },
-  providerIcon: {
-    width: '22px',
-    height: '22px',
-    flexShrink: 0,
-  },
+  googleBtn: { borderColor: '#d8dfdb' },
+  appleBtn: { borderColor: '#d8dfdb' },
+  providerIcon: { width: '22px', height: '22px', flexShrink: 0 },
   spinner: {
     width: '20px',
     height: '20px',
@@ -846,10 +728,7 @@ const styles: Record<string, CSSProperties> = {
     transition: 'background-color 0.15s ease, border-color 0.15s ease',
     marginTop: '4px',
   },
-  fallbackTriggerText: {
-    fontSize: '15px',
-    fontWeight: '700',
-  },
+  fallbackTriggerText: { fontSize: '15px', fontWeight: '700' },
   chevronIcon: {
     width: '20px',
     height: '20px',
@@ -857,17 +736,25 @@ const styles: Record<string, CSSProperties> = {
     color: '#65716c',
     transition: 'transform 0.2s ease',
   },
-  fallbackFormVisible: {
-    animation: 'slideDown 0.3s ease-out',
-  },
-  fallbackFormHidden: {
-    display: 'none',
-  },
+  fallbackFormVisible: { animation: 'slideDown 0.3s ease-out' },
+  fallbackFormHidden: { display: 'none' },
   fallbackForm: {
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
     paddingTop: '8px',
+  },
+  switchLink: {
+    textAlign: 'center',
+    marginTop: '16px',
+    fontSize: '14px',
+    color: '#243b35',
+    fontWeight: '500',
+  },
+  link: {
+    color: '#6266C7',
+    fontWeight: '700',
+    textDecoration: 'none',
   },
   supportBtn: {
     display: 'flex',
