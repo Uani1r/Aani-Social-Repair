@@ -4,6 +4,7 @@ import express from "express";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { PUSH_WEBHOOK_PATHS } from "./routes/pushNotifications";
+import { classifyStaticRequest } from "./lib/spaFallback";
 import { readAdminConfig, runExpiredRecordsCleanup, sweepOrphanUploads } from "./lib/mediaDb";
 import { processDeletionJobs } from "./lib/mediaDeletionWorker";
 import { imageKitConfigured } from "./lib/imagekitAdmin";
@@ -28,11 +29,28 @@ const publicPath =
 // خدمة ملفات الـ CSS والـ JS المجمعة
 app.use(express.static(publicPath));
 
-// توجيه باقي المسارات إلى index.html لدعم تطبيقات الصفحات الواحدة (SPA)
-// ملاحظة: في Express 5 لم يعد النمط "*" صالحاً في المسارات (path-to-regexp v8)
-// ويسبب PathError عند الإقلاع، لذلك نستخدم وسيطاً بلا نمط بدلاً منه.
-app.use((req, res, next) => {
-  if (req.path.startsWith("/api")) return next();
+// خدمة Render هي Web Service (Docker) لا Static Site، فلا يكفي rewrite في لوحة
+// Render: توجيه SPA يقع هنا. التصنيف في lib/spaFallback:
+//   * /api/* → JSON 404، فلا يصل HTML مكان واجهة برمجية أبداً.
+//   * طلب ملف له امتداد وغير موجود → 404 صريح، لا HTML مكان JS/CSS/خط.
+//   * غير GET/HEAD → 405 مع Allow.
+//   * أي مسار آخر → index.html، فتعمل المسارات المباشرة وتحديث الصفحة
+//     و/auth/callback. (في Express 5 لا يصح النمط "*" في المسارات.)
+app.use((req, res) => {
+  const route = classifyStaticRequest(req.path, req.method);
+  if (route === "api") {
+    res.status(404).json({ success: false, error: "المسار غير موجود" });
+    return;
+  }
+  if (route === "method_not_allowed") {
+    res.setHeader("Allow", "GET, HEAD");
+    res.status(405).type("text/plain").end("Method Not Allowed");
+    return;
+  }
+  if (route === "static") {
+    res.status(404).type("text/plain").end("Not Found");
+    return;
+  }
   res.sendFile(path.join(publicPath, "index.html"));
 });
 
