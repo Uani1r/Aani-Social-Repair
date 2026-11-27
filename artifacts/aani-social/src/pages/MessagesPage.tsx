@@ -25,6 +25,13 @@ import { MessagesSkeleton, ListSkeleton } from '@/components/Skeletons';
 import EmptyState from '@/components/EmptyState';
 import { storageBucket, supabase, supabaseConfigured } from '@/lib/supabase';
 import {
+  clearLegacyMutedIds,
+  createConversationMuteStore,
+  createConversationSettingsGateway,
+  readLegacyMutedIds,
+  type ConversationMuteStore,
+} from '@/lib/messagesConversationSettings';
+import {
   CHAT_VOICE_MESSAGE_PREFIX,
   VOICE_RECORDER_BITS_PER_SECOND,
   VOICE_RECORDER_MIME_CANDIDATES,
@@ -575,10 +582,11 @@ function isConversationRequestLocked(conversation: ConversationSummary | null | 
 
 type InboxTab = 'messages' | 'requests';
 
+// التثبيت والأرشفة محليان كما هما. الكتم ليس هنا: مصدره
+// public.message_conversation_settings في Supabase لكل مستخدم.
 type ConversationPreferences = {
   pinnedIds: string[];
   archivedIds: string[];
-  mutedIds: string[];
 };
 
 type ConversationPreferenceKey = keyof ConversationPreferences;
@@ -615,7 +623,6 @@ const PROFILE_FIELDS = 'id, username, full_name, display_name, avatar_url';
 const EMPTY_CONVERSATION_PREFERENCES: ConversationPreferences = {
   pinnedIds: [],
   archivedIds: [],
-  mutedIds: [],
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -631,7 +638,6 @@ function readConversationPreferences(userId: string): ConversationPreferences {
     return {
       pinnedIds: readIds(stored.pinnedIds),
       archivedIds: readIds(stored.archivedIds),
-      mutedIds: readIds(stored.mutedIds),
     };
   } catch {
     return EMPTY_CONVERSATION_PREFERENCES;
@@ -640,7 +646,12 @@ function readConversationPreferences(userId: string): ConversationPreferences {
 
 function writeConversationPreferences(userId: string, preferences: ConversationPreferences): void {
   try {
-    localStorage.setItem(`aani_message_preferences_${userId}`, JSON.stringify(preferences));
+    // هذا الكاتب يخصّ التثبيت والأرشفة فقط. يبقى mutedIds القديم في التخزين
+    // حتى ينجح ترحيل الكتم إلى Supabase، فلا يُفقد ما لم يُستورد بعد.
+    const legacyMutedIds = readLegacyMutedIds(userId);
+    const stored: Record<string, unknown> = { ...preferences };
+    if (legacyMutedIds.length > 0) stored.mutedIds = legacyMutedIds;
+    localStorage.setItem(`aani_message_preferences_${userId}`, JSON.stringify(stored));
   } catch {
     /* التخزين المحلي غير متاح */
   }
@@ -1178,6 +1189,11 @@ export default function MessagesPage({
   const [newMessageLoading, setNewMessageLoading] = useState(false);
   const [newMessageError, setNewMessageError] = useState<string | null>(null);
   const [conversationPreferences, setConversationPreferences] = useState<ConversationPreferences>(() => readConversationPreferences(currentUserId));
+  // الكتم مصدره Supabase: هذه مجموعة محادثات المستخدم الحالي المكتومة، تُملأ
+  // من القاعدة وRealtime ولا تُمزج مع التثبيت أو الأرشفة المحليين.
+  const [mutedContactIds, setMutedContactIds] = useState<Set<string>>(() => new Set());
+  const [muteSavingIds, setMuteSavingIds] = useState<Set<string>>(() => new Set());
+  const conversationMuteStoreRef = useRef<ConversationMuteStore | null>(null);
   const [conversationContext, setConversationContext] = useState<ConversationContextState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1380,6 +1396,68 @@ export default function MessagesPage({
   useEffect(() => {
     setConversationPreferences(readConversationPreferences(currentUserId));
   }, [currentUserId]);
+
+  useEffect(() => {
+    // تبديل المستخدم يبدأ من حالة فارغة: لا تُعرض لمحة عن إعدادات المستخدم
+    // السابق قبل أن تصل صفوف المستخدم الحالي.
+    setMutedContactIds(new Set());
+    setMuteSavingIds(new Set());
+    if (!supabaseConfigured) {
+      conversationMuteStoreRef.current = null;
+      return;
+    }
+    const store = createConversationMuteStore({
+      viewerId: currentUserId,
+      gateway: createConversationSettingsGateway(supabase),
+      readLegacyMutedIds: () => readLegacyMutedIds(currentUserId),
+      clearLegacyMutedIds: () => clearLegacyMutedIds(currentUserId),
+    });
+    conversationMuteStoreRef.current = store;
+    const unsubscribe = store.subscribe(mutedIds => setMutedContactIds(new Set(mutedIds)));
+    void store.initialize();
+
+    // القناة تحمل الـepoch مثل قناة القائمة: إعادة الاتصال تُنشئ قناة جديدة
+    // بدل إعادة استخدام قناة المفتاح نفسه. الفلتر يقصر الأحداث على صفوف
+    // صاحب الإعداد، فلا يصل تغيير مستخدم آخر.
+    const channel = supabase.channel(`messages-conversation-settings-${currentUserId}-${realtimeEpoch}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'message_conversation_settings',
+        filter: `user_id=eq.${currentUserId}`,
+      }, payload => {
+        store.applyRealtimeRow(payload.new);
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'message_conversation_settings',
+        filter: `user_id=eq.${currentUserId}`,
+      }, payload => {
+        store.applyRealtimeRow(payload.new);
+      })
+      .subscribe();
+
+    // العودة إلى الواجهة أو استعادة الشبكة تُعيد القراءة من القاعدة، فما فات
+    // أثناء الانقطاع لا يبقى ناقصاً. فشل Realtime لا يوقف التحميل ولا الحفظ.
+    const resync = () => {
+      void store.resync();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') resync();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('online', resync);
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('online', resync);
+      void supabase.removeChannel(channel);
+      unsubscribe();
+      store.dispose();
+      conversationMuteStoreRef.current = null;
+    };
+  }, [currentUserId, realtimeEpoch]);
 
   useEffect(() => {
     if (!conversationCacheReady) return;
@@ -4033,9 +4111,31 @@ export default function MessagesPage({
       return;
     }
     if (action === 'mute') {
-      const muted = conversationPreferences.mutedIds.includes(contactId);
-      setConversationPreference('mutedIds', contactId, !muted);
-      toast.success(muted ? 'تم إلغاء كتم المحادثة' : 'تم كتم المحادثة');
+      // الكتم يُحفظ في Supabase: لا رسالة نجاح قبل نجاح الحفظ.
+      if (!supabaseConfigured) {
+        toast.error('قاعدة البيانات غير مهيأة.');
+        return;
+      }
+      const store = conversationMuteStoreRef.current;
+      if (!store || muteSavingIds.has(contactId)) return;
+      const wasMuted = mutedContactIds.has(contactId);
+      setMuteSavingIds(current => new Set(current).add(contactId));
+      try {
+        const result = await store.setMuted(contactId, !wasMuted);
+        if (result.ok) {
+          toast.success(result.muted ? 'تم كتم المحادثة' : 'تم إلغاء كتم المحادثة');
+        } else {
+          // فشل الشبكة: تبقى الحالة السابقة معروضة، فلا نجاح كاذب.
+          toast.error(result.muted ? 'تعذر إلغاء كتم المحادثة.' : 'تعذر كتم المحادثة.');
+        }
+      } finally {
+        setMuteSavingIds(current => {
+          if (!current.has(contactId)) return current;
+          const next = new Set(current);
+          next.delete(contactId);
+          return next;
+        });
+      }
       return;
     }
 
@@ -4513,7 +4613,7 @@ export default function MessagesPage({
                 .includes(searchNeedle);
               const isOnline = onlineUserIds.has(conversation.profile.id);
               const isPinned = conversationPreferences.pinnedIds.includes(conversation.profile.id);
-              const isMuted = conversationPreferences.mutedIds.includes(conversation.profile.id);
+              const isMuted = mutedContactIds.has(conversation.profile.id);
               const isTyping = typingContactId === conversation.profile.id
                 || typingInboxContacts.has(conversation.profile.id);
               return (
@@ -5818,7 +5918,7 @@ export default function MessagesPage({
             </button>
             <button type="button" role="menuitem" onClick={() => void handleConversationAction('mute', conversationContext.conversation)}>
               <BellOff size={18} />
-              <span>{conversationPreferences.mutedIds.includes(conversationContext.conversation.profile.id) ? 'إلغاء الكتم' : 'كتم'}</span>
+              <span>{mutedContactIds.has(conversationContext.conversation.profile.id) ? 'إلغاء الكتم' : 'كتم'}</span>
             </button>
             <button type="button" role="menuitem" disabled={moderationBusy} onClick={() => void handleConversationAction('block', conversationContext.conversation)}>
               <Ban size={18} />

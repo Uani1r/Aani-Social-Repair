@@ -66,7 +66,7 @@ jobs:
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/messagesVoice.test.ts ./src/lib/messagesVoicePlayback.test.ts ./src/lib/messagesVoiceServer.test.ts ./src/lib/messagesVoiceDeletion.test.ts
 
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/netlifyApiProxy.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts ./src/lib/turnstileLoader.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/netlifyApiProxy.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts ./src/lib/messagesConversationSettings.test.ts ./src/lib/turnstileLoader.test.ts
 
       # Server-side voice pipeline: FFmpeg argument building, ffprobe parsing and
       # output verification, the pre-transcode guards, and the auth/rate/concurrency
@@ -882,3 +882,58 @@ jobs:
 
           unique="$(sort -u "$versions" | wc -l | tr -d ' ')"
           echo "Checked ${#files[@]} migration files: all versions are unique ($unique distinct versions)."
+
+  # مزامنة كتم المحادثات: الترحيل يضيف message_conversation_settings إلى منشور
+  # supabase_realtime، ولا يمسّ RLS ولا المنح ولا الأعمدة. يُطبَّق مرتين على قاعدة
+  # نظيفة لإثبات أنه قابل لإعادة التنفيذ، ثم يُتحقق من عضوية واحدة في المنشور.
+  message-conversation-settings-realtime:
+    name: Message conversation settings realtime SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_conversation_settings_realtime_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_conversation_settings_realtime_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the publication and the table
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/message_conversation_settings_realtime_schema.sql
+
+      - name: Apply the realtime migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270310000000_message_conversation_settings_realtime.sql
+
+      - name: Assert the publication membership
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/message_conversation_settings_realtime.test.sql
+
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270310000000_message_conversation_settings_realtime.sql
+
+      - name: Assert again after the second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/message_conversation_settings_realtime.test.sql
