@@ -735,3 +735,89 @@ jobs:
       - name: Deno tests (phone helpers, redaction, CAPTCHA, session gate)
         working-directory: artifacts/aani-social/supabase/functions
         run: deno test --allow-read tests/phone-edge.test.ts
+
+
+  # Applies the account settings migration (sessions reader, is_deactivated
+  # guard, deactivation/reactivation RPCs) to a throwaway PostgreSQL with a
+  # reduced auth schema, asserts the privileges, the guard, the session scoping
+  # and the deletion of the other sessions, then re-applies the migration and
+  # rebuilds the fixture and asserts again (idempotency). No Supabase project is
+  # touched and no account is deleted.
+  account-settings-sql:
+    name: Account settings SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_account_settings_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_account_settings_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary auth and profiles schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/account_settings_schema.sql
+
+      - name: Apply the account settings migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270308000000_account_settings_sessions_deactivation.sql
+
+      - name: Assert sessions, guard, deactivation and privileges
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_settings_sessions_deactivation.test.sql
+
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270308000000_account_settings_sessions_deactivation.sql
+
+      - name: Rebuild the fixture and assert again after a second apply
+        run: |
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/account_settings_schema.sql
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_settings_sessions_deactivation.test.sql
+
+  # Real Deno type check and tests for the MFA state and account deletion
+  # functions. No Supabase project, no network and no deployment: a fake fetch
+  # covers the aal gate, the app_metadata merge and the storage-free deletion.
+  account-mfa-edge:
+    name: Account MFA Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno 2
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno check (account-mfa and delete-account)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno check account-mfa/index.ts delete-account/index.ts
+
+      - name: Deno tests (MFA gate, app_metadata, deletion without storage)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno test --allow-read tests/account-mfa-edge.test.ts

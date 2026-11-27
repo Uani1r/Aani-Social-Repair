@@ -27,6 +27,8 @@ export type AccountSessionRow = {
   created_at: string;
   updated_at: string;
   refreshed_at: string | null;
+  /** تُحسب على الخادم بمقارنة معرّف الجلسة بمعرّف طلب JWT الحالي. */
+  is_current?: boolean;
 };
 
 export type AccountSessionView = {
@@ -97,7 +99,8 @@ export function mapAccountSessions(
       device: describeUserAgent(record.user_agent),
       createdAt,
       lastActiveAt,
-      current: Boolean(currentSessionId) && record.id === currentSessionId,
+      current: record.is_current === true
+        || (Boolean(currentSessionId) && record.id === currentSessionId),
     });
   }
   return sessions.sort((a, b) => Date.parse(b.lastActiveAt) - Date.parse(a.lastActiveAt));
