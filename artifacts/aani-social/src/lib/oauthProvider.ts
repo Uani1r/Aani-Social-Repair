@@ -12,6 +12,7 @@
 
 import { useState, useRef } from 'react';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { getOAuthRedirectUrl } from '@/lib/oauthRedirect';
 
 export type OAuthProvider = 'google' | 'apple';
 
@@ -41,7 +42,7 @@ export function createOAuthProvider(authClient = supabase): OAuthProviderState &
     try {
       const { error: authError } = await authClient.auth.signInWithOAuth({
         provider,
-        options: { redirectTo: (typeof window !== 'undefined' && window.location) ? window.location.origin : undefined },
+        options: { redirectTo: getOAuthRedirectUrl() },
       });
       if (authError) throw authError;
       // عند النجاح يقوم المتصفح بإعادة التوجيه إلى مزوّد الخدمة. تُنظّم حالة
