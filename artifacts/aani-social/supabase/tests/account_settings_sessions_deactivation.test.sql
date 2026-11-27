@@ -71,23 +71,64 @@ begin
 end
 $$;
 
--- 4) تحديث مباشر لـ is_deactivated يُرفض.
+-- 4) التحديث المباشر لـ is_deactivated يُرفض فعلاً (true وfalse)، ولا يغيّر
+--    الصف. نُثبت أولاً أن الصف مرئي، كي لا يكون «الرفض» تحديثاً لصفر صفوف.
+do $$
+declare
+  v_seen integer;
+  v_target boolean;
+begin
+  select count(*) into v_seen from public.profiles
+  where id = '11111111-1111-1111-1111-111111111111';
+  if v_seen <> 1 then
+    raise exception 'the profile row must be visible to authenticated, found %', v_seen;
+  end if;
+
+  -- زفّ متغير الجلسة القديم لا يعطّل الحارس.
+  perform set_config('aani.account_settings', 'rpc', false);
+
+  foreach v_target in array array[true, false] loop
+    begin
+      update public.profiles
+        set is_deactivated = v_target
+        where id = '11111111-1111-1111-1111-111111111111';
+      raise exception 'a direct is_deactivated := % update must be refused', v_target;
+    exception
+      when insufficient_privilege then
+        null; -- 42501: صلاحية عمود أو الحارس
+    end;
+
+    if (select is_deactivated from public.profiles
+        where id = '11111111-1111-1111-1111-111111111111') then
+      raise exception 'the refused update must not change the flag';
+    end if;
+  end loop;
+
+  -- الأعمدة الأخرى تبقى قابلة للتحديث من صاحب الصف.
+  update public.profiles set username = 'user_a_renamed'
+  where id = '11111111-1111-1111-1111-111111111111';
+  if not found then
+    raise exception 'the owner must still update other profile columns';
+  end if;
+end
+$$;
+
+-- 4ب) مستخدم آخر وأنون لا يؤثران في صف غيرهم.
 do $$
 begin
-  begin
-    update public.profiles
-      set is_deactivated = true
-      where id = '11111111-1111-1111-1111-111111111111';
-    raise exception 'a direct is_deactivated update must be refused';
-  exception
-    when insufficient_privilege then
-      null; -- المتوقع: 42501 من الحارس
-  end;
-
-  if (select is_deactivated from public.profiles
-      where id = '11111111-1111-1111-1111-111111111111') then
-    raise exception 'the refused update must not change the flag';
+  perform set_config('request.jwt.claim.sub', '22222222-2222-2222-2222-222222222222', false);
+  update public.profiles set username = 'hijacked'
+  where id = '11111111-1111-1111-1111-111111111111';
+  if found then
+    raise exception 'another user must not update a foreign profile row';
   end if;
+
+  if (select username from public.profiles
+      where id = '11111111-1111-1111-1111-111111111111') <> 'user_a_renamed' then
+    raise exception 'the foreign row must stay unchanged';
+  end if;
+
+  perform set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', false);
 end
 $$;
 

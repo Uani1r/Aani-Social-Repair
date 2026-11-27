@@ -37,8 +37,11 @@ security invoker
 set search_path = public, pg_temp
 as $$
 begin
+  -- الفيصل هو الدور الذي ينفّذ التحديث، لا أي متغير جلسة (متغير الجلسة كان
+  -- قابلاً للزفّ نظرياً). أي كتابة من anon أو authenticated مرفوضة، والكتابة
+  -- تمر من مالك الدالة (security definer) وservice_role وحدهما.
   if new.is_deactivated is distinct from old.is_deactivated
-     and current_setting('aani.account_settings', true) is distinct from 'rpc' then
+     and current_user in ('anon', 'authenticated') then
     raise exception 'is_deactivated changes only through aani_deactivate_account or aani_reactivate_account'
       using errcode = '42501';
   end if;
@@ -143,6 +146,27 @@ $$;
 
 revoke all on function public.aani_reactivate_account() from public, anon;
 grant execute on function public.aani_reactivate_account() to authenticated;
+
+-- 5ب) صلاحيات الأعمدة: authenticated لا يملك UPDATE على is_deactivated أصلاً.
+--     سحب منح الجدول ثم إعادة منح كل الأعمدة الأخرى يجعل المحاولة تفشل بـ42501
+--     قبل أي مشغّل، ولا يعتمد على أي متغير جلسة ولا على RLS وحدها.
+do $$
+declare
+  v_columns text;
+begin
+  select string_agg(quote_ident(attname), ', ' order by attnum) into v_columns
+  from pg_attribute
+  where attrelid = 'public.profiles'::regclass
+    and attnum > 0
+    and not attisdropped
+    and attname <> 'is_deactivated';
+
+  if v_columns is not null then
+    revoke update on public.profiles from authenticated;
+    execute format('grant update (%s) on public.profiles to authenticated', v_columns);
+  end if;
+end;
+$$;
 
 -- 6) RLS: يبقى التحديث للصف نفسه فقط (السياسة القائمة)، والحارس يمنع العمود.
 --    لا سياسة جديدة تفتح قراءة أو كتابة أوسع، ولا منح لـ anon.

@@ -57,6 +57,12 @@ create policy profiles_self_update on public.profiles
   using (id = auth.uid())
   with check (id = auth.uid());
 
+-- قراءة الصف نفسه: بدونها لا يرى UPDATE أي صف، فيبدو «مرفوضاً» لأنه حدّث صفراً.
+drop policy if exists profiles_self_select on public.profiles;
+create policy profiles_self_select on public.profiles
+  for select to authenticated
+  using (true);
+
 grant select, update on public.profiles to authenticated;
 
 insert into auth.users (id, email) values
