@@ -70,8 +70,13 @@ export function useOAuthProvider(authClient = supabase): OAuthProviderState & OA
   const [providerLoading, setProviderLoading] = useState<OAuthProvider | null>(null);
 
   const signIn = async (provider: OAuthProvider) => {
-    await providerRef.current.signIn(provider);
-    setProviderLoading(providerRef.current.providerLoading);
+    if (providerRef.current.isProviderLoading) return;
+    setProviderLoading(provider);
+    try {
+      await providerRef.current.signIn(provider);
+    } finally {
+      setProviderLoading(providerRef.current.providerLoading);
+    }
   };
 
   return {
