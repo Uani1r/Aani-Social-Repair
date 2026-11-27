@@ -1828,7 +1828,7 @@ alter table public.gift_transactions replica identity full;
 
 -- =====================================================================
 -- نظام Sandbox المالي التجريبي (معزول تمامًا عن الإنتاج)
--- راجع الترحيل: supabase/migrations/20270306000000_aani_sandbox_financial.sql
+-- راجع الترحيل: supabase/migrations/20270306000001_aani_sandbox_financial.sql
 -- =====================================================================
 create schema if not exists sandbox;
 
