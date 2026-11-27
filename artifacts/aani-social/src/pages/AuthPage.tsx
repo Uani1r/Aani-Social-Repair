@@ -323,8 +323,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       cancelled = true;
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
       if (abortLoadRef.current) { try { abortLoadRef.current(); } catch {} abortLoadRef.current = null; }
-      const sc = scriptRef.current;
-      if (sc && sc.parentNode) { try { sc.parentNode.removeChild(sc); } catch {} }
       scriptRef.current = null;
       removeWidget();
       setCaptchaLoadError(false);
