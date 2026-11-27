@@ -131,7 +131,8 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [fallbackBusy, setFallbackBusy] = useState(false);
   const [fallbackError, setFallbackError] = useState('');
   const { providerLoading, signIn: signInWithProvider } = useOAuthProvider();
-  const isGoogleLoading = providerLoading === 'google';
+  const [nativeGoogleLoading, setNativeGoogleLoading] = useState(false);
+  const isGoogleLoading = providerLoading === 'google' || nativeGoogleLoading;
   const isAppleLoading = providerLoading === 'apple';
   // حالة قناة الدعم: تُعرض عندما لا يُضبط عنوان بريد الدعم بعد.
   const [supportNotice, setSupportNotice] = useState('');
@@ -433,9 +434,11 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
               onClick={() => {
                 setError('');
                 if (isNativePlatform()) {
-                  startNativeGoogleOAuth().catch((reason: any) =>
-                    setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.')
-                  );
+                  setNativeGoogleLoading(true);
+                  startNativeGoogleOAuth().catch((reason: any) => {
+                    setNativeGoogleLoading(false);
+                    setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.');
+                  });
                 } else {
                   signInWithProvider('google').catch((reason: any) =>
                     setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.')

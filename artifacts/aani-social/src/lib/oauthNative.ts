@@ -37,6 +37,7 @@ export function parseOAuthCallback(url: string): ParsedOAuthCallback {
 
 export async function startNativeGoogleOAuth(): Promise<void> {
   if (!isNativePlatform() || inFlight) return;
+  if (inFlight) return;
   inFlight = true;
   try {
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -48,24 +49,27 @@ export async function startNativeGoogleOAuth(): Promise<void> {
     });
     if (error) throw error;
     if (data?.url) await Browser.open({ url: data.url });
-  } finally {
-    // allow new attempt after browser returns / failure
-    setTimeout(() => { inFlight = false; }, 0);
+    // Keep inFlight true until callback or explicit failure/cancel.
+  } catch (e) {
+    inFlight = false;
+    throw e;
   }
 }
 
 export async function handleNativeOAuthUrl(url: string): Promise<{ ok: boolean; error?: string }> {
   const parsed = parseOAuthCallback(url);
-  if (!parsed.ok || !parsed.code) return { ok: false, error: parsed.error || 'invalid_url' };
+  if (!parsed.ok || !parsed.code) { inFlight = false; return { ok: false, error: parsed.error || 'invalid_url' }; }
   if (handledCodes.has(parsed.code)) return { ok: true };
   handledCodes.add(parsed.code);
   try {
     const { error } = await supabase.auth.exchangeCodeForSession(parsed.code);
     if (error) throw error;
+    inFlight = false;
     await Browser.close().catch(() => {});
     return { ok: true };
   } catch (e: any) {
     handledCodes.delete(parsed.code);
+    inFlight = false;
     return { ok: false, error: e?.message || 'exchange_failed' };
   }
 }
