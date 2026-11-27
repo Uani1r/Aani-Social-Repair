@@ -9,7 +9,8 @@
  *     يعالج عاملان المهمة نفسها.
  *   * لكل جهاز صف تسليم مستقل (notification_outbox_deliveries) بمفتاح فريد
  *     (outbox_id, device_token_id): إعادة المحاولة ترسل فقط لما لم ينجح بعد.
- *   * حمولة FCM تحمل معرّفات ونوعاً فقط — لا نص رسالة ولا وسائط.
+ *   * حمولة FCM تحمل معرّفات ونوعاً وحقول عرض عامة (title, body, url) فقط —
+ *     لا نص رسالة ولا محتوى مكالمة ولا وسائط.
  *   * لا تُسجَّل الرموز ولا الأسرار ولا محتوى الرسائل في أي سجل.
  */
 
@@ -106,7 +107,68 @@ function safeText(value: unknown): string {
   return value.trim().slice(0, MAX_DATA_VALUE);
 }
 
-/** حمولة FCM: معرّفات فقط، بلا أي نص رسالة أو وسائط. */
+/** أنواع المتابعة كما في Shell.tsx وgetNotificationTarget. */
+const FOLLOW_TYPES = new Set(['follow', 'new_follower', 'followed', 'started_following', 'follow_accepted']);
+
+/** أنواع تفاعلات القصص (تُفتح داخل عارض القصص). */
+const STORY_TYPES = new Set(['story_like', 'story_reply', 'story_mention', 'story_view']);
+
+/** أنواع تُفتح على صفحة المنشور. */
+const POST_TYPES = new Set(['like', 'post_like', 'repost', 'mention']);
+
+/**
+ * وجهة النقر داخل التطبيق — مسارات التطبيق الفعلية فقط:
+ *   * رسالة → /messages/<sender_id>   (Shell.tsx وNotificationsModal.tsx)
+ *   * مكالمة → /messages/<sender_id>?openCall=1&callerId=…&callId=… (Shell.tsx)
+ *   * متابعة → /profile/<actor_id>
+ *   * طلب متابعة → /feed?openFollowRequests=1
+ *   * تعليق/رد → /post/<reference_id>?showComments=1
+ *   * إعجاب/إعادة نشر/إشارة → /post/<reference_id>
+ *   * قصة → /feed?openStoryId=…&openStoryOwner=… (المالك: mention للفاعل،
+ *     وغيرها لصاحب الإشعار — كما في getNotificationTarget)
+ *   * بلا بيانات كافية → /feed
+ */
+export function notificationDestination(task: OutboxTask): string {
+  const payload = task.payload && typeof task.payload === 'object' ? task.payload : {};
+  const eventType = safeText(task.event_type);
+  const type = safeText(payload.type).toLowerCase();
+  const referenceId = safeText(payload.reference_id);
+  const actorId = safeText(payload.actor_id);
+
+  if (eventType === 'message') {
+    const senderId = safeText(payload.sender_id);
+    return senderId ? `/messages/${encodeURIComponent(senderId)}` : '/feed';
+  }
+
+  if (eventType === 'call') {
+    const senderId = safeText(payload.sender_id);
+    if (!senderId) return '/feed';
+    const query = new URLSearchParams({ openCall: '1', callerId: senderId });
+    const callId = safeText(payload.call_id);
+    if (callId) query.set('callId', callId);
+    return `/messages/${encodeURIComponent(senderId)}?${query.toString()}`;
+  }
+
+  if (FOLLOW_TYPES.has(type) && actorId) return `/profile/${encodeURIComponent(actorId)}`;
+  if (type === 'follow_request') return '/feed?openFollowRequests=1';
+
+  if ((type === 'comment' || type === 'reply') && referenceId) {
+    return `/post/${encodeURIComponent(referenceId)}?showComments=1`;
+  }
+
+  if (STORY_TYPES.has(type) && referenceId) {
+    const ownerId = type === 'story_mention' ? actorId : safeText(task.recipient_user_id);
+    if (!ownerId) return '/feed';
+    const storyQuery = new URLSearchParams({ openStoryId: referenceId, openStoryOwner: ownerId });
+    return `/feed?${storyQuery.toString()}`;
+  }
+
+  if (POST_TYPES.has(type) && referenceId) return `/post/${encodeURIComponent(referenceId)}`;
+
+  return '/feed';
+}
+
+/** حمولة FCM: معرّفات وحقول عرض فقط، بلا أي نص رسالة أو وسائط. */
 export function buildFcmMessage(task: OutboxTask, device: DeviceTokenRow): Record<string, unknown> {
   const payload = task.payload && typeof task.payload === 'object' ? task.payload : {};
   const eventType = safeText(task.event_type);
@@ -140,6 +202,12 @@ export function buildFcmMessage(task: OutboxTask, device: DeviceTokenRow): Recor
     title = copy.title;
     body = copy.body;
   }
+
+  // حقول العرض التي يقرأها عامل الخدمة (public/firebase-messaging-sw.js):
+  // بلا title/body/url في data يظهر إشعار بعنوان افتراضي ونص فارغ.
+  data.title = title;
+  data.body = body;
+  data.url = notificationDestination(task);
 
   return {
     token: device.token,

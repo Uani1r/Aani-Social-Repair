@@ -1,57 +1,40 @@
-# إعداد إشعارات الويب عبر Firebase Cloud Messaging
+# إعداد إشعارات الويب — **متقادم ومؤرشف**
 
-يتطلب هذا التكامل إعداداً لمتصفح الويب، ودالة Supabase Edge، وWebhook على جدول الإشعارات. لا تُضمّن مفتاح Service Account في ملفات الواجهة أو Git.
+> **لا تتبع هذا الملف.** يصف هذا المستند مسار Push سابقاً: Firebase Web
+> Messaging مباشرة، ودالة `send-push-notification` مع Database Webhook،
+> ورمز جهاز واحد في `profiles.fcm_token`، ومشروع Firebase القديم `ani1-20bed`.
+> أُزيلت تعليماته التشغيلية (الأوامر وخطوات اللوحة وأسماء الأسرار القديمة)
+> ولم تعد صالحة.
+>
+> **الدليل الحالي الوحيد:** [`PUSH_OUTBOX_DEPLOYMENT_AR.md`](./PUSH_OUTBOX_DEPLOYMENT_AR.md)
 
-## 1. تدوير مفتاح الخدمة المكشوف
+## ما استُبدل بماذا
 
-مفتاح Service Account الذي أُرسل في المحادثة أصبح مكشوفاً. أبطله في Google Cloud Console وأنشئ مفتاحاً جديداً قبل تفعيل الإرسال. لا ترسل المفتاح الجديد في المحادثة ولا تضعه في المستودع.
+| المسار القديم (متقادم) | المسار الحالي |
+|---|---|
+| `profiles.fcm_token` — جهاز واحد لكل حساب | `public.device_tokens` بعدة أجهزة عبر `aani_register_device_token` |
+| Database Webhook على `public.notifications` | `public.notification_outbox` + عامل `push-outbox` |
+| دالة `send-push-notification` بسر Webhook | دالة `push-outbox` بترويسة `x-push-worker-secret` |
+| مشروع Firebase `ani1-20bed` | مشروع **Ani Social** فقط؛ `ani1-20bed` مرفوض في الكود |
 
-## 2. إعداد Firebase للويب
+## ما بقي في المستودع دون تغيير
 
-في Firebase Console للمشروع `ani1-20bed`:
+- `supabase/functions/send-push-notification/` — دالة قديمة، **غير منشورة وغير
+  مفعّلة**، وإعدادها في `supabase/config.toml` لم يُغيَّر.
+- مسار الـWebhook القديم على خادم Render: `api-server/src/routes/pushNotifications.ts`
+  (`/api/send-push-notification`) و`api-server/src/lib/notificationContent.ts`.
+  لم يُلمس، ولا يُعتمد عليه لأي إشعار جديد.
+- `public/firebase-messaging-sw.js` ما زال عامل الخدمة، لكنه يقرأ الآن
+  `data.title` و`data.body` و`data.url` من حمولة عامل `push-outbox`،
+  مع `payload.notification` كاحتياطي.
 
-1. أضف تطبيق Web أو افتح إعداداته وانسخ إعدادات الويب العامة: `apiKey` و`authDomain` و`projectId` و`messagingSenderId` و`appId`.
-2. من إعدادات Cloud Messaging أنشئ/انسخ Web Push certificate key (VAPID).
-3. أضف القيم كمتغيرات بناء `VITE_FIREBASE_*` الموضحة في `artifacts/aani-social/.env.example` أو أسرار منصة النشر. القيم العامة للويب ليست مفتاح Service Account.
-4. أعد بناء ونشر التطبيق بعد تعديل متغيرات `VITE_`.
+## لماذا لا تُستخدم التعليمات القديمة
 
-يحمّل التطبيق وحدات Firebase Web SDK 13.0.0 من CDN الرسمي، ويسجل `public/firebase-messaging-sw.js` مع إعدادات تطبيق الويب العامة كي يعالج Firebase رسائل الخلفية. يجب فتح الموقع عبر HTTPS. على iPhone/iPad يتطلب Web Push عادةً إضافة الموقع إلى الشاشة الرئيسية ودعمه بإصدار iOS حديث.
+- كانت تحفظ رمز جهاز واحد لكل حساب، فلا يمكن تفعيل الإشعارات على أكثر من جهاز،
+  ولا يُلغى الرمز عند تسجيل الخروج.
+- كان الإرسال يعتمد على Webhook من قاعدة البيانات إلى دالة واحدة: بلا طابور،
+  بلا إعادة محاولة، وبلا منع تكرار الإرسال إلى الجهاز نفسه.
+- كانت توجّه إلى مشروع Firebase القديم `ani1-20bed`.
 
-## 3. ترحيل قاعدة البيانات
-
-طبّق يدوياً على مشروع Supabase:
-
-- `supabase/migrations/20261227000000_fcm_push_notifications.sql` لإضافة `profiles.fcm_token`.
-- طبّق أيضاً `supabase/migrations/20261226000000_message_notifications.sql` لتوليد إشعارات الرسائل اللازمة لدفعها إلى FCM.
-
-بعد تسجيل الدخول، افتح الإشعارات واضغط «تفعيل» للسماح للمتصفح، وإنشاء FCM Token، وحفظه في ملف المستخدم.
-
-## 4. أسرار Supabase Edge Function
-
-انشر الدالة من مجلد التطبيق باستخدام Supabase CLI (مع معرّف المشروع الصحيح)، ثم خزّن في Edge Function Secrets:
-
-`supabase functions deploy send-push-notification --project-ref <project-ref>`
-
-- `FIREBASE_SERVICE_ACCOUNT`: محتوى JSON لمفتاح Service Account الجديد بعد تدويره. تقبل الدالة أيضاً الاسم القديم `FCM_SERVICE_ACCOUNT_JSON`.
-- `PUSH_WEBHOOK_SECRET`: سلسلة عشوائية طويلة تُنشأ خارج المستودع؛ يجب وضعها في أسرار الدالة وفي ترويسة الـ Webhook نفسها.
-
-تستخدم الدالة `SUPABASE_URL` و`SUPABASE_SERVICE_ROLE_KEY` من أسرار Supabase الافتراضية. لا تخزّن هذه القيم في الواجهة أو ملفات Git.
-
-## 5. إعداد Database Webhook
-
-من Supabase Dashboard > Database > Webhooks أنشئ Webhook:
-
-- الجدول: `public.notifications`
-- الحدث: `INSERT`
-- الطريقة: `POST`
-- الرابط: `https://<project-ref>.supabase.co/functions/v1/send-push-notification`
-- الترويسة: `x-push-webhook-secret: <نفس قيمة PUSH_WEBHOOK_SECRET>`
-- نوع المحتوى: `application/json`
-
-إعداد الدالة يعطّل تحقق JWT عند بوابة Supabase لأن استدعاء قاعدة البيانات ليس جلسة مستخدم؛ وتتحقق الدالة بدلاً من ذلك من الترويسة السرية. لا تجعل قيمة الترويسة عامة.
-
-## توجيه النقر
-
-تفتح الإعجابات المنشور، والتعليقات المنشور مع لوحة التعليقات، والمتابعة المباشرة ملف المتابع، وطلبات المتابعة قائمة الطلبات المعلقة، والرسائل محادثة المرسل. إشعار المكالمة يعيد إظهار المكالمة الواردة فقط إذا كانت لا تزال نشطة في جلسة الاتصال؛ لا تحفظ الإشعارات بيانات WebRTC لإحياء مكالمة انتهت.
-
-لم يُطبّق الترحيل أو تُنشر الدالة أو يُنشأ Webhook تلقائياً من هذا المستودع؛ يلزم تنفيذ خطوات لوحة التحكم أعلاه. لا يمكن اختبار الإرسال قبل توفير إعداد الويب ومفتاح الخدمة الجديد وتطبيق الترحيل.
+كل ما يلزم للإعداد والتشغيل — أسماء الأسرار، النشر، الجدولة، الوجهات، وما لم
+يُختبر — في [`PUSH_OUTBOX_DEPLOYMENT_AR.md`](./PUSH_OUTBOX_DEPLOYMENT_AR.md).

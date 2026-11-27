@@ -37,5 +37,13 @@ verify_jwt = true
 [functions.login-with-phone]
 verify_jwt = false
 
+# عامل إرسال الإشعارات (FCM HTTP v1): لا يعمل بجلسة مستخدم. الحماية هي ترويسة
+# x-push-worker-secret داخل العامل نفسه (401 للترويسة الخاطئة، و503 لغياب السر)
+# بمقارنة ثابتة الزمن، فيُعطَّل التحقق من JWT على البوابة لهذه الدالة وحدها.
+[functions.push-outbox]
+verify_jwt = false
+
+# قديمة — لا تُنشر ولا تُفعّل: مسار Database Webhook السابق استُبدل بعامل
+# push-outbox. الإعداد هنا لم يُغيَّر كي لا يتغيّر نشر قديم قائم.
 [functions.send-push-notification]
 verify_jwt = false

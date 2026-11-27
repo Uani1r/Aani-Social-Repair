@@ -1,20 +1,29 @@
 # إرسال إشعارات الدفع إلى كل الأجهزة — عامل `push-outbox`
 
-الفرع: `feat/fcm-multidevice-outbox-delivery` — الأساس: `main` عند `2493a1c`.
+الفرع: `main` — بعد دمج PR #131 (`06730d5`).
 
-## الحالة: لا شيء منشور ولا مطبَّق
+## الحالة
 
-- **لم يُطبَّق** ترحيل `20270313000000_notification_outbox_deliveries.sql` على أي مشروع Supabase.
-- **لم تُنشر** دالة `push-outbox`، ولا ضُبط أي سر في Supabase أو Firebase.
-- لا تغيير في إعدادات مشروع **Ani Social** ولا في `supabase_migrations.schema_migrations`.
-- الترحيلات التي يلزم تطبيقها بالترتيب قبل هذه الدالة (بعد المراجعة فقط):
+**مطبَّق ومتحقق** على مشروع Supabase الإنتاجية:
 
-```text
-20270312000000_device_tokens.sql
-20270312000001_notification_outbox.sql
-20270312000002_notification_push_outbox_triggers.sql
-20270313000000_notification_outbox_deliveries.sql
-```
+- `20270313000000_notification_outbox_deliveries.sql` مطبَّق: جدول
+  `public.notification_outbox_deliveries` موجود، ودالتاه
+  `aani_ensure_notification_deliveries` و`aani_complete_notification_delivery`
+  موجودتان، وصلاحياتهما كما في الترحيل (RLS مفعّلة بلا سياسة، ولا منح
+  لـ`anon`/`authenticated`، و`service_role` وحده) — متحقق منه.
+- الجدول يحمل مفتاحين خارجيين إلى `public.notification_outbox` وإلى
+  `public.device_tokens`، فهما موجودان في القاعدة كذلك.
+- الترحيلات الثلاثة السابقة له، بالترتيب، موجودة في المستودع:
+  `20270312000000_device_tokens.sql`، `20270312000001_notification_outbox.sql`،
+  `20270312000002_notification_push_outbox_triggers.sql`.
+
+**غير منفَّذ بعد (لا يُدَّعى خلاف ذلك):**
+
+- **لم تُنشر** دالة `push-outbox` (لا `supabase functions deploy`).
+- **لم تُضبط** أي أسرار للعامل (`FIREBASE_SERVICE_ACCOUNT`، `FIREBASE_PROJECT_ID`،
+  `PUSH_WORKER_SECRET`، `PUSH_WORKER_NAME`) ولا شيء في Firebase.
+- **لا جدولة (Cron)** مفعّلة: لا نداء دوري للعامل، ولا إرسال حقيقي يحدث الآن.
+- لا تغيير في `supabase_migrations.schema_migrations` من هذا الفرع.
 
 ## ما تفعله الدالة
 
@@ -39,9 +48,13 @@
 
 ## ما لا تحمله الحمولة ولا السجلات
 
-- حمولة FCM: معرّفات ونوع فقط (`message_id`, `sender_id`, `call_id`, `type`,
-  `notification_id`, `reference_id`) وعنوان/نص عامان ثابتان.
-- لا نص رسالة، ولا وسائط، ولا محتوى منشور في أي حمولة أو سجل.
+- حمولة FCM: معرّفات ونوع (`message_id`, `sender_id`, `call_id`, `type`,
+  `notification_id`, `reference_id`) وحقول عرض عامة: `title` و`body` (عنوان
+  ونص ثابتان حسب النوع) و`url` (وجهة داخل التطبيق).
+- عامل الخدمة `public/firebase-messaging-sw.js` يقرأ `data.title` و`data.body`
+  و`data.url`، ويستخدم `payload.notification` احتياطياً فقط — فلا يظهر إشعار
+  بعنوان افتراضي ونص فارغ. ويرفض أي وجهة ليست من أصل الموقع ويعود إلى `/feed`.
+- لا نص رسالة، ولا محتوى مكالمة، ولا وسائط، ولا محتوى منشور في أي حمولة أو سجل.
 - السجلات تحمل `task_id` و`event_type` وأعداداً (`devices`, `sent`, `skipped`,
   `failed`) فقط: لا رموز أجهزة، ولا أسرار، ولا نص.
 
@@ -55,6 +68,24 @@
 
 رموز المباني القديمة (`message`, `new_message`, `chat_message`, `call`,
 `incoming_call`, `missed_call`) تبقى ممنوعة من قائمة الإشعارات العامة.
+
+## وجهات النقر (مسارات التطبيق الفعلية)
+
+| الحدث | `data.url` |
+|---|---|
+| رسالة | `/messages/<sender_id>` |
+| مكالمة | `/messages/<sender_id>?openCall=1&callerId=<sender_id>&callId=<call_id>` |
+| متابعة / متابع جديد | `/profile/<actor_id>` |
+| طلب متابعة | `/feed?openFollowRequests=1` |
+| تعليق / رد | `/post/<reference_id>?showComments=1` |
+| إعجاب / إعادة نشر / إشارة | `/post/<reference_id>` |
+| تفاعل قصة | `/feed?openStoryId=<reference_id>&openStoryOwner=<owner>` (المالك: الفاعل لإشارة القصة، وإلا صاحب الإشعار) |
+| نوع غير معروف أو بيانات ناقصة | `/feed` |
+
+هذه المسارات مستخرجة من `Shell.tsx` (`handlePushNavigation`) و
+`NotificationsModal.tsx` (`getNotificationTarget`) — لا مسار مخترع. وعامل الخدمة
+يمرّرها عبر `localTarget` الذي يرفض أي أصل آخر ويعود إلى `/feed`، ويضيف
+`pushNotificationId` من `data.notification_id` ليُعلَّم الإشعار مقروءاً.
 
 ## متغيرات البيئة المطلوبة (أسماء فقط — القيم لا تُوضع في المستودع)
 
