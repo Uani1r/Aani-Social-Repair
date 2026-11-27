@@ -79,6 +79,12 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.3",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/browser": "^8.0.5",
+    "@capacitor/cli": "^8.6.3",
+    "@capacitor/core": "^8.6.3",
+    "@capacitor/ios": "^8.6.3",
     "@mediabunny/aac-encoder": "1.65.2",
     "@supabase/supabase-js": "^2.118.0",
     "mediabunny": "1.65.2"
