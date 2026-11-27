@@ -25,5 +25,13 @@ verify_jwt = true
 [functions.login-with-username]
 verify_jwt = false
 
+# رقم الدخول بالهاتف: يحتاج جلسة المستخدم، والهوية من الجلسة فقط.
+[functions.account-phone-alias]
+verify_jwt = true
+
+# الدخول بالهاتف وكلمة المرور: لا جلسة بعد، فلا JWT قبل الدخول.
+[functions.login-with-phone]
+verify_jwt = false
+
 [functions.send-push-notification]
 verify_jwt = false
