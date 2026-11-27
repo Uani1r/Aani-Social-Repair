@@ -12,6 +12,10 @@ import SoundDetailSheet from '@/components/SoundDetailSheet';
 import SoundPickerSheet from '@/components/SoundPickerSheet';
 import type { VideoMentionPerson } from '@/components/VideoPreviewModal';
 import { playMessageChime, unlockNotificationAudio } from '@/lib/notificationSounds';
+import {
+  LEGACY_NOTIFICATION_TYPE_FILTER,
+  isLegacyMessageCallNotification,
+} from '@/lib/notificationVisibility';
 import { isHorizontalGestureArea } from '@/lib/appShared';
 import { registerRealtimeReconnect } from '@/lib/realtimeReconnect';
 import { createRealtimeChannelLifecycle, createRealtimeChannelSupervisor } from '@/lib/realtimeChannelHealth';
@@ -1152,7 +1156,7 @@ export default function Shell({
       return;
     }
     let active = true;
-    void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count, error }) => {
+    void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).not('type', 'in', LEGACY_NOTIFICATION_TYPE_FILTER).eq('is_read', false).then(({ count, error }) => {
       if (active && !error) setUnreadCount(count || 0);
     });
     return () => { active = false; };
@@ -1272,7 +1276,7 @@ export default function Shell({
       if (countRefreshTimer !== null) window.clearTimeout(countRefreshTimer);
       countRefreshTimer = window.setTimeout(() => {
         countRefreshTimer = null;
-        void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count, error }) => {
+        void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).not('type', 'in', LEGACY_NOTIFICATION_TYPE_FILTER).eq('is_read', false).then(({ count, error }) => {
           if (!error) setUnreadCount(count || 0);
         });
       }, 80);
@@ -1421,11 +1425,15 @@ export default function Shell({
             if (oldestId) seenNotificationIdsRef.current.delete(oldestId);
           }
           const notificationType = String(notification.type || '');
-          if (['message', 'new_message'].includes(notificationType)
-            && profile?.notification_settings?.messages !== false) playMessageChime();
-          // زيادة فورية للشارة قبل وصول نتيجة الاستعلام المضاد
-          if (notification.is_read === false) setUnreadCount(current => current + 1);
-          void showRealtimeToast(notification);
+          // الإشعارات القديمة للرسائل/المكالمات لا تُحتسب في شارة القائمة
+          // العامة ولا تُنبّه؛ مسار الرسائل/المكالمات يبقى كما هو.
+          if (!isLegacyMessageCallNotification(notificationType)) {
+            if (['message', 'new_message'].includes(notificationType)
+              && profile?.notification_settings?.messages !== false) playMessageChime();
+            // زيادة فورية للشارة قبل وصول نتيجة الاستعلام المضاد
+            if (notification.is_read === false) setUnreadCount(current => current + 1);
+            void showRealtimeToast(notification);
+          }
         }
         refreshUnreadCount();
       })
@@ -1448,7 +1456,7 @@ export default function Shell({
   useEffect(() => {
     if (!supabaseConfigured || !userId) return undefined;
     return registerRealtimeReconnect(() => {
-      void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).eq('is_read', false).then(({ count, error }) => {
+      void supabase.from('notifications').select('id', { count: 'exact' }).eq('user_id', userId).not('type', 'in', LEGACY_NOTIFICATION_TYPE_FILTER).eq('is_read', false).then(({ count, error }) => {
         if (!error) setUnreadCount(count || 0);
       });
       void fetchUnreadMessagesCount(userId).then(count => {
