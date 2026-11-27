@@ -3,6 +3,13 @@ import { Browser } from '@capacitor/browser';
 import { supabase } from '@/lib/supabase';
 
 const handledCodes = new Set<string>();
+type NativeOAuthResult = { ok: boolean; error?: string };
+const resultHandlers = new Set<(result: NativeOAuthResult) => void>();
+
+export function onNativeOAuthResult(handler: (result: NativeOAuthResult) => void): () => void {
+  resultHandlers.add(handler);
+  return () => resultHandlers.delete(handler);
+}
 let listenerHandle: { remove: () => Promise<void> } | null = null;
 let inFlight = false;
 
@@ -57,19 +64,23 @@ export async function startNativeGoogleOAuth(): Promise<void> {
 
 export async function handleNativeOAuthUrl(url: string): Promise<{ ok: boolean; error?: string }> {
   const parsed = parseOAuthCallback(url);
-  if (!parsed.ok || !parsed.code) { inFlight = false; return { ok: false, error: parsed.error || 'invalid_url' }; }
-  if (handledCodes.has(parsed.code)) return { ok: true };
+  if (!parsed.ok || !parsed.code) { inFlight = false; const r = { ok: false, error: parsed.error || 'invalid_url' }; resultHandlers.forEach((h) => h(r)); return r; }
+  if (handledCodes.has(parsed.code)) { inFlight = false; const r = { ok: true }; resultHandlers.forEach((h) => h(r)); return r; }
   handledCodes.add(parsed.code);
   try {
     const { error } = await supabase.auth.exchangeCodeForSession(parsed.code);
     if (error) throw error;
     inFlight = false;
     await Browser.close().catch(() => {});
-    return { ok: true };
+    const result = { ok: true };
+    resultHandlers.forEach((h) => h(result));
+    return result;
   } catch (e: any) {
     handledCodes.delete(parsed.code);
     inFlight = false;
-    return { ok: false, error: e?.message || 'exchange_failed' };
+    const result = { ok: false, error: e?.message || 'exchange_failed' };
+    resultHandlers.forEach((h) => h(result));
+    return result;
   }
 }
 

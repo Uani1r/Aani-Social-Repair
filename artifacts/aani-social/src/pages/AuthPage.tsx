@@ -15,7 +15,7 @@ import {
 } from '@/lib/turnstileLoader';
 import { useOAuthProvider } from '@/lib/oauthProvider';
 import { isAppleOAuthEnabled } from '@/lib/oauthRedirect';
-import { isNativePlatform, startNativeGoogleOAuth } from '@/lib/oauthNative';
+import { isNativePlatform, startNativeGoogleOAuth, onNativeOAuthResult } from '@/lib/oauthNative';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
 const invokePhoneLogin = createPhoneFunctionInvoker({
@@ -134,6 +134,17 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [nativeGoogleLoading, setNativeGoogleLoading] = useState(false);
   const isGoogleLoading = providerLoading === 'google' || nativeGoogleLoading;
   const isAppleLoading = providerLoading === 'apple';
+
+  useEffect(() => {
+    if (!isNativePlatform()) return;
+    const unsubscribe = onNativeOAuthResult((result) => {
+      setNativeGoogleLoading(false);
+      if (!result.ok) {
+        setError(result.error || 'تعذر المتابعة باستخدام Google.');
+      }
+    });
+    return unsubscribe;
+  }, []);
   // حالة قناة الدعم: تُعرض عندما لا يُضبط عنوان بريد الدعم بعد.
   const [supportNotice, setSupportNotice] = useState('');
 
