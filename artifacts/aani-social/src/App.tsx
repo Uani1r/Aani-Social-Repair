@@ -17,10 +17,13 @@ import MessagesPage from '@/pages/MessagesPage';
 import NotFound from '@/pages/not-found';
 import PostDetailPage from '@/pages/PostDetailPage';
 import ProfilePage from '@/pages/ProfilePage';
+import AccountSettingsPage from '@/pages/AccountSettingsPage';
 import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
 import AdminSandbox from '@/pages/AdminSandbox';
 import useAppSession from '@/hooks/useAppSession';
+import useMfaGate from '@/hooks/useMfaGate';
+import MfaChallengePage from '@/pages/MfaChallengePage';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
@@ -33,6 +36,11 @@ function App() {
   const { authLoading, authResolved, user, profile, setProfile, signOut, passwordRecovery, clearPasswordRecovery } = useAppSession();
   const { setTheme, resolvedTheme } = useTheme();
   useInteractionRealtime(user?.id);
+  // فرض التحقق بخطوتين: لا يُعرض التطبيق ولا محتواه قبل aal2 لمن فعّلها،
+  // أياً كانت طريقة الدخول (بريد، اسم مستخدم، هاتف، Google أو Apple).
+  const mfaGate = useMfaGate(user?.id);
+  const mfaFactorId = mfaGate.state.factors
+    .find(factor => factor.factorType === 'totp' && factor.status === 'verified')?.id ?? '';
 
   useEffect(() => {
     const root = document.documentElement;
@@ -98,7 +106,7 @@ function App() {
   // حالة التحميل فقط، ولا تُحوّل الحالة غير المحسومة إلى "غير مسجل" ولا
   // تعرض تسجيل الدخول قبل تأكيد غياب الجلسة (الجلسة المتأخرة تُطبَّق فور
   // وصولها والواجهة تنتقل إليها مباشرة).
-  if (authLoading || !authResolved) {
+  if (authLoading || !authResolved || (user && mfaGate.state.status === 'resolving')) {
     return (
       <>
         <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
@@ -111,7 +119,21 @@ function App() {
   return (
     <TooltipProvider>
       <WouterRouter base={import.meta.env.BASE_URL ? import.meta.env.BASE_URL.replace(/\/$/, '') : ''}>
-        {user ? (
+        {user && mfaGate.state.status === 'blocked' && mfaFactorId ? (
+          <MfaChallengePage
+            factorId={mfaFactorId}
+            onVerified={() => void mfaGate.refresh()}
+            onSignOut={() => void signOut()}
+          />
+        ) : user && (mfaGate.state.status === 'blocked' || mfaGate.state.status === 'unavailable') ? (
+          <div className="loading-screen" role="alert" style={{ direction: 'rtl', padding: '24px', textAlign: 'center' }}>
+            <div className="loading-brand">آني Aani</div>
+            <p style={{ marginTop: '16px', lineHeight: 1.8 }}>{mfaGate.state.message}</p>
+            <button type="button" style={{ marginTop: '12px', padding: '12px 20px' }} onClick={() => void signOut()}>
+              تسجيل الخروج
+            </button>
+          </div>
+        ) : user ? (
           <Shell
             userId={user.id}
             profile={profile}
@@ -172,6 +194,7 @@ function App() {
                 )}
               </Route>
               <Route path="/admin/sandbox"><AdminSandbox key={user.id} /></Route>
+              <Route path="/settings/account"><AccountSettingsPage /></Route>
               <Route path="/profile">
                 {() => (
                   <ProfilePage
