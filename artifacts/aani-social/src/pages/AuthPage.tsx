@@ -14,6 +14,7 @@ import {
   type TurnstileScript,
 } from '@/lib/turnstileLoader';
 import { useOAuthProvider } from '@/lib/oauthProvider';
+import { isAppleOAuthEnabled } from '@/lib/oauthRedirect';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
 const invokePhoneLogin = createPhoneFunctionInvoker({
@@ -441,8 +442,12 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             </button>
             <button
               type="button"
-              disabled={providerLoading !== null || fallbackBusy || !supabaseConfigured}
+              disabled={!isAppleOAuthEnabled() || providerLoading !== null || fallbackBusy || !supabaseConfigured}
               onClick={() => {
+                if (!isAppleOAuthEnabled()) {
+                  setError('تسجيل الدخول عبر Apple غير مفعّل حالياً.');
+                  return;
+                }
                 setError('');
                 signInWithProvider('apple').catch((reason: any) =>
                   setError(reason?.message || 'تعذر المتابعة باستخدام Apple. حاول مرة أخرى.')
