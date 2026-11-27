@@ -139,7 +139,10 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     if (!isNativePlatform()) return;
     const unsubscribe = onNativeOAuthResult((result) => {
       setNativeGoogleLoading(false);
-      if (!result.ok) {
+      if (result.ok) {
+        afterAuth();
+        setLocation('/feed');
+      } else {
         setError(result.error || 'تعذر المتابعة باستخدام Google.');
       }
     });
