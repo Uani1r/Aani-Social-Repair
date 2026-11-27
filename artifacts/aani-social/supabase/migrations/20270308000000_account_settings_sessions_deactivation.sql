@@ -65,7 +65,6 @@ returns table (
   updated_at timestamptz,
   refreshed_at timestamptz,
   user_agent text,
-  ip text,
   is_current boolean
 )
 language sql
@@ -78,7 +77,6 @@ as $$
          s.updated_at,
          s.refreshed_at,
          s.user_agent::text,
-         s.ip::text,
          (s.id = public.aani_current_session_id()) as is_current
   from auth.sessions s
   where s.user_id = auth.uid()
@@ -103,7 +101,6 @@ begin
     raise exception 'a signed-in session is required' using errcode = '28000';
   end if;
 
-  perform set_config('aani.account_settings', 'rpc', true);
   update public.profiles set is_deactivated = true where id = v_user;
   if not found then
     raise exception 'profile row missing' using errcode = 'P0002';
@@ -135,7 +132,6 @@ begin
     raise exception 'a signed-in session is required' using errcode = '28000';
   end if;
 
-  perform set_config('aani.account_settings', 'rpc', true);
   update public.profiles set is_deactivated = false where id = v_user;
   if not found then
     raise exception 'profile row missing' using errcode = 'P0002';

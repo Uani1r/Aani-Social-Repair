@@ -132,21 +132,40 @@ begin
 end
 $$;
 
--- 5) التعطيل: يضبط العلامة، ينهي الجلسة الأخرى، ويُبقي الحالية.
+-- 5) التعطيل: يُنفَّذ بدور authenticated الحقيقي، ثم تُفحص حالة الجلسات
+--    الداخلية في سياق إداري موثوق (reset role) — لا تُمنح authenticated أي
+--    صلاحية على مخطط auth، والاختبار يفصل صلاحيات العميل عن الحالة الداخلية.
 do $$
 begin
   if public.aani_deactivate_account() is not true then
     raise exception 'deactivation must return true';
   end if;
+end
+$$;
 
+do $$
+begin
   if not (select is_deactivated from public.profiles
           where id = '11111111-1111-1111-1111-111111111111') then
     raise exception 'deactivation must set the flag';
   end if;
+end
+$$;
+
+reset role;
+
+do $$
+begin
+  -- الحالة الداخلية للجلسات تُقرأ بصلاحيات اختبار إدارية فقط.
+  if not has_table_privilege('authenticated', 'auth.sessions', 'select') then
+    null; -- مطلوب: لا صلاحية، وهذا ما نؤكده أدناه بالعكس
+  else
+    raise exception 'authenticated must not read auth.sessions directly';
+  end if;
 
   if exists (select 1 from auth.sessions
              where id = 'aaaaaaaa-0000-0000-0000-000000000002') then
-    raise exception 'the other session must be deleted';
+    raise exception 'the other session of the same user must be deleted';
   end if;
 
   if not exists (select 1 from auth.sessions
@@ -154,13 +173,14 @@ begin
     raise exception 'the current session must survive';
   end if;
 
-  -- الجلسة الأخرى لمستخدم آخر لا تُمس.
   if not exists (select 1 from auth.sessions
                  where id = 'bbbbbbbb-0000-0000-0000-000000000001') then
     raise exception 'another user session must never be deleted';
   end if;
 end
 $$;
+
+set role authenticated;
 
 -- 6) إعادة التفعيل تعيد العلامة إلى false.
 do $$

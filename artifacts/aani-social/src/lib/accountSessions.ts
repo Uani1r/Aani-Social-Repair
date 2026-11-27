@@ -23,7 +23,6 @@ export const ACCOUNT_SESSIONS_SIGNED_OUT_MESSAGE =
 export type AccountSessionRow = {
   id: string;
   user_agent: string | null;
-  ip: string | null;
   created_at: string;
   updated_at: string;
   refreshed_at: string | null;
