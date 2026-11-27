@@ -103,14 +103,17 @@ export function logFailure(scope: string, error: unknown): void {
 }
 
 /**
- * مفتاح HMAC مستقل للمحدّد: 32–256 محرفاً بلا مسافات. ليس مفتاح الخدمة ولا
- * أي مفتاح Supabase، ويُقرأ من `LOGIN_RATE_LIMIT_HMAC_SECRET` وحده.
+ * مفتاح HMAC مستقل للمحدّد: 32–256 محرفاً. تُرفض أي مسافة أو whitespace،
+ * سواء في الداخل أو على الأطراف (لا يُشذَّب المفتاح قبل الفحص)، ويرفض المفتاح
+ * المطابق لمفتاح الخدمة في دالة المسار. ليس مفتاح خدمة ولا أي مفتاح Supabase،
+ * ويُقرأ من `LOGIN_RATE_LIMIT_HMAC_SECRET` وحده.
  */
 export function isUsableRateLimitSecret(value: string | undefined): value is string {
   if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (trimmed.length < 32 || trimmed.length > 256) return false;
-  if (/\s/.test(trimmed)) return false;
+  // مسافة على الأطراف مرفوضة، وليست مدعاة للتشذيب.
+  if (value !== value.trim()) return false;
+  if (/\s/.test(value)) return false;
+  if (value.length < 32 || value.length > 256) return false;
   return true;
 }
 
@@ -133,6 +136,38 @@ export async function hmacSha256Hex(secret: string, domain: string, value: strin
     .join("");
 }
 
+/** IPv4 صحيح: أربع خانات عشرية 0–255 بلا أصفار بادئة. */
+function isIpv4Address(value: string): boolean {
+  const parts = value.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every(part => {
+    if (!/^(?:0|[1-9][0-9]{0,2})$/.test(part)) return false;
+    return Number(part) <= 255;
+  });
+}
+
+/**
+ * IPv6 صحيح: يُتحقق بمحلّل URL القياسي (WHATWG) الذي يرفض الصيغ المشوهة مثل
+ * `::::` أو أكثر من ثماني مجموعات، ويقبل `::1` و`2001:db8::1` والصيغة
+ * المدمجة `::ffff:192.168.0.1`.
+ */
+function isIpv6Address(value: string): boolean {
+  if (!value.includes(":")) return false;
+  if (!/^[0-9a-fA-F:.]+$/.test(value)) return false;
+  try {
+    const parsed = new URL(`http://[${value}]/`);
+    return parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]");
+  } catch {
+    return false;
+  }
+}
+
+/** تحقق فعلي من صحة العنوان بدل الاكتفاء بمطابقة تعبير نمطي. */
+export function isValidIpAddress(value: string): boolean {
+  if (!value || value.length > 64) return false;
+  return isIpv4Address(value) || isIpv6Address(value);
+}
+
 export type TrustedClientIp =
   | { status: "ip"; ip: string }
   | { status: "unavailable"; reason: "no-platform-markers" | "no-ip" | "invalid-ip" };
@@ -141,14 +176,16 @@ export type TrustedClientIp =
  * مصدر IP موثوق، موثّق هنا صراحةً:
  * - لا توجد في وثائق Supabase لـ Edge Functions ترويسة IP مضمونة من المنصة،
  *   و`x-forwarded-for` **لا** يُعتمد: قد يرسله العميل، ووثائق الدوال نفسها
- *   تُظهر مرور ترويسات مخصصة من العميل. لذلك لا يُقرأ هنا إطلاقاً.
+ *   تُظهر مرور ترويسات مخصصة من العميل. لذلك لا يُقرأ هنا إطلاقاً، ولا
+ *   `x-real-ip`.
  * - الترويسة الوحيدة الموصوفة في وثائق Supabase بأن المنصة تضبطها هي
  *   `cf-connecting-ip` (وثائق Data API)، وتصل الدالة عبر Cloudflare. لذلك لا
  *   تُقبل إلا مع علامتي المنصة التي يعيد كتابتهما Cloudflare على كل طلب:
  *   `cf-ray` موجودة و`cf-worker` تساوي `supabase.co`.
+ * - يُتحقق من صحة العنوان فعلياً (IPv4/IPv6)؛ المشوّه يُرفض.
  * - بلا هذه العلامات (مشروع مستضاف ذاتياً، أو ترويسة من العميل) لا IP موثوق:
- *   يُعالج الغياب بأمان في المحدّد (بصمة الهاتف وحدها) ولا يُجمع كل المستخدمين
- *   في حد واحد.
+ *   تُعالج الحالة بأمان في المحدّد (بصمة الهاتف وحدها)، ولا يُجمع كل المستخدمين
+ *   في حد واحد ولا تُستخدم بصمة IP مشتركة أو افتراضية.
  */
 export function resolveTrustedClientIp(headers: Headers): TrustedClientIp {
   const cfRay = (headers.get("cf-ray") ?? "").trim();
@@ -157,7 +194,7 @@ export function resolveTrustedClientIp(headers: Headers): TrustedClientIp {
 
   const ip = (headers.get("cf-connecting-ip") ?? "").trim();
   if (!ip) return { status: "unavailable", reason: "no-ip" };
-  if (!/^[0-9a-fA-F:.]{2,64}$/.test(ip)) return { status: "unavailable", reason: "invalid-ip" };
+  if (!isValidIpAddress(ip)) return { status: "unavailable", reason: "invalid-ip" };
   return { status: "ip", ip };
 }
 

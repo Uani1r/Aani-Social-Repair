@@ -16,6 +16,7 @@ import {
   failureBody,
   hmacSha256Hex,
   isUsableRateLimitSecret,
+  isValidIpAddress,
   logFailure,
   normalizePhoneToE164,
   redactForLog,
@@ -214,8 +215,18 @@ Deno.test("the bucket is a keyed HMAC with separated phone and IP domains", asyn
   assert(phoneDigest !== plainHex, "the bucket must not be an unkeyed SHA-256");
 
   assert(isUsableRateLimitSecret(secret), "a 32+ character secret is usable");
-  for (const value of [undefined, "", "short", "has a space inside the secret value", "x".repeat(300)]) {
-    assert(!isUsableRateLimitSecret(value), `secret ${String(value)} must be refused`);
+  for (const value of [
+    undefined,
+    "",
+    "short",
+    "has a space inside the secret value",
+    "x".repeat(300),
+    ` ${secret}`,
+    `${secret} `,
+    `\t${secret}`,
+    `${secret}\n`,
+  ]) {
+    assert(!isUsableRateLimitSecret(value), `secret ${JSON.stringify(value)} must be refused`);
   }
 });
 
@@ -266,6 +277,47 @@ Deno.test("the trusted client IP comes only from the platform headers", () => {
     { status: "unavailable", reason: "invalid-ip" },
     "an invalid IP",
   );
+});
+
+Deno.test("the trusted IP must parse as a real IPv4 or IPv6 address", () => {
+  for (const ip of ["203.0.113.9", "0.0.0.0", "255.255.255.255", "2001:db8::1", "::1", "::ffff:192.168.0.1"]) {
+    assert(isValidIpAddress(ip), `${ip} must be accepted`);
+    assertEqual(
+      resolveTrustedClientIp(new Headers({
+        "cf-ray": "9a1b",
+        "cf-worker": "supabase.co",
+        "cf-connecting-ip": ip,
+      })),
+      { status: "ip", ip },
+      `${ip} through the platform headers`,
+    );
+  }
+
+  for (const ip of [
+    "::::",
+    "999.999.999.999",
+    "256.0.0.1",
+    "1.2.3",
+    "1.2.3.4.5",
+    "01.2.3.4",
+    "1.2.3.-4",
+    "2001:db8:::1",
+    "1:2:3:4:5:6:7:8:9",
+    "12345%eth0",
+    "203.0.113.9, 198.51.100.7",
+    "",
+  ]) {
+    assert(!isValidIpAddress(ip), `${JSON.stringify(ip)} must be refused`);
+    assertEqual(
+      resolveTrustedClientIp(new Headers({
+        "cf-ray": "9a1b",
+        "cf-worker": "supabase.co",
+        "cf-connecting-ip": ip,
+      })),
+      { status: "unavailable", reason: ip ? "invalid-ip" : "no-ip" },
+      `${JSON.stringify(ip)} through the platform headers`,
+    );
+  }
 });
 
 Deno.test("a session token is required and a malformed header is refused", () => {
