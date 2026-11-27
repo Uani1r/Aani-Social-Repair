@@ -14,6 +14,8 @@
  *     فالأجهزة الأخرى لا تفقد إشعاراتها عند خروج هذا الجهاز.
  *   * فشل الإلغاء لا يُعرض أبداً كنجاح: الجلسة تبقى قائمة كي تُعاد المحاولة،
  *     والحالة المحلية (معرّف التثبيت) تبقى كما هي — لا ادّعاء خروج ولا مسح.
+ *   * الدالة غير منشورة في القاعدة (الترحيلات غير مطبقة) ليست فشلاً: لا صف
+ *     جهاز أصلاً، فيكتمل الخروج بلا ادّعاء إلغاء.
  *   * لا شيء هنا يلامس Firebase أو الشبكة مباشرة: كل نداء يُحقن، فالاختبار
  *     يثبت الترتيب والفشل بلا شبكة ولا أسرار.
  */
@@ -45,8 +47,12 @@ export type DeviceSignOutDeps = {
   readUserId: () => Promise<string | null>;
   /** معرّف تثبيت هذا المتصفح المحفوظ، أو null حين لم يُسجَّل جهاز. */
   readInstallationId: () => string | null;
-  /** الإلغاء على الخادم بمعرّف التثبيت وحده. */
-  revokeDeviceToken: (installationId: string) => Promise<{ error: unknown }>;
+  /**
+   * الإلغاء على الخادم بمعرّف التثبيت وحده.
+   * `missing` تعني أن الدالة غير منشورة في هذه القاعدة (الترحيلات غير مطبقة):
+   * لا صف جهاز أصلاً، فلا شيء يُلغى.
+   */
+  revokeDeviceToken: (installationId: string) => Promise<{ error: unknown; missing?: boolean }>;
   /** إنهاء الجلسة — لا يُستدعى إلا بعد نجاح الإلغاء. */
   endSession: () => Promise<{ error: unknown }>;
 };
@@ -70,17 +76,19 @@ export async function signOutThisDevice(deps: DeviceSignOutDeps): Promise<Device
   }
 
   const installationId = deps.readInstallationId();
-  const shouldRevoke = Boolean(userId && installationId);
+  let revoked = false;
 
   // لا إلغاء بلا جلسة (الدالة المحمية تحتاج auth.uid) ولا بلا جهاز مسجّل.
   if (userId && installationId) {
     try {
-      const { error } = await deps.revokeDeviceToken(installationId);
+      const { error, missing } = await deps.revokeDeviceToken(installationId);
       if (error) {
         // الجلسة باقية عمداً: الإلغاء شرط لإنهاء الجلسة، وإلا بقي الرمز
         // نشطاً بلا وسيلة لإلغائه بعد الخروج.
         return { ok: false, step: 'revoke', message: PUSH_SIGN_OUT_REVOKE_FAILED_MESSAGE };
       }
+      // الدالة غير منشورة في هذه القاعدة → لا صف جهاز، فلا ادّعاء إلغاء.
+      revoked = missing !== true;
     } catch {
       return { ok: false, step: 'revoke', message: PUSH_SIGN_OUT_REVOKE_FAILED_MESSAGE };
     }
@@ -97,10 +105,8 @@ export async function signOutThisDevice(deps: DeviceSignOutDeps): Promise<Device
 
   return {
     ok: true,
-    revoked: shouldRevoke,
-    message: shouldRevoke
-      ? PUSH_SIGN_OUT_DONE_WITH_DEVICE_MESSAGE
-      : PUSH_SIGN_OUT_DONE_WITHOUT_DEVICE_MESSAGE,
+    revoked,
+    message: revoked ? PUSH_SIGN_OUT_DONE_WITH_DEVICE_MESSAGE : PUSH_SIGN_OUT_DONE_WITHOUT_DEVICE_MESSAGE,
   };
 }
 

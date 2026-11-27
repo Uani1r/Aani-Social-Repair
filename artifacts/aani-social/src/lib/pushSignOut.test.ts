@@ -161,6 +161,35 @@ test('بلا جلسة أو بلا جهاز مسجّل: لا إلغاء، وإن�
   assert.deepEqual(noDevice.calls, ['readUserId', 'readInstallationId', 'signOut']);
 });
 
+test('الدالة غير منشورة في القاعدة: لا شيء يُلغى والخروج يكتمل', async () => {
+  const calls: string[] = [];
+  const outcome = await signOutThisDevice({
+    readUserId: async () => {
+      calls.push('readUserId');
+      return USER_ID;
+    },
+    readInstallationId: () => {
+      calls.push('readInstallationId');
+      return INSTALLATION_ID;
+    },
+    revokeDeviceToken: async () => {
+      calls.push('revoke');
+      return { error: null, missing: true };
+    },
+    endSession: async () => {
+      calls.push('signOut');
+      return { error: null };
+    },
+  });
+
+  assert.deepEqual(outcome, {
+    ok: true,
+    revoked: false,
+    message: PUSH_SIGN_OUT_DONE_WITHOUT_DEVICE_MESSAGE,
+  });
+  assert.deepEqual(calls, ['readUserId', 'readInstallationId', 'revoke', 'signOut']);
+});
+
 test('الإلغاء بمعرّف التثبيت وحده: لا رمز ولا معرّف صف آخر', async () => {
   const { deps, revokedInstallations } = createDeps();
   assert.equal(deps.revokeDeviceToken.length, 1);
