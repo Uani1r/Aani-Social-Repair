@@ -1000,3 +1000,68 @@ jobs:
 
       - name: Assert again after the second apply
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/message_conversation_settings_realtime.test.sql
+
+  # تأسيس نظام الإشعارات: device_tokens (أجهزة متعددة + تدوير/إلغاء) و
+  # notification_outbox (dedupe + حجز عاملين + إعادة محاولة)، وتسجيل أحداث Push
+  # للرسائل والمكالمات والإشعارات الاجتماعية داخل المعاملة نفسها. يُشغَّل على
+  # قاعدة CI مؤقتة فقط، ويُعاد تطبيق الترحيلات ثم الاختبار لإثبات إعادة التنفيذ.
+  notifications-foundation:
+    name: Notifications foundation SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_notifications_foundation_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_notifications_foundation_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the notification tables the migrations depend on
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/notifications_foundation_schema.sql
+
+      - name: Apply device_tokens
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000000_device_tokens.sql
+
+      - name: Apply notification_outbox
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000001_notification_outbox.sql
+
+      - name: Apply the message/call/social push triggers
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000002_notification_push_outbox_triggers.sql
+
+      - name: Assert tokens, outbox and the message/call separation
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notifications_foundation.test.sql
+
+      - name: Re-apply all three migrations (idempotency)
+        run: |
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000000_device_tokens.sql
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000001_notification_outbox.sql
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000002_notification_push_outbox_triggers.sql
+
+      - name: Assert again after the second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notifications_foundation.test.sql
