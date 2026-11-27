@@ -131,8 +131,10 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
   // ودجت Turnstile لمسار الهاتف فقط: مفتاح عام لا سر، ويُعاد ضبطه بعد كل فشل.
   const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaLoadError, setCaptchaLoadError] = useState(false);
   const captchaContainerRef = useRef<HTMLDivElement | null>(null);
   const captchaWidgetRef = useRef<string | number | null>(null);
+  const scriptRef = useRef<HTMLScriptElement | null>(null);
   // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
   const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
 
@@ -140,6 +142,15 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     setCaptchaToken('');
     const api = window.turnstile;
     if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
+  };
+
+  const removeWidget = () => {
+    const api = window.turnstile;
+    if (api && captchaWidgetRef.current !== null) {
+      api.remove(captchaWidgetRef.current);
+      captchaWidgetRef.current = null;
+    }
+    setCaptchaToken('');
   };
 
   useEffect(() => {
@@ -157,11 +168,22 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
    * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
    * للبريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح
    * الرمز فلا يُرسل رمز منتهٍ.
+   * يدعم: سكربت موجود مسبقاً (محمل أو قيد التحميل)، فشل التحميل مع إعادة محاولة،
+   * منع تكرار الودجت، وتنظيف كامل عند تبديل المعرف أو مغادرة الصفحة.
    */
   useEffect(() => {
-    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) return undefined;
+    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) {
+      removeWidget();
+      setCaptchaLoadError(false);
+      return;
+    }
+
     let cancelled = false;
-    const mount = () => {
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 500;
+
+    const mountWidget = () => {
       if (cancelled) return;
       const api = window.turnstile;
       const container = captchaContainerRef.current;
@@ -173,33 +195,103 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         action: TURNSTILE_ACTION,
         theme: 'light',
         language: 'ar',
-        callback: (token: string) => setCaptchaToken(token),
-        'expired-callback': () => setCaptchaToken(''),
-        'error-callback': () => setCaptchaToken(''),
+        callback: (token: string) => {
+          if (!cancelled) setCaptchaToken(token);
+        },
+        'expired-callback': () => {
+          if (!cancelled) setCaptchaToken('');
+        },
+        'error-callback': () => {
+          if (!cancelled) setCaptchaToken('');
+        },
       });
     };
 
-    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
-    if (window.turnstile) {
-      mount();
-    } else if (existing) {
-      existing.addEventListener('load', mount);
-    } else {
-      const script = document.createElement('script');
-      script.src = TURNSTILE_SCRIPT;
-      script.async = true;
-      script.defer = true;
-      script.dataset.turnstile = 'true';
-      script.addEventListener('load', mount);
-      document.head.appendChild(script);
-    }
+    const loadScript = (): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        if (window.turnstile) {
+          resolve();
+          return;
+        }
+
+        const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+        if (existingScript) {
+          scriptRef.current = existingScript;
+          // التحقق مما إذا كان window.turnstile جاهزاً بالفعل (السكربت محمل)
+          const checkReady = () => {
+            if (window.turnstile) {
+              resolve();
+            } else {
+              setTimeout(checkReady, 50);
+            }
+          };
+          // إذا كان السكربت محملاً، window.turnstile سيكون جاهزاً خلال وقت قصير
+          // نتحقق مباشرة بدلاً من الاعتماد على readyState
+          checkReady();
+          // نضيف مستمعي خطأ للتحميل كاحتياط
+          const onError = () => {
+            existingScript.removeEventListener('error', onError);
+            reject(new Error('Failed to load Turnstile script'));
+          };
+          existingScript.addEventListener('error', onError);
+          return;
+        }
+
+        const script = document.createElement('script');
+        script.src = TURNSTILE_SCRIPT;
+        script.async = true;
+        script.defer = true;
+        script.dataset.turnstile = 'true';
+        scriptRef.current = script;
+
+        const onLoad = () => {
+          script.removeEventListener('load', onLoad);
+          script.removeEventListener('error', onError);
+          setTimeout(() => {
+            if (window.turnstile) resolve();
+            else reject(new Error('Turnstile API not initialized after script load'));
+          }, 50);
+        };
+        const onError = () => {
+          script.removeEventListener('load', onLoad);
+          script.removeEventListener('error', onError);
+          reject(new Error('Failed to load Turnstile script'));
+        };
+        script.addEventListener('load', onLoad);
+        script.addEventListener('error', onError);
+        document.head.appendChild(script);
+      });
+    };
+
+    const attemptLoad = async () => {
+      try {
+        await loadScript();
+        if (!cancelled) {
+          setCaptchaLoadError(false);
+          mountWidget();
+        }
+      } catch (err) {
+        if (cancelled) return;
+        if (retryCount < MAX_RETRIES) {
+          retryCount++;
+          const delay = BASE_DELAY_MS * Math.pow(2, retryCount - 1);
+          setTimeout(attemptLoad, delay);
+        } else {
+          setCaptchaLoadError(true);
+        }
+      }
+    };
+
+    attemptLoad();
 
     return () => {
       cancelled = true;
-      if (existing) existing.removeEventListener('load', mount);
-      const api = window.turnstile;
-      if (api && captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
-      captchaWidgetRef.current = null;
+      if (scriptRef.current && !document.querySelector('script[data-turnstile]')) {
+        // لا نحذف السكربت إذا كان موجوداً مسبقاً في الصفحة
+        document.head.removeChild(scriptRef.current);
+      }
+      removeWidget();
+      setCaptchaLoadError(false);
     };
   }, [isPhoneLogin]);
 
@@ -581,7 +673,11 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                   {isPhoneLogin && (
                     <div style={styles.formGroup}>
                       <span style={styles.label}>تحقق الأمان</span>
-                      {TURNSTILE_SITE_KEY ? (
+                      {captchaLoadError ? (
+                        <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6, color: '#74442e' }}>
+                          تعذر تحميل تحقق الأمان. تحقّق من اتصالك بالإنترنت وأعد المحاولة، أو استخدم البريد أو اسم المستخدم.
+                        </span>
+                      ) : TURNSTILE_SITE_KEY ? (
                         <div ref={captchaContainerRef} />
                       ) : (
                         <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
