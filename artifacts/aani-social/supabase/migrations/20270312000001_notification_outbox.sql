@@ -105,11 +105,13 @@ revoke all on function public.aani_claim_notification_outbox(text, integer, inte
 grant execute on function public.aani_claim_notification_outbox(text, integer, interval) to service_role;
 
 -- إنهاء مهمة: sent، أو failed مع إعادة محاولة (Backoff) أو فشل نهائي.
--- لا تُقبل إلا من العامل الذي يحمل القفل (locked_by) أو من service_role.
+-- لا يُقبل الإنهاء إلا من العامل نفسه: المهمة يجب أن تكون processing،
+-- وlocked_by يجب أن يطابق p_worker تماماً، وp_worker لا يكون فارغاً.
+-- هذا يمنع عاملين من إنهاء المهمة نفسها أو من إنهاء مهمة ليست له.
 create or replace function public.aani_complete_notification_outbox(
   p_id uuid,
   p_status text,
-  p_worker text default null,
+  p_worker text,
   p_error text default null,
   p_provider_message_id text default null,
   p_retry_delay_seconds integer default null
@@ -124,6 +126,9 @@ declare
   v_delay integer := coalesce(p_retry_delay_seconds, 0);
   v_count integer := 0;
 begin
+  if v_worker is null then
+    raise exception 'aani_complete_notification_outbox: worker name required' using errcode = '42501';
+  end if;
   if v_status not in ('sent', 'failed', 'pending') then
     raise exception 'aani_complete_notification_outbox: unknown status %', v_status using errcode = '22023';
   end if;
@@ -154,11 +159,9 @@ begin
       end,
       provider_message_id = coalesce(nullif(btrim(coalesce(p_provider_message_id, '')), ''), task.provider_message_id)
   where task.id = p_id
-    and (
-      v_worker is null
-      or task.locked_by is null
-      or task.locked_by = v_worker
-    );
+    -- لا إنهاء لمهمة غير محجوزة، ولا لمهمة يحمل قفلها عامل آخر.
+    and task.status = 'processing'
+    and task.locked_by = v_worker;
   get diagnostics v_count = row_count;
   return v_count > 0;
 end

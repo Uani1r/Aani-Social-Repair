@@ -8,10 +8,12 @@
 --     الحمولة تحمل معرّفات فقط، بلا نص الرسالة ولا وسائطها.
 --   * المكالمة: إشارة سجل المكالمة '[aani-call:v1]{...}' تُسجَّل حدث 'call'
 --     لمعرّف المكالمة نفسه (call_id) مع النمط والنتيجة، بلا محتوى رسالة.
---     تُحترم تفضيلات المكالمات والحظر، ولا تُسجَّل في الإشعارات العامة.
+--     المكالمات تتبع إعداد 'messages' نفسه (لا مفتاح calls مستقل في التطبيق)،
+--     والحظر يمنعها، ولا تُسجَّل في الإشعارات العامة.
 --   * الإشعار الاجتماعي: بعد insert في public.notifications (إعجاب/تعليق/
 --     متابعة/إعادة نشر/تفاعل قصة…) يُسجَّل حدث 'notification' لصاحبه في
 --     outbox، فالإشعارات الاجتماعية الحالية تعمل كما هي بلا تعطيل.
+--     ويُحترم إعداد فئته الحقيقية: followers / interactions / stories.
 --
 -- dedupe_key يمنع تكرار الحدث نفسه: message:<id> أو call:<id> أو notification:<id>.
 -- لم يُطبَّق هذا الترحيل على أي مشروع Supabase. يُطبَّق يدوياً بعد المراجعة.
@@ -62,7 +64,9 @@ begin
         call_id := null;
     end;
 
-    select coalesce(p.notification_settings -> 'calls' = 'false'::jsonb, false)
+    -- المكالمات تتبع إعداد الرسائل نفسه (لا يوجد مفتاح calls منفصل في
+    -- التطبيق)، والحظر يمنع الحدث في كلا الاتجاهين.
+    select coalesce(p.notification_settings -> 'messages' = 'false'::jsonb, false)
       into disabled
     from public.profiles as p
     where p.id = new.recipient_id;
@@ -143,13 +147,46 @@ create trigger aani_enqueue_push_outbox
 after insert on public.messages
 for each row execute function public.aani_enqueue_push_outbox();
 
--- 2) أحداث الإشعارات الاجتماعية ------------------------------------------------
+-- 2) تصنيف الإشعار الاجتماعي حسب مفاتيح التطبيق الحقيقية في
+--    profiles.notification_settings: messages / followers / interactions / stories.
+--    أي نوع غير معروف لا يُحجب (السلوك الحالي يبقى كما هو).
+create or replace function public.aani_notification_preference_category(p_type text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select case lower(coalesce(p_type, ''))
+    when 'follow' then 'followers'
+    when 'new_follower' then 'followers'
+    when 'follow_request' then 'followers'
+    when 'follow_accepted' then 'followers'
+    when 'like' then 'interactions'
+    when 'post_like' then 'interactions'
+    when 'comment' then 'interactions'
+    when 'reply' then 'interactions'
+    when 'mention' then 'interactions'
+    when 'repost' then 'interactions'
+    when 'story_like' then 'stories'
+    when 'story_reply' then 'stories'
+    when 'story_mention' then 'stories'
+    when 'story_view' then 'stories'
+    else null
+  end
+$$;
+
+revoke all on function public.aani_notification_preference_category(text) from public, anon, authenticated;
+
+-- 3) أحداث الإشعارات الاجتماعية ------------------------------------------------
 create or replace function public.aani_enqueue_notification_push()
 returns trigger
 language plpgsql
 security definer
 set search_path = pg_catalog, public
 as $$
+declare
+  category text;
+  disabled boolean := false;
 begin
   if new.user_id is null then
     return new;
@@ -159,6 +196,21 @@ begin
     'message', 'new_message', 'chat_message', 'call', 'incoming_call', 'missed_call'
   ) then
     return new;
+  end if;
+  -- لا Push لفعل المستخدم على نفسه.
+  if new.actor_id is not null and new.actor_id = new.user_id then
+    return new;
+  end if;
+
+  category := public.aani_notification_preference_category(new.type);
+  if category is not null then
+    select coalesce(p.notification_settings -> category = 'false'::jsonb, false)
+      into disabled
+    from public.profiles as p
+    where p.id = new.user_id;
+    if disabled then
+      return new;
+    end if;
   end if;
 
   insert into public.notification_outbox (
@@ -173,6 +225,7 @@ begin
     jsonb_build_object(
       'notification_id', new.id,
       'type', new.type,
+      'preference_category', category,
       'actor_id', new.actor_id,
       'reference_id', new.reference_id
     )

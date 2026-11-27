@@ -3,9 +3,13 @@
 -- جدول واحد يدعم عدة أجهزة لكل مستخدم على المنصات الثلاث (web/android/ios)
 -- ومزوّدي الإشعارات (fcm اليوم، وapns/pushkit لاحقاً دون إعادة تصميم):
 --   * user_id -> public.profiles(id) ON DELETE CASCADE.
---   * provider + token فريدان لكل مستخدم ما دام الرمز غير ملغى
---     (لا نلمس صفوف مستخدم آخر عند تدوير رمز جهاز انتقل لحساب جديد).
---   * installation_id يميّز التثبيت نفسه، فيُلغى رمزه القديم عند التدوير.
+--   * provider + token فريدان على مستوى جميع المستخدمين ما دام الرمز غير
+--     ملغى: لا يملك رمز FCM الواحد حسابان نشطان.
+--   * provider + installation_id فريدان على مستوى جميع المستخدمين ما دام
+--     التثبيت غير ملغى: الانتقال إلى حساب آخر على الجهاز نفسه يُلغي
+--     ارتباط الحساب السابق (revoked_at) قبل تسجيل الحساب الجديد.
+--   * revoked_at يُملأ عند تسجيل الخروج أو إلغاء صلاحية الجهاز أو نقل الملكية،
+--     ولا يُحذف سجل الجهاز القديم.
 --   * revoked_at يُملأ عند تسجيل الخروج أو إلغاء صلاحية الجهاز، ولا يُحذف الصف.
 --   * وجود الصف لا يعني أن الجهاز يستقبل الآن: الإرسال يفحص revoked_at
 --     وlast_seen_at في مرحلة الإرسال.
@@ -32,14 +36,18 @@ create table if not exists public.device_tokens (
   updated_at timestamptz not null default now()
 );
 
--- رمز واحد غير ملغى لكل (مستخدم، مزوّد) — يمنع التكرار عند إعادة التسجيل.
-create unique index if not exists device_tokens_user_provider_token_key
-  on public.device_tokens (user_id, provider, token)
+-- رمز واحد نشط على مستوى جميع المستخدمين لكل (مزوّد، رمز): لا تملك نفس
+-- رمز FCM حسابان نشطان في الوقت نفسه.
+drop index if exists public.device_tokens_user_provider_token_key;
+create unique index if not exists device_tokens_active_token_key
+  on public.device_tokens (provider, token)
   where revoked_at is null;
 
--- تثبيت واحد غير ملغى لكل (مستخدم، مزوّد) — يمنع تراكم الصفوف عند التدوير.
-create unique index if not exists device_tokens_user_provider_installation_key
-  on public.device_tokens (user_id, provider, installation_id)
+-- تثبيت واحد نشط على مستوى جميع المستخدمين لكل (مزوّد، installation_id):
+-- الانتقال إلى حساب آخر على الجهاز نفسه يُلغي ارتباط الحساب السابق أولاً.
+drop index if exists public.device_tokens_user_provider_installation_key;
+create unique index if not exists device_tokens_active_installation_key
+  on public.device_tokens (provider, installation_id)
   where installation_id is not null and revoked_at is null;
 
 create index if not exists device_tokens_user_active_idx
@@ -109,6 +117,7 @@ declare
   v_token text := btrim(coalesce(p_token, ''));
   v_installation text := nullif(btrim(coalesce(p_installation_id, '')), '');
   v_device_name text := nullif(btrim(coalesce(p_device_name, '')), '');
+  v_attempt integer;
   v_row public.device_tokens;
 begin
   if v_user is null then
@@ -124,35 +133,40 @@ begin
     raise exception 'aani_register_device_token: invalid token' using errcode = '22023';
   end if;
 
-  -- تدوير الرمز: رمز التثبيت نفسه القديم يُلغى قبل تسجيل الجديد.
-  if v_installation is not null then
+  -- النقل والتدوير خطوة واحدة ذرية: كل صف نشط يحمل الرمز نفسه أو التثبيت
+  -- نفسه (لأي مستخدم، بما فيهم المستخدم الحالي) يُلغى قبل الإدراج، فلا تبقى
+  -- ملكيتان نشطتان. السجل القديم يبقى محفوظاً بـrevoked_at ولا يُحذف.
+  -- عند تسابق تسجيلين متزامنين، يفوز أحدهما ويُعاد الآخر بعد إلغاء الفائز،
+  -- فيبقى صف نشط واحد دائماً.
+  for v_attempt in 1..2 loop
     update public.device_tokens t
     set revoked_at = now(), updated_at = now()
-    where t.user_id = v_user
-      and t.provider = v_provider
+    where t.provider = v_provider
       and t.revoked_at is null
-      and t.installation_id = v_installation
-      and t.token <> v_token;
-  end if;
+      and (
+        t.token = v_token
+        or (v_installation is not null and t.installation_id = v_installation)
+      );
 
-  insert into public.device_tokens as t (
-    user_id, platform, provider, token, installation_id, device_name, metadata, last_seen_at
-  ) values (
-    v_user, v_platform, v_provider, v_token, v_installation, v_device_name,
-    coalesce(p_metadata, '{}'::jsonb), now()
-  )
-  on conflict (user_id, provider, token) where revoked_at is null
-  do update set
-    platform = excluded.platform,
-    installation_id = coalesce(excluded.installation_id, t.installation_id),
-    device_name = coalesce(excluded.device_name, t.device_name),
-    metadata = excluded.metadata,
-    last_seen_at = now(),
-    revoked_at = null,
-    updated_at = now()
-  returning * into v_row;
+    begin
+      insert into public.device_tokens (
+        user_id, platform, provider, token, installation_id, device_name, metadata, last_seen_at
+      ) values (
+        v_user, v_platform, v_provider, v_token, v_installation, v_device_name,
+        coalesce(p_metadata, '{}'::jsonb), now()
+      )
+      returning * into v_row;
 
-  return v_row;
+      return v_row;
+    exception
+      when unique_violation then
+        if v_attempt = 2 then
+          raise;
+        end if;
+    end;
+  end loop;
+
+  raise exception 'aani_register_device_token: could not register the device token' using errcode = '40001';
 end
 $$;
 
