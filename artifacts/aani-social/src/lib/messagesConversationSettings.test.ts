@@ -374,3 +374,128 @@ test('مجموعة الكتم تُشتق من is_muted فقط', () => {
 
   assert.deepEqual([...muted], [CONTACT_B]);
 });
+
+
+/* ------------------------------------------------------------------ */
+/* ترتيب نتائج القراءة مع تحديثات Realtime                             */
+/* ------------------------------------------------------------------ */
+
+const READ_STARTED_AT = '2026-11-27T12:00:00.000Z';
+const LATER = '2026-11-27T12:30:00.000Z';
+
+type DeferredList = {
+  promise: Promise<ConversationSettingRow[]>;
+  resolve: (rows: ConversationSettingRow[]) => void;
+};
+
+function createDeferredList(): DeferredList {
+  let resolve!: (rows: ConversationSettingRow[]) => void;
+  const promise = new Promise<ConversationSettingRow[]>(res => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
+/** بوّابة قراءة يدوية: كل listSettings ينتظر حتى يحرره الاختبار بالترتيب. */
+function createManualGateway() {
+  const requests: DeferredList[] = [];
+  const gateway: ConversationSettingsGateway = {
+    listSettings: () => {
+      const deferred = createDeferredList();
+      requests.push(deferred);
+      return deferred.promise;
+    },
+    insertMissingSettings: async () => {},
+    saveSetting: async () => {},
+  };
+  const request = (index: number): DeferredList => {
+    const deferred = requests[index];
+    assert.ok(deferred, `القراءة رقم ${index} يجب أن تكون قد بدأت`);
+    return deferred;
+  };
+  return { gateway, requests, request };
+}
+
+test('نتيجة قراءة قديمة لا تستبدل تحديث Realtime أحدث وصل أثناءها', async () => {
+  const manual = createManualGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: manual.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  const resyncing = store.resync();
+  // Realtime أحدث يصل قبل أن تنتهي القراءة.
+  assert.equal(store.applyRealtimeRow({
+    user_id: VIEWER,
+    other_user_id: CONTACT_B,
+    is_muted: true,
+    updated_at: LATER,
+  }), true);
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+
+  // القراءة القديمة تعود بقيمة أقدم للصف نفسه.
+  manual.request(0).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: EARLIER },
+  ]);
+  const result = await resyncing;
+
+  assert.equal(result.ok, true);
+  // الحالة الأحدث من Realtime باقية، ولم تُنزل إلى قيمة القراءة الأقدم.
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+  store.dispose();
+});
+
+test('Realtime أثناء initialize يبقى بعد انتهاء الاستعلام', async () => {
+  const manual = createManualGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: manual.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  const initializing = store.initialize();
+  // صف لم تعرفه القراءة الجارية، وصل بعد بدئها.
+  assert.equal(store.applyRealtimeRow({
+    user_id: VIEWER,
+    other_user_id: CONTACT_C,
+    is_muted: true,
+    updated_at: LATER,
+  }), true);
+
+  manual.request(0).resolve([]);
+  const result = await initializing;
+
+  assert.equal(result.ok, true);
+  assert.deepEqual([...store.mutedIds()], [CONTACT_C]);
+  store.dispose();
+});
+
+test('نتيجة resync أقدم لا تتغلب على نتيجة قراءة أحدث', async () => {
+  const manual = createManualGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: manual.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  const olderRead = store.resync();
+  const newerRead = store.resync();
+  assert.equal(manual.requests.length, 2);
+
+  // الأحدث ينتهي أولاً.
+  manual.request(1).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_C, is_muted: true, updated_at: LATER },
+  ]);
+  await newerRead;
+  assert.deepEqual([...store.mutedIds()], [CONTACT_C]);
+
+  // الأقدم ينتهي أخيراً بقيمة مختلفة، فلا يُطبَّق.
+  manual.request(0).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: true, updated_at: EARLIER },
+  ]);
+  const olderResult = await olderRead;
+  assert.equal(olderResult.ok, true);
+  assert.deepEqual([...store.mutedIds()], [CONTACT_C]);
+  store.dispose();
+});

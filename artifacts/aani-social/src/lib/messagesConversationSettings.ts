@@ -130,6 +130,17 @@ export function isStaleSettingUpdate(
   return after < before;
 }
 
+/** هل التغيير أحدث من لحظة بدء قراءة؟ يقارن updated_at بالوقت المرجعي. */
+export function isSettingNewerThan(
+  updatedAt: string | null | undefined,
+  reference: string | null | undefined,
+): boolean {
+  const value = updatedAt ? Date.parse(updatedAt) : Number.NaN;
+  const base = reference ? Date.parse(reference) : Number.NaN;
+  if (Number.isNaN(value) || Number.isNaN(base)) return false;
+  return value > base;
+}
+
 export function settingRow(
   viewerId: string,
   contactId: string,
@@ -286,13 +297,42 @@ export function createConversationMuteStore(
     });
   };
 
-  const replaceRows = (list: ConversationSettingRow[]): void => {
-    rows.clear();
-    list.forEach(row => {
-      if (row.other_user_id && row.other_user_id !== viewerId) {
-        rows.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
+  // كل قراءة (initialize أو resync) تأخذ رقماً متزايداً قبل أن تنتظر الشبكة:
+  // نتيجة قراءة بدأت قبل قراءة أخرى لا تُطبَّق حتى لو وصلت بعدها.
+  let readToken = 0;
+
+  /**
+   * تطبيق نتيجة قراءة واحدة.
+   *
+   * لا يستبدل الحالة كاملة: صف تغيّر بعد بدء هذه القراءة (Realtime أو حفظ
+   * محلي) يبقى كما هو، فلا تُنزل قيمة أحدث إلى قيمة أقدم.
+   */
+  const applyReadResult = (
+    list: ConversationSettingRow[],
+    startedAt: string,
+    token: number,
+  ): boolean => {
+    // قراءة أحدث بدأت: هذه النتيجة قديمة، فلا تغيّر الحالة.
+    if (disposed || token !== readToken) return false;
+    const next = new Map<string, { isMuted: boolean; updatedAt: string | null }>();
+    for (const row of list) {
+      if (!row.other_user_id || row.other_user_id === viewerId) continue;
+      next.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
+    }
+    // صف تغيّر بعد بدء القراءة يبقى حتى لو غاب عن نتيجتها أو جاءت بقيمة أقدم.
+    rows.forEach((current, contactId) => {
+      const fromRead = next.get(contactId);
+      if (!fromRead) {
+        if (isSettingNewerThan(current.updatedAt, startedAt)) next.set(contactId, current);
+        return;
       }
+      if (isStaleSettingUpdate(current.updatedAt, fromRead.updatedAt)) next.set(contactId, current);
     });
+    rows.clear();
+    next.forEach((value, contactId) => rows.set(contactId, value));
+    legacyPending = new Set([...legacyPending].filter(contactId => !rows.has(contactId)));
+    publish();
+    return true;
   };
 
   const clearLegacy = (): void => {
@@ -341,12 +381,6 @@ export function createConversationMuteStore(
     return toInsert.length;
   };
 
-  const applyList = (list: ConversationSettingRow[]): void => {
-    replaceRows(list);
-    legacyPending = new Set([...legacyPending].filter(contactId => !rows.has(contactId)));
-    publish();
-  };
-
   const saveMuted = async (
     contactId: string,
     muted: boolean,
@@ -386,6 +420,8 @@ export function createConversationMuteStore(
       };
     },
     async initialize() {
+      const startedAt = now();
+      const token = ++readToken;
       let list: ConversationSettingRow[];
       try {
         list = await gateway.listSettings(viewerId);
@@ -394,11 +430,15 @@ export function createConversationMuteStore(
         return { ok: false, imported: 0, error };
       }
       if (disposed) return { ok: false, imported: 0 };
-      applyList(list);
+      applyReadResult(list, startedAt, token);
+      // الترحيل يُنفَّذ حتى لو أُهملت نتيجة القراءة لصالح قراءة أحدث:
+      // الإدراج بـignoreDuplicates لا يغيّر أي قيمة موجودة.
       const imported = await importLegacyMutedIds(list);
       return { ok: true, imported };
     },
     async resync() {
+      const startedAt = now();
+      const token = ++readToken;
       let list: ConversationSettingRow[];
       try {
         list = await gateway.listSettings(viewerId);
@@ -406,7 +446,8 @@ export function createConversationMuteStore(
         return { ok: false, error };
       }
       if (disposed) return { ok: false };
-      applyList(list);
+      // نتيجة resync أقدم لا تتغلب على قراءة أحدث ولا على تحديث Realtime أحدث.
+      applyReadResult(list, startedAt, token);
       return { ok: true };
     },
     applyRealtimeRow(value) {
