@@ -1,3 +1,18 @@
+# [api] إعدادات Data API المحلية (Supabase CLI / self-hosted).
+# نُدرج مخطط `sandbox` ضمن المخططات المكشوفة محلياً كي تصل إليه دوال/جداول
+# Sandbox عبر PostgREST أثناء التطوير. لا نمنح anon أي صلاحية إضافية هنا؛
+# التحكم بالوصول يبقى عبر RLS والمنح المحددة في الترحيل (grant ... to
+# authenticated). لا منح جماعي.
+#
+# مهم — مشروع Supabase السحابي:
+#   تعديل هذا الملف وحده لا يغيّر إعدادات مشروع مستضاف ولا يُثبت تطبيقها.
+#   يجب إضافة `sandbox` يدوياً إلى: Dashboard > Project Settings > API >
+#   Exposed schemas (أو "Extra schemas to expose"). لم يُتحقق من أي اتصال
+#   سحابي فعلي في هذا التغيير، ولا يُدّعى ذلك.
+[api]
+schemas = ["public", "graphql_public", "sandbox"]
+extra_search_path = ["public", "extensions"]
+
 [functions.gemini-chat]
 verify_jwt = true
 

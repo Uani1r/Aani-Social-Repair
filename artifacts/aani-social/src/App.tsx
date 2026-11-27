@@ -19,6 +19,7 @@ import PostDetailPage from '@/pages/PostDetailPage';
 import ProfilePage from '@/pages/ProfilePage';
 import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
+import AdminSandbox from '@/pages/AdminSandbox';
 import useAppSession from '@/hooks/useAppSession';
 import { useModalBodyScrollLock } from '@/hooks/useModalBodyScrollLock';
 import { useInteractionRealtime } from '@/lib/interactions';
@@ -170,6 +171,7 @@ function App() {
                   />
                 )}
               </Route>
+              <Route path="/admin/sandbox"><AdminSandbox key={user.id} /></Route>
               <Route path="/profile">
                 {() => (
                   <ProfilePage
