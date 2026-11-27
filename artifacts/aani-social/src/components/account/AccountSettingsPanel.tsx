@@ -88,6 +88,8 @@ export default function AccountSettingsPanel() {
 
   const loadSessions = useCallback(async () => {
     const { data } = await supabase.auth.getSession();
+    // الجلسة الحالية يميّزها الخادم (`is_current` في نتيجة الدالة)، فلا نحتاج
+    // معرّف جلسة من العميل؛ ونمرّر null عن قصد ولا نعرض أي رمز أو عنوان.
     const result = await loadAccountSessions({
       listSessions: async () => await supabase.rpc('aani_account_sessions'),
       signOutOthers: () => supabase.auth.signOut({ scope: 'others' }),

@@ -19,11 +19,38 @@ begin;
 -- 1) هوية الجلسة الحالية من مطالبات JWT (session_id) — لا تُمنح للعميل.
 create or replace function public.aani_current_session_id()
 returns uuid
-language sql
+language plpgsql
 stable
 set search_path = public, pg_temp
 as $$
-  select nullif(current_setting('request.jwt.claim.session_id', true), '')::uuid;
+declare
+  v_claims jsonb;
+  v_value text;
+begin
+  -- PostgREST يضع كل المطالبات في request.jwt.claims (JSON)، وبعض الإصدارات
+  -- تضع المطالبة المفردة في request.jwt.claim.<name>. نقرأ الاثنين كي لا تضيع
+  -- هوية الجلسة الحالية، وأي قيمة غير صالحة تعني «لا جلسة حالية».
+  v_value := nullif(current_setting('request.jwt.claim.session_id', true), '');
+
+  if v_value is null then
+    begin
+      v_claims := nullif(current_setting('request.jwt.claims', true), '')::jsonb;
+    exception
+      when others then
+        v_claims := null;
+    end;
+    if v_claims is not null then
+      v_value := nullif(v_claims ->> 'session_id', '');
+    end if;
+  end if;
+
+  begin
+    return v_value::uuid;
+  exception
+    when others then
+      return null;
+  end;
+end;
 $$;
 
 revoke all on function public.aani_current_session_id() from public, anon, authenticated;
@@ -77,7 +104,7 @@ as $$
          s.updated_at,
          s.refreshed_at,
          s.user_agent::text,
-         (s.id = public.aani_current_session_id()) as is_current
+         (s.id = public.aani_current_session_id()) is true as is_current
   from auth.sessions s
   where s.user_id = auth.uid()
   order by coalesce(s.refreshed_at, s.updated_at, s.created_at) desc;

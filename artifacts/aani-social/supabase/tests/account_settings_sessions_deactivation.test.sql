@@ -71,7 +71,34 @@ begin
 end
 $$;
 
--- 4) التحديث المباشر لـ is_deactivated يُرفض فعلاً (true وfalse)، ولا يغيّر
+-- 3ب) تمييز الجلسة الحالية يعمل أيضاً حين تصل المطالبة داخل request.jwt.claims
+--     (JSON) كما يضعها PostgREST، لا في المتغير المفرد وحده.
+select set_config('request.jwt.claim.session_id', '', false);
+select set_config(
+  'request.jwt.claims',
+  '{"sub":"11111111-1111-1111-1111-111111111111","session_id":"aaaaaaaa-0000-0000-0000-000000000001"}',
+  false
+);
+
+do $$
+declare
+  v_current integer;
+begin
+  select count(*) into v_current
+  from public.aani_account_sessions() s
+  where s.id = 'aaaaaaaa-0000-0000-0000-000000000001'
+    and s.is_current is true;
+
+  if v_current <> 1 then
+    raise exception 'the current session must be marked from the jwt claims payload';
+  end if;
+end
+$$;
+
+-- إعادة المطالبات المفردة لتكملة الاختبار.
+select set_config('request.jwt.claim.session_id', 'aaaaaaaa-0000-0000-0000-000000000001', false);
+select set_config('request.jwt.claims', '', false);
+
 --    الصف. نُثبت أولاً أن الصف مرئي، كي لا يكون «الرفض» تحديثاً لصفر صفوف.
 do $$
 declare
