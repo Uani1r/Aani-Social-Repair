@@ -1,4 +1,5 @@
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import type { DeviceSignOutDeps } from '@/lib/pushSignOut';
 import {
   buildRegistrationInput,
   buildRevocationInput,
@@ -191,4 +192,36 @@ export async function unregisterPushNotifications(userId: string): Promise<PushR
     console.error('[push] تعذر إلغاء تسجيل الجهاز:', error instanceof Error ? error.message : 'unknown');
     return { ok: false, message: 'تعذر إلغاء تسجيل هذا الجهاز الآن.' };
   }
+}
+
+
+/** معرّف تثبيت هذا المتصفح المحفوظ — بلا إنشاء جديد. مفتاح إلغاء رمز الجهاز. */
+export function currentDeviceInstallationId(): string | null {
+  return readInstallationId(browserStorage());
+}
+
+/**
+ * إلغاء رمز جهاز هذا المتصفح على الخادم بمعرّف التثبيت وحده.
+ * `aani_revoke_device_token` تضبط `revoked_at` ولا تحذف الصف، ولا تمسّ جهازاً آخر.
+ */
+export async function revokeDeviceTokenForSignOut(installationId: string): Promise<{ error: unknown }> {
+  const { error } = await supabase.rpc('aani_revoke_device_token', buildRevocationInput({ installationId }));
+  return { error };
+}
+
+/**
+ * قوالب تسجيل الخروج لهذا الجهاز: الجلسة الحالية، معرّف هذا التثبيت، الإلغاء
+ * على الخادم، ثم إنهاء الجلسة الذي يمرّره المستدعي (محلي أو عام).
+ */
+export function deviceSignOutDeps(endSession: () => Promise<{ error: unknown }>): DeviceSignOutDeps {
+  return {
+    readUserId: async () => {
+      const { data, error } = await supabase.auth.getUser();
+      if (error) return null;
+      return data.user?.id ?? null;
+    },
+    readInstallationId: currentDeviceInstallationId,
+    revokeDeviceToken: revokeDeviceTokenForSignOut,
+    endSession,
+  };
 }
