@@ -852,7 +852,7 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '8px',
-    height: '60px',
+    height: '52px',
     padding: '0 12px',
     border: '1px solid #d8dfdb',
     borderRadius: '12px',
