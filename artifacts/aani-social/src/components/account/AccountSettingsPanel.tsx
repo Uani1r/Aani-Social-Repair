@@ -8,6 +8,7 @@
  * - الهاتف يبقى وسيلة دخول إضافية بلا SMS ولا OTP (إدارته في إعدادات الملف).
  */
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { Link } from 'wouter';
 
 import {
   describeEmailChangeState,
@@ -277,6 +278,16 @@ export default function AccountSettingsPanel() {
               {busy === 'email' ? 'جارٍ الإرسال...' : 'إرسال رابط التأكيد'}
             </button>
           </form>
+        </section>
+
+        <section style={styles.section}>
+          <h2 style={styles.heading}>كلمة المرور</h2>
+          <p style={styles.note}>
+            تغيير كلمة المرور يبقى في مكان واحد: إعدادات الملف الشخصي، بالتحقق من
+            كلمة المرور الحالية ثم التحديث. لا نُكرّر النموذج هنا لتفادي واجهتين
+            متعارضتين، وقد بقي سلوكه كما هو.
+          </p>
+          <Link href="/profile" style={styles.button}>فتح إعدادات الملف الشخصي لتغيير كلمة المرور</Link>
         </section>
 
         <section style={styles.section}>

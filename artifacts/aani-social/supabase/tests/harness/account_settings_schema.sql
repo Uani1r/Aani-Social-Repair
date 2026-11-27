@@ -63,7 +63,10 @@ create policy profiles_self_select on public.profiles
   for select to authenticated
   using (true);
 
-grant select, update on public.profiles to authenticated;
+-- القراءة فقط هنا: منح UPDATE على الجدول كان يُبطل تحصين العمود عند إعادة
+-- بناء البيئة بعد الترحيل. صلاحية التحديث تأتي من منح الأعمدة في الترحيل نفسه
+-- (كل الأعمدة ما عدا is_deactivated)، والاختبار يثبت ذلك.
+grant select on public.profiles to authenticated;
 
 insert into auth.users (id, email) values
   ('11111111-1111-1111-1111-111111111111', 'a@example.com'),
