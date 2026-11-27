@@ -1,4 +1,4 @@
-import { useState, type CSSProperties, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
@@ -10,6 +10,24 @@ import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvat
 const invokePhoneLogin = createPhoneFunctionInvoker({
   invoke: (name, options) => supabase.functions.invoke(name, options),
 });
+
+/** ودجت Cloudflare Turnstile: مفتاح عام فقط، ولا سر في الواجهة. */
+const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+const TURNSTILE_SITE_KEY = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
+const TURNSTILE_ACTION = 'phone_login';
+
+type TurnstileApi = {
+  render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
+  reset: (widgetId?: string | number) => void;
+  remove: (widgetId: string | number) => void;
+};
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi;
+  }
+}
+
 
 type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
 
@@ -70,6 +88,67 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [statusNotice, setStatusNotice] = useState('');
   // الجنس المختار عند إنشاء الحساب — يحدد الأيقونة الشخصية الافتراضية
   const [gender, setGender] = useState<'male' | 'female'>('male');
+  // ودجت Turnstile لمسار الهاتف فقط: مفتاح عام لا سر، ويُعاد ضبطه بعد كل فشل.
+  const [captchaToken, setCaptchaToken] = useState('');
+  const captchaContainerRef = useRef<HTMLDivElement | null>(null);
+  const captchaWidgetRef = useRef<string | number | null>(null);
+  const isPhoneLogin = !signUp && classifyLoginIdentifier(email).kind === 'phone';
+
+  const resetCaptcha = () => {
+    setCaptchaToken('');
+    const api = window.turnstile;
+    if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
+  };
+
+  /**
+   * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
+   * لمسارات البريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت
+   * يمسح الرمز فلا يُرسل رمز منتهٍ.
+   */
+  useEffect(() => {
+    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) return undefined;
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      const api = window.turnstile;
+      const container = captchaContainerRef.current;
+      if (!api || !container) return;
+      if (captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
+      setCaptchaToken('');
+      captchaWidgetRef.current = api.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        action: TURNSTILE_ACTION,
+        theme: 'light',
+        language: 'ar',
+        callback: (token: string) => setCaptchaToken(token),
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => setCaptchaToken(''),
+      });
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+    if (window.turnstile) {
+      mount();
+    } else if (existing) {
+      existing.addEventListener('load', mount);
+    } else {
+      const script = document.createElement('script');
+      script.src = TURNSTILE_SCRIPT;
+      script.async = true;
+      script.defer = true;
+      script.dataset.turnstile = 'true';
+      script.addEventListener('load', mount);
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      if (existing) existing.removeEventListener('load', mount);
+      const api = window.turnstile;
+      if (api && captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
+      captchaWidgetRef.current = null;
+    };
+  }, [isPhoneLogin]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -121,9 +200,15 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           if (authError) throw authError;
         } else if (identifier.kind === 'phone') {
           // الدخول برقم الهاتف وكلمة مرور الحساب عبر الدالة المحمية
-          // `login-with-phone`: لا OTP ولا SMS، والتحقق من كلمة المرور عند
-          // Supabase Auth نفسه. الرسالة عامة عند أي فشل.
-          const result = await loginWithPhone(identifier.phone, password, invokePhoneLogin);
+          // `login-with-phone`: لا OTP ولا SMS. CAPTCHA إلزامي هنا فقط،
+          // والتحقق منه على الخادم قبل أي بحث أو تحقق كلمة مرور.
+          if (!TURNSTILE_SITE_KEY) {
+            throw new Error('الدخول بالهاتف يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد أو اسم المستخدم في الوقت الحالي.');
+          }
+          if (!captchaToken) {
+            throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
+          }
+          const result = await loginWithPhone(identifier.phone, password, invokePhoneLogin, captchaToken);
           if (!result.ok) throw new Error(result.message);
           const { error: sessionError } = await supabase.auth.setSession({
             access_token: result.accessToken,
@@ -171,6 +256,8 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         afterAuth(); setLocation('/feed');
       }
     } catch (reason: any) {
+      // أي فشل في مسار الهاتف يُبطل رمز CAPTCHA ويُعيد ضبط الودجت.
+      if (isPhoneLogin) resetCaptcha();
       const message = reason?.message || '';
       if (/profiles_username_lower_idx|duplicate key|unique constraint/i.test(message)) {
         setError('اسم المستخدم مستخدم بالفعل. اختر اسمًا آخر ثم حاول مجددًا.');
@@ -312,6 +399,19 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                 style={styles.input}
               />
             </div>
+
+            {!signUp && isPhoneLogin && (
+              <div style={styles.formGroup}>
+                <span style={styles.label}>تحقق الأمان</span>
+                {TURNSTILE_SITE_KEY ? (
+                  <div ref={captchaContainerRef} />
+                ) : (
+                  <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
+                    الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
+                  </span>
+                )}
+              </div>
+            )}
 
             <button
               type="submit"

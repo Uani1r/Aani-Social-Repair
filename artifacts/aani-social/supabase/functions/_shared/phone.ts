@@ -101,21 +101,47 @@ export function logFailure(scope: string, error: unknown): void {
   console.error(`${scope}: ${redactForLog(error)}`);
 }
 
+/** بصمة SHA-256 بصيغة hex: مفتاح المحدّد المشترك بدل الرقم أو IP الخام. */
+export async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export type TurnstileExpectation = {
+  /** المضيفات المسموح بها (نطاق الموقع)، بأحرف صغيرة. */
+  expectedHostnames: string[];
+  /** الإجراء المتوقع الذي سجله الودجت. */
+  expectedAction: string;
+  /** عنوان IP من منصة الاستضافة، إن وُجد. */
+  remoteIp?: string;
+};
+
 /**
- * تحقق خادمي من CAPTCHA (Cloudflare Turnstile) قبل أي محاولة دخول.
- * `fetchImpl` يُمرَّر للاختبار، وأي خطأ أو رد غير صالح يعني «ليست بشراً».
+ * تحقق خادمي كامل من CAPTCHA (Cloudflare Turnstile) قبل أي محاولة دخول:
+ * - نجاح صريح (`success === true`) وبلا `error-codes`.
+ * - `hostname` ضمن المضيفات المسموح بها.
+ * - `action` مطابق للإجراء المتوقع.
+ * أي استجابة ناقصة أو غير متوقعة أو خطأ شبكة أو غياب السر أو الرمز تعني
+ * الرفض (fail-closed). `fetchImpl` يُمرَّر للاختبار.
  */
 export async function verifyTurnstileToken(
   token: string,
   secret: string,
   fetchImpl: typeof fetch,
-  remoteIp?: string,
+  expectation: TurnstileExpectation,
 ): Promise<boolean> {
   if (!token || !secret) return false;
+  if (!Array.isArray(expectation.expectedHostnames) || expectation.expectedHostnames.length === 0) return false;
+  if (!expectation.expectedAction) return false;
+
   const form = new URLSearchParams();
   form.set("secret", secret);
   form.set("response", token);
-  if (remoteIp) form.set("remoteip", remoteIp);
+  if (expectation.remoteIp) form.set("remoteip", expectation.remoteIp);
+
+  let payload: Record<string, unknown>;
   try {
     const response = await fetchImpl("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
       method: "POST",
@@ -123,9 +149,20 @@ export async function verifyTurnstileToken(
       body: form.toString(),
     });
     if (!response.ok) return false;
-    const payload = await response.json() as { success?: unknown };
-    return payload.success === true;
+    payload = await response.json() as Record<string, unknown>;
   } catch {
     return false;
   }
+
+  if (payload.success !== true) return false;
+  const errorCodes = payload["error-codes"];
+  if (Array.isArray(errorCodes) && errorCodes.length > 0) return false;
+
+  const hostname = typeof payload.hostname === "string" ? payload.hostname.toLowerCase() : "";
+  if (!hostname || !expectation.expectedHostnames.includes(hostname)) return false;
+
+  const action = typeof payload.action === "string" ? payload.action : "";
+  if (action !== expectation.expectedAction) return false;
+
+  return true;
 }

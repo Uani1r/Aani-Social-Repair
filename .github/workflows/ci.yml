@@ -669,6 +669,21 @@ jobs:
       - name: Re-run the alias assertions after a second apply
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_phone_alias.test.sql
 
+      # The shared login rate limiter: its table, RLS with no policies, the
+      # revoked privileges, the atomic consume function, window reset, input
+      # validation and expired cleanup. Re-applying proves idempotency.
+      - name: Apply the login rate limit migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307010000_login_rate_limits.sql
+
+      - name: Assert the shared login rate limiter
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/login_rate_limit.test.sql
+
+      - name: Re-apply the login rate limit migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307010000_login_rate_limits.sql
+
+      - name: Re-run the rate limiter assertions after a second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/login_rate_limit.test.sql
+
 
   # Real Deno type check and tests for the two phone Edge Functions. No
   # Supabase project, no network calls and no deployment are involved: the
