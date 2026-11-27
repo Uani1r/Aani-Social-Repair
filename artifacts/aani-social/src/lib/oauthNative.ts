@@ -2,51 +2,70 @@ import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { supabase } from '@/lib/supabase';
 
+const handledCodes = new Set<string>();
 let listenerHandle: { remove: () => Promise<void> } | null = null;
-let handledCode: string | null = null;
+let inFlight = false;
 
 export function isNativePlatform(): boolean {
   return typeof (window as any)?.Capacitor?.isNativePlatform === 'function'
     && (window as any).Capacitor.isNativePlatform() === true;
 }
 
-export async function startNativeGoogleOAuth(): Promise<void> {
-  if (!isNativePlatform()) return;
-  const { data, error } = await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: {
-      redirectTo: 'anisocial://auth/callback',
-      skipBrowserRedirect: true,
-    },
-  });
-  if (error) throw error;
-  if (data?.url) await Browser.open({ url: data.url });
-  // close browser after return handled elsewhere
+export interface ParsedOAuthCallback {
+  ok: boolean;
+  code?: string;
+  error?: string;
 }
 
-function parseParams(url: string): URLSearchParams {
-  const qIndex = url.indexOf('?');
-  const hashIndex = url.indexOf('#');
-  const query = qIndex >= 0 ? url.slice(qIndex + 1, hashIndex >= 0 ? hashIndex : undefined) : '';
-  return new URLSearchParams(query);
+export function parseOAuthCallback(url: string): ParsedOAuthCallback {
+  if (typeof url !== 'string') return { ok: false, error: 'invalid_url' };
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { ok: false, error: 'invalid_url' };
+  }
+  if (parsed.protocol !== 'anisocial:' || parsed.hostname !== 'auth' || parsed.pathname !== '/callback') {
+    return { ok: false, error: 'invalid_url' };
+  }
+  const error = parsed.searchParams.get('error') || parsed.searchParams.get('error_description');
+  if (error) return { ok: false, error };
+  const code = parsed.searchParams.get('code');
+  if (!code) return { ok: false, error: 'missing_code' };
+  return { ok: true, code };
+}
+
+export async function startNativeGoogleOAuth(): Promise<void> {
+  if (!isNativePlatform() || inFlight) return;
+  inFlight = true;
+  try {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: 'anisocial://auth/callback',
+        skipBrowserRedirect: true,
+      },
+    });
+    if (error) throw error;
+    if (data?.url) await Browser.open({ url: data.url });
+  } finally {
+    // allow new attempt after browser returns / failure
+    setTimeout(() => { inFlight = false; }, 0);
+  }
 }
 
 export async function handleNativeOAuthUrl(url: string): Promise<{ ok: boolean; error?: string }> {
-  if (!url || !url.startsWith('anisocial://auth/callback')) return { ok: false, error: 'invalid_url' };
-  const params = parseParams(url);
-  const code = params.get('code');
-  const error = params.get('error') || params.get('error_description');
-  if (error) return { ok: false, error };
-  if (!code) return { ok: false, error: 'missing_code' };
-  if (handledCode === code) return { ok: true }; // already exchanged
-  handledCode = code;
+  const parsed = parseOAuthCallback(url);
+  if (!parsed.ok || !parsed.code) return { ok: false, error: parsed.error || 'invalid_url' };
+  if (handledCodes.has(parsed.code)) return { ok: true };
+  handledCodes.add(parsed.code);
   try {
-    const { error: exError } = await supabase.auth.exchangeCodeForSession(code);
-    if (exError) throw exError;
+    const { error } = await supabase.auth.exchangeCodeForSession(parsed.code);
+    if (error) throw error;
     await Browser.close().catch(() => {});
     return { ok: true };
   } catch (e: any) {
-    handledCode = null;
+    handledCodes.delete(parsed.code);
     return { ok: false, error: e?.message || 'exchange_failed' };
   }
 }
@@ -62,5 +81,5 @@ export function registerNativeOAuthListener(): void {
 }
 
 export function resetNativeOAuthGuard(): void {
-  handledCode = null;
+  handledCodes.clear();
 }
