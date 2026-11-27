@@ -15,7 +15,13 @@ import {
 } from '@/lib/turnstileLoader';
 import { useOAuthProvider } from '@/lib/oauthProvider';
 import { isAppleOAuthEnabled } from '@/lib/oauthRedirect';
-import { isNativePlatform, startNativeGoogleOAuth, onNativeOAuthResult } from '@/lib/oauthNative';
+import {
+  describeNativeOAuthError,
+  isNativePlatform,
+  nativeOAuthDecision,
+  onNativeOAuthResult,
+  startNativeGoogleOAuth,
+} from '@/lib/oauthNative';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
 const invokePhoneLogin = createPhoneFunctionInvoker({
@@ -135,16 +141,37 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const isGoogleLoading = providerLoading === 'google' || nativeGoogleLoading;
   const isAppleLoading = providerLoading === 'apple';
 
+  // آخر محاولة OAuth أصلية عولجت: نتيجة مكررة أو قديمة لا تُنقل الواجهة مرتين
+  // ولا تعرض رسالة ثانية.
+  const handledNativeAttemptRef = useRef(0);
+  // afterAuth عبر مرجع: الاشتراك يبقى واحداً طوال عمر الصفحة ويستدعي أحدث نسخة،
+  // ويُزال عند إزالة الصفحة عبر الدالة التي يعيدها onNativeOAuthResult.
+  const afterAuthRef = useRef(afterAuth);
   useEffect(() => {
-    if (!isNativePlatform()) return;
+    afterAuthRef.current = afterAuth;
+  }, [afterAuth]);
+
+  useEffect(() => {
+    if (!isNativePlatform()) return undefined;
     const unsubscribe = onNativeOAuthResult((result) => {
+      const decision = nativeOAuthDecision(result, handledNativeAttemptRef.current);
+      if (decision.kind === 'ignore') return;
+      if (decision.attempt) handledNativeAttemptRef.current = decision.attempt;
       setNativeGoogleLoading(false);
-      if (result.ok) {
-        afterAuth();
+      if (decision.kind === 'navigate') {
+        setError('');
+        setStatusNotice('');
+        afterAuthRef.current();
         setLocation('/feed');
-      } else {
-        setError(result.error || 'تعذر المتابعة باستخدام Google.');
+        return;
       }
+      if (decision.kind === 'notice') {
+        setError('');
+        setStatusNotice(decision.message);
+        return;
+      }
+      setStatusNotice('');
+      setError(decision.message);
     });
     return unsubscribe;
   }, []);
@@ -447,11 +474,14 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
               disabled={providerLoading !== null || nativeGoogleLoading || fallbackBusy || !supabaseConfigured}
               onClick={() => {
                 setError('');
+                setStatusNotice('');
                 if (isNativePlatform()) {
                   setNativeGoogleLoading(true);
-                  startNativeGoogleOAuth().catch((reason: any) => {
+                  // البدء لا يرمي: فشله يُعيد حالة التحميل فوراً ويسمح بإعادة المحاولة.
+                  void startNativeGoogleOAuth().then((started) => {
+                    if (started.ok) return;
                     setNativeGoogleLoading(false);
-                    setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.');
+                    setError(describeNativeOAuthError(started.error));
                   });
                 } else {
                   signInWithProvider('google').catch((reason: any) =>

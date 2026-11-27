@@ -8,7 +8,8 @@ import { registerNativeOAuthListener } from '@/lib/oauthNative';
 import './index.css';
 
 if (typeof window !== 'undefined' && (window as any)?.Capacitor?.isNativePlatform?.()) {
-  registerNativeOAuthListener();
+  // مستمع واحد فقط حتى مع نداءات متزامنة؛ والرابط البارد يُعالَج بعد تثبيته.
+  void registerNativeOAuthListener();
 }
 
 // حاجز أخطاء React فقط (بلا أي مستمع عام لـ window): عند فشل الرسم تعرض

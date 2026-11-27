@@ -1,119 +1,104 @@
+/**
+ * oauthNative.ts
+ * ربط Google OAuth الأصلي بـCapacitor (App/Browser) وSupabase Auth.
+ *
+ * المنطق كله في `oauthNativeCore.ts` (نقي وقابل للاختبار بمحاكاة كاملة)؛ هذا
+ * الملف يمرّر الأدوات الحقيقية فقط: فتح المتصفح وإغلاقه، وحدث إغلاقه بيد
+ * المستخدم (`browserFinished` — الحدث المدعوم في نسخة @capacitor/browser
+ * المثبتة، ولا يوجد حدث «إلغاء» غيره)، ومستمع رابط التطبيق، ورابط التشغيل
+ * البارد، وتبادل الرمز عبر Supabase.
+ */
+
 import { App } from '@capacitor/app';
 import { Browser } from '@capacitor/browser';
 import { supabase } from '@/lib/supabase';
+import {
+  NATIVE_OAUTH_REDIRECT_URL,
+  isNativePlatform as readNativePlatform,
+} from '@/lib/oauthRedirect';
+import {
+  createNativeOAuthGate,
+  createNativeOAuthUrlListener,
+  type ListenerHandle,
+  type NativeOAuthResult,
+  type NativeOAuthStartResult,
+} from '@/lib/oauthNativeCore';
 
-const handledCodes = new Set<string>();
-const pendingCodes = new Set<string>();
-let inFlight = false;
-let listenerHandle: { remove: () => Promise<void> } | null = null;
-type NativeOAuthResult = { ok: boolean; error?: string };
-const resultHandlers = new Set<(result: NativeOAuthResult) => void>();
-
-export function onNativeOAuthResult(handler: (result: NativeOAuthResult) => void): () => void {
-  resultHandlers.add(handler);
-  return () => resultHandlers.delete(handler);
-}
+export {
+  describeNativeOAuthError,
+  nativeOAuthDecision,
+  parseOAuthCallback,
+} from '@/lib/oauthNativeCore';
+export type {
+  NativeOAuthDecision,
+  NativeOAuthResult,
+  NativeOAuthStartResult,
+  ParsedOAuthCallback,
+} from '@/lib/oauthNativeCore';
 
 export function isNativePlatform(): boolean {
-  return typeof (window as any)?.Capacitor?.isNativePlatform === 'function'
-    && (window as any).Capacitor.isNativePlatform() === true;
+  return readNativePlatform();
 }
 
-export interface ParsedOAuthCallback {
-  ok: boolean;
-  code?: string;
-  error?: string;
-}
-
-export function parseOAuthCallback(url: string): ParsedOAuthCallback {
-  if (typeof url !== 'string') return { ok: false, error: 'invalid_url' };
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { ok: false, error: 'invalid_url' };
-  }
-  if (parsed.protocol !== 'anisocial:' || parsed.hostname !== 'auth' || parsed.pathname !== '/callback') {
-    return { ok: false, error: 'invalid_url' };
-  }
-  const error = parsed.searchParams.get('error') || parsed.searchParams.get('error_description');
-  if (error) return { ok: false, error };
-  const code = parsed.searchParams.get('code');
-  if (!code) return { ok: false, error: 'missing_code' };
-  return { ok: true, code };
-}
-
-export async function startNativeGoogleOAuth(): Promise<void> {
-  if (inFlight) return;
-  inFlight = true;
-  try {
+const gate = createNativeOAuthGate({
+  async signInWithOAuth() {
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: 'anisocial://auth/callback',
+        redirectTo: NATIVE_OAUTH_REDIRECT_URL,
         skipBrowserRedirect: true,
       },
     });
-    if (error) throw error;
-    if (data?.url) await Browser.open({ url: data.url });
-  } catch (e) {
-    inFlight = false;
-    const result = { ok: false, error: (e as any)?.message || 'oauth_start_failed' };
-    resultHandlers.forEach((h) => h(result));
-    throw e;
-  }
+    const url = (data as { url?: string | null } | null)?.url ?? null;
+    return { url, error: error ?? null };
+  },
+  async exchangeCodeForSession(code) {
+    const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+    const session = (data as { session?: unknown } | null)?.session ?? null;
+    return { session, error: error ?? null };
+  },
+  openBrowser: url => Browser.open({ url }),
+  closeBrowser: () => Browser.close(),
+  async onBrowserFinished(handler): Promise<ListenerHandle> {
+    const handle = await Browser.addListener('browserFinished', () => handler());
+    return { remove: () => handle.remove() };
+  },
+});
+
+export function onNativeOAuthResult(handler: (result: NativeOAuthResult) => void): () => void {
+  return gate.subscribe(handler);
 }
 
-export async function handleNativeOAuthUrl(url: string): Promise<{ ok: boolean; error?: string }> {
-  const parsed = parseOAuthCallback(url);
-  if (!parsed.ok || !parsed.code) {
-    const result = { ok: false, error: parsed.error || 'invalid_url' };
-    resultHandlers.forEach((h) => h(result));
-    return result;
-  }
-  if (handledCodes.has(parsed.code)) {
-    // already completed; do not notify success again
-    return { ok: true };
-  }
-  if (pendingCodes.has(parsed.code)) {
-    // in progress; ignore duplicate
-    return { ok: false, error: 'in_progress' };
-  }
-  pendingCodes.add(parsed.code);
-  try {
-    const { data, error } = await supabase.auth.getSession();
-    const { error: exError } = await supabase.auth.exchangeCodeForSession(parsed.code);
-    if (exError) throw exError;
-    const { data: sessionData } = await supabase.auth.getSession();
-    if (!sessionData?.session) throw new Error('session_not_created');
-    pendingCodes.delete(parsed.code);
-    handledCodes.add(parsed.code);
-    inFlight = false;
-    await Browser.close().catch(() => {});
-    const result = { ok: true };
-    resultHandlers.forEach((h) => h(result));
-    return result;
-  } catch (e: any) {
-    pendingCodes.delete(parsed.code);
-    inFlight = false;
-    const result = { ok: false, error: e?.message || 'exchange_failed' };
-    resultHandlers.forEach((h) => h(result));
-    return result;
-  }
+export function startNativeGoogleOAuth(): Promise<NativeOAuthStartResult> {
+  return gate.start();
 }
 
-export function registerNativeOAuthListener(): void {
-  if (listenerHandle) return;
-  App.addListener('appUrlOpen', (event) => {
-    void handleNativeOAuthUrl(event.url);
-  }).then((handle) => { listenerHandle = handle; }).catch(() => {});
-  App.getLaunchUrl().then((result) => {
-    if (result?.url) void handleNativeOAuthUrl(result.url);
-  }).catch(() => {});
+export function handleNativeOAuthUrl(url: string): Promise<NativeOAuthResult> {
+  return gate.handleUrl(url);
 }
 
-export function resetNativeOAuthGuard(): void {
-  handledCodes.clear();
-  pendingCodes.clear();
-  inFlight = false;
+export async function resetNativeOAuthGuard(): Promise<void> {
+  await gate.reset();
+}
+
+const urlListener = createNativeOAuthUrlListener({
+  addAppUrlListener: async handler => {
+    const handle = await App.addListener('appUrlOpen', event => handler(event.url));
+    return { remove: () => handle.remove() };
+  },
+  getLaunchUrl: async () => {
+    const launch = await App.getLaunchUrl();
+    return typeof launch?.url === 'string' && launch.url ? launch.url : null;
+  },
+  handleUrl: url => gate.handleUrl(url),
+});
+
+/** تسجيل مستمع روابط التطبيق مرة واحدة (التسجيل المتزامن المتكرر يعيد نفسه). */
+export function registerNativeOAuthListener(): Promise<void> {
+  return urlListener.register();
+}
+
+/** إزالة المستمع: تحرير كامل، والتسجيل يعمل من جديد عند الحاجة. */
+export function unregisterNativeOAuthListener(): Promise<void> {
+  return urlListener.unregister();
 }
