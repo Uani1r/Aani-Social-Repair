@@ -128,13 +128,16 @@ end
 $$;
 
 -- 2) الانتقال إلى حساب B على التثبيت نفسه --------------------------------------
+set role authenticated;
 select set_config('request.jwt.claim.sub', 'b0000000-0000-0000-0000-00000000000b', false);
+select public.aani_register_device_token('web', 'tok-a-web-2', 'fcm', 'inst-a', 'Chrome');
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+
 do $$
 declare
   v_count integer;
 begin
-  perform public.aani_register_device_token('web', 'tok-a-web-2', 'fcm', 'inst-a', 'Chrome');
-
   -- الحساب السابق A فقد الملكية النشطة، وسجله القديم باقٍ بـrevoked_at.
   select count(*) into v_count from public.device_tokens
   where user_id = 'a0000000-0000-0000-0000-00000000000a' and revoked_at is null;
@@ -149,8 +152,8 @@ begin
 
   -- الحساب الجديد B يملك ملكية نشطة واحدة.
   select count(*) into v_count from public.device_tokens
-  where user_id = auth.uid() and token = 'tok-a-web-2' and revoked_at is null
-    and installation_id = 'inst-a';
+  where user_id = 'b0000000-0000-0000-0000-00000000000b'
+    and token = 'tok-a-web-2' and revoked_at is null and installation_id = 'inst-a';
   if v_count <> 1 then
     raise exception 'the new account must hold exactly one active token, found %', v_count;
   end if;
@@ -260,6 +263,16 @@ begin
   if v_count <> 0 then
     raise exception 'a user must not revoke another user token, affected %', v_count;
   end if;
+end
+$$;
+
+reset role;
+select set_config('request.jwt.claim.sub', '', false);
+
+do $$
+declare
+  v_count integer;
+begin
   select count(*) into v_count from public.device_tokens
   where user_id = 'a0000000-0000-0000-0000-00000000000a' and revoked_at is null;
   if v_count <> 1 then
@@ -269,6 +282,8 @@ end
 $$;
 
 -- 5) منع المستخدم العادي من outbox ------------------------------------------
+set role authenticated;
+select set_config('request.jwt.claim.sub', 'b0000000-0000-0000-0000-00000000000b', false);
 do $$
 begin
   begin
