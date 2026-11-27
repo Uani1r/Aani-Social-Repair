@@ -207,6 +207,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       });
     };
 
+    const SCRIPT_TIMEOUT_MS = 10000;
     const loadScript = (): Promise<void> => {
       return new Promise((resolve, reject) => {
         if (window.turnstile) {
@@ -214,26 +215,41 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           return;
         }
 
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+        const clearTimer = () => { if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; } };
+
+        timeoutId = setTimeout(() => {
+          clearTimer();
+          reject(new Error('Turnstile script load timed out'));
+        }, SCRIPT_TIMEOUT_MS);
+
         const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
         if (existingScript) {
           scriptRef.current = existingScript;
-          // التحقق مما إذا كان window.turnstile جاهزاً بالفعل (السكربت محمل)
-          const checkReady = () => {
-            if (window.turnstile) {
-              resolve();
-            } else {
-              setTimeout(checkReady, 50);
-            }
+          let settled = false;
+          const onReady = () => {
+            if (settled) return;
+            if (window.turnstile) { settled = true; clearTimer(); existingScript.removeEventListener('load', onReady); existingScript.removeEventListener('error', onError); resolve(); }
           };
-          // إذا كان السكربت محملاً، window.turnstile سيكون جاهزاً خلال وقت قصير
-          // نتحقق مباشرة بدلاً من الاعتماد على readyState
-          checkReady();
-          // نضيف مستمعي خطأ للتحميل كاحتياط
           const onError = () => {
+            if (settled) return;
+            settled = true;
+            clearTimer();
+            existingScript.removeEventListener('load', onReady);
             existingScript.removeEventListener('error', onError);
+            // remove failed script before retry
+            try { existingScript.remove(); } catch {}
             reject(new Error('Failed to load Turnstile script'));
           };
+          existingScript.addEventListener('load', onReady);
           existingScript.addEventListener('error', onError);
+          // poll readiness in case load already fired
+          const poll = () => {
+            if (settled) return;
+            if (window.turnstile) { onReady(); return; }
+            setTimeout(poll, 50);
+          };
+          poll();
           return;
         }
 
@@ -244,17 +260,24 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         script.dataset.turnstile = 'true';
         scriptRef.current = script;
 
+        let settled = false;
         const onLoad = () => {
+          if (settled) return;
           script.removeEventListener('load', onLoad);
           script.removeEventListener('error', onError);
           setTimeout(() => {
-            if (window.turnstile) resolve();
-            else reject(new Error('Turnstile API not initialized after script load'));
+            if (settled) return;
+            if (window.turnstile) { settled = true; clearTimer(); resolve(); }
+            else { settled = true; clearTimer(); reject(new Error('Turnstile API not initialized after script load')); }
           }, 50);
         };
         const onError = () => {
+          if (settled) return;
+          settled = true;
+          clearTimer();
           script.removeEventListener('load', onLoad);
           script.removeEventListener('error', onError);
+          try { script.remove(); } catch {}
           reject(new Error('Failed to load Turnstile script'));
         };
         script.addEventListener('load', onLoad);
@@ -263,6 +286,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       });
     };
 
+    let retryTimer = null;
     const attemptLoad = async () => {
       try {
         await loadScript();
@@ -275,7 +299,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         if (retryCount < MAX_RETRIES) {
           retryCount++;
           const delay = BASE_DELAY_MS * Math.pow(2, retryCount - 1);
-          setTimeout(attemptLoad, delay);
+          retryTimer = setTimeout(attemptLoad, delay);
         } else {
           setCaptchaLoadError(true);
         }
@@ -286,10 +310,10 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
     return () => {
       cancelled = true;
-      if (scriptRef.current && !document.querySelector('script[data-turnstile]')) {
-        // لا نحذف السكربت إذا كان موجوداً مسبقاً في الصفحة
-        document.head.removeChild(scriptRef.current);
-      }
+      if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      const sc = scriptRef.current;
+      if (sc && sc.parentNode) { try { sc.parentNode.removeChild(sc); } catch {} }
+      scriptRef.current = null;
       removeWidget();
       setCaptchaLoadError(false);
     };
