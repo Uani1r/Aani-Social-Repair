@@ -15,6 +15,7 @@ import {
 } from '@/lib/turnstileLoader';
 import { useOAuthProvider } from '@/lib/oauthProvider';
 import { isAppleOAuthEnabled } from '@/lib/oauthRedirect';
+import { isNativePlatform, startNativeGoogleOAuth } from '@/lib/oauthNative';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
 const invokePhoneLogin = createPhoneFunctionInvoker({
@@ -431,9 +432,15 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
               disabled={providerLoading !== null || fallbackBusy || !supabaseConfigured}
               onClick={() => {
                 setError('');
-                signInWithProvider('google').catch((reason: any) =>
-                  setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.')
-                );
+                if (isNativePlatform()) {
+                  startNativeGoogleOAuth().catch((reason: any) =>
+                    setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.')
+                  );
+                } else {
+                  signInWithProvider('google').catch((reason: any) =>
+                    setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.')
+                  );
+                }
               }}
               style={{ ...styles.providerBtn, ...styles.googleBtn, ...(providerLoading !== null || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
               aria-busy={isGoogleLoading || fallbackBusy}
