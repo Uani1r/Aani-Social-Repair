@@ -1,9 +1,33 @@
-import { useState, useEffect, type CSSProperties, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type CSSProperties, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { normalizePhoneToE164 } from '@/lib/accountAuth';
+import { classifyLoginIdentifier } from '@/lib/accountAuth';
+import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
+import { completePhoneLogin } from '@/lib/phoneLoginSession';
 import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
+
+/** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
+const invokePhoneLogin = createPhoneFunctionInvoker({
+  invoke: (name, options) => supabase.functions.invoke(name, options),
+});
+
+/** ودجت Cloudflare Turnstile: مفتاح عام فقط، ولا سر في الواجهة. */
+const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+const TURNSTILE_SITE_KEY = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
+const TURNSTILE_ACTION = 'phone_login';
+
+type TurnstileApi = {
+  render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
+  reset: (widgetId?: string | number) => void;
+  remove: (widgetId: string | number) => void;
+};
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi;
+  }
+}
 
 type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
 
@@ -97,6 +121,19 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [fallbackBusy, setFallbackBusy] = useState(false);
   const [fallbackError, setFallbackError] = useState('');
 
+  // ودجت Turnstile لمسار الهاتف فقط: مفتاح عام لا سر، ويُعاد ضبطه بعد كل فشل.
+  const [captchaToken, setCaptchaToken] = useState('');
+  const captchaContainerRef = useRef<HTMLDivElement | null>(null);
+  const captchaWidgetRef = useRef<string | number | null>(null);
+  // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
+  const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
+
+  const resetCaptcha = () => {
+    setCaptchaToken('');
+    const api = window.turnstile;
+    if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
+  };
+
   useEffect(() => {
     const style = document.createElement('style');
     style.textContent = `
@@ -107,6 +144,56 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     document.head.appendChild(style);
     return () => { document.head.removeChild(style); };
   }, []);
+
+  /**
+   * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
+   * للبريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح
+   * الرمز فلا يُرسل رمز منتهٍ.
+   */
+  useEffect(() => {
+    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) return undefined;
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      const api = window.turnstile;
+      const container = captchaContainerRef.current;
+      if (!api || !container) return;
+      if (captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
+      setCaptchaToken('');
+      captchaWidgetRef.current = api.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        action: TURNSTILE_ACTION,
+        theme: 'light',
+        language: 'ar',
+        callback: (token: string) => setCaptchaToken(token),
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => setCaptchaToken(''),
+      });
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+    if (window.turnstile) {
+      mount();
+    } else if (existing) {
+      existing.addEventListener('load', mount);
+    } else {
+      const script = document.createElement('script');
+      script.src = TURNSTILE_SCRIPT;
+      script.async = true;
+      script.defer = true;
+      script.dataset.turnstile = 'true';
+      script.addEventListener('load', mount);
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      if (existing) existing.removeEventListener('load', mount);
+      const api = window.turnstile;
+      if (api && captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
+      captchaWidgetRef.current = null;
+    };
+  }, [isPhoneLogin]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -188,24 +275,35 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
 
     try {
-      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
-      const normalizedPhone = normalizePhoneToE164(identifier);
-      const isPhone = normalizedPhone !== null;
+      const parsed = classifyLoginIdentifier(identifier);
+      if (parsed.kind === 'invalid') throw new Error(parsed.message);
 
-      if (isEmail) {
-        const { error: authError } = await supabase.auth.signInWithPassword({
-          email: identifier.toLowerCase(),
-          password: pwd,
+      if (parsed.kind === 'phone') {
+        // مسار الهاتف: لا يبدأ الطلب بلا رمز CAPTCHA صالح.
+        if (!TURNSTILE_SITE_KEY) {
+          throw new Error('الدخول بالهاتف يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد أو اسم المستخدم في الوقت الحالي.');
+        }
+        if (!captchaToken) {
+          throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
+        }
+        const outcome = await completePhoneLogin(parsed.phone, pwd, captchaToken, {
+          login: (phone, password, token) => loginWithPhone(phone, password, invokePhoneLogin, token),
+          setSession: tokens => supabase.auth.setSession({
+            access_token: tokens.accessToken,
+            refresh_token: tokens.refreshToken,
+          }),
+          getUser: () => supabase.auth.getUser(),
+          signOutLocal: () => supabase.auth.signOut({ scope: 'local' }),
         });
-        if (authError) throw authError;
-      } else if (isPhone) {
+        if (!outcome.ok) throw new Error(outcome.message);
+      } else if (parsed.kind === 'email') {
         const { error: authError } = await supabase.auth.signInWithPassword({
-          phone: normalizedPhone,
+          email: parsed.email,
           password: pwd,
         });
         if (authError) throw authError;
       } else {
-        const usernameIdentifier = identifier.replace(/^@/, '').toLowerCase();
+        const usernameIdentifier = parsed.username;
         if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
           throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف عراقيًا (مثلاً: 07701234567 أو +9647701234567).');
         }
@@ -243,13 +341,12 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       afterAuth();
       setLocation('/feed');
     } catch (reason: any) {
+      // أي فشل يُبطل رمز CAPTCHA ويُعيد ضبط الودجت.
+      resetCaptcha();
       const message = reason?.message || '';
-      if (/invalid.*(login|credentials)|wrong.*password|incorrect.*password/i.test(message)) {
+      // رسالة عامة عند فشل بيانات الدخول: لا تكشف وجود الرقم أو الحساب.
+      if (/invalid.*(login|credentials|grant)|wrong.*password|incorrect.*password/i.test(message)) {
         setFallbackError('المعرف أو كلمة المرور غير صحيحة.');
-      } else if (/phone_exists|already.*(registered|in use)|duplicate/i.test(message)) {
-        setFallbackError('هذا الرقم مرتبط بحساب آخر. استخدم رقماً مختلفاً.');
-      } else if (/sms|phone provider|not enabled|phone signups?/i.test(message)) {
-        setFallbackError('تسجيل الدخول برقم الهاتف غير متمكّن في إعدادات Supabase.');
       } else {
         setFallbackError(message || 'حدث خطأ في الاتصال. حاول مرة أخرى.');
       }
@@ -462,6 +559,19 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                       disabled={fallbackBusy}
                     />
                   </div>
+
+                  {isPhoneLogin && (
+                    <div style={styles.formGroup}>
+                      <span style={styles.label}>تحقق الأمان</span>
+                      {TURNSTILE_SITE_KEY ? (
+                        <div ref={captchaContainerRef} />
+                      ) : (
+                        <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
+                          الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
+                        </span>
+                      )}
+                    </div>
+                  )}
 
                   {fallbackError && <div style={styles.noticeError} role="alert">{fallbackError}</div>}
 
