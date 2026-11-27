@@ -878,7 +878,10 @@ jobs:
       - name: Re-apply the migration (idempotency)
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270309000000_message_conversation_settings_rls_privacy.sql
 
-      - name: Rebuild the fixture and assert again
+      # إعادة بناء البيئة تعيد السياسات القديمة بحرفها، ثم يُطبَّق الترحيل
+      # مرة ثانية، ثم يُعاد الاختبار: هذا هو ترتيب قاعدة جديدة فعلاً.
+      - name: Rebuild the fixture, re-apply the migration and assert again
         run: |
           psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/message_conversation_settings_schema.sql
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270309000000_message_conversation_settings_rls_privacy.sql
           psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/message_conversation_settings_rls.test.sql
