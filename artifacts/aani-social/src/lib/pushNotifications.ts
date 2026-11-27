@@ -1,4 +1,13 @@
-import { supabase } from '@/lib/supabase';
+import { supabase, supabaseConfigured } from '@/lib/supabase';
+import type { DeviceSignOutDeps } from '@/lib/pushSignOut';
+import {
+  buildRegistrationInput,
+  buildRevocationInput,
+  readInstallationId,
+  readOrCreateInstallationId,
+  validateRegistrationInput,
+  type StorageLike,
+} from '@/lib/deviceTokens';
 
 const readEnv = (): Record<string, string | undefined> => {
   try {
@@ -19,12 +28,16 @@ const firebaseConfig = {
 };
 const vapidKey = env.VITE_FIREBASE_VAPID_KEY?.trim() || '';
 
+/** مشروع Firebase القديم ممنوع: المشروع المعتمد هو Ani Social. */
+const FORBIDDEN_FIREBASE_PROJECT = 'ani1-20bed';
+
 export const isFirebaseMessagingConfigured = () => Boolean(
   firebaseConfig.apiKey
   && firebaseConfig.projectId
   && firebaseConfig.messagingSenderId
   && firebaseConfig.appId
-  && vapidKey,
+  && vapidKey
+  && firebaseConfig.projectId !== FORBIDDEN_FIREBASE_PROJECT,
 );
 
 type FirebaseAppSdk = {
@@ -44,11 +57,38 @@ export type PushRegistrationResult = {
   message: string;
 };
 
+function browserStorage(): StorageLike | null {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readSessionUserId(): Promise<string | null> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error) return null;
+  return data.user?.id ?? null;
+}
+
+/**
+ * تسجيل هذا الجهاز في public.device_tokens (متعدد الأجهزة).
+ *
+ * لا يكتب profiles.fcm_token: هذا هو المسار القديم لجهاز واحد، والمسار الجديد
+ * هو جدول الأجهزة عبر aani_register_device_token. يُلغي التسجيل السابق للرمز
+ * نفسه أو للتثبيت نفسه (بما فيه حساب سابق على الجهاز نفسه) داخل القاعدة.
+ */
 export async function registerPushNotifications(
   userId: string,
   requestPermission: boolean,
 ): Promise<PushRegistrationResult> {
   if (!userId) return { ok: false, message: 'سجّل الدخول أولاً لتفعيل الإشعارات.' };
+  if (!supabaseConfigured) return { ok: false, message: 'قاعدة البيانات غير مهيأة.' };
+  // التحقق من الجلسة وهوية المستخدم قبل أي تسجيل.
+  const sessionUserId = await readSessionUserId();
+  if (!sessionUserId) return { ok: false, message: 'تعذر التحقق من الحساب النشط. أعد تسجيل الدخول ثم حاول مجدداً.' };
+  if (sessionUserId !== userId) return { ok: false, message: 'الحساب النشط لا يطابق هذا الجهاز. أعد تسجيل الدخول.' };
+
   if (!isFirebaseMessagingConfigured()) {
     return { ok: false, message: 'إعداد Firebase ناقص. أضف إعدادات تطبيق الويب ومفتاح VAPID إلى متغيرات VITE_FIREBASE_* ثم أعد نشر التطبيق.' };
   }
@@ -59,6 +99,7 @@ export async function registerPushNotifications(
     return { ok: false, message: 'تتطلب الإشعارات فتح التطبيق عبر HTTPS.' };
   }
 
+  // إذن المتصفح يُطلب فقط بتفاعل المستخدم.
   let permission = Notification.permission;
   if (permission === 'default' && requestPermission) {
     permission = await Notification.requestPermission();
@@ -93,25 +134,99 @@ export async function registerPushNotifications(
       vapidKey,
       serviceWorkerRegistration,
     });
-    if (!token) return { ok: false, message: 'لم يُصدر Firebase رمزاً لهذا الجهاز. حاول مرة أخرى.' };
 
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    if (authError || authData.user?.id !== userId) {
-      return { ok: false, message: 'تعذر التحقق من الحساب النشط. أعد تسجيل الدخول ثم حاول مجدداً.' };
-    }
+    const validation = validateRegistrationInput({ token, platform: 'web', provider: 'fcm' });
+    if (!validation.ok) return { ok: false, message: validation.error || 'لم يُصدر Firebase رمزاً لهذا الجهاز.' };
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({ fcm_token: token })
-      .eq('id', userId);
+    const installationId = readOrCreateInstallationId(browserStorage());
+    const registration = buildRegistrationInput({
+      token,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      installationId,
+    });
+
+    const { error } = await supabase.rpc('aani_register_device_token', {
+      p_platform: registration.platform,
+      p_token: registration.token,
+      p_provider: registration.provider,
+      p_installation_id: registration.installationId,
+      p_device_name: registration.deviceName,
+      p_metadata: registration.metadata,
+    });
     if (error) {
-      console.error('[push] تعذر حفظ رمز FCM:', error);
+      console.error('[push] تعذر حفظ رمز الجهاز في device_tokens:', error.code || error.message);
       return { ok: false, message: 'تعذر حفظ رمز الإشعارات. تأكد من تطبيق ترحيل قاعدة البيانات ثم حاول مجدداً.' };
     }
 
     return { ok: true, message: 'إشعارات هذا الجهاز مفعّلة.' };
   } catch (error) {
-    console.error('[push] تعذر تفعيل إشعارات Firebase:', error);
+    console.error('[push] تعذر تفعيل إشعارات Firebase:', error instanceof Error ? error.message : 'unknown');
     return { ok: false, message: 'تعذر تفعيل الإشعارات الآن. تحقق من إعداد Firebase والاتصال ثم حاول مجدداً.' };
   }
+}
+
+/**
+ * إلغاء تسجيل هذا الجهاز عند تسجيل الخروج: علامة revoked_at فقط (لا حذف)،
+ * عبر aani_revoke_device_token وبمعرّف التثبيت. لا يمسّ أجهزة حساب آخر.
+ */
+export async function unregisterPushNotifications(userId: string): Promise<PushRegistrationResult> {
+  if (!userId) return { ok: false, message: 'لا حساب نشط.' };
+  if (!supabaseConfigured) return { ok: false, message: 'قاعدة البيانات غير مهيأة.' };
+
+  const sessionUserId = await readSessionUserId();
+  if (!sessionUserId || sessionUserId !== userId) {
+    return { ok: false, message: 'تعذر التحقق من الحساب النشط قبل إلغاء تسجيل الجهاز.' };
+  }
+
+  const installationId = readInstallationId(browserStorage());
+  if (!installationId) return { ok: true, message: 'لا جهاز مسجّل محلياً.' };
+
+  try {
+    const { error } = await supabase.rpc('aani_revoke_device_token', buildRevocationInput({ installationId }));
+    if (error) {
+      console.error('[push] تعذر إلغاء تسجيل الجهاز:', error.code || error.message);
+      return { ok: false, message: 'تعذر إلغاء تسجيل هذا الجهاز الآن.' };
+    }
+    return { ok: true, message: 'تم إلغاء تسجيل هذا الجهاز.' };
+  } catch (error) {
+    console.error('[push] تعذر إلغاء تسجيل الجهاز:', error instanceof Error ? error.message : 'unknown');
+    return { ok: false, message: 'تعذر إلغاء تسجيل هذا الجهاز الآن.' };
+  }
+}
+
+
+/** معرّف تثبيت هذا المتصفح المحفوظ — بلا إنشاء جديد. مفتاح إلغاء رمز الجهاز. */
+export function currentDeviceInstallationId(): string | null {
+  return readInstallationId(browserStorage());
+}
+
+/**
+ * إلغاء رمز جهاز هذا المتصفح على الخادم بمعرّف التثبيت وحده.
+ * `aani_revoke_device_token` تضبط `revoked_at` ولا تحذف الصف، ولا تمسّ جهازاً آخر.
+ * أي خطأ يُعاد كما هو ولا يُترجم إلى «لا شيء يُلغى»: رمز خطأ «الدالة غير ظاهرة
+ * في schema cache» لا يثبت أن الدالة أو جدول الأجهزة غير موجود، فقد تكون
+ * الدالة موجودة في القاعدة وغير محمّلة في الـcache — والخطأ الملتبس ليس دليلاً.
+ */
+export async function revokeDeviceTokenForSignOut(installationId: string): Promise<{ error: unknown }> {
+  const { error } = await supabase.rpc('aani_revoke_device_token', buildRevocationInput({ installationId }));
+  return { error };
+}
+
+/**
+ * قوالب تسجيل الخروج لهذا الجهاز: الجلسة الحالية، معرّف هذا التثبيت، الإلغاء
+ * على الخادم، ثم إنهاء الجلسة الذي يمرّره المستدعي (محلي أو عام).
+ */
+export function deviceSignOutDeps(endSession: () => Promise<{ error: unknown }>): DeviceSignOutDeps {
+  return {
+    readUserId: async () => {
+      const { data, error } = await supabase.auth.getUser();
+      // فشل getUser ليس «لا مستخدم»: يُرمى ليُعامل كفشل تحقق، فلا يُلغى رمز
+      // ولا تُنهى الجلسة على حالة غير معروفة. null تبقى لنجاح القراءة وحدها.
+      if (error) throw error;
+      return data.user?.id ?? null;
+    },
+    readInstallationId: currentDeviceInstallationId,
+    revokeDeviceToken: revokeDeviceTokenForSignOut,
+    endSession,
+  };
 }

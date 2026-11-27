@@ -52,6 +52,8 @@ import { useMediaUrl } from '@/lib/mediaAccess';
 import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
+import { deviceSignOutDeps } from '@/lib/pushNotifications';
+import { endSessionAfterAccountDeletion, signOutThisDevice } from '@/lib/pushSignOut';
 import './ProfilePage.css';
 import { firstMediaUrlOfPost, preloadMediaList, thumbnailUrl } from '@/lib/mediaPreload';
 
@@ -1703,8 +1705,14 @@ export default function ProfilePage({
       const { error } = await supabase.rpc('aani_deactivate_account');
       if (error) throw new Error('تعذر تعطيل الحساب الآن. لم يتغيّر شيء؛ حاول مجددًا.');
 
-      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
-      if (signOutError) throw new Error('تم تعطيل الحساب، لكن تعذر إنهاء الجلسة المحلية. أعد تحميل الصفحة.');
+      // تعطيل ناجح على الخادم. ثم إلغاء رمز هذا الجهاز أولاً وإنهاء الجلسة:
+      // فشل الإلغاء لا يُعرض كنجاح، والجلسة لا تُنهى قبله كي يمكن إعادة المحاولة.
+      const outcome = await signOutThisDevice(deviceSignOutDeps(() => supabase.auth.signOut({ scope: 'local' })));
+      if (!outcome.ok) {
+        throw new Error(outcome.step === 'revoke'
+          ? 'تم تعطيل الحساب مؤقتاً، لكن تعذر إلغاء تسجيل هذا الجهاز من الإشعارات ولم تُنهَ الجلسة. أعد المحاولة.'
+          : outcome.message);
+      }
 
       setShowDeactivateAccountConfirmation(false);
       setShowSettingsOverlay(false);
@@ -1730,8 +1738,12 @@ export default function ProfilePage({
         throw new Error('تعذر حذف الحساب. لم يُحذف الحساب ولم تُحذف وسائطه؛ حاول مجددًا أو تواصل مع الدعم.');
       }
 
-      const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
-      if (signOutError) throw new Error('تم حذف الحساب، لكن تعذر إنهاء الجلسة المحلية. أعد تحميل الصفحة.');
+      // سجلات أجهزة الحساب حُذفت بالتسلسل مع صف الحساب (on delete cascade)،
+      // فلا إلغاء هنا: إنهاء الجلسة المحلية وحدها.
+      const { ok: sessionEnded } = await endSessionAfterAccountDeletion({
+        endSession: () => supabase.auth.signOut({ scope: 'local' }),
+      });
+      if (!sessionEnded) throw new Error('تم حذف الحساب، لكن تعذر إنهاء الجلسة المحلية. أعد تحميل الصفحة.');
 
       setShowDeleteAccountConfirmation(false);
       setShowSettingsOverlay(false);
@@ -1795,8 +1807,9 @@ export default function ProfilePage({
     if (accountSettingsBusy) return;
     setAccountSettingsBusy(true);
     try {
-      const { error } = await supabase.auth.signOut({ scope: 'local' });
-      if (error) throw error;
+      // إلغاء رمز جهاز هذا المتصفح أولاً، ثم إنهاء الجلسة المحلية.
+      const outcome = await signOutThisDevice(deviceSignOutDeps(() => supabase.auth.signOut({ scope: 'local' })));
+      if (!outcome.ok) throw new Error(outcome.message);
       setShowLogoutConfirmation(false);
       closeSettingsOverlay();
       setLocation('/login');

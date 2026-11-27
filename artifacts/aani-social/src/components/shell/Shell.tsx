@@ -394,17 +394,11 @@ export default function Shell({
     }
   }, [onOpenComments, onOpenStory, requestOpenFollowRequests, setLocation, userId]);
 
-  const handleSignOut = async () => {
-    // Remove this browser's push destination before the session is cleared.
-    if (supabaseConfigured) {
-      try {
-        const { error } = await supabase.from('profiles').update({ fcm_token: null }).eq('id', userId);
-        if (error) console.warn('[push] تعذر إلغاء تسجيل هذا الجهاز قبل تسجيل الخروج:', error);
-      } catch (error) {
-        console.warn('[push] تعذر إلغاء تسجيل هذا الجهاز قبل تسجيل الخروج:', error);
-      }
-    }
-    // Root is valid in both session states: feed before logout, login after it.
+  const handleSignOut = () => {
+    // إلغاء رمز هذا الجهاز ثم إنهاء الجلسة يتمّان في المسار المركزي
+    // (useAppSession.signOut → signOutThisDevice) قبل إنهاء الجلسة.
+    // لا كتابة على عمود الرمز القديم في profiles بعد الآن (مسار الجهاز
+    // الواحد السابق)، ولا مسّ برموز أجهزة أخرى.
     setLocation('/');
     onSignOut();
   };

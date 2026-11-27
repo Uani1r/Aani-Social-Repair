@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTheme } from 'next-themes';
-import { Toaster } from 'sonner';
+import { Toaster, toast } from 'sonner';
 import { Route, Router as WouterRouter, Switch } from 'wouter';
 
 import GlobalErrorToast from '@/components/GlobalErrorToast';
@@ -34,6 +34,13 @@ import '@/index.css';
 function App() {
   useModalBodyScrollLock();
   const { authLoading, authResolved, user, profile, setProfile, signOut, passwordRecovery, clearPasswordRecovery } = useAppSession();
+
+  // تسجيل الخروج يُلغي رمز هذا الجهاز أولاً ثم ينهي الجلسة. فشل الإلغاء لا
+  // يُعرض كنجاح: تُبقى الجلسة قائمة وتظهر رسالة الفشل كي يُعاد المحاولة.
+  const handleSignOut = useCallback(async () => {
+    const outcome = await signOut();
+    if (!outcome.ok) toast.error(outcome.message);
+  }, [signOut]);
   const { setTheme, resolvedTheme } = useTheme();
   useInteractionRealtime(user?.id);
   // فرض التحقق بخطوتين: لا يُعرض التطبيق ولا محتواه قبل aal2 لمن فعّلها،
@@ -123,13 +130,13 @@ function App() {
           <MfaChallengePage
             factorId={mfaFactorId}
             onVerified={() => void mfaGate.refresh()}
-            onSignOut={() => void signOut()}
+            onSignOut={() => void handleSignOut()}
           />
         ) : user && (mfaGate.state.status === 'blocked' || mfaGate.state.status === 'unavailable') ? (
           <div className="loading-screen" role="alert" style={{ direction: 'rtl', padding: '24px', textAlign: 'center' }}>
             <div className="loading-brand">آني Aani</div>
             <p style={{ marginTop: '16px', lineHeight: 1.8 }}>{mfaGate.state.message}</p>
-            <button type="button" style={{ marginTop: '12px', padding: '12px 20px' }} onClick={() => void signOut()}>
+            <button type="button" style={{ marginTop: '12px', padding: '12px 20px' }} onClick={() => void handleSignOut()}>
               تسجيل الخروج
             </button>
           </div>
@@ -138,7 +145,7 @@ function App() {
             userId={user.id}
             profile={profile}
             onProfileUpdate={setProfile}
-            onSignOut={() => void signOut()}
+            onSignOut={() => void handleSignOut()}
             onOpenComments={openComments}
             onOpenStory={openNotificationStory}
             NotificationsModalComponent={NotificationsModal}

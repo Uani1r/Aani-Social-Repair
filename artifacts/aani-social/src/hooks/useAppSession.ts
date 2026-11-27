@@ -5,6 +5,12 @@ import { resetMessagesConversationMembershipCache } from '@/lib/messagesConversa
 import { fetchConditionalProfileFields, fetchMyPreferences, PUBLIC_PROFILE_COLUMNS, type PublicProfileRow } from '@/lib/profileFields';
 import { STORY_VIEWER_PLACEHOLDER_NAMES } from '@/lib/appShared';
 import { flushUploadLedgerQueue } from '@/lib/uploadLedgerQueue';
+import { deviceSignOutDeps } from '@/lib/pushNotifications';
+import {
+  PUSH_SIGN_OUT_DONE_WITHOUT_DEVICE_MESSAGE,
+  signOutThisDevice,
+  type DeviceSignOutOutcome,
+} from '@/lib/pushSignOut';
 import type { Profile } from '@/lib/types';
 
 export default function useAppSession() {
@@ -174,11 +180,29 @@ export default function useAppSession() {
     };
   }, [user?.id, user?.email, user?.user_metadata?.full_name, user?.user_metadata?.name, user?.user_metadata?.username]);
 
-  const signOut = async () => {
-    if (supabaseConfigured) await supabase.auth.signOut();
-    syncMembershipOwner(null);
-    setSession(null);
-    setProfile(null);
+  /**
+   * تسجيل الخروج: إلغاء رمز جهاز هذا المتصفح أولاً (revoked_at على الخادم)،
+   * ثم إنهاء الجلسة — بعد إنهاء الجلسة لا auth.uid() للدالة المحمية، فيبقى
+   * الرمز نشطاً ويستمر وصول إشعارات الحساب السابق إلى هذا الجهاز.
+   * لا تُمسح الحالة المحلية ولا يُدَّعى الخروج إذا فشل الإلغاء أو إنهاء الجلسة.
+   * لا يمسّ رموز أجهزة أخرى: الإلغاء بمعرّف تثبيت هذا المتصفح وحده.
+   */
+  const signOut = async (): Promise<DeviceSignOutOutcome> => {
+    if (!supabaseConfigured) {
+      syncMembershipOwner(null);
+      setSession(null);
+      setProfile(null);
+      return { ok: true, revoked: false, message: PUSH_SIGN_OUT_DONE_WITHOUT_DEVICE_MESSAGE };
+    }
+
+    const outcome = await signOutThisDevice(deviceSignOutDeps(() => supabase.auth.signOut()));
+
+    if (outcome.ok) {
+      syncMembershipOwner(null);
+      setSession(null);
+      setProfile(null);
+    }
+    return outcome;
   };
 
   const clearPasswordRecovery = () => setPasswordRecovery(false);
