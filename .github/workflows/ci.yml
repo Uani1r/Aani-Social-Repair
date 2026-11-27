@@ -945,4 +945,3 @@ jobs:
 
           unique="$(sort -u "$versions" | wc -l | tr -d ' ')"
           echo "Checked ${#files[@]} migration files: all versions are unique ($unique distinct versions)."
-
