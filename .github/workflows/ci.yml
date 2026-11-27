@@ -115,12 +115,12 @@ jobs:
       # وCapacitor (بلا جهاز ولا شبكة ولا مفاتيح).
       - name: Unit tests @workspace/aani-social (native OAuth)
         run: |
-          set -o pipefail
+          set +e
           pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/oauthNative.test.ts 2>&1 | tee /tmp/native-oauth.log
-          status=$?
+          status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             echo '--- failing native OAuth assertions ---'
-            grep -n -A 24 '^not ok' /tmp/native-oauth.log | head -90
+            grep -n -A 24 '^not ok' /tmp/native-oauth.log | head -120
           fi
           exit "$status"
 
