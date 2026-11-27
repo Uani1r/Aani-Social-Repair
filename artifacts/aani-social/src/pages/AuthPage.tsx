@@ -1,8 +1,34 @@
-import { useState, useEffect, type CSSProperties, type FormEvent } from 'react';
-import { Link, useLocation } from 'wouter';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { normalizePhoneToE164 } from '@/lib/accountAuth';
+import { classifyLoginIdentifier } from '@/lib/accountAuth';
+import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
+import { completePhoneLogin } from '@/lib/phoneLoginSession';
+import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
+
+/** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
+const invokePhoneLogin = createPhoneFunctionInvoker({
+  invoke: (name, options) => supabase.functions.invoke(name, options),
+});
+
+/** ودجت Cloudflare Turnstile: مفتاح عام فقط، ولا سر في الواجهة. */
+const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+const TURNSTILE_SITE_KEY = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
+const TURNSTILE_ACTION = 'phone_login';
+
+type TurnstileApi = {
+  render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
+  reset: (widgetId?: string | number) => void;
+  remove: (widgetId: string | number) => void;
+};
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi;
+  }
+}
+
 
 type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
 
@@ -50,6 +76,7 @@ const resolveCityFromDevice = (): Promise<CityLookupResult> => new Promise(resol
 
 // --- صفحة تسجيل الدخول وإنشاء الحساب ---
 export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterAuth: () => void }) {
+  const signUp = mode === 'signup';
   const [, setLocation] = useLocation();
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
@@ -69,6 +96,19 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [fallbackPassword, setFallbackPassword] = useState('');
   const [fallbackBusy, setFallbackBusy] = useState(false);
   const [fallbackError, setFallbackError] = useState('');
+
+  // ودجت Turnstile لمسار الهاتف فقط: مفتاح عام لا سر، ويُعاد ضبطه بعد كل فشل.
+  const [captchaToken, setCaptchaToken] = useState('');
+  const captchaContainerRef = useRef<HTMLDivElement | null>(null);
+  const captchaWidgetRef = useRef<string | number | null>(null);
+  // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
+  const isPhoneLogin = !signUp && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
+
+  const resetCaptcha = () => {
+    setCaptchaToken('');
+    const api = window.turnstile;
+    if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
+  };
 
   // حقن keyframes للرسوم المتحركة البسيطة
   useEffect(() => {
@@ -93,6 +133,56 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       document.head.removeChild(style);
     };
   }, []);
+
+  /**
+   * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
+   * للبريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح
+   * الرمز فلا يُرسل رمز منتهٍ.
+   */
+  useEffect(() => {
+    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) return undefined;
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      const api = window.turnstile;
+      const container = captchaContainerRef.current;
+      if (!api || !container) return;
+      if (captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
+      setCaptchaToken('');
+      captchaWidgetRef.current = api.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        action: TURNSTILE_ACTION,
+        theme: 'light',
+        language: 'ar',
+        callback: (token: string) => setCaptchaToken(token),
+        'expired-callback': () => setCaptchaToken(''),
+        'error-callback': () => setCaptchaToken(''),
+      });
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+    if (window.turnstile) {
+      mount();
+    } else if (existing) {
+      existing.addEventListener('load', mount);
+    } else {
+      const script = document.createElement('script');
+      script.src = TURNSTILE_SCRIPT;
+      script.async = true;
+      script.defer = true;
+      script.dataset.turnstile = 'true';
+      script.addEventListener('load', mount);
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      if (existing) existing.removeEventListener('load', mount);
+      const api = window.turnstile;
+      if (api && captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
+      captchaWidgetRef.current = null;
+    };
+  }, [isPhoneLogin]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -164,7 +254,16 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
   };
 
-  // معالجة تسجيل الدخول بالنموذج الاحتياطي
+  /**
+   * الدخول بالنموذج الاحتياطي — بلا OTP وبلا SMS:
+   * - قاعدة واحدة حاسمة لمسار الدخول: بريد، أو رقم هاتف صريح (دولي أو عراقي
+   *   محلي 07XX…)، أو اسم مستخدم — والأسماء الرقمية لا تُقرأ كأرقام.
+   * - مسار الهاتف يستخدم الدالة المشتركة `loginWithPhone` وحدها: لا
+   *   `signInWithPassword` برقم الهاتف، ولا `auth.users.phone`، ورمز Turnstile
+   *   إلزامي.
+   * - الجلسة تُثبَّت بالرمزين ثم يُتحقق المستخدم بـ`getUser` قبل الانتقال،
+   *   وفشل التحقق يلغي الجلسة المحلية.
+   */
   const handleFallbackLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabaseConfigured || fallbackBusy) return;
@@ -180,33 +279,36 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
 
     try {
-      // كشف نوع المعرف: بريد إلكتروني، رقم هاتف، أو اسم مستخدم
-      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
-      const normalizedPhone = normalizePhoneToE164(identifier);
-      const isPhone = normalizedPhone !== null;
+      const parsed = classifyLoginIdentifier(identifier);
+      if (parsed.kind === 'invalid') throw new Error(parsed.message);
 
-      if (isEmail) {
-        // مسار البريد الإلكتروني
-        const { error: authError } = await supabase.auth.signInWithPassword({
-          email: identifier.toLowerCase(),
-          password: pwd,
+      if (parsed.kind === 'phone') {
+        // مسار الهاتف: لا يبدأ الطلب بلا رمز CAPTCHA صالح.
+        if (!TURNSTILE_SITE_KEY) {
+          throw new Error('الدخول بالهاتف يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد أو اسم المستخدم في الوقت الحالي.');
+        }
+        if (!captchaToken) {
+          throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
+        }
+        const outcome = await completePhoneLogin(parsed.phone, pwd, captchaToken, {
+          login: (phone, password, token) => loginWithPhone(phone, password, invokePhoneLogin, token),
+          setSession: tokens => supabase.auth.setSession({
+            access_token: tokens.accessToken,
+            refresh_token: tokens.refreshToken,
+          }),
+          getUser: () => supabase.auth.getUser(),
+          signOutLocal: () => supabase.auth.signOut({ scope: 'local' }),
         });
-        if (authError) throw authError;
-      } else if (isPhone) {
-        // مسار رقم الهاتف
+        if (!outcome.ok) throw new Error(outcome.message);
+      } else if (parsed.kind === 'email') {
         const { error: authError } = await supabase.auth.signInWithPassword({
-          phone: normalizedPhone,
+          email: parsed.email,
           password: pwd,
         });
         if (authError) throw authError;
       } else {
-        // مسار اسم المستخدم
-        const usernameIdentifier = identifier.replace(/^@/, '').toLowerCase();
-        if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
-          throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف عراقيًا (مثلاً: 07701234567 أو +9647701234567).');
-        }
         const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
-          body: { username: usernameIdentifier, password: pwd },
+          body: { username: parsed.username, password: pwd },
         });
         if (functionError) {
           const context = (functionError as { context?: unknown }).context;
@@ -237,17 +339,15 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         if (sessionError) throw sessionError;
       }
 
-      // نجاح تسجيل الدخول
       afterAuth();
       setLocation('/feed');
     } catch (reason: any) {
+      // أي فشل يُبطل رمز CAPTCHA ويُعيد ضبط الودجت.
+      resetCaptcha();
       const message = reason?.message || '';
-      if (/invalid.*(login|credentials)|wrong.*password|incorrect.*password/i.test(message)) {
+      // رسالة عامة عند فشل بيانات الدخول: لا تكشف وجود الرقم أو الحساب.
+      if (/invalid.*(login|credentials|grant)|wrong.*password|incorrect.*password/i.test(message)) {
         setFallbackError('المعرف أو كلمة المرور غير صحيحة.');
-      } else if (/phone_exists|already.*(registered|in use)|duplicate/i.test(message)) {
-        setFallbackError('هذا الرقم مرتبط بحساب آخر. استخدم رقماً مختلفاً.');
-      } else if (/sms|phone provider|not enabled|phone signups?/i.test(message)) {
-        setFallbackError('تسجيل الدخول برقم الهاتف غير متمكّن في إعدادات Supabase.');
       } else {
         setFallbackError(message || 'حدث خطأ في الاتصال. حاول مرة أخرى.');
       }
@@ -290,6 +390,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
           {/* القسم الأول: الدخول السريع عبر Google و Apple */}
           <div style={styles.providerButtonsGrid} role="group" aria-label="تسجيل الدخول السريع">
+
             <button
               type="button"
               disabled={busy || fallbackBusy || !supabaseConfigured}
@@ -337,71 +438,180 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             </button>
           </div>
 
-          {/* القسم الثاني: التسجيل الاحتياطي */}
-          <button
-            type="button"
-            style={styles.fallbackTriggerBtn}
-            onClick={() => setShowFallbackForm(prev => !prev)}
-            disabled={busy || fallbackBusy}
-            aria-expanded={showFallbackForm}
-            aria-controls="fallback-form"
-          >
-            <span style={styles.fallbackTriggerText}>
-              {showFallbackForm ? 'إخفاء التسجيل الاحتياطي' : 'التسجيل الاحتياطي'}
-            </span>
-            <svg style={{ ...styles.chevronIcon, transform: showFallbackForm ? 'rotate(180deg)' : 'rotate(0deg)' }} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </button>
-
-          {/* نموذج التسجيل الاحتياطي (Accordion) */}
-          <div id="fallback-form" style={showFallbackForm ? styles.fallbackFormVisible : styles.fallbackFormHidden} role="region" aria-label="نموذج التسجيل الاحتياطي">
-            <form onSubmit={handleFallbackLogin} style={styles.fallbackForm}>
+          {/* نموذج إنشاء الحساب بالبريد — بلا تغيير في سلوكه */}
+          {signUp && (
+            <form onSubmit={submit}>
               <div style={styles.formGroup}>
-                <label style={styles.label} htmlFor="fallback-identifier">
-                  رقم الهاتف أو اسم المستخدم أو البريد الإلكتروني
-                </label>
+                <label style={styles.label} htmlFor="full-name">الاسم الكامل</label>
                 <input
-                  id="fallback-identifier"
+                  id="full-name"
                   type="text"
                   required
-                  autoComplete="username"
-                  dir="ltr"
-                  placeholder="07701234567 أو username أو email@example.com"
-                  value={fallbackIdentifier}
-                  onChange={event => { setFallbackIdentifier(event.target.value); setFallbackError(''); }}
+                  maxLength={80}
+                  autoComplete="name"
+                  value={fullName}
+                  onChange={event => setFullName(event.target.value)}
                   style={styles.input}
-                  disabled={fallbackBusy}
                 />
               </div>
-
               <div style={styles.formGroup}>
-                <label style={styles.label} htmlFor="fallback-password">كلمة المرور</label>
+                <label style={styles.label} htmlFor="username">اسم المستخدم</label>
                 <input
-                  id="fallback-password"
+                  id="username"
+                  type="text"
+                  required
+                  minLength={3}
+                  maxLength={32}
+                  pattern="[A-Za-z0-9_.]+"
+                  autoComplete="username"
+                  dir="ltr"
+                  placeholder="username"
+                  value={username}
+                  onChange={event => setUsername(event.target.value)}
+                  style={styles.input}
+                />
+              </div>
+              <div style={styles.formGroup}>
+                <span style={styles.label}>الجنس — يحدد صورتك الافتراضية</span>
+                <div style={styles.genderRow}>
+                  <button
+                    type="button"
+                    onClick={() => setGender('male')}
+                    style={{ ...styles.genderCard, borderColor: gender === 'male' ? '#6266C7' : '#d8dfdb' }}
+                  >
+                    <MaleDefaultAvatar className="h-20 w-20" />
+                    <span style={styles.genderLabel}>ذكر</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGender('female')}
+                    style={{ ...styles.genderCard, borderColor: gender === 'female' ? '#6266C7' : '#d8dfdb' }}
+                  >
+                    <FemaleDefaultAvatar className="h-20 w-20" />
+                    <span style={styles.genderLabel}>أنثى</span>
+                  </button>
+                </div>
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label} htmlFor="signup-email">البريد الإلكتروني</label>
+                <input
+                  id="signup-email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  dir="ltr"
+                  placeholder="أدخل بريدك الإلكتروني"
+                  value={email}
+                  onChange={event => setEmail(event.target.value)}
+                  style={styles.input}
+                />
+              </div>
+              <div style={styles.formGroup}>
+                <label style={styles.label} htmlFor="signup-password">كلمة المرور</label>
+                <input
+                  id="signup-password"
                   type="password"
                   required
                   minLength={6}
-                  autoComplete="current-password"
+                  autoComplete="new-password"
                   placeholder="أدخل كلمة المرور"
-                  value={fallbackPassword}
-                  onChange={event => { setFallbackPassword(event.target.value); setFallbackError(''); }}
+                  value={password}
+                  onChange={event => setPassword(event.target.value)}
                   style={styles.input}
-                  disabled={fallbackBusy}
                 />
               </div>
-
-              {fallbackError && <div style={styles.noticeError} role="alert">{fallbackError}</div>}
-
               <button
                 type="submit"
-                disabled={fallbackBusy || !supabaseConfigured}
-                style={{ ...styles.btnSubmit, ...(fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+                disabled={busy || !supabaseConfigured}
+                style={{ ...styles.btnSubmit, ...(busy || !supabaseConfigured ? styles.btnDisabled : {}) }}
               >
-                {fallbackBusy ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول'}
+                {busy ? 'جاري الإنشاء...' : 'إنشاء حساب'}
               </button>
             </form>
-          </div>
+          )}
+
+          {/* القسم الثاني: التسجيل الاحتياطي — للدخول فقط */}
+          {!signUp && (
+            <>
+              <button
+                type="button"
+                style={styles.fallbackTriggerBtn}
+                onClick={() => setShowFallbackForm(prev => !prev)}
+                disabled={busy || fallbackBusy}
+                aria-expanded={showFallbackForm}
+                aria-controls="fallback-form"
+              >
+                <span style={styles.fallbackTriggerText}>
+                  {showFallbackForm ? 'إخفاء التسجيل الاحتياطي' : 'التسجيل الاحتياطي'}
+                </span>
+                <svg style={{ ...styles.chevronIcon, transform: showFallbackForm ? 'rotate(180deg)' : 'rotate(0deg)' }} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+
+              {/* نموذج التسجيل الاحتياطي (Accordion) */}
+              <div id="fallback-form" style={showFallbackForm ? styles.fallbackFormVisible : styles.fallbackFormHidden} role="region" aria-label="نموذج التسجيل الاحتياطي">
+                <form onSubmit={handleFallbackLogin} style={styles.fallbackForm}>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="fallback-identifier">
+                      رقم الهاتف أو اسم المستخدم أو البريد الإلكتروني
+                    </label>
+                    <input
+                      id="fallback-identifier"
+                      type="text"
+                      required
+                      autoComplete="username"
+                      dir="ltr"
+                      placeholder="07701234567 أو username أو email@example.com"
+                      value={fallbackIdentifier}
+                      onChange={event => { setFallbackIdentifier(event.target.value); setFallbackError(''); }}
+                      style={styles.input}
+                      disabled={fallbackBusy}
+                    />
+                  </div>
+
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="fallback-password">كلمة المرور</label>
+                    <input
+                      id="fallback-password"
+                      type="password"
+                      required
+                      minLength={6}
+                      autoComplete="current-password"
+                      placeholder="أدخل كلمة المرور"
+                      value={fallbackPassword}
+                      onChange={event => { setFallbackPassword(event.target.value); setFallbackError(''); }}
+                      style={styles.input}
+                      disabled={fallbackBusy}
+                    />
+                  </div>
+
+                  {isPhoneLogin && (
+                    <div style={styles.formGroup}>
+                      <span style={styles.label}>تحقق الأمان</span>
+                      {TURNSTILE_SITE_KEY ? (
+                        <div ref={captchaContainerRef} />
+                      ) : (
+                        <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
+                          الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {fallbackError && <div style={styles.noticeError} role="alert">{fallbackError}</div>}
+
+                  <button
+                    type="submit"
+                    disabled={fallbackBusy || !supabaseConfigured}
+                    style={{ ...styles.btnSubmit, ...(fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+                  >
+                    {fallbackBusy ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول'}
+                  </button>
+                </form>
+              </div>
+            </>
+          )}
 
           {/* القسم الثالث: التواصل مع الدعم */}
           <button

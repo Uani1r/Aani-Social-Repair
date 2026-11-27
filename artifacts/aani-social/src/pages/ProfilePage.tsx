@@ -36,25 +36,32 @@ import {
   DEFAULT_PHONE_COUNTRY_CODE,
   formatPhoneForDisplay,
   MIN_PASSWORD_LENGTH,
-  normalizePhoneToE164,
   providerBadgeLabel,
   readAccountAuthIdentity,
 } from '@/lib/accountAuth';
 import {
-  clearPendingPhoneChange,
-  planPhoneChangeStart,
-  promotePendingPhoneChange,
-  readPendingPhoneChange,
-  reconcileCompletedPhoneChange,
-  runWithPhoneChangeLock,
-  type PendingPhoneChangeRead,
-} from '@/lib/accountPhoneChange';
+  PHONE_ALIAS_INVALID_MESSAGE,
+  createPhoneFunctionInvoker,
+  deletePhoneAlias,
+  loadPhoneAlias,
+  savePhoneAlias,
+  type PhoneAliasRead,
+  type PhoneFunctionInvoker,
+} from '@/lib/accountPhoneAlias';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import { SignedImage } from '@/components/SignedMedia';
 import { fontPreferenceLabel, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
 import { readLocalBlockedUserIds, readLocalMutedUserIds, writeLocalBlockedUserIds, writeLocalMutedUserIds } from '@/lib/comments/localModeration';
 import './ProfilePage.css';
 import { firstMediaUrlOfPost, preloadMediaList, thumbnailUrl } from '@/lib/mediaPreload';
+
+/**
+ * نداء دوال رقم الهاتف عبر `supabase.functions`: الجلسة تُرسل مع كل طلب،
+ * والهوية يأخذها الخادم منها.
+ */
+const invokePhoneFunction: PhoneFunctionInvoker = createPhoneFunctionInvoker({
+  invoke: (name, options) => supabase.functions.invoke(name, options),
+});
 
 type SettingsScreen = 'home' | 'account' | 'password' | 'security' | 'privacy' | 'blocked' | 'muted' | 'subscriptions' | 'billing' | 'archive' | 'saved' | 'support' | 'report' | 'faq' | 'legal' | 'about' | ProfileSettingsPreferenceScreen;
 type ProfileReportCategory = 'spam' | 'harassment' | 'hate' | 'fake_account' | 'other';
@@ -547,40 +554,24 @@ export default function ProfilePage({
   const [phoneDraft, setPhoneDraft] = useState('');
   const [passwordDraft, setPasswordDraft] = useState('');
   const [accountSettingsBusy, setAccountSettingsBusy] = useState(false);
-  // تأكيد Supabase لرقم الهاتف فقط (phone_confirmed_at) — لا يُعرض الرقم
-  // مؤكداً قبل نجاح التحقق.
+  // تأكيد Supabase لـ auth.users.phone (phone_confirmed_at) — لا يُستخدم
+  // لتأكيد رقم الدخول الإضافي: ذاك رقم مستقل في جدول account_phone_aliases.
   const [authPhoneVerified, setAuthPhoneVerified] = useState(false);
-  // سجل طلب تغيير الهاتف محفوظ في localStorage (لا React state وحدها):
-  // يبقى بعد تحديث الصفحة أو إعادة فتح التطبيق، ويستمر منع رقم جديد ما دام
-  // قد يكون قائماً لدى Supabase. لا يُحفظ أي رمز OTP.
-  // القراءة fail-closed: لا سجل، سجل صالح، أو سجل لا يمكن التحقق منه.
-  const [phoneChangeRead, setPhoneChangeRead] = useState<PendingPhoneChangeRead>({ status: 'absent' });
-  const [phoneOtpCode, setPhoneOtpCode] = useState('');
-  // مشتقّة من القراءة المحفوظة: لا حالة ثانية قد تتعارض معها. لا حد زمني هنا:
-  // انتهاء صلاحية OTP لا يرفع الحجب ولا يُثبت إلغاء سجل phone_change.
-  const pendingPhoneChange = phoneChangeRead.status === 'valid' ? phoneChangeRead.pending : null;
-  const phoneChangeUnreadable = phoneChangeRead.status === 'unreadable';
-  // السجل غير القابل للتحقق لا يُعرض كأنه لا سجل: لا إدخال رمز بلا رقم معلّق
-  // معروف، ولا يبدأ طلب جديد حتى يُحل السجل.
-  const phoneChangeStep: 'request' | 'verify' | 'blocked' = phoneChangeUnreadable
-    ? 'blocked'
-    : pendingPhoneChange
-      ? 'verify'
-      : 'request';
-  const phoneChangeTarget = pendingPhoneChange?.phone ?? '';
-  const phoneChangeUnresolved = pendingPhoneChange?.state === 'requesting';
-  // سجل لرقم صار هو الرقم المؤكد في الحساب (تأكيد من جهاز أو جلسة أخرى) لا
-  // يمثل طلباً قائماً: يُمسح عند تحميل الشاشة، ويبقى معروضاً إن فشل مسحه.
-  const pendingPhoneChangeStale =
-    !!pendingPhoneChange && authPhoneVerified && pendingPhoneChange.phone === authPhone;
+  // رقم الدخول بالهاتف (alias): يُقرأ ويُكتب في جدول account_phone_aliases
+  // عبر الدالة المحمية فقط، لا في auth.users.phone ولا في التخزين المحلي.
+  // لا SMS ولا OTP ولا رمز تحقق في هذه الشاشة.
+  // 'idle' قبل التحميل، ثم لا رقم / رقم / تعذر التحميل (بلا تخمين).
+  const [phoneAliasState, setPhoneAliasState] = useState<{ status: 'idle' } | PhoneAliasRead>({ status: 'idle' });
+  // طلب واحد في المرة لرقم الهاتف.
+  const phoneAliasInFlightRef = useRef(false);
+  const phoneAliasPhone = phoneAliasState.status === 'present' ? phoneAliasState.phone : '';
+  const phoneAliasUnavailableMessage =
+    phoneAliasState.status === 'unavailable' ? phoneAliasState.message : '';
   // كلمة المرور الحالية والجديدة وتأكيدها — تُمرَّر إلى Supabase مباشرة فقط.
   const [currentPasswordDraft, setCurrentPasswordDraft] = useState('');
   const [passwordConfirmDraft, setPasswordConfirmDraft] = useState('');
   // أُرسل رابط تحقق إلى البريد لتعيين كلمة مرور لحساب Google/Apple.
   const [passwordReauthSent, setPasswordReauthSent] = useState(false);
-  // يمنع طلبات تغيير الهاتف المتزامنة (Supabase يحذّر من طلبات phone_change
-  // متزامنة قد تربط رقماً غير مقصود).
-  const phoneChangeInFlightRef = useRef(false);
   const [blockedProfiles, setBlockedProfiles] = useState<Profile[]>([]);
   const [mutedProfiles, setMutedProfiles] = useState<Profile[]>([]);
   const [storyHiddenUserIds, setStoryHiddenUserIds] = useState<Set<string>>(new Set());
@@ -1079,21 +1070,12 @@ export default function ProfilePage({
       setAuthPhoneVerified(identity.phoneConfirmed);
       setAuthProvider(identity.primaryProvider);
       setHasPassword(identity.hasPassword);
-      // طلب تغيير الهاتف المعلّق يُقرأ من التخزين المحلي لا من React state،
-      // فيبقى بعد تحديث الصفحة أو إعادة فتح التطبيق. السجل الذي لا يمكن
-      // التحقق منه لا يُقرأ كأنه لا سجل.
-      const record = readPendingPhoneChange(currentUserId);
-      // سجل لرقم صار هو الرقم المؤكد في الحساب (تأكيد من جهاز أو جلسة أخرى)
-      // لا يمثل طلباً قائماً: يُمسح. ولا يُمسح سجل لا يمكن التحقق منه.
-      const reconciliation = reconcileCompletedPhoneChange({
-        userId: currentUserId,
-        record,
-        currentPhone: identity.phone,
-        currentPhoneConfirmed: identity.phoneConfirmed,
-      });
-      const nextRecord = reconciliation.cleared ? readPendingPhoneChange(currentUserId) : record;
-      setPhoneChangeRead(nextRecord);
-      if (settingsScreen === 'account' && nextRecord.status === 'absent') setPhoneDraft(identity.phone || '');
+      // رقم الدخول بالهاتف يُقرأ من جدول الأرقام عبر الدالة المحمية، لا من
+      // auth.users.phone ولا من التخزين المحلي.
+      const alias = await loadPhoneAlias(invokePhoneFunction);
+      if (!active) return;
+      setPhoneAliasState(alias);
+      if (settingsScreen === 'account') setPhoneDraft('');
     };
     void loadAuthSettings();
     return () => { active = false; };
@@ -1543,234 +1525,90 @@ export default function ProfilePage({
     return identity;
   };
 
-  const openPhoneChangeDialog = () => {
+  /** قراءة جديدة لرقم الدخول من الخادم — بعد تعذر التحميل أو بعد الحفظ. */
+  const refreshPhoneAlias = async () => {
+    const alias = await loadPhoneAlias(invokePhoneFunction);
+    setPhoneAliasState(alias);
+  };
+
+  const openPhoneAliasDialog = () => {
     if (accountSettingsBusy) return;
-    setPhoneDraft(pendingPhoneChange ? pendingPhoneChange.phone : phoneChangeUnreadable ? '' : authPhone);
-    setPhoneOtpCode('');
+    setPhoneDraft(phoneAliasPhone);
     setShowPhoneModal(true);
   };
 
-  const closePhoneChangeDialog = () => {
+  const closePhoneAliasDialog = () => {
     if (accountSettingsBusy) return;
     setShowPhoneModal(false);
-    setPhoneOtpCode('');
-    if (!pendingPhoneChange) setPhoneDraft(authPhone);
+    setPhoneDraft('');
   };
 
   /**
-   * طلب تغيير الهاتف: Supabase Auth يرسل رمز SMS إلى الرقم الجديد عبر
-   * updateUser({ phone }) — بلا phone_confirm وبلا خدمة إدارية. الرقم لا
-   * يُعتمد ولا يُعرض مؤكداً قبل verifyOtp.
+   * حفظ رقم الدخول بالهاتف أو تغييره: تطبيع في الواجهة ثم طلب واحد ذري إلى
+   * الدالة `account-phone-alias`. لا SMS ولا OTP، ولا updateUser({ phone })،
+   * ولا كتابة في auth.users.
    *
-   * تحذير Supabase: طلبات phone_change القديمة/المتزامنة قد تربط رقماً غير
-   * مقصود، والعميل لا يملك واجهة لإلغاء طلب معلّق أو الاستعلام عن حالته.
-   * لذلك:
-   * - طلب واحد فقط في المرة (phoneChangeInFlightRef + accountSettingsBusy).
-   * - **يُحفظ سجل الطلب قبل أي استدعاء** (planPhoneChangeStart): إن تعذّر
-   *   حفظه في التخزين المحلي لا يبدأ الطلب أصلاً، فلا يبقى طلب خادمي بلا
-   *   حالة قابلة للاسترجاع بعد إعادة التحميل.
-   * - لا يبدأ رقم جديد ما دام طلب سابق قد يكون قائماً — بلا أي حد زمني.
-   * - الحالة تُقرأ من التخزين داخل القفل عند كل محاولة (لا React state):
-   *   سجل أحدث من الحالة المعروضة يمنع، وسجل لا يمكن التحقق منه يمنع.
-   * - عملية واحدة في المرة: phoneChangeInFlightRef + accountSettingsBusy
-   *   وقفل بين التبويبات (runWithPhoneChangeLock). إن لم يوفّر المتصفح
-   *   القفل أو كان مشغولاً لا يبدأ الطلب.
-   * - إعادة الإرسال للرقم المعلّق نفسه فقط عبر resend() الموثّقة.
+   * - الرقم فريد بين الحسابات (قيد UNIQUE): إن كان مستخدماً في حساب آخر
+   *   يُرفض الحفظ ويبقى الرقم السابق دون تغيير، لأن العبارة في قاعدة
+   *   البيانات ذرية.
+   * - لا تُرسل هوية من العميل: الخادم يأخذها من الجلسة.
+   * - الجلسة تبقى قائمة بعد الحفظ أو التغيير.
    */
-  const requestPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
+  const savePhoneAliasHandler = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
-    const nextPhone = normalizePhoneToE164(phoneDraft);
-    if (!nextPhone) {
-      toast.error(`أدخل رقم هاتف صالحاً — الرمز الافتراضي ${DEFAULT_PHONE_COUNTRY_CODE} أو صيغة دولية تبدأ بـ +.`);
+    if (phoneAliasInFlightRef.current || accountSettingsBusy) return;
+    if (!phoneDraft.trim()) {
+      toast.error(PHONE_ALIAS_INVALID_MESSAGE);
       return;
     }
 
-    phoneChangeInFlightRef.current = true;
+    phoneAliasInFlightRef.current = true;
     setAccountSettingsBusy(true);
     try {
-      const outcome = await runWithPhoneChangeLock(currentUserId, async () => {
-        // قراءة جديدة داخل القفل من التخزين لا من React state: قد يبدأ تبويب
-        // آخر طلباً بعد تحميل هذه الشاشة.
-        const record = readPendingPhoneChange(currentUserId);
-        setPhoneChangeRead(record);
-        const plan = planPhoneChangeStart({
-          userId: currentUserId,
-          record,
-          nextPhone,
-          currentPhone: authPhone,
-        });
-        if (!plan.canStart) {
-          if (plan.reason === 'unchanged') {
-            toast.error('هذا هو رقم الهاتف الحالي على الحساب.');
-            return;
-          }
-          if (plan.reason === 'storage') {
-            toast.error('تغيير الهاتف غير متاح على هذا الجهاز حالياً: تعذر حفظ حالة الطلب في التخزين المحلي، ولا يبدأ طلب لا يمكن تتبعه. حاول بعد إعادة فتح التطبيق أو على جهاز آخر.');
-            return;
-          }
-          if (plan.reason === 'unreadable') {
-            toast.error(plan.read === 'storage-unavailable'
-              ? 'تعذر الوصول إلى سجل طلب الهاتف المحفوظ على هذا الجهاز، ولا يبدأ طلب جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase. أعد المحاولة بعد إعادة فتح التطبيق.'
-              : 'سجل طلب الهاتف المحفوظ على هذا الجهاز تالف أو لا يمكن التحقق منه، ولا يبدأ طلب جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase. حلّه يحتاج معالجة موثّقة من جهة Supabase أو الإدارة، ولا يُحل بمحو سجل الحماية المحلي.');
-            return;
-          }
-          if (plan.reason === 'resend') {
-            toast.info(`هناك طلب قائم إلى ${formatPhoneForDisplay(plan.pending.phone)}. أكّد رمزه أو أعد إرساله من نافذة الطلب بدل بدء طلب جديد.`);
-            return;
-          }
-          toast.error(`قد يكون طلب تغيير سابق ما زال معلّقاً لدى Supabase إلى ${formatPhoneForDisplay(plan.pending.phone)}. لا يمكن بدء رقم جديد قبل حلّه: أكّد الرمز أو أعد إرساله إلى الرقم نفسه، وإن تعذّر ذلك فالحل يحتاج معالجة موثّقة من جهة Supabase.`);
-          return;
-        }
-
-        // السجل محفوظ قبل أي استدعاء: لا يبدأ طلب بلا حالة قابلة للاسترجاع.
-        const { error } = await supabase.auth.updateUser({ phone: nextPhone });
-        if (error) {
-          // لا يمكن إثبات أن الخادم لم يُنشئ الطلب: يبقى السجل غير محسوم
-          // ويمنع أي رقم آخر حتى يُحل بتأكيد أو بمعالجة موثّقة.
-          setPhoneChangeRead(readPendingPhoneChange(currentUserId));
-          throw error;
-        }
-        const promoted = promotePendingPhoneChange(currentUserId, plan.record);
-        // الحالة المعروضة تُقرأ بعد الكتابة لا من الخطة: فشل الترقية يُبقي
-        // سجل النية غير محسوم ويمنع أي رقم آخر.
-        setPhoneChangeRead(readPendingPhoneChange(currentUserId));
-        if (!promoted) {
-          toast.error('بدأ طلب التحقق لكن تعذر حفظ حالته على الجهاز. لن يُسمح بطلب رقم آخر حتى يُحل: أكّد الرمز أو أعد إرساله إلى الرقم نفسه.');
-          return;
-        }
-        setPhoneOtpCode('');
-        toast.success('أرسلنا رمز تحقق SMS إلى الرقم الجديد. أدخل الرمز لتأكيده.');
-      });
-
-      if (outcome.status === 'unavailable') {
-        toast.error('تغيير الهاتف غير متاح في هذا المتصفح: لا يوفّر قفلاً بين تبويباته، ولا يبدأ طلب قد يتزامن مع طلب آخر. افتح التطبيق في متصفح يوفّر Web Locks.');
-      } else if (outcome.status === 'busy') {
-        toast.error('هناك طلب تغيير رقم قيد التنفيذ في تبويب آخر من هذا المتصفح. انتظر انتهاءه ثم أعد المحاولة.');
+      const result = await savePhoneAlias(phoneDraft, invokePhoneFunction);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
       }
-    } catch (error) {
-      toast.error(accountAuthErrorMessage(error, 'تعذر إرسال رمز التحقق. حاول مرة أخرى.'));
+      setPhoneAliasState({ status: 'present', phone: result.phone });
+      setPhoneDraft('');
+      setShowPhoneModal(false);
+      toast.success('حُفظ رقم الدخول بالهاتف. يمكنك الدخول به مع كلمة مرور الحساب — بلا رمز SMS.');
     } finally {
-      phoneChangeInFlightRef.current = false;
+      phoneAliasInFlightRef.current = false;
       setAccountSettingsBusy(false);
     }
   };
 
   /**
-   * إعادة إرسال موثّقة لرمز الطلب القائم عبر resend({ type: 'phone_change' })
-   * — لا تنشئ طلب تغيير جديد ولا تستبدل الرقم المعلّق. الرقم يُقرأ من
-   * التخزين داخل القفل، لا من الحالة المعروضة.
+   * حذف رقم الدخول بالهاتف للحساب الحالي فقط. لا SMS ولا OTP، ولا يمسّ
+   * auth.users.phone، والجلسة تبقى قائمة.
    */
-  const resendPhoneChangeCode = async () => {
-    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
-    phoneChangeInFlightRef.current = true;
+  const removePhoneAliasHandler = async () => {
+    if (phoneAliasInFlightRef.current || accountSettingsBusy) return;
+    if (phoneAliasState.status !== 'present') return;
+
+    phoneAliasInFlightRef.current = true;
     setAccountSettingsBusy(true);
     try {
-      const outcome = await runWithPhoneChangeLock(currentUserId, async () => {
-        const record = readPendingPhoneChange(currentUserId);
-        setPhoneChangeRead(record);
-        if (record.status !== 'valid') {
-          toast.error(record.status === 'unreadable'
-            ? 'تعذر قراءة سجل الطلب المحفوظ على هذا الجهاز، فلا يمكن تحديد الرقم المعلّق لإعادة إرسال رمزه.'
-            : 'لا يوجد طلب تغيير رقم معلّق على هذا الجهاز. ابدأ طلباً جديداً وأدخل رمزه.');
-          return;
-        }
-        const { error } = await supabase.auth.resend({
-          type: 'phone_change',
-          phone: record.pending.phone,
-        });
-        if (error) throw error;
-        toast.success('أعدنا إرسال رمز الطلب القائم إلى الرقم نفسه.');
-      });
-
-      if (outcome.status === 'unavailable') {
-        toast.error('إعادة إرسال الرمز غير متاحة في هذا المتصفح: لا يوفّر قفلاً بين تبويباته. أعد المحاولة في متصفح يوفّر Web Locks.');
-      } else if (outcome.status === 'busy') {
-        toast.error('هناك عملية تغيير رقم قيد التنفيذ في تبويب آخر من هذا المتصفح. انتظر انتهاءها ثم أعد المحاولة.');
+      const result = await deletePhoneAlias(invokePhoneFunction);
+      if (!result.ok) {
+        toast.error(result.message);
+        return;
       }
-    } catch (error) {
-      toast.error(accountAuthErrorMessage(error, 'تعذر إعادة إرسال الرمز للطلب القائم. إن رفض Supabase إعادة الإرسال فلا يمكن حل الطلب من التطبيق ويحتاج معالجة موثّقة من جهة Supabase.'));
+      setPhoneAliasState({ status: 'absent' });
+      setPhoneDraft('');
+      setShowPhoneModal(false);
+      toast.success('حُذف رقم الدخول بالهاتف. يمكنك إضافته مجدداً في أي وقت.');
     } finally {
-      phoneChangeInFlightRef.current = false;
+      phoneAliasInFlightRef.current = false;
       setAccountSettingsBusy(false);
     }
   };
 
-  const confirmPhoneChange = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
-    const token = phoneOtpCode.replace(/\D/g, '');
-    if (token.length < 6) {
-      toast.error('أدخل رمز التحقق المكوّن من ستة أرقام.');
-      return;
-    }
 
-    phoneChangeInFlightRef.current = true;
-    setAccountSettingsBusy(true);
-    try {
-      const outcome = await runWithPhoneChangeLock(currentUserId, async () => {
-        // الرقم المعلّق يُقرأ من التخزين داخل القفل: قد يتغيّر من تبويب آخر.
-        const record = readPendingPhoneChange(currentUserId);
-        setPhoneChangeRead(record);
-        if (record.status !== 'valid') {
-          toast.error(record.status === 'unreadable'
-            ? 'تعذر قراءة سجل الطلب المحفوظ على هذا الجهاز، فلا يمكن تحديد الرقم المعلّق لتأكيد رمزه.'
-            : 'لا يوجد طلب تغيير رقم معلّق على هذا الجهاز. ابدأ طلباً جديداً وأدخل رمزه.');
-          return;
-        }
-        const pending = record.pending;
-        const { data, error } = await supabase.auth.verifyOtp({ phone: pending.phone, token, type: 'phone_change' });
-        if (error) throw error;
-        // نفس الهوية فقط: لا تُقبل نتيجة جلسة أخرى.
-        if (!data.user || data.user.id !== currentUserId) {
-          throw new Error('تعذر تأكيد هوية الحساب الحالي. أعد المحاولة.');
-        }
-        const identity = await refreshAccountAuthIdentity();
-        // لا يُعرض الرقم مؤكداً إلا إذا أعاد Supabase الرقم الجديد نفسه مؤكداً.
-        if (!identity || identity.phone !== pending.phone || !identity.phoneConfirmed) {
-          throw new Error('لم يؤكد Supabase الرقم الجديد بعد. أعد المحاولة أو أعد إرسال الرمز نفسه.');
-        }
-        // بعد إثبات Supabase فقط: يُمسح السجل المحلي ويرتفع منع الرقم الجديد.
-        // فشل المسح يُبلَّغ عنه ولا يُعامَل كأنه نجح.
-        const cleared = clearPendingPhoneChange(currentUserId);
-        setPhoneChangeRead(readPendingPhoneChange(currentUserId));
-        setPhoneOtpCode('');
-        setPhoneDraft(identity.phone);
-        setShowPhoneModal(false);
-        toast.success('تم تأكيد رقم الهاتف الجديد. جلستك على هذا الجهاز ما زالت قائمة.');
-        if (!cleared) {
-          toast.error('تعذر مسح سجل الطلب المحلي على هذا الجهاز بعد التأكيد، فيبقى منع بدء رقم جديد قائماً. السجل محفوظ، ويعيد التطبيق محاولة مسحه عند تحميل شاشة الحساب، وأي حلّ آخر يحتاج إجراءً موثّقاً من جهة Supabase أو الإدارة.');
-        }
-      });
 
-      if (outcome.status === 'unavailable') {
-        toast.error('تأكيد الرمز غير متاح في هذا المتصفح: لا يوفّر قفلاً بين تبويباته. أعد المحاولة في متصفح يوفّر Web Locks.');
-      } else if (outcome.status === 'busy') {
-        toast.error('هناك عملية تغيير رقم قيد التنفيذ في تبويب آخر من هذا المتصفح. انتظر انتهاءها ثم أعد المحاولة.');
-      }
-    } catch (error) {
-      const message = accountAuthErrorMessage(error, 'تعذر تأكيد الرمز. أعد المحاولة أو أعد إرسال الرمز نفسه.');
-      // لا يُعتبر الخطأ أو مسح الرمز إلغاءً للطلب: السجل المعلّق يبقى، ويُمسح
-      // الرمز المكتوب فقط.
-      if (/انتهت صلاحية|غير صحيح/.test(message)) setPhoneOtpCode('');
-      toast.error(`${message} الطلب المعلّق لم يُلغَ من Supabase، وإن تعذّر تأكيده أو إعادة إرساله فحلّه يحتاج معالجة موثّقة من جهة Supabase.`);
-    } finally {
-      phoneChangeInFlightRef.current = false;
-      setAccountSettingsBusy(false);
-    }
-  };
 
-  /**
-   * إغلاق التنبيه المحلي فقط. Supabase لا يوفّر في العميل واجهة لإلغاء طلب
-   * phone_change، ولذلك يبقى السجل المعلّق ويبقى منع الرقم الجديد قائماً.
-   * لا مسار زمني يرفع هذا المنع.
-   */
-  const dismissPendingPhoneChangeNotice = () => {
-    if (phoneChangeInFlightRef.current || accountSettingsBusy) return;
-    setShowPhoneModal(false);
-    setPhoneOtpCode('');
-    toast.info('أُغلق التنبيه على هذا الجهاز فقط. طلب تغيير الهاتف لم يُلغَ في Supabase، ولا يمكن بدء رقم جديد حتى يُحل الطلب بتأكيد الرمز أو بمعالجة موثّقة من جهة Supabase.');
-  };
 
   /** إعادة تحقق آمنة لحساب Google/Apple: رابط إلى بريد الحساب نفسه. */
   const sendPasswordResetLink = async () => {
@@ -1801,6 +1639,9 @@ export default function ProfilePage({
    *   لا signOut: الجلسة تبقى قائمة بعد التغيير.
    * - حساب Google/Apple بلا كلمة مرور: رابط تحقق إلى البريد (أعلاه) ثم
    *   نافذة التعيين — إعادة تحقق آمنة بلا ربط هوية جديد.
+   * - تُستخدم هوية المصادقة الأصلية فقط (البريد، أو auth.users.phone لحساب
+   *   قديم مسجّل به): رقم الدخول الإضافي (alias) ليس هوية مصادقة ولا يُستخدم
+   *   للتحقق من كلمة المرور هنا.
    */
   const savePasswordChange = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2997,27 +2838,29 @@ export default function ProfilePage({
                       <span className="profile-settings-description">البريد للعرض فقط — لا يمكن تغييره من إعدادات الحساب.</span>
                     </span>
                   </div>
-                  <button type="button" className="profile-settings-row profile-settings-link" onClick={openPhoneChangeDialog} disabled={accountSettingsBusy}>
+                  <button type="button" className="profile-settings-row profile-settings-link" onClick={openPhoneAliasDialog} disabled={accountSettingsBusy}>
                     <span className="profile-settings-copy">
-                      <span className="profile-settings-label">رقم الهاتف</span>
-                      <span className="profile-settings-description" dir="ltr">{authPhone ? formatPhoneForDisplay(authPhone) : 'غير مضاف'}</span>
-                      {pendingPhoneChange && !pendingPhoneChangeStale && (
-                        <span className="profile-settings-description" dir="auto">
-                          {`طلب ${phoneChangeUnresolved ? 'غير محسوم' : 'معلّق'} إلى ${formatPhoneForDisplay(pendingPhoneChange.phone)} — لا يمكن بدء رقم جديد حتى يُحل`}
-                        </span>
+                      <span className="profile-settings-label">رقم الدخول بالهاتف</span>
+                      <span className="profile-settings-description" dir="ltr">
+                        {phoneAliasState.status === 'idle'
+                          ? 'جارٍ التحميل...'
+                          : phoneAliasState.status === 'present'
+                            ? formatPhoneForDisplay(phoneAliasState.phone)
+                            : phoneAliasState.status === 'unavailable'
+                              ? 'تعذر التحميل'
+                              : 'غير مضاف'}
+                      </span>
+                      <span className="profile-settings-description" dir="auto">وسيلة دخول إضافية مع كلمة مرور الحساب — بلا رمز SMS.</span>
+                      {phoneAliasState.status === 'unavailable' && (
+                        <span className="profile-settings-description" dir="auto">{phoneAliasUnavailableMessage}</span>
                       )}
-                      {pendingPhoneChangeStale && (
+                      {!hasPassword && (
                         <span className="profile-settings-description" dir="auto">
-                          سجل طلب محلي إلى رقمك المؤكد — لا يوجد طلب قائم، ويُمسح السجل تلقائياً عند تحميل الشاشة.
-                        </span>
-                      )}
-                      {phoneChangeUnreadable && (
-                        <span className="profile-settings-description" dir="auto">
-                          تعذر قراءة سجل طلب الهاتف المحفوظ على هذا الجهاز — لا يمكن بدء رقم جديد حتى يُحل السجل.
+                          قبل الدخول بالهاتف، عيّن كلمة مرور للحساب من «تعيين كلمة مرور احتياطية» (حسابات Google/Apple).
                         </span>
                       )}
                     </span>
-                    {authPhone && authPhoneVerified && <span className="profile-settings-provider-badge">مؤكد</span>}
+                    {phoneAliasState.status === 'present' && <span className="profile-settings-provider-badge">مضاف</span>}
                     <ChevronLeft size={18} aria-hidden="true" />
                   </button>
                   <button type="button" className="profile-settings-row profile-settings-link" onClick={() => navigateToSettingsScreen('password')}>
@@ -3197,54 +3040,41 @@ export default function ProfilePage({
             </div>
           )}
           {showPhoneModal && (
-            <div className="profile-settings-dialog-backdrop" onClick={closePhoneChangeDialog}>
+            <div className="profile-settings-dialog-backdrop" onClick={closePhoneAliasDialog}>
               <section role="dialog" aria-modal="true" aria-labelledby="phone-modal-title" className="profile-settings-dialog" onClick={event => event.stopPropagation()}>
-                <h3 id="phone-modal-title">{phoneChangeStep === 'request' ? 'تغيير رقم الهاتف' : phoneChangeStep === 'blocked' ? 'سجل طلب الهاتف' : 'تأكيد الرقم الجديد'}</h3>
-                {phoneChangeStep === 'request' ? (
-                  <form onSubmit={requestPhoneChange}>
-                    <p className="profile-settings-note">أدخل الرقم بالصيغة الدولية أو المحلية — الرمز الافتراضي {DEFAULT_PHONE_COUNTRY_CODE} للعراق. سيصل رمز تحقق SMS إلى الرقم الجديد، ولا يُعتمد الرقم قبل إدخال الرمز.</p>
-                    <p className="profile-settings-note">لا يمكن بدء رقم جديد ما دام طلب سابق قد يكون معلّقاً لدى Supabase — لا يوفّر Supabase إلغاءً له من التطبيق.</p>
-                    <div className="profile-settings-field">
-                      <label htmlFor="settings-phone">رقم الهاتف</label>
-                      <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder={`${DEFAULT_PHONE_COUNTRY_CODE} 7XX XXX XXXX`} maxLength={24} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
-                    </div>
-                    <div className="profile-settings-dialog-actions">
-                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={closePhoneChangeDialog}>إلغاء</button>
-                      <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim()}>{accountSettingsBusy ? 'جارٍ الإرسال...' : 'إرسال رمز التحقق'}</button>
-                    </div>
-                  </form>
-                ) : phoneChangeStep === 'verify' ? (
-                  <form onSubmit={confirmPhoneChange}>
-                    <p className="profile-settings-note">أرسلنا رمزاً إلى {formatPhoneForDisplay(phoneChangeTarget)}. أدخل الرمز لاعتماد الرقم — لا يُعرض الرقم مؤكداً قبل تأكيد Supabase.</p>
-                    <div className="profile-settings-field">
-                      <label htmlFor="settings-phone-code">رمز التحقق</label>
-                      <input id="settings-phone-code" type="text" inputMode="numeric" autoComplete="one-time-code" maxLength={8} required value={phoneOtpCode} onChange={event => setPhoneOtpCode(event.target.value.replace(/\D/g, ''))} />
-                    </div>
-                    <p className="profile-settings-note" dir="auto">
-                      {phoneChangeUnresolved
-                        ? 'حالة هذا الطلب غير محسومة على الجهاز (بدأ الطلب أو لم تُحفظ نتيجته). لا يمكن بدء رقم جديد حتى يُحل بتأكيد الرمز أو بمعالجة موثّقة من جهة Supabase.'
-                        : 'لا يمكن بدء رقم جديد حتى يُحل هذا الطلب. انتهاء صلاحية رمز SMS لا يُثبت إلغاء سجل phone_change لدى Supabase، ولا يرفع هذا المنع.'}
-                    </p>
-                    <div className="profile-settings-dialog-actions">
-                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={dismissPendingPhoneChangeNotice}>إغلاق (يبقى الطلب)</button>
-                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={() => void resendPhoneChangeCode()}>إعادة إرسال الرمز</button>
-                      <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || phoneOtpCode.length < 6}>{accountSettingsBusy ? 'جارٍ التحقق...' : 'تأكيد الرقم'}</button>
-                    </div>
-                  </form>
-                ) : (
+                <h3 id="phone-modal-title">رقم الدخول بالهاتف</h3>
+                {phoneAliasState.status === 'unavailable' ? (
                   <div>
-                    <p className="profile-settings-note" dir="auto">
-                      {phoneChangeRead.status === 'unreadable' && phoneChangeRead.reason === 'storage-unavailable'
-                        ? 'تعذر الوصول إلى سجل طلب الهاتف المحفوظ على هذا الجهاز (التخزين المحلي غير متاح أو محظور). لا يبدأ التطبيق طلباً جديداً في هذه الحالة لأن طلباً سابقاً قد يكون معلّقاً لدى Supabase.'
-                        : 'سجل طلب الهاتف المحفوظ على هذا الجهاز تالف ولا يمكن التحقق منه. لا يبدأ التطبيق طلباً جديداً في هذه الحالة لأن طلباً سابقاً قد يكون معلّقاً لدى Supabase، ولا يمكن إدخال رمز بلا رقم معلّق معروف.'}
-                    </p>
-                    <p className="profile-settings-note" dir="auto">
-                      حلّ هذا يحتاج معالجة موثّقة من جهة Supabase (أو لوحة تحكم المشروع أو الإدارة). لا يُقترح هنا محو بيانات الموقع أو سجل الحماية المحلي: قد يمحو الحماية بينما يظل طلب phone_change قائماً لدى Supabase، فيسمح بطلب جديد غير آمن.
-                    </p>
+                    <p className="profile-settings-note" dir="auto">{phoneAliasUnavailableMessage}</p>
+                    <p className="profile-settings-note" dir="auto">لا يُعرض الرقم من التخزين المحلي ولا يُخمَّن: الحالة تُقرأ من الخادم فقط.</p>
                     <div className="profile-settings-dialog-actions">
-                      <button type="button" className="profile-settings-dialog-cancel" onClick={closePhoneChangeDialog}>إغلاق</button>
+                      <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={closePhoneAliasDialog}>إغلاق</button>
+                      <button type="button" className="profile-settings-action" disabled={accountSettingsBusy} onClick={() => void refreshPhoneAlias()}>إعادة المحاولة</button>
                     </div>
                   </div>
+                ) : (
+                  <>
+                    <form onSubmit={savePhoneAliasHandler}>
+                      <p className="profile-settings-note">أدخل الرقم محلياً أو بالصيغة الدولية — الرمز الافتراضي {DEFAULT_PHONE_COUNTRY_CODE} للعراق. يُحفظ الرقم مباشرة كوسيلة دخول مع كلمة مرور الحساب: لا رمز SMS ولا OTP.</p>
+                      <p className="profile-settings-note">رقم واحد لكل حساب، ولا يُقبل رقم مستخدم في حساب آخر. تغيير الرقم أو حذفه متاح لاحقاً دون رسالة.</p>
+                      {!hasPassword && (
+                        <p className="profile-settings-note">لا يمكن الدخول بالهاتف قبل تعيين كلمة مرور للحساب (حساب Google/Apple). عيّنها من «تعيين كلمة مرور احتياطية» ثم استخدم الرقم.</p>
+                      )}
+                      <div className="profile-settings-field">
+                        <label htmlFor="settings-phone">رقم الهاتف</label>
+                        <input id="settings-phone" type="tel" inputMode="tel" autoComplete="tel" placeholder={`${DEFAULT_PHONE_COUNTRY_CODE} 7XX XXX XXXX`} maxLength={24} required value={phoneDraft} onChange={event => setPhoneDraft(event.target.value)} />
+                      </div>
+                      <div className="profile-settings-dialog-actions">
+                        <button type="button" className="profile-settings-dialog-cancel" disabled={accountSettingsBusy} onClick={closePhoneAliasDialog}>إلغاء</button>
+                        <button className="profile-settings-action" type="submit" disabled={accountSettingsBusy || !phoneDraft.trim()}>{accountSettingsBusy ? 'جارٍ الحفظ...' : 'حفظ الرقم'}</button>
+                      </div>
+                    </form>
+                    {phoneAliasState.status === 'present' && (
+                      <div className="profile-settings-dialog-actions">
+                        <button type="button" className="profile-settings-dialog-delete" disabled={accountSettingsBusy} onClick={() => void removePhoneAliasHandler()}>حذف الرقم</button>
+                      </div>
+                    )}
+                  </>
                 )}
               </section>
             </div>

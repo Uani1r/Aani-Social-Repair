@@ -90,10 +90,22 @@ jobs:
       - name: Unit tests @workspace/aani-social (chat video player)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/chatVideoPlayer.test.ts
 
-      # طلبات تغيير الهاتف المعلّقة: التخزين المحلي بعد إعادة التحميل، منع
-      # الرقم الثاني، إغلاق التنبيه دون إلغاء، والقيم التالفة.
-      - name: Unit tests @workspace/aani-social (account phone change)
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountPhoneChange.test.ts
+      # رقم الدخول بالهاتف: التطبيع بلا SMS، رفض رقم مستخدم في حساب آخر،
+      # ذرية التغيير، رسائل الدخول العامة، ومنع قراءة الجدول أو كشف البريد.
+      - name: Unit tests @workspace/aani-social (account phone alias)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountPhoneAlias.test.ts
+
+      # مسار الدخول: قاعدة حاسمة واحدة بين البريد والهاتف واسم المستخدم،
+      # وأسماء المستخدمين الرقمية القصيرة والطويلة لا تُقرأ كأرقام هاتف.
+      - name: Unit tests @workspace/aani-social (login identifier)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountAuth.test.ts
+
+      # الدخول بالهاتف في صفحة المصادقة: الدالة المشتركة وحدها (لا
+      # signInWithPassword برقم)، CAPTCHA إلزامية، تثبيت الجلسة ثم التحقق من
+      # المستخدم، وإلغاء الجلسة المحلية عند فشل التحقق، دون مساس بمسارات
+      # البريد واسم المستخدم وGoogle وApple.
+      - name: Unit tests @workspace/aani-social (phone login session)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/phoneLoginSession.test.ts
 
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
@@ -599,3 +611,112 @@ jobs:
       - name: Run the profile content reordering browser tests
         working-directory: artifacts/aani-social
         run: pnpm exec playwright test
+
+
+  # Applies the account phone alias migration to a throwaway PostgreSQL with a
+  # reduced auth schema (auth.users without columns, Supabase roles) and
+  # asserts what the database itself guarantees: the table shape, RLS enabled
+  # with no policy, anon/authenticated holding no table or function privilege,
+  # the E.164 check, one alias per account, phone uniqueness across accounts,
+  # an atomic replace that keeps the previous number, per-user delete, cascade
+  # on user deletion, and no password/OTP/session columns. It does not exercise
+  # two real concurrent connections (the guarantee is the UNIQUE constraint and
+  # the single-statement upsert), the Edge Functions, or Supabase Auth.
+  account-phone-alias-sql:
+    name: Account phone alias SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_phone_alias_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_phone_alias_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary alias schema and auth users
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/account_phone_alias_schema.sql
+
+      - name: Apply the alias migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307000000_account_phone_aliases.sql
+
+      - name: Assert the alias table, RLS, privileges and constraints
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_phone_alias.test.sql
+
+      # Re-applying must be idempotent: the constraints, the trigger and the
+      # REVOKE/GRANT pairs are not duplicated, and every assertion still holds.
+      - name: Re-apply the alias migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307000000_account_phone_aliases.sql
+
+      - name: Re-run the alias assertions after a second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/account_phone_alias.test.sql
+
+      # The shared login rate limiter: its table, RLS with no policies, the
+      # revoked privileges, the atomic consume function, window reset, input
+      # validation and expired cleanup. Re-applying proves idempotency.
+      - name: Apply the login rate limit migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307010000_login_rate_limits.sql
+
+      - name: Assert the shared login rate limiter
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/login_rate_limit.test.sql
+
+      - name: Re-apply the login rate limit migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270307010000_login_rate_limits.sql
+
+      - name: Re-run the rate limiter assertions after a second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/login_rate_limit.test.sql
+
+
+  # Real Deno type check and tests for the two phone Edge Functions. No
+  # Supabase project, no network calls and no deployment are involved: the
+  # functions are type checked with `deno check`, and the shared helpers are
+  # exercised with a fake fetch (phone normalisation, session gate, the
+  # two-token session, failure bodies, log redaction, CAPTCHA verification),
+  # together with source assertions (no console calls in the functions, no
+  # service_role or email in any response, the session check before any RPC).
+  phone-edge-functions:
+    name: Phone Edge Functions (Deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno 2
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno check (account-phone-alias and login-with-phone)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno check account-phone-alias/index.ts login-with-phone/index.ts
+
+      - name: Deno tests (phone helpers, redaction, CAPTCHA, session gate)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno test --allow-read tests/phone-edge.test.ts
