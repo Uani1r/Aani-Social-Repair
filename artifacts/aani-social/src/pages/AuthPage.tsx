@@ -135,6 +135,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const captchaContainerRef = useRef<HTMLDivElement | null>(null);
   const captchaWidgetRef = useRef<string | number | null>(null);
   const scriptRef = useRef<HTMLScriptElement | null>(null);
+  const abortLoadRef = useRef<(() => void) | null>(null);
   // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
   const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
 
@@ -227,24 +228,29 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           clearAll();
           listeners.forEach(({el,ev,fn}) => { try { el.removeEventListener(ev, fn); } catch {} });
           listeners = [];
+          abortLoadRef.current = null;
           if (ok) resolve(); else reject(err);
         };
 
+        abortLoadRef.current = () => finish(false, new Error('cancelled'));
         const timeoutId = setTimeout(() => {
           // remove failed script
-          const sc = scriptRef.current;
-          if (sc && sc.parentNode) { try { sc.parentNode.removeChild(sc); } catch {} }
-          scriptRef.current = null;
+          if (owned) {
+            const sc = scriptRef.current;
+            if (sc && sc.parentNode) { try { sc.parentNode.removeChild(sc); } catch {} }
+            scriptRef.current = null;
+          }
           finish(false, new Error('Turnstile script load timed out'));
         }, 10000);
         timers.push(timeoutId);
 
         const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+        const owned = !existingScript;
         if (existingScript) {
           scriptRef.current = existingScript;
           const onReady = () => { if (window.turnstile) finish(true, null); };
           const onError = () => {
-            try { existingScript.remove(); } catch {}
+            if (owned) { try { existingScript.remove(); } catch {} }
             scriptRef.current = null;
             finish(false, new Error('Failed to load Turnstile script'));
           };
@@ -306,7 +312,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         if (retryCount < MAX_RETRIES) {
           retryCount++;
           const delay = BASE_DELAY_MS * Math.pow(2, retryCount - 1);
-          retryTimer = setTimeout(attemptLoad, delay);
+          if (!cancelled) retryTimer = setTimeout(attemptLoad, delay);
         } else {
           setCaptchaLoadError(true);
         }
@@ -318,6 +324,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     return () => {
       cancelled = true;
       if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+      if (abortLoadRef.current) { try { abortLoadRef.current(); } catch {} abortLoadRef.current = null; }
       const sc = scriptRef.current;
       if (sc && sc.parentNode) { try { sc.parentNode.removeChild(sc); } catch {} }
       scriptRef.current = null;
