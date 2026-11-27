@@ -557,12 +557,12 @@ jobs:
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/profile_highlight_reorder_schema.sql
 
       - name: Apply the highlight story reordering migration
-        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270217000000_profile_highlight_story_reordering.sql
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270303000002_profile_highlight_story_reordering.sql
 
       # The function must be re-creatable: a second run proves the migration is
       # idempotent and does not duplicate the function or its grants.
       - name: Re-apply the migration (idempotency)
-        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270217000000_profile_highlight_story_reordering.sql
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270303000002_profile_highlight_story_reordering.sql
 
       - name: Run the highlight story reordering tests
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/profile_highlight_story_reordering.test.sql
@@ -821,3 +821,64 @@ jobs:
       - name: Deno tests (MFA gate, app_metadata, deletion without storage)
         working-directory: artifacts/aani-social/supabase/functions
         run: deno test --allow-read tests/account-mfa-edge.test.ts
+
+
+  # تفرّد إصدارات الترحيلات: Supabase CLI يسجّل الإصدار مفتاحاً أساسياً في
+  # supabase_migrations.schema_migrations، فتكرار إصدار بين ملفين يُفشل db push و
+  # migration up (unique violation) ويتوقف عنده بقية الترحيلات. هذا الفحص يمنع
+  # تكراراً جديداً: كل ملف يجب أن يبدأ بـ14 رقماً، ولا يتكرر أي إصدار.
+  migration-version-uniqueness:
+    name: Supabase migration version uniqueness
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Every migration file has a unique 14-digit version
+        working-directory: artifacts/aani-social/supabase/migrations
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          files=(*.sql)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No migration files found in $(pwd)"
+            exit 1
+          fi
+
+          versions="$(mktemp)"
+          trap 'rm -f "$versions"' EXIT
+
+          invalid=0
+          for file in "${files[@]}"; do
+            version="${file%%_*}"
+            if [[ ! "$version" =~ ^[0-9]{14}$ ]]; then
+              echo "Invalid migration name (missing 14-digit version prefix): $file"
+              invalid=1
+              continue
+            fi
+            printf '%s\n' "$version" >> "$versions"
+          done
+
+          duplicates="$(sort "$versions" | uniq -d || true)"
+          if [ -n "$duplicates" ]; then
+            echo "Duplicate migration versions:"
+            while IFS= read -r version; do
+              echo "  $version"
+              for file in "${files[@]}"; do
+                if [[ "$file" == "$version"_* ]]; then
+                  echo "    $file"
+                fi
+              done
+            done <<< "$duplicates"
+            exit 1
+          fi
+
+          if [ "$invalid" -ne 0 ]; then
+            exit 1
+          fi
+
+          unique="$(sort -u "$versions" | wc -l | tr -d ' ')"
+          echo "Checked ${#files[@]} migration files: all versions are unique ($unique distinct versions)."
