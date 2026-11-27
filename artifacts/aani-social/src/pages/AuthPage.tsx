@@ -430,7 +430,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           <div style={styles.providerButtonsGrid} role="group" aria-label={isSignup ? 'إنشاء حساب سريع' : 'تسجيل الدخول السريع'}>
             <button
               type="button"
-              disabled={providerLoading !== null || fallbackBusy || !supabaseConfigured}
+              disabled={providerLoading !== null || nativeGoogleLoading || fallbackBusy || !supabaseConfigured}
               onClick={() => {
                 setError('');
                 if (isNativePlatform()) {

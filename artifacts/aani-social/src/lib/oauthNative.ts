@@ -37,7 +37,6 @@ export function parseOAuthCallback(url: string): ParsedOAuthCallback {
 
 export async function startNativeGoogleOAuth(): Promise<void> {
   if (!isNativePlatform() || inFlight) return;
-  if (inFlight) return;
   inFlight = true;
   try {
     const { data, error } = await supabase.auth.signInWithOAuth({
