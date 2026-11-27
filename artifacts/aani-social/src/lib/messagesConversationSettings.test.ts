@@ -499,3 +499,53 @@ test('نتيجة resync أقدم لا تتغلب على نتيجة قراءة أ
   assert.deepEqual([...store.mutedIds()], [CONTACT_C]);
   store.dispose();
 });
+
+
+test('استيراد الكتم القديم لا يستبدل صفاً أحدث وصل من Realtime', async () => {
+  let releaseInsert!: () => void;
+  const insertGate = new Promise<void>(resolve => {
+    releaseInsert = resolve;
+  });
+  const insertedRows: ConversationSettingRow[] = [];
+  const gateway: ConversationSettingsGateway = {
+    listSettings: async () => [],
+    insertMissingSettings: async rows => {
+      insertedRows.push(...rows);
+      await insertGate;
+    },
+    saveSetting: async () => {},
+  };
+  let legacy = [CONTACT_B];
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway,
+    now: () => READ_STARTED_AT,
+    readLegacyMutedIds: () => [...legacy],
+    clearLegacyMutedIds: () => {
+      legacy = [];
+    },
+  });
+
+  const initializing = store.initialize();
+  // انتظر حتى يبدأ الإدراج بعد نتيجة القراءة الفارغة.
+  for (let attempt = 0; attempt < 10 && insertedRows.length === 0; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  assert.equal(insertedRows.length, 1);
+  assert.equal(insertedRows[0]?.is_muted, true);
+
+  // Realtime يقول إن المحادثة غير مكتومة الآن، وهو أحدث من صف الاستيراد.
+  assert.equal(store.applyRealtimeRow({
+    user_id: VIEWER,
+    other_user_id: CONTACT_B,
+    is_muted: false,
+    updated_at: LATER,
+  }), true);
+
+  releaseInsert();
+  await initializing;
+
+  // لا يعود الكتم القديم إلى الواجهة رغم قبول القاعدة لصف الاستيراد.
+  assert.deepEqual([...store.mutedIds()], []);
+  store.dispose();
+});

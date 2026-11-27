@@ -373,6 +373,9 @@ export function createConversationMuteStore(
     if (disposed) return 0;
     toInsert.forEach(row => {
       legacyPending.delete(row.other_user_id);
+      // لا يُستبدل صف أحدث وصل من Realtime أو من حفظ محلي أثناء الاستيراد.
+      const current = rows.get(row.other_user_id);
+      if (current && isStaleSettingUpdate(current.updatedAt, row.updated_at)) return;
       rows.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
     });
     publish();
