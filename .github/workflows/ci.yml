@@ -100,6 +100,13 @@ jobs:
       - name: Unit tests @workspace/aani-social (login identifier)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/accountAuth.test.ts
 
+      # الدخول بالهاتف في صفحة المصادقة: الدالة المشتركة وحدها (لا
+      # signInWithPassword برقم)، CAPTCHA إلزامية، تثبيت الجلسة ثم التحقق من
+      # المستخدم، وإلغاء الجلسة المحلية عند فشل التحقق، دون مساس بمسارات
+      # البريد واسم المستخدم وGoogle وApple.
+      - name: Unit tests @workspace/aani-social (phone login session)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/phoneLoginSession.test.ts
+
   # Applies the messages reply-compat migration to a throwaway PostgreSQL and
   # runs the reply compatibility SQL test against it. The harness builds only
   # the part of the schema the migration and the test touch, so this proves the

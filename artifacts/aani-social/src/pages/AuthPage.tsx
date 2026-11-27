@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
+import { useState, useEffect, useRef, type CSSProperties, type FormEvent } from 'react';
 import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { classifyLoginIdentifier } from '@/lib/accountAuth';
 import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
+import { completePhoneLogin } from '@/lib/phoneLoginSession';
 import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
@@ -16,6 +17,12 @@ const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?
 const TURNSTILE_SITE_KEY = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
 const TURNSTILE_ACTION = 'phone_login';
 
+/**
+ * عنوان بريد الدعم: يُضبط عند البناء عبر `VITE_SUPPORT_EMAIL`، ولا عنوان
+ * مخترع في الكود. بلا قيمة لا يُفتح بريد بلا مستلم، بل تظهر رسالة واضحة.
+ */
+const SUPPORT_EMAIL = String(import.meta.env.VITE_SUPPORT_EMAIL || '').trim();
+
 type TurnstileApi = {
   render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
   reset: (widgetId?: string | number) => void;
@@ -27,7 +34,6 @@ declare global {
     turnstile?: TurnstileApi;
   }
 }
-
 
 type CityLookupResult = { ok: true; city: string } | { ok: false; message: string };
 
@@ -73,9 +79,38 @@ const resolveCityFromDevice = (): Promise<CityLookupResult> => new Promise(resol
   );
 });
 
-// --- صفحة تسجيل الدخول وإنشاء الحساب ---
+const Spinner = () => <span style={styles.spinner} aria-hidden="true" />;
+
+const GoogleIcon = () => (
+  <svg style={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true">
+    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+  </svg>
+);
+
+const AppleIcon = () => (
+  <svg style={styles.providerIcon} viewBox="0 0 24 24" aria-hidden="true" fill="currentColor">
+    <path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" />
+  </svg>
+);
+
+const SupportIcon = () => (
+  <svg style={styles.supportIcon} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    <path d="M17 9h-5a2 2 0 0 0-2 2v3" />
+  </svg>
+);
+
+const ChevronIcon = ({ rotated }: { rotated: boolean }) => (
+  <svg style={{ ...styles.chevronIcon, transform: rotated ? 'rotate(180deg)' : 'rotate(0deg)' }} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+
 export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterAuth: () => void }) {
-  const signUp = mode === 'signup';
+  const isSignup = mode === 'signup';
   const [, setLocation] = useLocation();
   const [username, setUsername] = useState('');
   const [fullName, setFullName] = useState('');
@@ -84,15 +119,24 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  // حالة رسالة أثناء تحديد الموقع الإجباري عند التسجيل
   const [statusNotice, setStatusNotice] = useState('');
-  // الجنس المختار عند إنشاء الحساب — يحدد الأيقونة الشخصية الافتراضية
   const [gender, setGender] = useState<'male' | 'female'>('male');
+  const [showFallbackForm, setShowFallbackForm] = useState(false);
+  const [fallbackIdentifier, setFallbackIdentifier] = useState('');
+  const [fallbackPassword, setFallbackPassword] = useState('');
+  const [fallbackBusy, setFallbackBusy] = useState(false);
+  const [fallbackError, setFallbackError] = useState('');
+  // حالة قناة الدعم: تُعرض عندما لا يُضبط عنوان بريد الدعم بعد.
+  const [supportNotice, setSupportNotice] = useState('');
+
   // ودجت Turnstile لمسار الهاتف فقط: مفتاح عام لا سر، ويُعاد ضبطه بعد كل فشل.
   const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaLoadError, setCaptchaLoadError] = useState(false);
   const captchaContainerRef = useRef<HTMLDivElement | null>(null);
   const captchaWidgetRef = useRef<string | number | null>(null);
-  const isPhoneLogin = !signUp && classifyLoginIdentifier(email).kind === 'phone';
+  const scriptRef = useRef<HTMLScriptElement | null>(null);
+  // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
+  const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
 
   const resetCaptcha = () => {
     setCaptchaToken('');
@@ -100,15 +144,46 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
   };
 
+  const removeWidget = () => {
+    const api = window.turnstile;
+    if (api && captchaWidgetRef.current !== null) {
+      api.remove(captchaWidgetRef.current);
+      captchaWidgetRef.current = null;
+    }
+    setCaptchaToken('');
+  };
+
+  useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
+    `;
+    document.head.appendChild(style);
+    return () => { document.head.removeChild(style); };
+  }, []);
+
   /**
    * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
-   * لمسارات البريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت
-   * يمسح الرمز فلا يُرسل رمز منتهٍ.
+   * للبريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح
+   * الرمز فلا يُرسل رمز منتهٍ.
+   * يدعم: سكربت موجود مسبقاً (محمل أو قيد التحميل)، فشل التحميل مع إعادة محاولة،
+   * منع تكرار الودجت، وتنظيف كامل عند تبديل المعرف أو مغادرة الصفحة.
    */
   useEffect(() => {
-    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) return undefined;
+    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) {
+      removeWidget();
+      setCaptchaLoadError(false);
+      return;
+    }
+
     let cancelled = false;
-    const mount = () => {
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 500;
+
+    const mountWidget = () => {
       if (cancelled) return;
       const api = window.turnstile;
       const container = captchaContainerRef.current;
@@ -120,33 +195,103 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         action: TURNSTILE_ACTION,
         theme: 'light',
         language: 'ar',
-        callback: (token: string) => setCaptchaToken(token),
-        'expired-callback': () => setCaptchaToken(''),
-        'error-callback': () => setCaptchaToken(''),
+        callback: (token: string) => {
+          if (!cancelled) setCaptchaToken(token);
+        },
+        'expired-callback': () => {
+          if (!cancelled) setCaptchaToken('');
+        },
+        'error-callback': () => {
+          if (!cancelled) setCaptchaToken('');
+        },
       });
     };
 
-    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
-    if (window.turnstile) {
-      mount();
-    } else if (existing) {
-      existing.addEventListener('load', mount);
-    } else {
-      const script = document.createElement('script');
-      script.src = TURNSTILE_SCRIPT;
-      script.async = true;
-      script.defer = true;
-      script.dataset.turnstile = 'true';
-      script.addEventListener('load', mount);
-      document.head.appendChild(script);
-    }
+    const loadScript = (): Promise<void> => {
+      return new Promise((resolve, reject) => {
+        if (window.turnstile) {
+          resolve();
+          return;
+        }
+
+        const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+        if (existingScript) {
+          scriptRef.current = existingScript;
+          // التحقق مما إذا كان window.turnstile جاهزاً بالفعل (السكربت محمل)
+          const checkReady = () => {
+            if (window.turnstile) {
+              resolve();
+            } else {
+              setTimeout(checkReady, 50);
+            }
+          };
+          // إذا كان السكربت محملاً، window.turnstile سيكون جاهزاً خلال وقت قصير
+          // نتحقق مباشرة بدلاً من الاعتماد على readyState
+          checkReady();
+          // نضيف مستمعي خطأ للتحميل كاحتياط
+          const onError = () => {
+            existingScript.removeEventListener('error', onError);
+            reject(new Error('Failed to load Turnstile script'));
+          };
+          existingScript.addEventListener('error', onError);
+          return;
+        }
+
+        const script = document.createElement('script');
+        script.src = TURNSTILE_SCRIPT;
+        script.async = true;
+        script.defer = true;
+        script.dataset.turnstile = 'true';
+        scriptRef.current = script;
+
+        const onLoad = () => {
+          script.removeEventListener('load', onLoad);
+          script.removeEventListener('error', onError);
+          setTimeout(() => {
+            if (window.turnstile) resolve();
+            else reject(new Error('Turnstile API not initialized after script load'));
+          }, 50);
+        };
+        const onError = () => {
+          script.removeEventListener('load', onLoad);
+          script.removeEventListener('error', onError);
+          reject(new Error('Failed to load Turnstile script'));
+        };
+        script.addEventListener('load', onLoad);
+        script.addEventListener('error', onError);
+        document.head.appendChild(script);
+      });
+    };
+
+    const attemptLoad = async () => {
+      try {
+        await loadScript();
+        if (!cancelled) {
+          setCaptchaLoadError(false);
+          mountWidget();
+        }
+      } catch (err) {
+        if (cancelled) return;
+        if (retryCount < MAX_RETRIES) {
+          retryCount++;
+          const delay = BASE_DELAY_MS * Math.pow(2, retryCount - 1);
+          setTimeout(attemptLoad, delay);
+        } else {
+          setCaptchaLoadError(true);
+        }
+      }
+    };
+
+    attemptLoad();
 
     return () => {
       cancelled = true;
-      if (existing) existing.removeEventListener('load', mount);
-      const api = window.turnstile;
-      if (api && captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
-      captchaWidgetRef.current = null;
+      if (scriptRef.current && !document.querySelector('script[data-turnstile]')) {
+        // لا نحذف السكربت إذا كان موجوداً مسبقاً في الصفحة
+        document.head.removeChild(scriptRef.current);
+      }
+      removeWidget();
+      setCaptchaLoadError(false);
     };
   }, [isPhoneLogin]);
 
@@ -155,15 +300,11 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     if (!supabaseConfigured) { setError('إعدادات Supabase غير مكتملة في Secrets.'); return; }
     setBusy(true); setError(''); setSuccess('');
     try {
-      if (signUp) {
-        // التحديد الإجباري التلقائي للموقع: لا يكتمل إنشاء الحساب بدون إذن الموقع ومدينة مستخرجة
+      if (isSignup) {
         setStatusNotice('نحدد موقعك تلقائياً الآن لضبط مدينتك — اسمح بالوصول إلى الموقع عند طلب المتصفح لإكمال التسجيل.');
         const geo = await resolveCityFromDevice();
         setStatusNotice('');
-        if (!geo.ok) {
-          setError(geo.message);
-          return;
-        }
+        if (!geo.ok) { setError(geo.message); return; }
         const city = geo.city;
 
         const { data, error: authError } = await supabase.auth.signUp({
@@ -174,7 +315,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
         if (authError) throw authError;
 
-        // اكتب المدينة مباشرة في الملف أيضاً (احتياط إن لم يكن مشغّل إنشاء الملف محدثاً بعد)
         const signedUpUserId = data.session?.user?.id;
         if (signedUpUserId) {
           const { error: cityError } = await supabase
@@ -190,74 +330,8 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         } else {
           setSuccess('تم إنشاء الحساب. افتح رسالة التفعيل التي أرسلناها إلى بريدك الإلكتروني، ثم سجّل الدخول.');
         }
-      } else {
-        // قاعدة واحدة حاسمة لمسار الدخول: بريد، أو رقم هاتف صريح (دولي أو
-        // عراقي محلي 07XX…)، أو اسم مستخدم — والأسماء الرقمية لا تُقرأ كأرقام.
-        const identifier = classifyLoginIdentifier(email);
-        if (identifier.kind === 'invalid') throw new Error(identifier.message);
-        if (identifier.kind === 'email') {
-          const { error: authError } = await supabase.auth.signInWithPassword({ email: identifier.email, password });
-          if (authError) throw authError;
-        } else if (identifier.kind === 'phone') {
-          // الدخول برقم الهاتف وكلمة مرور الحساب عبر الدالة المحمية
-          // `login-with-phone`: لا OTP ولا SMS. CAPTCHA إلزامي هنا فقط،
-          // والتحقق منه على الخادم قبل أي بحث أو تحقق كلمة مرور.
-          if (!TURNSTILE_SITE_KEY) {
-            throw new Error('الدخول بالهاتف يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد أو اسم المستخدم في الوقت الحالي.');
-          }
-          if (!captchaToken) {
-            throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
-          }
-          const result = await loginWithPhone(identifier.phone, password, invokePhoneLogin, captchaToken);
-          if (!result.ok) throw new Error(result.message);
-          const { error: sessionError } = await supabase.auth.setSession({
-            access_token: result.accessToken,
-            refresh_token: result.refreshToken,
-          });
-          if (sessionError) throw sessionError;
-          // لا انتقال قبل التحقق من هوية المستخدم بعد تثبيت الجلسة.
-          const { data: userData, error: userError } = await supabase.auth.getUser();
-          if (userError || !userData.user) {
-            await supabase.auth.signOut({ scope: 'local' });
-            throw new Error('تعذر التحقق من الجلسة بعد الدخول. أعد المحاولة.');
-          }
-        } else {
-          const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
-            body: { username: identifier.username, password },
-          });
-          if (functionError) {
-            const context = (functionError as { context?: unknown }).context;
-            if (context instanceof Response) {
-              let responseBody: { error?: unknown; message?: unknown } | null = null;
-              try {
-                responseBody = await context.clone().json() as { error?: unknown; message?: unknown };
-              } catch {
-                // Keep the SDK error when the function response is not JSON.
-              }
-              if (context.status === 401) {
-                throw new Error(typeof responseBody?.error === 'string' ? responseBody.error : 'بيانات تسجيل الدخول غير صحيحة.');
-              }
-              const responseMessage = typeof responseBody?.error === 'string'
-                ? responseBody.error
-                : typeof responseBody?.message === 'string' ? responseBody.message : '';
-              if (responseMessage) throw new Error(responseMessage);
-            }
-            throw functionError;
-          }
-          if (typeof data?.access_token !== 'string' || typeof data?.refresh_token !== 'string') {
-            throw new Error('تعذر إكمال تسجيل الدخول. حاول مرة أخرى.');
-          }
-          const { error: sessionError } = await supabase.auth.setSession({
-            access_token: data.access_token,
-            refresh_token: data.refresh_token,
-          });
-          if (sessionError) throw sessionError;
-        }
-        afterAuth(); setLocation('/feed');
       }
     } catch (reason: any) {
-      // أي فشل في مسار الهاتف يُبطل رمز CAPTCHA ويُعيد ضبط الودجت.
-      if (isPhoneLogin) resetCaptcha();
       const message = reason?.message || '';
       if (/profiles_username_lower_idx|duplicate key|unique constraint/i.test(message)) {
         setError('اسم المستخدم مستخدم بالفعل. اختر اسمًا آخر ثم حاول مجددًا.');
@@ -286,6 +360,117 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     }
   };
 
+  const handleFallbackLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabaseConfigured || fallbackBusy) return;
+    setFallbackBusy(true); setFallbackError('');
+
+    const identifier = fallbackIdentifier.trim();
+    const pwd = fallbackPassword;
+
+    if (!identifier || !pwd) {
+      setFallbackError('أدخل المعرف وكلمة المرور.');
+      setFallbackBusy(false);
+      return;
+    }
+
+    try {
+      const parsed = classifyLoginIdentifier(identifier);
+      if (parsed.kind === 'invalid') throw new Error(parsed.message);
+
+      if (parsed.kind === 'phone') {
+        // مسار الهاتف: لا يبدأ الطلب بلا رمز CAPTCHA صالح.
+        if (!TURNSTILE_SITE_KEY) {
+          throw new Error('الدخول بالهاتف يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد أو اسم المستخدم في الوقت الحالي.');
+        }
+        if (!captchaToken) {
+          throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
+        }
+        const outcome = await completePhoneLogin(parsed.phone, pwd, captchaToken, {
+          login: (phone, password, token) => loginWithPhone(phone, password, invokePhoneLogin, token),
+          setSession: tokens => supabase.auth.setSession({
+            access_token: tokens.accessToken,
+            refresh_token: tokens.refreshToken,
+          }),
+          getUser: () => supabase.auth.getUser(),
+          signOutLocal: () => supabase.auth.signOut({ scope: 'local' }),
+        });
+        if (!outcome.ok) throw new Error(outcome.message);
+      } else if (parsed.kind === 'email') {
+        const { error: authError } = await supabase.auth.signInWithPassword({
+          email: parsed.email,
+          password: pwd,
+        });
+        if (authError) throw authError;
+      } else {
+        const usernameIdentifier = parsed.username;
+        if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
+          throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف عراقيًا (مثلاً: 07701234567 أو +9647701234567).');
+        }
+        const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
+          body: { username: usernameIdentifier, password: pwd },
+        });
+        if (functionError) {
+          const context = (functionError as { context?: unknown }).context;
+          if (context instanceof Response) {
+            let responseBody: { error?: unknown; message?: unknown } | null = null;
+            try {
+              responseBody = await context.clone().json() as { error?: unknown; message?: unknown };
+            } catch {
+            }
+            if (context.status === 401) {
+              throw new Error(typeof responseBody?.error === 'string' ? responseBody.error : 'بيانات تسجيل الدخول غير صحيحة.');
+            }
+            const responseMessage = typeof responseBody?.error === 'string'
+              ? responseBody.error
+              : typeof responseBody?.message === 'string' ? responseBody.message : '';
+            if (responseMessage) throw new Error(responseMessage);
+          }
+          throw functionError;
+        }
+        if (typeof data?.access_token !== 'string' || typeof data?.refresh_token !== 'string') {
+          throw new Error('تعذر إكمال تسجيل الدخول. حاول مرة أخرى.');
+        }
+        const { error: sessionError } = await supabase.auth.setSession({
+          access_token: data.access_token,
+          refresh_token: data.refresh_token,
+        });
+        if (sessionError) throw sessionError;
+      }
+
+      afterAuth();
+      setLocation('/feed');
+    } catch (reason: any) {
+      // أي فشل يُبطل رمز CAPTCHA ويُعيد ضبط الودجت.
+      resetCaptcha();
+      const message = reason?.message || '';
+      // رسالة عامة عند فشل بيانات الدخول: لا تكشف وجود الرقم أو الحساب.
+      if (/invalid.*(login|credentials|grant)|wrong.*password|incorrect.*password/i.test(message)) {
+        setFallbackError('المعرف أو كلمة المرور غير صحيحة.');
+      } else {
+        setFallbackError(message || 'حدث خطأ في الاتصال. حاول مرة أخرى.');
+      }
+    } finally {
+      setFallbackBusy(false);
+    }
+  };
+
+  /**
+   * التواصل مع الدعم: لا عنوان بريد مخترع في الكود. العنوان يُضبط عند البناء
+   * عبر `VITE_SUPPORT_EMAIL`؛ وبلا عنوان لا تُفتح رسالة بلا مستلم، بل تظهر
+   * رسالة واضحة أن قناة الدعم لم تُضبط بعد.
+   */
+  const openSupportEmail = () => {
+    if (!SUPPORT_EMAIL) {
+      setSupportNotice('قناة الدعم لم تُضبط بعد. ستظهر وسيلة التواصل هنا بعد تفعيلها.');
+      return;
+    }
+    setSupportNotice('');
+    const subject = encodeURIComponent('تواصل مع دعم آني Aani');
+    const body = encodeURIComponent('مرحباً فريق دعم آني،\n\nأود التواصل بخصوص: \n\n---\n\nمعلومات حسابي (إن وجدت):\n- البريد الإلكتروني: \n- اسم المستخدم: \n\nوصف المشكلة/الاستفسار:\n');
+    window.location.href = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+  };
+
   return (
     <div style={styles.pageContainer}>
       <div style={styles.card}>
@@ -294,7 +479,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             <div style={styles.sunRipples} />
             <div style={styles.sunCore} />
           </div>
-
           <div style={styles.heroTextContent}>
             <span style={styles.badgeText}>مكانك هنا</span>
             <h1 style={styles.mainTitle}>
@@ -311,9 +495,30 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           {error && <div style={styles.noticeError} role="alert">{error}</div>}
           {success && <div style={styles.noticeSuccess} role="status">{success}</div>}
 
-          <form onSubmit={submit}>
-            {signUp && (
-              <>
+          <div style={styles.providerButtonsGrid} role="group" aria-label={isSignup ? 'إنشاء حساب سريع' : 'تسجيل الدخول السريع'}>
+            <button
+              type="button"
+              disabled={busy || fallbackBusy || !supabaseConfigured}
+              onClick={() => void signInWithProvider('google')}
+              style={{ ...styles.providerBtn, ...styles.googleBtn, ...(busy || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+              aria-busy={busy || fallbackBusy}
+            >
+              {busy ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><GoogleIcon /><span>{isSignup ? 'المتابعة عبر Google' : 'الدخول باستخدام Google'}</span></>)}
+            </button>
+            <button
+              type="button"
+              disabled={busy || fallbackBusy || !supabaseConfigured}
+              onClick={() => void signInWithProvider('apple')}
+              style={{ ...styles.providerBtn, ...styles.appleBtn, ...(busy || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+              aria-busy={busy || fallbackBusy}
+            >
+              {busy ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><AppleIcon /><span>{isSignup ? 'المتابعة عبر Apple' : 'الدخول باستخدام Apple'}</span></>)}
+            </button>
+          </div>
+
+          {isSignup ? (
+            <>
+              <form onSubmit={submit} style={styles.signupForm}>
                 <div style={styles.formGroup}>
                   <label style={styles.label} htmlFor="full-name">الاسم الكامل</label>
                   <input
@@ -325,6 +530,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                     value={fullName}
                     onChange={event => setFullName(event.target.value)}
                     style={styles.input}
+                    disabled={busy}
                   />
                 </div>
                 <div style={styles.formGroup}>
@@ -342,6 +548,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                     value={username}
                     onChange={event => setUsername(event.target.value)}
                     style={styles.input}
+                    disabled={busy}
                   />
                 </div>
                 <div style={styles.formGroup}>
@@ -351,6 +558,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                       type="button"
                       onClick={() => setGender('male')}
                       style={{ ...styles.genderCard, borderColor: gender === 'male' ? '#6266C7' : '#d8dfdb' }}
+                      disabled={busy}
                     >
                       <MaleDefaultAvatar className="h-20 w-20" />
                       <span style={styles.genderLabel}>ذكر</span>
@@ -359,99 +567,155 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                       type="button"
                       onClick={() => setGender('female')}
                       style={{ ...styles.genderCard, borderColor: gender === 'female' ? '#6266C7' : '#d8dfdb' }}
+                      disabled={busy}
                     >
                       <FemaleDefaultAvatar className="h-20 w-20" />
                       <span style={styles.genderLabel}>أنثى</span>
                     </button>
                   </div>
                 </div>
-              </>
-            )}
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="email">البريد الإلكتروني</label>
+                  <input
+                    id="email"
+                    type="email"
+                    required
+                    autoComplete="email"
+                    dir="ltr"
+                    placeholder="أدخل بريدك الإلكتروني"
+                    value={email}
+                    onChange={event => setEmail(event.target.value)}
+                    style={styles.input}
+                    disabled={busy}
+                  />
+                </div>
+                <div style={styles.formGroup}>
+                  <label style={styles.label} htmlFor="password">كلمة المرور</label>
+                  <input
+                    id="password"
+                    type="password"
+                    required
+                    minLength={6}
+                    autoComplete="new-password"
+                    placeholder="أدخل كلمة المرور"
+                    value={password}
+                    onChange={event => setPassword(event.target.value)}
+                    style={styles.input}
+                    disabled={busy}
+                  />
+                </div>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label} htmlFor={signUp ? 'email' : 'login-identifier'}>
-                {signUp ? 'البريد الإلكتروني' : 'البريد الإلكتروني أو اسم المستخدم أو رقم الهاتف'}
-              </label>
-              <input
-                id={signUp ? 'email' : 'login-identifier'}
-                type={signUp ? 'email' : 'text'}
-                required
-                autoComplete={signUp ? 'email' : 'username'}
-                dir="ltr"
-                placeholder={signUp ? 'أدخل بريدك الإلكتروني' : 'name@example.com أو username أو 07XX XXX XXXX'}
-                value={email}
-                onChange={event => setEmail(event.target.value)}
-                style={styles.input}
-              />
-            </div>
+                <button
+                  type="submit"
+                  disabled={busy || !supabaseConfigured}
+                  style={{ ...styles.btnSubmit, ...(busy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+                >
+                  {busy ? 'جاري إنشاء الحساب...' : 'إنشاء حساب'}
+                </button>
+              </form>
 
-            <div style={styles.formGroup}>
-              <label style={styles.label} htmlFor="password">كلمة المرور</label>
-              <input
-                id="password"
-                type="password"
-                required
-                minLength={6}
-                autoComplete={signUp ? 'new-password' : 'current-password'}
-                placeholder="أدخل كلمة المرور"
-                value={password}
-                onChange={event => setPassword(event.target.value)}
-                style={styles.input}
-              />
-            </div>
-
-            {!signUp && isPhoneLogin && (
-              <div style={styles.formGroup}>
-                <span style={styles.label}>تحقق الأمان</span>
-                {TURNSTILE_SITE_KEY ? (
-                  <div ref={captchaContainerRef} />
-                ) : (
-                  <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
-                    الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
-                  </span>
-                )}
+              <div style={styles.switchLink}>
+                لديك حساب؟ <Link href="/login" style={styles.link}>تسجيل الدخول</Link>
               </div>
-            )}
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                style={styles.fallbackTriggerBtn}
+                onClick={() => setShowFallbackForm(prev => !prev)}
+                disabled={busy || fallbackBusy}
+                aria-expanded={showFallbackForm}
+                aria-controls="fallback-form"
+              >
+                <span style={styles.fallbackTriggerText}>
+                  {showFallbackForm ? 'إخفاء التسجيل الاحتياطي' : 'التسجيل الاحتياطي'}
+                </span>
+                <ChevronIcon rotated={showFallbackForm} />
+              </button>
 
-            <button
-              type="submit"
-              disabled={busy || !supabaseConfigured}
-              style={{ ...styles.btnSubmit, ...(busy || !supabaseConfigured ? styles.btnDisabled : {}) }}
-            >
-              {busy ? 'جاري الدخول...' : signUp ? 'إنشاء حساب' : 'تسجيل الدخول'}
-            </button>
-          </form>
+              <div id="fallback-form" style={showFallbackForm ? styles.fallbackFormVisible : styles.fallbackFormHidden} role="region" aria-label="نموذج التسجيل الاحتياطي">
+                <form onSubmit={handleFallbackLogin} style={styles.fallbackForm}>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="fallback-identifier">
+                      رقم الهاتف أو اسم المستخدم أو البريد الإلكتروني
+                    </label>
+                    <input
+                      id="fallback-identifier"
+                      type="text"
+                      required
+                      autoComplete="username"
+                      dir="ltr"
+                      placeholder="07701234567 أو username أو email@example.com"
+                      value={fallbackIdentifier}
+                      onChange={event => { setFallbackIdentifier(event.target.value); setFallbackError(''); }}
+                      style={styles.input}
+                      disabled={fallbackBusy}
+                    />
+                  </div>
 
-          <div aria-label="خيارات تسجيل الدخول عبر مزود خارجي" style={{ marginTop: '18px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#65716c', fontSize: '12px', marginBottom: '10px' }}>
-              <span style={{ height: '1px', flex: 1, background: '#d8dfdb' }} />
-              <span>أو المتابعة باستخدام</span>
-              <span style={{ height: '1px', flex: 1, background: '#d8dfdb' }} />
-            </div>
-            <button
-              type="button"
-              disabled={busy || !supabaseConfigured}
-              onClick={() => void signInWithProvider('google')}
-              style={{ width: '100%', marginTop: '8px', padding: '13px', border: '1px solid #d8dfdb', borderRadius: '12px', background: '#fff', color: '#243b35', fontSize: '14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.65 : 1 }}
-            >
-              {signUp ? 'المتابعة باستخدام Google' : 'الدخول باستخدام Google'}
-            </button>
-            <button
-              type="button"
-              disabled={busy || !supabaseConfigured}
-              onClick={() => void signInWithProvider('apple')}
-              style={{ width: '100%', marginTop: '8px', padding: '13px', border: '1px solid #d8dfdb', borderRadius: '12px', background: '#fff', color: '#243b35', fontSize: '14px', fontWeight: 700, cursor: busy ? 'wait' : 'pointer', opacity: busy ? 0.65 : 1 }}
-            >
-              {signUp ? 'المتابعة باستخدام Apple' : 'الدخول باستخدام Apple'}
-            </button>
-          </div>
+                  <div style={styles.formGroup}>
+                    <label style={styles.label} htmlFor="fallback-password">كلمة المرور</label>
+                    <input
+                      id="fallback-password"
+                      type="password"
+                      required
+                      minLength={6}
+                      autoComplete="current-password"
+                      placeholder="أدخل كلمة المرور"
+                      value={fallbackPassword}
+                      onChange={event => { setFallbackPassword(event.target.value); setFallbackError(''); }}
+                      style={styles.input}
+                      disabled={fallbackBusy}
+                    />
+                  </div>
 
-          <div style={styles.signupLink}>
-            {signUp ? 'لديك حساب؟ ' : 'جديد هنا؟ '}
-            <Link href={signUp ? '/login' : '/signup'} style={styles.link}>
-              {signUp ? 'تسجيل الدخول' : 'أنشئ حساباً'}
-            </Link>
-          </div>
+                  {isPhoneLogin && (
+                    <div style={styles.formGroup}>
+                      <span style={styles.label}>تحقق الأمان</span>
+                      {captchaLoadError ? (
+                        <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6, color: '#74442e' }}>
+                          تعذر تحميل تحقق الأمان. تحقّق من اتصالك بالإنترنت وأعد المحاولة، أو استخدم البريد أو اسم المستخدم.
+                        </span>
+                      ) : TURNSTILE_SITE_KEY ? (
+                        <div ref={captchaContainerRef} />
+                      ) : (
+                        <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
+                          الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {fallbackError && <div style={styles.noticeError} role="alert">{fallbackError}</div>}
+
+                  <button
+                    type="submit"
+                    disabled={fallbackBusy || !supabaseConfigured}
+                    style={{ ...styles.btnSubmit, ...(fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+                  >
+                    {fallbackBusy ? 'جاري تسجيل الدخول...' : 'تسجيل الدخول'}
+                  </button>
+                </form>
+              </div>
+
+              <div style={styles.switchLink}>
+                جديد هنا؟ <Link href="/signup" style={styles.link}>إنشاء حساب</Link>
+              </div>
+            </>
+          )}
+
+          {supportNotice && <div style={styles.noticeInfo} role="status">{supportNotice}</div>}
+
+          <button
+            type="button"
+            style={styles.supportBtn}
+            onClick={openSupportEmail}
+            disabled={busy || fallbackBusy}
+          >
+            <SupportIcon />
+            <span>تواصل مع الدعم</span>
+          </button>
         </main>
       </div>
     </div>
@@ -539,6 +803,14 @@ const styles: Record<string, CSSProperties> = {
   formSection: {
     padding: '20px 28px 40px 28px',
     marginTop: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  signupForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
   },
   formGroup: {
     marginBottom: '18px',
@@ -575,6 +847,7 @@ const styles: Record<string, CSSProperties> = {
     marginTop: '8px',
     fontFamily: "'Tajawal', sans-serif",
   },
+  btnDisabled: { cursor: 'wait', opacity: 0.65 },
   genderRow: {
     display: 'flex',
     gap: '12px',
@@ -595,19 +868,6 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '14px',
     fontWeight: 700,
     color: '#243b35',
-  },
-  btnDisabled: { cursor: 'wait', opacity: 0.65 },
-  signupLink: {
-    textAlign: 'center',
-    marginTop: '22px',
-    fontSize: '14px',
-    color: '#243b35',
-    fontWeight: '500',
-  },
-  link: {
-    color: '#243b35',
-    fontWeight: '700',
-    textDecoration: 'none',
   },
   noticeError: {
     marginBlock: '12px',
@@ -641,5 +901,108 @@ const styles: Record<string, CSSProperties> = {
     fontSize: '14px',
     lineHeight: 1.7,
     overflowWrap: 'anywhere',
+  },
+  providerButtonsGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: '12px',
+    marginTop: '8px',
+  },
+  providerBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    height: '56px',
+    padding: '0 16px',
+    border: '1px solid #d8dfdb',
+    borderRadius: '12px',
+    background: '#fff',
+    color: '#243b35',
+    fontSize: '15px',
+    fontWeight: '700',
+    cursor: 'pointer',
+    fontFamily: "'Tajawal', sans-serif",
+    transition: 'background-color 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
+    minWidth: 0,
+  },
+  googleBtn: { borderColor: '#d8dfdb' },
+  appleBtn: { borderColor: '#d8dfdb' },
+  providerIcon: { width: '22px', height: '22px', flexShrink: 0 },
+  spinner: {
+    width: '20px',
+    height: '20px',
+    border: '2px solid #d8dfdb',
+    borderTopColor: '#243b35',
+    borderRadius: '50%',
+    animation: 'spin 0.8s linear infinite',
+  },
+  fallbackTriggerBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '8px',
+    padding: '14px 16px',
+    border: '1px solid #d8dfdb',
+    borderRadius: '12px',
+    background: '#f5f6f4',
+    color: '#243b35',
+    fontSize: '15px',
+    fontWeight: '700',
+    cursor: 'pointer',
+    fontFamily: "'Tajawal', sans-serif",
+    transition: 'background-color 0.15s ease, border-color 0.15s ease',
+    marginTop: '4px',
+  },
+  fallbackTriggerText: { fontSize: '15px', fontWeight: '700' },
+  chevronIcon: {
+    width: '20px',
+    height: '20px',
+    flexShrink: 0,
+    color: '#65716c',
+    transition: 'transform 0.2s ease',
+  },
+  fallbackFormVisible: { animation: 'slideDown 0.3s ease-out' },
+  fallbackFormHidden: { display: 'none' },
+  fallbackForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+    paddingTop: '8px',
+  },
+  switchLink: {
+    textAlign: 'center',
+    marginTop: '16px',
+    fontSize: '14px',
+    color: '#243b35',
+    fontWeight: '500',
+  },
+  link: {
+    color: '#6266C7',
+    fontWeight: '700',
+    textDecoration: 'none',
+  },
+  supportBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    padding: '14px 16px',
+    border: '1px solid #d8dfdb',
+    borderRadius: '12px',
+    background: '#fff',
+    color: '#243b35',
+    fontSize: '15px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    fontFamily: "'Tajawal', sans-serif",
+    transition: 'background-color 0.15s ease, border-color 0.15s ease',
+    marginTop: '8px',
+  },
+  supportIcon: {
+    width: '22px',
+    height: '22px',
+    flexShrink: 0,
+    color: '#6266C7',
   },
 };
