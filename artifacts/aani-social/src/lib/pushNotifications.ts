@@ -201,28 +201,14 @@ export function currentDeviceInstallationId(): string | null {
 }
 
 /**
- * الدالة غير منشورة في هذه القاعدة (الترحيلات غير مطبقة): لا صف جهاز أصلاً،
- * فلا شيء يُلغى. أي خطأ آخر (شبكة، صلاحيات) يبقى فشلاً ويُعرض بوضوح.
- */
-const isRevokeFunctionMissing = (error: unknown): boolean => {
-  if (!error || typeof error !== 'object') return false;
-  const code = typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : '';
-  if (code === 'PGRST202' || code === 'PGRST203' || code === '42883') return true;
-  const message = typeof (error as { message?: unknown }).message === 'string'
-    ? (error as { message: string }).message
-    : '';
-  return /could not find the function/i.test(message) && /aani_revoke_device_token/i.test(message);
-};
-
-/**
  * إلغاء رمز جهاز هذا المتصفح على الخادم بمعرّف التثبيت وحده.
  * `aani_revoke_device_token` تضبط `revoked_at` ولا تحذف الصف، ولا تمسّ جهازاً آخر.
+ * أي خطأ يُعاد كما هو ولا يُترجم إلى «لا شيء يُلغى»: رمز خطأ «الدالة غير ظاهرة
+ * في schema cache» لا يثبت أن الدالة أو جدول الأجهزة غير موجود، فقد تكون
+ * الدالة موجودة في القاعدة وغير محمّلة في الـcache — والخطأ الملتبس ليس دليلاً.
  */
-export async function revokeDeviceTokenForSignOut(
-  installationId: string,
-): Promise<{ error: unknown; missing?: boolean }> {
+export async function revokeDeviceTokenForSignOut(installationId: string): Promise<{ error: unknown }> {
   const { error } = await supabase.rpc('aani_revoke_device_token', buildRevocationInput({ installationId }));
-  if (error && isRevokeFunctionMissing(error)) return { error: null, missing: true };
   return { error };
 }
 
@@ -234,7 +220,9 @@ export function deviceSignOutDeps(endSession: () => Promise<{ error: unknown }>)
   return {
     readUserId: async () => {
       const { data, error } = await supabase.auth.getUser();
-      if (error) return null;
+      // فشل getUser ليس «لا مستخدم»: يُرمى ليُعامل كفشل تحقق، فلا يُلغى رمز
+      // ولا تُنهى الجلسة على حالة غير معروفة. null تبقى لنجاح القراءة وحدها.
+      if (error) throw error;
       return data.user?.id ?? null;
     },
     readInstallationId: currentDeviceInstallationId,

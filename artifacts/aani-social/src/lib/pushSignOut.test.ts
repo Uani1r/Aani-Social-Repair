@@ -161,33 +161,45 @@ test('بلا جلسة أو بلا جهاز مسجّل: لا إلغاء، وإن�
   assert.deepEqual(noDevice.calls, ['readUserId', 'readInstallationId', 'signOut']);
 });
 
-test('الدالة غير منشورة في القاعدة: لا شيء يُلغى والخروج يكتمل', async () => {
-  const calls: string[] = [];
-  const outcome = await signOutThisDevice({
-    readUserId: async () => {
-      calls.push('readUserId');
-      return USER_ID;
-    },
-    readInstallationId: () => {
-      calls.push('readInstallationId');
-      return INSTALLATION_ID;
-    },
-    revokeDeviceToken: async () => {
-      calls.push('revoke');
-      return { error: null, missing: true };
-    },
-    endSession: async () => {
-      calls.push('signOut');
-      return { error: null };
-    },
+test('PGRST202 لا يسمح بتجاوز الإلغاء', async () => {
+  const { deps, calls } = createDeps({
+    revokeError: { code: 'PGRST202', message: 'Could not find the function public.aani_revoke_device_token' },
   });
+  const outcome = await signOutThisDevice(deps);
+
+  assert.deepEqual(outcome, {
+    ok: false,
+    step: 'revoke',
+    message: PUSH_SIGN_OUT_REVOKE_FAILED_MESSAGE,
+  });
+  assert.equal(calls.includes('signOut'), false);
+});
+
+test('PGRST203 لا يسمح بتجاوز الإلغاء', async () => {
+  const { deps, calls } = createDeps({
+    revokeError: { code: 'PGRST203', message: 'Could not choose the best candidate function' },
+  });
+  const outcome = await signOutThisDevice(deps);
+
+  assert.deepEqual(outcome, {
+    ok: false,
+    step: 'revoke',
+    message: PUSH_SIGN_OUT_REVOKE_FAILED_MESSAGE,
+  });
+  assert.equal(calls.includes('signOut'), false);
+});
+
+test('غياب المستخدم بعد قراءة ناجحة للجلسة يسمح بالخروج دون إلغاء', async () => {
+  const { deps, calls, revokedInstallations } = createDeps({ userId: null });
+  const outcome = await signOutThisDevice(deps);
 
   assert.deepEqual(outcome, {
     ok: true,
     revoked: false,
     message: PUSH_SIGN_OUT_DONE_WITHOUT_DEVICE_MESSAGE,
   });
-  assert.deepEqual(calls, ['readUserId', 'readInstallationId', 'revoke', 'signOut']);
+  assert.deepEqual(calls, ['readUserId', 'readInstallationId', 'signOut']);
+  assert.deepEqual(revokedInstallations, []);
 });
 
 test('الإلغاء بمعرّف التثبيت وحده: لا رمز ولا معرّف صف آخر', async () => {
@@ -246,4 +258,18 @@ test('كل مسارات الخروج المحلي تمرّ بإلغاء رمز �
 test('الخروج من الأجهزة الأخرى لا يلمس رموز الأجهزة', () => {
   const sessions = readFileSync(join(SRC_ROOT, 'lib/accountSessions.ts'), 'utf8');
   assert.equal(/aani_revoke_device_token|device_tokens|revokeDeviceToken/.test(sessions), false);
+});
+
+
+test('لا تجاوز للإلغاء في العميل، وفشل getUser يُرمى ولا يُقرأ كغياب مستخدم', () => {
+  const source = readFileSync(join(SRC_ROOT, 'lib/pushNotifications.ts'), 'utf8');
+  assert.equal(source.includes('PGRST202'), false, 'no error-code bypass may exist in the client');
+  assert.equal(source.includes('PGRST203'), false, 'PGRST203 must never be treated as a missing function');
+  assert.equal(/missing\s*:\s*true/.test(source), false, 'no error path may report a skipped revoke');
+
+  const start = source.indexOf('export function deviceSignOutDeps');
+  assert.equal(start > 0, true, 'the sign-out deps factory must stay in the module');
+  const block = source.slice(start);
+  assert.equal(block.includes('throw error'), true, 'a failed getUser must throw');
+  assert.equal(block.includes('return null'), false, 'a failed getUser must not look like no user');
 });
