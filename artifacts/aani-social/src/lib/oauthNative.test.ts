@@ -20,6 +20,7 @@ import {
   type ListenerHandle,
   type NativeOAuthDeps,
   type NativeOAuthResult,
+  type NativeOAuthUrlListenerDeps,
 } from './oauthNativeCore';
 import {
   NATIVE_OAUTH_REDIRECT_URL,
@@ -527,4 +528,149 @@ test('Web OAuth لم يتأثر: عنوان الأصل للويب والمخطط
   // العنوان الأصلي ثابت ومطابق لما يحلّله parseOAuthCallback.
   assert.equal(NATIVE_OAUTH_REDIRECT_URL, 'anisocial://auth/callback');
   assert.equal(parseOAuthCallback(`${NATIVE_OAUTH_REDIRECT_URL}?code=web-safe`).code, 'web-safe');
+});
+
+
+type ListenerFake = {
+  deps: NativeOAuthUrlListenerDeps;
+  created: Array<{ handler: (url: string) => void; removed: number }>;
+  handled: string[];
+  addCalls: () => number;
+  launchCalls: () => number;
+  resolveCreation: () => void;
+};
+
+/**
+ * محاكاة مستمع روابط التطبيق: أول `deferredCreations` نداءات تبقى معلّقة حتى
+ * `resolveCreation`، لاختبار ما يحدث حين يكتمل التسجيل بعد طلب الإزالة.
+ */
+function createListenerFake(
+  options: { launchUrl?: string | null; deferredCreations?: number } = {},
+): ListenerFake {
+  const created: Array<{ handler: (url: string) => void; removed: number }> = [];
+  const handled: string[] = [];
+  const resolvers: Array<() => void> = [];
+  let addCalls = 0;
+  let launchCalls = 0;
+  let remainingDeferred = options.deferredCreations ?? 0;
+
+  const deps: NativeOAuthUrlListenerDeps = {
+    addAppUrlListener(handler) {
+      addCalls += 1;
+      const record = { handler, removed: 0 };
+      created.push(record);
+      const handle: ListenerHandle = {
+        remove: () => {
+          record.removed += 1;
+        },
+      };
+      if (remainingDeferred <= 0) return Promise.resolve(handle);
+      remainingDeferred -= 1;
+      return new Promise<ListenerHandle>(resolve => {
+        resolvers.push(() => resolve(handle));
+      });
+    },
+    async getLaunchUrl() {
+      launchCalls += 1;
+      return options.launchUrl ?? null;
+    },
+    async handleUrl(url) {
+      handled.push(url);
+    },
+  };
+
+  return {
+    deps,
+    created,
+    handled,
+    addCalls: () => addCalls,
+    launchCalls: () => launchCalls,
+    resolveCreation: () => {
+      const next = resolvers.shift();
+      if (next) next();
+    },
+  };
+}
+
+test('unregister أثناء انتظار addAppUrlListener لا يترك مستمعاً فعالاً', async () => {
+  const fake = createListenerFake({ deferredCreations: 1 });
+  const listener = createNativeOAuthUrlListener(fake.deps);
+
+  const registering = listener.register();
+  await listener.unregister();
+  fake.resolveCreation();
+  await registering;
+
+  assert.equal(fake.created.length, 1);
+  assert.equal(fake.created[0].removed, 1, 'المستمع المكتمل بعد الإزالة يُزال');
+  assert.equal(listener.isRegistered(), false, 'لا مستمع نشط بعد الإزالة');
+  assert.equal(fake.launchCalls(), 0, 'لا قراءة لرابط التشغيل بعد الإزالة');
+  assert.deepEqual(fake.handled, []);
+});
+
+test('اكتمال التسجيل بعد طلب الإزالة لا يُنشر مستمعاً ولا يعالج رابط تشغيل', async () => {
+  const fake = createListenerFake({
+    deferredCreations: 1,
+    launchUrl: 'anisocial://auth/callback?code=cold',
+  });
+  const listener = createNativeOAuthUrlListener(fake.deps);
+
+  const registering = listener.register();
+  await listener.unregister();
+  // الإكمال المتأخر: يُزال فوراً، ولا يُعالج رابط تشغيل سابق.
+  fake.resolveCreation();
+  await registering;
+
+  assert.equal(fake.created[0].removed, 1);
+  assert.equal(listener.isRegistered(), false);
+  assert.equal(fake.launchCalls(), 0);
+  assert.deepEqual(fake.handled, []);
+});
+
+test('تسجيل متكرر أثناء تسجيل معلّق يعيد الوعد نفسه ولا ينشئ مستمعاً ثانياً', async () => {
+  const fake = createListenerFake({ deferredCreations: 1 });
+  const listener = createNativeOAuthUrlListener(fake.deps);
+
+  const first = listener.register();
+  const second = listener.register();
+  const third = listener.register();
+
+  assert.equal(first, second, 'نفس وعد التسجيل');
+  assert.equal(second, third, 'نفس وعد التسجيل');
+  assert.equal(fake.addCalls(), 1, 'نداء addAppUrlListener مرة واحدة');
+
+  fake.resolveCreation();
+  await first;
+
+  assert.equal(listener.isRegistered(), true);
+  assert.equal(fake.created[0].removed, 0);
+});
+
+test('التسجيل بعد الإزالة ينشئ مستمعاً جديداً فقط دون إحياء القديم', async () => {
+  const fake = createListenerFake({ launchUrl: 'anisocial://auth/callback?code=cold' });
+  const listener = createNativeOAuthUrlListener(fake.deps);
+
+  await listener.register();
+  assert.equal(listener.isRegistered(), true);
+  assert.equal(fake.addCalls(), 1);
+  assert.equal(fake.launchCalls(), 1);
+  assert.deepEqual(fake.handled, ['anisocial://auth/callback?code=cold']);
+
+  await listener.unregister();
+  assert.equal(fake.created[0].removed, 1, 'المستمع القديم أُزيل');
+  assert.equal(listener.isRegistered(), false);
+
+  await listener.register();
+  assert.equal(fake.addCalls(), 2, 'تسجيل جديد بمستمع جديد فقط');
+  assert.equal(listener.isRegistered(), true);
+  assert.equal(fake.created[0].removed, 1, 'القديم لم يُعد نشطاً');
+  assert.equal(fake.created[1].removed, 0, 'الجديد هو الفعّال');
+  // رابط التشغيل يُقرأ من جديد بعد الإزالة؛ وحارس الرموز في البوّابة يمنع
+  // تبادل الرمز نفسه مرتين.
+  assert.equal(fake.launchCalls(), 2);
+
+  await listener.unregister();
+  assert.equal(fake.created[1].removed, 1);
+  assert.equal(fake.created[0].removed, 1, 'لا عودة للمستمع القديم');
+  assert.equal(listener.isRegistered(), false);
 });

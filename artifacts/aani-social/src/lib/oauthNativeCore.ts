@@ -314,6 +314,11 @@ export type NativeOAuthUrlListener = {
 /**
  * مستمع روابط التطبيق: تسجيل واحد فقط حتى مع نداءات متزامنة، ورابط التشغيل
  * البارد يُقرأ بعد تثبيت المستمع فلا سباق، ويُعالَج مرة واحدة.
+ *
+ * سباق register/unregister: لو اكتمل `addAppUrlListener` بعد طلب الإزالة،
+ * لَتُرك المستمع المكتمل فعّالاً بلا مالك. لذلك كل إزالة ترفع رقم جيل، وأي
+ * تسجيل معلّق ينتهي بعدها يُزيل مستمعه بنفسه ولا يصبح المستمع النشط، ولا يقرأ
+ * رابط التشغيل.
  */
 export function createNativeOAuthUrlListener(
   deps: NativeOAuthUrlListenerDeps,
@@ -321,21 +326,55 @@ export function createNativeOAuthUrlListener(
   let handle: ListenerHandle | null = null;
   let registration: Promise<void> | null = null;
   let launchHandled = false;
+  // يزيد مع كل إزالة: يُبطل أي تسجيل معلّق بدأ قبلها.
+  let generation = 0;
+
+  const removeHandle = async (target: ListenerHandle | null): Promise<void> => {
+    if (!target) return;
+    try {
+      await target.remove();
+    } catch {
+      /* أُزيل مسبقاً */
+    }
+  };
 
   const register = (): Promise<void> => {
     if (registration) return registration;
+    const attempt = generation;
+
     const pending = (async () => {
+      let created: ListenerHandle | null = null;
       try {
-        handle = await deps.addAppUrlListener(url => {
+        created = await deps.addAppUrlListener(url => {
           void deps.handleUrl(url);
         });
       } catch {
-        handle = null;
+        created = null;
       }
+
+      // إزالة وقعت أثناء انتظار addAppUrlListener: المستمع المتأخر يُزال فوراً
+      // ولا يُنشر، فلا مستمع متروك بعد الإزالة.
+      if (attempt !== generation) {
+        await removeHandle(created);
+        return;
+      }
+
+      handle = created;
 
       if (launchHandled) return;
       launchHandled = true;
       const launchUrl = await deps.getLaunchUrl().catch(() => null);
+
+      // إزالة وقعت أثناء قراءة رابط التشغيل: يُزال مستمعنا وحدنا (لا مستمع
+      // تسجيل أحدث) ولا يُعالَج الرابط.
+      if (attempt !== generation) {
+        if (handle === created) {
+          handle = null;
+          await removeHandle(created);
+        }
+        return;
+      }
+
       if (!launchUrl) return;
       try {
         await deps.handleUrl(launchUrl);
@@ -343,21 +382,19 @@ export function createNativeOAuthUrlListener(
         /* فشل المعالجة لا يمنع الاستماع */
       }
     })();
+
     registration = pending.catch(() => undefined);
     return registration;
   };
 
   const unregister = async (): Promise<void> => {
+    // إبطال أي تسجيل معلّق قبل الإزالة: نتيجته المتأخرة تُزال بنفسها.
+    generation += 1;
     const current = handle;
     handle = null;
     registration = null;
     launchHandled = false;
-    if (!current) return;
-    try {
-      await current.remove();
-    } catch {
-      /* أُزيل مسبقاً */
-    }
+    await removeHandle(current);
   };
 
   return { register, unregister, isRegistered: () => handle !== null };
