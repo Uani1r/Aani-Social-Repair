@@ -88,7 +88,7 @@ export default function AccountSettingsPanel() {
   const loadSessions = useCallback(async () => {
     const { data } = await supabase.auth.getSession();
     const result = await loadAccountSessions({
-      listSessions: () => supabase.rpc('aani_account_sessions'),
+      listSessions: async () => await supabase.rpc('aani_account_sessions'),
       signOutOthers: () => supabase.auth.signOut({ scope: 'others' }),
       getCurrentSessionId: async () => null,
     });
@@ -207,7 +207,7 @@ export default function AccountSettingsPanel() {
     void run('sessions', async () => {
       const { data } = await supabase.auth.getSession();
       const result = await signOutOtherDevices({
-        listSessions: () => supabase.rpc('aani_account_sessions'),
+        listSessions: async () => await supabase.rpc('aani_account_sessions'),
         signOutOthers: () => supabase.auth.signOut({ scope: 'others' }),
         getCurrentSessionId: async () => null,
       });
@@ -219,7 +219,7 @@ export default function AccountSettingsPanel() {
   const deactivate = () => {
     void run('deactivate', async () => {
       const result = await deactivateAccount({
-        deactivate: () => supabase.rpc('aani_deactivate_account'),
+        deactivate: async () => await supabase.rpc('aani_deactivate_account'),
         signOutLocal: () => supabase.auth.signOut({ scope: 'local' }),
       });
       if (result.ok) window.location.assign('/login');
