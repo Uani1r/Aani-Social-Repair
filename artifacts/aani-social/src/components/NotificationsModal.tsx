@@ -15,6 +15,11 @@ import { releaseOverlayBackForNavigation } from '@/lib/overlayBack';
 import { useMediaUrl } from '@/lib/mediaAccess';
 import EmptyState from '@/components/EmptyState';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import {
+  LEGACY_NOTIFICATION_TYPE_FILTER,
+  isLegacyMessageCallNotification,
+  shouldHandleRealtimeNotification,
+} from '@/lib/notificationVisibility';
 import type { NotificationItem } from '@/lib/appShared';
 import { displayName, formatDate, type Profile, type ProfileNotificationSettings } from '@/lib/types';
 
@@ -112,12 +117,13 @@ const isStoryNotification = (item: NotificationEntry) => {
 };
 
 // تصفية سجلات قديمة لا تظهر في القائمة العامة:
-// الرسائل والمكالمات الفائتة تُدار خارج قائمة الإشعارات (تبويب الرسائل/المكالمات).
-const SUPPRESSED_NOTIFICATION_TYPES = ['message', 'new_message', 'chat_message', 'call', 'incoming_call', 'missed_call'];
+// الرسائل والمكالمات القديمة تُدار خارج قائمة الإشعارات (تبويب الرسائل/المكالمات).
+// الأنواع تأتي من lib/notificationVisibility (مصدر واحد مشترك مع العدّاد وRealtime).
+// النصوص هنا احتياط لسجلات قديمة لا يحمل نوعها أحد الأنواع المثبتة.
 const SUPPRESSED_NOTIFICATION_PATTERNS = ['مكالمة صوتية', 'أرسل لك رسالة'];
 
 const isSuppressedLegacyNotification = (item: NotificationEntry): boolean => {
-  if (SUPPRESSED_NOTIFICATION_TYPES.includes(String(item.type || '').toLowerCase())) return true;
+  if (isLegacyMessageCallNotification(item.type)) return true;
   const text = `${item.content || ''}`;
   return SUPPRESSED_NOTIFICATION_PATTERNS.some(pattern => text.includes(pattern));
 };
@@ -411,10 +417,13 @@ export default function NotificationsModal({
       setError('');
 
       try {
+        // الاستبعاد في الاستعلام نفسه: سجلات الرسائل/المكالمات القديمة لا تظهر
+        // في القائمة ولا تستهلك صفحات التحميل.
         const loadRows = (columns: string) => supabase
           .from('notifications')
           .select(columns)
           .eq('user_id', currentUserId)
+          .not('type', 'in', LEGACY_NOTIFICATION_TYPE_FILTER)
           .neq('type', 'follow_request')
           .order('created_at', { ascending: false })
           .order('id', { ascending: false })
@@ -444,6 +453,7 @@ export default function NotificationsModal({
             .from('notifications')
             .select('id,reference_id,entity_id,actor_id,comment_id')
             .eq('user_id', currentUserId)
+            .not('type', 'in', LEGACY_NOTIFICATION_TYPE_FILTER)
             .neq('type', 'follow_request')
             .order('created_at', { ascending: false })
             .order('id', { ascending: false })
@@ -456,6 +466,7 @@ export default function NotificationsModal({
               .from('notifications')
               .select('id,entity_id,actor_id,comment_id')
               .eq('user_id', currentUserId)
+              .not('type', 'in', LEGACY_NOTIFICATION_TYPE_FILTER)
               .neq('type', 'follow_request')
               .order('created_at', { ascending: false })
               .order('id', { ascending: false })
@@ -564,7 +575,10 @@ export default function NotificationsModal({
         schema: 'public',
         table: 'notifications',
         filter: `user_id=eq.${currentUserId}`,
-      }, () => {
+      }, payload => {
+        // إشعارات الرسائل/المكالمات القديمة لا تدخل القائمة ولا تُعيد الجلب.
+        const insertedType = (payload.new as { type?: unknown } | null)?.type;
+        if (!shouldHandleRealtimeNotification(insertedType)) return;
         if (pageRequestInProgress) realtimeRefreshPending = true;
         else void fetchPage(0, false);
       })

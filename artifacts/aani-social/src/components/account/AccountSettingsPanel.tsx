@@ -36,6 +36,8 @@ import {
   deleteAccount,
 } from '@/lib/accountLifecycle';
 import { supabase } from '@/lib/supabase';
+import { deviceSignOutDeps } from '@/lib/pushNotifications';
+import { signOutThisDevice } from '@/lib/pushSignOut';
 
 type Notice = { tone: 'ok' | 'error' | 'info'; message: string } | null;
 
@@ -221,12 +223,23 @@ export default function AccountSettingsPanel() {
 
   const deactivate = () => {
     void run('deactivate', async () => {
+      // داخل signOutLocal: إلغاء رمز هذا الجهاز أولاً ثم إنهاء الجلسة المحلية.
+      // فشل الإلغاء لا يُعرض كنجاح ولا يُنهي الجلسة كي يمكن إعادة المحاولة.
+      let signOutFailure = '';
       const result = await deactivateAccount({
         deactivate: async () => await supabase.rpc('aani_deactivate_account'),
-        signOutLocal: () => supabase.auth.signOut({ scope: 'local' }),
+        signOutLocal: async () => {
+          const outcome = await signOutThisDevice(deviceSignOutDeps(() => supabase.auth.signOut({ scope: 'local' })));
+          if (!outcome.ok) signOutFailure = outcome.message;
+          return { error: outcome.ok ? null : outcome.message };
+        },
       });
-      if (result.ok) window.location.assign('/login');
-      return { tone: result.ok ? 'ok' : 'error', message: result.message };
+      if (!result.ok) return { tone: 'error', message: result.message };
+      if (signOutFailure) {
+        return { tone: 'error', message: `تم تعطيل الحساب مؤقتاً، لكن ${signOutFailure}` };
+      }
+      window.location.assign('/login');
+      return { tone: 'ok', message: result.message };
     });
   };
 
