@@ -67,15 +67,13 @@ export type DeleteOutcome =
   | { ok: true; message: string }
   | { ok: false; message: string };
 
-function readServerError(error: unknown): string {
-  const context = (error as { context?: unknown })?.context;
-  const message = (error as { message?: unknown })?.message;
-  return typeof message === 'string' ? message : context instanceof Response ? '' : '';
-}
-
 /**
  * يحذف الحساب نهائياً: تأكيد الكلمة أولاً، ثم نداء واحد للخادم. لا حذف لأي
  * وسيط من العميل، ولا إظهار نجاح قبل رد الخادم.
+ *
+ * رسالة الفشل عامة دائماً: لا يُعرض نص خطأ SDK تقني («Failed to send a request
+ * to the Edge Function») ولا أي تفصيل داخلي. سبب الفشل الحقيقي يُقرأ من سجل
+ * الخادم فقط، والمستخدم يرى رسالة واحدة واضحة.
  */
 export async function deleteAccount(
   confirmation: string,
@@ -86,10 +84,12 @@ export async function deleteAccount(
   }
 
   const { data, error } = await deps.deleteAccount();
-  if (error) {
-    return { ok: false, message: readServerError(error) || ACCOUNT_DELETE_FAILED_MESSAGE };
+  // أي خطأ من النداء (شبكة، 401، 500، جسم غير متوقع) يعني فشلاً واحداً
+  // للمستخدم: الحساب لم يُحذف، ولا نجاح قبل `success` من الخادم.
+  if (error || !data || typeof data !== 'object') {
+    return { ok: false, message: ACCOUNT_DELETE_FAILED_MESSAGE };
   }
-  const success = Boolean(data && typeof data === 'object' && (data as { success?: unknown }).success === true);
+  const success = (data as { success?: unknown }).success === true;
   if (!success) return { ok: false, message: ACCOUNT_DELETE_FAILED_MESSAGE };
 
   await deps.signOutLocal();
