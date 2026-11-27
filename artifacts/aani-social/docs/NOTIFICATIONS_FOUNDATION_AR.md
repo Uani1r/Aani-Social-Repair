@@ -102,3 +102,25 @@ select max(version), count(*) from supabase_migrations.schema_migrations;
 - تعطيل الفئة يمنع Push الحدث فقط، ولا يمنع إنشاء سجل الإشعار في `public.notifications`.
 - لا Push لفعل المستخدم على نفسه، والنوع غير المعروف يبقى يُرسل (لا تغيير للسلوك الحالي).
 - الرسائل والمكالمات لا تدخل `public.notifications` أبداً (حارس 20261229 باقٍ).
+
+
+## توافق المخطط الإنتاجي (فحص للقراءة فقط على auqqqwfjxrxizlmeweka)
+
+المخطط الفعلي يختلف عن افتراضات النسخة الأولى من الترحيلات في موضعين حاسمين:
+
+| العنصر | الإنتاج (مُتحقَّق) | ما كانت الترحيلات تفترضه | الإصلاح |
+|---|---|---|---|
+| `public.user_blocks` | `blocker_id`, `blocked_id` | `blocked_user_id` | استُبدل العمود في كل استعلامات الحظر داخل `aani_enqueue_push_outbox` |
+| Trigger الرسائل | `aani_message_notification_after_insert` → `aani_notify_on_message_insert()` ينشئ إشعاراً عاماً | غير موجود (افتراض خاطئ من ترحيل 20261228 الذي لم يُطبَّق) | يُسقط الترحيل الـtrigger، ويُبقي الدالة دون حذف |
+| حارس `aani_block_message_call_notifications` | لم يظهر ضمن الأدلة | مفترض أنه مطبَّق | يُنشأ في الترحيل نفسه (نفس تعريف 20261229) بصورة idempotent |
+
+بقيت الأعمدة الأخرى مطابقة: `messages(id, sender_id, recipient_id, content)`،
+`profiles.notification_settings jsonb`، `message_conversation_settings(user_id, other_user_id, is_muted)`.
+و`device_tokens`/`notification_outbox` غير موجودين في الإنتاج، فترحيلاتهما إنشاء جديد لا يمسّ شيئاً قائماً.
+
+`aani_notify_on_message_insert` تبقى موجودة بعد الترحيل (لا حذف بلا إثبات عدم وجود اعتماد آخر)، لكنها
+بلا trigger يستدعيها، فلا تُنشئ إشعارات رسائل بعد اليوم.
+
+**دليل الاختبار:** الـharness صار يبني المخطط الإنتاجي نفسه (بما فيه الـtrigger القديم و`blocked_id`)
+ثم تُطبَّق الترحيلات الثلاثة مرتين، والاختبار يثبت: إسقاط الـtrigger القديم، وجود كل trigger جديد مرة
+واحدة فقط، عدم إنشاء إشعار عام لأي رسالة أو مكالمة، والحظر في الاتجاهين.

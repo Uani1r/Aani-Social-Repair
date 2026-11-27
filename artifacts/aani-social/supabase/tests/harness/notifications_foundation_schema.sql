@@ -1,7 +1,13 @@
--- بيئة اختبار نظام الإشعارات الموحد على قاعدة CI مؤقتة فقط.
--- تعيد الشكل الفعلي المختصر للجداول التي تعتمد عليها الترحيلات الجديدة:
---   profiles, messages, notifications (+ حارس 20261229), user_blocks,
---   message_conversation_settings، وأدوار Supabase وauth.uid().
+-- بيئة اختبار نظام الإشعارات على قاعدة CI مؤقتة فقط، مطابقة للمخطط الإنتاجي
+-- (auqqqwfjxrxizlmeweka) كما جرى فحصه للقراءة فقط:
+--   * public.user_blocks بعموديها الفعليين: blocker_id و blocked_id
+--     (لا blocked_user_id).
+--   * public.messages: id, sender_id, recipient_id, content.
+--   * public.profiles: notification_settings jsonb.
+--   * public.message_conversation_settings: user_id, other_user_id, is_muted.
+--   * الـtrigger القديم aani_message_notification_after_insert على public.messages
+--     يستدعي public.aani_notify_on_message_insert() وينشئ إشعار رسالة عاماً.
+--     يُنشأ هنا كما هو في الإنتاج، والترحيلات الجديدة يجب أن تُسقطه.
 -- لا تُشغَّل على أي مشروع Supabase.
 
 create schema if not exists auth;
@@ -14,8 +20,7 @@ begin
   if not exists (select 1 from pg_roles where rolname = 'authenticated') then
     create role authenticated nologin;
   end if;
-  -- service_role في Supabase يمتلك BYPASSRLS، وبه يعمل العامل على outbox
-  -- (RLS مفعّلة بلا سياسات، فالمستخدم العادي ممنوع تماماً).
+  -- service_role في Supabase يمتلك BYPASSRLS، وبه يعمل العامل على outbox.
   if not exists (select 1 from pg_roles where rolname = 'service_role') then
     create role service_role nologin bypassrls;
   else
@@ -41,12 +46,28 @@ create table if not exists public.profiles (
   notification_settings jsonb not null default '{}'::jsonb
 );
 
+-- الأعمدة الفعلية للرسائل في الإنتاج.
 create table if not exists public.messages (
   id uuid primary key default gen_random_uuid(),
   sender_id uuid not null,
   recipient_id uuid not null,
-  content text,
-  created_at timestamptz not null default now()
+  content text
+);
+
+-- الأعمدة الفعلية للحظر في الإنتاج: blocker_id و blocked_id.
+create table if not exists public.user_blocks (
+  blocker_id uuid not null,
+  blocked_id uuid not null,
+  created_at timestamptz not null default now(),
+  primary key (blocker_id, blocked_id)
+);
+
+create table if not exists public.message_conversation_settings (
+  user_id uuid not null,
+  other_user_id uuid not null,
+  is_muted boolean not null default false,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, other_user_id)
 );
 
 create table if not exists public.notifications (
@@ -63,38 +84,32 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
-create table if not exists public.user_blocks (
-  blocker_id uuid not null,
-  blocked_user_id uuid not null,
-  created_at timestamptz not null default now(),
-  primary key (blocker_id, blocked_user_id)
-);
-
-create table if not exists public.message_conversation_settings (
-  user_id uuid not null,
-  other_user_id uuid not null,
-  is_muted boolean not null default false,
-  updated_at timestamptz not null default now(),
-  primary key (user_id, other_user_id)
-);
-
--- حارس 20261229: يمنع إدراج الرسائل والمكالمات في الإشعارات العامة.
-create or replace function public.aani_block_message_call_notifications()
+-- الـtrigger القديم الفعلي في الإنتاج: ينشئ إشعار رسالة عاماً.
+create or replace function public.aani_notify_on_message_insert()
 returns trigger
 language plpgsql
+security definer
+set search_path = ''
 as $$
 begin
-  if lower(new.type) in ('message', 'new_message', 'chat_message', 'call', 'incoming_call', 'missed_call') then
-    return null;
+  if new.sender_id is null
+    or new.recipient_id is null
+    or new.sender_id = new.recipient_id
+    or coalesce(new.content, '') like '[aani-call:v1]%' then
+    return new;
   end if;
+
+  insert into public.notifications (user_id, actor_id, type, content, reference_id)
+  values (new.recipient_id, new.sender_id, 'message', 'أرسل لك رسالة', new.id);
+
   return new;
 end;
 $$;
 
-drop trigger if exists aani_block_message_call_notifications on public.notifications;
-create trigger aani_block_message_call_notifications
-before insert on public.notifications
-for each row execute function public.aani_block_message_call_notifications();
+drop trigger if exists aani_message_notification_after_insert on public.messages;
+create trigger aani_message_notification_after_insert
+after insert on public.messages
+for each row execute function public.aani_notify_on_message_insert();
 
 -- سياسات الإشعارات الفعلية (قراءة/تحديث/حذف صاحبها).
 alter table public.notifications enable row level security;

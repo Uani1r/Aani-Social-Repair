@@ -67,23 +67,35 @@ begin
     raise exception 'the old per-user unique indexes must be removed';
   end if;
 
-  if not exists (
-    select 1 from pg_catalog.pg_trigger
-    where tgrelid = 'public.notifications'::regclass and tgname = 'aani_block_message_call_notifications'
-  ) then
-    raise exception 'the message/call guard trigger must stay in place';
+  -- الحارس ضد كتابة الرسائل/المكالمات في الإشعارات العامة موجود مرة واحدة.
+  if (select count(*) from pg_catalog.pg_trigger
+      where tgrelid = 'public.notifications'::regclass
+        and tgname = 'aani_block_message_call_notifications') <> 1 then
+    raise exception 'the message/call guard trigger must exist exactly once';
   end if;
-  if not exists (
-    select 1 from pg_catalog.pg_trigger
-    where tgrelid = 'public.messages'::regclass and tgname = 'aani_enqueue_push_outbox'
-  ) then
-    raise exception 'the push outbox trigger must exist on messages';
-  end if;
+  -- Trigger الرسائل القديم (المحصي من الإنتاج) أُسقط بالترحيل، ولا نسخة ثانية منه.
   if exists (
     select 1 from pg_catalog.pg_trigger
     where tgrelid = 'public.messages'::regclass and tgname = 'aani_message_notification_after_insert'
   ) then
-    raise exception 'the old message notification trigger must stay removed';
+    raise exception 'the legacy message notification trigger must be removed by the migration';
+  end if;
+  -- الدالة القديمة تُترك دون حذف (قد يكون لها اعتماد آخر).
+  if not exists (
+    select 1 from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'aani_notify_on_message_insert'
+  ) then
+    raise exception 'the legacy notification function must not be dropped';
+  end if;
+  -- trigger الـoutbox على الرسائل موجود مرة واحدة بعد إعادة التطبيق أيضاً.
+  if (select count(*) from pg_catalog.pg_trigger
+      where tgrelid = 'public.messages'::regclass and tgname = 'aani_enqueue_push_outbox') <> 1 then
+    raise exception 'the push outbox trigger must exist exactly once on messages';
+  end if;
+  if (select count(*) from pg_catalog.pg_trigger
+      where tgrelid = 'public.notifications'::regclass and tgname = 'aani_enqueue_notification_push') <> 1 then
+    raise exception 'the notification push trigger must exist exactly once';
   end if;
 end
 $$;
@@ -531,17 +543,38 @@ begin
   delete from public.message_conversation_settings
   where user_id = 'b0000000-0000-0000-0000-00000000000b';
 
-  insert into public.user_blocks (blocker_id, blocked_user_id)
+  -- المستلم (B) حظر المرسل (A): لا حدث Push.
+  insert into public.user_blocks (blocker_id, blocked_id)
   values ('b0000000-0000-0000-0000-00000000000b', 'a0000000-0000-0000-0000-00000000000a');
   insert into public.messages (id, sender_id, recipient_id, content)
   values (v_blocked_message, 'a0000000-0000-0000-0000-00000000000a',
-          'b0000000-0000-0000-0000-00000000000b', 'رسالة بعد الحظر');
+          'b0000000-0000-0000-0000-00000000000b', 'رسالة بعد حظر المستلم للمرسل');
   select count(*) into v_count from public.notification_outbox
   where dedupe_key = 'message:' || v_blocked_message::text;
   if v_count <> 0 then
-    raise exception 'a block must not enqueue a push event, found %', v_count;
+    raise exception 'a recipient block must not enqueue a push event, found %', v_count;
+  end if;
+  select count(*) into v_count from public.notifications
+  where user_id = 'b0000000-0000-0000-0000-00000000000b';
+  if v_count <> 0 then
+    raise exception 'a blocked private message must not create a public notification, found %', v_count;
   end if;
   delete from public.user_blocks where blocker_id = 'b0000000-0000-0000-0000-00000000000b';
+
+  -- المرسل (A) حظر المستلم (B): لا حدث Push في الاتجاه المعاكس.
+  insert into public.user_blocks (blocker_id, blocked_id)
+  values ('a0000000-0000-0000-0000-00000000000a', 'b0000000-0000-0000-0000-00000000000b');
+  insert into public.messages (id, sender_id, recipient_id, content)
+  values (gen_random_uuid(), 'a0000000-0000-0000-0000-00000000000a',
+          'b0000000-0000-0000-0000-00000000000b', 'رسالة بعد حظر المرسل للمستلم');
+  select count(*) into v_count from public.notification_outbox
+  where recipient_user_id = 'b0000000-0000-0000-0000-00000000000b'
+    and event_type = 'message'
+    and payload ->> 'sender_id' = 'a0000000-0000-0000-0000-00000000000a';
+  if v_count <> 1 then
+    raise exception 'only the earlier unblocked message event must remain, found %', v_count;
+  end if;
+  delete from public.user_blocks where blocker_id = 'a0000000-0000-0000-0000-00000000000a';
 
   update public.profiles set notification_settings = '{"messages": false}'::jsonb
   where id = 'b0000000-0000-0000-0000-00000000000b';

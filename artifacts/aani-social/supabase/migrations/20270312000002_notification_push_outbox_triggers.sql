@@ -2,9 +2,10 @@
 -- داخل المعاملة نفسها، دون إضافة أي سجل رسالة/مكالمة إلى public.notifications.
 --
 --   * الرسالة: بعد insert في public.messages (غير إشارة مكالمة) يُسجَّل حدث
---     'message' للمستلم، ويُتخطى عند: مستلم = مرسل، حظر بين الطرفين،
---     كتم المحادثة عند المستلم (message_conversation_settings.is_muted)،
---     أو تعطيل المستلم إشعارات الرسائل (profiles.notification_settings).
+--     'message' للمستلم، ويُتخطى عند: مستلم = مرسل، حظر بين الطرفين
+--     (public.user_blocks بعموديه الفعليين blocker_id/blocked_id)، كتم المحادثة
+--     عند المستلم (message_conversation_settings.is_muted)، أو تعطيل المستلم
+--     إشعارات الرسائل (profiles.notification_settings).
 --     الحمولة تحمل معرّفات فقط، بلا نص الرسالة ولا وسائطها.
 --   * المكالمة: إشارة سجل المكالمة '[aani-call:v1]{...}' تُسجَّل حدث 'call'
 --     لمعرّف المكالمة نفسه (call_id) مع النمط والنتيجة، بلا محتوى رسالة.
@@ -15,10 +16,52 @@
 --     outbox، فالإشعارات الاجتماعية الحالية تعمل كما هي بلا تعطيل.
 --     ويُحترم إعداد فئته الحقيقية: followers / interactions / stories.
 --
+-- توافق مع المخطط الإنتاجي (auqqqwfjxrxizlmeweka، قراءة فقط):
+--   * user_blocks العمود الفعلي blocked_id وليس blocked_user_id (وهو ما
+--     تستخدمه الدالة أدناه). كانت النسخة السابقة تستخدم blocked_user_id
+--     فتفشل عند وقت التشغيل قبل هذا التصحيح.
+--   * public.messages فيها id, sender_id, recipient_id, content (هذا كل ما
+--     تقرأه الدالة).
+--   * يوجد في الإنتاج trigger قديم aani_message_notification_after_insert
+--     يستدعي public.aani_notify_on_message_insert() وينشئ إشعار رسالة عاماً.
+--     هذا الترحيل يُسقط الـtrigger (بعد حصره من المخطط الفعلي) ويُبقي الدالة
+--     دون حذف (لا نعرف كل اعتمادها)، فلا يبقى أي trigger متعارض على الرسائل.
+--   * حارس منع الرسائل/المكالمات من الإشعارات العامة قد لا يكون مطبَّقاً في
+--     الإنتاج (لأن الترحيل القديم لم يُطبَّق)، فيُنشأ هنا مرة أخرى بصورة
+--     idempotent (نفس تعريف 20261229)، فلا يدخل نوع message/call القائمة العامة.
+--
 -- dedupe_key يمنع تكرار الحدث نفسه: message:<id> أو call:<id> أو notification:<id>.
 -- لم يُطبَّق هذا الترحيل على أي مشروع Supabase. يُطبَّق يدوياً بعد المراجعة.
 
 begin;
+
+-- 0) تنظيف الـtriggers القديمة على الرسائل وحارس الإشعارات العامة ---------------
+-- Trigger الرسائل القديم (محصور من مخطط الإنتاج): ينشئ سجلاً عاماً لكل رسالة.
+drop trigger if exists aani_message_notification_after_insert on public.messages;
+
+-- الحارس الفعلي ضد كتابة الرسائل/المكالمات في الإشعارات العامة (تعريف 20261229
+-- نفسه) يُنشأ هنا مجدداً كي لا يعتمد الترحيل على ترحيل قديم غير مطبَّق.
+create or replace function public.aani_block_message_call_notifications()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if lower(coalesce(new.type, '')) in (
+    'message', 'new_message', 'chat_message', 'call', 'incoming_call', 'missed_call'
+  ) then
+    return null;
+  end if;
+  return new;
+end
+$$;
+
+revoke all on function public.aani_block_message_call_notifications() from public, anon, authenticated;
+
+drop trigger if exists aani_block_message_call_notifications on public.notifications;
+create trigger aani_block_message_call_notifications
+before insert on public.notifications
+for each row execute function public.aani_block_message_call_notifications();
 
 -- 1) أحداث الرسائل والمكالمات -------------------------------------------------
 create or replace function public.aani_enqueue_push_outbox()
@@ -39,11 +82,12 @@ begin
   end if;
 
   -- الحظر في أي اتجاه يمنع أي حدث Push بين الطرفين.
+  -- أسماء الأعمدة الفعلية في الإنتاج: blocker_id و blocked_id.
   if exists (
     select 1
     from public.user_blocks as b
-    where (b.blocker_id = new.recipient_id and b.blocked_user_id = new.sender_id)
-       or (b.blocker_id = new.sender_id and b.blocked_user_id = new.recipient_id)
+    where (b.blocker_id = new.recipient_id and b.blocked_id = new.sender_id)
+       or (b.blocker_id = new.sender_id and b.blocked_id = new.recipient_id)
   ) then
     return new;
   end if;
@@ -187,20 +231,30 @@ as $$
 declare
   category text;
   disabled boolean := false;
+  reference_value uuid := null;
 begin
   if new.user_id is null then
     return new;
   end if;
-  -- الرسائل والمكالمات ممنوعة أصلاً من هذا الجدول (20261229)، وهذا حارس إضافي.
+  -- حارس الإشعارات العامة (أعلاه) يمنع الرسائل والمكالمات من هذا الجدول،
+  -- وهذا فحص إضافي إن غاب الـtrigger لأي سبب.
   if lower(coalesce(new.type, '')) in (
     'message', 'new_message', 'chat_message', 'call', 'incoming_call', 'missed_call'
   ) then
     return new;
   end if;
   -- لا Push لفعل المستخدم على نفسه.
-  if new.actor_id is not null and new.actor_id = new.user_id then
+  if to_jsonb(new) ->> 'actor_id' = new.user_id::text then
     return new;
   end if;
+
+  -- reference_id يُقرأ من الصف بأمان، فلا تُفشل الحمولة غير المتوقعة الإدراج.
+  begin
+    reference_value := nullif(to_jsonb(new) ->> 'reference_id', '')::uuid;
+  exception
+    when others then
+      reference_value := null;
+  end;
 
   category := public.aani_notification_preference_category(new.type);
   if category is not null then
@@ -220,14 +274,14 @@ begin
     'notification',
     'notification',
     new.id,
-    new.reference_id,
+    reference_value,
     'notification:' || new.id::text,
     jsonb_build_object(
       'notification_id', new.id,
       'type', new.type,
       'preference_category', category,
-      'actor_id', new.actor_id,
-      'reference_id', new.reference_id
+      'actor_id', to_jsonb(new) ->> 'actor_id',
+      'reference_id', reference_value
     )
   )
   on conflict (dedupe_key) do nothing;
