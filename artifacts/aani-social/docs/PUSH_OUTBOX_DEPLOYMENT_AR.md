@@ -93,6 +93,11 @@
 |---|---|---|
 | `FIREBASE_SERVICE_ACCOUNT` | JSON كامل لحساب خدمة مشروع **Ani Social** | Firebase Console → Project settings → Service accounts → Generate new private key |
 | `FIREBASE_PROJECT_ID` | معرّف مشروع **Ani Social** كما في Console | Firebase Console → Project settings → Project ID |
+
+`FIREBASE_PROJECT_ID` اختياري، لكنه إن ضُبط وجب أن يطابق `project_id` داخل
+حساب الخدمة **تماماً**؛ أي اختلاف يوقف العامل قبل أي إرسال (`firebase_project_mismatch`).
+وغيابه يعني الاعتماد على `project_id` في حساب الخدمة وحده. لا يُنشأ المعرّف ولا
+يُخمَّن ولا يُستنتج من رقم المشروع، والرسالة لا تكشف أي قيمة.
 | `PUSH_WORKER_SECRET` | سر عشوائي طويل يتحقق منه العامل | يُنشأ عندك ويُخزَّن في الخزنة فقط |
 | `PUSH_WORKER_NAME` | اسم العامل في `locked_by` (افتراضي `push-outbox-edge`) | اختياري |
 | `SUPABASE_URL` | `https://<project-ref>.supabase.co` | Supabase → Project settings → API |

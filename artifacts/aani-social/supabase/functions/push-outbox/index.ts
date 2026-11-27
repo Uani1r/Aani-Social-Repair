@@ -15,8 +15,8 @@ import {
   type PushOutboxDeps,
   type SendOutcome,
 } from '../_shared/pushOutbox.ts';
+import { FORBIDDEN_FIREBASE_PROJECT, resolveFirebaseProjectId } from '../_shared/fcmProject.ts';
 
-const FORBIDDEN_FIREBASE_PROJECT = 'ani1-20bed';
 const REQUEST_TIMEOUT_MS = 10_000;
 const TASK_LIMIT = 10;
 
@@ -49,12 +49,13 @@ function readServiceAccount(): ServiceAccount {
   return parsed;
 }
 
+/**
+ * معرّف مشروع FCM: من حساب الخدمة، ولا يُنشأ ولا يُخمَّن.
+ * إن ضُبط `FIREBASE_PROJECT_ID` تحقّقنا من مطابقته تماماً لـ`project_id`،
+ * وأي اختلاف يُوقف العامل قبل الإرسال بخطأ يحمل رمزاً فقط (بلا أي قيمة).
+ */
 function firebaseProjectId(account: ServiceAccount): string {
-  const projectId = asText(Deno.env.get('FIREBASE_PROJECT_ID')) || asText(account.project_id);
-  if (!projectId || projectId === FORBIDDEN_FIREBASE_PROJECT) {
-    throw new Error('a valid Firebase project id is required (Ani Social)');
-  }
-  return projectId;
+  return resolveFirebaseProjectId(account.project_id, Deno.env.get('FIREBASE_PROJECT_ID'));
 }
 
 let cachedAccessToken: { token: string; expiresAt: number } | null = null;
