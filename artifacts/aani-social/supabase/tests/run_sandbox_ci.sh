@@ -7,10 +7,11 @@
 #   1. bootstrap (أدوار + auth + storage + extensions + realtime)
 #   2. fresh_schema_cloudflare_r2.sql (المخطط الأساسي — الحالة النهائية)
 #   3. ترحيل الهدايا 20261124181406 (gifts/wallets — يعتمد عليه المالي)
-#   4. الترحيل المالي 20270306000000_aani_sandbox_financial.sql
-#   5. بيانات الاختبار sandbox_seed.sql
-#   6. الاختبارات الـ28 (sandbox_isolation.test.sql) عبر اتصال إداري + SET ROLE
-#   7. اختبار التزامن الحقيقي (جلستان) sandbox_concurrency.sh
+#   4. الترحيل المالي 20270306000001_aani_sandbox_financial.sql
+#   5. إعادة تطبيق الترحيل المالي نفسه (idempotency قبل أي بيانات)
+#   6. بيانات الاختبار sandbox_seed.sql — لا تبدأ إلا بعد نجاح التطبيقين
+#   7. الاختبارات الـ30 (sandbox_isolation.test.sql) عبر اتصال إداري + SET ROLE
+#   8. اختبار التزامن الحقيقي (جلستان) sandbox_concurrency.sh
 #
 # ملاحظة: لا نطبّق جميع الترحيلات التاريخية لأن fresh_schema يمثّل الحالة النهائية
 # المكافئة لها؛ تطبيقها فوقه يتعارض (تغيير نوع دالة موجودة). نطبّق فقط ما يلزم
@@ -45,10 +46,14 @@ run_step "fresh_schema" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../fresh_schema_cloudfla
 # 3) ترحيل الهدايا (gifts/wallets/gift_transactions) — الترحيل المالي يعتمد عليه.
 run_step "gifts_migration" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20261124181406_aani_gifts_popularity_final.sql" 2>&1 | tee "$LOG_DIR/03_gifts_migration.log"
 
-# 4) الترحيل المالي 20270306000000 (الأخير — يضيف مخطط sandbox).
-run_step "financial_migration" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20270306000000_aani_sandbox_financial.sql" 2>&1 | tee "$LOG_DIR/04_financial_migration.log"
+# 4) الترحيل المالي 20270306000001 (الأخير — يضيف مخطط sandbox).
+run_step "financial_migration" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20270306000001_aani_sandbox_financial.sql" 2>&1 | tee "$LOG_DIR/04_financial_migration.log"
 
-# 5) بيانات الاختبار
+# 5) إعادة تطبيق الترحيل المالي نفسه: يجب أن تنجح بلا خطأ (idempotency)،
+#    وأي فشل هنا يوقف السكربت (set -e) قبل بيانات الاختبار.
+run_step "financial_migration_reapply" "${PSQL[@]}" -q -f "$SCRIPT_DIR/../migrations/20270306000001_aani_sandbox_financial.sql" 2>&1 | tee "$LOG_DIR/04b_financial_migration_reapply.log"
+
+# 6) بيانات الاختبار — لا تبدأ إلا بعد نجاح التطبيقين أعلاه.
 run_step "seed" "${PSQL[@]}" -q -f "$SCRIPT_DIR/sandbox_seed.sql" 2>&1 | tee "$LOG_DIR/05_seed.log"
 
 # 5) الاختبارات الـ28 — بدون ON_ERROR_STOP لجمع كل النتائج، ثم نحكم على الفشل.
