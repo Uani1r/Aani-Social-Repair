@@ -821,3 +821,64 @@ jobs:
       - name: Deno tests (MFA gate, app_metadata, deletion without storage)
         working-directory: artifacts/aani-social/supabase/functions
         run: deno test --allow-read tests/account-mfa-edge.test.ts
+
+
+  # Verifies the conversation-settings privacy fix on a throwaway PostgreSQL.
+  # The harness recreates the live table shape and the exact pre-fix policies,
+  # the migration is applied, then three real identities (A, B, C) prove that a
+  # user reads only its own settings row (never through other_user_id), that the
+  # owner insert/update/delete still work, and that no permissive policy or grant
+  # was widened. The migration is applied twice to prove idempotency.
+  message-conversation-settings-rls:
+    name: Message conversation settings RLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_conversation_settings_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_conversation_settings_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the live table shape and the pre-fix policies
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/message_conversation_settings_schema.sql
+
+      - name: Apply the privacy migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270309000000_message_conversation_settings_rls_privacy.sql
+
+      - name: Assert the RLS isolation for A, B and C
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/message_conversation_settings_rls.test.sql
+
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270309000000_message_conversation_settings_rls_privacy.sql
+
+      - name: Rebuild the fixture and assert again
+        run: |
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/message_conversation_settings_schema.sql
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/message_conversation_settings_rls.test.sql
