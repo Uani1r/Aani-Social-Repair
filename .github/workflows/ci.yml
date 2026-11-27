@@ -66,7 +66,7 @@ jobs:
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/messagesVoice.test.ts ./src/lib/messagesVoicePlayback.test.ts ./src/lib/messagesVoiceServer.test.ts ./src/lib/messagesVoiceDeletion.test.ts
 
       - name: Unit tests @workspace/aani-social
-        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/netlifyApiProxy.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts ./src/lib/messagesConversationSettings.test.ts ./src/lib/notificationVisibility.test.ts ./src/lib/turnstileLoader.test.ts
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/reelsBatches.test.ts ./src/lib/reelsViewingSession.test.ts ./src/lib/messagesThread.test.ts ./src/lib/messagesInbox.test.ts ./src/lib/messagesRealtimeEvents.test.ts ./src/lib/realtimeChannelHealth.test.ts ./src/lib/realtimeChannelLifecycle.test.ts ./src/lib/messagesDeliveryReceipts.test.ts ./src/lib/messagesDeleteBroadcast.test.ts ./src/lib/messagesTypingIndicator.test.ts ./src/lib/messagesConversationMembership.test.ts ./src/lib/messagesConversationChannel.test.ts ./src/lib/netlifyApiProxy.test.ts ./src/lib/imagekitSignDiagnosticsRemoval.test.ts ./src/lib/messagesConversationSettings.test.ts ./src/lib/notificationVisibility.test.ts ./src/lib/turnstileLoader.test.ts ./src/lib/deviceTokens.test.ts
 
       # Server-side voice pipeline: FFmpeg argument building, ffprobe parsing and
       # output verification, the pre-transcode guards, and the auth/rate/concurrency
@@ -737,6 +737,36 @@ jobs:
         run: deno test --allow-read tests/phone-edge.test.ts
 
 
+  # Real Deno type check and tests for the FCM push-outbox worker. No Supabase
+  # project, no Firebase credentials and no network: every Supabase and FCM call
+  # goes through injected fakes, and the tests cover one delivery row per active
+  # device, an event claimed by a single worker, a transient failure that keeps
+  # only that device retryable, an invalid token that is revoked and skipped, a
+  # permanent rejection that is not retried, a payload with ids only, and logs
+  # that carry no device token, no secret and no message content.
+  push-outbox-edge:
+    name: Push outbox worker (Deno)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno 2
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno check (push-outbox)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno check push-outbox/index.ts
+
+      - name: Deno tests (multi-device delivery, retry, revocation, payload, logs)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno test --allow-read tests/push-outbox.test.ts
+
+
   # Applies the account settings migration (sessions reader, is_deactivated
   # guard, deactivation/reactivation RPCs) to a throwaway PostgreSQL with a
   # reduced auth schema, asserts the privileges, the guard, the session scoping
@@ -1054,14 +1084,26 @@ jobs:
       - name: Apply the message/call/social push triggers
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000002_notification_push_outbox_triggers.sql
 
+      # صف تسليم لكل (مهمة، جهاز): إعادة المحاولة ترسل فقط إلى الأجهزة التي
+      # لم تنجح بعد، فلا يصل الإشعار مرتين إلى الجهاز نفسه.
+      - name: Apply the per-device delivery table
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270313000000_notification_outbox_deliveries.sql
+
       - name: Assert tokens, outbox and the message/call separation
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notifications_foundation.test.sql
 
-      - name: Re-apply all three migrations (idempotency)
+      - name: Assert per-device deliveries, retry and revocation
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notification_outbox_deliveries.test.sql
+
+      - name: Re-apply all four migrations (idempotency)
         run: |
           psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000000_device_tokens.sql
           psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000001_notification_outbox.sql
           psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270312000002_notification_push_outbox_triggers.sql
+          psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270313000000_notification_outbox_deliveries.sql
 
       - name: Assert again after the second apply
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notifications_foundation.test.sql
+
+      - name: Re-run the deliveries assertions after the second apply
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notification_outbox_deliveries.test.sql
