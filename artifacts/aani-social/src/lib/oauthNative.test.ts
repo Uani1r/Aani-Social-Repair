@@ -43,7 +43,8 @@ type FakePlatform = {
 };
 
 type FakeOptions = {
-  url?: string | null;
+  /** روابط OAuth بالترتيب: كل نداء SignIn يستهلك عنصراً، والأخير يُعاد بعده. */
+  urls?: Array<string | null>;
   signInError?: unknown;
   signInThrows?: boolean;
   openThrows?: boolean;
@@ -66,7 +67,9 @@ function createFakePlatform(options: FakeOptions = {}): FakePlatform {
       state.signInCalls += 1;
       if (options.signInThrows) throw new Error('network');
       if (options.signInError) return { url: null, error: options.signInError };
-      return { url: options.url === undefined ? 'https://accounts.google.com/o/oauth2/auth' : options.url, error: null };
+      const urls = options.urls ?? ['https://accounts.google.com/o/oauth2/auth'];
+      const url = urls.length > 1 ? urls.shift() ?? null : urls[0] ?? null;
+      return { url, error: null };
     },
     async exchangeCodeForSession(code) {
       exchangeCalls.push(code);
@@ -152,7 +155,10 @@ test('بدء OAuth ناجح يفتح المتصفح برابط Supabase', async 
 });
 
 test('غياب data.url بلا خطأ: فشل واضح وتحرير المحاولة', async () => {
-  const platform = createFakePlatform({ url: null });
+  // النداء الأول بلا رابط (بلا خطأ)، والثاني برابط: إعادة المحاولة تنجح.
+  const platform = createFakePlatform({
+    urls: [null, 'https://accounts.google.com/o/oauth2/auth'],
+  });
   const gate = createGate(platform);
 
   const failed = await gate.start();
