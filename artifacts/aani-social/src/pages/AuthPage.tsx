@@ -6,6 +6,13 @@ import { classifyLoginIdentifier } from '@/lib/accountAuth';
 import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
 import { completePhoneLogin } from '@/lib/phoneLoginSession';
 import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
+import {
+  createTurnstileLoader,
+  type TurnstileApi,
+  type TurnstileClock,
+  type TurnstileDom,
+  type TurnstileScript,
+} from '@/lib/turnstileLoader';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
 const invokePhoneLogin = createPhoneFunctionInvoker({
@@ -22,12 +29,6 @@ const TURNSTILE_ACTION = 'phone_login';
  * مخترع في الكود. بلا قيمة لا يُفتح بريد بلا مستلم، بل تظهر رسالة واضحة.
  */
 const SUPPORT_EMAIL = String(import.meta.env.VITE_SUPPORT_EMAIL || '').trim();
-
-type TurnstileApi = {
-  render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
-  reset: (widgetId?: string | number) => void;
-  remove: (widgetId: string | number) => void;
-};
 
 declare global {
   interface Window {
@@ -133,23 +134,19 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [captchaToken, setCaptchaToken] = useState('');
   const [captchaLoadError, setCaptchaLoadError] = useState(false);
   const captchaContainerRef = useRef<HTMLDivElement | null>(null);
-  const captchaWidgetRef = useRef<string | number | null>(null);
-  const scriptRef = useRef<HTMLScriptElement | null>(null);
+  const loaderRef = useRef<ReturnType<typeof createTurnstileLoader> | null>(null);
   // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
   const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
 
   const resetCaptcha = () => {
     setCaptchaToken('');
     const api = window.turnstile;
-    if (api && captchaWidgetRef.current !== null) api.reset(captchaWidgetRef.current);
+    const loader = loaderRef.current;
+    if (api && loader && loader.widgetId !== null) api.reset(loader.widgetId);
   };
 
   const removeWidget = () => {
-    const api = window.turnstile;
-    if (api && captchaWidgetRef.current !== null) {
-      api.remove(captchaWidgetRef.current);
-      captchaWidgetRef.current = null;
-    }
+    loaderRef.current?.removeWidget();
     setCaptchaToken('');
   };
 
@@ -173,124 +170,67 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
    */
   useEffect(() => {
     if (!isPhoneLogin || !TURNSTILE_SITE_KEY) {
-      removeWidget();
+      loaderRef.current?.removeWidget();
+      loaderRef.current?.cancel();
       setCaptchaLoadError(false);
       return;
     }
 
+    const dom: TurnstileDom = {
+      document: {
+        head: document.head as unknown as TurnstileDom['document']['head'],
+        querySelector: (selector) =>
+          document.querySelector<HTMLScriptElement>(selector) as unknown as TurnstileScript | null,
+        createElement: (tag) => document.createElement(tag) as unknown as TurnstileScript,
+      },
+      window: window as unknown as { turnstile?: TurnstileApi },
+    };
+    const clock: TurnstileClock = {
+      setTimeout: setTimeout as unknown as TurnstileClock['setTimeout'],
+      clearTimeout: clearTimeout as unknown as TurnstileClock['clearTimeout'],
+    };
+
+    const loader = createTurnstileLoader({
+      siteKey: TURNSTILE_SITE_KEY,
+      action: TURNSTILE_ACTION,
+      scriptUrl: TURNSTILE_SCRIPT,
+      dom,
+      clock,
+      onLoadError: () => {
+        if (!loader.isCancelled) setCaptchaLoadError(true);
+      },
+    });
+    loaderRef.current = loader;
+
     let cancelled = false;
-    let retryCount = 0;
-    const MAX_RETRIES = 3;
-    const BASE_DELAY_MS = 500;
 
-    const mountWidget = () => {
-      if (cancelled) return;
-      const api = window.turnstile;
+    const loadAndMount = async () => {
+      await loader.load();
+      if (cancelled || loader.isCancelled) return;
+      if (loader.loadError) return;
+      setCaptchaLoadError(false);
       const container = captchaContainerRef.current;
-      if (!api || !container) return;
-      if (captchaWidgetRef.current !== null) api.remove(captchaWidgetRef.current);
-      setCaptchaToken('');
-      captchaWidgetRef.current = api.render(container, {
-        sitekey: TURNSTILE_SITE_KEY,
-        action: TURNSTILE_ACTION,
-        theme: 'light',
-        language: 'ar',
-        callback: (token: string) => {
-          if (!cancelled) setCaptchaToken(token);
-        },
-        'expired-callback': () => {
-          if (!cancelled) setCaptchaToken('');
-        },
-        'error-callback': () => {
-          if (!cancelled) setCaptchaToken('');
-        },
-      });
-    };
-
-    const loadScript = (): Promise<void> => {
-      return new Promise((resolve, reject) => {
-        if (window.turnstile) {
-          resolve();
-          return;
-        }
-
-        const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
-        if (existingScript) {
-          scriptRef.current = existingScript;
-          // التحقق مما إذا كان window.turnstile جاهزاً بالفعل (السكربت محمل)
-          const checkReady = () => {
-            if (window.turnstile) {
-              resolve();
-            } else {
-              setTimeout(checkReady, 50);
-            }
-          };
-          // إذا كان السكربت محملاً، window.turnstile سيكون جاهزاً خلال وقت قصير
-          // نتحقق مباشرة بدلاً من الاعتماد على readyState
-          checkReady();
-          // نضيف مستمعي خطأ للتحميل كاحتياط
-          const onError = () => {
-            existingScript.removeEventListener('error', onError);
-            reject(new Error('Failed to load Turnstile script'));
-          };
-          existingScript.addEventListener('error', onError);
-          return;
-        }
-
-        const script = document.createElement('script');
-        script.src = TURNSTILE_SCRIPT;
-        script.async = true;
-        script.defer = true;
-        script.dataset.turnstile = 'true';
-        scriptRef.current = script;
-
-        const onLoad = () => {
-          script.removeEventListener('load', onLoad);
-          script.removeEventListener('error', onError);
-          setTimeout(() => {
-            if (window.turnstile) resolve();
-            else reject(new Error('Turnstile API not initialized after script load'));
-          }, 50);
-        };
-        const onError = () => {
-          script.removeEventListener('load', onLoad);
-          script.removeEventListener('error', onError);
-          reject(new Error('Failed to load Turnstile script'));
-        };
-        script.addEventListener('load', onLoad);
-        script.addEventListener('error', onError);
-        document.head.appendChild(script);
-      });
-    };
-
-    const attemptLoad = async () => {
-      try {
-        await loadScript();
-        if (!cancelled) {
-          setCaptchaLoadError(false);
-          mountWidget();
-        }
-      } catch (err) {
-        if (cancelled) return;
-        if (retryCount < MAX_RETRIES) {
-          retryCount++;
-          const delay = BASE_DELAY_MS * Math.pow(2, retryCount - 1);
-          setTimeout(attemptLoad, delay);
-        } else {
-          setCaptchaLoadError(true);
-        }
+      if (container) {
+        loader.mount(container,
+          (token: string) => {
+            if (!cancelled) setCaptchaToken(token);
+          },
+          () => {
+            if (!cancelled) setCaptchaToken('');
+          },
+          () => {
+            if (!cancelled) setCaptchaToken('');
+          },
+        );
       }
     };
 
-    attemptLoad();
+    loadAndMount();
 
     return () => {
       cancelled = true;
-      if (scriptRef.current && !document.querySelector('script[data-turnstile]')) {
-        // لا نحذف السكربت إذا كان موجوداً مسبقاً في الصفحة
-        document.head.removeChild(scriptRef.current);
-      }
-      removeWidget();
+      loader.cancel();
+      loader.removeWidget();
       setCaptchaLoadError(false);
     };
   }, [isPhoneLogin]);
