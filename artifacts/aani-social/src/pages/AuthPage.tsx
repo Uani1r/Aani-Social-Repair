@@ -136,6 +136,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const captchaWidgetRef = useRef<string | number | null>(null);
   const scriptRef = useRef<HTMLScriptElement | null>(null);
   const abortLoadRef = useRef<(() => void) | null>(null);
+  const activeAttemptRef = useRef<any>(null);
   // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
   const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
 
@@ -213,51 +214,78 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       return new Promise((resolve, reject) => {
         if (window.turnstile) { resolve(); return; }
 
-        const timers = [];
-        let settled = false;
-        let listeners = [];
+        const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+        const ownsScript = existingScript === null;
+        const script = existingScript ?? document.createElement('script');
 
-        const clearAll = () => {
-          timers.forEach(t => clearTimeout(t));
-          timers.length = 0;
-        };
+        const timers = [];
+        const listeners = [];
+        let settled = false;
+
+        const clearAllTimers = () => { timers.forEach(t => clearTimeout(t)); timers.length = 0; };
+        const removeAllListeners = () => { listeners.forEach(({el, ev, fn}) => { try { el.removeEventListener(ev, fn); } catch {} }); listeners.length = 0; };
 
         const finish = (ok, err) => {
           if (settled) return;
           settled = true;
-          clearAll();
-          listeners.forEach(({el,ev,fn}) => { try { el.removeEventListener(ev, fn); } catch {} });
-          listeners = [];
-          abortLoadRef.current = null;
-          if (ok) resolve(); else reject(err);
+          clearAllTimers();
+          removeAllListeners();
+          if (activeAttemptRef.current === attempt) activeAttemptRef.current = null;
+          if (ok) resolve(); else reject(err ?? new Error('Turnstile load failed'));
         };
 
-        abortLoadRef.current = () => finish(false, new Error('cancelled'));
+        const abort = () => {
+          if (settled) return;
+          clearAllTimers();
+          removeAllListeners();
+          if (ownsScript && script.parentNode) { try { script.parentNode.removeChild(script); } catch {} }
+          finish(false, new Error('Turnstile load cancelled'));
+        };
+
+        const attempt = { settled, timers, listeners, script, ownsScript, abort, finish };
+        activeAttemptRef.current = attempt;
+        abortLoadRef.current = abort;
+
         const timeoutId = setTimeout(() => {
-          // remove failed script
-          if (owned) {
-            const sc = scriptRef.current;
-            if (sc && sc.parentNode) { try { sc.parentNode.removeChild(sc); } catch {} }
-            scriptRef.current = null;
-          }
+          if (ownsScript && script.parentNode) { try { script.parentNode.removeChild(script); } catch {} }
           finish(false, new Error('Turnstile script load timed out'));
         }, 10000);
         timers.push(timeoutId);
 
-        const existingScript = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
-        const owned = !existingScript;
-        if (existingScript) {
-          scriptRef.current = existingScript;
-          const onReady = () => { if (window.turnstile) finish(true, null); };
+        if (ownsScript) {
+          script.src = TURNSTILE_SCRIPT;
+          script.async = true;
+          script.defer = true;
+          script.dataset.turnstile = 'true';
+          scriptRef.current = script;
+
+          const onLoad = () => {
+            const t = setTimeout(() => {
+              if (window.turnstile) finish(true, null);
+              else {
+                if (ownsScript && script.parentNode) { try { script.parentNode.removeChild(script); } catch {} }
+                finish(false, new Error('Turnstile API not initialized after script load'));
+              }
+            }, 50);
+            timers.push(t);
+          };
           const onError = () => {
-            if (owned) { try { existingScript.remove(); } catch {} }
-            scriptRef.current = null;
+            if (ownsScript && script.parentNode) { try { script.parentNode.removeChild(script); } catch {} }
             finish(false, new Error('Failed to load Turnstile script'));
           };
-          listeners.push({el:existingScript,ev:'load',fn:onReady});
-          listeners.push({el:existingScript,ev:'error',fn:onError});
-          existingScript.addEventListener('load', onReady);
-          existingScript.addEventListener('error', onError);
+          listeners.push({el: script, ev: 'load', fn: onLoad});
+          listeners.push({el: script, ev: 'error', fn: onError});
+          script.addEventListener('load', onLoad);
+          script.addEventListener('error', onError);
+          document.head.appendChild(script);
+        } else {
+          scriptRef.current = script;
+          const onReady = () => { if (window.turnstile) finish(true, null); };
+          const onError = () => { finish(false, new Error('Failed to load Turnstile script')); };
+          listeners.push({el: script, ev: 'load', fn: onReady});
+          listeners.push({el: script, ev: 'error', fn: onError});
+          script.addEventListener('load', onReady);
+          script.addEventListener('error', onError);
           const poll = () => {
             if (settled) return;
             if (window.turnstile) { onReady(); return; }
@@ -265,37 +293,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
             timers.push(t);
           };
           poll();
-          return;
         }
-
-        const script = document.createElement('script');
-        script.src = TURNSTILE_SCRIPT;
-        script.async = true;
-        script.defer = true;
-        script.dataset.turnstile = 'true';
-        scriptRef.current = script;
-
-        const onLoad = () => {
-          const t = setTimeout(() => {
-            if (window.turnstile) finish(true, null);
-            else {
-              try { script.remove(); } catch {}
-              scriptRef.current = null;
-              finish(false, new Error('Turnstile API not initialized after script load'));
-            }
-          }, 50);
-          timers.push(t);
-        };
-        const onError = () => {
-          try { script.remove(); } catch {}
-          scriptRef.current = null;
-          finish(false, new Error('Failed to load Turnstile script'));
-        };
-        listeners.push({el:script,ev:'load',fn:onLoad});
-        listeners.push({el:script,ev:'error',fn:onError});
-        script.addEventListener('load', onLoad);
-        script.addEventListener('error', onError);
-        document.head.appendChild(script);
       });
     };
 
