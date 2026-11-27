@@ -98,6 +98,11 @@
 | `SUPABASE_URL` | `https://<project-ref>.supabase.co` | Supabase → Project settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | مفتاح service_role (خادم فقط) | Supabase → Project settings → API |
 
+`FIREBASE_PROJECT_ID` اختياري، لكنه إن ضُبط وجب أن يطابق `project_id` داخل
+حساب الخدمة **تماماً**؛ أي اختلاف يوقف العامل قبل أي إرسال (`firebase_project_mismatch`).
+وغيابه يعني الاعتماد على `project_id` في حساب الخدمة وحده. لا يُنشأ المعرّف ولا
+يُخمَّن ولا يُستنتج من رقم المشروع، والرسالة لا تكشف أي قيمة.
+
 **لا** يُستخدم المشروع القديم `ani1-20bed` ولا يُستنتج معرّف المشروع من رقم
 المشروع `742633618169`: العامل يرفض معرّف المشروع القديم صراحةً.
 

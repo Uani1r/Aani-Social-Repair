@@ -764,7 +764,7 @@ jobs:
 
       - name: Deno tests (multi-device delivery, retry, revocation, payload, logs)
         working-directory: artifacts/aani-social/supabase/functions
-        run: deno test --allow-read tests/push-outbox.test.ts
+        run: deno test --allow-read tests/push-outbox.test.ts tests/fcm-project.test.ts
 
 
   # Applies the account settings migration (sessions reader, is_deactivated
