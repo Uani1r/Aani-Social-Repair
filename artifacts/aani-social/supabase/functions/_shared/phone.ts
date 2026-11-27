@@ -21,6 +21,7 @@ export const PHONE_MESSAGES = {
   phoneTaken: "هذا الرقم مستخدم في حساب آخر. استخدم رقماً مختلفاً.",
   unauthorized: "يجب تسجيل الدخول لإدارة رقم الهاتف.",
   rateLimited: "تجاوزت عدد المحاولات. انتظر قليلاً ثم أعد المحاولة.",
+  rateLimitUnavailable: "تعذر الوصول إلى حماية تسجيل الدخول حالياً. حاول بعد قليل.",
   captchaRequired: "تحقق الأمان مطلوب لإكمال الدخول. أعد المحاولة بعد تحديث الصفحة.",
   captchaUnavailable: "الدخول بالهاتف غير متاح حالياً: حماية CAPTCHA لم تُفعّل بعد.",
   unavailable: "تعذر الوصول إلى الخدمة حالياً. حاول بعد قليل.",
@@ -101,12 +102,63 @@ export function logFailure(scope: string, error: unknown): void {
   console.error(`${scope}: ${redactForLog(error)}`);
 }
 
-/** بصمة SHA-256 بصيغة hex: مفتاح المحدّد المشترك بدل الرقم أو IP الخام. */
-export async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest))
+/**
+ * مفتاح HMAC مستقل للمحدّد: 32–256 محرفاً بلا مسافات. ليس مفتاح الخدمة ولا
+ * أي مفتاح Supabase، ويُقرأ من `LOGIN_RATE_LIMIT_HMAC_SECRET` وحده.
+ */
+export function isUsableRateLimitSecret(value: string | undefined): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length < 32 || trimmed.length > 256) return false;
+  if (/\s/.test(trimmed)) return false;
+  return true;
+}
+
+/**
+ * بصمة HMAC-SHA-256: `domain` يفصل نطاق الهاتف عن نطاق IP فلا تتداخل
+ * المفاتيح (نفس القيمة في نطاقين تُنتج بصمتين مختلفتين)، والمفتاح سري مستقل.
+ */
+export async function hmacSha256Hex(secret: string, domain: string, value: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const message = new TextEncoder().encode(`${domain}\u0000${value}`);
+  const signature = await crypto.subtle.sign("HMAC", key, message);
+  return Array.from(new Uint8Array(signature))
     .map(byte => byte.toString(16).padStart(2, "0"))
     .join("");
+}
+
+export type TrustedClientIp =
+  | { status: "ip"; ip: string }
+  | { status: "unavailable"; reason: "no-platform-markers" | "no-ip" | "invalid-ip" };
+
+/**
+ * مصدر IP موثوق، موثّق هنا صراحةً:
+ * - لا توجد في وثائق Supabase لـ Edge Functions ترويسة IP مضمونة من المنصة،
+ *   و`x-forwarded-for` **لا** يُعتمد: قد يرسله العميل، ووثائق الدوال نفسها
+ *   تُظهر مرور ترويسات مخصصة من العميل. لذلك لا يُقرأ هنا إطلاقاً.
+ * - الترويسة الوحيدة الموصوفة في وثائق Supabase بأن المنصة تضبطها هي
+ *   `cf-connecting-ip` (وثائق Data API)، وتصل الدالة عبر Cloudflare. لذلك لا
+ *   تُقبل إلا مع علامتي المنصة التي يعيد كتابتهما Cloudflare على كل طلب:
+ *   `cf-ray` موجودة و`cf-worker` تساوي `supabase.co`.
+ * - بلا هذه العلامات (مشروع مستضاف ذاتياً، أو ترويسة من العميل) لا IP موثوق:
+ *   يُعالج الغياب بأمان في المحدّد (بصمة الهاتف وحدها) ولا يُجمع كل المستخدمين
+ *   في حد واحد.
+ */
+export function resolveTrustedClientIp(headers: Headers): TrustedClientIp {
+  const cfRay = (headers.get("cf-ray") ?? "").trim();
+  const cfWorker = (headers.get("cf-worker") ?? "").trim().toLowerCase();
+  if (!cfRay || cfWorker !== "supabase.co") return { status: "unavailable", reason: "no-platform-markers" };
+
+  const ip = (headers.get("cf-connecting-ip") ?? "").trim();
+  if (!ip) return { status: "unavailable", reason: "no-ip" };
+  if (!/^[0-9a-fA-F:.]{2,64}$/.test(ip)) return { status: "unavailable", reason: "invalid-ip" };
+  return { status: "ip", ip };
 }
 
 export type TurnstileExpectation = {
@@ -155,8 +207,8 @@ export async function verifyTurnstileToken(
   }
 
   if (payload.success !== true) return false;
-  const errorCodes = payload["error-codes"];
-  if (Array.isArray(errorCodes) && errorCodes.length > 0) return false;
+  // أي وجود لـ error-codes — حتى مصفوفة فارغة أو قيمة غير متوقعة — رفض.
+  if ("error-codes" in payload) return false;
 
   const hostname = typeof payload.hostname === "string" ? payload.hostname.toLowerCase() : "";
   if (!hostname || !expectation.expectedHostnames.includes(hostname)) return false;

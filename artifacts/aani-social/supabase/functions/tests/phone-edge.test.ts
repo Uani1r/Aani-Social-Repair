@@ -14,12 +14,14 @@
 import {
   PHONE_MESSAGES,
   failureBody,
+  hmacSha256Hex,
+  isUsableRateLimitSecret,
   logFailure,
   normalizePhoneToE164,
   redactForLog,
   requireBearerToken,
+  resolveTrustedClientIp,
   sessionTokens,
-  sha256Hex,
   verifyTurnstileToken,
 } from "../_shared/phone.ts";
 import { LOGIN_CAPTCHA_ACTION, createLoginWithPhoneHandler } from "../_shared/phoneLoginFlow.ts";
@@ -47,8 +49,9 @@ type FakeDb = {
   rateLimitDown: boolean;
   alias: { phone: string; userId: string } | null;
   passwords: Map<string, string>;
-  captcha: { success: boolean; hostname: string; action: string; errorCodes?: string[] };
+  captcha: { success: boolean; hostname: string; action: string; errorCodes?: unknown };
   calls: string[];
+  buckets: string[];
 };
 
 function createDb(): FakeDb {
@@ -60,6 +63,7 @@ function createDb(): FakeDb {
     passwords: new Map([[EMAIL, PASSWORD]]),
     captcha: { success: true, hostname: HOSTNAME, action: LOGIN_CAPTCHA_ACTION },
     calls: [],
+    buckets: [],
   };
 }
 
@@ -87,8 +91,13 @@ function createFakeFetch(db: FakeDb): typeof fetch {
 
     if (url.startsWith("https://challenges.cloudflare.com/turnstile/v0/siteverify")) {
       if (!db.captcha.success) return json({ success: false, "error-codes": ["invalid-input-response"] });
-      if (db.captcha.errorCodes?.length) {
-        return json({ success: true, hostname: HOSTNAME, action: db.captcha.action, "error-codes": db.captcha.errorCodes });
+      if (Object.prototype.hasOwnProperty.call(db.captcha, "errorCodes")) {
+        return json({
+          success: true,
+          hostname: db.captcha.hostname,
+          action: db.captcha.action,
+          "error-codes": db.captcha.errorCodes,
+        });
       }
       return json({ success: true, hostname: db.captcha.hostname, action: db.captcha.action });
     }
@@ -97,6 +106,7 @@ function createFakeFetch(db: FakeDb): typeof fetch {
       if (db.rateLimitDown) return json({ message: "down" }, 500);
       const payload = JSON.parse(String(init?.body ?? "{}")) as { p_bucket?: string };
       const bucket = payload.p_bucket ?? "";
+      db.buckets.push(bucket);
       const existing = db.rateLimits.get(bucket);
       if (!existing || existing.resetAt <= db.now) {
         db.rateLimits.set(bucket, { attempts: 1, resetAt: db.now + WINDOW_SECONDS * 1000 });
@@ -147,6 +157,7 @@ const BASE_ENV: Record<string, string> = {
   SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
   TURNSTILE_SECRET_KEY: "turnstile-secret",
   TURNSTILE_ALLOWED_HOSTNAMES: `${HOSTNAME}, www.${HOSTNAME}`,
+  LOGIN_RATE_LIMIT_HMAC_SECRET: "rate-limit-hmac-secret-0123456789abcdef",
 };
 
 function handlerWith(db: FakeDb, overrides: Record<string, string | undefined> = {}) {
@@ -155,10 +166,16 @@ function handlerWith(db: FakeDb, overrides: Record<string, string | undefined> =
   return createLoginWithPhoneHandler({ fetchImpl, env: name => env[name] });
 }
 
-function loginRequest(body: Record<string, unknown>): Request {
+function loginRequest(body: Record<string, unknown>, extraHeaders: Record<string, string> = {}): Request {
   return new Request("https://project.test/functions/v1/login-with-phone", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+    headers: {
+      "content-type": "application/json",
+      "cf-ray": "9a1b2c3d4e5f6a7b-GRU",
+      "cf-worker": "supabase.co",
+      "cf-connecting-ip": "203.0.113.9",
+      ...extraHeaders,
+    },
     body: JSON.stringify(body),
   });
 }
@@ -174,11 +191,81 @@ Deno.test("normalises Iraqi local and international numbers and rejects others",
   assertEqual(normalizePhoneToE164("+0123456789"), null, "no leading zero after +");
 });
 
-Deno.test("the shared rate-limit bucket is a hash, not a phone", async () => {
-  const digest = await sha256Hex(PHONE);
-  assertEqual(digest.length, 64, "sha-256 hex length");
-  assert(!digest.includes("964"), "the digest must not contain the phone");
-  assertEqual(digest, await sha256Hex(PHONE), "the digest is stable");
+Deno.test("the bucket is a keyed HMAC with separated phone and IP domains", async () => {
+  const secret = BASE_ENV.LOGIN_RATE_LIMIT_HMAC_SECRET;
+  const phoneDigest = await hmacSha256Hex(secret, "phone", PHONE);
+  assertEqual(phoneDigest.length, 64, "hmac hex length");
+  assert(!phoneDigest.includes("964"), "the digest must not contain the phone");
+  assertEqual(phoneDigest, await hmacSha256Hex(secret, "phone", PHONE), "the digest is stable");
+
+  // نفس القيمة في نطاق آخر تُنتج بصمة مختلفة (فصل النطاق).
+  const ipDigest = await hmacSha256Hex(secret, "ip", PHONE);
+  assert(phoneDigest !== ipDigest, "the phone and IP domains must not collide");
+
+  // مفتاح آخر يُنتج بصمة مختلفة.
+  const otherSecret = "another-rate-limit-secret-0123456789";
+  assert(phoneDigest !== await hmacSha256Hex(otherSecret, "phone", PHONE), "the secret must matter");
+
+  // وليست SHA-256 غير مقيّدة بنفس القيمة.
+  const plain = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(PHONE));
+  const plainHex = Array.from(new Uint8Array(plain))
+    .map(byte => byte.toString(16).padStart(2, "0"))
+    .join("");
+  assert(phoneDigest !== plainHex, "the bucket must not be an unkeyed SHA-256");
+
+  assert(isUsableRateLimitSecret(secret), "a 32+ character secret is usable");
+  for (const value of [undefined, "", "short", "has a space inside the secret value", "x".repeat(300)]) {
+    assert(!isUsableRateLimitSecret(value), `secret ${String(value)} must be refused`);
+  }
+});
+
+Deno.test("the trusted client IP comes only from the platform headers", () => {
+  const platform = new Headers({
+    "cf-ray": "9a1b2c3d4e5f6a7b-GRU",
+    "cf-worker": "supabase.co",
+    "cf-connecting-ip": "203.0.113.9",
+  });
+  assertEqual(resolveTrustedClientIp(platform), { status: "ip", ip: "203.0.113.9" }, "platform markers");
+
+  assertEqual(
+    resolveTrustedClientIp(new Headers({ "x-forwarded-for": "198.51.100.7", "x-real-ip": "198.51.100.8" })),
+    { status: "unavailable", reason: "no-platform-markers" },
+    "a client header alone is not an IP",
+  );
+  assertEqual(
+    resolveTrustedClientIp(new Headers({
+      "cf-ray": "9a1b2c3d4e5f6a7b-GRU",
+      "cf-worker": "supabase.co",
+      "cf-connecting-ip": "203.0.113.9",
+      "x-forwarded-for": "198.51.100.7",
+    })),
+    { status: "ip", ip: "203.0.113.9" },
+    "a forged x-forwarded-for does not change the trusted IP",
+  );
+  assertEqual(
+    resolveTrustedClientIp(new Headers({ "cf-connecting-ip": "203.0.113.9" })),
+    { status: "unavailable", reason: "no-platform-markers" },
+    "cf-connecting-ip without platform markers is not trusted",
+  );
+  assertEqual(
+    resolveTrustedClientIp(new Headers({ "cf-ray": "9a1b", "cf-worker": "other-host" })),
+    { status: "unavailable", reason: "no-platform-markers" },
+    "cf-worker must be the Supabase host",
+  );
+  assertEqual(
+    resolveTrustedClientIp(new Headers({ "cf-ray": "9a1b", "cf-worker": "supabase.co" })),
+    { status: "unavailable", reason: "no-ip" },
+    "a missing IP",
+  );
+  assertEqual(
+    resolveTrustedClientIp(new Headers({
+      "cf-ray": "9a1b",
+      "cf-worker": "supabase.co",
+      "cf-connecting-ip": "not an ip!",
+    })),
+    { status: "unavailable", reason: "invalid-ip" },
+    "an invalid IP",
+  );
 });
 
 Deno.test("a session token is required and a malformed header is refused", () => {
@@ -270,9 +357,15 @@ Deno.test("captcha verification needs success, hostname and action", async () =>
     success: true, action: LOGIN_CAPTCHA_ACTION,
   }), expectation)), "a missing hostname must be refused");
 
-  assert(!(await verifyTurnstileToken("token", "secret", responder({
-    success: true, hostname: HOSTNAME, action: LOGIN_CAPTCHA_ACTION, "error-codes": ["timeout-or-duplicate"],
-  }), expectation)), "error codes must be refused");
+  for (const errorCodes of [[], ["timeout-or-duplicate"], "invalid", { code: 1 }, null]) {
+    assert(!(await verifyTurnstileToken("token", "secret", responder({
+      success: true, hostname: HOSTNAME, action: LOGIN_CAPTCHA_ACTION, "error-codes": errorCodes,
+    }), expectation)), `error-codes ${JSON.stringify(errorCodes)} must be refused`);
+  }
+
+  assert((await verifyTurnstileToken("token", "secret", responder({
+    success: true, hostname: HOSTNAME, action: LOGIN_CAPTCHA_ACTION,
+  }), expectation)) === true, "a complete response without error-codes passes");
 
   assert(!(await verifyTurnstileToken("token", "secret", responder({ success: false }), expectation)), "a failure");
   assert(!(await verifyTurnstileToken("token", "secret", responder({}, 500), expectation)), "an HTTP error");
@@ -362,6 +455,65 @@ Deno.test("the login is gated when captcha is not configured", async () => {
     assertEqual(response.status, 503, "status");
     assertEqual(db.calls.length, 0, "nothing must be called");
   }
+});
+
+Deno.test("the login is refused when the rate-limit HMAC secret is missing or invalid", async () => {
+  const overridesList: Record<string, string | undefined>[] = [
+    { LOGIN_RATE_LIMIT_HMAC_SECRET: undefined },
+    { LOGIN_RATE_LIMIT_HMAC_SECRET: "short" },
+    { LOGIN_RATE_LIMIT_HMAC_SECRET: "has a space inside the secret value" },
+  ];
+
+  for (const overrides of overridesList) {
+    const db = createDb();
+    const response = await handlerWith(db, overrides)(loginRequest({
+      phone: PHONE,
+      password: PASSWORD,
+      captchaToken: "x",
+    }));
+    assertEqual(response.status, 503, "status");
+    assertEqual(db.calls.length, 0, "nothing must be called");
+  }
+});
+
+Deno.test("the service role key is never used as the HMAC key", async () => {
+  const serviceKey = "service-role-key-0123456789abcdef0123456789";
+  const db = createDb();
+  const response = await handlerWith(db, {
+    SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+    LOGIN_RATE_LIMIT_HMAC_SECRET: serviceKey,
+  })(loginRequest({ phone: PHONE, password: PASSWORD, captchaToken: "x" }));
+
+  assertEqual(response.status, 503, "status");
+  assertEqual(db.calls.length, 0, "nothing must be called");
+});
+
+Deno.test("a forged forwarding header does not change the IP bucket", async () => {
+  const plain = createDb();
+  await handlerWith(plain)(loginRequest({ phone: PHONE, password: PASSWORD, captchaToken: "x" }));
+
+  const forged = createDb();
+  await handlerWith(forged)(loginRequest(
+    { phone: PHONE, password: PASSWORD, captchaToken: "x" },
+    { "x-forwarded-for": "198.51.100.7", "x-real-ip": "198.51.100.8" },
+  ));
+
+  assert(plain.buckets.length === 2, "the phone and the trusted IP buckets");
+  assertEqual(forged.buckets, plain.buckets, "the forged headers must not change any bucket");
+  assert(plain.buckets.some(bucket => bucket.startsWith("login:ip:")) === true, "an IP bucket from the platform header");
+  assert(plain.buckets.some(bucket => bucket.includes("198.51.100")) === false, "no address is stored raw");
+});
+
+Deno.test("without a trusted IP only the phone bucket applies", async () => {
+  const db = createDb();
+  const response = await handlerWith(db)(loginRequest(
+    { phone: PHONE, password: PASSWORD, captchaToken: "x" },
+    { "cf-ray": "", "cf-connecting-ip": "" },
+  ));
+
+  assertEqual(response.status, 200, "status");
+  assertEqual(db.buckets.length, 1, "one bucket only");
+  assert(db.buckets[0].startsWith("login:phone:") === true, "the phone bucket");
 });
 
 Deno.test("the shared limiter blocks across two handler instances", async () => {
@@ -476,4 +628,16 @@ Deno.test("the login function no longer keeps an in-memory limiter", async () =>
   const flow = await readFunction("_shared/phoneLoginFlow.ts");
   assert(flow.includes("aani_consume_login_attempt"), "the flow must use the shared database limiter");
   assert(!flow.includes("new Map"), "the flow must not fall back to a per-instance map");
+});
+
+
+Deno.test("the flow never reads a client-supplied forwarding header", async () => {
+  const flow = await readFunction("_shared/phoneLoginFlow.ts");
+  for (const header of ["x-forwarded-for", "x-real-ip"]) {
+    assert(!flow.includes(`get("${header}")`), `${header} must not be read`);
+    assert(!flow.includes(`get('${header}')`), `${header} must not be read`);
+  }
+  assert(flow.includes("resolveTrustedClientIp("), "the trusted IP comes from the shared resolver");
+  assert(flow.includes("LOGIN_RATE_LIMIT_HMAC_SECRET"), "the HMAC secret comes from its own variable");
+  assert(!flow.includes("sha256Hex"), "no unkeyed digest is used");
 });

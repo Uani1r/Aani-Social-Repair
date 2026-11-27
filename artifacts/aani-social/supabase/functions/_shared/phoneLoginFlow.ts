@@ -4,22 +4,32 @@
 // ترتيب لا يُخترق:
 // 1) CAPTCHA خادمي (Turnstile): نجاح + hostname + action قبل أي شيء آخر.
 // 2) تطبيع الرقم.
-// 3) محدّد معدل **مشترك** في قاعدة البيانات (دالة ذرية)، لا Map داخل نسخة.
+// 3) محدّد معدل **مشترك** في قاعدة البيانات (دالة ذرية)، لا Map داخل نسخة،
+//    ببصمات HMAC-SHA-256 بمفتاح مستقل (LOGIN_RATE_LIMIT_HMAC_SECRET) ونطاقين
+//    منفصلين للهاتف وIP.
 // 4) البحث عن الحساب في account_phone_aliases.
 // 5) قراءة بريد المصادقة الأصلي عبر Admin API.
 // 6) التحقق من كلمة المرور عبر Supabase Auth.
 // 7) إعادة الرمزين فقط.
 //
-// إن تعذّر الوصول إلى محدّد المعدل تُرفض المحاولة (fail-closed)، ولا تُقرأ
-// بيانات أي حساب. الرسالة العامة لا تكشف وجود الرقم ولا لمن.
+// IP الموثوق: لا تُقرأ x-forwarded-for ولا x-real-ip إطلاقاً. المصدر الوحيد
+// هو cf-connecting-ip مع علامتي المنصة (cf-ray وcf-worker: supabase.co)،
+// وتفصيله في resolveTrustedClientIp. بلا IP موثوق تُستهلك بصمة الهاتف وحدها،
+// فلا يُجمع المستخدمون في حد واحد غير مقصود.
+//
+// إن تعذّر الوصول إلى محدّد المعدل أو غاب مفتاح HMAC أو كان غير صالح تُرفض
+// المحاولة (fail-closed) بلا رجوع إلى SHA-256 غير مقيّد، ولا تُقرأ بيانات أي
+// حساب. الرسالة العامة لا تكشف وجود الرقم ولا لمن.
 
 import {
   PHONE_MESSAGES,
   failureBody,
+  hmacSha256Hex,
+  isUsableRateLimitSecret,
   logFailure,
   normalizePhoneToE164,
+  resolveTrustedClientIp,
   sessionTokens,
-  sha256Hex,
   verifyTurnstileToken,
   type TurnstileExpectation,
 } from "./phone.ts";
@@ -69,16 +79,6 @@ function serviceHeaders(serviceRoleKey: string): HeadersInit {
     apikey: serviceRoleKey,
     Authorization: `Bearer ${serviceRoleKey}`,
   };
-}
-
-/**
- * عنوان IP من ترويسات منصة الاستضافة فقط (لا شيء يرسله العميل مباشرة):
- * يُستخدم كبصمة ثانية إلى جانب بصمة الرقم، لا وحده.
- */
-function clientKey(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for") ?? "";
-  const first = forwarded.split(",")[0]?.trim() ?? "";
-  return first || request.headers.get("x-real-ip") || "unknown";
 }
 
 function readHostnames(env: (name: string) => string | undefined): string[] {
@@ -154,7 +154,14 @@ export function createLoginWithPhoneHandler(
       return jsonResponse(failureBody(PHONE_MESSAGES.captchaUnavailable), 503, origin);
     }
 
-    const remoteIp = clientKey(request);
+    // مفتاح HMAC مستقل للمحدّد: بلا مفتاح صالح لا رجوع إلى SHA-256 غير
+    // مقيّد، ولا يُستخدم مفتاح الخدمة مفتاحاً.
+    const hmacSecret = deps.env("LOGIN_RATE_LIMIT_HMAC_SECRET");
+    if (!isUsableRateLimitSecret(hmacSecret) || hmacSecret === serviceRoleKey) {
+      return jsonResponse(failureBody(PHONE_MESSAGES.rateLimitUnavailable), 503, origin);
+    }
+
+    const trustedIp = resolveTrustedClientIp(request.headers);
     const captchaToken = typeof body.captchaToken === "string" ? body.captchaToken : "";
     if (!captchaToken) {
       return jsonResponse(failureBody(PHONE_MESSAGES.captchaRequired), 400, origin);
@@ -163,7 +170,7 @@ export function createLoginWithPhoneHandler(
     const expectation: TurnstileExpectation = {
       expectedHostnames: allowedHostnames,
       expectedAction: LOGIN_CAPTCHA_ACTION,
-      remoteIp: remoteIp === "unknown" ? undefined : remoteIp,
+      ...(trustedIp.status === "ip" ? { remoteIp: trustedIp.ip } : {}),
     };
     const human = await verifyTurnstileToken(captchaToken, captchaSecret, deps.fetchImpl, expectation);
     if (!human) {
@@ -179,8 +186,10 @@ export function createLoginWithPhoneHandler(
     const phone = normalizePhoneToE164(rawPhone);
     if (!phone) return jsonResponse(failureBody(PHONE_MESSAGES.invalidCredentials), 401, origin);
 
-    // محدّد المعدل المشترك: بصمة الرقم وبصمة IP معاً، وكلهما ذري في قاعدة البيانات.
-    const phoneDecision = await consumeAttempt(deps, supabaseUrl, serviceRoleKey, `login:phone:${await sha256Hex(phone)}`);
+    // محدّد المعدل المشترك: بصمة HMAC للرقم، ثم بصمة HMAC لـIP الموثوق إن
+    // وُجد. بلا IP موثوق لا يُجمع المستخدمون في حد واحد غير مقصود.
+    const phoneBucket = `login:phone:${await hmacSha256Hex(hmacSecret, "phone", phone)}`;
+    const phoneDecision = await consumeAttempt(deps, supabaseUrl, serviceRoleKey, phoneBucket);
     if (phoneDecision.status === "unavailable") {
       return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 503, origin);
     }
@@ -188,12 +197,15 @@ export function createLoginWithPhoneHandler(
       return jsonResponse(failureBody(PHONE_MESSAGES.rateLimited), 429, origin);
     }
 
-    const ipDecision = await consumeAttempt(deps, supabaseUrl, serviceRoleKey, `login:ip:${await sha256Hex(remoteIp)}`);
-    if (ipDecision.status === "unavailable") {
-      return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 503, origin);
-    }
-    if (ipDecision.status === "limited") {
-      return jsonResponse(failureBody(PHONE_MESSAGES.rateLimited), 429, origin);
+    if (trustedIp.status === "ip") {
+      const ipBucket = `login:ip:${await hmacSha256Hex(hmacSecret, "ip", trustedIp.ip)}`;
+      const ipDecision = await consumeAttempt(deps, supabaseUrl, serviceRoleKey, ipBucket);
+      if (ipDecision.status === "unavailable") {
+        return jsonResponse(failureBody(PHONE_MESSAGES.unavailable), 503, origin);
+      }
+      if (ipDecision.status === "limited") {
+        return jsonResponse(failureBody(PHONE_MESSAGES.rateLimited), 429, origin);
+      }
     }
 
     try {
