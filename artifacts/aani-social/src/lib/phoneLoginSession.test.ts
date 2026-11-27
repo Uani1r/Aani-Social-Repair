@@ -126,8 +126,12 @@ test('the phone path calls login-with-phone only, never signInWithPassword with 
 test('the email, username, Google and Apple paths are unchanged', () => {
   assert.equal(authPage.includes("signInWithPassword({\n          email: parsed.email"), true);
   assert.equal(authPage.includes("'login-with-username'"), true);
-  assert.equal(authPage.includes('signInWithOAuth'), true);
-  assert.equal(authPage.includes("provider"), true);
+  assert.equal(authPage.includes('useOAuthProvider'), true);
+  assert.equal(authPage.includes('signInWithProvider'), true);
+  const oauthProvider = readFileSync(join(SRC_ROOT, 'lib/oauthProvider.ts'), 'utf8');
+  assert.equal(oauthProvider.includes('signInWithOAuth'), true);
+  assert.equal(oauthProvider.includes("'google'") || oauthProvider.includes('"google"'), true);
+  assert.equal(oauthProvider.includes("'apple'") || oauthProvider.includes('"apple"'), true);
   assert.equal(authPage.includes('supabase.auth.signUp('), true);
 });
 
