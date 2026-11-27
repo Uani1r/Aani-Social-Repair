@@ -13,6 +13,7 @@ import {
   type TurnstileDom,
   type TurnstileScript,
 } from '@/lib/turnstileLoader';
+import { useOAuthProvider } from '@/lib/oauthProvider';
 
 /** نداء دالة الدخول بالهاتف: الجلسة غير مطلوبة قبل الدخول. */
 const invokePhoneLogin = createPhoneFunctionInvoker({
@@ -127,6 +128,9 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [fallbackPassword, setFallbackPassword] = useState('');
   const [fallbackBusy, setFallbackBusy] = useState(false);
   const [fallbackError, setFallbackError] = useState('');
+  const { providerLoading, signIn: signInWithProvider } = useOAuthProvider();
+  const isGoogleLoading = providerLoading === 'google';
+  const isAppleLoading = providerLoading === 'apple';
   // حالة قناة الدعم: تُعرض عندما لا يُضبط عنوان بريد الدعم بعد.
   const [supportNotice, setSupportNotice] = useState('');
 
@@ -285,21 +289,6 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     } finally { setBusy(false); }
   };
 
-  const signInWithProvider = async (provider: 'google' | 'apple') => {
-    if (!supabaseConfigured || busy) return;
-    setBusy(true); setError(''); setSuccess('');
-    try {
-      const { error: authError } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: { redirectTo: window.location.origin },
-      });
-      if (authError) throw authError;
-    } catch (reason: any) {
-      setError(reason?.message || `تعذر المتابعة باستخدام ${provider === 'google' ? 'Google' : 'Apple'}.`);
-      setBusy(false);
-    }
-  };
-
   const handleFallbackLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabaseConfigured || fallbackBusy) return;
@@ -438,21 +427,31 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           <div style={styles.providerButtonsGrid} role="group" aria-label={isSignup ? 'إنشاء حساب سريع' : 'تسجيل الدخول السريع'}>
             <button
               type="button"
-              disabled={busy || fallbackBusy || !supabaseConfigured}
-              onClick={() => void signInWithProvider('google')}
-              style={{ ...styles.providerBtn, ...styles.googleBtn, ...(busy || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
-              aria-busy={busy || fallbackBusy}
+              disabled={providerLoading !== null || fallbackBusy || !supabaseConfigured}
+              onClick={() => {
+                setError('');
+                signInWithProvider('google').catch((reason: any) =>
+                  setError(reason?.message || 'تعذر المتابعة باستخدام Google. حاول مرة أخرى.')
+                );
+              }}
+              style={{ ...styles.providerBtn, ...styles.googleBtn, ...(providerLoading !== null || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+              aria-busy={isGoogleLoading || fallbackBusy}
             >
-              {busy ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><GoogleIcon /><span>{isSignup ? 'المتابعة عبر Google' : 'الدخول باستخدام Google'}</span></>)}
+              {isGoogleLoading ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><GoogleIcon /><span>{isSignup ? 'المتابعة عبر Google' : 'الدخول باستخدام Google'}</span></>)}
             </button>
             <button
               type="button"
-              disabled={busy || fallbackBusy || !supabaseConfigured}
-              onClick={() => void signInWithProvider('apple')}
-              style={{ ...styles.providerBtn, ...styles.appleBtn, ...(busy || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
-              aria-busy={busy || fallbackBusy}
+              disabled={providerLoading !== null || fallbackBusy || !supabaseConfigured}
+              onClick={() => {
+                setError('');
+                signInWithProvider('apple').catch((reason: any) =>
+                  setError(reason?.message || 'تعذر المتابعة باستخدام Apple. حاول مرة أخرى.')
+                );
+              }}
+              style={{ ...styles.providerBtn, ...styles.appleBtn, ...(providerLoading !== null || fallbackBusy || !supabaseConfigured ? styles.btnDisabled : {}) }}
+              aria-busy={isAppleLoading || fallbackBusy}
             >
-              {busy ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><AppleIcon /><span>{isSignup ? 'المتابعة عبر Apple' : 'الدخول باستخدام Apple'}</span></>)}
+              {isAppleLoading ? (<><Spinner /><span>جاري التوجيه...</span></>) : (<><AppleIcon /><span>{isSignup ? 'المتابعة عبر Apple' : 'الدخول باستخدام Apple'}</span></>)}
             </button>
           </div>
 
@@ -845,21 +844,21 @@ const styles: Record<string, CSSProperties> = {
   providerButtonsGrid: {
     display: 'grid',
     gridTemplateColumns: '1fr 1fr',
-    gap: '12px',
+    gap: '10px',
     marginTop: '8px',
   },
   providerBtn: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '10px',
-    height: '56px',
-    padding: '0 16px',
+    gap: '8px',
+    height: '60px',
+    padding: '0 12px',
     border: '1px solid #d8dfdb',
     borderRadius: '12px',
     background: '#fff',
     color: '#243b35',
-    fontSize: '15px',
+    fontSize: '14px',
     fontWeight: '700',
     cursor: 'pointer',
     fontFamily: "'Tajawal', sans-serif",
@@ -868,7 +867,7 @@ const styles: Record<string, CSSProperties> = {
   },
   googleBtn: { borderColor: '#d8dfdb' },
   appleBtn: { borderColor: '#d8dfdb' },
-  providerIcon: { width: '22px', height: '22px', flexShrink: 0 },
+  providerIcon: { width: '20px', height: '20px', flexShrink: 0 },
   spinner: {
     width: '20px',
     height: '20px',
