@@ -1699,24 +1699,16 @@ export default function ProfilePage({
     if (!currentUserId || accountSettingsBusy) return;
     setAccountSettingsBusy(true);
     try {
-      const { data, error } = await supabase.from('profiles')
-        .update({ is_deactivated: true })
-        .eq('id', currentUserId)
-        .select('id')
-        .maybeSingle();
-      if (error) {
-        if ((error.code === 'PGRST204' || error.code === '42703') && /is_deactivated/i.test(error.message)) {
-          throw new Error('طبّق ترحيل تعطيل الحساب في Supabase ثم حاول مجدداً.');
-        }
-        throw error;
-      }
-      if (!data?.id) throw new Error('تعذر العثور على ملف الحساب لتحديث حالته.');
+      // التعطيل عبر الدالة المعتمدة وحدها: لا كتابة مباشرة على is_deactivated.
+      const { error } = await supabase.rpc('aani_deactivate_account');
+      if (error) throw new Error('تعذر تعطيل الحساب الآن. لم يتغيّر شيء؛ حاول مجددًا.');
 
       const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
-      if (signOutError) throw signOutError;
+      if (signOutError) throw new Error('تم تعطيل الحساب، لكن تعذر إنهاء الجلسة المحلية. أعد تحميل الصفحة.');
+
       setShowDeactivateAccountConfirmation(false);
       setShowSettingsOverlay(false);
-      toast.success('تم تعطيل الحساب مؤقتاً. سجّل الدخول مجدداً لإعادة تفعيله.');
+      toast.success('تم تعطيل الحساب مؤقتاً وإنهاء الجلسات الأخرى. سجّل الدخول مجدداً لإعادة تفعيله.');
       setLocation('/login');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'تعذر تعطيل الحساب مؤقتاً.');
@@ -1729,16 +1721,26 @@ export default function ProfilePage({
     if (deleteAccountConfirmation.trim() !== 'حذف' || accountSettingsBusy) return;
     setAccountSettingsBusy(true);
     try {
-      const { error } = await supabase.functions.invoke('delete-account');
-      if (error) throw error;
+      // الهوية من الجلسة على الخادم، ولا مسّ للوسائط من الواجهة.
+      const { data, error } = await supabase.functions.invoke('delete-account', {
+        body: { confirmation: 'delete' },
+      });
+      if (error) throw new Error('تعذر حذف الحساب. لم يُحذف الحساب ولم تُحذف وسائطه؛ حاول مجددًا أو تواصل مع الدعم.');
+      if (!data || (data as { success?: unknown }).success !== true) {
+        throw new Error('تعذر حذف الحساب. لم يُحذف الحساب ولم تُحذف وسائطه؛ حاول مجددًا أو تواصل مع الدعم.');
+      }
+
       const { error: signOutError } = await supabase.auth.signOut({ scope: 'local' });
-      if (signOutError) throw signOutError;
+      if (signOutError) throw new Error('تم حذف الحساب، لكن تعذر إنهاء الجلسة المحلية. أعد تحميل الصفحة.');
+
       setShowDeleteAccountConfirmation(false);
       setShowSettingsOverlay(false);
-      toast.success('تم حذف الحساب وبياناته نهائياً.');
+      toast.success('تم حذف الحساب نهائياً وإدراج وسائطه في طابور الحذف.');
       setLocation('/login');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'تعذر حذف الحساب.');
+      toast.error(error instanceof Error
+        ? error.message
+        : 'تعذر حذف الحساب. لم يُحذف الحساب ولم تُحذف وسائطه؛ حاول مجددًا أو تواصل مع الدعم.');
     } finally {
       setAccountSettingsBusy(false);
     }
@@ -2874,6 +2876,7 @@ export default function ProfilePage({
                   </button>
                   <p className="profile-settings-section-title">إدارة الحساب</p>
                   <button type="button" className="profile-settings-danger" onClick={() => setShowDeactivateAccountConfirmation(true)} disabled={!own || accountSettingsBusy}>تعطيل الحساب</button>
+                  <button type="button" className="profile-settings-note" onClick={() => setLocation('/settings/account')}>إعدادات الحساب: البريد، التحقق بخطوتين، الأجهزة</button>
                   <button type="button" className="profile-settings-danger" onClick={() => { setDeleteAccountConfirmation(''); setShowDeleteAccountConfirmation(true); }}>حذف الحساب نهائياً</button>
                 </>
               ) : settingsScreen === 'password' ? (

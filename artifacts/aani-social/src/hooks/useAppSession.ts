@@ -85,15 +85,13 @@ export default function useAppSession() {
       if (event === 'SIGNED_IN' && nextSession?.user?.id) {
         // سجل الرفع: إعادة محاولة تسجيل الروابط المعلقة فور توفر جلسة جديدة
         void flushUploadLedgerQueue().catch(() => undefined);
-        const signedInUserId = nextSession.user.id;
+        // إعادة التفعيل عبر الدالة المعتمدة وحدها (لا كتابة مباشرة على
+        // is_deactivated). هذه الخطوة لا تفتح أي بوابة: التحقق بخطوتين يُفرض
+        // في App قبل عرض المحتوى، ولا يُتجاوز بحدث SIGNED_IN.
         window.setTimeout(() => {
-          void supabase.from('profiles')
-            .update({ is_deactivated: false })
-            .eq('id', signedInUserId)
-            .eq('is_deactivated', true)
-            .then(({ error }) => {
-              if (error) console.error('تعذر إعادة تفعيل الحساب عند تسجيل الدخول:', error);
-            });
+          void supabase.rpc('aani_reactivate_account').then(({ error }) => {
+            if (error) console.error('تعذر إعادة تفعيل الحساب عند تسجيل الدخول.');
+          });
         }, 0);
       }
     });

@@ -22,6 +22,10 @@ verify_jwt = true
 [functions.delete-account]
 verify_jwt = true
 
+# حالة التحقق بخطوتين: تُشتق من عوامل Auth وتُكتب في app_metadata من الخادم.
+[functions.account-mfa]
+verify_jwt = true
+
 [functions.login-with-username]
 verify_jwt = false
 
