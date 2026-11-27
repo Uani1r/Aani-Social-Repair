@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createOAuthProvider } from './oauthProvider';
+import { NATIVE_OAUTH_REDIRECT_URL, PUBLISHED_WEB_ORIGIN } from './oauthRedirect';
 
 // متصفح مُحاكى لعقد `window.location.origin` المستخدم في redirectTo.
 globalThis.window = globalThis.window ?? ({} as Window);
 if (!globalThis.window.location) {
   (globalThis.window as Window & { location: Location }).location = {
-    origin: 'http://localhost:3000',
+    origin: PUBLISHED_WEB_ORIGIN,
     ...((globalThis.window as unknown) as { location?: Location }).location,
   } as Location;
 }
@@ -195,4 +196,49 @@ test('successful sign-in does not leave a stuck loading state', async () => {
   assert.equal(provider.isProviderLoading, false);
   assert.equal(calls.length, 2);
   assert.equal(calls[1].provider, 'apple');
+});
+
+
+test('web sign-in sends the resolved published origin as redirectTo', async () => {
+  const calls: OAuthCall[] = [];
+  const { client } = makeClient({ calls, responses: [{ error: null }] });
+  const provider = createOAuthProvider(client, () => ({
+    ok: true,
+    kind: 'web',
+    url: PUBLISHED_WEB_ORIGIN,
+  }));
+
+  await provider.signIn('google');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].provider, 'google');
+  // عنوان العودة المنشور هو ما يُرسل إلى Supabase، لا localhost.
+  assert.equal(calls[0].options.redirectTo, PUBLISHED_WEB_ORIGIN);
+  assert.doesNotMatch(String(calls[0].options.redirectTo), /localhost|127\.0\.0\.1/);
+  assert.equal(provider.providerLoading, null);
+});
+
+test('native sign-in sends the app deep link, never the web origin', async () => {
+  const calls: OAuthCall[] = [];
+  const { client } = makeClient({ calls, responses: [{ error: null }] });
+  const provider = createOAuthProvider(client, () => ({
+    ok: true,
+    kind: 'native',
+    url: NATIVE_OAUTH_REDIRECT_URL,
+  }));
+
+  await provider.signIn('apple');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.redirectTo, NATIVE_OAUTH_REDIRECT_URL);
+  assert.notEqual(calls[0].options.redirectTo, PUBLISHED_WEB_ORIGIN);
+});
+
+test('an unresolved redirect rejects before any OAuth request is made', async () => {
+  const calls: OAuthCall[] = [];
+  const { client } = makeClient({ calls, responses: [{ error: null }] });
+  const provider = createOAuthProvider(client, () => ({ ok: false, error: 'origin not allowed' }));
+
+  await assert.rejects(() => provider.signIn('google'), /origin not allowed/);
+  assert.equal(calls.length, 0);
+  assert.equal(provider.providerLoading, null);
+  assert.equal(provider.isProviderLoading, false);
 });

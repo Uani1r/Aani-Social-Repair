@@ -12,7 +12,7 @@
 
 import { useState, useRef } from 'react';
 import { supabase, supabaseConfigured } from '@/lib/supabase';
-import { getOAuthRedirectUrl } from '@/lib/oauthRedirect';
+import { currentWebOAuthRedirect, type OAuthRedirectResult } from '@/lib/oauthRedirect';
 
 export type OAuthProvider = 'google' | 'apple';
 
@@ -33,16 +33,25 @@ export interface OAuthProviderActions {
  * قابلة للاختبار مباشرة without React. يُمرّر عميل المصادقة ليُسهّل المحاكاة
  * في الاختبارات؛ القيم الافتراضية تستخدم `supabase` الفعلي.
  */
-export function createOAuthProvider(authClient = supabase): OAuthProviderState & OAuthProviderActions {
+export type OAuthRedirectResolver = () => OAuthRedirectResult;
+
+export function createOAuthProvider(
+  authClient = supabase,
+  resolveRedirect: OAuthRedirectResolver = currentWebOAuthRedirect,
+): OAuthProviderState & OAuthProviderActions {
   let providerLoading: OAuthProvider | null = null;
 
   const signIn = async (provider: OAuthProvider): Promise<void> => {
     if (!supabaseConfigured || providerLoading) return;
     providerLoading = provider;
     try {
+      // عنوان العودة يُفحص قبل أي طلب: لا يُرسَل المستخدم إلى عنوان غير مسموح،
+      // ولا يعود Supabase إلى Site URL محلي في الإنتاج.
+      const redirect = resolveRedirect();
+      if (!redirect.ok) throw new Error(redirect.error);
       const { error: authError } = await authClient.auth.signInWithOAuth({
         provider,
-        options: { redirectTo: getOAuthRedirectUrl() },
+        options: { redirectTo: redirect.url },
       });
       if (authError) throw authError;
       // عند النجاح يقوم المتصفح بإعادة التوجيه إلى مزوّد الخدمة. تُنظّم حالة

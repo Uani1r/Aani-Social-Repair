@@ -14,7 +14,7 @@ import {
   type TurnstileScript,
 } from '@/lib/turnstileLoader';
 import { useOAuthProvider } from '@/lib/oauthProvider';
-import { isAppleOAuthEnabled } from '@/lib/oauthRedirect';
+import { isAppleOAuthEnabled, readWebOAuthReturn } from '@/lib/oauthRedirect';
 import {
   describeNativeOAuthError,
   isNativePlatform,
@@ -31,7 +31,6 @@ const invokePhoneLogin = createPhoneFunctionInvoker({
 /** ودجت Cloudflare Turnstile: مفتاح عام فقط، ولا سر في الواجهة. */
 const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
 const TURNSTILE_SITE_KEY = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
-const TURNSTILE_ACTION = 'phone_login';
 
 /**
  * عنوان بريد الدعم: يُضبط عند البناء عبر `VITE_SUPPORT_EMAIL`، ولا عنوان
@@ -175,6 +174,45 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     });
     return unsubscribe;
   }, []);
+
+  /**
+   * العودة من Google على الويب: رمز PKCE (`?code=`) يتبادله Supabase تلقائياً
+   * عند التحميل فتتم الجلسة. الإلغاء أو الفشل يأتي بـ`error`، فيُعرض برسالة
+   * عربية ثابتة (بلا رسالة المزوّد الخام) ويُنقّى العنوان فلا تبقى بقايا.
+   */
+  useEffect(() => {
+    if (isNativePlatform()) return undefined;
+    const outcome = readWebOAuthReturn(window.location.search);
+    if (outcome.kind === 'none') return undefined;
+
+    const stripOAuthParams = () => {
+      const params = new URLSearchParams(window.location.search);
+      ['error', 'error_code', 'error_description', 'code', 'state'].forEach(key => params.delete(key));
+      const query = params.toString();
+      window.history.replaceState(
+        {},
+        '',
+        `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`,
+      );
+    };
+
+    if (outcome.kind === 'error') {
+      setStatusNotice('');
+      setError(outcome.message);
+      stripOAuthParams();
+      return undefined;
+    }
+
+    setError('');
+    setStatusNotice('جارٍ إكمال تسجيل الدخول عبر Google…');
+    let cancelled = false;
+    // التنظيف بعد أن يتبادله Supabase، فلا يُعاد استخدام رمز واحد مرتين.
+    void supabase.auth.getSession().then(() => {
+      if (!cancelled) stripOAuthParams();
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   // حالة قناة الدعم: تُعرض عندما لا يُضبط عنوان بريد الدعم بعد.
   const [supportNotice, setSupportNotice] = useState('');
 
@@ -183,8 +221,11 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [captchaLoadError, setCaptchaLoadError] = useState(false);
   const captchaContainerRef = useRef<HTMLDivElement | null>(null);
   const loaderRef = useRef<ReturnType<typeof createTurnstileLoader> | null>(null);
-  // مسار الهاتف يُشتق من القاعدة الحاسمة نفسها المستخدمة عند الدخول.
-  const isPhoneLogin = !isSignup && classifyLoginIdentifier(fallbackIdentifier).kind === 'phone';
+  // CAPTCHA مطلوب لمساري الهاتف واسم المستخدم: المفتاح العام وحده في الواجهة،
+  // والإجراء يختلف لكل مسار (phone_login / username_login) فيتحقق الخادم منه.
+  const loginIdentifierKind = isSignup ? 'unknown' : classifyLoginIdentifier(fallbackIdentifier).kind;
+  const needsCaptcha = loginIdentifierKind === 'phone' || loginIdentifierKind === 'username';
+  const captchaAction = loginIdentifierKind === 'username' ? 'username_login' : 'phone_login';
 
   const resetCaptcha = () => {
     setCaptchaToken('');
@@ -210,14 +251,14 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   }, []);
 
   /**
-   * تحميل الودجت عند مسار الهاتف فقط، وإزالته عند مغادرته. لا CAPTCHA
-   * للبريد واسم المستخدم وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح
-   * الرمز فلا يُرسل رمز منتهٍ.
+   * تحميل الودجت عند مساري الهاتف واسم المستخدم فقط، وإزالته عند مغادرتهما. لا
+   * CAPTCHA للبريد وGoogle وApple. انتهاء الرمز أو خطأ الودجت يمسح الرمز فلا
+   * يُرسل رمز منتهٍ.
    * يدعم: سكربت موجود مسبقاً (محمل أو قيد التحميل)، فشل التحميل مع إعادة محاولة،
    * منع تكرار الودجت، وتنظيف كامل عند تبديل المعرف أو مغادرة الصفحة.
    */
   useEffect(() => {
-    if (!isPhoneLogin || !TURNSTILE_SITE_KEY) {
+    if (!needsCaptcha || !TURNSTILE_SITE_KEY) {
       loaderRef.current?.cancel();
       loaderRef.current?.removeWidget();
       setCaptchaLoadError(false);
@@ -240,7 +281,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
 
     const loader = createTurnstileLoader({
       siteKey: TURNSTILE_SITE_KEY,
-      action: TURNSTILE_ACTION,
+      action: captchaAction,
       scriptUrl: TURNSTILE_SCRIPT,
       dom,
       clock,
@@ -281,7 +322,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
       loader.removeWidget();
       setCaptchaLoadError(false);
     };
-  }, [isPhoneLogin]);
+  }, [needsCaptcha, captchaAction]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -380,8 +421,15 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
           throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف عراقيًا (مثلاً: 07701234567 أو +9647701234567).');
         }
+        // مسار اسم المستخدم: لا يبدأ الطلب بلا رمز CAPTCHA صالح، والخادم يتحقق منه.
+        if (!TURNSTILE_SITE_KEY) {
+          throw new Error('الدخول باسم المستخدم يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد في الوقت الحالي.');
+        }
+        if (!captchaToken) {
+          throw new Error('أكمل تحقق الأمان (CAPTCHA) ثم أعد المحاولة.');
+        }
         const { data, error: functionError } = await supabase.functions.invoke('login-with-username', {
-          body: { username: usernameIdentifier, password: pwd },
+          body: { username: usernameIdentifier, password: pwd, captchaToken },
         });
         if (functionError) {
           const context = (functionError as { context?: unknown }).context;
@@ -668,7 +716,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                     />
                   </div>
 
-                  {isPhoneLogin && (
+                  {needsCaptcha && (
                     <div style={styles.formGroup}>
                       <span style={styles.label}>تحقق الأمان</span>
                       {captchaLoadError ? (
@@ -679,7 +727,7 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
                         <div ref={captchaContainerRef} />
                       ) : (
                         <span style={{ ...styles.label, fontWeight: 400, lineHeight: 1.6 }}>
-                          الدخول بالهاتف يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد أو اسم المستخدم في الوقت الحالي.
+                          الدخول بالهاتف أو باسم المستخدم يحتاج CAPTCHA غير مضبوطة في هذا البناء. استخدم البريد في الوقت الحالي.
                         </span>
                       )}
                     </div>
