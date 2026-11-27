@@ -680,3 +680,80 @@ test('فشل الحفظ بعد تداخل القراءة يرجّع الحالة
   assert.deepEqual([...store.mutedIds()], []);
   store.dispose();
 });
+
+
+/* ------------------------------------------------------------------ */
+/* الترتيب المعاكس: الحفظ ينجح أولاً ثم تعود القراءة القديمة            */
+/* ------------------------------------------------------------------ */
+
+test('قراءة بدأت قبل الحفظ لا تستبدل الكتم بعد نجاح الحفظ', async () => {
+  const gated = createGatedGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: gated.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  const loading = store.initialize();
+  gated.read(0).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: READ_STARTED_AT },
+  ]);
+  await loading;
+  assert.deepEqual([...store.mutedIds()], []);
+
+  // القراءة القديمة تبدأ قبل الحفظ وتبقى معلّقة.
+  const resyncing = store.resync();
+
+  // الحفظ يكتمل بنجاح قبل أن تعود القراءة.
+  const muting = store.setMuted(CONTACT_B, true);
+  await gated.settle();
+  gated.save(0).resolve();
+  const muteResult = await muting;
+  assert.equal(muteResult.ok, true);
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+
+  // القراءة القديمة تعود بـ false و updated_at مساوٍ تماماً لوقت الحفظ.
+  gated.read(1).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: READ_STARTED_AT },
+  ]);
+  await resyncing;
+
+  // لا تعود القيمة القديمة: الكتم يبقى.
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+  store.dispose();
+});
+
+test('قراءة بدأت قبل إلغاء الكتم لا تعيد الكتم بعد نجاحه', async () => {
+  const gated = createGatedGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: gated.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  const loading = store.initialize();
+  gated.read(0).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: true, updated_at: READ_STARTED_AT },
+  ]);
+  await loading;
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+
+  const resyncing = store.resync();
+
+  const unmuting = store.setMuted(CONTACT_B, false);
+  await gated.settle();
+  gated.save(0).resolve();
+  const unmuteResult = await unmuting;
+  assert.equal(unmuteResult.ok, true);
+  assert.deepEqual([...store.mutedIds()], []);
+
+  // القراءة القديمة تعود بـ true و updated_at مساوٍ تماماً لوقت الحفظ.
+  gated.read(1).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: true, updated_at: READ_STARTED_AT },
+  ]);
+  await resyncing;
+
+  // لا يعود الكتم القديم.
+  assert.deepEqual([...store.mutedIds()], []);
+  store.dispose();
+});

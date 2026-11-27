@@ -266,9 +266,11 @@ export function createConversationMuteStore(
   const rows = new Map<string, { isMuted: boolean; updatedAt: string | null }>();
   const listeners = new Set<(mutedIds: ReadonlySet<string>) => void>();
   const pendingSaves = new Map<string, Promise<unknown>>();
-  // وقت بدء أحدث تغيير محلي لكل محادثة. القراءة التي بدأت قبله أو أثناءه لا
-  // تستبدل التحديث المتفائل، ولو كان updated_at في القاعدة مساوياً أو أقدم.
-  const localEdits = new Map<string, number>();
+  // جيل التغيير المحلي لكل محادثة: يزيد عند بدء كل حفظ، ولا يعتمد على ساعة
+  // الجهاز ولا على updated_at. القراءة تأخذ صورة منه عند بدئها، فلا تطبّق
+  // نتيجة على محادثة تغيّر جيلها بعد ذلك ولو اكتمل الحفظ قبل عودتها.
+  let localEditSerial = 0;
+  const localEditGenerations = new Map<string, number>();
   // كتم قديم لم يصل بعد إلى القاعدة: يُعرض مؤقتاً ويُعاد الاستيراد لاحقاً.
   let legacyPending = new Set<string>();
   let snapshot: ReadonlySet<string> = new Set();
@@ -314,6 +316,7 @@ export function createConversationMuteStore(
     list: ConversationSettingRow[],
     startedAt: string,
     token: number,
+    editSnapshot: Map<string, number>,
   ): boolean => {
     // قراءة أحدث بدأت: هذه النتيجة قديمة، فلا تغيّر الحالة.
     if (disposed || token !== readToken) return false;
@@ -322,16 +325,11 @@ export function createConversationMuteStore(
       if (!row.other_user_id || row.other_user_id === viewerId) continue;
       next.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
     }
-    const readStartedMs = Date.parse(startedAt);
-    // تحديث محلي متفائل (حفظ جارٍ، أو حفظ بدأ بعد بدء هذه القراءة) لا تستبدله
-    // نتيجة القراءة ولو تساوى updated_at.
-    const isLocallyEdited = (contactId: string): boolean => {
-      const editedAt = localEdits.get(contactId);
-      if (editedAt !== undefined && !Number.isNaN(readStartedMs) && editedAt >= readStartedMs) {
-        return true;
-      }
-      return pendingSaves.has(contactId);
-    };
+    // تغيّر جيل المحادثة بعد بدء هذه القراءة (حفظ بدأ بعدها، ولو اكتمل قبل
+    // عودتها) أو ما زال حفظها جارياً: نتيجة القراءة لا تمسّها.
+    const isLocallyEdited = (contactId: string): boolean =>
+      (localEditGenerations.get(contactId) ?? 0) !== (editSnapshot.get(contactId) ?? 0)
+      || pendingSaves.has(contactId);
     // صف تغيّر بعد بدء القراءة يبقى حتى لو غاب عن نتيجتها أو جاءت بقيمة أقدم.
     rows.forEach((current, contactId) => {
       if (isLocallyEdited(contactId)) {
@@ -370,7 +368,10 @@ export function createConversationMuteStore(
     }
   };
 
-  const importLegacyMutedIds = async (list: ConversationSettingRow[]): Promise<number> => {
+  const importLegacyMutedIds = async (
+    list: ConversationSettingRow[],
+    editSnapshot: Map<string, number>,
+  ): Promise<number> => {
     if (!options.readLegacyMutedIds) return 0;
     const legacyMutedIds = readLegacy();
     const toInsert = legacyMuteRowsToInsert(list, viewerId, legacyMutedIds, now());
@@ -390,8 +391,11 @@ export function createConversationMuteStore(
     if (disposed) return 0;
     toInsert.forEach(row => {
       legacyPending.delete(row.other_user_id);
-      // لا يُستبدل تحديث محلي جارٍ ولا صف أحدث وصل من Realtime أثناء الاستيراد.
-      if (pendingSaves.has(row.other_user_id) || localEdits.has(row.other_user_id)) return;
+      // لا يُستبدل تحديث محلي جارٍ ولا محادثة تغيّر جيلها بعد بدء القراءة.
+      if (
+        pendingSaves.has(row.other_user_id)
+        || (localEditGenerations.get(row.other_user_id) ?? 0) !== (editSnapshot.get(row.other_user_id) ?? 0)
+      ) return;
       const current = rows.get(row.other_user_id);
       if (current && isStaleSettingUpdate(current.updatedAt, row.updated_at)) return;
       rows.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
@@ -409,25 +413,26 @@ export function createConversationMuteStore(
     const previous = rows.get(contactId);
     const previousMuted = previous?.isMuted ?? false;
     if (disposed) return { ok: false, muted: previousMuted };
-    // تحديث متفائل: يُعرف الصف بهويته ويُسجَّل وقت بدء التغيير المحلي، فلا
-    // تستبدله قراءة بدأت قبله أو أثناءه ولو تساوى updated_at، ويُعرف عند
-    // الفشل هل ما يزال هو الصف المعروض (لم يحل محلّه تحديث أحدث).
+    // تحديث متفائل: يُعرف الصف بهويته ويأخذ جيلاً محلياً جديداً، فلا تستبدله
+    // قراءة بدأت قبله ولو اكتمل الحفظ وتساوى updated_at، ويُعرف عند الفشل هل
+    // ما يزال هو الصف المعروض (لم يحل محلّه تحديث أحدث).
     const optimistic = { isMuted: muted, updatedAt: previous?.updatedAt ?? null };
     rows.set(contactId, optimistic);
-    localEdits.set(contactId, Date.parse(now()));
+    // جيل جديد: كل قراءة بدأت قبل هذا الحفظ لا تطبّق نتيجتها على هذا الصف،
+    // حتى لو اكتمل الحفظ قبل أن تعود.
+    localEditSerial += 1;
+    localEditGenerations.set(contactId, localEditSerial);
     legacyPending.delete(contactId);
     publish();
     const updatedAt = now();
     try {
       await gateway.saveSetting(settingRow(viewerId, contactId, muted, updatedAt));
-      localEdits.delete(contactId);
       if (!disposed) {
         rows.set(contactId, { isMuted: muted, updatedAt });
         publish();
       }
       return { ok: true, muted };
     } catch (error) {
-      localEdits.delete(contactId);
       if (!disposed) {
         // لا يُلغى تحديث أحدث (Realtime) حلّ محل الصف المتفائل أثناء الحفظ.
         if (rows.get(contactId) === optimistic) {
@@ -452,6 +457,7 @@ export function createConversationMuteStore(
     async initialize() {
       const startedAt = now();
       const token = ++readToken;
+      const editSnapshot = new Map(localEditGenerations);
       let list: ConversationSettingRow[];
       try {
         list = await gateway.listSettings(viewerId);
@@ -460,15 +466,16 @@ export function createConversationMuteStore(
         return { ok: false, imported: 0, error };
       }
       if (disposed) return { ok: false, imported: 0 };
-      applyReadResult(list, startedAt, token);
+      applyReadResult(list, startedAt, token, editSnapshot);
       // الترحيل يُنفَّذ حتى لو أُهملت نتيجة القراءة لصالح قراءة أحدث:
       // الإدراج بـignoreDuplicates لا يغيّر أي قيمة موجودة.
-      const imported = await importLegacyMutedIds(list);
+      const imported = await importLegacyMutedIds(list, editSnapshot);
       return { ok: true, imported };
     },
     async resync() {
       const startedAt = now();
       const token = ++readToken;
+      const editSnapshot = new Map(localEditGenerations);
       let list: ConversationSettingRow[];
       try {
         list = await gateway.listSettings(viewerId);
@@ -476,8 +483,9 @@ export function createConversationMuteStore(
         return { ok: false, error };
       }
       if (disposed) return { ok: false };
-      // نتيجة resync أقدم لا تتغلب على قراءة أحدث ولا على تحديث Realtime أحدث.
-      applyReadResult(list, startedAt, token);
+      // نتيجة resync أقدم لا تتغلب على قراءة أحدث ولا على تحديث Realtime أحدث
+      // ولا على تغيير محلي بدأ بعد هذه القراءة.
+      applyReadResult(list, startedAt, token, editSnapshot);
       return { ok: true };
     },
     applyRealtimeRow(value) {
@@ -514,7 +522,7 @@ export function createConversationMuteStore(
       disposed = true;
       listeners.clear();
       pendingSaves.clear();
-      localEdits.clear();
+      localEditGenerations.clear();
       legacyPending = new Set();
     },
   };
