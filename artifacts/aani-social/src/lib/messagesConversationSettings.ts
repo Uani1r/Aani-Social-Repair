@@ -266,6 +266,9 @@ export function createConversationMuteStore(
   const rows = new Map<string, { isMuted: boolean; updatedAt: string | null }>();
   const listeners = new Set<(mutedIds: ReadonlySet<string>) => void>();
   const pendingSaves = new Map<string, Promise<unknown>>();
+  // وقت بدء أحدث تغيير محلي لكل محادثة. القراءة التي بدأت قبله أو أثناءه لا
+  // تستبدل التحديث المتفائل، ولو كان updated_at في القاعدة مساوياً أو أقدم.
+  const localEdits = new Map<string, number>();
   // كتم قديم لم يصل بعد إلى القاعدة: يُعرض مؤقتاً ويُعاد الاستيراد لاحقاً.
   let legacyPending = new Set<string>();
   let snapshot: ReadonlySet<string> = new Set();
@@ -319,8 +322,22 @@ export function createConversationMuteStore(
       if (!row.other_user_id || row.other_user_id === viewerId) continue;
       next.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
     }
+    const readStartedMs = Date.parse(startedAt);
+    // تحديث محلي متفائل (حفظ جارٍ، أو حفظ بدأ بعد بدء هذه القراءة) لا تستبدله
+    // نتيجة القراءة ولو تساوى updated_at.
+    const isLocallyEdited = (contactId: string): boolean => {
+      const editedAt = localEdits.get(contactId);
+      if (editedAt !== undefined && !Number.isNaN(readStartedMs) && editedAt >= readStartedMs) {
+        return true;
+      }
+      return pendingSaves.has(contactId);
+    };
     // صف تغيّر بعد بدء القراءة يبقى حتى لو غاب عن نتيجتها أو جاءت بقيمة أقدم.
     rows.forEach((current, contactId) => {
+      if (isLocallyEdited(contactId)) {
+        next.set(contactId, current);
+        return;
+      }
       const fromRead = next.get(contactId);
       if (!fromRead) {
         if (isSettingNewerThan(current.updatedAt, startedAt)) next.set(contactId, current);
@@ -373,7 +390,8 @@ export function createConversationMuteStore(
     if (disposed) return 0;
     toInsert.forEach(row => {
       legacyPending.delete(row.other_user_id);
-      // لا يُستبدل صف أحدث وصل من Realtime أو من حفظ محلي أثناء الاستيراد.
+      // لا يُستبدل تحديث محلي جارٍ ولا صف أحدث وصل من Realtime أثناء الاستيراد.
+      if (pendingSaves.has(row.other_user_id) || localEdits.has(row.other_user_id)) return;
       const current = rows.get(row.other_user_id);
       if (current && isStaleSettingUpdate(current.updatedAt, row.updated_at)) return;
       rows.set(row.other_user_id, { isMuted: row.is_muted, updatedAt: row.updated_at });
@@ -391,25 +409,34 @@ export function createConversationMuteStore(
     const previous = rows.get(contactId);
     const previousMuted = previous?.isMuted ?? false;
     if (disposed) return { ok: false, muted: previousMuted };
-    // تحديث متفائل: تُعرض الحالة فوراً، وتُعاد الحالة السابقة عند أي فشل.
-    rows.set(contactId, { isMuted: muted, updatedAt: previous?.updatedAt ?? null });
+    // تحديث متفائل: يُعرف الصف بهويته ويُسجَّل وقت بدء التغيير المحلي، فلا
+    // تستبدله قراءة بدأت قبله أو أثناءه ولو تساوى updated_at، ويُعرف عند
+    // الفشل هل ما يزال هو الصف المعروض (لم يحل محلّه تحديث أحدث).
+    const optimistic = { isMuted: muted, updatedAt: previous?.updatedAt ?? null };
+    rows.set(contactId, optimistic);
+    localEdits.set(contactId, Date.parse(now()));
     legacyPending.delete(contactId);
     publish();
     const updatedAt = now();
     try {
       await gateway.saveSetting(settingRow(viewerId, contactId, muted, updatedAt));
+      localEdits.delete(contactId);
       if (!disposed) {
         rows.set(contactId, { isMuted: muted, updatedAt });
         publish();
       }
       return { ok: true, muted };
     } catch (error) {
+      localEdits.delete(contactId);
       if (!disposed) {
-        if (previous) rows.set(contactId, previous);
-        else rows.delete(contactId);
-        publish();
+        // لا يُلغى تحديث أحدث (Realtime) حلّ محل الصف المتفائل أثناء الحفظ.
+        if (rows.get(contactId) === optimistic) {
+          if (previous) rows.set(contactId, previous);
+          else rows.delete(contactId);
+          publish();
+        }
       }
-      return { ok: false, muted: previousMuted, error };
+      return { ok: false, muted: rows.get(contactId)?.isMuted ?? previousMuted, error };
     }
   };
 
@@ -487,6 +514,7 @@ export function createConversationMuteStore(
       disposed = true;
       listeners.clear();
       pendingSaves.clear();
+      localEdits.clear();
       legacyPending = new Set();
     },
   };

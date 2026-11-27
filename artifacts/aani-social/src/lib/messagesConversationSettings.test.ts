@@ -549,3 +549,134 @@ test('استيراد الكتم القديم لا يستبدل صفاً أحدث
   assert.deepEqual([...store.mutedIds()], []);
   store.dispose();
 });
+
+
+/* ------------------------------------------------------------------ */
+/* تداخل القراءة مع الحفظ المحلي المتفائل                              */
+/* ------------------------------------------------------------------ */
+
+type GatedRead = {
+  viewerId: string;
+  resolve: (rows: ConversationSettingRow[]) => void;
+};
+
+type GatedSave = {
+  row: ConversationSettingRow;
+  resolve: () => void;
+  reject: (reason?: unknown) => void;
+};
+
+/** بوّابة قراءة وحفظ يدوية: كل طلب ينتظر حتى يحرره الاختبار. */
+function createGatedGateway() {
+  const reads: GatedRead[] = [];
+  const saves: GatedSave[] = [];
+  const gateway: ConversationSettingsGateway = {
+    listSettings: viewerId => new Promise<ConversationSettingRow[]>(resolve => {
+      reads.push({ viewerId, resolve });
+    }),
+    insertMissingSettings: async () => {},
+    saveSetting: row => new Promise<void>((resolve, reject) => {
+      saves.push({ row, resolve, reject });
+    }),
+  };
+  const read = (index: number): GatedRead => {
+    const request = reads[index];
+    assert.ok(request, `القراءة رقم ${index} يجب أن تكون قد بدأت`);
+    return request;
+  };
+  const save = (index: number): GatedSave => {
+    const request = saves[index];
+    assert.ok(request, `الحفظ رقم ${index} يجب أن يكون قد بدأ`);
+    return request;
+  };
+  /** يُفرّغ المهام الميكروية حتى يصل الحفظ إلى بوّابته. */
+  const settle = async (): Promise<void> => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  };
+  return { gateway, reads, saves, read, save, settle };
+}
+
+test('التحديث المتفائل لا تُلغيه نتيجة قراءة بدأت قبله أو أثناءه', async () => {
+  const gated = createGatedGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: gated.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  // قراءة أولى تُحمّل صف القاعدة الحالي (غير مكتومة).
+  const loading = store.initialize();
+  gated.read(0).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: EARLIER },
+  ]);
+  await loading;
+  assert.deepEqual([...store.mutedIds()], []);
+
+  // resync يبدأ، ثم الكتم يُنفَّذ قبل أن ينتهي.
+  const resyncing = store.resync();
+  const muting = store.setMuted(CONTACT_B, true);
+  await gated.settle();
+  assert.equal(gated.saves.length, 1);
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+
+  // نتيجة القراءة القديمة تعود قبل اكتمال الحفظ، فلا تستبدل التحديث المتفائل.
+  gated.read(1).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: EARLIER },
+  ]);
+  await resyncing;
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+
+  // نجاح الحفظ يُثبّت القيمة الجديدة.
+  gated.save(0).resolve();
+  const result = await muting;
+  assert.equal(result.ok, true);
+  assert.equal(result.muted, true);
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+  store.dispose();
+});
+
+test('فشل الحفظ بعد تداخل القراءة يرجّع الحالة دون قيمة متفائلة عالقة', async () => {
+  const gated = createGatedGateway();
+  const store = createConversationMuteStore({
+    viewerId: VIEWER,
+    gateway: gated.gateway,
+    now: () => READ_STARTED_AT,
+  });
+
+  const loading = store.initialize();
+  gated.read(0).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: EARLIER },
+  ]);
+  await loading;
+  assert.deepEqual([...store.mutedIds()], []);
+
+  const resyncing = store.resync();
+  const muting = store.setMuted(CONTACT_B, true);
+  await gated.settle();
+  assert.equal(gated.saves.length, 1);
+
+  // القراءة القديمة تصل قبل اكتمال الحفظ: التحديث المتفائل يبقى.
+  gated.read(1).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: EARLIER },
+  ]);
+  await resyncing;
+  assert.deepEqual([...store.mutedIds()], [CONTACT_B]);
+
+  // فشل الحفظ: تراجع إلى قيمة القاعدة، ولا قيمة متفائلة عالقة.
+  gated.save(0).reject(new Error('offline'));
+  const result = await muting;
+  assert.equal(result.ok, false);
+  assert.equal(result.muted, false);
+  assert.deepEqual([...store.mutedIds()], []);
+
+  // قراءة لاحقة تؤكد أن الحالة المعروضة هي حالة القاعدة.
+  const reloading = store.resync();
+  gated.read(2).resolve([
+    { user_id: VIEWER, other_user_id: CONTACT_B, is_muted: false, updated_at: EARLIER },
+  ]);
+  await reloading;
+  assert.deepEqual([...store.mutedIds()], []);
+  store.dispose();
+});
