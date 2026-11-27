@@ -278,10 +278,10 @@ test('تنظيف مستمعات السكريبت الموجود مسبقاً ع�
   assert.equal(dom.created.length, 0);
 
   const loadPromise = loader.load();
-  // يبدأ الاستطلاع الدوري (مؤقت واحد) لكن السكريبت ليس مملوكاً لهذه الوحدة.
+  // يبدأ الاستطلاع الدوري ومهلة التحميل لكن السكريبت ليس مملوكاً لهذه الوحدة.
   assert.equal(existing.listenerCount('load'), 1);
   assert.equal(existing.listenerCount('error'), 1);
-  assert.equal(clock.pending, 1);
+  assert.equal(clock.pending, 2);
 
   // النجاح → تُزال المستمعات ويُحتفظ بالسكريبت.
   dom.window.turnstile = {} as unknown as TurnstileApi;
@@ -330,6 +330,79 @@ test('تنظيف مستمعات السكريبت الموجود مسبقاً ع�
   assert.equal(loader.isCancelled, true);
   assert.equal(clock.pending, 0);
   await loadPromise;
+});
+
+test('مسار السكربت الموجود مسبقاً يطبق مهلة التحميل وينظّف مستمعاته دون حذفه', async () => {
+  const existing = createScript();
+  existing.dataset.turnstile = 'true';
+  let onLoadErrorCalls = 0;
+  const { loader, dom, clock } = createLoader({
+    dom: createDom(existing),
+    maxRetries: 0,
+    loadTimeoutMs: 100,
+    onLoadError: () => { onLoadErrorCalls += 1; },
+  });
+
+  const loadPromise = loader.load();
+  assert.equal(existing.listenerCount('load'), 1);
+  assert.equal(existing.listenerCount('error'), 1);
+  // مؤقتا الاستطلاع والمهلة معلقان.
+  assert.equal(clock.pending, 2);
+  assert.equal(clock.delays[0], 50);
+  assert.equal(clock.delays[1], 100);
+
+  // انتهاء المهلة يُنهي المحاولة، ينظّم المستندات والمستمعات، ولا يحذف السكربت المشترك.
+  clock.next();
+  await tick();
+  clock.next();
+  await tick();
+  assert.equal(existing.listenerCount('load'), 0);
+  assert.equal(existing.listenerCount('error'), 0);
+  assert.equal(dom.head.children.length, 1); // السكربت المشترك يبقى
+  assert.equal(onLoadErrorCalls, 1);
+  assert.equal(loader.loadError, true);
+  assert.equal(loader.isLoaded, false);
+  assert.equal(clock.pending, 0);
+
+  await loadPromise;
+});
+
+test('استدعاء load() مرتين متتاليتين يلغي المحاولة المعلقة ومواردها', async () => {
+  const existing = createScript();
+  existing.dataset.turnstile = 'true';
+  const { loader, dom, clock } = createLoader({
+    dom: createDom(existing),
+    maxRetries: 2,
+    loadTimeoutMs: 100,
+    readyPollMs: 50,
+    onLoadError: () => {},
+  });
+
+  // المحاولة الأولى تبدأ الاستطلاع والمهلة.
+  const p1 = loader.load();
+  assert.equal(existing.listenerCount('load'), 1);
+  assert.equal(existing.listenerCount('error'), 1);
+  assert.equal(clock.pending, 2);
+
+  // قبل استقرار المحاولة الأولى، استدعي load() مرة ثانية.
+  const p2 = loader.load();
+  // موارد المحاولة الأولى أُزيلت: مستmindعاتها مسحّة ومؤقتاتها مُمسَحة.
+  assert.equal(existing.listenerCount('load'), 1);
+  assert.equal(existing.listenerCount('error'), 1);
+  assert.equal(clock.pending, 2); // مؤقتا المحاولة الجديدة فقط
+
+  // اجعل المحاولة الجديدة تنجح عبر تجهيز window.turnstile ثم تشغيل الاستطلاع.
+  dom.window.turnstile = {} as unknown as TurnstileApi;
+  clock.next(); // تشغيل مؤقت الاستطلاع للمحاولة الجديدة → onReady → finish(true)
+  await tick();
+  assert.equal(clock.pending, 0);
+  await p2;
+  assert.equal(loader.isLoaded, true);
+  assert.equal(loader.loadError, false);
+
+  // وعد المحاولة الأولى يُحَلّ (بالإلغاء) ولا يبقى معلقاً، ولا تُStarted إعادة محاولة لها.
+  await p1.then(() => {}, () => {});
+  assert.equal(dom.head.children.length, 1); // السكربت المشترك لا يُزال
 });
 
 test('انتهاء المهلة ومنع الانتظار المستمر', async () => {
@@ -481,7 +554,7 @@ test('يُعاد استخدام السكربت الموجود مسبقاً ول�
   const loadPromise = loader.load();
   assert.equal(dom.head.children.length, 1); // لا يُنشأ جديد
   assert.equal(dom.created.length, 0);
-  assert.equal(clock.pending, 1); // استطلاع الجاهزية الدوري
+  assert.equal(clock.pending, 2); // استطلاع الجاهزية الدوري + مهلة التحميل
 
   loader.cancel();
   assert.equal(dom.head.children.length, 1); // السكربت الموجود مسبقاً يبقى

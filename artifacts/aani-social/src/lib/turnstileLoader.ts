@@ -133,6 +133,8 @@ export function createTurnstileLoader(options: TurnstileLoaderOptions): Turnstil
   let retryTimerId: unknown = null;
   /** دالة استئناف مؤقت النوم الحالي، تُستدعى عند الإلغاء لإيقاف الانتظار فوراً. */
   let sleepResolve: (() => void) | null = null;
+  /** عداد تحميلات متزايد: يكشف عن محاولة أُسبِقت باستدعاء load() أحدث، لتمنعها من الاستمرار. */
+  let loadId = 0;
 
   const clearRetryTimer = () => {
     if (retryTimerId !== null) {
@@ -251,6 +253,16 @@ export function createTurnstileLoader(options: TurnstileLoaderOptions): Turnstil
           trackTimer(setTimeout(poll, readyPollMs));
         };
         poll();
+
+        //طبّق مهلة التحميل على مسار السكربت الموجود مسبقاً أيضاً، بحيث لا يبقى
+        //الاستطلاع مفتوحاً إلى ما لا نهاية إذا لم تُهيأ window.turnstile.
+        //عند انتهاء المهلة يُنهي المحاولة وينظّف المؤقتات والمستمعين، دون حذف
+        //السكريبت المشترك لأنّه مملوك لجهة خارجية لهذه الوحدة.
+        loadTimeoutTimerId = trackTimer(setTimeout(() => {
+          if (settled) return;
+          clearAttempt();
+          finish(false, new Error('Turnstile script load timed out'));
+        }, loadTimeoutMs));
         return;
       }
 
@@ -323,13 +335,16 @@ export function createTurnstileLoader(options: TurnstileLoaderOptions): Turnstil
       sleepResolve = settle;
     });
 
-  const execute = async () => {
+  const execute = async (myLoadId: number) => {
     try {
       while (!cancelled) {
         try {
           await loadScript();
         } catch {
           if (cancelled) break;
+          // استدعاء load() أحدث أسبَق-proceeded-proceeded attempt: أوقف هذه الحلقة
+          // لمنعها من بدء إعادة محاولة أو تغيير حالة المحاولة الجديدة.
+          if (myLoadId !== loadId) break;
           if (retryCount < maxRetries) {
             retryCount += 1;
             const delay = baseDelayMs * Math.pow(2, retryCount - 1);
@@ -346,6 +361,7 @@ export function createTurnstileLoader(options: TurnstileLoaderOptions): Turnstil
           }
         }
         if (cancelled) break;
+        if (myLoadId !== loadId) break;
         isLoaded = true;
         loadError = false;
         break;
@@ -375,12 +391,13 @@ export function createTurnstileLoader(options: TurnstileLoaderOptions): Turnstil
       retryCount = 0;
       clearRetryTimer();
       abortCurrentAttempt();
+      const myLoadId = ++loadId;
       let resolveLoad: (() => void) | null = null;
       const promise = new Promise<void>((res) => {
         resolveLoad = res;
       });
 
-      execute().finally(() => {
+      execute(myLoadId).finally(() => {
         resolveLoad?.();
       });
       return promise;
