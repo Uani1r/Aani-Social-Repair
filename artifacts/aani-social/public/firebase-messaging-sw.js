@@ -16,9 +16,12 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
 
   messaging.onBackgroundMessage(payload => {
     const data = payload.data || {};
-    const title = typeof data.title === 'string' && data.title ? data.title : 'إشعار جديد من آني';
-    const body = typeof data.body === 'string' ? data.body : '';
-    const target = localTarget(typeof data.url === 'string' ? data.url : '/feed');
+    const fallback = payload.notification || {};
+    // العنوان والنص من data أولاً (يبنيها عامل الإرسال: data.title/body/url)،
+    // ثم payload.notification كاحتياطي. بلا هذا يظهر إشعار بعنوان افتراضي ونص فارغ.
+    const title = firstText(data.title, fallback.title) || 'إشعار جديد من آني';
+    const body = firstText(data.body, fallback.body);
+    const target = localTarget(firstText(data.url) || '/feed');
 
     return self.registration.showNotification(title, {
       body,
@@ -31,6 +34,14 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
       },
     });
   });
+}
+
+/** أول نص غير فارغ (بعد trim) — data أولاً ثم notification. */
+function firstText(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
 }
 
 function localTarget(path) {

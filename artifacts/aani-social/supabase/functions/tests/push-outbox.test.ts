@@ -11,6 +11,7 @@ import {
   buildFcmMessage,
   classifyFcmResult,
   createPushOutboxHandler,
+  notificationDestination,
   runPushOutboxBatch,
   type DeliveryCompletion,
   type DeliveryRow,
@@ -480,5 +481,153 @@ Deno.test("the worker refuses anything but a signed POST", async () => {
     Object.keys(fake.state.logs[0]).sort(),
     ["devices", "event", "event_type", "failed", "sent", "skipped", "task_id"].sort(),
     "a log entry keeps ids and counts only",
+  );
+});
+
+
+const WEB_DEVICE: DeviceTokenRow = {
+  id: "device-web",
+  token: MESSAGE_TOKEN,
+  platform: "web",
+  provider: "fcm",
+};
+
+function outboxTask(eventType: string, payload: Record<string, unknown>): OutboxTask {
+  return { id: "outbox-1", recipient_user_id: RECIPIENT, event_type: eventType, payload };
+}
+
+Deno.test("كل إشعار يفتح مساراً فعلياً من مسارات التطبيق", () => {
+  const urls = {
+    message: notificationDestination(outboxTask("message", { message_id: "message-1", sender_id: "sender-1" })),
+    call: notificationDestination(outboxTask("call", { call_id: "call-1", sender_id: "sender-1" })),
+    callWithoutId: notificationDestination(outboxTask("call", { sender_id: "sender-1" })),
+    messageWithoutSender: notificationDestination(outboxTask("message", { message_id: "message-1" })),
+    follow: notificationDestination(outboxTask("notification", { type: "follow", actor_id: "actor-1" })),
+    followRequest: notificationDestination(outboxTask("notification", { type: "follow_request" })),
+    comment: notificationDestination(outboxTask("notification", { type: "comment", reference_id: "post-1" })),
+    reply: notificationDestination(outboxTask("notification", { type: "reply", reference_id: "post-1" })),
+    like: notificationDestination(outboxTask("notification", { type: "like", reference_id: "post-1" })),
+    repost: notificationDestination(outboxTask("notification", { type: "repost", reference_id: "post-1" })),
+    storyLike: notificationDestination(outboxTask("notification", { type: "story_like", reference_id: "story-1" })),
+    storyMention: notificationDestination(outboxTask("notification", {
+      type: "story_mention",
+      reference_id: "story-1",
+      actor_id: "actor-1",
+    })),
+    unknown: notificationDestination(outboxTask("notification", { type: "system" })),
+    commentWithoutPost: notificationDestination(outboxTask("notification", { type: "comment" })),
+  };
+
+  assertEqual(urls.message, "/messages/sender-1", "a message opens its conversation");
+  assertEqual(
+    urls.call,
+    "/messages/sender-1?openCall=1&callerId=sender-1&callId=call-1",
+    "a call opens the conversation with the incoming-call query",
+  );
+  assertEqual(
+    urls.callWithoutId,
+    "/messages/sender-1?openCall=1&callerId=sender-1",
+    "a call without an id still opens the conversation",
+  );
+  assertEqual(urls.messageWithoutSender, "/feed", "a message without a sender falls back to the feed");
+  assertEqual(urls.follow, "/profile/actor-1", "a follow opens the actor profile");
+  assertEqual(urls.followRequest, "/feed?openFollowRequests=1", "a follow request opens the request list");
+  assertEqual(urls.comment, "/post/post-1?showComments=1", "a comment opens the post comments");
+  assertEqual(urls.reply, "/post/post-1?showComments=1", "a reply opens the post comments");
+  assertEqual(urls.like, "/post/post-1", "a like opens its post");
+  assertEqual(urls.repost, "/post/post-1", "a repost opens its post");
+  assertEqual(
+    urls.storyLike,
+    `/feed?openStoryId=story-1&openStoryOwner=${RECIPIENT}`,
+    "a story like opens the recipient story",
+  );
+  assertEqual(
+    urls.storyMention,
+    "/feed?openStoryId=story-1&openStoryOwner=actor-1",
+    "a story mention opens the actor story",
+  );
+  assertEqual(urls.unknown, "/feed", "an unknown type falls back to the feed");
+  assertEqual(urls.commentWithoutPost, "/feed", "a comment without a post falls back to the feed");
+});
+
+Deno.test("حمولة FCM تحمل حقول العرض التي يقرأها عامل الخدمة", () => {
+  const tasks = [
+    outboxTask("message", { message_id: "message-1", sender_id: "sender-1" }),
+    outboxTask("call", { call_id: "call-1", sender_id: "sender-1", mode: "audio" }),
+    outboxTask("notification", { type: "like", notification_id: "notification-1", reference_id: "post-1" }),
+  ];
+
+  for (const task of tasks) {
+    const message = buildFcmMessage(task, WEB_DEVICE);
+    const data = message.data as Record<string, string>;
+    const shown = message.notification as Record<string, string>;
+
+    assert(data.title.length > 0, "data.title must be present");
+    assert(data.body.length > 0, "data.body must be present");
+    assertEqual(data.url, notificationDestination(task), "data.url is the app destination");
+    assert(data.url.startsWith("/"), "a destination is an in-app path");
+    assertEqual(data.title, shown.title, "data.title matches the notification title");
+    assertEqual(data.body, shown.body, "data.body matches the notification body");
+  }
+});
+
+Deno.test("عامل الخدمة يقرأ نفس حقول العرض ويرفض العناوين الخارجية", async () => {
+  const serviceWorker = await Deno.readTextFile(
+    new URL("../../../public/firebase-messaging-sw.js", import.meta.url),
+  );
+
+  const titleLine = /const title = [^\n]+/.exec(serviceWorker)?.[0] || "";
+  const bodyLine = /const body = [^\n]+/.exec(serviceWorker)?.[0] || "";
+  const targetLine = /const target = [^\n]+/.exec(serviceWorker)?.[0] || "";
+
+  assert(serviceWorker.includes("payload.data"), "the handler reads payload.data");
+  assert(serviceWorker.includes("payload.notification"), "the handler reads payload.notification as a fallback");
+  assert(
+    titleLine.includes("data.title") && titleLine.includes("fallback.title"),
+    "the title comes from data first and notification second",
+  );
+  assert(
+    bodyLine.includes("data.body") && bodyLine.includes("fallback.body"),
+    "the body comes from data first and notification second",
+  );
+  assert(targetLine.includes("data.url"), "the click target comes from data.url");
+
+  // كل حقل عرض يبنيه العامل يقرأه عامل الخدمة.
+  for (const key of ["title", "body", "url", "notification_id"]) {
+    assert(serviceWorker.includes(`data.${key}`), `the service worker must read data.${key}`);
+  }
+
+  // منع الروابط الخارجية بقي كما هو.
+  assert(
+    serviceWorker.includes("target.origin === self.location.origin"),
+    "only same-origin targets are accepted",
+  );
+  assert(/new URL\('\/feed', self\.location\.origin\)/.test(serviceWorker), "an external target falls back to /feed");
+});
+
+Deno.test("لا نص رسالة ولا محتوى مكالمة في الحمولة أو الوجهة", () => {
+  const secret = "نص رسالة خاص جداً";
+  const message = buildFcmMessage(
+    outboxTask("message", { message_id: "message-1", sender_id: "sender-1", content: secret }),
+    WEB_DEVICE,
+  );
+  const call = buildFcmMessage(
+    outboxTask("call", { call_id: "call-1", sender_id: "sender-1", mode: "audio", content: secret }),
+    WEB_DEVICE,
+  );
+
+  for (const payload of [message, call]) {
+    const serialised = JSON.stringify(payload);
+    assert(!serialised.includes(secret), "no message content may travel in a push");
+    assert(!serialised.includes("content"), "a push carries no content field");
+    const data = payload.data as Record<string, string>;
+    assert(!data.url.includes(secret), "the destination carries no content");
+    assertEqual((payload.notification as Record<string, string>).body.includes(secret), false, "the body is generic");
+  }
+
+  assertEqual((message.data as Record<string, string>).url, "/messages/sender-1", "a message push opens the chat");
+  assert(
+    (call.data as Record<string, string>).url.startsWith("/messages/sender-1?openCall=1"),
+    "a call push opens the chat with the call query",
   );
 });
