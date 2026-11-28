@@ -15,10 +15,10 @@
  *   public.aani_is_official() returns boolean
  *
  * اسم الربط السابق aani_core_account_role يُحتفظ به كمرجع للتوافق العكسي فقط.
- * لا يُستخدم كبديل تلقائي إلا عند تأكيد غياب الدالة الأساسية في وقت التشغيل
- * (خطأ "الدالة غير موجودة")، وحتى ذلك الحين يُجرّب ويُتأكد من استجابته.
- * أي فشل يُعامل الجلسة كدور مستخدم عادي (fail-closed) ولا تُمنح أي صلاحية إدارية
- * بناءً على فشل الخادم.
+ * لا يُستخدم كبديل تلقائي إلا عند خطأ موثق يدّل تحديداً على غياب الدالة الأساسية
+ * (رمز PGRST202 أو 42883 مع ذكر اسم الدالة في رسالة الخطأ).
+ * أي خطأ آخر أو نتيجة غير صالحة ينتهي بـ null (fail-closed) ولا تُمنح أي
+ * صلاحية إدارية بناءً على فشل الخادم.
  */
 
 import type { CoreAccountRole } from '../types/account';
@@ -32,6 +32,9 @@ export const CORE_IS_ADMIN_RPC = 'aani_is_admin';
 export const CORE_IS_OFFICIAL_RPC = 'aani_is_official';
 
 export type CoreRoleRpcResult = string | null;
+
+/** رموز أخطاء PostgREST/PostgreSQL التي تدل على غياب الدالة. */
+const FUNCTION_NOT_FOUND_CODES = ['PGRST202', '42883'];
 
 /** الأدوار المسموحة من قبل النظام. */
 const ALLOWED_ROLES: ReadonlySet<CoreAccountRole> = new Set([
@@ -50,33 +53,33 @@ export async function getCoreAccountRole(): Promise<CoreAccountRole | null> {
   try {
     const role = await readRoleText(supabase, CORE_ACCOUNT_ROLE_RPC);
     if (role !== null) return role;
+    // الدالة موجودة لكنها أعادت قيمة غير صالحة → fail-closed بدون fallback.
+    return null;
   } catch (error) {
-    const message = String(error ?? '');
-    // فقط إذا كانت الدالة الأساسية غير موجودة، جرّب الربط القديم كتأكيد وجود في وقت التشغيل.
-    if (!message.toLowerCase().includes('function') && !message.toLowerCase().includes('does not exist')) {
-      console.warn('[core-accounts] فشل حل الدور من الخادم:', error);
-      return null;
+    const err = error as { code?: string; message?: string };
+    // جرب الربط القديم فقط عند غياب موثق للدالة الأساسية.
+    if (isFunctionNotFoundError(err, CORE_ACCOUNT_ROLE_RPC)) {
+      try {
+        const role = await readRoleText(supabase, CORE_ACCOUNT_ROLE_RPC_LEGACY);
+        if (role !== null) return role;
+        return null;
+      } catch (legacyError) {
+        // الربط القديم غائب أيضاً أو فشل → fail-closed.
+        console.warn('[core-accounts] الربط القديم للدور غير متاح:', legacyError);
+        return null;
+      }
     }
-    try {
-      const role = await readRoleText(supabase, CORE_ACCOUNT_ROLE_RPC_LEGACY);
-      if (role !== null) return role;
-    } catch (legacyError) {
-      // الربط القديم غائب أيضاً أو فشل → fail-closed.
-      console.warn('[core-accounts] الربط القديم للدور غير متاح:', legacyError);
-    }
+    // أي خطأ آخر (اتصال، صلاحيات، إلخ) → fail-closed.
+    console.warn('[core-accounts] فشل حل الدور من الخادم:', error);
     return null;
   }
-
-  // الدالة الأساسية موجودة لكنها أعادت قيمة غير صالحة → معامل كالمستخدم العادي.
-  return null;
 }
 
 /** اقرأ نص الدور من دالة RPC (تُرجع text وليس كائناً). */
 async function readRoleText(
-  supabase: ReturnType<typeof getCoreAccountsSupabaseClient> | null,
+  supabase: ReturnType<typeof getCoreAccountsSupabaseClient>,
   name: string,
 ): Promise<CoreAccountRole | null> {
-  if (!supabase) return null;
   const { data, error } = await supabase.rpc(name, {});
   if (error) throw error;
   const roleText = data as unknown as string;
@@ -84,6 +87,20 @@ async function readRoleText(
     return roleText as CoreAccountRole;
   }
   return null;
+}
+
+/**
+ * يتحقق مما إذا كان الخطأ يدل على غياب دالة محددة.
+ * يقبل فقط رموز الأخطاء الموثقة (PGRST202 / 42883) مع ذكر اسم الدالة في الرسالة.
+ * لا يعتمد على مطابقة كلمات عامة مثل 'function' أو 'does not exist'.
+ */
+function isFunctionNotFoundError(
+  error: { code?: string; message?: string },
+  expectedFunctionName: string,
+): boolean {
+  if (!FUNCTION_NOT_FOUND_CODES.includes(error.code)) return false;
+  const message = String(error.message ?? '');
+  return message.includes(expectedFunctionName);
 }
 
 /** التحقق من صلاحية معينة من الخادم (fail-closed). الوسيط p_permission. */

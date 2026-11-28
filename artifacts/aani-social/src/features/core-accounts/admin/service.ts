@@ -2,8 +2,12 @@
  * خدمات الإدارة اليومية (المسؤول).
  *
  * المسؤول يدير المستخدمين والبلاغات والمحتوى والإشراف. لا توجد هنا أي عملية
- * تمنح صلاحيات المؤسس ولا تمس جدول المؤسسين. تُؤكّد هوية المسؤول من الخادم
- * عبر RPC مؤمن قبل السماح بأي إجراء.
+ * تمنح صلاحيات المؤسس ولا تمس جدول المؤسسين. تُؤكّد هوية الممثل من الخادم
+ * عبر RPC مؤمن قبل السماح بأي إجراء:
+ *   - يُجلب الدور من aani_current_account_role() (نص مباشر، fail-closed).
+ *   - يُسمح للمؤسس الموثق خادمياً بالدخول إلى عمليات لوحة الإدارة.
+ *   - يُسمح للمسؤول فقط إذا أكد aani_is_admin() دوره.
+ *   - يُحظر الحساب الرسمي والمستخدم العادي صراحة.
  *
  * ما هو مربوط فعلياً من جانب الخادم:
  *   - قراءة سجل التدقيق: تُقرأ إدخالات sandbox.admin_actions عبر Supabase مع
@@ -17,9 +21,12 @@
  */
 
 import type { CoreAccountRole } from '../types/account';
-import { assertAdmin, isAdminActionAllowed } from './guard';
+import { isAdminActionAllowed } from './guard';
 import { auditAdminAction, fetchCoreAuditEntries } from '../services/audit';
-import { coreIsAdminServer } from '../services/rbac';
+import {
+  coreIsAdminServer,
+  getCoreAccountRole,
+} from '../services/rbac';
 
 export interface AdminUserAction {
   userId: string;
@@ -27,25 +34,50 @@ export interface AdminUserAction {
   reason: string;
 }
 
-/** التحقق من أن الممثل مسؤول من الخادم (fail-closed). */
-async function verifyServerAdmin(actorRole: CoreAccountRole | null): Promise<{ allowed: boolean; reason?: string }> {
-  if (!actorRole || !assertAdmin(actorRole).allowed) {
-    return { allowed: false, reason: 'دخول الإدارة محصور في المؤسس والمسؤول فقط؛ دورك الحالي: ' + (actorRole ?? 'غير محدد') };
+/**
+ * التحقق من أن الممثل مؤهل لدخول لوحة الإدارة من الخادم (fail-closed).
+ * لا تثق بالدور القادم من واجهة المستخدم؛ يُجلب الدور من RPC الخادم.
+ *
+ * القواعد:
+ *   - founder (من الخادم) → مسموح.
+ *   - admin (من الخادم) + تأكيد aani_is_admin() → مسموح.
+ *   - official / user / null → مرفوض.
+ */
+async function verifyServerAdmin(): Promise<{ allowed: boolean; reason?: string }> {
+  // جلب الدور من الخادم، لا ثقة في valore واجهة المستخدم.
+  const serverRole = await getCoreAccountRole();
+  if (!serverRole) {
+    return { allowed: false, reason: 'فشل جلب الدور من الخادم؛ الجلسة غير محسومة.' };
   }
-  const isAdmin = await coreIsAdminServer();
-  if (!isAdmin) {
-    return { allowed: false, reason: 'لم يُؤكد الخادم صلاحية المسؤول لهذه الجلسة.' };
+
+  // المؤسس الموثق خادمياً يُسمح له بدخول لوحة الإدارة.
+  if (serverRole === 'founder') {
+    return { allowed: true };
   }
-  return { allowed: true };
+
+  // المسؤول يُسمح له فقط إذا أكد aani_is_admin() دوره من الخادم.
+  if (serverRole === 'admin') {
+    const isAdmin = await coreIsAdminServer();
+    if (isAdmin) {
+      return { allowed: true };
+    }
+    return { allowed: false, reason: 'لم يؤكد الخادم صلاحية المسؤول لهذه الجلسة.' };
+  }
+
+  // الحساب الرسمي والمستخدم العادي محظوران صراحة.
+  return {
+    allowed: false,
+    reason: 'دخول لوحة الإدارة محصور في المؤسس والمسؤول فقط؛ دورك الحالي: ' + serverRole,
+  };
 }
 
 export async function coreAdminBanUser(params: AdminUserAction): Promise<{ ok: boolean; error?: Error | null }> {
-  const serverCheck = await verifyServerAdmin(params.actorRole);
+  const serverCheck = await verifyServerAdmin();
   if (!serverCheck.allowed) {
     await auditAdminAction({ action: 'ban_user', targetType: 'user', targetId: params.userId, reason: serverCheck.reason ?? '', ok: false });
     return { ok: false, error: new Error(serverCheck.reason ?? 'غير مصرح') };
   }
-  // حتى المسؤول لا يُنفّذ أي صلاحية محصورة في المؤسس.
+  // حتى المؤسس/المسؤول لا يُنفّذ أي صلاحية محصورة في المؤسس عبر هذه الدالة المعطلة.
   if (!isAdminActionAllowed(params.actorRole, 'core.admin.users.manage')) {
     await auditAdminAction({ action: 'ban_user', targetType: 'user', targetId: params.userId, reason: 'صلاحية محصورة في المؤسس', ok: false });
     return { ok: false, error: new Error('هذه العملية محصورة في المؤسس فقط') };
@@ -63,7 +95,7 @@ export async function coreAdminModerateContent(params: {
   reason: string;
   actorRole: CoreAccountRole | null;
 }): Promise<{ ok: boolean; error?: Error | null }> {
-  const serverCheck = await verifyServerAdmin(params.actorRole);
+  const serverCheck = await verifyServerAdmin();
   if (!serverCheck.allowed) {
     await auditAdminAction({ action: 'moderate_content', targetType: params.targetType, targetId: params.targetId, reason: serverCheck.reason ?? '', ok: false });
     return { ok: false, error: new Error(serverCheck.reason ?? 'غير مصرح') };
@@ -79,7 +111,7 @@ export async function coreAdminModerateContent(params: {
 }
 
 export async function coreAdminReadAudit(params: { actorRole: CoreAccountRole | null }): Promise<{ ok: boolean; entries: unknown[]; error?: Error | null }> {
-  const serverCheck = await verifyServerAdmin(params.actorRole);
+  const serverCheck = await verifyServerAdmin();
   if (!serverCheck.allowed) {
     return { ok: false, entries: [], error: new Error(serverCheck.reason ?? 'غير مصرح') };
   }
