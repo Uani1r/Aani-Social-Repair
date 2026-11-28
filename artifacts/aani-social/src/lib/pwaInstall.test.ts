@@ -6,7 +6,10 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * تثبيت آني على iPhone: Web App Manifest مربوط من index.html، وبيانات Apple
- * Web App، وأيقونات موجودة فعلاً في public/ (لا مسار مخترع ولا حجم مزعوم).
+ * Web App، وأيقونات حقيقية (PNG بتوقيع وأبعاد فعلية، وSVG للشعار) موجودة
+ * في public/ بمساراتها — لا مسار مخترع ولا حجم مزعوم.
+ *
+ * أبعاد PNG تُقرأ من ترويسة الملف نفسها (IHDR) لا من الاسم ولا من الـmanifest.
  *
  * ما لا يثبته: أن iOS عرض الأيقونة أو منح الإشعار — يحتاج جهازاً حقيقياً.
  */
@@ -34,6 +37,22 @@ const manifest = JSON.parse(manifestText) as {
   icons?: Array<{ src?: string; type?: string; sizes?: string; purpose?: string }>;
 };
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/** يقرأ توقيع PNG وأبعاد IHDR الفعلية من أول 24 بايت. */
+function readPngSize(relativePath: string): { width: number; height: number } {
+  const bytes = readFileSync(join(PUBLIC_DIR, relativePath));
+  assert(bytes.length > 24, `${relativePath}: too short to be a PNG`);
+  for (let index = 0; index < PNG_SIGNATURE.length; index += 1) {
+    assert.equal(bytes[index], PNG_SIGNATURE[index], `${relativePath}: png signature byte ${index}`);
+  }
+  assert.equal(bytes.toString('ascii', 12, 16), 'IHDR', `${relativePath}: the first chunk is IHDR`);
+  return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+}
+
+const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
+const publicFile = (href: string): string => href.replace(/^\/+/, '');
+
 test('index.html يربط manifest التطبيق', () => {
   assert.equal(indexHtml.includes('rel="manifest"'), true, 'the manifest link must exist');
   assert.equal(indexHtml.includes('href="/manifest.webmanifest"'), true, 'the manifest path must match the file');
@@ -54,31 +73,91 @@ test('البيانات الأساسية: الاسم والاختصار والأ�
   assert.equal(typeof manifest.description === 'string' && manifest.description.length > 0, true);
 });
 
-test('أيقونات Manifest موجودة فعلاً وبأنواعها الصحيحة', () => {
-  const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
-  assert(icons.length >= 1, 'the manifest must declare icons');
+test('ملفات PNG حقيقية: توقيع صحيح وأبعاد مضبوطة', () => {
+  const expected: Array<[string, number]> = [
+    ['icons/apple-touch-icon-180.png', 180],
+    ['icons/icon-192.png', 192],
+    ['icons/icon-512.png', 512],
+    ['icons/icon-512-maskable.png', 512],
+  ];
 
-  for (const icon of icons) {
-    const src = typeof icon.src === 'string' ? icon.src : '';
-    assert(src.startsWith('/'), `an icon path is rooted: ${src}`);
-    const file = join(PUBLIC_DIR, src.replace(/^\/+/, ''));
-    assert.equal(existsSync(file), true, `the icon file must exist: ${src}`);
-    const content = readFileSync(file, 'utf8');
-    assert(content.includes('<svg'), `the icon must be a real svg: ${src}`);
-    assert.equal(typeof icon.sizes === 'string' && icon.sizes.length > 0, true, `an icon needs sizes: ${src}`);
+  for (const [relativePath, size] of expected) {
+    assert.equal(existsSync(join(PUBLIC_DIR, relativePath)), true, `${relativePath} must exist`);
+    const { width, height } = readPngSize(relativePath);
+    assert.equal(width, size, `${relativePath}: real width`);
+    assert.equal(height, size, `${relativePath}: real height`);
   }
-
-  const purposes = icons.map(icon => icon.purpose || '');
-  assert(purposes.some(purpose => purpose.includes('any')), 'an "any" icon is declared');
-  assert(purposes.some(purpose => purpose.includes('maskable')), 'a maskable icon is declared');
-  assert(
-    icons.every(icon => icon.type === 'image/svg+xml'),
-    'every declared icon matches the type of the file it points at',
-  );
 });
 
-test('بيانات Apple Web App وأيقونة اللمس', () => {
-  assert.equal(indexHtml.includes('rel="apple-touch-icon"'), true, 'the apple touch icon link must exist');
+test('manifest يعلن أيقونات PNG بمقاساتها الفعلية ومسارات صحيحة', () => {
+  const pngIcons = icons.filter(icon => icon.type === 'image/png');
+  assert(pngIcons.length >= 3, 'the manifest must declare the PNG icons');
+
+  for (const icon of pngIcons) {
+    const src = typeof icon.src === 'string' ? icon.src : '';
+    assert(src.startsWith('/icons/'), `a PNG icon is served from /icons: ${src}`);
+    assert(src.endsWith('.png'), `a PNG icon points at a .png file: ${src}`);
+    const file = publicFile(src);
+    assert.equal(existsSync(join(PUBLIC_DIR, file)), true, `the declared icon exists: ${src}`);
+
+    // الحجم المعلن يجب أن يطابق البكسل الفعلي، وإلا رفض المتصفح الأيقونة.
+    const { width, height } = readPngSize(file);
+    assert.equal(icon.sizes, `${width}x${height}`, `${src}: declared sizes match the real pixels`);
+  }
+
+  assert(
+    pngIcons.some(icon => icon.sizes === '192x192' && (icon.purpose || '').includes('any')),
+    'a 192x192 PNG icon is declared',
+  );
+  assert(
+    pngIcons.some(icon => icon.sizes === '512x512' && (icon.purpose || '').includes('any')),
+    'a 512x512 PNG icon is declared',
+  );
+  assert(
+    pngIcons.some(icon => icon.sizes === '512x512' && (icon.purpose || '') === 'maskable'),
+    'the maskable PNG icon is kept with its purpose',
+  );
+
+  const svgIcons = icons.filter(icon => icon.type === 'image/svg+xml');
+  assert(svgIcons.length >= 1, 'the scalable source icon is still declared');
+  for (const icon of svgIcons) {
+    const file = publicFile(String(icon.src || ''));
+    assert.equal(existsSync(join(PUBLIC_DIR, file)), true, `the declared svg exists: ${icon.src}`);
+    assert.equal(readFileSync(join(PUBLIC_DIR, file), 'utf8').includes('<svg'), true, `${file} is a real svg`);
+  }
+});
+
+test('apple-touch-icon ملف PNG بمقاس 180×180', () => {
+  const match = /<link rel="apple-touch-icon" href="([^"]+)"[^>]*>/.exec(indexHtml);
+  assert(match !== null, 'the apple touch icon link carries an href');
+  const href = match[1];
+  assert.equal(href, '/icons/apple-touch-icon-180.png', 'the link points at the 180 png');
+  assert.equal(indexHtml.includes('sizes="180x180"'), true, 'the link declares 180x180');
+
+  const { width, height } = readPngSize(publicFile(href));
+  assert.equal(width, 180);
+  assert.equal(height, 180);
+});
+
+test('لا رابط إلى ملف غير موجود في index.html أو manifest', () => {
+  const linked = new Set<string>();
+  for (const icon of icons) {
+    if (typeof icon.src === 'string') linked.add(publicFile(icon.src));
+  }
+  const appleIcon = /<link rel="apple-touch-icon" href="([^"]+)"/.exec(indexHtml)?.[1];
+  if (appleIcon) linked.add(publicFile(appleIcon));
+  const manifestHref = /<link rel="manifest" href="([^"]+)"/.exec(indexHtml)?.[1];
+  if (manifestHref) linked.add(publicFile(manifestHref));
+  const favicon = /<link rel="icon"[^>]*href="([^"]+)"/.exec(indexHtml)?.[1];
+  if (favicon) linked.add(publicFile(favicon));
+
+  assert(linked.size >= 4, 'the icon links are found in the html and the manifest');
+  for (const file of linked) {
+    assert.equal(existsSync(join(PUBLIC_DIR, file)), true, `no link may point at a missing file: ${file}`);
+  }
+});
+
+test('بيانات Apple Web App', () => {
   assert.equal(indexHtml.includes('apple-mobile-web-app-capable" content="yes"'), true, 'standalone mode');
   assert.equal(
     indexHtml.includes('apple-mobile-web-app-status-bar-style" content="black-translucent"'),
@@ -90,34 +169,19 @@ test('بيانات Apple Web App وأيقونة اللمس', () => {
   assert.equal(indexHtml.includes('mobile-web-app-capable'), true, 'the cross-browser standalone hint');
 });
 
-test('الرابط في الأيقونة لا يشير إلى ملف غائب', () => {
-  const match = /<link rel="apple-touch-icon" href="([^"]+)"/.exec(indexHtml);
-  assert(match !== null, 'the apple touch icon link carries an href');
-  const href = match[1];
-  assert(href.startsWith('/'), 'the icon path is rooted');
-  assert.equal(existsSync(join(PUBLIC_DIR, href.replace(/^\/+/, ''))), true, `the linked icon exists: ${href}`);
-});
+test('مصدر الشعار محفوظ: مربع #FF3C00 وكلمة «آني» في المتجه', () => {
+  const anySource = read(PUBLIC_DIR, 'icons/icon.svg');
+  const maskableSource = read(PUBLIC_DIR, 'icons/icon-maskable.svg');
 
-test('أيقونة التطبيق تحمل شعار آني: مربع #FF3C00 وكلمة «آني»', () => {
-  const anyIcon = read(PUBLIC_DIR, 'icons/icon.svg');
-  const maskableIcon = read(PUBLIC_DIR, 'icons/icon-maskable.svg');
-
-  for (const [name, source] of [['icon.svg', anyIcon], ['icon-maskable.svg', maskableIcon]] as const) {
+  for (const [name, source] of [['icon.svg', anySource], ['icon-maskable.svg', maskableSource]] as const) {
     assert(source.includes('#FF3C00'), `${name} keeps the brand colour`);
     assert(source.includes('>آني</text>'), `${name} draws the «آني» wordmark`);
-    assert(source.includes('<text'), `${name} is not a bare colour tile`);
     assert(source.includes('viewBox='), `${name} is a scalable vector`);
     assert(/font-weight="(700|800|900)"/.test(source), `${name} keeps the bold wordmark weight`);
   }
 
-  // الأيقونة العادية بزوايا مستديرة، والـmaskable بلا زوايا لتملأ الإطار.
-  assert(/<rect[^>]*rx="40"/.test(anyIcon), 'the standard icon has rounded corners');
-  assert(!/<rect[^>]*rx=/.test(maskableIcon), 'the maskable icon is full-bleed');
-
-  // الأيقونة العامة في الـmanifest هي الشعار، لا مربع اللون القديم.
-  const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
-  const general = icons.find(icon => (icon.purpose || '').includes('any'));
-  assert.equal(general?.src, '/icons/icon.svg', 'the "any" icon points at the wordmark');
+  assert(/<rect[^>]*rx="40"/.test(anySource), 'the standard icon has rounded corners');
+  assert(!/<rect[^>]*rx=/.test(maskableSource), 'the maskable icon is full-bleed');
 });
 
 test('صفحة التطبيق تعلن اللغة والاتجاه المطابقين للـmanifest', () => {
