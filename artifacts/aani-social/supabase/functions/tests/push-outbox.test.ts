@@ -7,6 +7,8 @@
 // الإرسال إلى جهاز نجح، حمولة بلا نص رسالة، وسجل بلا رموز.
 
 import {
+  MAX_NO_DEVICE_ATTEMPTS,
+  NO_ACTIVE_DEVICES,
   backoffSeconds,
   buildFcmMessage,
   classifyFcmResult,
@@ -229,7 +231,7 @@ Deno.test("an event reaches every active device of the recipient", async () => {
 
   const summary = await runPushOutboxBatch(fake.deps, "worker-1", 10);
 
-  assertEqual(summary, { claimed: 1, sent: 2, skipped: 0, failed: 0, completed: 1 }, "both devices must be sent to");
+  assertEqual(summary, { claimed: 1, sent: 2, skipped: 0, failed: 0, rescheduled: 0, completed: 1 }, "both devices must be sent to");
   assertEqual(
     fake.state.sendCalls.map(call => call.deviceId),
     ["device-web", "device-android"],
@@ -350,15 +352,104 @@ Deno.test("a permanent rejection fails the delivery without a retry", async () =
   assertEqual(fake.state.sendCalls.length, 1, "a permanent failure is not retried");
 });
 
-Deno.test("a recipient without an active device completes without sending", async () => {
+Deno.test("a recipient without an active device is rescheduled, never marked sent", async () => {
   const fake = createFake({ devices: [], send: delivered });
   fake.enqueue("outbox-1", "message", { message_id: "message-1", sender_id: "user-a" });
 
   const summary = await runPushOutboxBatch(fake.deps, "worker-1", 10);
 
   assertEqual(summary.sent, 0, "there is no device to send to");
+  assertEqual(summary.rescheduled, 1, "a task without any delivery row is rescheduled");
   assertEqual(fake.state.sendCalls.length, 0, "nothing is sent without a device");
-  assertEqual(fake.state.outboxCompletions[0].status, "sent", "the task completes with nothing to deliver");
+  assertEqual(fake.state.deliveries.length, 0, "no delivery row is created without an active device");
+
+  // الإصلاح: بلا صفوف تسليم لا يوجد دليل، فلا تُصنَّف المهمة sent.
+  assertEqual(fake.state.outboxCompletions[0].status, "failed", "a task with no delivery proof is never sent");
+  assertEqual(fake.state.outboxCompletions[0].error, NO_ACTIVE_DEVICES, "the reason names the missing devices");
+  assertEqual(
+    fake.state.outboxCompletions[0].retryDelaySeconds,
+    backoffSeconds(1),
+    "the retry uses the existing backoff policy",
+  );
+  assertEqual(fake.state.tasks[0].status, "pending", "the task waits for the next attempt");
+  assertEqual(fake.state.logs[0].reason, NO_ACTIVE_DEVICES, "the log records the reason");
+  assertEqual(fake.state.logs[0].devices, 0, "the log records that no device was targeted");
+});
+
+Deno.test("a rescheduled task is delivered once a device becomes active", async () => {
+  const fake = createFake({ devices: [], send: delivered });
+  fake.enqueue("outbox-1", "message", { message_id: "message-1", sender_id: "user-a" });
+
+  const first = await runPushOutboxBatch(fake.deps, "worker-1", 10);
+  assertEqual(first.rescheduled, 1, "the first attempt has no device");
+
+  // يسجّل المستخدم جهازاً بعد إعادة الجدولة.
+  fake.state.devices.push({
+    id: "device-web",
+    token: MESSAGE_TOKEN,
+    platform: "web",
+    provider: "fcm",
+    revoked: false,
+  });
+  fake.advanceSeconds(backoffSeconds(1));
+
+  const second = await runPushOutboxBatch(fake.deps, "worker-2", 10);
+
+  assertEqual(second.claimed, 1, "the delayed task is claimable again");
+  assertEqual(second.sent, 1, "the notification reaches the new device");
+  assertEqual(second.rescheduled, 0, "the second attempt is not rescheduled");
+  assertEqual(fake.state.sendCalls.length, 1, "the notification is sent exactly once");
+  assertEqual(fake.state.outboxCompletions[1].status, "sent", "the task completes with real delivery rows");
+});
+
+Deno.test("a task with completed deliveries is sent, with no duplicate send", async () => {
+  const fake = createFake({ devices: [{ id: "device-web", token: MESSAGE_TOKEN }], send: delivered });
+  fake.enqueue("outbox-1", "notification", { notification_id: "notification-1", type: "like" });
+
+  const first = await runPushOutboxBatch(fake.deps, "worker-1", 10);
+  assertEqual(first.sent, 1, "the delivery row is sent");
+  assertEqual(fake.state.outboxCompletions[0].status, "sent", "a completed delivery is evidence");
+
+  // إعادة المعالجة لا تجد المهمة (أُنهيت) ولا ترسل مرة ثانية.
+  fake.advanceSeconds(3600);
+  const second = await runPushOutboxBatch(fake.deps, "worker-2", 10);
+  assertEqual(second.claimed, 0, "a finished task is never claimed again");
+  assertEqual(fake.state.sendCalls.length, 1, "no duplicate delivery on re-processing");
+  assertEqual(fake.state.deliveries.length, 1, "one delivery row per device");
+});
+
+Deno.test("a task without devices fails permanently after the attempt ceiling", async () => {
+  const fake = createFake({ devices: [], send: delivered });
+  fake.enqueue("outbox-1", "message", { message_id: "message-1", sender_id: "user-a" });
+
+  for (let attempt = 1; attempt <= MAX_NO_DEVICE_ATTEMPTS; attempt += 1) {
+    const summary = await runPushOutboxBatch(fake.deps, `worker-${attempt}`, 10);
+    assertEqual(summary.claimed, 1, `attempt ${attempt} claims the task`);
+    assertEqual(
+      summary.rescheduled,
+      attempt < MAX_NO_DEVICE_ATTEMPTS ? 1 : 0,
+      `attempt ${attempt} reschedules below the ceiling only`,
+    );
+    fake.advanceSeconds(backoffSeconds(attempt));
+  }
+
+  const completions = fake.state.outboxCompletions;
+  assertEqual(completions.length, MAX_NO_DEVICE_ATTEMPTS, "one completion per attempt");
+  assert(
+    completions.every(completion => completion.status !== "sent"),
+    "a task without any delivery row is never marked sent",
+  );
+  assertEqual(completions[completions.length - 1].error, NO_ACTIVE_DEVICES, "the final reason is explicit");
+  assertEqual(
+    completions[completions.length - 1].retryDelaySeconds,
+    0,
+    "the ceiling stops the retries instead of looping forever",
+  );
+  assertEqual(fake.state.tasks[0].status, "failed", "the task ends as failed, not delivered");
+
+  const later = await runPushOutboxBatch(fake.deps, "worker-final", 10);
+  assertEqual(later.claimed, 0, "a failed task is not claimed again");
+  assertEqual(fake.state.sendCalls.length, 0, "nothing was ever sent");
 });
 
 Deno.test("classifies FCM responses as success, invalid token, retryable or rejected", () => {
@@ -479,7 +570,18 @@ Deno.test("the worker refuses anything but a signed POST", async () => {
   assert(fake.state.logs.length === 1, "one summary entry per task");
   assertEqual(
     Object.keys(fake.state.logs[0]).sort(),
-    ["devices", "event", "event_type", "failed", "sent", "skipped", "task_id"].sort(),
+    [
+      "devices",
+      "pending",
+      "reason",
+      "rescheduled",
+      "event",
+      "event_type",
+      "failed",
+      "sent",
+      "skipped",
+      "task_id",
+    ].sort(),
     "a log entry keeps ids and counts only",
   );
 });
@@ -603,6 +705,18 @@ Deno.test("عامل الخدمة يقرأ نفس حقول العرض ويرفض 
     "only same-origin targets are accepted",
   );
   assert(/new URL\('\/feed', self\.location\.origin\)/.test(serviceWorker), "an external target falls back to /feed");
+
+  // منع الإشعار المكرر: وسم ثابت لكل حدث + حارس بصمة قصير العمر.
+  assert(serviceWorker.includes("const tag = notificationId"), "the notification tag is derived once");
+  assert(serviceWorker.includes("renotify: false"), "a repeated event replaces its notification instead of re-alerting");
+  assert(serviceWorker.includes("takeOnce"), "a short-lived dedupe guard exists");
+  assert(serviceWorker.includes("if (!takeOnce(tag)) return undefined;"), "a duplicate event is not shown twice");
+  assert(serviceWorker.includes("RECENT_TTL_MS"), "the dedupe window is bounded");
+  assert(serviceWorker.includes("RECENT_LIMIT"), "the dedupe memory is bounded");
+  assert(
+    serviceWorker.includes("`aani-${firstText(data.type, data.event_type) || 'event'}:${firstText(data.reference_id, data.message_id, data.call_id) || 'general'}`"),
+    "a stable fallback tag exists when the event has no id",
+  );
 });
 
 Deno.test("لا نص رسالة ولا محتوى مكالمة في الحمولة أو الوجهة", () => {
