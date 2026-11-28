@@ -1,35 +1,38 @@
 /**
  * خدمة سجل التدقيق للعمليات الإدارية الحساسة.
  *
- * العمليات الحساسة (منح عملات، استرداد شحن، إدارة أدوار، إشراف محتوى، إلخ)
- * تُسجل في جدول sandbox.admin_actions عبر دالة RPC مؤمنة (security-definer)
- * تُستمد فيها هوية الفاعل من auth.uid() داخل الدالة، ولا يُوثق في إدخال
- * المتصفح.
+ * ملاحظة أمنية إلزامية: دالة aani_core_audit_log غير موجودة في Supabase حالياً.
+ * لا تدّعي هذه الوحدة أن التدقيق العام يعمل قبل توفير عقد خادمي فعلي.
  *
- * عقد التدقيق المطلوب (يُضاف مع ترحيل الصلاحيات أو عامل حافة مخصص):
- *   public.aani_core_audit_log(
- *     p_action text, p_target_type text, p_target_id uuid,
- *     p_reason text, p_result text
- *   ) returns void
- *   - security definer، يُInsert في جدول التدقيق (يُفترض aani_private.account_role_audit
- *     على الإنتاج؛ تُسجّل الدوال المالية للساند박س في sandbox.admin_actions من الخادم).
- *   - يمكّن تنفيذه لـ authenticated.
+ * ما هو موجود فعلياً (من ترحيل 20270306000001_aani_sandbox_financial.sql):
+ *   جدول sandbox.admin_actions (id, actor_user_id, action, target_type, target_id,
+ *   reason, result, created_at) — سياسة قراءة للمصادقين حيث الفاعل هو auth.uid()
+ *   أو المستخدم مؤسس عبر aani_sandbox_is_founder(). لا سياسة إدراج مباشرة للعميل.
+ *   دوال RPC المالية (aani_sandbox_grant_coins، aani_sandbox_refund_top_up، إلخ)
+ *   تسجل داخل sandbox.admin_actions من جانب الخادم (security definer).
  *
- * في حال عدم توفر الدالة/الجدول، تُسجل المحاولة في وحدة التحكم ولا تُخفق العملية
- * الأساسية نفسها (التدقيق مكمل وليس حارسًا)، مع تحذير واضح حتى تُستكمل
- * الربط من جانب قاعدة البيانات.
+ * لذلك فإن تدقيق العمليات المالية المؤسس يتم بالفعل داخل الدوال RPC الخادمة.
+ * تدقيق العمليات العامة (حظر، إشراف، منشورات رسمية، إلخ) يحتاج إلى دالة RPC
+ * جديدة لإدراج في sandbox.admin_actions — أضفنا مقترح SQL للمراجعة في
+ * migrations/aani_core_audit_log.proposal.sql ولم يُطبَّق على الإنتاج.
+ *
+ * في غياب aani_core_audit_log، تُعيد دوال التدقيق هنا { ok: false, error }
+ * مع تحذير واضح، ولا تُخفي الفشل ولا تُنسب نجاحاً زائفاً.
  */
 
-import type { CoreAuditInput, CoreAuditResult } from '../types/audit';
-export type { CoreAuditInput, CoreAuditResult };
+import type { CoreAuditEntry, CoreAuditInput, CoreAuditResult } from '../types/audit';
 import { getCoreAccountsSupabaseClient } from './supabase';
 
+export type { CoreAuditEntry, CoreAuditInput, CoreAuditResult };
 export const CORE_AUDIT_RPC = 'aani_core_audit_log';
 
-export async function logCoreAudit(input: CoreAuditInput): Promise<{ ok: boolean; error?: Error | null }> {
+export type CoreAuditRpcResult = { ok: boolean; error?: Error | null };
+
+/** محاولة تسجيل تدقيق عبر RPC. إذا غابت الدالة، تُعاد { ok: false, error } ولا يُClaim نجاح. */
+export async function logCoreAudit(input: CoreAuditInput): Promise<CoreAuditRpcResult> {
   const supabase = getCoreAccountsSupabaseClient();
   if (!supabase) {
-    console.warn('[core-accounts] عميل Supabase غير متاح؛ لم يُسجل التدقيق:', input.action);
+    console.warn('[core-accounts] عميل Supabase غير متاح؛ التدقيق غير متاح:', input.action);
     return { ok: false, error: new Error('supabase client unavailable') };
   }
 
@@ -42,8 +45,8 @@ export async function logCoreAudit(input: CoreAuditInput): Promise<{ ok: boolean
       p_result: input.result,
     });
     if (error) {
-      // التدقيق مكمل: لا نُفشل العملية الأساسية بسبب欠缺 الربط الخادمي، لكن نُحذّر.
-      console.warn('[core-accounts] فشل تسجيل التدقيق عبر RPC:', error.message);
+      // الدالة غير موجودة أو فشل — لا نُClaim نجاح التدقيق. نُعيد 실패 بشكل صريح.
+      console.warn('[core-accounts] دالة التدقيق aani_core_audit_log غير متاحة أو فشلت:', error.message);
       return { ok: false, error };
     }
     return { ok: true, error: null };
@@ -53,19 +56,45 @@ export async function logCoreAudit(input: CoreAuditInput): Promise<{ ok: boolean
   }
 }
 
-/** سجّل نتيجة عملية إدارية حساسة (مريح للاستخدام في الخدمات). */
+/** سجّل نتيجة عملية إدارية حساسة. يُعيد نتيجة RPC كما هي (لا يُخفي فشلاً). */
 export async function auditAdminAction(params: {
   action: string;
   targetType: string;
   targetId?: string | null;
   reason: string;
   ok: boolean;
-}): Promise<void> {
-  await logCoreAudit({
+}): Promise<CoreAuditRpcResult> {
+  return logCoreAudit({
     action: params.action,
     targetType: params.targetType,
     targetId: params.targetId ?? null,
     reason: params.reason,
-    result: params.ok ? 'ok' : 'error',
+    result: params.ok ? ('ok' as CoreAuditResult) : ('error' as CoreAuditResult),
   });
+}
+
+/** اقرأ إدخالات التدقيق من sandbox.admin_actions عبر RLS (الفاعل هو الجلسة أو مؤسس). */
+export async function fetchCoreAuditEntries(params: {
+  page?: number;
+  pageSize?: number;
+  actorId?: string | null;
+}): Promise<{ data: CoreAuditEntry[] | null; error: Error | null }> {
+  const supabase = getCoreAccountsSupabaseClient();
+  if (!supabase) {
+    return { data: null, error: new Error('supabase client unavailable') };
+  }
+  const pageSize = params.pageSize ?? 50;
+  const from = ((params.page ?? 0) * pageSize);
+  let q = supabase
+    .from('sandbox.admin_actions')
+    .select('id, actor_user_id, action, target_type, target_id, reason, result, created_at')
+    .order('created_at', { ascending: false })
+    .range(from, from + pageSize);
+  if (params.actorId) q = q.eq('actor_user_id', params.actorId);
+  const { data, error } = await q;
+  if (error) return { data: null, error };
+  return {
+    data: (data as unknown as CoreAuditEntry[] ?? []),
+    error: null,
+  };
 }

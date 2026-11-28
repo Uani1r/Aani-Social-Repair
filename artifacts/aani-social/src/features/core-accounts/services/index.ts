@@ -15,6 +15,8 @@ export {
   CORE_AUDIT_RPC,
   type CoreAuditInput,
   type CoreAuditResult,
+  type CoreAuditEntry,
   logCoreAudit,
   auditAdminAction,
+  fetchCoreAuditEntries,
 } from './audit';

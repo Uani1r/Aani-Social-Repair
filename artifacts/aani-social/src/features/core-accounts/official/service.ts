@@ -3,15 +3,19 @@
  *
  * الحساب الرسمي ينشر المنشورات والإعلانات والتنبيهات فقط. لا يمتلك صلاحيات
  * المؤسس أو الإدارة العليا. تُؤكّد هوية الحساب الرسمي من الخادم عبر RPC مؤمن
- * قبل السماح بأي إجراء؛ حتى الربط الخادم للإجراءات نفسها غير مكتمل بعد،
- * تُرفض العملية وتُستبدل بتحذير واضح بدلاً من تنفيذ أي عملية أعلى من
- * الصلاحية الممنوحة.
+ * قبل السماح بأي إجراء.
+ *
+ * ما هو معطل بوضوح لعدم وجود آلية خادمية آمنة في هذا المستودع:
+ *   - إنشاء منشورات رسمية: لا دالة RPC آمنة للنشر → تُعاد ok:false.
+ *   - إرسال الإعلانات والتنبيهات: لا دالة RPC آمنة للإرسال → تُعاد ok:false.
+ *
+ * لا تُنفذ أي كتابة مباشرة من العميل، ولا تُتجاوز تحقق الخادم.
  */
 
 import type { CoreAccountRole } from '../types/account';
 import { assertOfficial } from './guard';
 import { auditAdminAction } from '../services/audit';
-import { coreIsOfficialServer, coreHasPermissionServer } from '../services/rbac';
+import { coreIsOfficialServer } from '../services/rbac';
 
 export interface OfficialPublishParams {
   content: string;
@@ -39,8 +43,9 @@ export async function coreOfficialCreatePost(params: OfficialPublishParams): Pro
     return { ok: false, error: new Error(serverCheck.reason ?? 'غير مصرح') };
   }
 
+  // لا دالة RPC آمنة لنشر منشورات رسمية في هذا المستودع. لا نُنشئ كتابة من العميل.
   await auditAdminAction({ action: 'create_post', targetType: 'post', targetId: null, reason: params.reason ?? 'منشور رسمي', ok: false });
-  return { ok: false, error: new Error('الربط الخادم لنشر المنشورات الرسمية غير مكتمل بعد — العملية لم تُنفذ') };
+  return { ok: false, error: new Error('آلية نشر المنشورات الرسمية غير مربوطة بخادم آمن — العملية لم تُنفذ') };
 }
 
 export async function coreOfficialSendAnnouncement(params: {
@@ -54,6 +59,7 @@ export async function coreOfficialSendAnnouncement(params: {
     return { ok: false, error: new Error(serverCheck.reason ?? 'غير مصرح') };
   }
 
+  // لا دالة RPC آمنة لإرسال إعلانات رسمية في هذا المستودع. لا نُنشئ كتابة من العميل.
   await auditAdminAction({ action: 'send_announcement', targetType: 'announcement', targetId: null, reason: params.reason ?? 'إعلان رسمي', ok: false });
-  return { ok: false, error: new Error('الربط الخادم لإرسال الإعلانات غير مكتمل بعد — العملية لم تُنفذ') };
+  return { ok: false, error: new Error('آلية إرسال الإعلانات الرسمية غير مربوطة بخادم آمن — العملية لم تُنفذ') };
 }

@@ -8,15 +8,17 @@
  * عقود RPC الفعلية في Supabase (يُفترض وجودها على المشروع الإنتاجي):
  *   public.aani_current_account_role() returns text
  *     - يُمكّن تنفيذه لـ authenticated فقط.
- *     - يرجع أحد القيم: 'founder' | 'admin' | 'official' | 'user'.
- *   public.aani_has_permission(p_key text) returns boolean
+ *     - يرجع نصاً واحداً: 'founder' | 'admin' | 'official' | 'user'.
+ *   public.aani_has_permission(p_permission text) returns boolean
+ *     - الوسيط هو p_permission (ليس p_key).
  *   public.aani_is_admin() returns boolean
  *   public.aani_is_official() returns boolean
  *
- * اسم الربط السابق aani_core_account_role يُحتفظ به كبديل للعقد القديم في حال كان
- * المنتج منشوراً به؛ تُجرّب الدالة الجديدة أولاً ثم تُسقط إلى البديل فقط عند خطأ
- * "الدالة غير موجودة". أي فشل يُعامل الجلسة كدور مستخدم عادي (fail-closed) ولا تُمنح
- * أي صلاحية إدارية بناءً على فشل الخادم.
+ * اسم الربط السابق aani_core_account_role يُحتفظ به كمرجع للتوافق العكسي فقط.
+ * لا يُستخدم كبديل تلقائي إلا عند تأكيد غياب الدالة الأساسية في وقت التشغيل
+ * (خطأ "الدالة غير موجودة")، وحتى ذلك الحين يُجرّب ويُتأكد من استجابته.
+ * أي فشل يُعامل الجلسة كدور مستخدم عادي (fail-closed) ولا تُمنح أي صلاحية إدارية
+ * بناءً على فشل الخادم.
  */
 
 import type { CoreAccountRole } from '../types/account';
@@ -29,50 +31,69 @@ export const CORE_HAS_PERMISSION_RPC = 'aani_has_permission';
 export const CORE_IS_ADMIN_RPC = 'aani_is_admin';
 export const CORE_IS_OFFICIAL_RPC = 'aani_is_official';
 
-export type CoreRoleRpcResult = { role: CoreAccountRole | null } | null;
+export type CoreRoleRpcResult = string | null;
 
-/** حل دور الجلسة الحالية من الخادم (fail-closed). */
+/** الأدوار المسموحة من قبل النظام. */
+const ALLOWED_ROLES: ReadonlySet<CoreAccountRole> = new Set([
+  'founder',
+  'admin',
+  'official',
+  'user',
+]);
+
+/** حل دور الجلسة الحالية من الخادم كنص مباشر (fail-closed). */
 export async function getCoreAccountRole(): Promise<CoreAccountRole | null> {
   const supabase = getCoreAccountsSupabaseClient();
   if (!supabase) return null;
 
-  const candidates = [CORE_ACCOUNT_ROLE_RPC, CORE_ACCOUNT_ROLE_RPC_LEGACY];
-  let lastError: unknown | null = null;
-
-  for (const name of candidates) {
-    try {
-      // العميل عام (Database = any) لذا يُمرّر اسم الدالة كنص في الموضع الأول.
-      const { data, error } = await supabase.rpc(name, {});
-      if (error) {
-        lastError = error;
-        continue;
-      }
-      const role = ((data as unknown as { role: CoreAccountRole | null } | null)?.role) ?? null;
-      if (role && ['founder', 'admin', 'official', 'user'].includes(role)) {
-        return role as CoreAccountRole;
-      }
+  // جرّب الدالة الأساسية أولاً.
+  try {
+    const role = await readRoleText(supabase, CORE_ACCOUNT_ROLE_RPC);
+    if (role !== null) return role;
+  } catch (error) {
+    const message = String(error ?? '');
+    // فقط إذا كانت الدالة الأساسية غير موجودة، جرّب الربط القديم كتأكيد وجود في وقت التشغيل.
+    if (!message.toLowerCase().includes('function') && !message.toLowerCase().includes('does not exist')) {
+      console.warn('[core-accounts] فشل حل الدور من الخادم:', error);
       return null;
-    } catch (error) {
-      lastError = error;
-      const message = String(error ?? '');
-      // إذا كانت الدالة غير موجودة، جرّب العقد البديل؛ أي فشل آخر يُعامل fail-closed.
-      if (!message.toLowerCase().includes('function') && !message.toLowerCase().includes('does not exist')) {
-        break;
-      }
-      continue;
     }
+    try {
+      const role = await readRoleText(supabase, CORE_ACCOUNT_ROLE_RPC_LEGACY);
+      if (role !== null) return role;
+    } catch (legacyError) {
+      // الربط القديم غائب أيضاً أو فشل → fail-closed.
+      console.warn('[core-accounts] الربط القديم للدور غير متاح:', legacyError);
+    }
+    return null;
   }
 
-  console.warn('[core-accounts] فشل حل الدور من الخادم:', lastError);
+  // الدالة الأساسية موجودة لكنها أعادت قيمة غير صالحة → معامل كالمستخدم العادي.
   return null;
 }
 
-/** التحقق من صلاحية معينة من الخادم (fail-closed). */
-export async function coreHasPermissionServer(key: string): Promise<boolean> {
+/** اقرأ نص الدور من دالة RPC (تُرجع text وليس كائناً). */
+async function readRoleText(
+  supabase: ReturnType<typeof getCoreAccountsSupabaseClient> | null,
+  name: string,
+): Promise<CoreAccountRole | null> {
+  if (!supabase) return null;
+  const { data, error } = await supabase.rpc(name, {});
+  if (error) throw error;
+  const roleText = data as unknown as string;
+  if (typeof roleText === 'string' && ALLOWED_ROLES.has(roleText as CoreAccountRole)) {
+    return roleText as CoreAccountRole;
+  }
+  return null;
+}
+
+/** التحقق من صلاحية معينة من الخادم (fail-closed). الوسيط p_permission. */
+export async function coreHasPermissionServer(permission: string): Promise<boolean> {
   const supabase = getCoreAccountsSupabaseClient();
   if (!supabase) return false;
   try {
-    const { data, error } = await supabase.rpc(CORE_HAS_PERMISSION_RPC, { p_key: key });
+    const { data, error } = await supabase.rpc(CORE_HAS_PERMISSION_RPC, {
+      p_permission: permission,
+    });
     if (error) {
       console.warn('[core-accounts] فشل التحقق من الصلاحية من الخادم:', error);
       return false;

@@ -98,6 +98,46 @@ test('استرداد شحن ينجح للمؤسس ويُستدعى RPC الما�
   assert.deepEqual(refundCalledWith, { topUpId: 'tu-1', reason: 'استرداد تجريبي' });
 });
 
+test('فشل RPC المالي يُ_propagate خطاً للمؤسس (لا يُClaim نجاحاً)', async () => {
+  let threw = false;
+  try {
+    await coreGrantSandboxCoins({
+      userId: 'u-target',
+      amount: 500,
+      reason: 'منح تجريبي',
+      actorRole: 'founder',
+      _grantCoinsFn: async () => { throw new Error('فشل RPC مالي'); },
+    });
+  } catch {
+    threw = true;
+  }
+  assert.equal(threw, true, 'يجب أن يُPropagate فشل العميل/RPC');
+});
+
+test('عمليات الإدارة والنشر غير المربوطة لا تدّعي نجاحاً حتى لدور صالح', async () => {
+  // تُستورد ديناميكياً لتجنب تأثيرivial على ملفات أخرى
+  const { coreAdminBanUser } = await import('../admin/service');
+  const { coreAdminModerateContent } = await import('../admin/service');
+  const { coreOfficialCreatePost } = await import('../official/service');
+  const { coreOfficialSendAnnouncement } = await import('../official/service');
+
+  const ban = await coreAdminBanUser({ userId: 'u-1', actorRole: 'admin', reason: 'x' });
+  assert.equal(ban.ok, false, 'حظر المستخدم لا يجب أن يدّعي نجاحاً');
+  assert.ok(ban.error);
+
+  const mod = await coreAdminModerateContent({ targetType: 'post', targetId: 'p-1', action: 'hide', reason: 'x', actorRole: 'admin' });
+  assert.equal(mod.ok, false, 'الإشراف لا يجب أن يدّعي نجاحاً');
+  assert.ok(mod.error);
+
+  const post = await coreOfficialCreatePost({ content: 'سلام', actorRole: 'official' });
+  assert.equal(post.ok, false, 'إنشاء منشور رسمي لا يجب أن يدّعي نجاحاً');
+  assert.ok(post.error);
+
+  const ann = await coreOfficialSendAnnouncement({ content: 'تنبيه', actorRole: 'official' });
+  assert.equal(ann.ok, false, 'إرسال إعلان رسمي لا يجب أن يدّعي نجاحاً');
+  assert.ok(ann.error);
+});
+
 test('حارس المؤسس يرفض الأدوار غير المؤسس (منطقه خالص)', () => {
   for (const role of nonFounderRoles) {
     assert.equal(requireFounderRole(role).allowed, false);

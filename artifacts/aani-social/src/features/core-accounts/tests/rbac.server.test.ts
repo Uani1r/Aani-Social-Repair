@@ -33,7 +33,7 @@ test('عقد الدور: يستخدم aani_current_account_role كعقد أسا�
 test('getCoreAccountrole يُرجع الدور من aani_current_account_role عند النجاح', async () => {
   setCoreAccountsSupabaseClient(makeClient(async (name) => {
     assert.equal(name, CORE_ACCOUNT_ROLE_RPC);
-    return { data: { role: 'admin' }, error: null };
+    return { data: 'admin', error: null };
   }));
   const role = await getCoreAccountRole();
   assert.equal(role, 'admin');
@@ -41,7 +41,7 @@ test('getCoreAccountrole يُرجع الدور من aani_current_account_role ع
 });
 
 test('getCoreAccountrole يرجع founder من العقد الأساسي', async () => {
-  setCoreAccountsSupabaseClient(makeClient(async () => ({ data: { role: 'founder' }, error: null })));
+  setCoreAccountsSupabaseClient(makeClient(async () => ({ data: 'founder', error: null })));
   const role = await getCoreAccountRole();
   assert.equal(role, 'founder');
   resetClient();
@@ -54,7 +54,7 @@ test('getCoreAccountrole يسقط إلى العقد الأlegacy عند عدم �
     if (name === CORE_ACCOUNT_ROLE_RPC) {
       throw new Error(`function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist`);
     }
-    return { data: { role: 'official' }, error: null };
+    return { data: 'official', error: null };
   }));
   const role = await getCoreAccountRole();
   assert.equal(role, 'official');

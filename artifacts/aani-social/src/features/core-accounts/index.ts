@@ -9,7 +9,6 @@
 export type { CoreAccountRole } from './types/account';
 export type { CoreAccount, CoreAccountRoleSnapshot, DEFAULT_ACCOUNT, ROOT_ACCOUNT_EMAILS } from './types/account';
 export type { CORE_ACCOUNTS_DOCUMENTATION } from './types/account';
-export type { CoreAuditEntry } from './types/audit';
 
 // الأدوار والصلاحيات
 export type { CorePermissionKey } from './roles/definitions';
@@ -86,8 +85,10 @@ export {
   CORE_AUDIT_RPC,
   type CoreAuditInput,
   type CoreAuditResult,
+  type CoreAuditEntry,
   logCoreAudit,
   auditAdminAction,
+  fetchCoreAuditEntries,
 } from './services/audit';
 
 // المكونات
