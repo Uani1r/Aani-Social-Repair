@@ -56,6 +56,7 @@ import { deviceSignOutDeps } from '@/lib/pushNotifications';
 import { endSessionAfterAccountDeletion, signOutThisDevice } from '@/lib/pushSignOut';
 import './ProfilePage.css';
 import { firstMediaUrlOfPost, preloadMediaList, thumbnailUrl } from '@/lib/mediaPreload';
+import { USERNAME_HINT, describeUsernameClaimError, validateUsername } from '@/lib/usernameRules';
 
 /**
  * نداء دوال رقم الهاتف عبر `supabase.functions`: الجلسة تُرسل مع كل طلب،
@@ -1944,18 +1945,35 @@ export default function ProfilePage({
     }
 
     const name = nameDraft.trim();
-    const normalizedUsername = cleanUsername(usernameDraft).toLowerCase();
+    // قواعد اسم المستخدم المشتركة (1–32): لا نسخة ثالثة للقاعدة هنا.
+    const usernameValidation = validateUsername(usernameDraft);
     if (!name || name.length > 120) {
       toast.error('أدخل اسماً لا يتجاوز 120 حرفاً.');
       return;
     }
-    if (!/^[a-z0-9_.]{3,32}$/.test(normalizedUsername)) {
-      toast.error('اسم المستخدم يجب أن يتكون من 3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية.');
+    if (!usernameValidation.ok) {
+      toast.error(usernameValidation.message);
       return;
     }
+    const normalizedUsername = usernameValidation.username;
     if (birthDateDraft && !formatProfileBirthDate(birthDateDraft)) {
       toast.error('أدخل تاريخ ميلاد صالحاً.');
       return;
+    }
+
+    // تغيير اسم المستخدم يمر بدالة المطالبة الذرية: السجل يرفض المحجوز
+    // والممنوع والمأخوذ، ولا يتجاوز ذلك تحديث مباشر على profiles.
+    // قبل تطبيق ترحيل السجل تبقى الدالة غير موجودة، فيُكمل التحديث المباشر
+    // (القيد والمشغّل يفحصان الصيغة) بدل تعطيل ميزة قائمة.
+    if (normalizedUsername !== cleanUsername(person.username).toLowerCase()) {
+      const { error: claimError } = await supabase.rpc('aani_claim_username', { p_username: normalizedUsername });
+      if (claimError) {
+        const claimCode = String(claimError.code ?? '');
+        if (claimCode !== '42883' && claimCode !== 'PGRST202') {
+          toast.error(describeUsernameClaimError(claimError));
+          return;
+        }
+      }
     }
 
     // القفل المرجعي يُضبط قبل أول await؛ النقر الثاني في الدورة نفسها يراه ويخرج.
@@ -2462,9 +2480,9 @@ export default function ProfilePage({
                   <label htmlFor="profile-edit-username">اسم المستخدم</label>
                   <div className="profile-edit-username-input">
                     <span aria-hidden="true">@</span>
-                    <input id="profile-edit-username" value={usernameDraft} onChange={event => setUsernameDraft(event.target.value)} maxLength={32} autoCapitalize="none" autoCorrect="off" spellCheck={false} required aria-describedby="profile-edit-username-hint" />
+                    <input id="profile-edit-username" value={usernameDraft} onChange={event => setUsernameDraft(event.target.value)} minLength={1} maxLength={32} autoCapitalize="none" autoCorrect="off" spellCheck={false} required aria-describedby="profile-edit-username-hint" />
                   </div>
-                  <span id="profile-edit-username-hint" className="text-xs text-white/45">3 إلى 32 حرفاً إنجليزياً أو رقماً أو نقطة أو شرطة سفلية</span>
+                  <span id="profile-edit-username-hint" className="text-xs text-white/45">{USERNAME_HINT}</span>
                 </div>
                 <div className="profile-edit-field">
                   <label htmlFor="profile-edit-bio">السيرة الذاتية</label>

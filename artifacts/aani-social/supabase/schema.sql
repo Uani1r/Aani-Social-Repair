@@ -68,6 +68,11 @@ alter table public.profiles add column if not exists fcm_token text;
 grant update (fcm_token) on table public.profiles to authenticated;
 alter table public.profiles add column if not exists created_at timestamptz not null default now();
 alter table public.profiles add column if not exists updated_at timestamptz not null default now();
+-- اكتمال التسجيل والموافقة: يُضبطان من aani_complete_onboarding وحده
+-- (التفصيل في ترحيل 20270314000000_profile_onboarding_and_username_registry).
+alter table public.profiles add column if not exists onboarding_completed_at timestamptz;
+alter table public.profiles add column if not exists terms_accepted_at timestamptz;
+alter table public.profiles add column if not exists terms_version text;
 
 -- Backfill rows created by the previous Social Feed schema.
 update public.profiles as p
@@ -90,7 +95,7 @@ alter table public.profiles alter column full_name set not null;
 alter table public.profiles drop constraint if exists profiles_username_format_check;
 alter table public.profiles
   add constraint profiles_username_format_check
-  check (username ~ '^[a-z0-9_.]{3,32}$');
+  check (username = lower(username) and username ~ '^[a-z0-9_.]{1,32}$');
 create unique index if not exists profiles_username_lower_idx
   on public.profiles (lower(username));
 
@@ -579,7 +584,8 @@ begin
     '',
     'g'
   ));
-  if char_length(requested_username) < 3 then
+  -- الحد الأدنى محرف واحد: لا استبدال بالمعرّف إلا إذا لم يبق أي محرف صالح.
+  if requested_username = '' then
     requested_username := replace(new.id::text, '-', '');
   end if;
 

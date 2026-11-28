@@ -195,7 +195,11 @@ Deno.test("the username is lower-cased, stripped of @ and validated", () => {
   assertEqual(normalizeUsername("User.Name"), USERNAME, "lower case");
   assertEqual(normalizeUsername("  @USER.NAME  "), USERNAME, "leading @ and spaces");
   assertEqual(normalizeUsername("user.name"), USERNAME, "already normalised");
-  for (const value of ["ab", "", "@", "user name", "user@name", "user-name", "x".repeat(33), 123, null]) {
+  // الحد الأدنى محرف واحد (لا ثلاثة): الأسماء القصيرة صالحة في كل المواضع.
+  for (const value of ["a", "7", "ab", "12", "123", "12345678901234567890", "abcdefghijklmnopqrst", "a_1.b"]) {
+    assertEqual(normalizeUsername(value), value.toLowerCase(), `${value} must be accepted`);
+  }
+  for (const value of ["", "@", "user name", "user@name", "user-name", "x".repeat(33), 123, null]) {
     assertEqual(normalizeUsername(value), "", `${JSON.stringify(value)} must be refused`);
   }
 });

@@ -171,6 +171,22 @@ jobs:
       - name: Unit tests @workspace/aani-social (build env contract)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/buildEnvContract.test.ts
 
+      # قواعد اسم المستخدم الجديدة: محرف واحد (لا ثلاثة)، 32 حداً أعلى،
+      # تطبيع الأحرف، ورفض المسافات والمحارف غير المسموحة — في الواجهة
+      # والتسجيل والدخول. وتوفر الاسم من الخادم وحده (fail-closed).
+      - name: Unit tests @workspace/aani-social (username rules and availability)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/usernameRules.test.ts ./src/lib/usernameAvailability.test.ts
+
+      # إكمال التسجيل: نموذج واحد للتسجيل ولمستخدم Google، موافقة إلزامية
+      # بوقتها، وبوابة توجيه لا تفتح التطبيق قبل تحميل الملف واكتماله.
+      - name: Unit tests @workspace/aani-social (profile completion and auth gate)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/profileCompletion.test.ts ./src/lib/onboarding.test.ts ./src/lib/authGate.test.ts
+
+      # سجل أسماء المستخدمين: العميل لا يلمسه ولا يشتق صلاحية إدارة من
+      # user_metadata، والترحيل يسحب الصلاحيات ويشغّل RLS ويسجّل التدقيق.
+      - name: Unit tests @workspace/aani-social (username registry guard)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/usernameRegistryGuard.test.ts
+
       # إعدادات الحساب: تغيير البريد (قبل التأكيد لا يتغيّر شيء)، فرض MFA
       # بقرار aal2 وحالات الفشل، جلسات الحساب وإبطال الجلسات الأخرى، وتعطيل
       # الحساب وحذفه (لا نجاح قبل رد الخادم، ولا حذف لوسائط من العميل).
@@ -1178,3 +1194,60 @@ jobs:
 
       - name: Re-run the deliveries assertions after the second apply
         run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/notification_outbox_deliveries.test.sql
+
+
+
+  # ترحيل سجل أسماء المستخدمين وإكمال التسجيل: يُشغَّل على قاعدة CI مؤقتة
+  # فقط (لا مشروع Supabase)، ثم يُعاد الترحيل ويُعاد الاختبار. يثبت قيد 1–32،
+  # تطبيع الأحرف، التفرد بلا حساسية لحالة الأحرف، المطالبة الذرية، رفض
+  # المحجوز والممنوع، عدم التجاوز من REST، تسجيل الموافقة، سجل التدقيق،
+  # وتهيئة الحسابات القائمة مرة واحدة.
+  username-registry-onboarding:
+    name: Username registry and onboarding SQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: aani_username_registry_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: aani_username_registry_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure psql
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+          fi
+
+      - name: Build the temporary auth and profiles schema
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/harness/username_registry_schema.sql
+
+      - name: Apply the username registry and onboarding migration
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270314000000_profile_onboarding_and_username_registry.sql
+
+      # إعادة التطبيق تثبت أن كل عبارة idempotent، وأن التهيئة لا تتكرر.
+      - name: Re-apply the migration (idempotency)
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/migrations/20270314000000_profile_onboarding_and_username_registry.sql
+
+      - name: Test username rules, registry, claims, RLS and onboarding
+        run: psql -v ON_ERROR_STOP=1 -f artifacts/aani-social/supabase/tests/username_registry_onboarding.test.sql

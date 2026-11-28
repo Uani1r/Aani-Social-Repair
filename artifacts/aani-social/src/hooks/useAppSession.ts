@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
 import { resetMessagesConversationMembershipCache } from '@/lib/messagesConversationMembership';
@@ -11,7 +11,19 @@ import {
   signOutThisDevice,
   type DeviceSignOutOutcome,
 } from '@/lib/pushSignOut';
+import type { ProfileLoadState } from '@/lib/authGate';
+import { fetchMyOnboardingState, onboardingIsComplete, type OnboardingSnapshot } from '@/lib/onboarding';
 import type { Profile } from '@/lib/types';
+
+/**
+ * نتيجة تحميل الملف: تُعاد للمستدعي بعد كل تحميل فعلي، فلا يعتمد أي قرار
+ * توجيه (لا اكتمال التسجيل ولا فتح التطبيق) على حالة قديمة.
+ */
+export type ProfileLoadOutcome = {
+  ok: boolean;
+  profileState: ProfileLoadState;
+  onboardingComplete: boolean;
+};
 
 export default function useAppSession() {
   const [session, setSession] = useState<any>(null);
@@ -26,6 +38,11 @@ export default function useAppSession() {
   // هوية جديد. تُطفأ بعد الحفظ أو الإغلاق.
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const user = session?.user;
+  // حالة تحميل الملف الشخصي: 'failed' و'missing' ليستا اكتمالاً، وليستا
+  // مدعاةً لفتح التطبيق أو صفحاته الداخلية.
+  const [profileState, setProfileState] = useState<ProfileLoadState>('idle');
+  // حالة إكمال التسجيل من قاعدة البيانات وحدها (onboarding_completed_at).
+  const [onboarding, setOnboarding] = useState<OnboardingSnapshot | null>(null);
   // جلسة المصادقة هي مالك ذاكرة عضوية المحادثات: الخروج أو تبديل الحساب يفرّغها
   // ويقطع أي طلب عضوية جارٍ، فلا تتسرّب نتيجة جلسة سابقة إلى الجلسة الجديدة.
   const authOwnerRef = useRef<string | null>(null);
@@ -34,6 +51,12 @@ export default function useAppSession() {
     authOwnerRef.current = nextUserId;
     resetMessagesConversationMembershipCache(nextUserId);
   };
+
+  // الهوية الحالية كما قرأتها المصادقة: تُقرأ داخل محمّل الملف بدل الاعتماد
+  // على إغلاق قديم، فيبقى إعادة التحميل صالحاً بعد أي تغيير في الجلسة.
+  const sessionUserRef = useRef<any>(null);
+  // رقم الطلب: نتيجة تحميل قديمة لا تُطبَّق على جلسة أحدث.
+  const profileRequestRef = useRef(0);
 
   useEffect(() => {
     if (!supabaseConfigured) {
@@ -109,33 +132,42 @@ export default function useAppSession() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!supabaseConfigured || !user?.id) return;
-    let active = true;
+  /**
+   * تحميل الملف الشخصي وحالة إكمال التسجيل من قاعدة البيانات.
+   *   * يُعيد النتيجة الفعلية، فلا يعتمد التوجيه على حالة محفوظة سابقاً.
+   *   * فشل القراءة → 'failed' (لا فتح للتطبيق)، وغياب الصف → 'missing'.
+   *   * لا يُعتبر الاسم الذي أنشأه مشغّل الحساب اكتمالاً: الفيصل
+   *     onboarding_completed_at وحده.
+   */
+  const loadProfileData = useCallback(async (): Promise<ProfileLoadOutcome> => {
+    const sessionUser = sessionUserRef.current;
+
+    if (!supabaseConfigured || !sessionUser?.id) {
+      profileRequestRef.current += 1;
+      setProfile(null);
+      setProfileState('idle');
+      setOnboarding(null);
+      return { ok: false, profileState: 'idle', onboardingComplete: false };
+    }
+
+    const requestId = profileRequestRef.current + 1;
+    profileRequestRef.current = requestId;
+    const isCurrent = () => profileRequestRef.current === requestId;
+    setProfileState('loading');
+
     const validName = (value: unknown): string | null => {
       if (typeof value !== 'string') return null;
       const name = value.trim();
       return name && !STORY_VIEWER_PLACEHOLDER_NAMES.has(name.toLowerCase()) ? name : null;
     };
-    const metadataName = validName(user.user_metadata?.full_name) || validName(user.user_metadata?.name);
-
-    // ملف بديل من user_metadata فقط — يُستخدم عند فشل طلب profiles أو تعذر
-    // معالجة الصف، حتى لا يمنع فشل الملف الشخصي رسم التطبيق.
-    const fallbackProfile = (): Profile => ({
-      id: user.id,
-      username: validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'user',
-      full_name: metadataName || validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'مستخدم',
-      display_name: metadataName,
-      avatar_url: null,
-      bio: '',
-    });
+    const metadataName = validName(sessionUser.user_metadata?.full_name) || validName(sessionUser.user_metadata?.name);
 
     const applyProfile = (row: Profile | null) => {
-      const username = validName(row?.username) || validName(user.user_metadata?.username) || user.email?.split('@')[0] || 'user';
+      const username = validName(row?.username) || validName(sessionUser.user_metadata?.username) || sessionUser.email?.split('@')[0] || 'user';
       const storedDisplayName = validName(row?.display_name);
       setProfile({
         ...(row || {}),
-        id: user.id,
+        id: sessionUser.id,
         username,
         full_name: validName(row?.full_name) || metadataName || username,
         display_name: storedDisplayName || (row?.display_name ? metadataName : row?.display_name ?? null),
@@ -144,41 +176,63 @@ export default function useAppSession() {
       });
     };
 
-    (async () => {
-      try {
-        // الأعمدة العامة فقط: أعمدة التفضيلات الشخصية و city/location/birth_date
-        // لم تعد ممنوحة للقراءة عبر REST (ترحيل 20270206000000)، وتُقرأ لصاحب
-        // الحساب عبر الدالتين المصرّح بهما أدناه.
-        const { data, error } = await supabase.from('profiles')
-          .select(PUBLIC_PROFILE_COLUMNS)
-          .eq('id', user.id)
-          .returns<PublicProfileRow>()
-          .maybeSingle();
-        if (error) throw error;
-        if (!active) return;
+    try {
+      // الأعمدة العامة فقط: أعمدة التفضيلات الشخصية و city/location/birth_date
+      // لم تعد ممنوحة للقراءة عبر REST (ترحيل 20270206000000)، وتُقرأ لصاحب
+      // الحساب عبر الدالتين المصرّح بهما أدناه.
+      const { data, error } = await supabase.from('profiles')
+        .select(PUBLIC_PROFILE_COLUMNS)
+        .eq('id', sessionUser.id)
+        .returns<PublicProfileRow>()
+        .maybeSingle();
+      if (error) throw error;
 
-        const [preferences, conditionalFields] = await Promise.all([
-          fetchMyPreferences(),
-          fetchConditionalProfileFields(user.id),
-        ]);
-        if (!active) return;
-
-        applyProfile(data
-          ? ({ ...(data as Profile), ...(conditionalFields || {}), ...(preferences || {}) } as Profile)
-          : null);
-      } catch (profileError) {
-        // فشل تحميل الملف الشخصي (شبكة/RLS/انقطاع) لا يمنع رسم التطبيق
-        console.warn('[app] تعذر تحميل الملف الشخصي — استخدام بيانات الجلسة:', profileError);
-        if (!active) return;
-        applyProfile(null);
-        setProfile(current => current ?? fallbackProfile());
+      const [preferences, conditionalFields, onboardingSnapshot] = await Promise.all([
+        fetchMyPreferences(),
+        fetchConditionalProfileFields(sessionUser.id),
+        fetchMyOnboardingState(),
+      ]);
+      if (!isCurrent()) {
+        return { ok: false, profileState: 'loading', onboardingComplete: false };
       }
-    })();
 
-    return () => {
-      active = false;
-    };
-  }, [user?.id, user?.email, user?.user_metadata?.full_name, user?.user_metadata?.name, user?.user_metadata?.username]);
+      applyProfile(data
+        ? ({ ...(data as Profile), ...(conditionalFields || {}), ...(preferences || {}) } as Profile)
+        : null);
+
+      const nextProfileState: ProfileLoadState = data ? 'ready' : 'missing';
+      setProfileState(nextProfileState);
+      setOnboarding(onboardingSnapshot);
+
+      const onboardingComplete = onboardingIsComplete(onboardingSnapshot);
+      return {
+        ok: nextProfileState === 'ready' && onboardingSnapshot !== null && onboardingComplete,
+        profileState: nextProfileState,
+        onboardingComplete,
+      };
+    } catch (profileError) {
+      // فشل تحميل الملف (شبكة/RLS/انقطاع) لا يُعتبر اكتمالاً ولا يفتح التطبيق.
+      console.warn('[app] تعذر تحميل الملف الشخصي — لا يُفتح التطبيق قبل تحميله:', profileError);
+      if (!isCurrent()) {
+        return { ok: false, profileState: 'loading', onboardingComplete: false };
+      }
+      setProfile(null);
+      setProfileState('failed');
+      setOnboarding(null);
+      return { ok: false, profileState: 'failed', onboardingComplete: false };
+    }
+  }, []);
+
+  useEffect(() => {
+    sessionUserRef.current = user ?? null;
+    void loadProfileData();
+  }, [user?.id, user?.email, user?.user_metadata?.full_name, user?.user_metadata?.name, user?.user_metadata?.username, loadProfileData]);
+
+  /**
+   * إعادة تحميل الملف من قاعدة البيانات (بعد إكمال التسجيل أو إعادة المحاولة).
+   * تُعيد النتيجة الفعلية لا الحالة المحفوظة، فلا يُنقل المستخدم قبل تحققها.
+   */
+  const reloadProfile = loadProfileData;
 
   /**
    * تسجيل الخروج: إلغاء رمز جهاز هذا المتصفح أولاً (revoked_at على الخادم)،
@@ -207,5 +261,17 @@ export default function useAppSession() {
 
   const clearPasswordRecovery = () => setPasswordRecovery(false);
 
-  return { authLoading, authResolved, user, profile, setProfile, signOut, passwordRecovery, clearPasswordRecovery };
+  return {
+    authLoading,
+    authResolved,
+    user,
+    profile,
+    setProfile,
+    signOut,
+    passwordRecovery,
+    clearPasswordRecovery,
+    profileState,
+    onboarding,
+    reloadProfile,
+  };
 }

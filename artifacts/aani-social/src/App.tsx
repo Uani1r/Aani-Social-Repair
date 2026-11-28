@@ -15,6 +15,8 @@ import { AuthPage } from '@/pages/AuthPage';
 import FeedPage from '@/pages/FeedPage';
 import MessagesPage from '@/pages/MessagesPage';
 import NotFound from '@/pages/not-found';
+import OnboardingPage from '@/pages/OnboardingPage';
+import LegalPage, { readLegalDocumentFromPath } from '@/pages/legal';
 import PostDetailPage from '@/pages/PostDetailPage';
 import ProfilePage from '@/pages/ProfilePage';
 import AccountSettingsPage from '@/pages/AccountSettingsPage';
@@ -29,11 +31,45 @@ import { useInteractionRealtime } from '@/lib/interactions';
 import type { StoryRow as StoryDmCardStory } from '@/components/StoryDmCard';
 import { readLocalUserPreferences, saveLocalUserPreferences, userPreferencesFromProfile } from '@/lib/userPreferences';
 import { applyFontPreference, readLocalFontPreference, resolveFontPreference } from '@/lib/fontPreferences';
+import { AUTH_GATE_MESSAGES, resolveAuthGate } from '@/lib/authGate';
+import { fullNameFromProvider, onboardingIsComplete, suggestedUsernameFromProvider } from '@/lib/onboarding';
+import { PROFILE_COMPLETION_MESSAGES } from '@/lib/profileCompletion';
 import '@/index.css';
+
+/**
+ * شاشة فشل تحميل الملف الشخصي: لا يُفتح التطبيق ولا يُعدّ الغياب اكتمالاً.
+ * إعادة المحاولة تعيد الجلب من قاعدة البيانات، وتسجيل الخروج يخرج من الحساب.
+ */
+function ProfileLoadErrorScreen({ message, onRetry, onSignOut }: { message: string; onRetry: () => void; onSignOut: () => void }) {
+  return (
+    <div dir="rtl" className="loading-screen" role="alert" style={{ padding: '24px', textAlign: 'center', lineHeight: 1.9 }}>
+      <div className="loading-brand">آني Aani</div>
+      <p style={{ marginTop: '16px' }}>{message}</p>
+      <button type="button" style={{ marginTop: '12px', padding: '12px 20px' }} onClick={onRetry}>
+        {AUTH_GATE_MESSAGES.retry}
+      </button>
+      <button type="button" style={{ marginTop: '10px', padding: '12px 20px' }} onClick={onSignOut}>
+        {AUTH_GATE_MESSAGES.signOut}
+      </button>
+    </div>
+  );
+}
 
 function App() {
   useModalBodyScrollLock();
-  const { authLoading, authResolved, user, profile, setProfile, signOut, passwordRecovery, clearPasswordRecovery } = useAppSession();
+  const {
+    authLoading,
+    authResolved,
+    user,
+    profile,
+    setProfile,
+    signOut,
+    passwordRecovery,
+    clearPasswordRecovery,
+    profileState,
+    onboarding,
+    reloadProfile,
+  } = useAppSession();
 
   // تسجيل الخروج يُلغي رمز هذا الجهاز أولاً ثم ينهي الجلسة. فشل الإلغاء لا
   // يُعرض كنجاح: تُبقى الجلسة قائمة وتظهر رسالة الفشل كي يُعاد المحاولة.
@@ -109,6 +145,28 @@ function App() {
     return () => document.removeEventListener('selectstart', preventNativeTextSelection, true);
   }, []);
 
+  /**
+   * بعد حفظ إكمال التسجيل: يُعاد تحميل الملف من Supabase، ولا يُنقل المستخدم
+   * إلى /feed إلا بعد نجاح التحقق (ملف محمّل وحالة إكمال مؤكدة).
+   */
+  const handleOnboardingCompleted = useCallback(async () => {
+    const outcome = await reloadProfile();
+    if (outcome.profileState === 'ready' && outcome.onboardingComplete) return { ok: true };
+    return {
+      ok: false,
+      message: outcome.profileState === 'failed'
+        ? AUTH_GATE_MESSAGES.profileLoadFailed
+        : PROFILE_COMPLETION_MESSAGES.verifyFailed,
+    };
+  }, [reloadProfile]);
+
+  // إكمال التسجيل يُقاس من قاعدة البيانات وحدها.
+  const onboardingComplete = onboardingIsComplete(onboarding);
+
+  // شاشات الشروط والخصوصية عامة: تُخدم قبل بوابة الجلسة وقبل الإكمال،
+  // والرابط في نموذج الموافقة يفتح صفحة موجودة فعلاً.
+  const legalDocument = readLegalDocumentFromPath(typeof window === 'undefined' ? '' : window.location.pathname);
+
   // شاشة الانتظار تُعرض حتى تُحسم حالة الجلسة فعلياً — مهلة 2500ms تحرر
   // حالة التحميل فقط، ولا تُحوّل الحالة غير المحسومة إلى "غير مسجل" ولا
   // تعرض تسجيل الدخول قبل تأكيد غياب الجلسة (الجلسة المتأخرة تُطبَّق فور
@@ -123,16 +181,51 @@ function App() {
     );
   }
 
+  if (legalDocument) {
+    return (
+      <>
+        <LegalPage kind={legalDocument} onBack={() => window.location.assign('/')} />
+        <Toaster position="top-center" duration={10000} theme={resolvedTheme === 'light' ? 'light' : 'dark'} />
+      </>
+    );
+  }
+
+  // بوابة واحدة: انتظار، تسجيل دخول، فشل ملف، إكمال تسجيل، ثم التطبيق.
+  const gate = resolveAuthGate({
+    authLoading,
+    authResolved,
+    hasUser: Boolean(user),
+    profileState,
+    onboardingComplete,
+  });
+
   return (
     <TooltipProvider>
       <WouterRouter base={import.meta.env.BASE_URL ? import.meta.env.BASE_URL.replace(/\/$/, '') : ''}>
-        {user && mfaGate.state.status === 'blocked' && mfaFactorId ? (
+        {gate === 'loading' ? (
+          <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
+        ) : gate === 'signin' ? (
+          <Switch>
+            <Route path="/signup"><AuthPage mode="signup" afterAuth={() => undefined} /></Route>
+            <Route path="/login"><AuthPage mode="login" afterAuth={() => undefined} /></Route>
+            <Route path="/"><AuthPage mode="login" afterAuth={() => undefined} /></Route>
+            <Route component={NotFound} />
+          </Switch>
+        ) : gate === 'profile_error' ? (
+          <ProfileLoadErrorScreen
+            message={AUTH_GATE_MESSAGES.profileLoadFailed}
+            onRetry={() => void reloadProfile()}
+            onSignOut={() => void handleSignOut()}
+          />
+        ) : !user ? (
+          <div className="loading-screen"><div className="loading-brand">آني Aani</div></div>
+        ) : mfaGate.state.status === 'blocked' && mfaFactorId ? (
           <MfaChallengePage
             factorId={mfaFactorId}
             onVerified={() => void mfaGate.refresh()}
             onSignOut={() => void handleSignOut()}
           />
-        ) : user && (mfaGate.state.status === 'blocked' || mfaGate.state.status === 'unavailable') ? (
+        ) : mfaGate.state.status === 'blocked' || mfaGate.state.status === 'unavailable' ? (
           <div className="loading-screen" role="alert" style={{ direction: 'rtl', padding: '24px', textAlign: 'center' }}>
             <div className="loading-brand">آني Aani</div>
             <p style={{ marginTop: '16px', lineHeight: 1.8 }}>{mfaGate.state.message}</p>
@@ -140,7 +233,18 @@ function App() {
               تسجيل الخروج
             </button>
           </div>
-        ) : user ? (
+        ) : gate === 'onboarding' ? (
+          // مستخدم غير مكتمل (Google جديد أو ملف غائب): واجهة الإكمال وحدها،
+          // بلا Shell وبلا أي صفحة داخلية، ولو كان العنوان /feed.
+          <OnboardingPage
+            profile={profile}
+            userId={user.id}
+            providerFullName={fullNameFromProvider(user)}
+            suggestedUsername={suggestedUsernameFromProvider(user)}
+            onCompleted={handleOnboardingCompleted}
+            onSignOut={() => void handleSignOut()}
+          />
+        ) : (
           <Shell
             userId={user.id}
             profile={profile}
@@ -250,13 +354,6 @@ function App() {
               />
             )}
           </Shell>
-        ) : (
-          <Switch>
-            <Route path="/signup"><AuthPage mode="signup" afterAuth={() => undefined} /></Route>
-            <Route path="/login"><AuthPage mode="login" afterAuth={() => undefined} /></Route>
-            <Route path="/"><AuthPage mode="login" afterAuth={() => undefined} /></Route>
-            <Route component={NotFound} />
-          </Switch>
         )}
       </WouterRouter>
       <GlobalErrorToast />

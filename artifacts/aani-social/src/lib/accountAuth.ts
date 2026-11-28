@@ -13,6 +13,8 @@
  */
 import type { User } from '@supabase/supabase-js';
 
+import { USERNAME_PATTERN } from '@/lib/usernameRules';
+
 /** الرمز الافتراضي للعراق؛ تُقبل أيضاً الصيغة الدولية الكاملة (+...). */
 export const DEFAULT_PHONE_COUNTRY_CODE = '+964';
 
@@ -69,8 +71,11 @@ export function formatPhoneForDisplay(phone: string): string {
 export const LOGIN_IDENTIFIER_MESSAGE =
   'أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف (07XX XXX XXXX أو +964…).';
 
-/** صيغة اسم المستخدم الحالية في التطبيق (3–32 حرفاً: a-z 0-9 _ .). */
-export const USERNAME_PATTERN = /^[a-z0-9_.]{3,32}$/;
+/**
+ * صيغة اسم المستخدم: من القواعد المشتركة في `usernameRules` (1–32: a-z 0-9 _ .).
+ * الحد الأدنى القديم (3 محارف) أُلغي هناك، فلا تعود نسخة ثانية ترفض `a` أو `7`.
+ */
+export { USERNAME_PATTERN };
 
 /** صيغة رقم الهاتف العراقي المحلي: 07 ثم 9 أرقام. */
 const IRAQI_LOCAL_MOBILE_PATTERN = /^07\d{9}$/;

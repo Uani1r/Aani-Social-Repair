@@ -54,8 +54,17 @@ test('a numeric username shaped like a local number can be forced with @', () =>
 
 test('an @ prefix forces the username route and keeps the current rules', () => {
   assert.deepEqual(classifyLoginIdentifier('@Aani.User'), { kind: 'username', username: 'aani.user' });
-  assert.deepEqual(classifyLoginIdentifier('@ab'), { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE });
+  // الحد الأدنى محرف واحد: @ab و@a اسمان صالحان، لا مرفوضان.
+  assert.deepEqual(classifyLoginIdentifier('@ab'), { kind: 'username', username: 'ab' });
+  assert.deepEqual(classifyLoginIdentifier('@a'), { kind: 'username', username: 'a' });
+  assert.deepEqual(classifyLoginIdentifier('@7'), { kind: 'username', username: '7' });
   assert.deepEqual(classifyLoginIdentifier('@has space'), { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE });
+});
+
+test('one-character and two-character usernames are accepted by the new rules', () => {
+  for (const value of ['a', '7', 'ab', '12', '123']) {
+    assert.deepEqual(classifyLoginIdentifier(value), { kind: 'username', username: value }, value);
+  }
 });
 
 test('text usernames with dots and underscores keep working', () => {
@@ -64,7 +73,7 @@ test('text usernames with dots and underscores keep working', () => {
 });
 
 test('anything that is neither email, phone nor username is refused', () => {
-  for (const value of ['', '   ', '12', '+12', 'a', 'a b', '@', 'name@']) {
+  for (const value of ['', '   ', '+12', 'a b', '@', 'name@', 'user-name']) {
     assert.deepEqual(classifyLoginIdentifier(value), { kind: 'invalid', message: LOGIN_IDENTIFIER_MESSAGE }, value);
   }
 });
