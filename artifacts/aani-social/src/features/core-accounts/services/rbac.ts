@@ -80,7 +80,9 @@ async function readRoleText(
   supabase: ReturnType<typeof getCoreAccountsSupabaseClient>,
   name: string,
 ): Promise<CoreAccountRole | null> {
-  const { data, error } = await supabase.rpc(name, {});
+  if (!supabase) return null;
+  const client = supabase;
+  const { data, error } = await client.rpc(name, {});
   if (error) throw error;
   const roleText = data as unknown as string;
   if (typeof roleText === 'string' && ALLOWED_ROLES.has(roleText as CoreAccountRole)) {
@@ -98,7 +100,7 @@ function isFunctionNotFoundError(
   error: { code?: string; message?: string },
   expectedFunctionName: string,
 ): boolean {
-  if (!FUNCTION_NOT_FOUND_CODES.includes(error.code)) return false;
+  if (!error.code || !FUNCTION_NOT_FOUND_CODES.includes(error.code)) return false;
   const message = String(error.message ?? '');
   return message.includes(expectedFunctionName);
 }

@@ -47,12 +47,12 @@ test('getCoreAccountrole يرجع founder من العقد الأساسي', async
   resetClient();
 });
 
-test('getCoreAccountrole يسقط إلى العقد الأlegacy عند عدم وجود الدالة الأساسية', async () => {
+test('getCoreAccountrole يسقط إلى العقد الأlegacy عند خطأ PGRST202 مع اسم الدالة الأساسية', async () => {
   let calls: string[] = [];
   setCoreAccountsSupabaseClient(makeClient(async (name) => {
     calls.push(name);
     if (name === CORE_ACCOUNT_ROLE_RPC) {
-      throw new Error(`function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist`);
+      throw { code: 'PGRST202', message: `function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist` };
     }
     return { data: 'official', error: null };
   }));
@@ -62,11 +62,57 @@ test('getCoreAccountrole يسقط إلى العقد الأlegacy عند عدم �
   resetClient();
 });
 
+test('getCoreAccountrole يسقط إلى العقد الأlegacy عند خطأ 42883 مع اسم الدالة الأساسية', async () => {
+  let calls: string[] = [];
+  setCoreAccountsSupabaseClient(makeClient(async (name) => {
+    calls.push(name);
+    if (name === CORE_ACCOUNT_ROLE_RPC) {
+      throw { code: '42883', message: `function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist` };
+    }
+    return { data: 'admin', error: null };
+  }));
+  const role = await getCoreAccountRole();
+  assert.equal(role, 'admin');
+  assert.deepEqual(calls, [CORE_ACCOUNT_ROLE_RPC, CORE_ACCOUNT_ROLE_RPC_LEGACY]);
+  resetClient();
+});
+
+test('getCoreAccountrole لا يسقط عند خطأ اتصال (رمز خطأ غير معروف)', async () => {
+  setCoreAccountsSupabaseClient(makeClient(async () => {
+    throw { code: 'UNKNOWN_ERROR', message: 'network failure' };
+  }));
+  const role = await getCoreAccountRole();
+  assert.equal(role, null);
+  resetClient();
+});
+
+test('getCoreAccountrole لا يسقط عند خطأ صلاحيات (رمز 42501)', async () => {
+  setCoreAccountsSupabaseClient(makeClient(async () => {
+    throw { code: '42501', message: 'permission denied for function aani_current_account_role' };
+  }));
+  const role = await getCoreAccountRole();
+  assert.equal(role, null);
+  resetClient();
+});
+
+test('getCoreAccountrole يرجع null للدور غير الصالح حتى لو حققت RPC', async () => {
+  setCoreAccountsSupabaseClient(makeClient(async () => ({ data: 'superuser', error: null })));
+  const role = await getCoreAccountRole();
+  assert.equal(role, null);
+  resetClient();
+});
+
 test('getCoreAccountrole يرجع null عند خطأ الخادم (fail-closed، لا يُمنح دور)', async () => {
   setCoreAccountsSupabaseClient(makeClient(async () => ({ data: null, error: new Error('خطأ خادم') })));
   const role = await getCoreAccountRole();
   assert.equal(role, null);
   resetClient();
+});
+
+test('getCoreAccountrole يرجع null عند غياب عميل Supabase', async () => {
+  setCoreAccountsSupabaseClient(null);
+  const role = await getCoreAccountRole();
+  assert.equal(role, null);
 });
 
 test('getCoreAccountrole يرجع null عند غياب عميل Supabase', async () => {

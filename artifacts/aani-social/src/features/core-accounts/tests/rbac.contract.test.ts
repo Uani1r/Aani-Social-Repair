@@ -54,18 +54,27 @@ test('getCoreAccountrole يُرجع null للقيمة غير الصالحة حت
   resetClient();
 });
 
-test('getCoreAccountrole يسقط إلى الربط القديم فقط عند غياب الدالة الأساسية', async () => {
+test('getCoreAccountrole يسقط إلى الربط القديم فقط عند خطأ PGRST202 مع اسم الدالة الأساسية', async () => {
   let calls: string[] = [];
   setCoreAccountsSupabaseClient(makeClient(async (name) => {
     calls.push(name);
     if (name === CORE_ACCOUNT_ROLE_RPC) {
-      throw new Error(`function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist`);
+      throw { code: 'PGRST202', message: `function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist` };
     }
     return { data: 'official', error: null };
   }));
   const role = await getCoreAccountRole();
   assert.equal(role, 'official');
   assert.deepEqual(calls, [CORE_ACCOUNT_ROLE_RPC, CORE_ACCOUNT_ROLE_RPC_LEGACY]);
+  resetClient();
+});
+
+test('getCoreAccountrole لا يسقط عند خطأ عام بدون رمز غياب دالة', async () => {
+  setCoreAccountsSupabaseClient(makeClient(async () => {
+    throw new Error(`function public.${CORE_ACCOUNT_ROLE_RPC}() does not exist`);
+  }));
+  const role = await getCoreAccountRole();
+  assert.equal(role, null);
   resetClient();
 });
 
