@@ -23,6 +23,9 @@ import AccountSettingsPage from '@/pages/AccountSettingsPage';
 import ReelsPage from '@/pages/ReelsPage';
 import SearchPage from '@/pages/SearchPage';
 import AdminSandbox from '@/pages/AdminSandbox';
+import FounderPanel from '@/features/core-accounts/components/FounderPanel';
+import AdminDashboard from '@/features/core-accounts/components/AdminDashboard';
+import OfficialComposer from '@/features/core-accounts/components/OfficialComposer';
 import useAppSession from '@/hooks/useAppSession';
 import useMfaGate from '@/hooks/useMfaGate';
 import MfaChallengePage from '@/pages/MfaChallengePage';
@@ -305,6 +308,9 @@ function App() {
                 )}
               </Route>
               <Route path="/admin/sandbox"><AdminSandbox key={user.id} /></Route>
+              <Route path="/core/founder"><FounderPanel key={user.id} /></Route>
+              <Route path="/core/admin"><AdminDashboard key={user.id} /></Route>
+              <Route path="/core/official"><OfficialComposer key={user.id} /></Route>
               <Route path="/settings/account"><AccountSettingsPage /></Route>
               <Route path="/profile">
                 {() => (
