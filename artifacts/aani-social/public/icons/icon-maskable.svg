@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="آني">
+  <title>آني</title>
+  <!-- نسخة maskable من شعار آني: الخلفية تملأ الإطار بلا زوايا، وكلمة «آني»
+       داخل المنطقة الآمنة (دائرة قطرها 80% من الإطار) فلا يُقص الحرف عند
+       تقنيع النظام. اللون #FF3C00 مطابق لأصل العلامة. -->
+  <rect width="512" height="512" fill="#FF3C00"/>
+  <text
+    x="256"
+    y="256"
+    fill="#FFFFFF"
+    font-family="'SF Arabic', 'Geeza Pro', 'Al Nile', Alexandria, 'IBM Plex Sans Arabic', Tajawal, system-ui, sans-serif"
+    font-size="168"
+    font-weight="800"
+    text-anchor="middle"
+    dominant-baseline="central"
+    alignment-baseline="central"
+    direction="rtl"
+  >آني</text>
+</svg>

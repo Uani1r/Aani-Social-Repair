@@ -187,6 +187,16 @@ jobs:
       - name: Unit tests @workspace/aani-social (username registry guard)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/usernameRegistryGuard.test.ts
 
+      # إشعارات iPhone: لا طلب إذن قبل التثبيت على الشاشة الرئيسية، وبعد
+      # التثبيت (standalone) يُسمح بالمتابعة وفق دعم إصدار iOS.
+      - name: Unit tests @workspace/aani-social (push environment)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/pushEnvironment.test.ts
+
+      # تثبيت التطبيق: manifest مربوط من index.html، وبيانات Apple Web App،
+      # وأيقونات موجودة فعلاً بمساراتها (لا مسار مخترع ولا حجم مزعوم).
+      - name: Unit tests @workspace/aani-social (PWA install manifest)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/pwaInstall.test.ts
+
       # إعدادات الحساب: تغيير البريد (قبل التأكيد لا يتغيّر شيء)، فرض MFA
       # بقرار aal2 وحالات الفشل، جلسات الحساب وإبطال الجلسات الأخرى، وتعطيل
       # الحساب وحذفه (لا نجاح قبل رد الخادم، ولا حذف لوسائط من العميل).

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180" role="img" aria-label="آني">
+  <title>آني</title>
+  <!-- شعار آني المعتمد: مربع بلون العلامة #FF3C00 مع كلمة «آني» بالحروف البيضاء،
+       مطابق لشارة العلامة داخل التطبيق (ProfilePage: مربع #ff3c00 + «آني»).
+       هذه هي النسخة المتجهية للأيقونة: المصدر الذي تُصدَّر منه PNG
+       180×180 و192×192 و512×512. لا رسومة مخترعة ولا أيقونة فارغة. -->
+  <rect width="180" height="180" rx="40" fill="#FF3C00"/>
+  <text
+    x="90"
+    y="90"
+    fill="#FFFFFF"
+    font-family="'SF Arabic', 'Geeza Pro', 'Al Nile', Alexandria, 'IBM Plex Sans Arabic', Tajawal, system-ui, sans-serif"
+    font-size="72"
+    font-weight="800"
+    text-anchor="middle"
+    dominant-baseline="central"
+    alignment-baseline="central"
+    direction="rtl"
+  >آني</text>
+</svg>
