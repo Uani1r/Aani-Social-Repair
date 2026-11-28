@@ -51,8 +51,39 @@ jobs:
       - name: Typecheck @workspace/aani-social
         run: pnpm --filter @workspace/aani-social run typecheck
 
+      # قيم بناء وهمية عامة (لا أسرار) لخطوة التحقق التالية فقط: تثبت أن متغيراً
+      # من بيئة البناء يصل فعلاً إلى حزمة الواجهة، وهو ما ينقله Docker ARG على
+      # Render. بلا هذه القيم يبقى الموقع المنشور بلا CAPTCHA بلا أي خطأ ظاهر.
       - name: Build @workspace/aani-social
+        env:
+          VITE_TURNSTILE_SITE_KEY: 0x4AAAAAAAciBuildArgCheck
+          VITE_AUTH_ALLOWED_ORIGINS: https://ci-build-arg-check.example
         run: pnpm --filter @workspace/aani-social run build
+
+      # حارس ضد فقدان متغيرات البناء: لو لم يصل المتغير إلى Vite لما ظهرت
+      # قيمته في الحزمة. يفشل هذا الفحص فوراً بدل نشر موقع بلا CAPTCHA.
+      # قيمة العنوان الإضافي تُطبع للعلم فقط (تُقرأ عبر كائن import.meta.env
+      # كاملاً في oauthRedirect)، ويغطيها اختبار عقد متغيرات البناء.
+      - name: Verify build-time VITE values reach the client bundle
+        working-directory: artifacts/aani-social
+        run: |
+          set -euo pipefail
+          if [ ! -d dist/public ]; then
+            echo "dist/public is missing: the front-end build did not run."
+            exit 1
+          fi
+          if ! grep -rqF -- "0x4AAAAAAAciBuildArgCheck" dist/public; then
+            echo "VITE_TURNSTILE_SITE_KEY did not reach the client bundle."
+            find dist/public -type f -name '*.js' | head -20
+            exit 1
+          fi
+          echo "present in the client bundle: VITE_TURNSTILE_SITE_KEY"
+          if grep -rqF -- "https://ci-build-arg-check.example" dist/public; then
+            echo "present in the client bundle: VITE_AUTH_ALLOWED_ORIGINS"
+          else
+            echo "note: VITE_AUTH_ALLOWED_ORIGINS is not inlined by this Vite version;"
+            echo "      its wiring is covered by src/lib/buildEnvContract.test.ts."
+          fi
 
       # Run focused unit tests; the wider test:unit script includes unrelated
       # mediaCompressor failures already present on main. messagesInbox covers
@@ -133,6 +164,12 @@ jobs:
       # ولا أصناف فاتحة تُخفي النص على خلفية داكنة.
       - name: Unit tests @workspace/aani-social (not found page contrast)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/notFoundPage.test.ts
+
+      # عقد متغيرات البناء العامة: Dockerfile يعرّف ARG ويمرّرهما في ENV قبل بناء
+      # الواجهة، وrender.yaml يعرضهما كإعدادين من المالك بلا قيمة، والعميل يقرأ
+      # المفتاح العام وحده ولا يدّعي أن CAPTCHA جاهزة بلا مفتاح.
+      - name: Unit tests @workspace/aani-social (build env contract)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/buildEnvContract.test.ts
 
       # إعدادات الحساب: تغيير البريد (قبل التأكيد لا يتغيّر شيء)، فرض MFA
       # بقرار aal2 وحالات الفشل، جلسات الحساب وإبطال الجلسات الأخرى، وتعطيل

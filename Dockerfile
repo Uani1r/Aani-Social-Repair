@@ -27,11 +27,30 @@ ARG VITE_SUPABASE_PUBLISHABLE_KEY=
 ARG VITE_IMAGEKIT_SIGNED_URLS=false
 ARG VITE_IMAGEKIT_PRIVATE_UPLOADS=false
 
+# Public front-end build settings (NOT secrets: Vite inlines them into the
+# client bundle, and both are meant to be readable in the browser).
+#
+#   * VITE_TURNSTILE_SITE_KEY — the Turnstile site key (public by design). With
+#     no value the client loads no widget and tells the visitor that CAPTCHA is
+#     not configured; it never pretends the check is live.
+#   * VITE_AUTH_ALLOWED_ORIGINS — comma-separated extra origins allowed to
+#     receive the OAuth return (the published origin is already allowed in
+#     src/lib/oauthRedirect.ts).
+#
+# Render passes a service's environment variables as Docker build args of the
+# same name, but only when the Dockerfile declares them. Without these two ARGs
+# the values never reach the Vite build, so the published site would silently
+# ship with no CAPTCHA and no extra allowed origin.
+ARG VITE_TURNSTILE_SITE_KEY=
+ARG VITE_AUTH_ALLOWED_ORIGINS=
+
 ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
     VITE_SUPABASE_PUBLISHABLE_KEY=$VITE_SUPABASE_PUBLISHABLE_KEY \
     VITE_IMAGEKIT_SIGNED_URLS=$VITE_IMAGEKIT_SIGNED_URLS \
     VITE_IMAGEKIT_PRIVATE_UPLOADS=$VITE_IMAGEKIT_PRIVATE_UPLOADS \
+    VITE_TURNSTILE_SITE_KEY=$VITE_TURNSTILE_SITE_KEY \
+    VITE_AUTH_ALLOWED_ORIGINS=$VITE_AUTH_ALLOWED_ORIGINS \
     NODE_ENV=production \
     CI=true
 
