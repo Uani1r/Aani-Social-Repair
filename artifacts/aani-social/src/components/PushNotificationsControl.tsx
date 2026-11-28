@@ -106,10 +106,9 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
           <button
             type="button"
             onClick={() => void enableNotifications()}
-            disabled={status === 'loading'}
-            className="shrink-0 rounded-xl bg-[#c98a66] px-3 py-2 text-xs font-bold text-black disabled:opacity-50"
+            className="shrink-0 rounded-xl bg-[#c98a66] px-3 py-2 text-xs font-bold text-black"
           >
-            {status === 'loading' ? 'جارٍ التفعيل…' : 'تفعيل'}
+            تفعيل
           </button>
         )}
       </div>
