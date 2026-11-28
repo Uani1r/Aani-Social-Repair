@@ -98,6 +98,28 @@ test('الرابط في الأيقونة لا يشير إلى ملف غائب', 
   assert.equal(existsSync(join(PUBLIC_DIR, href.replace(/^\/+/, ''))), true, `the linked icon exists: ${href}`);
 });
 
+test('أيقونة التطبيق تحمل شعار آني: مربع #FF3C00 وكلمة «آني»', () => {
+  const anyIcon = read(PUBLIC_DIR, 'icons/icon.svg');
+  const maskableIcon = read(PUBLIC_DIR, 'icons/icon-maskable.svg');
+
+  for (const [name, source] of [['icon.svg', anyIcon], ['icon-maskable.svg', maskableIcon]] as const) {
+    assert(source.includes('#FF3C00'), `${name} keeps the brand colour`);
+    assert(source.includes('>آني</text>'), `${name} draws the «آني» wordmark`);
+    assert(source.includes('<text'), `${name} is not a bare colour tile`);
+    assert(source.includes('viewBox='), `${name} is a scalable vector`);
+    assert(/font-weight="(700|800|900)"/.test(source), `${name} keeps the bold wordmark weight`);
+  }
+
+  // الأيقونة العادية بزوايا مستديرة، والـmaskable بلا زوايا لتملأ الإطار.
+  assert(/<rect[^>]*rx="40"/.test(anyIcon), 'the standard icon has rounded corners');
+  assert(!/<rect[^>]*rx=/.test(maskableIcon), 'the maskable icon is full-bleed');
+
+  // الأيقونة العامة في الـmanifest هي الشعار، لا مربع اللون القديم.
+  const icons = Array.isArray(manifest.icons) ? manifest.icons : [];
+  const general = icons.find(icon => (icon.purpose || '').includes('any'));
+  assert.equal(general?.src, '/icons/icon.svg', 'the "any" icon points at the wordmark');
+});
+
 test('صفحة التطبيق تعلن اللغة والاتجاه المطابقين للـmanifest', () => {
   assert.equal(indexHtml.includes('lang="ar"'), true);
   assert.equal(indexHtml.includes('dir="rtl"'), true);
