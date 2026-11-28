@@ -6,15 +6,15 @@ import { isFirebaseMessagingConfigured, registerPushNotifications } from '@/lib/
 type PushStatus = 'idle' | 'loading' | 'enabled' | 'unavailable' | 'error';
 
 export default function PushNotificationsControl({ currentUserId }: { currentUserId: string }) {
-  // تُخفى البطاقة تماماً من شاشة الإشعارات طالما لم يُربط Firebase بنجاح
-  const firebaseReady = isFirebaseMessagingConfigured();
+  // تُعرض البطاقة دائماً داخل نافذة الجرس، حتى لو لم يُكمل إعداد Firebase/VAPID بعد.
+  const configured = isFirebaseMessagingConfigured();
   const [status, setStatus] = useState<PushStatus>('idle');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    if (!firebaseReady) {
+    if (!configured) {
       setStatus('unavailable');
-      setMessage('');
+      setMessage('إعدادات الإشعارات غير مكتملة في نسخة التطبيق المنشورة. يرجى التواصل مع الدعم لتفعيل إشعارات الويب.');
       return;
     }
     if (typeof Notification === 'undefined') {
@@ -24,7 +24,7 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
     }
     if (Notification.permission === 'denied') {
       setStatus('unavailable');
-      setMessage('الإشعارات محظورة من إعدادات المتصفح.');
+      setMessage('الإشعارات محظورة من إعدادات المتصفح. اسمح بالإشعارات لهذا الموقع ثم حاول مجدداً.');
       return;
     }
     if (Notification.permission !== 'granted') return;
@@ -37,7 +37,7 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
       setMessage(result.message);
     });
     return () => { active = false; };
-  }, [currentUserId, firebaseReady]);
+  }, [currentUserId, configured]);
 
   const enableNotifications = async () => {
     setStatus('loading');
@@ -46,8 +46,6 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
     setStatus(result.ok ? 'enabled' : 'error');
     setMessage(result.message);
   };
-
-  if (!firebaseReady) return null;
 
   return (
     <section className="rounded-2xl border border-[#c98a66]/20 bg-[#141414] px-4 py-3">
@@ -61,7 +59,7 @@ export default function PushNotificationsControl({ currentUserId }: { currentUse
             {message || 'استقبل الرسائل والتفاعلات والمكالمات حتى عند إغلاق التطبيق.'}
           </p>
         </div>
-        {status !== 'enabled' && (
+        {configured && status !== 'enabled' && (
           <button
             type="button"
             onClick={() => void enableNotifications()}
