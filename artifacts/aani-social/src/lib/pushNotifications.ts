@@ -40,6 +40,133 @@ export const isFirebaseMessagingConfigured = () => Boolean(
   && firebaseConfig.projectId !== FORBIDDEN_FIREBASE_PROJECT,
 );
 
+/**
+ * رسائل بيئة الإشعارات: مصدر واحد للواجهة وللتسجيل.
+ * على iPhone وiPad لا تعمل إشعارات الويب قبل إضافة التطبيق إلى الشاشة
+ * الرئيسية، ولا يجوز طلب إذن المتصفح في متصفح عادي.
+ */
+export const PUSH_MESSAGES = {
+  ready: 'إشعارات هذا الجهاز مفعّلة.',
+  needsPermission: 'اسمح بالإشعارات من نافذة المتصفح لإكمال التفعيل.',
+  denied: 'الإشعارات محظورة من إعدادات المتصفح. اسمح بها ثم حاول مجدداً.',
+  iosInstall:
+    'على iPhone وiPad لا تصل إشعارات الويب قبل تثبيت التطبيق: افتح آني في Safari، اضغط زر المشاركة، اختر «إضافة إلى الشاشة الرئيسية»، ثم افتح آني من الشاشة الرئيسية وفعّل الإشعارات من هنا.',
+  iosInstalledHint:
+    'التطبيق مفتوح من الشاشة الرئيسية — يمكنك الآن تفعيل الإشعارات على هذا الجهاز.',
+  unsupported: 'هذا المتصفح لا يدعم إشعارات الويب على هذا الجهاز.',
+  insecure: 'تتطلب الإشعارات فتح التطبيق عبر HTTPS.',
+  saveFailed: 'تعذر حفظ رمز الإشعارات. تأكد من تطبيق ترحيل قاعدة البيانات ثم حاول مجدداً.',
+  saveUnverified: 'لم يتأكد حفظ رمز الإشعارات على الخادم. أعد المحاولة.',
+} as const;
+
+/** هل المتصفح على iPhone/iPad؟ كل المتصفحات هناك تعمل على WebKit. */
+export function isIosBrowser(userAgent: string): boolean {
+  const value = typeof userAgent === 'string' ? userAgent.toLowerCase() : '';
+  if (!value) return false;
+  return /iphone|ipad|ipod/.test(value);
+}
+
+/**
+ * هل التطبيق مفتوح بوضع standalone بعد التثبيت؟
+ * `navigator.standalone` في iOS، و`display-mode: standalone` في بقية المتصفحات.
+ */
+export function isStandaloneDisplay(input: {
+  navigatorStandalone?: unknown;
+  displayModeStandalone?: unknown;
+}): boolean {
+  return input.navigatorStandalone === true || input.displayModeStandalone === true;
+}
+
+export type PushEnvironmentStatus =
+  | 'ready'
+  | 'needs-permission'
+  | 'denied'
+  | 'ios-install-required'
+  | 'unsupported'
+  | 'insecure';
+
+export type PushEnvironment = {
+  status: PushEnvironmentStatus;
+  message: string;
+  /** هل يجوز طلب إذن المتصفح الآن؟ لا قبل التثبيت على iOS. */
+  canRequestPermission: boolean;
+};
+
+/**
+ * بيئة الإشعارات كقرار واحد قابل للاختبار:
+ *   1. بلا HTTPS → غير ممكن.
+ *   2. بلا Notification أو Service Worker → غير مدعوم.
+ *   3. iOS بلا تثبيت → شرح الإضافة إلى الشاشة الرئيسية، وبلا طلب إذن.
+ *   4. الإذن محظور → رسالة المحظور.
+ *   5. الإذن ممنوح → التفعيل متاح.
+ *   6. غير محسوم → طلب الإذن بتفاعل المستخدم.
+ */
+export function evaluatePushEnvironment(input: {
+  isIos: boolean;
+  standalone: boolean;
+  hasNotificationApi: boolean;
+  hasServiceWorker: boolean;
+  secureContext: boolean;
+  permission: 'default' | 'granted' | 'denied' | 'unsupported';
+}): PushEnvironment {
+  if (!input.secureContext) {
+    return { status: 'insecure', message: PUSH_MESSAGES.insecure, canRequestPermission: false };
+  }
+  if (!input.hasNotificationApi || !input.hasServiceWorker) {
+    return { status: 'unsupported', message: PUSH_MESSAGES.unsupported, canRequestPermission: false };
+  }
+  // الترتيب مقصود: التثبيت يُفحص قبل الإذن، فلا يُطلب إذن في متصفح عادي على iOS.
+  if (input.isIos && !input.standalone) {
+    return { status: 'ios-install-required', message: PUSH_MESSAGES.iosInstall, canRequestPermission: false };
+  }
+  if (input.permission === 'denied') {
+    return { status: 'denied', message: PUSH_MESSAGES.denied, canRequestPermission: false };
+  }
+  if (input.permission === 'granted') {
+    return { status: 'ready', message: PUSH_MESSAGES.ready, canRequestPermission: false };
+  }
+  if (input.permission === 'default') {
+    return { status: 'needs-permission', message: PUSH_MESSAGES.needsPermission, canRequestPermission: true };
+  }
+  return { status: 'unsupported', message: PUSH_MESSAGES.unsupported, canRequestPermission: false };
+}
+
+/**
+ * بيئة هذا المتصفح فعلياً. iPadOS يعرّف نفسه Macintosh، فيُعامل iOS عند
+ * وجود نقاط لمس (maxTouchPoints > 1) — وهذا يمنع طلب إذن في متصفح iPad عادي.
+ */
+export function readPushEnvironment(): PushEnvironment {
+  const userAgent = typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string'
+    ? navigator.userAgent
+    : '';
+  const maxTouchPoints = typeof navigator !== 'undefined' && typeof navigator.maxTouchPoints === 'number'
+    ? navigator.maxTouchPoints
+    : 0;
+  const isIos = isIosBrowser(userAgent) || (/macintosh/i.test(userAgent) && maxTouchPoints > 1);
+  const standalone = isStandaloneDisplay({
+    navigatorStandalone: typeof navigator !== 'undefined'
+      ? (navigator as Navigator & { standalone?: unknown }).standalone
+      : false,
+    displayModeStandalone: typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(display-mode: standalone)').matches
+      : false,
+  });
+  const hasNotificationApi = typeof window !== 'undefined' && 'Notification' in window;
+  const hasServiceWorker = typeof navigator !== 'undefined' && 'serviceWorker' in navigator;
+  const secureContext = typeof window !== 'undefined' && window.isSecureContext === true;
+  const permission: 'default' | 'granted' | 'denied' | 'unsupported' =
+    hasNotificationApi ? Notification.permission : 'unsupported';
+
+  return evaluatePushEnvironment({
+    isIos,
+    standalone,
+    hasNotificationApi,
+    hasServiceWorker,
+    secureContext,
+    permission,
+  });
+}
+
 type FirebaseAppSdk = {
   getApps: () => Array<{ name: string }>;
   getApp: () => unknown;
@@ -92,14 +219,14 @@ export async function registerPushNotifications(
   if (!isFirebaseMessagingConfigured()) {
     return { ok: false, message: 'إعداد Firebase ناقص. أضف إعدادات تطبيق الويب ومفتاح VAPID إلى متغيرات VITE_FIREBASE_* ثم أعد نشر التطبيق.' };
   }
-  if (!('Notification' in window) || !('serviceWorker' in navigator)) {
-    return { ok: false, message: 'هذا المتصفح لا يدعم إشعارات الويب على هذا الجهاز.' };
-  }
-  if (!window.isSecureContext) {
-    return { ok: false, message: 'تتطلب الإشعارات فتح التطبيق عبر HTTPS.' };
-  }
+  // بيئة الإشعارات أولاً: على iPhone/iPad بلا تثبيت لا يُطلب إذن أبداً.
+  const environment = readPushEnvironment();
+  if (environment.status === 'ios-install-required') return { ok: false, message: environment.message };
+  if (environment.status === 'unsupported') return { ok: false, message: environment.message };
+  if (environment.status === 'insecure') return { ok: false, message: environment.message };
+  if (environment.status === 'denied') return { ok: false, message: environment.message };
 
-  // إذن المتصفح يُطلب فقط بتفاعل المستخدم.
+  // إذن المتصفح يُطلب فقط بتفاعل المستخدم، وبعد اجتياز بوابة التثبيت.
   let permission = Notification.permission;
   if (permission === 'default' && requestPermission) {
     permission = await Notification.requestPermission();
@@ -107,9 +234,7 @@ export async function registerPushNotifications(
   if (permission !== 'granted') {
     return {
       ok: false,
-      message: permission === 'denied'
-        ? 'الإشعارات محظورة من إعدادات المتصفح. اسمح بها ثم حاول مجدداً.'
-        : 'اسمح بالإشعارات من نافذة المتصفح لإكمال التفعيل.',
+      message: permission === 'denied' ? PUSH_MESSAGES.denied : PUSH_MESSAGES.needsPermission,
     };
   }
 
@@ -145,7 +270,8 @@ export async function registerPushNotifications(
       installationId,
     });
 
-    const { error } = await supabase.rpc('aani_register_device_token', {
+    // لا نجاح قبل دليل حفظ: الدالة تُعيد صف الجهاز المسجّل نفسه.
+    const { data: registeredRow, error } = await supabase.rpc('aani_register_device_token', {
       p_platform: registration.platform,
       p_token: registration.token,
       p_provider: registration.provider,
@@ -155,10 +281,19 @@ export async function registerPushNotifications(
     });
     if (error) {
       console.error('[push] تعذر حفظ رمز الجهاز في device_tokens:', error.code || error.message);
-      return { ok: false, message: 'تعذر حفظ رمز الإشعارات. تأكد من تطبيق ترحيل قاعدة البيانات ثم حاول مجدداً.' };
+      return { ok: false, message: PUSH_MESSAGES.saveFailed };
     }
 
-    return { ok: true, message: 'إشعارات هذا الجهاز مفعّلة.' };
+    const registered = Array.isArray(registeredRow) ? registeredRow[0] : registeredRow;
+    const registeredId = registered && typeof (registered as { id?: unknown }).id === 'string'
+      ? String((registered as { id: unknown }).id)
+      : '';
+    if (!registeredId) {
+      console.error('[push] لم يُعِد الخادم صف جهاز مسجّل — لا يُعلن نجاح.');
+      return { ok: false, message: PUSH_MESSAGES.saveUnverified };
+    }
+
+    return { ok: true, message: PUSH_MESSAGES.ready };
   } catch (error) {
     console.error('[push] تعذر تفعيل إشعارات Firebase:', error instanceof Error ? error.message : 'unknown');
     return { ok: false, message: 'تعذر تفعيل الإشعارات الآن. تحقق من إعداد Firebase والاتصال ثم حاول مجدداً.' };

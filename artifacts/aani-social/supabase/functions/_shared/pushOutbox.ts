@@ -84,11 +84,25 @@ export type BatchSummary = {
   sent: number;
   skipped: number;
   failed: number;
+  /** مهام لم يُرسل منها شيء لعدم وجود جهاز نشط، وأُعيدت للمحاولة القادمة. */
+  rescheduled: number;
   completed: number;
 };
 
 const MAX_BATCH = 25;
 const MAX_DATA_VALUE = 512;
+
+/**
+ * سبب إعادة الجدولة عند غياب أي جهاز نشط للمستلم، وعندها لا تُصنَّف المهمة
+ * sent: لا صف تسليم يعني لا دليل تسليم.
+ */
+export const NO_ACTIVE_DEVICES = 'no_active_devices';
+
+/**
+ * سقف محاولات غياب الجهاز: بعدها تُنهى المهمة failed بسبب واضح بدل إعادة
+ * جدولة لا تنتهي. السقف متوافق مع سقف backoffSeconds نفسه (10 محاولات).
+ */
+export const MAX_NO_DEVICE_ATTEMPTS = 10;
 
 const SOCIAL_TITLES: Record<string, { title: string; body: string }> = {
   like: { title: 'إعجاب جديد', body: 'أعجب أحدهم بمحتواك.' },
@@ -257,7 +271,7 @@ export async function runPushOutboxBatch(
   worker: string,
   limit = 10,
 ): Promise<BatchSummary> {
-  const summary: BatchSummary = { claimed: 0, sent: 0, skipped: 0, failed: 0, completed: 0 };
+  const summary: BatchSummary = { claimed: 0, sent: 0, skipped: 0, failed: 0, rescheduled: 0, completed: 0 };
   const workerName = safeText(worker);
   if (!workerName) throw new Error('push-outbox: worker name is required');
 
@@ -265,8 +279,38 @@ export async function runPushOutboxBatch(
   summary.claimed = tasks.length;
 
   for (const task of tasks) {
-    await deps.ensureDeliveries(task.id);
+    // صفوف التسليم هي دليل التسليم: تُنشأ لكل جهاز نشط للمستلم.
+    const deliveries = await deps.ensureDeliveries(task.id);
     const pending = await deps.listPendingDeliveries(task.id);
+    const attempts = Math.max(1, Number(task.attempts) || 1);
+
+    // لا صف تسليم = لا جهاز نشط: لا إرسال ولا دليل، فلا تُصنَّف المهمة sent.
+    if (deliveries.length === 0) {
+      const exhausted = attempts >= MAX_NO_DEVICE_ATTEMPTS;
+      await deps.completeOutbox({
+        id: task.id,
+        status: 'failed',
+        worker: workerName,
+        error: NO_ACTIVE_DEVICES,
+        // السياسة نفسها: تأخير المهمة، ثم فشل نهائي بسبب واضح عند السقف.
+        retryDelaySeconds: exhausted ? 0 : backoffSeconds(attempts),
+      });
+      if (!exhausted) summary.rescheduled += 1;
+      summary.completed += 1;
+      deps.log({
+        event: 'outbox_task',
+        task_id: task.id,
+        event_type: safeText(task.event_type),
+        devices: 0,
+        pending: 0,
+        sent: 0,
+        skipped: 0,
+        failed: 0,
+        rescheduled: exhausted ? 0 : 1,
+        reason: NO_ACTIVE_DEVICES,
+      });
+      continue;
+    }
 
     const deviceIds = Array.from(new Set(pending.map(delivery => delivery.device_token_id)));
     const devices = deviceIds.length ? await deps.loadDevices(deviceIds) : [];
@@ -330,6 +374,8 @@ export async function runPushOutboxBatch(
     summary.skipped += skippedForTask;
     summary.failed += failedForTask;
 
+    // صف تسليم واحد على الأقل مضمون هنا: sent فقط عندما لا يوجد فشل،
+    // والدليل هو صف تسليم منتهٍ (sent أو skipped) لا مجرد غياب الفشل.
     const hasRetry = retryable && failedForTask > 0;
     const allDone = failedForTask === 0;
     await deps.completeOutbox({
@@ -338,7 +384,7 @@ export async function runPushOutboxBatch(
       worker: workerName,
       error: allDone ? undefined : (hasRetry ? 'transient' : 'permanent'),
       providerMessageId,
-      retryDelaySeconds: hasRetry ? backoffSeconds(task.attempts || 1) : 0,
+      retryDelaySeconds: hasRetry ? backoffSeconds(attempts) : 0,
     });
     summary.completed += 1;
 
@@ -347,10 +393,13 @@ export async function runPushOutboxBatch(
       event: 'outbox_task',
       task_id: task.id,
       event_type: safeText(task.event_type),
-      devices: pending.length,
+      devices: deliveries.length,
+      pending: pending.length,
       sent: sentForTask,
       skipped: skippedForTask,
       failed: failedForTask,
+      rescheduled: 0,
+      reason: null,
     });
   }
 

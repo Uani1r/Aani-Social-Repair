@@ -1,0 +1,6 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <!-- أيقونة maskable: مربع بلون العلامة يملأ الإطار بلا زوايا، فلا يُقص
+       المحتوى عند تقنيع النظام (Maskable safe zone). اللون مطابق لأصل
+       العلامة في public/favicon.svg (#FF3C00). -->
+  <rect width="512" height="512" fill="#FF3C00"/>
+</svg>
