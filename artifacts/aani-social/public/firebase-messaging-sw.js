@@ -33,10 +33,13 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId && firebaseConfig.messagin
     // نفس الحدث مرتين في عمر عامل الخدمة → إشعار واحد فقط.
     if (!takeOnce(tag)) return undefined;
 
+    // أيقونة الإشعار: شعار آني PNG الحقيقي (192×192) بدل مربع اللون البرتقالي
+    // في favicon.svg الذي كان يظهر فارغاً في إشعارات Android.
+    // ولا badge هنا: أيقونة شريط الحالة في Android تُرسم كظل أبيض لقناة
+    // الشفافية، فتمرير صورة ملوّنة يُظهر مربعاً مصمتاً بدل الشعار.
     return self.registration.showNotification(title, {
       body,
-      icon: '/favicon.svg',
-      badge: '/favicon.svg',
+      icon: '/icons/icon-192.png',
       tag,
       renotify: false,
       data: {

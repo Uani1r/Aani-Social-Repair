@@ -719,6 +719,35 @@ Deno.test("عامل الخدمة يقرأ نفس حقول العرض ويرفض 
   );
 });
 
+Deno.test("أيقونة إشعار عامل الخدمة شعار PNG حقيقي وبلا badge", async () => {
+  const serviceWorker = await Deno.readTextFile(
+    new URL("../../../public/firebase-messaging-sw.js", import.meta.url),
+  );
+
+  // الأيقونة الكبيرة: شعار آني PNG (192×192)، لا مربع اللون البرتقالي.
+  assert(
+    serviceWorker.includes("icon: '/icons/icon-192.png'"),
+    "the notification icon must be the 192 png wordmark",
+  );
+  assert(
+    !serviceWorker.includes("'/favicon.svg'"),
+    "the notification must not use the bare colour tile as an icon",
+  );
+  // لا badge: صورة ملوّنة في شريط حالة Android تُرسم مربعاً مصمتاً.
+  assert(!/\bbadge\s*:/.test(serviceWorker), "no badge icon is declared");
+
+  // الملف نفسه: موجود، وPNG صالح بمقاس 192×192 (توقيع + مقطع IHDR).
+  const bytes = await Deno.readFile(new URL("../../../public/icons/icon-192.png", import.meta.url));
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const signature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let index = 0; index < signature.length; index += 1) {
+    assertEqual(view.getUint8(index), signature[index], `png signature byte ${index}`);
+  }
+  assertEqual(new TextDecoder().decode(bytes.slice(12, 16)), "IHDR", "the first chunk is IHDR");
+  assertEqual(view.getUint32(16), 192, "the notification icon width");
+  assertEqual(view.getUint32(20), 192, "the notification icon height");
+});
+
 Deno.test("لا نص رسالة ولا محتوى مكالمة في الحمولة أو الوجهة", () => {
   const secret = "نص رسالة خاص جداً";
   const message = buildFcmMessage(
