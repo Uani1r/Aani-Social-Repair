@@ -2,10 +2,13 @@ import { useState, useEffect, useRef, type CSSProperties, type FormEvent } from 
 import { Link, useLocation } from 'wouter';
 
 import { supabase, supabaseConfigured } from '@/lib/supabase';
+import { ProfileFormFields } from '@/components/auth/ProfileFormFields';
+import { completeOnboarding, validateProfileDraft } from '@/lib/profileCompletion';
 import { classifyLoginIdentifier } from '@/lib/accountAuth';
 import { createPhoneFunctionInvoker, loginWithPhone } from '@/lib/accountPhoneAlias';
 import { completePhoneLogin } from '@/lib/phoneLoginSession';
-import { FemaleDefaultAvatar, MaleDefaultAvatar } from '@/components/DefaultAvatar';
+// حقول الملف (الاسم واسم المستخدم وتاريخ الميلاد والجنس والموافقة) تعيش في
+// المكوّن المشترك ProfileFormFields — نسخة واحدة للتسجيل وإكمال تسجيل Google.
 import {
   createTurnstileLoader,
   type TurnstileApi,
@@ -129,7 +132,12 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [statusNotice, setStatusNotice] = useState('');
-  const [gender, setGender] = useState<'male' | 'female'>('male');
+  // الجنس باختيار صريح: لا افتراضي بدل المستخدم (null حتى يختار).
+  const [gender, setGender] = useState<'male' | 'female' | null>(null);
+  // إكمال التسجيل في التسجيل التقليدي أيضاً: تاريخ الميلاد والموافقة
+  // (محددة افتراضياً وقابلة لإلغاء التحديد قبل الحفظ).
+  const [birthDate, setBirthDate] = useState('');
+  const [termsAccepted, setTermsAccepted] = useState(true);
   const [showFallbackForm, setShowFallbackForm] = useState(false);
   const [fallbackIdentifier, setFallbackIdentifier] = useState('');
   const [fallbackPassword, setFallbackPassword] = useState('');
@@ -330,6 +338,11 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
     setBusy(true); setError(''); setSuccess('');
     try {
       if (isSignup) {
+        // تحقق واحد قبل أي طلب: الاسم الكامل، اسم المستخدم (1–32)، تاريخ
+        // الميلاد، جنس صريح، والموافقة على الشروط وسياسة الخصوصية.
+        const completion = validateProfileDraft({ fullName, username, birthDate, gender, termsAccepted });
+        if (!completion.ok) { setError(completion.message); return; }
+
         setStatusNotice('نحدد موقعك تلقائياً الآن لضبط مدينتك — اسمح بالوصول إلى الموقع عند طلب المتصفح لإكمال التسجيل.');
         const geo = await resolveCityFromDevice();
         setStatusNotice('');
@@ -339,7 +352,15 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         const { data, error: authError } = await supabase.auth.signUp({
           email: email.trim(),
           password,
-          options: { data: { username: username.trim().toLowerCase(), full_name: fullName.trim(), gender, city } },
+          options: {
+            data: {
+              username: completion.value.username,
+              full_name: completion.value.fullName,
+              gender: completion.value.gender,
+              birth_date: completion.value.birthDate,
+              city,
+            },
+          },
         });
 
         if (authError) throw authError;
@@ -354,6 +375,13 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         }
 
         if (data.session) {
+          // التسجيل التقليدي يُكمل بنفس الدالة الذرية: تاريخ الميلاد والموافقة
+          // ووقتها وحالة الإكمال. فشلها لا يدّعي الاكتمال: بوابة App تعرض
+          // واجهة الإكمال بدل صفحة المتابعة.
+          const onboarding = await completeOnboarding({ fullName, username, birthDate, gender, termsAccepted });
+          if (!onboarding.ok) {
+            console.error('[signup] تعذر إكمال التسجيل بعد إنشاء الحساب:', onboarding.message);
+          }
           afterAuth();
           setLocation('/feed');
         } else {
@@ -417,10 +445,9 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
         });
         if (authError) throw authError;
       } else {
+        // الصيغة تحققت في classifyLoginIdentifier بقواعد اسم المستخدم المشتركة
+        // (1–32)، فلا نسخة ثالثة للقاعدة هنا.
         const usernameIdentifier = parsed.username;
-        if (!/^[a-z0-9_.]{3,32}$/.test(usernameIdentifier)) {
-          throw new Error('أدخل بريدًا إلكترونيًا أو اسم مستخدم صالحًا أو رقم هاتف عراقيًا (مثلاً: 07701234567 أو +9647701234567).');
-        }
         // مسار اسم المستخدم: لا يبدأ الطلب بلا رمز CAPTCHA صالح، والخادم يتحقق منه.
         if (!TURNSTILE_SITE_KEY) {
           throw new Error('الدخول باسم المستخدم يتطلب حماية CAPTCHA غير المضبوطة بعد. استخدم البريد في الوقت الحالي.');
@@ -565,61 +592,19 @@ export function AuthPage({ mode, afterAuth }: { mode: 'login' | 'signup'; afterA
           {isSignup ? (
             <>
               <form onSubmit={submit} style={styles.signupForm}>
-                <div style={styles.formGroup}>
-                  <label style={styles.label} htmlFor="full-name">الاسم الكامل</label>
-                  <input
-                    id="full-name"
-                    type="text"
-                    required
-                    maxLength={80}
-                    autoComplete="name"
-                    value={fullName}
-                    onChange={event => setFullName(event.target.value)}
-                    style={styles.input}
-                    disabled={busy}
-                  />
-                </div>
-                <div style={styles.formGroup}>
-                  <label style={styles.label} htmlFor="username">اسم المستخدم</label>
-                  <input
-                    id="username"
-                    type="text"
-                    required
-                    minLength={3}
-                    maxLength={32}
-                    pattern="[A-Za-z0-9_.]+"
-                    autoComplete="username"
-                    dir="ltr"
-                    placeholder="username"
-                    value={username}
-                    onChange={event => setUsername(event.target.value)}
-                    style={styles.input}
-                    disabled={busy}
-                  />
-                </div>
-                <div style={styles.formGroup}>
-                  <span style={styles.label}>الجنس — يحدد صورتك الافتراضية</span>
-                  <div style={styles.genderRow}>
-                    <button
-                      type="button"
-                      onClick={() => setGender('male')}
-                      style={{ ...styles.genderCard, borderColor: gender === 'male' ? '#6266C7' : '#d8dfdb' }}
-                      disabled={busy}
-                    >
-                      <MaleDefaultAvatar className="h-20 w-20" />
-                      <span style={styles.genderLabel}>ذكر</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setGender('female')}
-                      style={{ ...styles.genderCard, borderColor: gender === 'female' ? '#6266C7' : '#d8dfdb' }}
-                      disabled={busy}
-                    >
-                      <FemaleDefaultAvatar className="h-20 w-20" />
-                      <span style={styles.genderLabel}>أنثى</span>
-                    </button>
-                  </div>
-                </div>
+                {/* نفس حقول إكمال تسجيل Google: مكوّن واحد مشترك، بقواعد اسم
+                    المستخدم الجديدة (1–32) والموافقة المحددة افتراضياً. */}
+                <ProfileFormFields
+                  draft={{ fullName, username, birthDate, gender, termsAccepted }}
+                  onChange={patch => {
+                    if (patch.fullName !== undefined) setFullName(patch.fullName);
+                    if (patch.username !== undefined) setUsername(patch.username);
+                    if (patch.birthDate !== undefined) setBirthDate(patch.birthDate);
+                    if (patch.gender !== undefined) setGender(patch.gender);
+                    if (patch.termsAccepted !== undefined) setTermsAccepted(patch.termsAccepted);
+                  }}
+                  disabled={busy}
+                />
                 <div style={styles.formGroup}>
                   <label style={styles.label} htmlFor="email">البريد الإلكتروني</label>
                   <input

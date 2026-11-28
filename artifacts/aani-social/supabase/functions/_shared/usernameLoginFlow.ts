@@ -34,11 +34,13 @@ import {
 export const USERNAME_LOGIN_CAPTCHA_ACTION = "username_login";
 export const USERNAME_RATE_WINDOW_SECONDS = 900;
 export const USERNAME_RATE_MAX_ATTEMPTS = 10;
-export const USERNAME_PATTERN = /^[a-z0-9_.]{3,32}$/;
+// قواعد اسم المستخدم المشتركة مع الواجهة وقاعدة البيانات (1–32): محرف واحد
+// مسموح، والحد الأعلى 32، والحروف صغيرة والمحارف a-z 0-9 _ . فقط.
+export const USERNAME_PATTERN = /^[a-z0-9_.]{1,32}$/;
 
 export const USERNAME_LOGIN_MESSAGES = {
   invalidCredentials: "اسم المستخدم أو كلمة المرور غير صحيحة.",
-  invalidUsername: "اسم المستخدم غير صالح. استخدم 3–32 حرفاً لاتينياً أو رقماً أو _ أو .",
+  invalidUsername: "اسم المستخدم غير صالح. استخدم 1–32 محرفاً لاتينياً أو رقماً أو _ أو .",
   captchaRequired: "تحقق الأمان مطلوب لإكمال الدخول. أعد المحاولة بعد تحديث الصفحة.",
   captchaUnavailable: "الدخول باسم المستخدم غير متاح حالياً: حماية CAPTCHA لم تُفعّل بعد.",
   rateLimited: "تجاوزت عدد المحاولات. انتظر قليلاً ثم أعد المحاولة.",
