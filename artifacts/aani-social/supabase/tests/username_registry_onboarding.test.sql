@@ -183,8 +183,6 @@ declare
 begin
   foreach candidate in array array[
     'a b',
-    ' user',
-    'user ',
     'user-name',
     'user@name',
     'مستخدم',
@@ -203,6 +201,14 @@ begin
     end if;
   end loop;
 
+  -- المسافة الطرفية تُطبَّع (تُحذف) ولا تُنشئ اسماً ثانياً.
+  update public.profiles set username = '  user  ' where id = account_a;
+  select username into candidate from public.profiles where id = account_a;
+  if candidate is distinct from 'user' then
+    raise exception 'ASSERT: surrounding spaces must be trimmed (got %)', candidate;
+  end if;
+
+  update public.profiles set username = 'a' where id = account_a;
   select username into candidate from public.profiles where id = account_a;
   if candidate <> 'a' then
     raise exception 'ASSERT: a refused username must not change the stored one (got %)', candidate;

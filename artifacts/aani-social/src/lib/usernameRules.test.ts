@@ -39,8 +39,6 @@ const REJECTED = [
   ' ',
   '  ',
   'a b',
-  ' a',
-  'a ',
   'a\tb',
   'user name',
   'user-name',
@@ -85,6 +83,10 @@ test('يرفض المسافات والمحارف غير المسموحة برس�
     const result = validateUsername(value);
     assert.equal(result.ok, false, `${JSON.stringify(value)} must be refused`);
   }
+
+  // المسافة الطرفية تُطبَّع ولا تُنشئ اسماً ثانياً؛ المسافة الداخلية مرفوضة.
+  assert.equal(normalizeUsernameInput('  a  '), 'a');
+  assert.equal(validateUsername('  a  ').ok, true);
 
   for (const value of ['a b', 'user-name', 'user@name', 'مستخدم', 'user/name']) {
     const result = validateUsername(value);
