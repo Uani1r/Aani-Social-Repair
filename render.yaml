@@ -16,6 +16,18 @@ services:
         value: https://auqqqwfjxrxizlmeweka.supabase.co
       - key: VITE_SUPABASE_PUBLISHABLE_KEY
         value: sb_publishable_RD_YttgesZJraGb7dvuArQ_ggxUCfmt
+      # إعدادان مطلوبان من المالك، بلا قيمة مخترعة هنا:
+      #   * VITE_TURNSTILE_SITE_KEY: المفتاح العام لـCloudflare Turnstile. بلا
+      #     قيمة لا تُحمَّل ودجت CAPTCHA ولا تُفتح مسارات الهاتف واسم المستخدم،
+      #     والواجهة تقول ذلك صراحةً ولا تدّعي أن التحقق جاهز.
+      #   * VITE_AUTH_ALLOWED_ORIGINS: عناوين إضافية مسموحة لعودة OAuth،
+      #     مفصولة بفواصل (العنوان المنشور مسموح في الكود أصلاً).
+      # القيمتان عامتان (تُحشى في حزمة الواجهة)، ولا سر فيهما؛ Render يمرّرهما
+      # كـbuild args إلى Dockerfile، ولذلك يلزم تعريف ARG لهما هناك.
+      - key: VITE_TURNSTILE_SITE_KEY
+        sync: false
+      - key: VITE_AUTH_ALLOWED_ORIGINS
+        sync: false
       - key: SUPABASE_URL
         value: https://auqqqwfjxrxizlmeweka.supabase.co
       - key: SUPABASE_SERVICE_ROLE_KEY

@@ -68,6 +68,9 @@ function createSupabaseClient(url: string, key: string): SupabaseClient {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      // PKCE: عودة Google تحمل ?code= فيتبادله العميل تلقائياً عند التحميل
+      // (بدل implicit و#access_token)، فلا تبقى الجلسة ناقصة بعد العودة.
+      flowType: 'pkce',
     },
   });
 }

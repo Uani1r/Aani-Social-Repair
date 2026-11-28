@@ -51,8 +51,39 @@ jobs:
       - name: Typecheck @workspace/aani-social
         run: pnpm --filter @workspace/aani-social run typecheck
 
+      # قيم بناء وهمية عامة (لا أسرار) لخطوة التحقق التالية فقط: تثبت أن متغيراً
+      # من بيئة البناء يصل فعلاً إلى حزمة الواجهة، وهو ما ينقله Docker ARG على
+      # Render. بلا هذه القيم يبقى الموقع المنشور بلا CAPTCHA بلا أي خطأ ظاهر.
       - name: Build @workspace/aani-social
+        env:
+          VITE_TURNSTILE_SITE_KEY: 0x4AAAAAAAciBuildArgCheck
+          VITE_AUTH_ALLOWED_ORIGINS: https://ci-build-arg-check.example
         run: pnpm --filter @workspace/aani-social run build
+
+      # حارس ضد فقدان متغيرات البناء: لو لم يصل المتغير إلى Vite لما ظهرت
+      # قيمته في الحزمة. يفشل هذا الفحص فوراً بدل نشر موقع بلا CAPTCHA.
+      # قيمة العنوان الإضافي تُطبع للعلم فقط (تُقرأ عبر كائن import.meta.env
+      # كاملاً في oauthRedirect)، ويغطيها اختبار عقد متغيرات البناء.
+      - name: Verify build-time VITE values reach the client bundle
+        working-directory: artifacts/aani-social
+        run: |
+          set -euo pipefail
+          if [ ! -d dist/public ]; then
+            echo "dist/public is missing: the front-end build did not run."
+            exit 1
+          fi
+          if ! grep -rqF -- "0x4AAAAAAAciBuildArgCheck" dist/public; then
+            echo "VITE_TURNSTILE_SITE_KEY did not reach the client bundle."
+            find dist/public -type f -name '*.js' | head -20
+            exit 1
+          fi
+          echo "present in the client bundle: VITE_TURNSTILE_SITE_KEY"
+          if grep -rqF -- "https://ci-build-arg-check.example" dist/public; then
+            echo "present in the client bundle: VITE_AUTH_ALLOWED_ORIGINS"
+          else
+            echo "note: VITE_AUTH_ALLOWED_ORIGINS is not inlined by this Vite version;"
+            echo "      its wiring is covered by src/lib/buildEnvContract.test.ts."
+          fi
 
       # Run focused unit tests; the wider test:unit script includes unrelated
       # mediaCompressor failures already present on main. messagesInbox covers
@@ -73,6 +104,13 @@ jobs:
       # gate that runs before the request body is read. No ffmpeg binary is needed.
       - name: Unit tests @workspace/api-server (voice)
         run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/voiceProcessing.test.ts ./src/lib/voiceGate.test.ts ./src/lib/voiceUploadFinalize.test.ts
+
+      # خدمة Render هي Web Service (Docker) لا Static Site: توجيه SPA يقع في
+      # Express. هذا الفحص يثبّت التصنيف: /api/* بلا HTML، وطلب ملف بامتداد
+      # يعيد 404 صريحاً، و/auth/callback وغيره من المسارات بلا امتداد تُخدم
+      # بـindex.html، وغير GET/HEAD مرفوض.
+      - name: Unit tests @workspace/api-server (SPA fallback)
+        run: pnpm --filter @workspace/api-server exec tsx --test ./src/lib/spaFallback.test.ts
 
       - name: Typecheck @workspace/api-server
         run: pnpm --filter @workspace/api-server run typecheck
@@ -115,6 +153,23 @@ jobs:
       # وCapacitor (بلا جهاز ولا شبكة ولا مفاتيح).
       - name: Unit tests @workspace/aani-social (native OAuth)
         run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/oauthNative.test.ts
+
+      # عنوان عودة OAuth: يُبنى من أصل الموقع الفعلي وحده، ويُرفض localhost
+      # وأي أصل غير مدرج في نسخة الإنتاج، وdeep link الهاتف منفصل عن الويب.
+      # هذا ما يمنع تكرار تحويل Google إلى localhost:3000.
+      - name: Unit tests @workspace/aani-social (OAuth redirect origin)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/oauthRedirect.test.ts
+
+      # صفحة 404 في الوضع الداكن: خلفية داكنة ونص فاتح مقروء وروابط رجوع واضحة،
+      # ولا أصناف فاتحة تُخفي النص على خلفية داكنة.
+      - name: Unit tests @workspace/aani-social (not found page contrast)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/notFoundPage.test.ts
+
+      # عقد متغيرات البناء العامة: Dockerfile يعرّف ARG ويمرّرهما في ENV قبل بناء
+      # الواجهة، وrender.yaml يعرضهما كإعدادين من المالك بلا قيمة، والعميل يقرأ
+      # المفتاح العام وحده ولا يدّعي أن CAPTCHA جاهزة بلا مفتاح.
+      - name: Unit tests @workspace/aani-social (build env contract)
+        run: pnpm --filter @workspace/aani-social exec tsx --test ./src/lib/buildEnvContract.test.ts
 
       # إعدادات الحساب: تغيير البريد (قبل التأكيد لا يتغيّر شيء)، فرض MFA
       # بقرار aal2 وحالات الفشل، جلسات الحساب وإبطال الجلسات الأخرى، وتعطيل
@@ -737,13 +792,20 @@ jobs:
         with:
           deno-version: v2.x
 
-      - name: Deno check (account-phone-alias and login-with-phone)
+      - name: Deno check (account-phone-alias, login-with-phone and login-with-username)
         working-directory: artifacts/aani-social/supabase/functions
-        run: deno check account-phone-alias/index.ts login-with-phone/index.ts
+        run: deno check account-phone-alias/index.ts login-with-phone/index.ts login-with-username/index.ts
 
       - name: Deno tests (phone helpers, redaction, CAPTCHA, session gate)
         working-directory: artifacts/aani-social/supabase/functions
         run: deno test --allow-read tests/phone-edge.test.ts
+
+      # مسار اسم المستخدم: CAPTCHA قبل أي بحث عن حساب، محدّد المحاولات المشترك
+      # ببصمتين HMAC منفصلتين (username/ip)، رفض عند تعطل المحدّد أو غياب
+      # مفتاح HMAC، وردود فشل متطابقة بلا كشف وجود الحساب.
+      - name: Deno tests (username login captcha, shared limiter, no enumeration)
+        working-directory: artifacts/aani-social/supabase/functions
+        run: deno test --allow-read tests/username-edge.test.ts
 
 
   # Real Deno type check and tests for the FCM push-outbox worker. No Supabase

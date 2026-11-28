@@ -29,6 +29,11 @@ const PUBLIC_ENV_KEYS = [
   'VITE_FIREBASE_MESSAGING_SENDER_ID',
   'VITE_FIREBASE_APP_ID',
   'VITE_FIREBASE_VAPID_KEY',
+  // إعدادان عامان للبناء: مفتاح Turnstile العام (لا سر) وقائمة عناوين OAuth
+  // الإضافية. إدراجهما هنا يجعل قيمتهما من .env أو من متغير بيئة البناء
+  // (Render/Docker ARG) تصل إلى process.env ثم إلى import.meta.env في الحزمة.
+  'VITE_TURNSTILE_SITE_KEY',
+  'VITE_AUTH_ALLOWED_ORIGINS',
 ] as const;
 
 export default defineConfig(async ({ mode }) => {

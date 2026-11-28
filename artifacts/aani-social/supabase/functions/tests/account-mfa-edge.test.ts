@@ -7,6 +7,7 @@
 import {
   MFA_STATE_LEVEL_REQUIRED_MESSAGE,
   MFA_STATE_UNAUTHORIZED_MESSAGE,
+  MFA_STATE_UNAVAILABLE_MESSAGE,
   countVerifiedTotpFactors,
   createMfaStateHandler,
   readAssuranceLevel,
@@ -232,4 +233,53 @@ Deno.test("a failed deletion is reported as a failure, and a repeat is idempoten
   }));
   assertEqual(repeated.status, 200, "idempotent status");
   assertEqual((await repeated.json()).alreadyDeleted, true, "already deleted");
+});
+
+
+Deno.test("the preflight is answered without a store and without touching the account", async () => {
+  const db = createDb();
+  const handler = createMfaStateHandler({ fetchImpl: fakeFetch(db), env });
+
+  const response = await handler(new Request("https://project.test/functions/v1/account-mfa", {
+    method: "OPTIONS",
+    headers: { origin: "https://aani-social-repair.onrender.com" },
+  }));
+
+  assertEqual(response.status, 204, "preflight status");
+  assertEqual(response.headers.get("cache-control"), "no-store", "preflight cache");
+  assertEqual(
+    response.headers.get("access-control-allow-origin"),
+    "https://aani-social-repair.onrender.com",
+    "preflight origin",
+  );
+  assertEqual(db.calls.length, 0, "the preflight must not call anything");
+});
+
+Deno.test("the success body carries the state only, never a session or an email", async () => {
+  const db = createDb({ aal: "aal2", factors: [VERIFIED_TOTP] });
+  const handler = createMfaStateHandler({ fetchImpl: fakeFetch(db), env });
+
+  const response = await handler(mfaRequest({ action: "sync" }, { authorization: `Bearer ${token("aal2")}` }));
+  assertEqual(response.status, 200, "status");
+
+  const body = await response.json() as Record<string, unknown>;
+  assertEqual(Object.keys(body).sort(), ["mfaEnabled", "verifiedFactors"], "body keys");
+  assertEqual(body.mfaEnabled, true, "enabled");
+  assertEqual(body.verifiedFactors, 1, "one verified factor");
+  assert(!("access_token" in body), "no access token");
+  assert(!("email" in body), "no email");
+});
+
+Deno.test("a failed admin lookup answers with the shared unavailable message and no state", async () => {
+  const db = createDb({ aal: "aal2", factors: [VERIFIED_TOTP], adminFails: true });
+  const handler = createMfaStateHandler({ fetchImpl: fakeFetch(db), env });
+
+  const response = await handler(mfaRequest({ action: "sync" }, { authorization: `Bearer ${token("aal2")}` }));
+  assertEqual(response.status, 502, "status");
+
+  const body = await response.json() as Record<string, unknown>;
+  assertEqual(Object.keys(body), ["error"], "only an error key");
+  assertEqual(body.error, MFA_STATE_UNAVAILABLE_MESSAGE, "the shared message");
+  assert(!("mfaEnabled" in body), "no state on failure");
+  assertEqual(db.lastMetadata, undefined, "no metadata write");
 });
