@@ -506,7 +506,8 @@ begin
 end $$;
 
 -- =====================================================================
--- 11) حذف الحساب يُعيد اسمه متاحاً ولا يفشل على قيد السجل
+-- 11) حذف الحساب يُحرّر اسمه (سجل الاسم يُحذف معه، فلا اسم مملوك لحساب
+--     محذوف، ولا يفشل الحذف على قيد username_registry_claim_shape)
 -- =====================================================================
 delete from auth.users where id = '44444444-4444-4444-4444-444444444444';
 
@@ -515,11 +516,9 @@ begin
   if exists (select 1 from public.profiles where id = '44444444-4444-4444-4444-444444444444') then
     raise exception 'ASSERT: deleting the account must delete its profile';
   end if;
-  if (select state from public.username_registry where username = 'late') is distinct from 'available' then
-    raise exception 'ASSERT: deleting the account must release its username';
+  if exists (select 1 from public.username_registry where username = 'late') then
+    raise exception 'ASSERT: deleting the account must free its username';
   end if;
 end $$;
-
-delete from public.username_registry where username = 'late';
 
 \echo 'username_registry_onboarding: all assertions passed'

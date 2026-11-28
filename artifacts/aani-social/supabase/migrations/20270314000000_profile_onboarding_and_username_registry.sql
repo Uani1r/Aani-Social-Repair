@@ -114,7 +114,11 @@ comment on constraint profiles_username_format_check on public.profiles is
 create table if not exists public.username_registry (
   username text primary key,
   state text not null default 'available',
-  user_id uuid references auth.users (id) on delete set null,
+  -- ON DELETE CASCADE: حذف الحساب يحذف سجل اسمه فيعود الاسم متاحاً فوراً.
+  -- لا ON DELETE SET NULL: قيد username_registry_claim_shape يمنع صفاً
+  -- «claimed» بلا مالك، فكان SET NULL يُفشل حذف الحساب كلّه. تاريخ المطالبة
+  -- يبقى في username_registry_audit (بلا مفتاح أجنبي).
+  user_id uuid references auth.users (id) on delete cascade,
   reason text,
   actor_id uuid,
   actor_kind text not null default 'system',
@@ -501,23 +505,6 @@ as $$
 declare
   previous_name text;
 begin
-  -- حذف الحساب: اسمه يعود متاحاً، فلا يبقى سجل مملوك لحساب غير موجود،
-  -- ولا يفشل حذف الحساب على قيد username_registry_claim_shape.
-  if tg_op = 'DELETE' then
-    update public.username_registry
-    set state = 'available', user_id = null, reserved_until = null, updated_at = now()
-    where username = public.aani_normalize_username(old.username)
-      and state = 'claimed'
-      and user_id = old.id;
-    if found then
-      insert into public.username_registry_audit
-        (username, previous_state, new_state, previous_user_id, actor_id, actor_kind, reason)
-      values
-        (public.aani_normalize_username(old.username), 'claimed', 'available', old.id, null, 'system', 'username released by account deletion');
-    end if;
-    return null;
-  end if;
-
   if tg_op = 'UPDATE' then
     previous_name := public.aani_normalize_username(old.username);
   end if;
@@ -588,12 +575,6 @@ create trigger aani_profiles_username_guard_trg
 drop trigger if exists aani_profiles_username_sync_trg on public.profiles;
 create trigger aani_profiles_username_sync_trg
   after insert or update of username on public.profiles
-  for each row execute function public.aani_profiles_username_sync();
-
--- حذف الحساب يُعيد اسمه متاحاً (وإلا بقي سجل مملوك لحساب محذوف).
-drop trigger if exists aani_profiles_username_delete_trg on public.profiles;
-create trigger aani_profiles_username_delete_trg
-  after delete on public.profiles
   for each row execute function public.aani_profiles_username_sync();
 
 drop trigger if exists aani_profiles_onboarding_guard_trg on public.profiles;
